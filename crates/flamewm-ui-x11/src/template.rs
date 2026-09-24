@@ -50,6 +50,10 @@ pub trait UiDocumentAccess {
     fn foreground_clear(&mut self, id: &str) -> Result<(), String>;
     fn font_size(&mut self, id: &str, size_px: f32) -> Result<(), String>;
     fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String>;
+    fn font_family(&mut self, family: String) -> Result<(), String> {
+        let _ = family;
+        Err("font family projection is unsupported by this document access".to_string())
+    }
     fn overflow(
         &mut self,
         id: &str,
@@ -145,6 +149,10 @@ impl UiDocument {
         self.document.set_font_weight(id, weight)
     }
 
+    pub fn font_family(&mut self, family: String) -> Result<(), String> {
+        self.document.set_ui_font_family(family)
+    }
+
     pub fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
         self.document.set_z_index(id, layer.z_index())
     }
@@ -218,6 +226,10 @@ impl UiDocumentAccess for UiDocument {
 
     fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
         self.font_weight(id, weight)
+    }
+
+    fn font_family(&mut self, family: String) -> Result<(), String> {
+        self.font_family(family)
     }
 
     fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
@@ -316,6 +328,10 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
 
     fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
         self.document.set_font_weight(id, weight)
+    }
+
+    fn font_family(&mut self, family: String) -> Result<(), String> {
+        self.document.set_ui_font_family(family)
     }
 
     fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
@@ -833,5 +849,14 @@ mod tests {
         let (doc, layout) = stacked_doc();
         let top = doc.document.node_by_id("top").expect("top index");
         assert_eq!(layout.hit_test_action(&doc.document, 5.0, 5.0), Some(top));
+    }
+
+    #[test]
+    fn font_family_projection_reaches_runtime_document() {
+        let mut doc = image_node_doc();
+        doc.font_family("Noto Sans".to_string())
+            .expect("font family projection");
+        assert_eq!(doc.document.ui_font_family(), "Noto Sans");
+        assert!(doc.font_family(String::new()).is_err());
     }
 }

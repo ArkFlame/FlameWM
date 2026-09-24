@@ -984,9 +984,18 @@ impl RuntimeDocument {
         if !size_offset.is_finite() {
             return Err("UI font size offset must be finite".to_string());
         }
-        self.ui_font_family = family;
+        self.set_ui_font_family(family)?;
         self.ui_font_size_offset = size_offset.clamp(-3.0, 6.0);
         self.ui_font_bold = bold;
+        Ok(())
+    }
+
+    pub fn set_ui_font_family(&mut self, family: impl Into<String>) -> Result<(), String> {
+        let family = family.into();
+        if family.trim().is_empty() {
+            return Err("UI font family cannot be empty".to_string());
+        }
+        self.ui_font_family = family;
         Ok(())
     }
 

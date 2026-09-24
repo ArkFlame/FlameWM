@@ -11,6 +11,7 @@ use calloop::{Interest, RegistrationToken};
 
 use crate::X11Desktop;
 use flamewm_api::ports::FdEvents;
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::system::{AudioSnapshot, SystemAction};
 use flamewm_applications::ApplicationCatalog;
 use flamewm_control_dbus::ControlServer;
@@ -243,6 +244,7 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
         if !host_started {
             let _host_guard = flamewm_profiler::start("wm.startup.host");
             host.start()?;
+            sync_snap_preview_opacity(&host.settings_snapshot());
             host_started = true;
         }
         // ProviderDirty audio domain: drain only snapshots the audio fd delivered.
@@ -306,6 +308,14 @@ where
         revision: snapshot.revision,
     })?;
     Ok(())
+}
+
+fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {
+    if let Some(SettingValue::Percent(opacity)) =
+        snapshot.values.get("WindowSnapPreviewFillOpacity")
+    {
+        crate::snap_preview::set_live_opacity(*opacity);
+    }
 }
 
 /// Drain one `WmChangeSet` once per reactor turn: refresh only required
@@ -414,13 +424,28 @@ fn register_control(
             let Some(host) = host.as_mut() else {
                 return FdAction::Continue;
             };
-            if let Err(error) = control.on_ready(host, now_ms.get()) {
+            let panels_before = host.panels_snapshot();
+            let result = control.on_ready(host, now_ms.get());
+            if let Err(error) = result {
                 let mut control_error = control_error.borrow_mut();
                 if control_error.is_none() {
                     *control_error = Some(Box::new(error));
                 }
                 FdAction::Remove
             } else {
+                sync_snap_preview_opacity(&host.settings_snapshot());
+                let panels = host.panels_snapshot();
+                if panels != panels_before {
+                    if let Err(error) = control
+                        .emit_signal(&ControlSignal::PanelsSnapshotChanged { snapshot: panels })
+                    {
+                        let mut control_error = control_error.borrow_mut();
+                        if control_error.is_none() {
+                            *control_error = Some(Box::new(error));
+                        }
+                        return FdAction::Remove;
+                    }
+                }
                 FdAction::Continue
             }
         },

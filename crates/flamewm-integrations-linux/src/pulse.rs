@@ -752,17 +752,16 @@ fn retry_connection(
     };
     let result = {
         let mut mainloop = mainloop.borrow_mut();
-        mainloop.lock();
-        let result = install_context_locked(
+        // Timer callbacks run on Pulse's event-loop thread, which already owns the
+        // threaded-mainloop lock. `Mainloop::lock()` is forbidden on that thread.
+        install_context_locked(
             &mut mainloop,
             &context_slot,
             controller,
             on_snapshot,
             timer,
             generation,
-        );
-        mainloop.unlock();
-        result
+        )
     };
     if result.is_err() {
         mark_disconnected(controller, on_snapshot, timer, generation);
@@ -842,5 +841,97 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flamewm_integrations_core::pulse::BackoffConfig;
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn unavailable_retry_timer_returns_from_pulse_callback_thread() {
+        let mut initial_mainloop = Mainloop::new().expect("Pulse mainloop must be constructible");
+        initial_mainloop
+            .start()
+            .expect("Pulse mainloop must start for the callback probe");
+        let mainloop = Rc::new(RefCell::new(initial_mainloop));
+        let context = Rc::new(RefCell::new(None));
+        let controller = Arc::new(Mutex::new(PulseController::default()));
+        let on_snapshot: Arc<Mutex<Box<SnapshotCallback>>> = Arc::new(Mutex::new(Box::new(|_| {})));
+        let timer = Rc::new(RefCell::new(None));
+        let context_weak = Rc::downgrade(&context);
+        let timer_weak = Rc::downgrade(&timer);
+        let callback_mainloop = Rc::clone(&mainloop);
+        let retry_mainloop = Rc::clone(&mainloop);
+        let callback_controller = Arc::clone(&controller);
+        let callback_snapshot = Arc::clone(&on_snapshot);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (completed_tx, completed_rx) = mpsc::channel();
+
+        let timer_callback = Box::new(move |_| {
+            let callback_thread = thread::current().id();
+            let in_pulse_thread = callback_mainloop.borrow().in_thread();
+            entered_tx
+                .send((callback_thread, in_pulse_thread))
+                .expect("callback probe receiver must remain available");
+            retry_connection(
+                &retry_mainloop,
+                &context_weak,
+                &callback_controller,
+                &callback_snapshot,
+                &timer_weak,
+            );
+            completed_tx
+                .send(())
+                .expect("callback probe receiver must remain available");
+        });
+
+        let timer_event = {
+            let mut mainloop_ref = mainloop.borrow_mut();
+            mainloop_ref.lock();
+            let event = mainloop_ref.new_timer_event_rt(
+                MonotonicTs::now()
+                    + Duration::from_millis(BackoffConfig::default().initial_ms + 50),
+                timer_callback,
+            );
+            mainloop_ref.unlock();
+            event
+        };
+        let Some(timer_event) = timer_event else {
+            mainloop.borrow_mut().stop();
+            panic!("Pulse callback probe timer must be created");
+        };
+        *timer.borrow_mut() = Some(timer_event);
+
+        let entered = entered_rx.recv_timeout(Duration::from_millis(
+            BackoffConfig::default().initial_ms + 1_000,
+        ));
+        let completed = if entered.is_ok() {
+            completed_rx.recv_timeout(Duration::from_millis(
+                BackoffConfig::default().initial_ms + 1_000,
+            ))
+        } else {
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        };
+        mainloop.borrow_mut().stop();
+
+        let (callback_thread, in_pulse_thread) =
+            entered.expect("unavailable retry timer must execute its callback");
+        assert_ne!(
+            callback_thread,
+            thread::current().id(),
+            "retry callback must run on the Pulse threaded-mainloop thread"
+        );
+        assert!(
+            in_pulse_thread,
+            "retry callback must report Pulse threaded-mainloop affinity"
+        );
+        assert!(
+            completed.is_ok(),
+            "unavailable retry callback must return without calling Mainloop::lock from the callback thread"
+        );
     }
 }

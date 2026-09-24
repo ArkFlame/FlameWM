@@ -488,6 +488,8 @@ fn canonical_dbus_protocol_keeps_snapshot_signals_with_legacy_compat() {
     for member in [
         "WindowsChanged",
         "WindowsSnapshotChanged",
+        "SettingsChanged",
+        "SettingsSnapshotChanged",
         "WorkspacesChanged",
         "WorkspacesSnapshotChanged",
         "PanelsChanged",

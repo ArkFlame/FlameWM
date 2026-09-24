@@ -9,6 +9,14 @@ pub(crate) fn is_legacy_workspace_signal(signal: &flamewm_control_wire::ControlS
     )
 }
 
+#[cfg(test)]
+#[path = "settings_sync.rs"]
+mod settings_sync;
+
+#[cfg(test)]
+#[path = "wallpaper_loader.rs"]
+mod wallpaper_loader;
+
 /// The desktop keeps the complete delivered snapshot as its only workspace
 /// authority. Presentation code reads the active index from this value; it
 /// does not maintain a second active-workspace source.

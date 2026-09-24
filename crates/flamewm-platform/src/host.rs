@@ -15,7 +15,8 @@ use flamewm_api::wm_features::{
 };
 use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_api::{
-    DesktopAppId, FlameResult, ModeId, OutputId, PanelEdge, TaskEntryId, TransactionId, WindowRef,
+    DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, PanelEdge, TaskEntryId,
+    TransactionId, WindowRef,
 };
 
 use crate::services::applications::ApplicationService;
@@ -74,9 +75,18 @@ impl<E: EnginePorts> PlatformHost<E> {
         if self.started {
             return Ok(());
         }
+        match std::fs::read_to_string(self.settings.path()) {
+            Ok(text) => self.settings.load_text(&text)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(FlameError::new(ErrorCode::IoFailure, error.to_string()));
+            }
+        }
         self.windows.refresh(&self.engine)?;
         let displays = self.displays.refresh(&mut self.engine)?.clone();
         self.panels.sync_outputs(&displays);
+        self.panels
+            .reconcile_taskbar_height(self.settings.current().taskbar_height);
         self.started = true;
         self.generation = self.generation.saturating_add(1).max(1);
         Ok(())
@@ -278,7 +288,16 @@ impl<E: EnginePorts> PlatformHost<E> {
         &mut self,
         transaction: &SettingsTransaction,
     ) -> FlameResult<SettingsSnapshot> {
-        self.settings.apply(&mut self.engine, transaction)
+        let snapshot = self.settings.apply(&mut self.engine, transaction)?;
+        if let Some(flamewm_api::settings::SettingValue::Integer(logical_size)) =
+            snapshot.values.get("taskbarHeight")
+        {
+            let logical_size = (*logical_size).try_into().map_err(|_| {
+                FlameError::new(ErrorCode::InvalidArgument, "taskbarHeight is out of range")
+            })?;
+            self.panels.reconcile_taskbar_height(logical_size);
+        }
+        Ok(snapshot)
     }
 
     #[must_use]

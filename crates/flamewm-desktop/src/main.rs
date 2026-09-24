@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_api::{OutputId, Point, Rect};
 use flamewm_applications::DesktopEntry;
@@ -49,6 +50,7 @@ use flamewm_ui_x11::{
 };
 
 mod projection;
+mod wallpaper_loader;
 mod workspace_sync;
 
 use std::sync::OnceLock;
@@ -339,6 +341,10 @@ struct DesktopState {
     workspace_visual_dirty: bool,
     workspace_present_pending: bool,
     workspace_present_span: Option<flamewm_profiler::SpanGuard>,
+    settings: SettingsSnapshot,
+    settings_visual_dirty: bool,
+    sticky_notes_enabled: bool,
+    wallpaper_loader: wallpaper_loader::WallpaperLoader,
 }
 
 #[derive(Clone)]
@@ -408,6 +414,14 @@ fn main() -> Result<(), String> {
 
     let work_area = resolve_work_area()?;
     let grid = GridConfig::compute(work_area, 100);
+    let settings = query_settings();
+    let mut wallpaper_loader = wallpaper_loader::WallpaperLoader::new(
+        work_area.width.max(1) as u32,
+        work_area.height.max(1) as u32,
+    )?;
+    wallpaper_loader
+        .request(setting_text(&settings, "wallpaper"))
+        .map_err(|_| "wallpaper loader closed during startup".to_owned())?;
     let mut model = DesktopModel::default();
     let output = OutputId::new("default");
     {
@@ -473,6 +487,10 @@ fn main() -> Result<(), String> {
             workspace_visual_dirty: false,
             workspace_present_pending: false,
             workspace_present_span: None,
+            sticky_notes_enabled: setting_bool(&settings, "stickyNotesEnabled", true),
+            settings,
+            settings_visual_dirty: false,
+            wallpaper_loader,
         };
         refresh_launchers(&mut state);
         update_gauges(&state);
@@ -483,7 +501,14 @@ fn main() -> Result<(), String> {
         env!("OUT_DIR"),
         "/flamewm-desktop.rwr"
     )))?;
-    projection::project_background(&mut document, None)?;
+    {
+        let state = state_cell.borrow();
+        projection::project_background(
+            &mut document,
+            state.settings.values.get("wallpaper"),
+            &state.wallpaper_loader.state().presentation,
+        )?;
+    }
     projection::assign_document_layers(&mut document)?;
     projection::initialize_transient_visibility(&mut document)?;
     {
@@ -532,6 +557,22 @@ fn main() -> Result<(), String> {
                     let state_cell = &workspace_cell;
                     let _ = client.on_ready(|signal| {
                         match signal {
+                            flamewm_control_wire::ControlSignal::SettingsSnapshotChanged {
+                                snapshot,
+                            } => {
+                                let wallpaper = match snapshot.values.get("wallpaper") {
+                                    Some(SettingValue::Text(path)) => path.clone(),
+                                    _ => String::new(),
+                                };
+                                let mut state = state_cell.borrow_mut();
+                                if let Err(error) = state.wallpaper_loader.request(wallpaper) {
+                                    eprintln!(
+                                        "desktop: wallpaper settings request failed: {error:?}"
+                                    );
+                                }
+                                state.settings = snapshot;
+                                state.settings_visual_dirty = true;
+                            }
                             flamewm_control_wire::ControlSignal::WorkspacesSnapshotChanged {
                                 snapshot,
                             } => {
@@ -637,6 +678,18 @@ fn main() -> Result<(), String> {
             eprintln!("desktop: degraded icon completion subscription: {error}");
         }
     }
+    let wallpaper_fd = state_cell.borrow().wallpaper_loader.wake_fd();
+    let wallpaper_cell = std::rc::Rc::clone(&state_cell);
+    let registration =
+        reactor.register_raw_fd_with_action(wallpaper_fd, calloop::Interest::READ, move |_, _| {
+            let mut state = wallpaper_cell.borrow_mut();
+            state.wallpaper_loader.wake_drain();
+            state.settings_visual_dirty = true;
+            FdAction::Continue
+        });
+    if let Err(error) = registration {
+        eprintln!("desktop: degraded wallpaper completion subscription: {error}");
+    }
     run_with_controller_events_role_with_reactor(
         document,
         UiWindowConfig {
@@ -654,14 +707,17 @@ fn main() -> Result<(), String> {
             move |event, document| {
                 let state_cell = &event_cell;
                 let mut state = state_cell.borrow_mut();
+                refresh_settings_projection(document, &mut state)?;
                 refresh_if_changed(document, &mut state)?;
                 refresh_workspace_projection(document, &mut state)?;
                 apply_pending_icon_results(document, &mut state)?;
                 poll_sticky_persist(document, &mut state)?;
-                let UiControllerEvent::Action(action) = event;
-                let result =
-                    handle_event(action, document, &mut state, mutation_dispatcher.as_ref());
-                result
+                match event {
+                    UiControllerEvent::Action(action) => {
+                        handle_event(action, document, &mut state, mutation_dispatcher.as_ref())
+                    }
+                    UiControllerEvent::Key(_) => Ok(()),
+                }
             }
         },
         {
@@ -670,6 +726,7 @@ fn main() -> Result<(), String> {
                 let state_cell = &flush_cell;
                 let mut state = state_cell.borrow_mut();
                 let _completed_workspace_present = state.workspace_present_span.take();
+                refresh_settings_projection(document, &mut state)?;
                 refresh_if_changed(document, &mut state)?;
                 refresh_workspace_projection(document, &mut state)?;
                 apply_pending_icon_results(document, &mut state)?;
@@ -702,6 +759,93 @@ fn query_workspaces() -> WorkspaceSnapshot {
         },
         Err(_) => fallback,
     }
+}
+
+fn query_settings() -> SettingsSnapshot {
+    let fallback = SettingsSnapshot::new(0);
+    match control_client() {
+        Ok(client) => match client.call(&ControlRequest::GetSettings) {
+            Ok(ControlResponse::Settings(snapshot)) => snapshot,
+            Ok(response) => {
+                eprintln!("desktop: startup GetSettings returned {response:?}; using defaults");
+                fallback
+            }
+            Err(error) => {
+                eprintln!(
+                    "desktop: startup GetSettings failed: {}; using defaults",
+                    error.message
+                );
+                fallback
+            }
+        },
+        Err(error) => {
+            eprintln!("desktop: startup settings subscription degraded: {error}; using defaults");
+            fallback
+        }
+    }
+}
+
+fn setting_text<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> String {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Text(value)) => value.clone(),
+        _ => String::new(),
+    }
+}
+
+fn setting_bool(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Boolean(value)) => *value,
+        _ => default,
+    }
+}
+
+fn setting_percent(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
+    match snapshot.values.get(key) {
+        Some(SettingValue::Percent(value)) => *value,
+        _ => default,
+    }
+}
+
+fn percent_alpha(percent: u8) -> u8 {
+    ((u16::from(percent) * 255) / 100) as u8
+}
+
+fn refresh_settings_projection(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    if !state.settings_visual_dirty {
+        return Ok(());
+    }
+    loop {
+        match state.wallpaper_loader.poll() {
+            wallpaper_loader::PollOutcome::Idle => break,
+            wallpaper_loader::PollOutcome::Failed { generation } => {
+                if let Some(diagnostic) = &state.wallpaper_loader.state().diagnostic {
+                    eprintln!(
+                        "desktop: wallpaper generation {generation} failed for {}: {}",
+                        diagnostic.path.display(),
+                        diagnostic.message
+                    );
+                }
+            }
+            wallpaper_loader::PollOutcome::Applied { .. }
+            | wallpaper_loader::PollOutcome::Stale { .. } => {}
+        }
+    }
+    // SettingsSnapshotChanged is the live authority for stickyNotesEnabled and
+    // DesktopSelectionFillOpacity; wallpaper stays on the bounded loader path.
+    state.sticky_notes_enabled = setting_bool(&state.settings, "stickyNotesEnabled", true);
+    let wallpaper = state.settings.values.get("wallpaper");
+    projection::project_background(
+        document,
+        wallpaper,
+        &state.wallpaper_loader.state().presentation,
+    )?;
+    sync_selection_visuals(document, state)?;
+    sync_sticky(document, state)?;
+    state.settings_visual_dirty = false;
+    Ok(())
 }
 
 fn refresh_if_changed_direct(state: &mut DesktopState) -> Result<(), String> {
@@ -1030,7 +1174,7 @@ fn sync_sticky(
     state: &mut DesktopState,
 ) -> Result<(), String> {
     let visible = visible_sticky_notes(state);
-    let show_any = state.sticky.enabled() && !visible.is_empty();
+    let show_any = state.sticky_notes_enabled && state.sticky.enabled() && !visible.is_empty();
     for slot in 0..STICKY_SLOTS {
         let number = slot + 1;
         let id = format!("sticky-{number}");
@@ -2454,6 +2598,11 @@ fn sync_selection_visuals(
     document: &mut impl UiDocumentAccess,
     state: &DesktopState,
 ) -> Result<(), String> {
+    let fill_alpha = percent_alpha(setting_percent(
+        &state.settings,
+        "DesktopSelectionFillOpacity",
+        20,
+    ));
     for (index, item) in state.model.items().enumerate() {
         let id = format!("desktop-item-{index}");
         if state.selection.selected().contains(&item.id) {
@@ -2463,7 +2612,7 @@ fn sync_selection_visuals(
                     r: 239,
                     g: 64,
                     b: 72,
-                    a: 52,
+                    a: fill_alpha,
                 },
             )?;
             document.border(

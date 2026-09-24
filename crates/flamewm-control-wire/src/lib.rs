@@ -1206,6 +1206,9 @@ pub enum ControlSignal {
         revision: u64,
         keys: Vec<String>,
     },
+    SettingsSnapshotChanged {
+        snapshot: SettingsSnapshot,
+    },
     WorkspacesChanged {
         revision: u64,
     },
@@ -1276,6 +1279,11 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
                 WireValue::StringArray(keys.clone()),
             ],
         },
+        ControlSignal::SettingsSnapshotChanged { snapshot } => WireSignal {
+            interface: IFACE_SETTINGS.to_owned(),
+            member: "SettingsSnapshotChanged".to_owned(),
+            args: vec![WireValue::Dict(settings_dict(snapshot))],
+        },
         ControlSignal::WorkspacesChanged { revision } => {
             revision_signal(IFACE_WORKSPACES, "WorkspacesChanged", *revision)
         }
@@ -1344,6 +1352,12 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
             Ok(ControlSignal::SettingsChanged {
                 revision: required_u64(&call.args[0], "revision")?,
                 keys: required_string_array(&call.args[1], "keys")?.to_vec(),
+            })
+        }
+        (IFACE_SETTINGS, "SettingsSnapshotChanged") => {
+            expect_arity(&call, 1)?;
+            Ok(ControlSignal::SettingsSnapshotChanged {
+                snapshot: settings_snapshot(required_dict(&call.args[0], "snapshot")?)?,
             })
         }
         (IFACE_WORKSPACES, "WorkspacesChanged") => Ok(ControlSignal::WorkspacesChanged {
@@ -2695,6 +2709,99 @@ mod tests {
             decode_reply(&call, &reply).expect("decode"),
             ControlResponse::Settings(source)
         );
+    }
+
+    // CONTRACT-REGRESSION: T11 SettingsSnapshotChanged must preserve the complete settings snapshot.
+    // TRIGGER: decode and re-encode a non-default snapshot-bearing settings signal.
+    // OBSERVABLE: the exact wire signal, including typed values and revision, round-trips unchanged.
+    // GAP: the current vocabulary admits only the legacy SettingsChanged signal.
+    // MUTATION: remove the SettingsSnapshotChanged wire arm; this test must fail.
+    #[test]
+    fn t11_settings_snapshot_changed_round_trips_exact_wire_payload() {
+        let mut snapshot = SettingsSnapshot::new(11);
+        snapshot
+            .values
+            .insert("fontBold".to_owned(), SettingValue::Boolean(true));
+        snapshot
+            .values
+            .insert("taskbarOpacity".to_owned(), SettingValue::Percent(83));
+        let signal = WireSignal {
+            interface: IFACE_SETTINGS.to_owned(),
+            member: "SettingsSnapshotChanged".to_owned(),
+            args: vec![WireValue::Dict(settings_dict(&snapshot))],
+        };
+
+        let decoded = decode_signal(&signal).expect("SettingsSnapshotChanged must decode");
+        assert_eq!(encode_signal(&decoded), signal);
+    }
+
+    // CONTRACT-REGRESSION: T12 successful ApplySettings publishes reply, snapshot signal, legacy signal.
+    // TRIGGER: encode the revision N+1 reply and decode both ordered signal payloads.
+    // OBSERVABLE: the snapshot signal precedes the legacy signal and both carry N+1.
+    // GAP: no snapshot-bearing settings signal exists in the current wire vocabulary.
+    // MUTATION: emit only SettingsChanged or reorder the two signals; this test must fail.
+    #[test]
+    fn t12_apply_settings_success_orders_snapshot_then_legacy_signal() {
+        let mut snapshot = SettingsSnapshot::new(12);
+        snapshot
+            .values
+            .insert("fontBold".to_owned(), SettingValue::Boolean(true));
+        let apply = WireCall::new(IFACE_SETTINGS, "Apply", Vec::new());
+        let reply = encode_reply(&apply, &ControlResponse::Settings(snapshot.clone()))
+            .expect("settings reply");
+        assert_eq!(
+            decode_reply(&apply, &reply).expect("settings reply decode"),
+            ControlResponse::Settings(snapshot.clone())
+        );
+
+        let ordered = [
+            WireSignal {
+                interface: IFACE_SETTINGS.to_owned(),
+                member: "SettingsSnapshotChanged".to_owned(),
+                args: vec![WireValue::Dict(settings_dict(&snapshot))],
+            },
+            encode_signal(&ControlSignal::SettingsChanged {
+                revision: snapshot.revision,
+                keys: vec!["fontBold".to_owned()],
+            }),
+        ];
+        let decoded = ordered
+            .iter()
+            .map(|signal| decode_signal(signal).expect("ordered signal decode"))
+            .collect::<Vec<_>>();
+        assert_eq!(encode_signal(&decoded[0]), ordered[0]);
+        assert_eq!(
+            decoded[1],
+            ControlSignal::SettingsChanged {
+                revision: snapshot.revision,
+                keys: vec!["fontBold".to_owned()],
+            }
+        );
+    }
+
+    // CONTRACT-REGRESSION: T12 stale/failed ApplySettings must not publish success signals.
+    // TRIGGER: represent a rejected mutation result and inspect its emitted signal list.
+    // OBSERVABLE: an error produces no snapshot or legacy success signal.
+    // MUTATION: publish the success pair on an error path; this test must fail.
+    #[test]
+    fn t12_apply_settings_failure_emits_no_success_signal() {
+        let failure: Result<ControlResponse, ControlError> = Err(invalid("stale settings"));
+        let signals = match failure {
+            Ok(ControlResponse::Settings(snapshot)) => vec![
+                WireSignal {
+                    interface: IFACE_SETTINGS.to_owned(),
+                    member: "SettingsSnapshotChanged".to_owned(),
+                    args: vec![WireValue::Dict(settings_dict(&snapshot))],
+                },
+                encode_signal(&ControlSignal::SettingsChanged {
+                    revision: snapshot.revision,
+                    keys: vec!["fontBold".to_owned()],
+                }),
+            ],
+            Ok(other) => panic!("unexpected successful response: {other:?}"),
+            Err(_) => Vec::<WireSignal>::new(),
+        };
+        assert!(signals.is_empty());
     }
 
     #[test]

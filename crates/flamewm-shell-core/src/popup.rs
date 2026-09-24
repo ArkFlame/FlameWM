@@ -616,3 +616,80 @@ mod fitted_start_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod panel_popup_edge_tests {
+    use super::*;
+
+    #[test]
+    fn panel_popups_open_opposite_each_panel_edge_and_stay_on_output() {
+        let output_rect = Rect::new(0, 0, 1000, 800);
+        let output = OutputSnapshot {
+            id: OutputId::new("test-output"),
+            connector: "test".to_owned(),
+            edid_identity: "test".to_owned(),
+            connected: true,
+            primary: true,
+            geometry: output_rect,
+            current_mode: flamewm_api::ModeId(1),
+            modes: Vec::new(),
+            shell_scale_percent: 100,
+        };
+        let cases = [
+            (
+                PanelEdge::Bottom,
+                Rect::new(0, 400, 1000, 44),
+                PopoverEdge::Above,
+            ),
+            (
+                PanelEdge::Top,
+                Rect::new(0, 300, 1000, 44),
+                PopoverEdge::Below,
+            ),
+            (
+                PanelEdge::Left,
+                Rect::new(400, 0, 44, 800),
+                PopoverEdge::Right,
+            ),
+            (
+                PanelEdge::Right,
+                Rect::new(500, 0, 44, 800),
+                PopoverEdge::Left,
+            ),
+        ];
+
+        for (edge, geometry, expected_edge) in cases {
+            let panel = PanelSnapshot {
+                output: output.id.clone(),
+                edge,
+                logical_size: 44,
+                visible: true,
+                geometry,
+            };
+            let rect = panel_popup_rect(
+                &panel,
+                &output,
+                ShellMetrics::default(),
+                Size::new(180, 120),
+                3,
+            );
+
+            assert!(rect.x >= output_rect.x, "{edge:?}: {rect:?}");
+            assert!(rect.y >= output_rect.y, "{edge:?}: {rect:?}");
+            assert!(rect.right() <= output_rect.right(), "{edge:?}: {rect:?}");
+            assert!(rect.bottom() <= output_rect.bottom(), "{edge:?}: {rect:?}");
+            match expected_edge {
+                PopoverEdge::Above => assert!(rect.bottom() <= geometry.y, "{edge:?}: {rect:?}"),
+                PopoverEdge::Below => {
+                    assert!(rect.y >= geometry.bottom(), "{edge:?}: {rect:?}")
+                }
+                PopoverEdge::Right => {
+                    assert!(rect.x >= geometry.right(), "{edge:?}: {rect:?}")
+                }
+                PopoverEdge::Left => {
+                    assert!(rect.right() <= geometry.x, "{edge:?}: {rect:?}")
+                }
+            }
+        }
+    }
+}

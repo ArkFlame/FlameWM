@@ -78,6 +78,9 @@
       <arg name="newRevision" type="t"/>
       <arg name="keys" type="as"/>
     </signal>
+    <signal name="SettingsSnapshotChanged">
+      <arg name="snapshot" type="a{sv}"/>
+    </signal>
   </interface>
 
   <!-- Workspaces -->

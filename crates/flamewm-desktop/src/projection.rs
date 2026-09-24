@@ -9,6 +9,7 @@ use flamewm_integrations_linux::icons::{
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
+use crate::wallpaper_loader::WallpaperPresentation;
 use std::path::PathBuf;
 
 const ICON_KINDS: [&str; 5] = ["directory", "desktop-launcher", "file", "symlink", "trash"];
@@ -22,6 +23,7 @@ const ICON_TILE_PX: u32 = 44;
 pub fn project_background(
     document: &mut impl UiDocumentAccess,
     wallpaper: Option<&SettingValue>,
+    presentation: &WallpaperPresentation,
 ) -> Result<(), String> {
     let selected = matches!(wallpaper, Some(SettingValue::Text(path)) if !path.trim().is_empty());
     document.background(
@@ -34,7 +36,20 @@ pub fn project_background(
         },
     )?;
     document.visible("desktop-watermark", !selected)?;
-    document.visible("desktop-wallpaper-selection", !selected)?;
+    document.visible("desktop-wallpaper-selection", selected)?;
+    if selected {
+        if let WallpaperPresentation::Image(raster) = presentation {
+            document.image_rgba8(
+                "desktop-wallpaper-selection",
+                RuntimeImage {
+                    source: raster.source.clone(),
+                    width: raster.width,
+                    height: raster.height,
+                    pixels: raster.pixels.clone(),
+                },
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -625,6 +640,39 @@ mod tests {
             .visible("desktop-menu", true)
             .expect("show restores authored display");
         assert_eq!(probe.shown, vec!["desktop-menu".to_owned()]);
+    }
+
+    #[test]
+    fn compiled_desktop_document_has_only_canonical_sticky_slots() {
+        let mut document = flamewm_ui_x11::decode_document(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/flamewm-desktop.rwr"
+        )))
+        .expect("decode compiled desktop document");
+
+        assert!(
+            document.visible("sticky-note", false).is_err(),
+            "compiled desktop document must not contain the legacy sticky-note node"
+        );
+
+        for slot in 1..=STICKY_SLOT_COUNT {
+            let note_id = format!("sticky-{slot}");
+            assert!(
+                document.visible(&note_id, false).is_ok(),
+                "compiled desktop document must contain canonical sticky note {slot}"
+            );
+            let text_id = format!("sticky-{slot}-text");
+            assert!(
+                document.text(&text_id, String::new()).is_ok(),
+                "compiled desktop document must contain canonical sticky text target {slot}"
+            );
+        }
+        assert!(
+            document
+                .visible(&format!("sticky-{}", STICKY_SLOT_COUNT + 1), false)
+                .is_err(),
+            "compiled desktop document must not contain a slot beyond the canonical count"
+        );
     }
 
     #[test]

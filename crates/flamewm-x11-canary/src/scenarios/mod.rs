@@ -9,6 +9,7 @@
 pub mod debug_retention;
 pub mod interaction_regressions;
 pub mod popup_lifecycle;
+pub mod reactor_presentation;
 pub mod t15_t18;
 pub mod window_chrome;
 pub mod window_interaction;
@@ -255,6 +256,10 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         let (pass, detail) = workspaces::run_t12(canary, args);
         results.push(run("t12-workspace-churn", pass, detail));
     }
+    if scenario == "t21" || scenario == "t22" || scenario == "t21-t22" {
+        let (pass, detail) = workspaces::run_t21_t22(canary, args);
+        results.push(run("t21-t22-workspace-sticky-convergence", pass, detail));
+    }
     if scenario == "all" || scenario == "retention" {
         let (pass, detail) = debug_retention::run_t13(args);
         results.push(run("t13-debug-retention", pass, detail));
@@ -275,9 +280,13 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         let (pass, detail) = t15_t18::run_t18(canary, args);
         results.push(run("t18-desktop-selection-admission", pass, detail));
     }
+    if scenario == "reactor" || scenario == "reactor-presentation" {
+        let (pass, detail) = reactor_presentation::run(canary, args);
+        results.push(run("t18-t20-reactor-presentation-admission", pass, detail));
+    }
     if results.is_empty() {
         crate::fail(
-            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|xtest-self-check|all)",
+            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|xtest-self-check|all)",
         );
     }
     let pass = results.iter().all(|(_, ok, _)| *ok);

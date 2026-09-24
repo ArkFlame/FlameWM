@@ -8,7 +8,7 @@
 <body>
   <nav class="settings-nav">
     <div class="settings-brand"><img src="assets/branding/flamewm-start.svg"></div>
-    <div class="nav-selection"><div class="nav-selection-accent"></div></div>
+    <div id="nav-selection" class="nav-selection"><div class="nav-selection-accent"></div></div>
     <button class="nav-row" data-action="settings.page.appearance"><img src="assets/breeze/settings-appearance.svg"><div>Appearance</div></button>
     <button class="nav-row" data-action="settings.page.desktop"><img src="assets/breeze/settings-desktop.svg"><div>Desktop</div></button>
     <button class="nav-row" data-action="settings.page.taskbar"><img src="assets/breeze/preferences-system.svg"><div>Taskbar</div></button>
@@ -19,51 +19,79 @@
   </nav>
   <main class="settings-main">
     <section id="page-appearance" class="settings-page page-scroll">
-      <div class="page-title">Appearance</div><div class="page-subtitle">Colors and icons.</div>
+      <div class="page-heading"><div class="page-title">Appearance</div><div class="page-subtitle">Accent, icon theme and live preview</div></div>
       <div class="settings-card">
-        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Accent color</div><div class="setting-note">Used across selection, focus and layout previews.</div></div></div>
-        <div class="accent-palette"><button class="accent-swatch swatch-red" data-action="settings.accent.red"></button><button class="accent-swatch swatch-blue" data-action="settings.accent.blue"></button><button class="accent-swatch swatch-purple" data-action="settings.accent.purple"></button><button class="accent-swatch swatch-teal" data-action="settings.accent.teal"></button></div>
-        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Icon theme</div><div class="setting-note">FlameWM Breeze</div></div><button class="select-box">Built-in</button></div>
+        <div class="setting-group-title">Theme</div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Accent color</div><div class="setting-note">Used across focus, selection and layout previews.</div></div><div class="accent-palette"><button class="accent-swatch swatch-red" data-action="settings.accent.red"></button><button class="accent-swatch swatch-blue" data-action="settings.accent.blue"></button><button class="accent-swatch swatch-purple" data-action="settings.accent.purple"></button><button class="accent-swatch swatch-teal" data-action="settings.accent.teal"></button></div></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Accent preset</div><div class="setting-note">Restore the native FlameWM accent.</div></div><button class="settings-button" data-action="settings.accent.reset">Reset</button></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Icon theme</div><div class="setting-note">Built-in Breeze icon set</div></div><button class="select-box" data-action="settings.icon-theme.next">FlameWM Breeze</button></div>
       </div>
     </section>
+
     <section id="page-desktop" class="settings-page page-scroll">
-      <div class="page-title">Desktop</div><div class="page-subtitle">Wallpaper, desktop feedback and sticky notes.</div>
+      <div class="page-heading"><div class="page-title">Desktop</div><div class="page-subtitle">Wallpaper, selection and snap preview</div></div>
       <div class="settings-card">
-        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Sticky notes</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="sticky-toggle-on" data-action="settings.toggle.stickyNotesEnabled"><i></i></button><button class="toggle toggle-off" id="sticky-toggle-off" data-action="settings.toggle.stickyNotesEnabled"><i></i></button></div></div>
-        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Selection rectangle opacity</div></div><div class="value-pill value">20%</div></div>
+        <div class="setting-group-title">Desktop surface</div>
+        <div class="setting-block wallpaper-setting"><div class="setting-copy"><div class="setting-title">Wallpaper</div><div class="setting-note">Choose an image or restore the default desktop wallpaper.</div></div><div class="wallpaper-actions"><button class="settings-button" id="wallpaper-choose" data-action="settings.wallpaper.choose">Choose…</button><button class="settings-button" id="wallpaper-reset" data-action="settings.wallpaper.reset">Restore default</button></div></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Sticky notes</div><div class="setting-note">Keep notes available on the desktop.</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="sticky-toggle-on" data-action="settings.toggle.stickyNotesEnabled"><i></i></button><button class="toggle toggle-off" id="sticky-toggle-off" data-action="settings.toggle.stickyNotesEnabled"><i></i></button></div></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Selection rectangle opacity</div><div class="setting-note">Desktop selection fill</div></div><div class="step-control"><button class="step-button" data-action="settings.selection-opacity.down">−</button><div class="value-pill value" data-status="authoritative">20%</div><button class="step-button" data-action="settings.selection-opacity.up">+</button></div></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Window layout preview opacity</div><div class="setting-note">Snap preview fill</div></div><div class="step-control"><button class="step-button" data-action="settings.snap-opacity.down">−</button><div class="value-pill value" data-status="authoritative">20%</div><button class="step-button" data-action="settings.snap-opacity.up">+</button></div></div>
       </div>
     </section>
+
     <section id="page-taskbar" class="settings-page page-scroll">
-      <div class="page-title">Taskbar</div><div class="page-subtitle">Customize the FlameWM taskbar.</div>
+      <div class="page-heading"><div class="page-title">Taskbar</div><div class="page-subtitle">Color, opacity, height and Start branding</div></div>
       <div class="settings-card">
-        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Position</div></div><button class="select-box">Bottom</button></div>
-        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Transparency</div></div><div class="value-pill value">1%</div></div>
+        <div class="setting-group-title">Panel</div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Edge</div><div class="setting-note">Panel placement for the current output</div></div><button class="select-box" data-action="settings.taskbar.position">Bottom</button></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Color</div><div class="setting-note">Taskbar surface color</div></div><button class="select-box" data-action="settings.taskbar.color">Pitch black</button></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Size</div><div class="setting-note">Panel height</div></div><button class="select-box" data-action="settings.taskbar.size">Default</button></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Opacity</div><div class="setting-note">Panel transparency</div></div><div class="step-control"><button class="step-button" data-action="settings.taskbar-opacity.down">−</button><div class="value-pill value" data-status="authoritative">1%</div><button class="step-button" data-action="settings.taskbar-opacity.up">+</button></div></div>
       </div>
     </section>
+
     <section id="page-displays" class="settings-page page-scroll">
-      <div class="page-title">Displays</div><div class="page-subtitle">Select a display to configure resolution and FlameWM scale.</div>
+      <div class="page-heading"><div class="page-title">Displays</div><div class="page-subtitle">Output mode, scale and reversible confirmation</div></div>
       <div class="display-layout">
-        <button class="display-output" id="display-output-0" data-action="settings.display.select.0"><div class="monitor-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-0"></strong><small id="display-output-size-0"></small><em id="display-output-selected-0" class="display-state-selected"></em><em id="display-output-unselected-0" class="display-state-unselected"></em></button>
-        <button class="display-output" id="display-output-1" data-action="settings.display.select.1"><div class="monitor-screen wide-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-1"></strong><small id="display-output-size-1"></small><em id="display-output-selected-1" class="display-state-selected"></em><em id="display-output-unselected-1" class="display-state-unselected"></em></button>
-        <button class="display-output" id="display-output-2" data-action="settings.display.select.2"><div class="monitor-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-2"></strong><small id="display-output-size-2"></small><em id="display-output-selected-2" class="display-state-selected"></em><em id="display-output-unselected-2" class="display-state-unselected"></em></button>
-        <button class="display-output" id="display-output-3" data-action="settings.display.select.3"><div class="monitor-screen wide-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-3"></strong><small id="display-output-size-3"></small><em id="display-output-selected-3" class="display-state-selected"></em><em id="display-output-unselected-3" class="display-state-unselected"></em></button>
+        <button class="display-output" id="display-output-0" data-action="settings.display.select.0"><div class="monitor-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-0">&#8203;</strong><small id="display-output-size-0">&#8203;</small><em id="display-output-selected-0" class="display-state-selected"></em><em id="display-output-unselected-0" class="display-state-unselected"></em></button>
+        <button class="display-output" id="display-output-1" data-action="settings.display.select.1"><div class="monitor-screen wide-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-1">&#8203;</strong><small id="display-output-size-1">&#8203;</small><em id="display-output-selected-1" class="display-state-selected"></em><em id="display-output-unselected-1" class="display-state-unselected"></em></button>
+        <button class="display-output" id="display-output-2" data-action="settings.display.select.2"><div class="monitor-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-2">&#8203;</strong><small id="display-output-size-2">&#8203;</small><em id="display-output-selected-2" class="display-state-selected"></em><em id="display-output-unselected-2" class="display-state-unselected"></em></button>
+        <button class="display-output" id="display-output-3" data-action="settings.display.select.3"><div class="monitor-screen wide-screen"><div class="monitor-window"></div><div class="monitor-bar"><div></div></div></div><strong id="display-output-name-3">&#8203;</strong><small id="display-output-size-3">&#8203;</small><em id="display-output-selected-3" class="display-state-selected"></em><em id="display-output-unselected-3" class="display-state-unselected"></em></button>
       </div>
-      <div class="settings-card">
-        <div class="setting-block"><div class="setting-copy"><div id="display-selected-title" class="setting-title">Selected display</div><div class="setting-note">Authoritative output snapshot</div></div></div>
-        <div class="setting-block"><div class="setting-title">Resolution</div><div class="value-pill value" id="display-selected-resolution"></div></div>
-        <div class="setting-block"><div class="setting-title">Scale</div><div class="scale-setting"><div class="value-pill value" id="display-selected-scale"></div><div class="scale-buttons"><button data-action="settings.display.scale.100">100%</button><button data-action="settings.display.scale.125">125%</button><button data-action="settings.display.scale.150">150%</button><button data-action="settings.display.scale.175">175%</button><button data-action="settings.display.scale.200">200%</button></div></div></div>
+      <div class="settings-card display-card">
+        <div class="setting-group-title">Selected output</div>
+        <div class="setting-block"><div class="setting-copy"><div id="display-selected-title" class="setting-title">&#8203;</div><div class="setting-note">Authoritative output snapshot</div></div><div class="status-token" data-status="confirmation">Changes are reversible</div></div>
+        <div class="setting-block"><div class="setting-title">Resolution</div><div class="value-pill value" id="display-selected-resolution">&#8203;</div></div>
+        <div class="setting-block"><div class="setting-title">Mode</div><div class="status-token" data-status="read-only">Current mode · confirm before keeping</div></div>
+        <div class="setting-block"><div class="setting-title">Scale</div><div class="scale-setting"><div class="value-pill value" id="display-selected-scale">&#8203;</div><div class="scale-buttons"><button data-action="settings.display.scale.100">100%</button><button data-action="settings.display.scale.125">125%</button><button data-action="settings.display.scale.150">150%</button><button data-action="settings.display.scale.175">175%</button><button data-action="settings.display.scale.200">200%</button></div></div></div>
       </div>
     </section>
+
     <section id="page-fonts" class="settings-page page-scroll">
-      <div class="page-title">Fonts</div><div class="page-subtitle">Interface typography.</div>
-      <div class="settings-card"><div class="setting-block"><div class="setting-copy"><div class="setting-title">Global bold text</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="font-toggle-on" data-action="settings.toggle.fontBold"><i></i></button><button class="toggle toggle-off" id="font-toggle-off" data-action="settings.toggle.fontBold"><i></i></button></div></div></div>
+      <div class="page-heading"><div class="page-title">Fonts</div><div class="page-subtitle">Family, bold and size offset</div></div>
+      <div class="settings-card">
+        <div class="setting-group-title">Interface typography</div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Font family</div><div class="setting-note">Default interface family</div></div><button class="select-box" data-action="settings.font.family">System Sans</button></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Global bold text</div><div class="setting-note">Apply stronger labels throughout FlameWM</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="font-toggle-on" data-action="settings.toggle.fontBold"><i></i></button><button class="toggle toggle-off" id="font-toggle-off" data-action="settings.toggle.fontBold"><i></i></button></div></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Size offset</div><div class="setting-note">Relative to the native interface size</div></div><div class="step-control"><button class="step-button" data-action="settings.font-size.down">−</button><div class="value-pill value" data-status="authoritative">Default</div><button class="step-button" data-action="settings.font-size.up">+</button></div></div>
+      </div>
     </section>
+
     <section id="page-hotkeys" class="settings-page page-scroll">
-      <div class="page-title">Hotkeys</div><div class="page-subtitle">Click shortcut and press new combination.</div>
-      <div class="settings-card hotkey-card"><div class="hotkey-row"><div>Toggle Start menu</div><div class="value-pill value">Super</div></div></div>
+      <div class="page-heading"><div class="page-title">Hotkeys</div><div class="page-subtitle">Capture, clear and reset shortcut rows</div></div>
+      <div class="settings-card hotkey-card">
+        <div class="setting-group-title">Curated shortcuts</div>
+        <div class="hotkey-row"><div class="hotkey-copy"><div>Toggle Start menu</div><small>Capture on release · Escape clears</small></div><button class="hotkey-key" data-action="settings.hotkey.start">Super</button></div>
+        <div class="hotkey-row"><div class="hotkey-copy"><div>Desktop left</div><small>Capture on release · Escape clears</small></div><button class="hotkey-key" data-action="settings.hotkey.left">Ctrl + Super + Left</button></div>
+        <div class="hotkey-row"><div class="hotkey-copy"><div>Desktop right</div><small>Capture on release · Escape clears</small></div><button class="hotkey-key" data-action="settings.hotkey.right">Ctrl + Super + Right</button></div>
+        <div class="hotkey-row"><div class="hotkey-copy"><div>Desktop up</div><small>Capture on release · Escape clears</small></div><button class="hotkey-key" data-action="settings.hotkey.up">Ctrl + Super + Up</button></div>
+        <div class="hotkey-row"><div class="hotkey-copy"><div>Desktop down</div><small>Capture on release · Escape clears</small></div><button class="hotkey-key" data-action="settings.hotkey.down">Ctrl + Super + Down</button></div>
+        <div class="hotkey-footer"><div class="status-token" data-status="read-only">Reset restores the native shortcut set</div><div class="status-token" data-status="action-owner">FlameWM control</div></div>
+      </div>
     </section>
+
     <section id="page-about" class="settings-page about-page">
-      <img class="about-logo" src="assets/branding/flamewm-start.svg"><div class="about-tagline">A lightweight desktop by ArkFlame Studios</div>
+      <img class="about-logo" src="assets/branding/flamewm-start.svg"><div class="about-tagline">A lightweight desktop by ArkFlame Studios</div><div class="about-version">FlameWM native settings · read-only product information</div>
       <div class="about-actions"><button class="about-link" data-action="about.donate"><img src="assets/web/paypal.svg"><div>Donate</div></button><button class="about-link" data-action="about.source"><img src="assets/web/github.svg"><div>Source Code</div></button><button class="about-link" data-action="about.website"><img src="assets/web/flamewm-icon.svg"><div>Website</div></button></div>
     </section>
   </main>

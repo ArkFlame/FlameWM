@@ -258,11 +258,26 @@ impl<T: ControlTransport> SettingsClient<T> {
             .settings
             .as_ref()
             .map_or(0, |snapshot| snapshot.revision);
-        let transaction = SettingsTransaction {
+        self.apply_transaction(SettingsTransaction {
             expected_revision,
             changes,
             reset_section: None,
-        };
+        })
+    }
+
+    pub fn reset_section(&mut self, section: impl Into<String>) -> Result<(), ControlError> {
+        let expected_revision = self
+            .settings
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.revision);
+        self.apply_transaction(SettingsTransaction {
+            expected_revision,
+            changes: Vec::new(),
+            reset_section: Some(section.into()),
+        })
+    }
+
+    fn apply_transaction(&mut self, transaction: SettingsTransaction) -> Result<(), ControlError> {
         let response = self
             .transport
             .call(ControlRequest::ApplySettings(transaction))?;
@@ -478,7 +493,7 @@ impl<T: ControlTransport> SettingsClient<T> {
         self.refresh_displays()
     }
 
-    pub fn set_shell_scale(&mut self, percent: u16) -> Result<bool, ControlError> {
+    pub fn set_shell_scale(&mut self, percent: u16) -> Result<(), ControlError> {
         let snapshot = self
             .displays
             .as_ref()
@@ -493,11 +508,9 @@ impl<T: ControlTransport> SettingsClient<T> {
             percent,
             expected_revision: snapshot.generation,
         })?;
-        let ControlResponse::Changed(changed) = response else {
-            return Err(unexpected_response("changed flag"));
-        };
+        expect_unit(response)?;
         self.refresh_displays()?;
-        Ok(changed)
+        Ok(())
     }
 
     pub fn set_panel_edge(
@@ -506,12 +519,60 @@ impl<T: ControlTransport> SettingsClient<T> {
         edge: PanelEdge,
     ) -> Result<(), ControlError> {
         let expected_revision = self.panels.as_ref().map_or(0, |snapshot| snapshot.revision);
-        expect_unit(self.transport.call(ControlRequest::SetPanelEdge {
+        self.apply_panel_mutation(ControlRequest::SetPanelEdge {
             output,
             edge,
             expected_revision,
-        })?)?;
-        self.refresh_panels()
+        })
+    }
+
+    pub fn set_panel_size(
+        &mut self,
+        output: OutputId,
+        logical_size: u16,
+    ) -> Result<(), ControlError> {
+        let expected_revision = self.panels.as_ref().map_or(0, |snapshot| snapshot.revision);
+        self.apply_panel_mutation(ControlRequest::SetPanelSize {
+            output,
+            logical_size,
+            expected_revision,
+        })
+    }
+
+    fn apply_panel_mutation(&mut self, request: ControlRequest) -> Result<(), ControlError> {
+        match self.transport.call(request.clone()) {
+            Ok(response) => {
+                expect_unit(response)?;
+                self.refresh_panels()
+            }
+            Err(error) if error.code == flamewm_api::ErrorCode::StaleRevision => {
+                self.refresh_panels()?;
+                let expected_revision =
+                    self.panels.as_ref().map_or(0, |snapshot| snapshot.revision);
+                let retry_request = match request {
+                    ControlRequest::SetPanelEdge { output, edge, .. } => {
+                        ControlRequest::SetPanelEdge {
+                            output,
+                            edge,
+                            expected_revision,
+                        }
+                    }
+                    ControlRequest::SetPanelSize {
+                        output,
+                        logical_size,
+                        ..
+                    } => ControlRequest::SetPanelSize {
+                        output,
+                        logical_size,
+                        expected_revision,
+                    },
+                    _ => return Err(unexpected_response("panel mutation request")),
+                };
+                expect_unit(self.transport.call(retry_request)?)?;
+                self.refresh_panels()
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn reconcile_selected_output(&mut self, snapshot: &DisplaySnapshot) {
@@ -557,9 +618,12 @@ fn missing_snapshot(name: &str) -> ControlError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::rc::Rc;
 
     use flamewm_api::display::{DisplayMode, OutputSnapshot};
+    use flamewm_api::panels::{PanelSnapshot, PanelsSnapshot};
     use flamewm_api::{Rect, Size};
 
     use super::*;
@@ -573,6 +637,18 @@ mod tests {
     impl ControlTransport for FakeTransport {
         fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
             self.requests.push(request);
+            self.responses.pop_front().expect("queued response")
+        }
+    }
+
+    struct RecordingTransport {
+        responses: VecDeque<Result<ControlResponse, ControlError>>,
+        requests: Rc<RefCell<Vec<ControlRequest>>>,
+    }
+
+    impl ControlTransport for RecordingTransport {
+        fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
+            self.requests.borrow_mut().push(request);
             self.responses.pop_front().expect("queued response")
         }
     }
@@ -601,6 +677,21 @@ mod tests {
         }
     }
 
+    fn panels_snapshot(revision: u64, edge: PanelEdge, logical_size: u16) -> PanelsSnapshot {
+        PanelsSnapshot {
+            revision,
+            panels: vec![PanelSnapshot {
+                output: OutputId::new("HDMI-1"),
+                edge,
+                logical_size,
+                visible: true,
+                geometry: Rect::new(0, 1036, 1920, i32::from(logical_size)),
+            }],
+            tasks: Vec::new(),
+            pinned_apps: Vec::new(),
+        }
+    }
+
     #[test]
     fn display_refresh_selects_primary_output() {
         let mut transport = FakeTransport::default();
@@ -613,6 +704,53 @@ mod tests {
             client.ui().selected_output.as_ref().map(|id| id.0.as_str()),
             Some("HDMI-1")
         );
+    }
+
+    #[test]
+    fn set_shell_scale_accepts_unit_after_authoritative_success() {
+        let mut updated = display_snapshot();
+        updated.generation = 4;
+        updated.outputs[0].shell_scale_percent = 125;
+
+        let mut transport = FakeTransport::default();
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
+        transport.responses.push_back(Ok(ControlResponse::Unit));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(updated)));
+
+        let mut client = SettingsClient::new(transport);
+        client.refresh_displays().expect("initial display snapshot");
+        assert!(
+            client.set_shell_scale(125).is_ok(),
+            "void SetShellScale success must not become InternalFailure"
+        );
+
+        assert_eq!(
+            client.displays().map(|snapshot| snapshot.generation),
+            Some(4)
+        );
+        assert_eq!(
+            client
+                .displays()
+                .and_then(|snapshot| snapshot.outputs.first())
+                .map(|output| output.shell_scale_percent),
+            Some(125)
+        );
+        assert!(matches!(
+            client.transport.requests.as_slice(),
+            [
+                ControlRequest::GetDisplays,
+                ControlRequest::SetShellScale {
+                    output,
+                    percent: 125,
+                    expected_revision: 3,
+                },
+                ControlRequest::GetDisplays,
+            ] if output == &OutputId::new("HDMI-1")
+        ));
     }
 
     #[test]
@@ -633,6 +771,276 @@ mod tests {
             client.shortcuts().map(|snapshot| snapshot.revision),
             Some(2)
         );
+    }
+
+    #[test]
+    fn settings_helpers_map_reset_and_font_values_and_refresh_cache() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let initial = SettingsSnapshot::new(4);
+        let updated = SettingsSnapshot::new(5);
+        let transport = RecordingTransport {
+            responses: VecDeque::from([
+                Ok(ControlResponse::Settings(initial)),
+                Ok(ControlResponse::Settings(updated.clone())),
+                Ok(ControlResponse::Settings(SettingsSnapshot::new(6))),
+            ]),
+            requests: requests.clone(),
+        };
+        let mut client = SettingsClient::new(transport);
+        client
+            .refresh_settings()
+            .expect("initial settings snapshot");
+        client
+            .set_fonts("Inter", true, 2)
+            .expect("font settings apply");
+        client.reset_section("fonts").expect("section reset");
+
+        let requests = requests.borrow();
+        assert!(matches!(
+            requests.get(1),
+            Some(ControlRequest::ApplySettings(transaction))
+                if transaction.expected_revision == 4
+                    && transaction.reset_section.is_none()
+                    && transaction.changes == vec![
+                        SettingsChange {
+                            key: "fontFamily".to_owned(),
+                            value: Some(SettingValue::Text("Inter".to_owned())),
+                        },
+                        SettingsChange {
+                            key: "fontBold".to_owned(),
+                            value: Some(SettingValue::Boolean(true)),
+                        },
+                        SettingsChange {
+                            key: "fontSizeOffset".to_owned(),
+                            value: Some(SettingValue::Integer(2)),
+                        },
+                    ]
+        ));
+        assert!(matches!(
+            requests.get(2),
+            Some(ControlRequest::ApplySettings(transaction))
+                if transaction.expected_revision == 5
+                    && transaction.changes.is_empty()
+                    && transaction.reset_section.as_deref() == Some("fonts")
+        ));
+        drop(requests);
+        assert_eq!(client.settings().map(|snapshot| snapshot.revision), Some(6));
+    }
+
+    #[test]
+    fn panel_helpers_map_requests_and_refresh_cached_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let transport = RecordingTransport {
+            responses: VecDeque::from([
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    4,
+                    PanelEdge::Bottom,
+                    44,
+                ))),
+                Ok(ControlResponse::Unit),
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    5,
+                    PanelEdge::Top,
+                    44,
+                ))),
+                Ok(ControlResponse::Unit),
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    6,
+                    PanelEdge::Top,
+                    52,
+                ))),
+            ]),
+            requests: requests.clone(),
+        };
+        let mut client = SettingsClient::new(transport);
+        client.refresh_panels().expect("initial panels snapshot");
+        client
+            .set_panel_edge(OutputId::new("HDMI-1"), PanelEdge::Top)
+            .expect("panel edge apply");
+        client
+            .set_panel_size(OutputId::new("HDMI-1"), 52)
+            .expect("panel size apply");
+
+        let requests = requests.borrow();
+        assert!(matches!(
+            requests.get(1),
+            Some(ControlRequest::SetPanelEdge {
+                output,
+                edge: PanelEdge::Top,
+                expected_revision: 4,
+            }) if output == &OutputId::new("HDMI-1")
+        ));
+        assert!(matches!(
+            requests.get(3),
+            Some(ControlRequest::SetPanelSize {
+                output,
+                logical_size: 52,
+                expected_revision: 5,
+            }) if output == &OutputId::new("HDMI-1")
+        ));
+        drop(requests);
+        assert_eq!(client.panels().map(|snapshot| snapshot.revision), Some(6));
+        assert_eq!(
+            client
+                .panels()
+                .and_then(|snapshot| snapshot.panels.first())
+                .map(|panel| panel.logical_size),
+            Some(52)
+        );
+    }
+
+    #[test]
+    fn panel_edge_change_recovers_once_after_stale_revision() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let transport = RecordingTransport {
+            responses: VecDeque::from([
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    3,
+                    PanelEdge::Bottom,
+                    44,
+                ))),
+                Err(ControlError {
+                    name: "com.arkflame.FlameWM1.Error.StaleRevision",
+                    code: flamewm_api::ErrorCode::StaleRevision,
+                    message: "panel revision is stale".to_owned(),
+                }),
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    4,
+                    PanelEdge::Bottom,
+                    44,
+                ))),
+                Ok(ControlResponse::Unit),
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    5,
+                    PanelEdge::Top,
+                    44,
+                ))),
+            ]),
+            requests: requests.clone(),
+        };
+        let mut client = SettingsClient::new(transport);
+
+        client.refresh_panels().expect("initial panels snapshot");
+        client
+            .set_panel_edge(OutputId::new("HDMI-1"), PanelEdge::Top)
+            .expect("stale panel edge apply recovers");
+
+        let requests = requests.borrow();
+        assert!(matches!(
+            requests.as_slice(),
+            [
+                ControlRequest::GetPanels,
+                ControlRequest::SetPanelEdge {
+                    output,
+                    edge: PanelEdge::Top,
+                    expected_revision: 3,
+                },
+                ControlRequest::GetPanels,
+                ControlRequest::SetPanelEdge {
+                    output: retry_output,
+                    edge: PanelEdge::Top,
+                    expected_revision: 4,
+                },
+                ControlRequest::GetPanels,
+            ] if output == &OutputId::new("HDMI-1")
+                && retry_output == &OutputId::new("HDMI-1")
+        ));
+        drop(requests);
+        assert_eq!(client.panels().map(|snapshot| snapshot.revision), Some(5));
+        assert_eq!(
+            client
+                .panels()
+                .and_then(|snapshot| snapshot.panels.first())
+                .map(|panel| panel.edge),
+            Some(PanelEdge::Top)
+        );
+    }
+
+    #[test]
+    fn panel_edge_change_returns_second_stale_without_looping() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let transport = RecordingTransport {
+            responses: VecDeque::from([
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    3,
+                    PanelEdge::Bottom,
+                    44,
+                ))),
+                Err(ControlError {
+                    name: "com.arkflame.FlameWM1.Error.StaleRevision",
+                    code: flamewm_api::ErrorCode::StaleRevision,
+                    message: "panel revision is stale".to_owned(),
+                }),
+                Ok(ControlResponse::Panels(panels_snapshot(
+                    4,
+                    PanelEdge::Bottom,
+                    44,
+                ))),
+                Err(ControlError {
+                    name: "com.arkflame.FlameWM1.Error.StaleRevision",
+                    code: flamewm_api::ErrorCode::StaleRevision,
+                    message: "panel revision is stale again".to_owned(),
+                }),
+            ]),
+            requests: requests.clone(),
+        };
+        let mut client = SettingsClient::new(transport);
+
+        client.refresh_panels().expect("initial panels snapshot");
+        let error = client
+            .set_panel_edge(OutputId::new("HDMI-1"), PanelEdge::Top)
+            .expect_err("second stale revision propagates");
+
+        assert_eq!(error.code, flamewm_api::ErrorCode::StaleRevision);
+        assert_eq!(error.message, "panel revision is stale again");
+        let requests = requests.borrow();
+        assert!(matches!(
+            requests.as_slice(),
+            [
+                ControlRequest::GetPanels,
+                ControlRequest::SetPanelEdge {
+                    expected_revision: 3,
+                    ..
+                },
+                ControlRequest::GetPanels,
+                ControlRequest::SetPanelEdge {
+                    expected_revision: 4,
+                    ..
+                },
+            ]
+        ));
+        drop(requests);
+        assert_eq!(client.panels().map(|snapshot| snapshot.revision), Some(4));
+        assert_eq!(
+            client
+                .panels()
+                .and_then(|snapshot| snapshot.panels.first())
+                .map(|panel| panel.edge),
+            Some(PanelEdge::Bottom)
+        );
+    }
+
+    #[test]
+    fn settings_reset_error_preserves_cached_authoritative_snapshot() {
+        let initial = SettingsSnapshot::new(4);
+        let mut transport = FakeTransport::default();
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(initial.clone())));
+        transport.responses.push_back(Err(ControlError {
+            name: "com.arkflame.FlameWM1.Error.StaleRevision",
+            code: flamewm_api::ErrorCode::StaleRevision,
+            message: "settings revision is stale".to_owned(),
+        }));
+        let mut client = SettingsClient::new(transport);
+        client
+            .refresh_settings()
+            .expect("initial settings snapshot");
+        assert_eq!(
+            client.reset_section("desktop").unwrap_err().code,
+            flamewm_api::ErrorCode::StaleRevision
+        );
+        assert_eq!(client.settings(), Some(&initial));
     }
 
     #[test]

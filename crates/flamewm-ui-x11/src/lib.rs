@@ -46,6 +46,20 @@ pub struct UiActionEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiKeyPhase {
+    Press,
+    Release,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiKeyEvent {
+    pub phase: UiKeyPhase,
+    pub modifiers: Vec<String>,
+    pub key: String,
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiActionPhase {
     Press,
     Hover,
@@ -56,6 +70,61 @@ pub enum UiActionPhase {
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiControllerEvent {
     Action(UiActionEvent),
+    Key(UiKeyEvent),
+}
+
+const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
+const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
+
+fn controller_event(event: &flamewm_render_core::ActionEvent) -> UiControllerEvent {
+    if event.action == TYPED_KEY_ACTION {
+        if let Some(payload) = event.text.as_deref() {
+            let mut fields = payload.splitn(3, KEY_PAYLOAD_SEPARATOR);
+            let modifiers = fields
+                .next()
+                .unwrap_or_default()
+                .split('+')
+                .filter(|modifier| !modifier.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let Some(key) = fields.next().filter(|key| !key.is_empty()) else {
+                return UiControllerEvent::Action(action_event(event));
+            };
+            let text = fields
+                .next()
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned);
+            let phase = match event.phase {
+                flamewm_render_core::ActionPhase::Press => UiKeyPhase::Press,
+                flamewm_render_core::ActionPhase::Release => UiKeyPhase::Release,
+                _ => return UiControllerEvent::Action(action_event(event)),
+            };
+            return UiControllerEvent::Key(UiKeyEvent {
+                phase,
+                modifiers,
+                key: key.to_owned(),
+                text,
+            });
+        }
+    }
+    UiControllerEvent::Action(action_event(event))
+}
+
+fn action_event(action: &flamewm_render_core::ActionEvent) -> UiActionEvent {
+    UiActionEvent {
+        action: action.action.clone(),
+        phase: match action.phase {
+            flamewm_render_core::ActionPhase::Press => UiActionPhase::Press,
+            flamewm_render_core::ActionPhase::Hover => UiActionPhase::Hover,
+            flamewm_render_core::ActionPhase::Motion => UiActionPhase::Motion,
+            flamewm_render_core::ActionPhase::Release => UiActionPhase::Release,
+        },
+        inside: action.inside,
+        button: action.button,
+        x: action.x,
+        y: action.y,
+        text: action.text.clone(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -114,20 +183,7 @@ where
         },
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
-            let event = UiControllerEvent::Action(UiActionEvent {
-                action: action.action.clone(),
-                phase: match action.phase {
-                    flamewm_render_core::ActionPhase::Press => UiActionPhase::Press,
-                    flamewm_render_core::ActionPhase::Hover => UiActionPhase::Hover,
-                    flamewm_render_core::ActionPhase::Motion => UiActionPhase::Motion,
-                    flamewm_render_core::ActionPhase::Release => UiActionPhase::Release,
-                },
-                inside: action.inside,
-                button: action.button,
-                x: action.x,
-                y: action.y,
-                text: action.text.clone(),
-            });
+            let event = controller_event(action);
             on_event(&event, &mut UiDocumentView { document })
         },
     )
@@ -162,20 +218,7 @@ where
         reactor,
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
-            let event = UiControllerEvent::Action(UiActionEvent {
-                action: action.action.clone(),
-                phase: match action.phase {
-                    flamewm_render_core::ActionPhase::Press => UiActionPhase::Press,
-                    flamewm_render_core::ActionPhase::Hover => UiActionPhase::Hover,
-                    flamewm_render_core::ActionPhase::Motion => UiActionPhase::Motion,
-                    flamewm_render_core::ActionPhase::Release => UiActionPhase::Release,
-                },
-                inside: action.inside,
-                button: action.button,
-                x: action.x,
-                y: action.y,
-                text: action.text.clone(),
-            });
+            let event = controller_event(action);
             on_event(&event, &mut UiDocumentView { document })
         },
         move |document| on_reactor(&mut UiDocumentView { document }),

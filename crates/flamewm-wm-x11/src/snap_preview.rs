@@ -24,11 +24,13 @@
 //! geometry, and opacity; stale results are fenced/cancelled by that state.
 //!
 //! Opacity: the compiled CSS bakes the 20% default fill
-//! (`--snap-fill:#ef404833`). Live settings are not plumbed to the WM event
-//! loop and no new protocol is introduced here, so callers pass
-//! `DEFAULT_PREVIEW_OPACITY_PERCENT` unless they already hold a live value.
+//! (`--snap-fill:#ef404833`). The runtime updates the process-local projection
+//! when the authoritative settings snapshot changes; the existing WM caller
+//! continues to pass the default when it has no direct settings reference.
 
 mod worker;
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use flamewm_api::Rect;
 use flamewm_render_x11::backdrop;
@@ -41,8 +43,27 @@ use flamewm_window_core::SnapTarget;
 
 const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-snap-preview.rwr"));
 
-/// Default fill opacity when live settings are unavailable (no new protocol).
+/// Default fill opacity used by the WM caller before a settings projection arrives.
 pub const DEFAULT_PREVIEW_OPACITY_PERCENT: u8 = 20;
+
+static LIVE_PREVIEW_OPACITY_PERCENT: AtomicU8 = AtomicU8::new(DEFAULT_PREVIEW_OPACITY_PERCENT);
+
+/// Publish the validated settings projection used by the WM-owned preview.
+pub(crate) fn set_live_opacity(opacity_percent: u8) {
+    LIVE_PREVIEW_OPACITY_PERCENT.store(opacity_percent.min(60), Ordering::Release);
+}
+
+fn live_opacity() -> u8 {
+    LIVE_PREVIEW_OPACITY_PERCENT.load(Ordering::Acquire)
+}
+
+fn effective_opacity(requested: u8) -> u8 {
+    if requested == DEFAULT_PREVIEW_OPACITY_PERCENT {
+        live_opacity()
+    } else {
+        requested
+    }
+}
 
 /// Accent red backing the preview border/fill (`#ef4048`): shared with
 /// the desktop-selection material owner, one material two consumers.
@@ -101,7 +122,7 @@ impl SnapPreviewSurface {
             visible: false,
             candidate: None,
             geometry: None,
-            opacity: DEFAULT_PREVIEW_OPACITY_PERCENT,
+            opacity: live_opacity(),
         }
     }
 
@@ -130,12 +151,13 @@ impl SnapPreviewSurface {
         self.visible
             && self.candidate == Some(candidate)
             && self.geometry == Some(geometry)
-            && self.opacity == opacity
+            && self.opacity == effective_opacity(opacity)
     }
 
     /// Show or move the preview for a live drag candidate. `None` hides.
     /// Total without a display: records intent, leaves `visible` false.
     pub fn update(&mut self, candidate: Option<SnapTarget>, geometry: Option<Rect>, opacity: u8) {
+        let opacity = effective_opacity(opacity);
         let (Some(candidate), Some(geometry)) = (candidate, geometry) else {
             self.hide();
             return;

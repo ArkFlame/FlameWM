@@ -1,5 +1,6 @@
 mod app;
 mod event_router;
+mod settings_projection;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};

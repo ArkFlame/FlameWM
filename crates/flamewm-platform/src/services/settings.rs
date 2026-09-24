@@ -71,17 +71,22 @@ impl SettingsService {
         candidate.revision = self.store.current().revision.saturating_add(1);
         candidate.validate()?;
 
-        let desired_shortcuts = shortcut_bindings(&candidate)?;
-        if let Err(error) = shortcut_port.prepare_shortcuts(&desired_shortcuts) {
-            shortcut_port.rollback_shortcuts();
-            return Err(error);
-        }
-        if let Err(error) = shortcut_port.commit_shortcuts() {
-            shortcut_port.rollback_shortcuts();
-            return Err(error);
+        let changes_shortcuts = transaction_changes_shortcuts(transaction);
+        if changes_shortcuts {
+            let desired_shortcuts = shortcut_bindings(&candidate)?;
+            if let Err(error) = shortcut_port.prepare_shortcuts(&desired_shortcuts) {
+                shortcut_port.rollback_shortcuts();
+                return Err(error);
+            }
+            if let Err(error) = shortcut_port.commit_shortcuts() {
+                shortcut_port.rollback_shortcuts();
+                return Err(error);
+            }
         }
         if let Err(error) = ConfigStore::persist(&self.path, &candidate) {
-            shortcut_port.rollback_shortcuts();
+            if changes_shortcuts {
+                shortcut_port.rollback_shortcuts();
+            }
             return Err(error);
         }
         self.store.apply_snapshot(candidate)?;
@@ -310,6 +315,17 @@ fn shortcut_bindings(settings: &ProductSettings) -> FlameResult<BTreeMap<String,
     Ok(registry.bindings().clone())
 }
 
+fn transaction_changes_shortcuts(transaction: &SettingsTransaction) -> bool {
+    transaction
+        .reset_section
+        .as_deref()
+        .is_some_and(|section| section.eq_ignore_ascii_case("hotkeys"))
+        || transaction
+            .changes
+            .iter()
+            .any(|change| change.key.starts_with("hotkey."))
+}
+
 fn text_or(value: Option<&SettingValue>, default: String) -> FlameResult<String> {
     match value {
         Some(SettingValue::Text(value)) => Ok(value.clone()),
@@ -345,6 +361,30 @@ fn integer_or(value: Option<&SettingValue>, default: i64) -> FlameResult<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    struct UnsupportedShortcutPort;
+
+    impl ShortcutPort for UnsupportedShortcutPort {
+        fn prepare_shortcuts(
+            &mut self,
+            _desired: &BTreeMap<String, KeyBinding>,
+        ) -> FlameResult<()> {
+            Err(FlameError::new(
+                ErrorCode::Unsupported,
+                "test shortcut port does not support preparation",
+            ))
+        }
+
+        fn commit_shortcuts(&mut self) -> FlameResult<()> {
+            Err(FlameError::new(
+                ErrorCode::Unsupported,
+                "test shortcut port does not support commit",
+            ))
+        }
+
+        fn rollback_shortcuts(&mut self) {}
+    }
 
     #[test]
     fn api_snapshot_uses_stable_native_configuration_keys() {
@@ -362,5 +402,76 @@ mod tests {
         )
         .expect_err("unknown key must fail");
         assert_eq!(error.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn wallpaper_only_apply_does_not_require_shortcut_port_support() {
+        for (case, wallpaper) in [("empty", ""), ("nonempty", "/tmp/flamewm-wallpaper.png")] {
+            let path = std::env::temp_dir().join(format!(
+                "flamewm-settings-wallpaper-only-{}-{case}.conf",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            let mut service = SettingsService::new(path.clone());
+            let mut shortcut_port = UnsupportedShortcutPort;
+            let transaction = SettingsTransaction {
+                expected_revision: service.snapshot().revision,
+                changes: vec![flamewm_api::settings::SettingsChange {
+                    key: "wallpaper".to_owned(),
+                    value: Some(SettingValue::Text(wallpaper.to_owned())),
+                }],
+                reset_section: None,
+            };
+
+            let snapshot = service
+                .apply(&mut shortcut_port, &transaction)
+                .expect("wallpaper-only apply must not require shortcut support");
+
+            assert_eq!(snapshot.revision, 2);
+            assert_eq!(service.current().revision, 2);
+            assert_eq!(service.current().wallpaper, wallpaper);
+            assert_eq!(
+                snapshot.values.get("wallpaper"),
+                Some(&SettingValue::Text(wallpaper.to_owned()))
+            );
+            let persisted = std::fs::read_to_string(&path).expect("wallpaper settings persisted");
+            assert!(persisted.contains("revision=2\n"));
+            assert!(persisted.contains(&format!("wallpaper={wallpaper}\n")));
+            std::fs::remove_file(path).expect("remove test settings");
+        }
+    }
+
+    #[test]
+    fn mixed_wallpaper_and_shortcut_apply_preserves_shortcut_transaction() {
+        let path = std::env::temp_dir().join(format!(
+            "flamewm-settings-mixed-wallpaper-shortcut-{}.conf",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut service = SettingsService::new(path.clone());
+        let mut shortcut_port = UnsupportedShortcutPort;
+        let transaction = SettingsTransaction {
+            expected_revision: service.snapshot().revision,
+            changes: vec![
+                flamewm_api::settings::SettingsChange {
+                    key: "wallpaper".to_owned(),
+                    value: Some(SettingValue::Text("/tmp/mixed-wallpaper.png".to_owned())),
+                },
+                flamewm_api::settings::SettingsChange {
+                    key: format!("hotkey.{}", flamewm_api::shortcuts::ACTION_WINDOW_CLOSE),
+                    value: Some(SettingValue::Text("Ctrl+Alt+W".to_owned())),
+                },
+            ],
+            reset_section: None,
+        };
+
+        let error = service
+            .apply(&mut shortcut_port, &transaction)
+            .expect_err("shortcut changes must still require shortcut support");
+
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(service.current().revision, 1);
+        assert!(service.current().wallpaper.is_empty());
+        assert!(!path.exists());
     }
 }

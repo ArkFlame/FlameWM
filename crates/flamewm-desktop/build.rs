@@ -74,8 +74,10 @@ fn stage_tree(source: &Path, dest: &Path) {
 }
 
 fn validate_text_targets(output: &CompileOutput) {
-    let mut ids = Vec::with_capacity(257);
-    ids.push("sticky-text".to_string());
+    let mut ids = Vec::with_capacity(272);
+    for slot in 1..=16 {
+        ids.push(format!("sticky-{slot}-text"));
+    }
     for index in 0..128 {
         ids.push(format!("desktop-label-{index}-line-1"));
         ids.push(format!("desktop-label-{index}-line-2"));

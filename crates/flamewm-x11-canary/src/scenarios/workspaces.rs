@@ -1,10 +1,381 @@
-//! T11 max/snap/fullscreen and T12 workspace churn.
+//! T11 max/snap/fullscreen, T12 workspace churn, and T21/T22 workspace
+//! projection admission.
 
-use super::{center, real_click, real_warp};
+use std::time::{Duration, Instant};
+
+use super::{
+    center, real_click, real_warp, xtest_button_press, xtest_button_release, xtest_motion,
+};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::{AtomEnum, ClientMessageData, ClientMessageEvent, EventMask};
+
+const WORKSPACE_CONVERGENCE_BUDGET_MS: u128 = 50;
+const WORKSPACE_CONVERGENCE_SAMPLES: usize = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StickyPixel {
+    Yellow,
+    Green,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StickySignature {
+    yellow_probe: StickyPixel,
+    green_probe: StickyPixel,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ColorBounds {
+    min_x: u16,
+    min_y: u16,
+    max_x: u16,
+    max_y: u16,
+}
+
+fn current_workspace(canary: &crate::Canary) -> Option<u32> {
+    canary
+        .prop_u32(canary.root, "_NET_CURRENT_DESKTOP")
+        .first()
+        .copied()
+}
+
+fn color_bounds(data: &[u8], width: u16, height: u16, color: StickyPixel) -> Option<ColorBounds> {
+    let mut bounds: Option<ColorBounds> = None;
+    for (index, pixel) in data.chunks_exact(4).enumerate() {
+        let x = index % usize::from(width.max(1));
+        let y = index / usize::from(width.max(1));
+        if y >= usize::from(height) {
+            break;
+        }
+        let b = pixel[0];
+        let g = pixel[1];
+        let r = pixel[2];
+        let matches = match color {
+            StickyPixel::Yellow => r >= 220 && g >= 190 && g <= 250 && b <= 140 && r > g + 20,
+            StickyPixel::Green => {
+                r >= 160 && r <= 225 && g >= 200 && b >= 70 && b <= 190 && g > r + 15
+            }
+            StickyPixel::Other => false,
+        };
+        if !matches {
+            continue;
+        }
+        let x = u16::try_from(x).unwrap_or(u16::MAX);
+        let y = u16::try_from(y).unwrap_or(u16::MAX);
+        bounds = Some(match bounds {
+            Some(mut current) => {
+                current.min_x = current.min_x.min(x);
+                current.min_y = current.min_y.min(y);
+                current.max_x = current.max_x.max(x);
+                current.max_y = current.max_y.max(y);
+                current
+            }
+            None => ColorBounds {
+                min_x: x,
+                min_y: y,
+                max_x: x,
+                max_y: y,
+            },
+        });
+    }
+    bounds
+}
+
+fn color_probe(bounds: ColorBounds) -> (i16, i16) {
+    let x = u32::from(bounds.min_x)
+        .saturating_add(u32::from(bounds.max_x.saturating_sub(bounds.min_x)) * 3 / 4);
+    let y = u32::from(bounds.max_y.saturating_sub(20).max(bounds.min_y));
+    (
+        i16::try_from(x).unwrap_or(i16::MAX),
+        i16::try_from(y).unwrap_or(i16::MAX),
+    )
+}
+
+fn sticky_probe(canary: &crate::Canary, color: StickyPixel) -> Option<(i16, i16)> {
+    let (width, height) = canary.root_geometry();
+    let data = canary
+        .sample(canary.root, 0, 0, width.max(1), height.max(1))
+        .ok()?;
+    Some(color_probe(color_bounds(&data, width, height, color)?))
+}
+
+fn sticky_color_present(canary: &crate::Canary, color: StickyPixel) -> Option<bool> {
+    let (width, height) = canary.root_geometry();
+    let data = canary
+        .sample(canary.root, 0, 0, width.max(1), height.max(1))
+        .ok()?;
+    Some(color_bounds(&data, width, height, color).is_some())
+}
+
+fn sticky_pixel(canary: &crate::Canary, point: (i16, i16)) -> StickyPixel {
+    let Ok(data) = canary.sample(canary.root, point.0, point.1, 1, 1) else {
+        return StickyPixel::Other;
+    };
+    let (_, _, r, g, b) = crate::Canary::pixel_stats(&data);
+    if r >= 220 && g >= 190 && g <= 250 && b <= 140 && r > g + 20 {
+        StickyPixel::Yellow
+    } else if r >= 160 && r <= 225 && g >= 200 && b >= 70 && b <= 190 && g > r + 15 {
+        StickyPixel::Green
+    } else {
+        StickyPixel::Other
+    }
+}
+
+fn sticky_signature(canary: &crate::Canary, probes: &[(i16, i16); 2]) -> StickySignature {
+    StickySignature {
+        yellow_probe: sticky_pixel(canary, probes[0]),
+        green_probe: sticky_pixel(canary, probes[1]),
+    }
+}
+
+fn expected_sticky_signature(workspace: u32) -> StickySignature {
+    if workspace == 0 {
+        StickySignature {
+            yellow_probe: StickyPixel::Yellow,
+            green_probe: StickyPixel::Other,
+        }
+    } else {
+        StickySignature {
+            yellow_probe: StickyPixel::Other,
+            green_probe: StickyPixel::Green,
+        }
+    }
+}
+
+fn workspace_button(target: u32, root: (u16, u16)) -> (i16, i16) {
+    let x = if target == 0 {
+        i32::from(root.0).saturating_sub(173)
+    } else {
+        i32::from(root.0).saturating_sub(150)
+    };
+    let y = i32::from(root.1).saturating_sub(30);
+    (
+        x.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+        y.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+    )
+}
+
+fn real_workspace_click(canary: &crate::Canary, target: u32) -> bool {
+    let point = workspace_button(target, canary.root_geometry());
+    xtest_motion(canary, point.0, point.1)
+        && xtest_button_press(canary, point.0, point.1, 1)
+        && xtest_button_release(canary, point.0, point.1, 1)
+        && canary.conn.flush().is_ok()
+}
+
+fn wait_workspace(canary: &crate::Canary, target: u32, timeout_ms: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if current_workspace(canary) == Some(target) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn restore_workspace(canary: &crate::Canary, original: u32) -> bool {
+    let restored = if original <= 1 {
+        real_workspace_click(canary, original) && wait_workspace(canary, original, 500)
+    } else {
+        ewmh_request(
+            canary,
+            canary.root,
+            "_NET_CURRENT_DESKTOP",
+            original,
+            CURRENT_TIME,
+        ) && wait_workspace(canary, original, 500)
+    };
+    restored && current_workspace(canary) == Some(original)
+}
+
+/// T21/T22: real pager clicks must converge the sticky A/B projection without
+/// a post-release pointer, key, or expose-generating interaction. The canary
+/// observes WM authority through `_NET_CURRENT_DESKTOP` and presentation
+/// through two seeded sticky-color pixels. Legacy control-fetch and filesystem
+/// rescan counters belong to the desktop process, so this X11-only scenario
+/// reports those deltas as an explicit external-profiler boundary.
+pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
+    let Some(original) = current_workspace(canary) else {
+        return (
+            false,
+            "scenario=T21-T22 no _NET_CURRENT_DESKTOP path=real-pointer".to_owned(),
+        );
+    };
+    let desktops = canary
+        .prop_u32(canary.root, "_NET_NUMBER_OF_DESKTOPS")
+        .first()
+        .copied()
+        .unwrap_or(1);
+    if desktops < 2 {
+        return (
+            false,
+            format!("scenario=T21-T22 desktops={desktops} need_at_least=2 path=real-pointer"),
+        );
+    }
+
+    if !wait_workspace(canary, original, 250) {
+        return (
+            false,
+            format!("scenario=T21-T22 original_workspace={original} not_observed_before_setup"),
+        );
+    }
+    if original != 0 && (!real_workspace_click(canary, 0) || !wait_workspace(canary, 0, 500)) {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            format!("scenario=T21-T22 setup_workspace=0 failed original_workspace={original}"),
+        );
+    }
+    let Some(yellow_probe) = sticky_probe(canary, StickyPixel::Yellow) else {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            "scenario=T21-T22 baseline_A_not_observable_on_workspace_0".to_owned(),
+        );
+    };
+
+    let baseline_green = sticky_color_present(canary, StickyPixel::Green);
+    if baseline_green != Some(false) || sticky_pixel(canary, yellow_probe) != StickyPixel::Yellow {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            format!(
+                "scenario=T21-T22 baseline_invalid workspace=0 A={:?} B_present={baseline_green:?} expected=A-visible/B-absent",
+                sticky_pixel(canary, yellow_probe),
+            ),
+        );
+    }
+
+    // The seeded fixture places A on workspace 0 and B on workspace 1. Visit
+    // workspace 1 once to discover B's probe, then return before measuring the
+    // required workspace-0 baseline and the 100 alternating switches.
+    {
+        let clicked = real_workspace_click(canary, 1);
+        let converged = clicked && wait_workspace(canary, 1, 500);
+        if !clicked || !converged {
+            let current = current_workspace(canary);
+            let _ = restore_workspace(canary, original);
+            return (
+                false,
+                format!(
+                    "scenario=T21-T22 setup_workspace=1 failed while_discovering_B clicked={clicked} converged={converged} current_workspace={current:?} target_workspace=1 path=real-pointer"
+                ),
+            );
+        }
+    }
+    let Some(green_probe) = sticky_probe(canary, StickyPixel::Green) else {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            "scenario=T21-T22 switched_B_not_observable_on_workspace_1".to_owned(),
+        );
+    };
+    let switched_yellow = sticky_color_present(canary, StickyPixel::Yellow);
+    let switched = sticky_signature(canary, &[yellow_probe, green_probe]);
+    if switched != expected_sticky_signature(1) || switched_yellow != Some(false) {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            format!(
+                "scenario=T21-T22 switched_invalid workspace=1 A_present={switched_yellow:?} B={:?} expected=A-absent/B-visible",
+                switched.green_probe
+            ),
+        );
+    }
+    if !real_workspace_click(canary, 0) || !wait_workspace(canary, 0, 500) {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            "scenario=T21-T22 setup_workspace=0 failed after_discovering_B".to_owned(),
+        );
+    }
+    let probes = [yellow_probe, green_probe];
+    let mut before = sticky_signature(canary, &probes);
+    if before != expected_sticky_signature(0) {
+        let _ = restore_workspace(canary, original);
+        return (
+            false,
+            format!(
+                "scenario=T21-T22 baseline_invalid_after_probe_setup A={:?} B={:?} expected=A-visible/B-absent",
+                before.yellow_probe, before.green_probe
+            ),
+        );
+    }
+    let mut timings_us = Vec::with_capacity(WORKSPACE_CONVERGENCE_SAMPLES);
+    let mut wm_correct = 0usize;
+    let mut pixel_switches = 0usize;
+    let mut exact_signatures = 0usize;
+    let mut clicked = 0usize;
+    let mut max_us = 0u128;
+    for iteration in 0..WORKSPACE_CONVERGENCE_SAMPLES {
+        let target = if iteration % 2 == 0 { 1 } else { 0 };
+        let sent = real_workspace_click(canary, target);
+        if sent {
+            clicked += 1;
+        }
+        let released = Instant::now();
+        let deadline = released + Duration::from_millis(WORKSPACE_CONVERGENCE_BUDGET_MS as u64);
+        let mut observed = current_workspace(canary);
+        let mut after = before;
+        let mut converged = false;
+        while Instant::now() <= deadline {
+            observed = current_workspace(canary);
+            after = sticky_signature(canary, &probes);
+            if observed == Some(target) && after == expected_sticky_signature(target) {
+                converged = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let elapsed_us = released.elapsed().as_micros();
+        max_us = max_us.max(elapsed_us);
+        timings_us.push(elapsed_us);
+        if observed == Some(target) {
+            wm_correct += 1;
+        }
+        if after != before {
+            pixel_switches += 1;
+        }
+        if converged {
+            exact_signatures += 1;
+            before = after;
+        }
+    }
+    timings_us.sort_unstable();
+    let p95_us = timings_us
+        .get((timings_us.len() * 95 / 100).saturating_sub(1))
+        .copied()
+        .unwrap_or(0);
+    let restored = restore_workspace(canary, original);
+    let all_converged = clicked == WORKSPACE_CONVERGENCE_SAMPLES
+        && wm_correct == WORKSPACE_CONVERGENCE_SAMPLES
+        && exact_signatures == WORKSPACE_CONVERGENCE_SAMPLES
+        && pixel_switches == WORKSPACE_CONVERGENCE_SAMPLES
+        && timings_us
+            .iter()
+            .all(|elapsed| *elapsed <= WORKSPACE_CONVERGENCE_BUDGET_MS * 1_000);
+    let pass = restored && all_converged;
+    (
+        pass,
+        format!(
+            "scenario=T21-T22 samples={} clicked={clicked} wm_correct={wm_correct}/{} sticky_pixel_switches={pixel_switches}/{} exact_signatures={exact_signatures}/{} budget_ms={} p95_ms={:.3} max_ms={:.3} legacy_get_workspaces_delta=external-profiler-required filesystem_rescan_delta=external-profiler-required restored={restored} assertions={} baseline=A-visible/B-absent switched=A-absent/B-visible path=real-pointer no_post_release_motion=true no_post_release_key=true no_expose_interaction=true",
+            timings_us.len(),
+            WORKSPACE_CONVERGENCE_SAMPLES,
+            WORKSPACE_CONVERGENCE_SAMPLES,
+            WORKSPACE_CONVERGENCE_SAMPLES,
+            WORKSPACE_CONVERGENCE_BUDGET_MS,
+            p95_us as f64 / 1_000.0,
+            max_us as f64 / 1_000.0,
+            pass,
+        ),
+    )
+}
 
 fn ewmh_request(canary: &crate::Canary, wid: u32, kind: &str, data0: u32, data1: u32) -> bool {
     let Some(msg) = canary.intern(kind) else {

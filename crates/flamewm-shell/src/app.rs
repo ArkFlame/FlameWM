@@ -90,6 +90,7 @@ pub(crate) struct ShellLoop {
     pub(crate) network_query: NetworkQuery,
     pub(crate) settings_revision: u64,
     pub(crate) settings_cache: Option<SettingsSnapshot>,
+    pub(crate) settings_projection_pending: bool,
     pub(crate) icon_loader: Option<IconLoader>,
     pub(crate) loader_root: std::path::PathBuf,
     pub(crate) start_view: StartViewNote,
@@ -125,6 +126,7 @@ impl ShellLoop {
             network_query: NetworkQuery::default(),
             settings_revision: 0,
             settings_cache: None,
+            settings_projection_pending: false,
             icon_loader: None,
             loader_root,
             start_view: StartViewNote::default(),
@@ -141,16 +143,27 @@ impl ShellLoop {
     }
 
     pub(crate) fn note_signal(&mut self, signal: &flamewm_control_wire::ControlSignal) {
+        if let flamewm_control_wire::ControlSignal::SettingsSnapshotChanged { snapshot } = signal {
+            self.apply_settings_snapshot(snapshot.clone());
+        }
         self.shell.mark_signal(signal);
     }
 
     pub(crate) fn apply_settings_snapshot(&mut self, snapshot: SettingsSnapshot) {
+        if self
+            .settings_cache
+            .as_ref()
+            .is_some_and(|current| snapshot.revision <= current.revision)
+        {
+            return;
+        }
         self.settings_revision = snapshot.revision;
         if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY)
         {
             self.audio_settings.raise_maximum = *raise;
         }
         self.settings_cache = Some(snapshot);
+        self.settings_projection_pending = true;
     }
 
     /// J07 nonblocking submit: enqueue onto the mutation queue and return
@@ -770,6 +783,12 @@ impl ShellLoop {
         if !changed.any() && !resynced {
             return;
         }
+        // Domain projectors retain their own semantic defaults. Reapply the
+        // already-authoritative settings payload after them so a later task
+        // or workspace update cannot erase the active presentation accent.
+        if self.settings_cache.is_some() {
+            self.settings_projection_pending = true;
+        }
         let request_id = self
             .shell
             .snapshot()
@@ -976,6 +995,55 @@ impl ShellLoop {
         // Steady state never polls: reconcile signal-flagged domains at most
         // once per tick, after the clock projection above.
         self.refresh_dynamic(runtime);
+        self.project_settings(runtime)?;
+        Ok(())
+    }
+
+    fn project_settings(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), UiBackendError> {
+        if !self.settings_projection_pending {
+            return Ok(());
+        }
+        let Some(snapshot) = self.settings_cache.as_ref() else {
+            self.settings_projection_pending = false;
+            return Ok(());
+        };
+        let snapshot = snapshot.clone();
+        runtime.with_document(self.surfaces.panel, |document| {
+            crate::settings_projection::project(
+                document,
+                &snapshot,
+                crate::settings_projection::SurfaceKind::Panel,
+            )
+        })?;
+        for (surface, kind) in [
+            (
+                self.surfaces.start,
+                crate::settings_projection::SurfaceKind::Start,
+            ),
+            (
+                self.surfaces.task_menu,
+                crate::settings_projection::SurfaceKind::TaskMenu,
+            ),
+            (
+                self.surfaces.media,
+                crate::settings_projection::SurfaceKind::Media,
+            ),
+        ] {
+            runtime.with_document(surface, |document| {
+                crate::settings_projection::project(document, &snapshot, kind)
+            })?;
+        }
+        let _ = runtime.redraw(self.surfaces.panel);
+        if self.surfaces.is_start_group_open() {
+            let _ = runtime.redraw(self.surfaces.start);
+        }
+        if self.context_menu.is_some() {
+            let _ = runtime.redraw(self.surfaces.task_menu);
+        }
+        if self.surfaces.is_media_open() {
+            let _ = runtime.redraw(self.surfaces.media);
+        }
+        self.settings_projection_pending = false;
         Ok(())
     }
 }

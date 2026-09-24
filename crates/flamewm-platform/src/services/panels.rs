@@ -133,6 +133,22 @@ impl PanelService {
         Ok(())
     }
 
+    /// Reconcile every live output with the persisted taskbar height owned by
+    /// the settings service. Panel geometry and its revision remain owned here.
+    pub fn reconcile_taskbar_height(&mut self, logical_size: u16) -> bool {
+        let before = self.manager.clone();
+        for output in self.manager.outputs() {
+            if let Some(panel) = self.manager.panel_mut(&output) {
+                panel.set_logical_size(logical_size);
+            }
+        }
+        let changed = self.manager != before;
+        if changed {
+            self.bump_revision();
+        }
+        changed
+    }
+
     pub fn set_activity_outputs(&mut self, focused: Option<OutputId>, pointer: Option<OutputId>) {
         self.manager.set_focused_frame_output(focused);
         self.manager.set_pointer_output(pointer);
@@ -281,5 +297,41 @@ impl PanelService {
 
     fn bump_revision(&mut self) {
         self.revision = self.revision().saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flamewm_api::display::{DisplaySnapshot, OutputSnapshot};
+    use flamewm_api::{ModeId, OutputId, Rect};
+
+    use super::PanelService;
+
+    #[test]
+    fn persisted_taskbar_height_reconciles_panel_geometry_once() {
+        let mut service = PanelService::default();
+        service.sync_outputs(&DisplaySnapshot {
+            generation: 1,
+            outputs: vec![OutputSnapshot {
+                id: OutputId::new("eDP-1"),
+                connector: "eDP-1".to_owned(),
+                edid_identity: "panel".to_owned(),
+                connected: true,
+                primary: true,
+                geometry: Rect::new(0, 0, 1920, 1080),
+                current_mode: ModeId(1),
+                modes: Vec::new(),
+                shell_scale_percent: 100,
+            }],
+            pending: None,
+        });
+
+        assert!(service.reconcile_taskbar_height(52));
+        assert_eq!(service.snapshot().panels[0].logical_size, 52);
+        assert_eq!(
+            service.snapshot().panels[0].geometry,
+            Rect::new(0, 1028, 1920, 52)
+        );
+        assert!(!service.reconcile_taskbar_height(52));
     }
 }

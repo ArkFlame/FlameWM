@@ -10,6 +10,7 @@ pub mod icon_theme;
 pub mod icons;
 pub mod mpris;
 pub mod network_manager;
+pub mod portal_file_chooser;
 pub mod pulse;
 
 pub use icon_service::{
@@ -22,6 +23,7 @@ pub use mpris::{MprisProvider, MprisProviderState};
 pub use network_manager::{
     NetworkManagerProperties, NetworkManagerProvider, NetworkManagerProviderState,
 };
+pub use portal_file_chooser::PortalFileChooser;
 
 use flamewm_api::FlameResult;
 use flamewm_api::system::{MediaSnapshot, NetworkSnapshot, SystemAction};

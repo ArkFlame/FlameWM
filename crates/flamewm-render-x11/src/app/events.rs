@@ -11,6 +11,100 @@ fn keyboard_text(symbol: u64) -> Option<String> {
     }
 }
 
+const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
+const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
+
+fn normalized_modifiers(state: u32) -> Vec<&'static str> {
+    let mut modifiers = Vec::with_capacity(4);
+    if state & CONTROL_MASK != 0 {
+        modifiers.push("Ctrl");
+    }
+    if state & SHIFT_MASK != 0 {
+        modifiers.push("Shift");
+    }
+    if state & MOD1_MASK != 0 {
+        modifiers.push("Alt");
+    }
+    if state & MOD4_MASK != 0 {
+        modifiers.push("Super");
+    }
+    modifiers
+}
+
+fn canonical_key_name(symbol: u64) -> String {
+    match symbol {
+        XK_BACK_SPACE => "BackSpace".to_string(),
+        XK_TAB => "Tab".to_string(),
+        XK_SPACE => "Space".to_string(),
+        XK_RETURN => "Return".to_string(),
+        XK_ESCAPE => "Escape".to_string(),
+        XK_LEFT => "Left".to_string(),
+        XK_UP => "Up".to_string(),
+        XK_RIGHT => "Right".to_string(),
+        XK_DOWN => "Down".to_string(),
+        XK_SUPER_L => "Super_L".to_string(),
+        XK_SUPER_R => "Super_R".to_string(),
+        0xffe1 => "Shift_L".to_string(),
+        0xffe2 => "Shift_R".to_string(),
+        0xffe3 => "Control_L".to_string(),
+        0xffe4 => "Control_R".to_string(),
+        0xffe7 => "Meta_L".to_string(),
+        0xffe8 => "Meta_R".to_string(),
+        0xffe9 => "Alt_L".to_string(),
+        0xffea => "Alt_R".to_string(),
+        0xffbe..=0xffc9 => format!("F{}", symbol - 0xffbd),
+        0x20..=0x7e | 0xa0..=0xff => char::from_u32(symbol as u32)
+            .map_or_else(|| format!("Keysym(0x{symbol:x})"), |key| key.to_string()),
+        _ => format!("Keysym(0x{symbol:x})"),
+    }
+}
+
+fn printable_key_text(symbol: u64) -> Option<String> {
+    match symbol {
+        0x20..=0x7e | 0xa0..=0xff => char::from_u32(symbol as u32).map(|key| key.to_string()),
+        _ => None,
+    }
+}
+
+fn emit_typed_key<F>(
+    key: &XKeyEvent,
+    symbol: u64,
+    phase: ActionPhase,
+    document: &mut RuntimeDocument,
+    on_action: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+{
+    let modifiers = normalized_modifiers(key.state);
+    let key_name = canonical_key_name(symbol);
+    let text = (!modifiers.iter().any(|modifier| *modifier != "Shift"))
+        .then(|| printable_key_text(symbol))
+        .flatten();
+    let payload = format!(
+        "{}{}{}{}{}",
+        modifiers.join("+"),
+        KEY_PAYLOAD_SEPARATOR,
+        key_name,
+        KEY_PAYLOAD_SEPARATOR,
+        text.as_deref().unwrap_or_default()
+    );
+    let scale = document.ui_scale();
+    on_action(
+        &ActionEvent {
+            action: TYPED_KEY_ACTION.to_string(),
+            phase,
+            button: 0,
+            x: key.x as f32 / scale,
+            y: key.y as f32 / scale,
+            inside: true,
+            time_ms: key.time as u64,
+            text: Some(payload),
+        },
+        document,
+    )
+}
+
 impl X11App {
     pub(crate) unsafe fn event_loop_once<F>(
         &mut self,
@@ -222,6 +316,10 @@ impl X11App {
                     let mut key = unsafe { event.xkey };
                     // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
                     let symbol = unsafe { XLookupKeysym(&mut key, 0) };
+                    let shift_index = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
+                    // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
+                    let typed_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
+                    emit_typed_key(&key, typed_symbol, ActionPhase::Press, document, on_action)?;
                     let ctrl = key.state & CONTROL_MASK != 0;
                     let alt = key.state & MOD1_MASK != 0;
                     let super_key = key.state & MOD4_MASK != 0;
@@ -269,7 +367,6 @@ impl X11App {
                         )?;
                         self.mark_full();
                     } else if !ctrl && !alt && !super_key {
-                        let shift_index = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
                         // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
                         let text_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
                         if let Some(text) = keyboard_text(text_symbol) {
@@ -295,6 +392,16 @@ impl X11App {
                     let mut key = unsafe { event.xkey };
                     // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
                     let symbol = unsafe { XLookupKeysym(&mut key, 0) };
+                    let shift_index = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
+                    // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
+                    let typed_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
+                    emit_typed_key(
+                        &key,
+                        typed_symbol,
+                        ActionPhase::Release,
+                        document,
+                        on_action,
+                    )?;
                     if symbol == XK_SUPER_L || symbol == XK_SUPER_R {
                         if !self.super_chord_used {
                             on_action(
@@ -545,8 +652,15 @@ impl X11App {
         loop {
             reactor.dispatch(None).map_err(|error| error.to_string())?;
             on_reactor(document)?;
+            // Reactor callbacks may mutate the document without producing
+            // an X event. The retained damage/revision gate presents that
+            // mutation once and skips no-op wakes.
+            unsafe { self.redraw_if_dirty(document)? };
             // SAFETY: self.display is the live display owned by this app.
             if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
+                if self.close_requested {
+                    return Ok(());
+                }
                 continue;
             }
             self.single_event = true;
@@ -645,5 +759,95 @@ impl X11App {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod reactor_presentation_regressions {
+    use super::{
+        CONTROL_MASK, MOD4_MASK, XK_ESCAPE, XK_LEFT, XK_SUPER_L, canonical_key_name,
+        normalized_modifiers, printable_key_text,
+    };
+
+    fn reactor_loop_source() -> &'static str {
+        const SOURCE: &str = include_str!("events.rs");
+        let start = SOURCE
+            .find("pub(crate) unsafe fn event_loop_with_reactor")
+            .expect("reactor event-loop owner remains present");
+        let end = SOURCE[start..]
+            .find("pub(crate) fn hit_test")
+            .map(|offset| start + offset)
+            .expect("reactor event-loop owner has a bounded body");
+        &SOURCE[start..end]
+    }
+
+    #[test]
+    fn t18_reactor_only_document_mutation_presents_before_x_queue_gate() {
+        let source = reactor_loop_source();
+        let callback = source
+            .find("on_reactor(document)?")
+            .expect("reactor callback is the document mutation boundary");
+        let after_callback = &source[callback..];
+        let present = after_callback
+            .find("redraw_if_dirty(document)?")
+            .expect("reactor-only mutation must reach the retained redraw gate");
+        let queue_gate = after_callback
+            .find("XEventsQueued")
+            .expect("X11 queue gate remains after reactor dispatch");
+        assert!(
+            present < queue_gate,
+            "reactor document mutation must be presented before an empty X queue can continue"
+        );
+    }
+
+    #[test]
+    fn t19_noop_reactor_wakes_use_the_dirty_skip_not_an_unconditional_paint() {
+        let source = reactor_loop_source();
+        assert_eq!(
+            source.matches("redraw_if_dirty(document)?").count(),
+            1,
+            "one retained redraw gate must admit each reactor turn"
+        );
+        assert!(
+            !source.contains("self.redraw("),
+            "reactor wake must not become an unconditional full repaint loop"
+        );
+        let render = include_str!("render.rs");
+        assert!(render.contains("if self.pending_damage.is_empty() && !stale"));
+        assert!(render.contains("return Ok(false);"));
+    }
+
+    #[test]
+    fn t20_same_turn_reactor_mutations_coalesce_at_one_final_state_gate() {
+        let source = reactor_loop_source();
+        assert_eq!(
+            source.matches("on_reactor(document)?").count(),
+            1,
+            "one reactor callback owns the same-turn mutation batch"
+        );
+        assert_eq!(
+            source.matches("redraw_if_dirty(document)?").count(),
+            1,
+            "the mutation batch must have one retained presentation gate"
+        );
+        let callback = source
+            .find("on_reactor(document)?")
+            .expect("reactor callback is present");
+        let present = source[callback..]
+            .find("redraw_if_dirty(document)?")
+            .expect("same-turn mutations must present through the retained gate");
+        assert!(present > 0);
+    }
+
+    #[test]
+    fn typed_key_projection_uses_shortcut_modifier_order_and_canonical_names() {
+        assert_eq!(
+            normalized_modifiers(CONTROL_MASK | MOD4_MASK),
+            vec!["Ctrl", "Super"]
+        );
+        assert_eq!(canonical_key_name(XK_LEFT), "Left");
+        assert_eq!(canonical_key_name(XK_SUPER_L), "Super_L");
+        assert_eq!(printable_key_text(u64::from(b'A')), Some("A".to_string()));
+        assert_eq!(printable_key_text(XK_ESCAPE), None);
     }
 }
