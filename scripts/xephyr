@@ -1,5 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+usage(){
+  cat <<'EOF'
+Usage: scripts/xephyr
+
+Launch the FlameWM Xephyr development session. No arguments are accepted.
+
+Environment controls include:
+  FLAMEWM_XEPHYR_PRIVATE_DBUS=0   Opt out of the default private D-Bus session
+  FLAMEWM_XEPHYR_SCREEN=WxH       Nested display geometry (default: 1350x641)
+  FLAMEWM_XEPHYR_DISPLAY=:N       Select a nested X display (default: auto)
+  FLAMEWM_XEPHYR_CANARY=1         Run bounded canary checks
+  FLAMEWM_XEPHYR_TEST_APPS=1      Start optional test application
+  FLAMEWM_XEPHYR_HARD_T06=1       Require hard T06 move and T07 resize canaries
+  FLAMEWM_XEPHYR_SESSION_MODE=1   Run flamewm-session as sole supervisor (default: direct WM/desktop/shell)
+  FLAMEWM_XEPHYR_BUILD=0          Skip Cargo build when selected binaries are executable
+  FLAMEWM_XEPHYR_SESSION_BIN=PATH Override flamewm-session binary in session mode
+  FLAMEWM_XEPHYR_WM_BIN=PATH      Override direct WM binary
+  FLAMEWM_XEPHYR_DESKTOP_BIN=PATH Override direct desktop binary
+  FLAMEWM_XEPHYR_SHELL_BIN=PATH   Override direct shell binary
+  FLAMEWM_XEPHYR_CANARY_BIN=PATH  Override X11 canary binary
+  FLAMEWM_XEPHYR_DEBUG_CRASH=1    Enable crash-debug Rust environment
+  FLAMEWM_XEPHYR_OUTPUT_DIR=PATH  Root for invocation logs and screenshots
+  FLAMEWM_XEPHYR_EVIDENCE_ROOT=PATH Root for profiler evidence (default: .performance)
+  FLAMEWM_XEPHYR_DEBUG_ROOT=PATH  Root for debug logs (default: .debug)
+  FLAMEWM_DEBUG=0                 Disable development debug logging
+  FLAMEWM_PROFILE=0               Disable development profiling
+EOF
+}
+
+if [[ "$#" -gt 0 ]]; then
+  if [[ "$#" -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+    usage
+    exit 0
+  fi
+  usage >&2
+  printf 'error: unknown argument: %s\n' "$1" >&2
+  exit 2
+fi
+
 # J01 private nested D-Bus: outer invocation re-execs the harness under a
 # private session bus so the nested WM never touches the host bus.
 # Default ON; FLAMEWM_XEPHYR_PRIVATE_DBUS=0 opts out (debugging only).
@@ -17,20 +57,31 @@ if [[ "${FLAMEWM_XEPHYR_PRIVATE_DBUS_INNER:-}" != "1" ]]; then
 fi
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
-export PATH="$ROOT/.target/release:$PATH"
+# Checkout binaries shadow PATH only for checkout builds; FLAMEWM_XEPHYR_BUILD=0
+# leaves bare-name lookups to the installed prefix.
+if [[ "${FLAMEWM_XEPHYR_BUILD:-1}" != 0 ]]; then
+  export PATH="$ROOT/.target/release:$PATH"
+fi
 command -v cargo >/dev/null || { echo 'cargo is required' >&2; exit 1; }
 command -v Xephyr >/dev/null || { echo 'Xephyr is required (Ubuntu/Debian: xserver-xephyr)' >&2; exit 1; }
 command -v xdpyinfo >/dev/null || { echo 'xdpyinfo is required (x11-utils)' >&2; exit 1; }
 [[ -n "${DISPLAY:-}" ]] || { echo 'Host DISPLAY is unset; Xephyr needs the current X desktop.' >&2; exit 1; }
 
 SCREEN="${FLAMEWM_XEPHYR_SCREEN:-1350x641}"
+SESSION_MODE="${FLAMEWM_XEPHYR_SESSION_MODE:-0}"
+BUILD="${FLAMEWM_XEPHYR_BUILD:-1}"
 CANARY="${FLAMEWM_XEPHYR_CANARY:-0}"
 CANARY_SECS="${FLAMEWM_XEPHYR_CANARY_SECS:-10}"
 # Canary harness (flamewm-x11-canary): scenario selection for CANARY mode.
 # Default runs all four: SR05 first-present, SR07 popup matrix, SR08 black-pixel, SR15 input matrix.
 CANARY_SCENARIOS="${FLAMEWM_XEPHYR_CANARY_SCENARIOS:-sr05,sr07,sr08,sr15}"
+IFS=',' read -r -a selected_scenarios <<<"$CANARY_SCENARIOS"
+for scenario in "${selected_scenarios[@]}"; do
+  case "$scenario" in sr05|sr07|sr08|sr15) ;; *) echo "Unsupported canary scenario: $scenario" >&2; exit 2 ;; esac
+done
 CANARY_NAME="${FLAMEWM_XEPHYR_CANARY_NAME:-flame}"
 CANARY_JSON="${FLAMEWM_XEPHYR_CANARY_JSON:-0}"
+HARD_T06="${FLAMEWM_XEPHYR_HARD_T06:-0}"
 # Off by default: when enabled, run FlameWM children with crash-debug friendly
 # Rust env so a segfault produces a full backtrace. Does not change normal runs.
 DEBUG_CRASH="${FLAMEWM_XEPHYR_DEBUG_CRASH:-0}"
@@ -46,15 +97,30 @@ if [[ -z "${RWR_FONT_FILES:-}" ]]; then
 fi
 VERSION="$(tr -d '[:space:]' < "$ROOT/FLAMEWM_VERSION")"
 
-echo "[1/5] Building FlameWM WM + desktop + shell + settings"
-cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings
-mkdir -p .target/flamewm
-WM_BIN=./.target/release/flamewm
-DESKTOP_BIN=./.target/release/flamewm-desktop
-SHELL_BIN=./.target/release/flamewm-shell
-[[ -x "$WM_BIN" ]] || { echo "missing $WM_BIN" >&2; exit 1; }
-[[ -x "$DESKTOP_BIN" ]] || { echo "missing $DESKTOP_BIN" >&2; exit 1; }
-[[ -x "$SHELL_BIN" ]] || { echo "missing $SHELL_BIN" >&2; exit 1; }
+OUTPUT_DIR="${FLAMEWM_XEPHYR_OUTPUT_DIR:-$ROOT/.target/flamewm}"
+mkdir -p "$OUTPUT_DIR"
+WM_BIN="${FLAMEWM_XEPHYR_WM_BIN:-./.target/release/flamewm}"
+DESKTOP_BIN="${FLAMEWM_XEPHYR_DESKTOP_BIN:-./.target/release/flamewm-desktop}"
+SHELL_BIN="${FLAMEWM_XEPHYR_SHELL_BIN:-./.target/release/flamewm-shell}"
+SESSION_BIN="${FLAMEWM_XEPHYR_SESSION_BIN:-./.target/release/flamewm-session}"
+CANARY_BIN="${FLAMEWM_XEPHYR_CANARY_BIN:-./.target/release/flamewm-x11-canary}"
+if [[ "$BUILD" == 1 ]]; then
+  echo "[1/5] Building FlameWM WM + desktop + shell + settings + X11 canary"
+  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-x11-canary
+elif [[ "$BUILD" != 0 ]]; then
+  echo "FLAMEWM_XEPHYR_BUILD must be 0 or 1" >&2; exit 2
+fi
+if [[ "$SESSION_MODE" == 1 ]]; then
+  [[ -x "$SESSION_BIN" ]] || { echo "missing or non-executable session binary: $SESSION_BIN" >&2; exit 1; }
+  [[ -x "$CANARY_BIN" ]] || { echo "missing or non-executable canary binary: $CANARY_BIN" >&2; exit 1; }
+elif [[ "$SESSION_MODE" == 0 ]]; then
+  [[ -x "$WM_BIN" ]] || { echo "missing or non-executable WM binary: $WM_BIN" >&2; exit 1; }
+  [[ -x "$DESKTOP_BIN" ]] || { echo "missing or non-executable desktop binary: $DESKTOP_BIN" >&2; exit 1; }
+  [[ -x "$SHELL_BIN" ]] || { echo "missing or non-executable shell binary: $SHELL_BIN" >&2; exit 1; }
+  [[ -x "$CANARY_BIN" ]] || { echo "missing or non-executable canary binary: $CANARY_BIN" >&2; exit 1; }
+else
+  echo "FLAMEWM_XEPHYR_SESSION_MODE must be 0 or 1" >&2; exit 2
+fi
 
 if [[ -n "${FLAMEWM_XEPHYR_DISPLAY:-}" ]]; then
   nested="${FLAMEWM_XEPHYR_DISPLAY}"
@@ -69,11 +135,15 @@ else
 fi
 if DISPLAY="$nested" xdpyinfo >/dev/null 2>&1; then echo "$nested is already in use" >&2; exit 1; fi
 
-xephyr_log=.target/flamewm/xephyr.log
-wm_log=.target/flamewm/wm.log
-desktop_log=.target/flamewm/desktop.log
-shell_log=.target/flamewm/shell.log
-: >"$xephyr_log"; : >"$wm_log"; : >"$desktop_log"; : >"$shell_log"
+INVOCATION_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+LOG_DIR="$OUTPUT_DIR/$INVOCATION_ID"
+mkdir -p "$LOG_DIR"
+xephyr_log="$LOG_DIR/xephyr.log"
+wm_log="$LOG_DIR/wm.log"
+desktop_log="$LOG_DIR/desktop.log"
+shell_log="$LOG_DIR/shell.log"
+session_log="$LOG_DIR/session.log"
+: >"$xephyr_log"; : >"$wm_log"; : >"$desktop_log"; : >"$shell_log"; : >"$session_log"
 
 # C03 debug logs: never delete history here; each run gets its own
 # `.debug/$RUN_ID` dir (see below); retention prunes old runs only.
@@ -92,21 +162,28 @@ export FLAMEWM_PROFILE FLAMEWM_PROFILE_INTERVAL FLAMEWM_PROFILE_TOP
 # J11 .performance evidence run directory pipeline.
 # Profiler owns formatting/append; this harness owns lifecycle only.
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-RUN_DIR="$ROOT/.performance/$RUN_ID"
+EVIDENCE_ROOT="${FLAMEWM_XEPHYR_EVIDENCE_ROOT:-$ROOT/.performance}"
+DEBUG_ROOT="${FLAMEWM_XEPHYR_DEBUG_ROOT:-$ROOT/.debug}"
+ISOLATED_OUTPUT=0
+if [[ -n "${FLAMEWM_XEPHYR_OUTPUT_DIR:-}" || -n "${FLAMEWM_XEPHYR_EVIDENCE_ROOT:-}" || -n "${FLAMEWM_XEPHYR_DEBUG_ROOT:-}" ]]; then
+  ISOLATED_OUTPUT=1
+fi
+RUN_DIR="$EVIDENCE_ROOT/$RUN_ID"
 mkdir -p "$RUN_DIR"
 export FLAMEWM_PROFILE_DIR="$RUN_DIR"
 # F20 debug run dir: per-run debug logs under .debug/$RUN_ID; never rm -rf.
-DEBUG_RUN_DIR="$ROOT/.debug/$RUN_ID"
+DEBUG_RUN_DIR="$DEBUG_ROOT/$RUN_ID"
 mkdir -p "$DEBUG_RUN_DIR"
 export FLAMEWM_DEBUG_DIR="$DEBUG_RUN_DIR"
-ln -sfn "$DEBUG_RUN_DIR" "$ROOT/.debug/latest" 2>/dev/null || true
+ln -sfn "$DEBUG_RUN_DIR" "$DEBUG_ROOT/latest" 2>/dev/null || true
 # Bounded debug retention: keep latest + previous 9, never current run.
 run_debug_retention(){
+  if [[ "$ISOLATED_OUTPUT" == 1 ]]; then return 0; fi
   if [[ -x tools/debug_retention.py || -f tools/debug_retention.py ]]; then
-    FLAMEWM_CURRENT_RUN="${RUN_ID:-}" python3 tools/debug_retention.py "$ROOT/.debug" 2>/dev/null || true
+    FLAMEWM_CURRENT_RUN="${RUN_ID:-}" python3 tools/debug_retention.py "$DEBUG_ROOT" 2>/dev/null || true
   else
     # Fallback: same policy inline (keep 10 newest, protect latest+current).
-    python3 - "$ROOT/.debug" "${RUN_ID:-}" <<'EOF' 2>/dev/null || true
+    python3 - "$DEBUG_ROOT" "${RUN_ID:-}" <<'EOF' 2>/dev/null || true
 import os, re, shutil, sys
 base, current = sys.argv[1], sys.argv[2]
 pat = re.compile(r"^\d{8}T\d{6}Z-\d+$")
@@ -147,7 +224,7 @@ run_debug_retention
   echo "rustc=$(rustc --version 2>/dev/null || echo unknown)"
   echo "cargo=$(cargo --version 2>/dev/null || echo unknown)"
 } >"$RUN_DIR/manifest.txt" 2>/dev/null || true
-ln -sfn "$RUN_DIR" "$ROOT/.performance/latest" 2>/dev/null || true
+ln -sfn "$RUN_DIR" "$EVIDENCE_ROOT/latest" 2>/dev/null || true
 # Crash-debug environment record (never fails the run).
 {
   echo "ulimit_c=$(ulimit -c 2>/dev/null || echo unknown)"
@@ -159,8 +236,9 @@ ln -sfn "$RUN_DIR" "$ROOT/.performance/latest" 2>/dev/null || true
 # Bounded retention: on by default (FLAMEWM_PERFORMANCE_CLEANUP=1).
 # Never fails run.
 run_retention(){
+  if [[ "$ISOLATED_OUTPUT" == 1 ]]; then return 0; fi
   if [[ -x tools/performance_retention.py || -f tools/performance_retention.py ]]; then
-    FLAMEWM_CURRENT_RUN="${RUN_ID:-}" python3 tools/performance_retention.py "$ROOT/.performance" 2>/dev/null || true
+    FLAMEWM_CURRENT_RUN="${RUN_ID:-}" python3 tools/performance_retention.py "$EVIDENCE_ROOT" 2>/dev/null || true
   fi
 }
 run_retention
@@ -190,7 +268,7 @@ launch_child(){
 collect_evidence(){
   [[ -n "${RUN_DIR:-}" ]] || return 0
   [[ -d "${RUN_DIR:-}" ]] || return 0
-  for f in "$xephyr_log" "$wm_log" "$desktop_log" "$shell_log"; do
+  for f in "$xephyr_log" "$wm_log" "$desktop_log" "$shell_log" "$session_log"; do
     cp "$f" "$RUN_DIR/$(basename "$f")" 2>/dev/null || true
   done
   # F20: collect per-run debug logs + manifest link into evidence.
@@ -198,14 +276,15 @@ collect_evidence(){
     mkdir -p "$RUN_DIR/debug" 2>/dev/null || true
     cp "${FLAMEWM_DEBUG_DIR:-}"/*.log "$RUN_DIR/debug/" 2>/dev/null || true
   fi
-  echo "debug_dir=.debug/$RUN_ID" >>"$RUN_DIR/manifest.txt" 2>/dev/null || true
+  echo "debug_dir=$DEBUG_RUN_DIR" >>"$RUN_DIR/manifest.txt" 2>/dev/null || true
+  echo "session_mode=$SESSION_MODE session_pid=${session_pid:-}" >>"$RUN_DIR/manifest.txt" 2>/dev/null || true
   for rec in "wm:${wm_pid:-}" "desktop:${desktop_pid:-}" "shell:${shell_pid:-}"; do
     name="${rec%%:*}"; pid="${rec##*:}"
     [[ -n "$pid" && -r "/proc/$pid/smaps_rollup" ]] || continue
     awk '/^Pss:/{pss=$2} /^Rss:/{rss=$2} /^Swap:/{sw=$2} END{printf "%s pid=%s pss=%dkB rss=%dkB swap=%dkB\n", "'"${name}"'", "'"${pid}"'", pss+0, rss+0, sw+0}' \
       "/proc/$pid/smaps_rollup" >>"$RUN_DIR/pss.txt" 2>/dev/null || true
   done
-  [[ -s .target/flamewm/canary-root.png ]] && cp .target/flamewm/canary-root.png "$RUN_DIR/root.png" 2>/dev/null || true
+  [[ -s "$OUTPUT_DIR/canary-root.png" ]] && cp "$OUTPUT_DIR/canary-root.png" "$RUN_DIR/root.png" 2>/dev/null || true
   if [[ -x tools/profile_summary.py ]]; then    shopt -s nullglob
     prof_logs=("$RUN_DIR"/*.profile.log)
     shopt -u nullglob
@@ -219,13 +298,40 @@ collect_evidence(){
 }
 
 xephyr_pid=''
+session_pid=''
 wm_pid=''
 desktop_pid=''
 shell_pid=''
+xterm_pid=''
 cleanup(){
-  [[ -n "${shell_pid:-}" ]] && kill "$shell_pid" 2>/dev/null || true
-  [[ -n "${desktop_pid:-}" ]] && kill "$desktop_pid" 2>/dev/null || true
-  [[ -n "${wm_pid:-}" ]] && kill "$wm_pid" 2>/dev/null || true
+  if [[ -n "${xterm_pid:-}" ]]; then
+    kill -TERM "$xterm_pid" 2>/dev/null || true
+    for _ in $(seq 1 100); do
+      kill -0 "$xterm_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$xterm_pid" 2>/dev/null; then
+      echo "xterm exceeded 10s shutdown bound; sending KILL to pid=$xterm_pid" >&2
+      kill -KILL "$xterm_pid" 2>/dev/null || true
+    fi
+    wait "$xterm_pid" 2>/dev/null || true
+  fi
+  if [[ -n "${session_pid:-}" ]]; then
+    kill -TERM "$session_pid" 2>/dev/null || true
+    for _ in $(seq 1 100); do
+      kill -0 "$session_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$session_pid" 2>/dev/null; then
+      echo "session supervisor exceeded 10s shutdown bound; sending KILL to pid=$session_pid" >&2
+      kill -KILL "$session_pid" 2>/dev/null || true
+    fi
+    wait "$session_pid" 2>/dev/null || true
+  else
+    [[ -n "${shell_pid:-}" ]] && kill "$shell_pid" 2>/dev/null || true
+    [[ -n "${desktop_pid:-}" ]] && kill "$desktop_pid" 2>/dev/null || true
+    [[ -n "${wm_pid:-}" ]] && kill "$wm_pid" 2>/dev/null || true
+  fi
   [[ -n "${xephyr_pid:-}" ]] && kill "$xephyr_pid" 2>/dev/null || true
   [[ -n "${shell_pid:-}" ]] && wait "$shell_pid" 2>/dev/null || true
   [[ -n "${desktop_pid:-}" ]] && wait "$desktop_pid" 2>/dev/null || true
@@ -240,7 +346,7 @@ fail(){
     echo "FLAMEWM_XEPHYR_FAIL: $*" >>"$RUN_DIR/crash.txt" 2>/dev/null || true
     first_dead_child >>"$RUN_DIR/crash.txt" 2>&1 || true
   fi
-  for f in "$xephyr_log" "$wm_log" "$desktop_log" "$shell_log"; do
+  for f in "$xephyr_log" "$wm_log" "$desktop_log" "$shell_log" "$session_log"; do
     echo "--- tail $f ---" >&2
     tail -n 30 "$f" >&2 || true
   done
@@ -277,7 +383,7 @@ crash_capture(){
 # exact and is NOT confused with the later Xephyr teardown during cleanup.
 first_dead_child(){
   local rec name pid status sig
-  for rec in "wm:$wm_pid" "desktop:$desktop_pid" "shell:$shell_pid" "xephyr:$xephyr_pid"; do
+  for rec in "session:$session_pid" "wm:$wm_pid" "desktop:$desktop_pid" "shell:$shell_pid" "xephyr:$xephyr_pid"; do
     name="${rec%%:*}"
     pid="${rec##*:}"
     if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
@@ -367,52 +473,83 @@ for _ in $(seq 1 100); do
   sleep 0.05
 done
 DISPLAY="$nested" xdpyinfo >/dev/null 2>&1 || fail "Xephyr readiness failed"
+if [[ -n "${FLAMEWM_XEPHYR_XTEST_OWNER_TOKEN:-}" || -n "${FLAMEWM_XEPHYR_XTEST_OWNER_MARKER:-}" ]]; then
+  [[ "${FLAMEWM_XEPHYR_XTEST_OWNER_TOKEN:-}" =~ ^[0-9a-f]{64}$ && -n "${FLAMEWM_XEPHYR_XTEST_OWNER_MARKER:-}" ]] \
+    || fail 'XTEST ownership token/marker configuration is invalid'
+  printf '%s\n%s\n' "$nested" "$FLAMEWM_XEPHYR_XTEST_OWNER_TOKEN" >"$FLAMEWM_XEPHYR_XTEST_OWNER_MARKER"
+fi
 
-echo '[3/5] Starting FlameWM window manager (EWMH gate)'
-launch_child wm "$WM_BIN" "$wm_log" &
-wm_pid=$!
+if [[ "$SESSION_MODE" == 1 ]]; then
+  echo '[3/5] Starting flamewm-session supervisor (EWMH gate)'
+  nested_env "$SESSION_BIN" >"$session_log" 2>&1 &
+  session_pid=$!
+else
+  echo '[3/5] Starting FlameWM window manager (EWMH gate)'
+  launch_child wm "$WM_BIN" "$wm_log" &
+  wm_pid=$!
+fi
 wm_ready=0
 for _ in $(seq 1 100); do
-  require_alive wm "$wm_pid" "$wm_log"
+  if [[ "$SESSION_MODE" == 1 ]]; then require_alive session "$session_pid" "$session_log"; else require_alive wm "$wm_pid" "$wm_log"; fi
   if command -v xprop >/dev/null 2>&1 && DISPLAY="$nested" xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q '#'; then
     wm_ready=1
     break
   fi
   sleep 0.05
 done
-require_alive wm "$wm_pid" "$wm_log"
+if [[ "$SESSION_MODE" == 1 ]]; then require_alive session "$session_pid" "$session_log"; else require_alive wm "$wm_pid" "$wm_log"; fi
 if command -v xprop >/dev/null 2>&1; then
   [[ "$wm_ready" == 1 ]] || fail "WM EWMH readiness failed (_NET_SUPPORTING_WM_CHECK not published)"
 else
   echo 'WARN: xprop missing; EWMH gate degraded to WM liveness only' >&2
 fi
 
-echo '[4/5] Starting FlameWM desktop'
-launch_child desktop "$DESKTOP_BIN" "$desktop_log" &
-desktop_pid=$!
-sleep 1
-require_alive desktop "$desktop_pid" "$desktop_log"
-require_alive wm "$wm_pid" "$wm_log"
+if [[ "$SESSION_MODE" == 0 ]]; then
+  echo '[4/5] Starting FlameWM desktop'
+  launch_child desktop "$DESKTOP_BIN" "$desktop_log" &
+  desktop_pid=$!
+  sleep 1
+  require_alive desktop "$desktop_pid" "$desktop_log"
+  require_alive wm "$wm_pid" "$wm_log"
 
-echo '[5/5] Starting FlameWM shell'
-launch_child shell "$SHELL_BIN" "$shell_log" &
-shell_pid=$!
-sleep 1
-require_alive shell "$shell_pid" "$shell_log"
-require_alive desktop "$desktop_pid" "$desktop_log"
-require_alive wm "$wm_pid" "$wm_log"
+  echo '[5/5] Starting FlameWM shell'
+  launch_child shell "$SHELL_BIN" "$shell_log" &
+  shell_pid=$!
+  sleep 1
+  require_alive shell "$shell_pid" "$shell_log"
+  require_alive desktop "$desktop_pid" "$desktop_log"
+  require_alive wm "$wm_pid" "$wm_log"
+fi
 
-if [[ "${FLAMEWM_XEPHYR_TEST_APPS:-0}" == 1 ]] && command -v xterm >/dev/null 2>&1; then
-  nested_env xterm -geometry 80x24+90+90 >/dev/null 2>&1 &
+hard_t06_active=0
+if [[ "$HARD_T06" == 1 ]]; then
+  hard_t06_active=1
+elif [[ "${FLAMEWM_XEPHYR_TEST_APPS:-0}" == 1 ]]; then
+  hard_t06_active=0
+fi
+if [[ "$HARD_T06" == 1 || "${FLAMEWM_XEPHYR_TEST_APPS:-0}" == 1 ]]; then
+  command -v xterm >/dev/null 2>&1 || {
+    [[ "$HARD_T06" == 1 ]] && fail 'hard T06/T07 lane requires xterm binary' || echo 'WARN: xterm missing; optional test app not started' >&2
+  }
+  if command -v xterm >/dev/null 2>&1; then
+    nested_env xterm -T FlameWM-T06-Canary -n FlameWM-T06-Canary -geometry 80x24+90+90 >"$RUN_DIR/xterm.log" 2>&1 &
+    xterm_pid=$!
+  fi
 fi
 
 canary_checks(){
-  CANARY_BIN="${CANARY_BIN:-./.target/release/flamewm-x11-canary}"
-  if [[ ! -x "$CANARY_BIN" ]]; then
-    echo '[canary] building flamewm-x11-canary harness' >&2
-    cargo build --quiet --release -p flamewm-x11-canary || fail "canary harness build failed"
-  fi
   [[ -x "$CANARY_BIN" ]] || fail "canary harness missing ($CANARY_BIN)"
+  if [[ "$HARD_T06" == 1 ]]; then
+    local hard_log="$RUN_DIR/hard-t06-t07.log"
+    echo '[hard-canary] T06 move FlameWM-T06-Canary' | tee -a "$hard_log"
+    if ! DISPLAY="$nested" "$CANARY_BIN" j07 --scenario move --name FlameWM-T06-Canary --timeout-secs 5 --json 2>&1 | tee -a "$hard_log"; then
+      fail "hard T06 move canary failed (fixture unmapped, XTEST unsupported, or scenario failure); see $hard_log"
+    fi
+    echo '[hard-canary] T07 resize FlameWM-T06-Canary' | tee -a "$hard_log"
+    if ! DISPLAY="$nested" "$CANARY_BIN" j07 --scenario resize --name FlameWM-T06-Canary --timeout-secs 5 --json 2>&1 | tee -a "$hard_log"; then
+      fail "hard T07 resize canary failed (fixture unmapped, XTEST unsupported, or scenario failure); see $hard_log"
+    fi
+  fi
   json_flag=''
   [[ "$CANARY_JSON" == 1 ]] && json_flag='--json'
   # SR05 first-present: named Flame surface must be mapped/viewable.
@@ -468,7 +605,7 @@ canary_checks(){
   # shellcheck disable=SC2086
   DISPLAY="$nested" "$CANARY_BIN" root-shot $json_flag 2>/dev/null \
     || echo 'WARN: canary root-shot probe failed' >&2
-  shot=.target/flamewm/canary-root.png
+  shot="$OUTPUT_DIR/canary-root.png"
   if command -v import >/dev/null 2>&1; then
     DISPLAY="$nested" import -window root "$shot" 2>/dev/null || fail "canary screenshot failed (import)"
     [[ -s "$shot" ]] || fail "canary screenshot failed (empty file)"
@@ -484,8 +621,8 @@ canary_checks(){
       echo "canary: screenshot ${size}B (mean check skipped, identify missing)"
     fi
   elif command -v xwd >/dev/null 2>&1; then
-    DISPLAY="$nested" xwd -root -out .target/flamewm/canary-root.xwd 2>/dev/null || fail "canary screenshot failed (xwd)"
-    size="$(wc -c <.target/flamewm/canary-root.xwd | tr -d ' ')"
+    DISPLAY="$nested" xwd -root -out "$OUTPUT_DIR/canary-root.xwd" 2>/dev/null || fail "canary screenshot failed (xwd)"
+    size="$(wc -c <"$OUTPUT_DIR/canary-root.xwd" | tr -d ' ')"
     [[ "$size" -gt 8192 ]] || fail "canary screenshot rejected (suspiciously small: ${size}B, likely black frame)"
     echo "canary: xwd dump ${size}B"
   else
@@ -496,28 +633,37 @@ canary_checks(){
 if [[ "$CANARY" == 1 ]]; then
   echo "CANARY mode: bounded run ${CANARY_SECS}s on $nested"
   sleep "$CANARY_SECS"
-  require_alive wm "$wm_pid" "$wm_log"
-  require_alive desktop "$desktop_pid" "$desktop_log"
-  require_alive shell "$shell_pid" "$shell_log"
+  if [[ "$SESSION_MODE" == 1 ]]; then require_alive session "$session_pid" "$session_log"; else
+    require_alive wm "$wm_pid" "$wm_log"
+    require_alive desktop "$desktop_pid" "$desktop_log"
+    require_alive shell "$shell_pid" "$shell_log"
+  fi
   canary_checks
-  require_alive wm "$wm_pid" "$wm_log"
-  require_alive desktop "$desktop_pid" "$desktop_log"
-  require_alive shell "$shell_pid" "$shell_log"
+  if [[ "$SESSION_MODE" == 1 ]]; then require_alive session "$session_pid" "$session_log"; else
+    require_alive wm "$wm_pid" "$wm_log"
+    require_alive desktop "$desktop_pid" "$desktop_log"
+    require_alive shell "$shell_pid" "$shell_log"
+  fi
   collect_evidence
   echo "FLAMEWM_XEPHYR_CANARY_PASS display=$nested version=$VERSION"
-  echo "logs: $xephyr_log $wm_log $desktop_log $shell_log"
+  echo "logs: $xephyr_log $wm_log $desktop_log $shell_log $session_log"
   echo "evidence: $RUN_DIR"
   exit 0
 fi
 
-echo "FlameWM $VERSION running on $nested (wm -> desktop -> shell)"
-echo "logs: $xephyr_log $wm_log $desktop_log $shell_log"
+if [[ "$SESSION_MODE" == 1 ]]; then
+  echo "FlameWM $VERSION running on $nested (flamewm-session supervisor)"
+else
+  echo "FlameWM $VERSION running on $nested (wm -> desktop -> shell)"
+fi
+echo "logs: $xephyr_log $wm_log $desktop_log $shell_log $session_log"
 # Supervise: fail visibly if any required child exits. Fail-fast is preserved:
 # no `|| true` masks on the required children, and now the FIRST dead child is
 # classified (pid/name/status/signal) so a child segfault is never mislabeled as
 # the later, expected `X connection broken` that follows Xephyr teardown.
 while true; do
-  if ! wait -n "$xephyr_pid" "$wm_pid" "$desktop_pid" "$shell_pid" 2>/dev/null; then
+  if [[ "$SESSION_MODE" == 1 ]]; then supervised_pids=("$xephyr_pid" "$session_pid"); else supervised_pids=("$xephyr_pid" "$wm_pid" "$desktop_pid" "$shell_pid"); fi
+  if ! wait -n "${supervised_pids[@]}" 2>/dev/null; then
     : # reaped child failed; classification below does not hide the failure
   fi
   # wait -n reaped one exited child; classify exactly which one (never masked).

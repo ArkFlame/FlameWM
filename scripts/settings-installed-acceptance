@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Usage: scripts/settings-installed-acceptance --prefix DIR --run-dir DIR [options]
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+if [[ ! -f "$ROOT/Cargo.toml" ]]; then
+  echo "error: $ROOT does not contain Cargo.toml; refusing to run" >&2
+  exit 2
+fi
+exec python3 "$ROOT/tools/flamewm_settings_installed_acceptance.py" "$@"
