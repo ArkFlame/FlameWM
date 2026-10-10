@@ -164,14 +164,6 @@ pub fn native_icon_rgba(icon: &IconImage, slot: u32) -> Option<flamewm_image_cor
     flamewm_image_core::RgbaImage::from_rgba8(scaled.width, scaled.height, pixels)
 }
 
-/// Load a Breeze `window-*.svg` control glyph at its asset path with the
-/// semantic Flame color scheme (canonical `image-core` SVG entry point).
-/// Pure/cached asset only: no application catalog lookup.
-#[must_use]
-pub fn control_glyph_svg(role: ControlRole, edge: u32) -> Option<flamewm_image_core::RgbaImage> {
-    control_glyph_svg_at(env!("CARGO_MANIFEST_DIR"), role, edge)
-}
-
 /// Material variant for one cached control glyph: resting or hover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ControlMaterial {
@@ -288,45 +280,13 @@ fn control_glyph_scheme(
     }
 }
 
-fn control_glyph_svg_at(
-    manifest_dir: &str,
-    role: ControlRole,
-    edge: u32,
-) -> Option<flamewm_image_core::RgbaImage> {
-    if edge == 0 || edge > flamewm_image_core::MAX_DIMENSION {
-        return None;
-    }
-    let path = std::path::Path::new(manifest_dir)
-        .join("../../")
-        .join(role.asset_path());
-    let bytes = std::fs::read(path).ok()?;
-    flamewm_image_core::svg::render_with_color_scheme(
-        &bytes,
-        edge,
-        edge,
-        &flamewm_image_core::SvgColorScheme::flame_default(),
-    )
-    .ok()
-}
-
-/// Code-level delegation anchor for the doc contract on [`skin_color`]:
-/// the live paint path executes through this external drawable contract.
+/// Code-level delegation anchor for the external drawable contract: the live
+/// paint path executes through this external drawable contract.
 /// Dead-code type reference (never called) so source-context guards observe
 /// the delegation outside comments; behavior unchanged.
 #[allow(dead_code)]
 fn external_drawable_delegation_target() -> &'static str {
     std::any::type_name::<flamewm_render_x11::ExternalDrawableTarget>()
-}
-
-/// Skin color as canonical `render-core` RGBA for `ExternalDrawableTarget`.
-#[must_use]
-pub fn skin_color(color: flamewm_skin::Rgb) -> flamewm_render_core::Color {
-    flamewm_render_core::Color {
-        r: ((color.0 >> 16) & 0xff) as u8,
-        g: ((color.0 >> 8) & 0xff) as u8,
-        b: (color.0 & 0xff) as u8,
-        a: 255,
-    }
 }
 
 /// Titlebar icon slot edge for the configured titlebar height.
@@ -444,73 +404,6 @@ pub fn icon_dest_rect(titlebar_height: u16) -> (f32, f32, f32) {
     )
 }
 
-/// Map a `WM_CLASS` (instance or class, NUL-separated) to a skin icon role.
-/// Used only when `_NET_WM_ICON` is absent; pure fallback, no state minted.
-#[must_use]
-pub fn icon_role_for_class(wm_class: &str) -> Option<IconRole> {
-    let lowered = wm_class.to_ascii_lowercase();
-    for token in lowered.split(['\0', ' ', '-', '_']) {
-        let role = match token {
-            t if t.contains("terminal") || t == "xterm" || t == "kitty" || t == "alacritty" => {
-                IconRole::Terminal
-            }
-            t if t.contains("browser") || t.contains("firefox") || t.contains("chrome") => {
-                IconRole::Browser
-            }
-            t if t.contains("file") || t.contains("nautilus") || t.contains("dolphin") => {
-                IconRole::Files
-            }
-            t if t.contains("code") || t.contains("editor") || t.contains("vim") => IconRole::Code,
-            t if t.contains("setting") || t.contains("config") => IconRole::Settings,
-            t if t.contains("trash") => IconRole::Trash,
-            t if t.contains("music") || t.contains("audio") => IconRole::Volume,
-            t if t.contains("lock") => IconRole::Lock,
-            _ => continue,
-        };
-        return Some(role);
-    }
-    None
-}
-
-/// Build the renderer-neutral [`WindowChromeScene`] for one frame.
-///
-/// `app_icon` carries the resolved icon role: `Some` when `_NET_WM_ICON` is
-/// present (mapped through the caller) or when the `WM_CLASS` fallback
-/// resolves, else `None`. Hit rects derive from skin
-/// `control_button_geometries`, never from glyph pixels.
-#[must_use]
-#[allow(clippy::too_many_arguments)]
-pub fn build_scene(
-    frame_width: u32,
-    title: &str,
-    app_icon: Option<IconRole>,
-    hover: Option<ControlRole>,
-    active: bool,
-    maximized: bool,
-    fullscreen: bool,
-) -> recipe::WindowChromeScene {
-    use flamewm_skin::DEFAULT;
-    use flamewm_skin::recipes::window_chrome::{SceneRect, WindowChromeScene};
-    use flamewm_skin::typography::Typography;
-    let policy = ControlPolicy::for_state(maximized, fullscreen);
-    let bounds = SceneRect::new(
-        0,
-        0,
-        i32::try_from(frame_width).unwrap_or(i32::MAX),
-        i32::from(DEFAULT.chrome.titlebar),
-    );
-    let mut scene = WindowChromeScene::new(bounds, title);
-    scene.title_style = Typography::RWR_0_0_9.title;
-    scene.app_icon = app_icon;
-    scene.control_roles = policy.roles.map(ControlRole::skin);
-    scene.hover = hover.map(ControlRole::skin);
-    scene.pressed = None;
-    scene.active = active;
-    scene.maximized = maximized;
-    scene.fullscreen = fullscreen;
-    scene
-}
-
 /// Renderer-owned title measurement for Xft IBM Plex Sans 12px semibold
 /// (skin typography title). Proportional advance estimate: ASCII 7px, CJK
 /// 12px, other 8px; keeps the skin `center_title_x` contract without the
@@ -544,25 +437,6 @@ fn is_wide(ch: char) -> bool {
         | '\u{F900}'..='\u{FAFF}' | '\u{FE30}'..='\u{FE4F}' | '\u{FF00}'..='\u{FFEF}')
 }
 
-/// Center-title formula, delegated to the skin contract.
-/// `paint_x = clamp((W - tw) / 2, left + pad, right - pad - tw)`.
-#[must_use]
-pub fn center_title_x(
-    titlebar_width: i32,
-    title_text_width: i32,
-    left_occupied: i32,
-    right_occupied: i32,
-    padding: i32,
-) -> i32 {
-    recipe::center_title_x(
-        titlebar_width,
-        title_text_width,
-        left_occupied,
-        right_occupied,
-        padding,
-    )
-}
-
 /// Frame shaping: rounded radius normally, rectangular when maximized or
 /// fullscreen. The bounding shape stays rectangular so the reparented client
 /// is never over-clipped; shaping is applied atomically with the geometry
@@ -579,11 +453,11 @@ mod tests {
     #[test]
     fn center_formula_matches_flame_contract() {
         // desired=(400-90)/2=155 inside free region.
-        assert_eq!(center_title_x(400, 90, 22, 304, 6), 155);
+        assert_eq!(recipe::center_title_x(400, 90, 22, 304, 6), 155);
         // Desired below minimum but free region inverted: sorted clamp keeps desired (20).
-        assert_eq!(center_title_x(400, 360, 22, 304, 6), 20);
+        assert_eq!(recipe::center_title_x(400, 360, 22, 304, 6), 20);
         // Title wider than the free region: sorted clamp keeps desired (10).
-        assert_eq!(center_title_x(200, 180, 22, 104, 6), 10);
+        assert_eq!(recipe::center_title_x(200, 180, 22, 104, 6), 10);
     }
 
     #[test]
@@ -632,22 +506,17 @@ mod tests {
     }
 
     #[test]
-    fn scene_uses_skin_controls_and_rectangular_maximized() {
-        let scene = build_scene(400, "app", None, None, true, true, false);
-        assert_eq!(scene.control_roles[1], WindowControlRole::Restore);
-        assert_eq!(scene.effective_radius(), 0);
-        let floating = build_scene(400, "app", None, None, true, false, false);
-        assert_eq!(floating.control_roles[1], WindowControlRole::Maximize);
-        assert_eq!(floating.effective_radius(), WINDOW_CHROME.metrics.radius);
-    }
-
-    #[test]
-    fn class_fallback_maps_known_apps() {
+    fn policy_uses_skin_controls_and_rectangular_maximized() {
         assert_eq!(
-            icon_role_for_class("org.gnome.Terminal"),
-            Some(IconRole::Terminal)
+            ControlPolicy::for_state(true, false).roles[1],
+            ControlRole::Restore
         );
-        assert!(icon_role_for_class("").is_none());
+        assert_eq!(effective_radius(true, false), 0);
+        assert_eq!(
+            ControlPolicy::for_state(false, false).roles[1],
+            ControlRole::Maximize
+        );
+        assert_eq!(effective_radius(false, false), WINDOW_CHROME.metrics.radius);
     }
 
     #[test]
@@ -677,24 +546,51 @@ mod tests {
             ControlRole::Restore,
             ControlRole::Close,
         ] {
-            let image = control_glyph_svg(role, 16).expect("breeze control svg");
+            let image =
+                control_glyph_raster(role, 16, ControlMaterial::Rest).expect("breeze control svg");
             assert_eq!((image.width, image.height), (16, 16));
             assert!(image.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
         }
-        assert!(control_glyph_svg(ControlRole::Close, 0).is_none());
+        assert!(control_glyph_raster(ControlRole::Close, 0, ControlMaterial::Rest).is_none());
     }
 
     #[test]
-    fn control_glyph_rejects_missing_assets() {
-        assert!(control_glyph_svg_at("/nonexistent", ControlRole::Close, 16).is_none());
-    }
-
-    #[test]
-    fn skin_color_maps_titlebar_background() {
-        let color = skin_color(WINDOW_CHROME.titlebar_background);
-        assert_eq!(
-            (color.r, color.g, color.b, color.a),
-            (0x1b, 0x1e, 0x20, 255)
-        );
+    fn hovering_close_selects_hover_material_only_for_close() {
+        use crate::frame::model::FrameControl;
+        let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
+        // Blits carry no material field, so the material each control was
+        // rendered with is observed through its cached glyph raster.
+        assert_eq!(ControlMaterial::for_pointer(false, false), ControlMaterial::Rest);
+        assert_eq!(ControlMaterial::for_pointer(true, false), ControlMaterial::Hover);
+        let rest = control_blits_for(400, false, false, None, None);
+        let hovered = control_blits_for(400, false, false, Some(FrameControl::Close), None);
+        assert_eq!(rest.len(), 3);
+        assert_eq!(hovered.len(), 3);
+        let expected = [
+            (FrameControl::Minimize, ControlMaterial::Rest),
+            (FrameControl::MaximizeRestore, ControlMaterial::Rest),
+            (FrameControl::Close, ControlMaterial::Hover),
+        ];
+        for (index, (control, material)) in expected.iter().enumerate() {
+            assert_eq!(hovered[index].control, *control);
+            let raster = control_glyph_raster(hovered[index].role, edge, *material)
+                .expect("control raster");
+            assert_eq!(
+                hovered[index].raster, raster,
+                "{control:?} must use {material:?} material on close hover"
+            );
+            let (h, r) = (&hovered[index], &rest[index]);
+            assert_eq!(
+                (h.dest_x, h.dest_y, h.dest_w, h.dest_h),
+                (r.dest_x, r.dest_y, r.dest_w, r.dest_h),
+                "hover must keep the {control:?} destination geometry"
+            );
+        }
+        for (index, blit) in rest.iter().enumerate() {
+            let raster = control_glyph_raster(blit.role, edge, ControlMaterial::Rest)
+                .expect("control raster");
+            assert_eq!(blit.raster, raster, "no hover must select Rest material for every control");
+            assert_eq!(blit.control, hovered[index].control);
+        }
     }
 }

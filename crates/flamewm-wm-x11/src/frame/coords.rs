@@ -24,13 +24,6 @@ pub struct FramePoint {
     pub y: i32,
 }
 
-/// Point in client-local coordinates (origin = client window origin).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ClientLocalPoint {
-    pub x: i32,
-    pub y: i32,
-}
-
 /// Rectangle in root (screen) coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RootRect {
@@ -101,13 +94,6 @@ impl FramePoint {
             x: self.x.saturating_add(frame_origin.x),
             y: self.y.saturating_add(frame_origin.y),
         }
-    }
-}
-
-impl ClientLocalPoint {
-    #[must_use]
-    pub const fn new(x: i32, y: i32) -> Self {
-        Self { x, y }
     }
 }
 
@@ -237,8 +223,6 @@ mod tests {
 
     #[test]
     fn client_local_types_constructible() {
-        let p = ClientLocalPoint::new(0, 31);
-        assert_eq!((p.x, p.y), (0, 31));
         let r = ClientLocalRect::new(0, 31, 400, 269);
         assert_eq!((r.x, r.y, r.w, r.h), (0, 31, 400, 269));
     }

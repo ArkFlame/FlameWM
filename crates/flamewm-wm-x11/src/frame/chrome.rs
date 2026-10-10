@@ -23,8 +23,7 @@ pub const TITLE_FONT_WEIGHT: i32 = 600;
 /// Carries geometry + asset intent for the live render: centered title
 /// origin (`title_x` via skin `center_title_x`), the native `_NET_WM_ICON`
 /// selection (`icon`, pure/cached asset only, no catalog lookup), its skin
-/// destination (`icon_dest`), and the exact skin control roles for the
-/// three titlebar buttons.
+/// destination (`icon_dest`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChromeScene {
     pub frame_w: u32,
@@ -41,7 +40,6 @@ pub struct ChromeScene {
     pub icon: Option<crate::chrome::IconImage>,
     pub icon_dest: Option<(f32, f32, f32)>,
     pub icon_edge: u16,
-    pub control_roles: [crate::chrome::ControlRole; 3],
     pub baseline: f32,
     pub hover: Option<FrameControl>,
     pub pressed: Option<FrameControl>,
@@ -70,7 +68,6 @@ pub fn plan_scene(
     let radius = WINDOW_CHROME.metrics.radius;
     let title_width = crate::chrome::title_text_width(title);
     let title_x = crate::chrome::live_title_x(frame_w, title_width);
-    let policy = crate::chrome::ControlPolicy::for_state(maximized, fullscreen);
     ChromeScene {
         frame_w,
         frame_h,
@@ -96,7 +93,6 @@ pub fn plan_scene(
             WINDOW_CHROME.metrics.titlebar,
         )),
         icon_edge: WINDOW_CHROME.metrics.icon,
-        control_roles: policy.roles,
         baseline: crate::chrome::title_baseline(WINDOW_CHROME.metrics.titlebar),
         hover,
         pressed,
@@ -115,84 +111,6 @@ pub fn with_icon(mut scene: ChromeScene, icon: Option<crate::chrome::IconImage>)
     scene.icon_present = icon.is_some();
     scene.icon = icon;
     scene
-}
-
-/// Production paint plan: renderer-executor inputs derived from a
-/// [`ChromeScene`] through the production skin path only (no test-only
-/// `ChromeEffect`/`effects_for` duplicate). J21/J22 own the executor
-/// rewrite; this struct only names the contract the executor must honor.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ControlPaintSlot {
-    pub control: FrameControl,
-    pub role: crate::chrome::ControlRole,
-    pub dest_x: f32,
-    pub dest_y: f32,
-    pub dest_w: f32,
-    pub dest_h: f32,
-    pub material: crate::chrome::ControlMaterial,
-}
-
-/// Production paint plan for one frame: exact colors, title style,
-/// icon destination, three skin-owned control slots with per-control
-/// material, and shape radius.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChromePaintPlan {
-    pub bg: (u8, u8, u8),
-    pub text_color: (u8, u8, u8),
-    pub font_family: &'static str,
-    pub font_size_px: f32,
-    pub font_weight: i32,
-    pub title_x: f32,
-    pub baseline: f32,
-    pub icon_dest: Option<(f32, f32, f32)>,
-    pub controls: [ControlPaintSlot; 3],
-    pub radius: u16,
-}
-
-/// Derive the production paint plan from a planned scene using only the
-/// production skin path (`ControlPolicy`, `control_button_geometries`,
-/// `ControlMaterial::for_pointer`). Pure; no X calls.
-#[must_use]
-pub fn paint_plan(scene: &ChromeScene) -> ChromePaintPlan {
-    use crate::frame::model::FrameControl as Control;
-    let titlebar = flamewm_skin::recipes::window_chrome::SceneRect::new(
-        0,
-        0,
-        i32::try_from(scene.frame_w).unwrap_or(i32::MAX),
-        i32::from(WINDOW_CHROME.metrics.titlebar),
-    );
-    let geometries = flamewm_skin::recipes::window_chrome::control_button_geometries(titlebar);
-    let button_w = f32::from(WINDOW_CHROME.metrics.button_width);
-    let button_h = f32::from(WINDOW_CHROME.metrics.titlebar);
-    let controls = [Control::Minimize, Control::MaximizeRestore, Control::Close];
-    let mut slots = Vec::with_capacity(3);
-    for (index, control) in controls.iter().enumerate() {
-        let bounds = geometries[index].bounds;
-        slots.push(ControlPaintSlot {
-            control: *control,
-            role: scene.control_roles[index],
-            dest_x: bounds.x as f32,
-            dest_y: bounds.y as f32,
-            dest_w: button_w,
-            dest_h: button_h,
-            material: crate::chrome::ControlMaterial::for_pointer(
-                scene.hover == Some(*control),
-                scene.pressed == Some(*control),
-            ),
-        });
-    }
-    ChromePaintPlan {
-        bg: scene.bg,
-        text_color: scene.title_color,
-        font_family: TITLE_FONT_FAMILY,
-        font_size_px: TITLE_FONT_SIZE_PX,
-        font_weight: TITLE_FONT_WEIGHT,
-        title_x: scene.title_x,
-        baseline: scene.baseline,
-        icon_dest: scene.icon_dest,
-        controls: [slots[0].clone(), slots[1].clone(), slots[2].clone()],
-        radius: scene.radius,
-    }
 }
 
 /// Native effect intents executed against [`ExternalDecorationRenderer`].
@@ -475,75 +393,5 @@ mod tests {
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.
         assert_eq!(renderer.last_title_style(), Some((12.0, 600)));
-    }
-
-    #[test]
-    fn production_plan_covers_title_style_colors_icon_dest() {
-        let scene = plan_scene(400, 300, "app", true, None, None, false, false);
-        let plan = paint_plan(&scene);
-        assert_eq!(plan.bg, (0x1b, 0x1e, 0x20));
-        assert_eq!(plan.text_color, (0xf1, 0xf2, 0xf3));
-        assert_eq!(plan.font_family, "IBM Plex Sans");
-        assert_eq!(plan.font_size_px, 12.0);
-        assert_eq!(plan.font_weight, 600);
-        let (x, _y, _edge) = plan.icon_dest.expect("plan carries icon dest");
-        assert_eq!(x, 6.0);
-    }
-
-    #[test]
-    fn production_plan_has_three_38px_skin_slots_maximized_middle_restore() {
-        let scene = plan_scene(400, 300, "a", true, None, None, true, false);
-        let plan = paint_plan(&scene);
-        assert_eq!(plan.controls.len(), 3);
-        for slot in &plan.controls {
-            assert_eq!((slot.dest_w, slot.dest_h), (38.0, 31.0));
-        }
-        assert_eq!(
-            plan.controls[2].dest_x + plan.controls[2].dest_w,
-            scene.frame_w as f32
-        );
-        assert_eq!(plan.controls[1].role, crate::chrome::ControlRole::Restore);
-        assert_eq!(plan.radius, 0);
-        let fullscreen = plan_scene(400, 300, "a", true, None, None, false, true);
-        assert_eq!(paint_plan(&fullscreen).radius, 0);
-        let floating = plan_scene(400, 300, "a", true, None, None, false, false);
-        let floating_plan = paint_plan(&floating);
-        assert_eq!(floating_plan.radius, WINDOW_CHROME.metrics.radius);
-        assert_eq!(
-            floating_plan.controls[1].role,
-            crate::chrome::ControlRole::Maximize
-        );
-    }
-
-    #[test]
-    fn production_plan_close_hover_only_changes_close_material() {
-        let base = paint_plan(&plan_scene(400, 300, "a", true, None, None, false, false));
-        let hovered = paint_plan(&plan_scene(
-            400,
-            300,
-            "a",
-            true,
-            Some(FrameControl::Close),
-            None,
-            false,
-            false,
-        ));
-        for index in 0..2 {
-            assert_eq!(
-                hovered.controls[index].material,
-                base.controls[index].material
-            );
-            assert_eq!(
-                hovered.controls[index].material,
-                crate::chrome::ControlMaterial::Rest
-            );
-        }
-        assert_eq!(
-            hovered.controls[2].material,
-            crate::chrome::ControlMaterial::Hover
-        );
-        assert_eq!(hovered.bg, base.bg);
-        assert_eq!(hovered.radius, base.radius);
-        assert_eq!(hovered.font_family, base.font_family);
     }
 }

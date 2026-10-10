@@ -239,4 +239,14 @@ mod tests {
         assert_eq!(geometries[1].bounds.x + width, geometries[2].bounds.x);
         assert_eq!(geometries[0].bounds.x + width, geometries[1].bounds.x);
     }
+
+    #[test]
+    fn control_slots_are_38_by_31_and_flush_to_titlebar_right_edge() {
+        let geometries = control_button_geometries(SceneRect::new(0, 0, 400, 31));
+        for geometry in &geometries {
+            assert_eq!(geometry.bounds.width, 38);
+            assert_eq!(geometry.bounds.height, 31);
+        }
+        assert_eq!(geometries[2].bounds.x + geometries[2].bounds.width, 400);
+    }
 }
