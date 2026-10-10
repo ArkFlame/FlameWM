@@ -205,38 +205,6 @@ impl DragSnapSession {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SnapState {
-    pub current: SnapTarget,
-    pub unsnapped_outer: Option<Rect>,
-}
-
-impl SnapState {
-    pub fn snap(&mut self, target: SnapTarget, current_outer: Rect) {
-        if target == SnapTarget::None {
-            return;
-        }
-        if self.current == SnapTarget::None && self.unsnapped_outer.is_none() {
-            self.unsnapped_outer = Some(current_outer);
-        }
-        self.current = target;
-    }
-
-    pub fn manual_resize(&mut self) {
-        self.current = SnapTarget::None;
-        self.unsnapped_outer = None;
-    }
-
-    #[must_use]
-    pub fn consume_drag_away(&mut self, surviving_work_area: Rect) -> Option<Rect> {
-        let restore = self
-            .unsnapped_outer
-            .map(|rect| rect.clamp_inside(surviving_work_area));
-        self.manual_resize();
-        restore
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,23 +223,6 @@ mod tests {
         let target = detect_target(pointer, output);
         assert_eq!(target, SnapTarget::TopLeftQuarter);
         assert!(!should_dwell_side_edge(target, pointer, output, 1000));
-    }
-
-    #[test]
-    fn first_snap_preserves_original_floating_geometry_across_snap_to_snap() {
-        let mut state = SnapState::default();
-        let floating = Rect::new(100, 100, 900, 600);
-        state.snap(SnapTarget::LeftHalf, floating);
-        state.snap(SnapTarget::RightHalf, Rect::new(0, 0, 960, 1080));
-        assert_eq!(state.unsnapped_outer, Some(floating));
-    }
-
-    #[test]
-    fn manual_resize_exits_snap_state() {
-        let mut state = SnapState::default();
-        state.snap(SnapTarget::LeftHalf, Rect::new(100, 100, 900, 600));
-        state.manual_resize();
-        assert_eq!(state, SnapState::default());
     }
 
     #[test]
@@ -300,16 +251,5 @@ mod tests {
         let _ = session.update(pointer, output, 400);
         session.workspace_switch_committed();
         assert_eq!(session.release_target(), SnapTarget::None);
-    }
-
-    #[test]
-    fn drag_away_clamps_restore_to_surviving_output() {
-        let mut state = SnapState::default();
-        state.snap(SnapTarget::LeftHalf, Rect::new(2600, 100, 1200, 800));
-        let restore = state
-            .consume_drag_away(Rect::new(0, 0, 1920, 1080))
-            .expect("saved floating geometry");
-        assert_eq!(restore, Rect::new(720, 100, 1200, 800));
-        assert_eq!(state, SnapState::default());
     }
 }
