@@ -1169,16 +1169,6 @@ def _j11_prod_rs(base: Path):
             yield p
 
 
-def _j11_fn_body(code: str, fn_name: str) -> str:
-    """Return the body of `fn <fn_name>(` up to the next top-level item."""
-    match = re.search(r"fn\s+" + re.escape(fn_name) + r"\s*\(", code)
-    if not match:
-        return ""
-    rest = code[match.end():]
-    nxt = re.search(r"\n(?:pub\s+)?fn\s+", rest)
-    return rest[:nxt.start()] if nxt else rest
-
-
 def _j11_strip_test_items(text: str) -> str:
     """Drop `#[cfg(test)]` items (test fns and test modules) from code context."""
     lines = text.splitlines(keepends=True)
@@ -1208,8 +1198,6 @@ def _j11_strip_test_items(text: str) -> str:
     return "".join(out)
 
 
-_J11_MOVE_RESIZE_OWNER = "crates/flamewm-render-x11/src/surface_controller.rs"
-_J11_XLIB_DECL = "crates/flamewm-render-x11/src/xlib.rs"
 # J11-G01: move_resize is the single native geometry owner; size changes go
 # through commit_geometry, and no other production file issues XMoveResizeWindow.
 _move_resize_src = ROOT / _J11_MOVE_RESIZE_OWNER

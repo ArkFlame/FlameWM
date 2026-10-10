@@ -621,10 +621,10 @@ def inspect_accent_after_click(ctx: Ctx, run: Path, name: str, geometry: dict,
     }
 
 
-def dbus_displays_snapshot(ctx: Ctx) -> tuple[str | None, str]:
+def dbus_get_snapshot(ctx: Ctx, interface: str) -> tuple[str | None, str]:
     argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
             "--object-path", "/com/arkflame/FlameWM1", "--method",
-            "com.arkflame.FlameWM1.Displays.GetSnapshot"]
+            f"com.arkflame.FlameWM1.{interface}.GetSnapshot"]
     try:
         result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
                                 timeout=10, check=False)
@@ -633,6 +633,10 @@ def dbus_displays_snapshot(ctx: Ctx) -> tuple[str | None, str]:
     if result.returncode:
         return None, result.stderr.strip() or f"gdbus exited {result.returncode}"
     return result.stdout, shell(argv)
+
+
+def dbus_displays_snapshot(ctx: Ctx) -> tuple[str | None, str]:
+    return dbus_get_snapshot(ctx, "Displays")
 
 
 def parse_proc_metrics(pid: int) -> dict | None:
@@ -679,13 +683,6 @@ def image_region_color_count(path: Path, rect: tuple[int, int, int, int],
                 abs(actual - expected) for actual, expected in zip(pixel, color)) <= 12)
     except OSError:
         return None
-
-
-def shortcut_binding(snapshot_output: str, action: str) -> str | None:
-    """Read one string binding from gdbus's printed a{sv} snapshot without eval."""
-    escaped = re.escape(action)
-    match = re.search(r"['\"]" + escaped + r"['\"]\s*:\s*<\s*['\"]([^'\"]*)['\"]\s*>", snapshot_output)
-    return match.group(1) if match else None
 
 
 def capture_lease_calls(log: str) -> list[tuple[str, str | None]]:
@@ -749,6 +746,7 @@ def assess_ss07(observations: dict[str, bool | None]) -> tuple[str, str]:
 
 
 def gvariant_field_string(output: str, key: str) -> str | None:
+    """Read one string field from gdbus's printed a{sv} snapshot without eval."""
     match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*['\"]([^'\"]*)['\"]\s*>", output)
     return match.group(1) if match else None
 
@@ -856,31 +854,11 @@ def send_input(ctx: Ctx, click: str | None, key: str | None, chord: str | None =
 
 
 def dbus_shortcuts_snapshot(ctx: Ctx) -> tuple[str | None, str]:
-    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
-            "--object-path", "/com/arkflame/FlameWM1", "--method",
-            "com.arkflame.FlameWM1.Shortcuts.GetSnapshot"]
-    try:
-        result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
-                                timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        return None, str(error)
-    if result.returncode:
-        return None, result.stderr.strip() or f"gdbus exited {result.returncode}"
-    return result.stdout, shell(argv)
+    return dbus_get_snapshot(ctx, "Shortcuts")
 
 
 def dbus_settings_snapshot(ctx: Ctx) -> tuple[str | None, str]:
-    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
-            "--object-path", "/com/arkflame/FlameWM1", "--method",
-            "com.arkflame.FlameWM1.Settings.GetSnapshot"]
-    try:
-        result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
-                                timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        return None, str(error)
-    if result.returncode:
-        return None, result.stderr.strip() or f"gdbus exited {result.returncode}"
-    return result.stdout, shell(argv)
+    return dbus_get_snapshot(ctx, "Settings")
 
 
 def dbus_apply_accent(ctx: Ctx, revision: int, accent: str) -> tuple[str | None, str, int | None]:
@@ -901,17 +879,7 @@ def dbus_apply_settings(ctx: Ctx, revision: int, changes: dict[str, str]) -> tup
 
 
 def dbus_panels_snapshot(ctx: Ctx) -> tuple[str | None, str]:
-    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
-            "--object-path", "/com/arkflame/FlameWM1", "--method",
-            "com.arkflame.FlameWM1.Panels.GetSnapshot"]
-    try:
-        result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
-                                timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        return None, str(error)
-    if result.returncode:
-        return None, result.stderr.strip() or f"gdbus exited {result.returncode}"
-    return result.stdout, shell(argv)
+    return dbus_get_snapshot(ctx, "Panels")
 
 
 def parse_panels_snapshot(output: str) -> dict | None:
@@ -1138,7 +1106,7 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
 
     before_output, before_command = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(before_command)
-    before_binding = shortcut_binding(before_output or "", "ToggleStartMenu")
+    before_binding = gvariant_field_string(before_output or "", "ToggleStartMenu")
     details["before_binding"] = before_binding
     if before_output is None or before_binding is None:
         details["reason"] = "cannot read authoritative ToggleStartMenu binding before capture"
@@ -1190,7 +1158,7 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     time.sleep(args.settle_seconds)
     after_output, after_command = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(after_command)
-    stored = shortcut_binding(after_output or "", "ToggleStartMenu")
+    stored = gvariant_field_string(after_output or "", "ToggleStartMenu")
     details["stored_binding"] = stored
     observations["binding_stored"] = stored == args.ss12_chord if after_output is not None else None
     stop_dbus_monitor(ctx, monitor)
@@ -1266,7 +1234,7 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
     clear_text, clear_query = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(clear_query)
-    cleared = shortcut_binding(clear_text or "", "ToggleStartMenu")
+    cleared = gvariant_field_string(clear_text or "", "ToggleStartMenu")
     details["clear_binding"] = cleared
     ctx.stop(clear_settings)
     clear_restart_ok = clear_text is not None and clear_click == 0 and clear_escape == 0 \
@@ -1274,7 +1242,7 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     if clear_restart_ok:
         after_clear_text, clear_restart_query = dbus_shortcuts_snapshot(ctx)
         details["commands"].extend(["restart owned WM after Escape clear", clear_restart_query])
-        after_clear = shortcut_binding(after_clear_text or "", "ToggleStartMenu")
+        after_clear = gvariant_field_string(after_clear_text or "", "ToggleStartMenu")
         details["binding_after_clear_restart"] = after_clear
         clear_restart_ok = after_clear_text is not None and after_clear == ""
     details["clear_persisted"] = clear_restart_ok
@@ -1292,14 +1260,14 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
         reset_text, reset_query = dbus_shortcuts_snapshot(ctx)
         details["commands"].append(reset_query)
-        reset_binding = shortcut_binding(reset_text or "", "ToggleStartMenu")
+        reset_binding = gvariant_field_string(reset_text or "", "ToggleStartMenu")
         details["reset_binding"] = reset_binding
         reset_ok = reset_code == 0 and reset_binding == before_binding and restart_owned_wm(
             ctx, args, "wm-ss12-reset-restart")
         if reset_ok:
             after_reset_text, reset_restart_query = dbus_shortcuts_snapshot(ctx)
             details["commands"].extend(["restart owned WM after reset", reset_restart_query])
-            after_reset = shortcut_binding(after_reset_text or "", "ToggleStartMenu")
+            after_reset = gvariant_field_string(after_reset_text or "", "ToggleStartMenu")
             details["binding_after_reset_restart"] = after_reset
             reset_ok = after_reset_text is not None and after_reset == before_binding
         observations["clear_reset_persisted"] = bool(clear_restart_ok and reset_ok)
@@ -1497,21 +1465,21 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
     key_point = settings_relative_point(ctx, geometry, (592, 149))
     initial_text, initial_query = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(initial_query)
-    initial_binding = shortcut_binding(initial_text or "", "ToggleStartMenu")
+    initial_binding = gvariant_field_string(initial_text or "", "ToggleStartMenu")
     key_code, key_command = send_input(ctx, key_point, None)
     escape_code, escape_command = send_input(ctx, None, "Escape")
     details["commands"].extend([key_command, escape_command])
     time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
     clear_text, clear_query = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(clear_query)
-    cleared_binding = shortcut_binding(clear_text or "", "ToggleStartMenu")
+    cleared_binding = gvariant_field_string(clear_text or "", "ToggleStartMenu")
     reset_point = args.ss12_reset_click or settings_relative_point(ctx, geometry, (732, 149))
     reset_code, reset_command = send_input(ctx, reset_point, None)
     details["commands"].append(reset_command)
     time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
     reset_text, reset_query = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(reset_query)
-    reset_binding = shortcut_binding(reset_text or "", "ToggleStartMenu")
+    reset_binding = gvariant_field_string(reset_text or "", "ToggleStartMenu")
     escape_geometry = window_geometry(ctx, ctx.run / "logs" / "ss15-after-escape-window-tree.txt")
     survives = ss15_escape_state_ok(hotkeys.proc.poll() is None, escape_geometry,
                                     (key_code, escape_code, reset_code), initial_binding,

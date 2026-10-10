@@ -252,8 +252,8 @@ class HotkeyLeaseScenarioTests(unittest.TestCase):
         self.assertEqual(acc.assess_ss12(observations)[0], "FAIL")
 
     def test_malformed_or_missing_snapshot_cannot_prove_binding(self) -> None:
-        self.assertIsNone(acc.shortcut_binding("garbage", "ToggleStartMenu"))
-        self.assertIsNone(acc.shortcut_binding("{'revision': <uint64 4>}", "ToggleStartMenu"))
+        self.assertIsNone(acc.gvariant_field_string("garbage", "ToggleStartMenu"))
+        self.assertIsNone(acc.gvariant_field_string("{'revision': <uint64 4>}", "ToggleStartMenu"))
 
     def test_lease_call_parser_requires_same_observed_sender_for_driver(self) -> None:
         log = ("method call sender=:1.7 -> dest=:1.0; interface=com.arkflame.FlameWM1.Shortcuts; member=BeginCapture\n"
