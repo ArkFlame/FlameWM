@@ -1,4 +1,4 @@
-# FlameWM Rust WebRender Architecture — 0.0.2
+# FlameWM Rust WebRender Architecture — 0.0.9
 
 ## 1. Product boundary
 
