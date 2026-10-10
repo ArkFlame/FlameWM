@@ -1,5 +1,8 @@
 # Runtime package layout: source path -> installed path
 .target/release/flamewm                  usr/bin/flamewm
+.target/release/flamewm-session          usr/bin/flamewm-session
+.target/release/flamewm-desktop          usr/bin/flamewm-desktop
+.target/release/flamewm-shell            usr/bin/flamewm-shell
 .target/release/flamewm-settings         usr/bin/flamewm-settings
 .target/release/flamewm-render-x11       usr/bin/flamewm-render-x11
 .target/release/flamewm-render-compile   usr/bin/flamewm-render-compile
@@ -9,6 +12,7 @@ assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme
 assets/cursors/cursors                   usr/share/icons/FlameWM-Breeze-Dark/cursors
 packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
+packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
 LICENSE                                  usr/share/doc/flamewm/LICENSE
 README.md                                usr/share/doc/flamewm/README.md
 docs/INSTALL.md                          usr/share/doc/flamewm/INSTALL.md

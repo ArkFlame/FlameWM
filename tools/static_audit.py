@@ -23,13 +23,388 @@ def read_required(path: str) -> str:
     return p.read_text() if p.exists() else ""
 
 
+# ---------------------------------------------------------------------------
+# Audit primitives.
+#
+# These live above the audit body so `--self-test` exercises the exact same
+# predicates the default run uses instead of a parallel re-implementation.
+# ---------------------------------------------------------------------------
+
+_RUST_DELIMITERS = re.compile(r"""[/"']""")
+
+
+def _raw_string_prefix_hashes(text: str, quote: int) -> int:
+    """Classify the `"` at `quote` as a raw-string opener or a plain string.
+
+    Returns the raw-string `#` count, or 0 when the quote is an ordinary
+    string delimiter. Handles `r"..."`, `r#"..."#`, `br#"..."#`, `rb##"..."##`
+    while refusing identifier lookalikes such as `myvar"..."`.
+    """
+    back = quote - 1
+    while back >= 0 and text[back] == "#":
+        back -= 1
+    hashes = quote - 1 - back
+    start = back
+    while start >= 0 and text[start] in "rb":
+        start -= 1
+    if text[start + 1:back + 1] not in ("r", "br", "rb"):
+        return 0
+    if start >= 0 and (text[start].isalnum() or text[start] == "_"):
+        return 0
+    return -1 if hashes == 0 else hashes
+
+
+def _strip_rust_comments(text: str) -> str:
+    """Return Rust source with `//` and `/* */` comments removed.
+
+    Correct Rust lexing rules, so a retired symbol mentioned inside a comment
+    never leaks into the guarded source context:
+
+    * `//` line comments and nested `/* /* */ */` block comments are removed,
+      and newlines inside them are preserved so line numbers stay stable;
+    * `"` strings keep `\\` escapes;
+    * `'` CHAR literals (`'a'`, `'\\n'`, `'\\''`, `'{`) are preserved verbatim;
+    * LIFETIMES (`'a`, `'static`, `'static mut`) never open a string;
+    * raw strings `r"..."`, `r#"..."#`, `br#"..."#` are preserved verbatim.
+
+    Stdlib only.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    block_depth = 0
+    while i < n:
+        if block_depth:
+            close = text.find("*/", i)
+            nested = text.find("/*", i)
+            if nested != -1 and (close == -1 or nested < close):
+                block_depth += 1
+                out.append("\n" * text.count("\n", i, nested))
+                i = nested + 2
+            elif close != -1:
+                block_depth -= 1
+                out.append("\n" * text.count("\n", i, close))
+                i = close + 2
+            else:
+                out.append("\n" * text.count("\n", i))
+                return "".join(out)
+            continue
+        match = _RUST_DELIMITERS.search(text, i)
+        if match is None:
+            out.append(text[i:])
+            break
+        start = match.start()
+        if start > i:
+            out.append(text[i:start])
+            i = start
+        ch = text[start]
+        if ch == "/":
+            nxt = text[i + 1] if i + 1 < n else ""
+            if nxt == "/":
+                end = text.find("\n", i)
+                i = n if end == -1 else end  # the newline itself is kept
+            elif nxt == "*":
+                block_depth = 1
+                i += 2
+            else:
+                out.append("/")
+                i += 1
+        elif ch == '"':
+            hashes = _raw_string_prefix_hashes(text, i)
+            if hashes < 0:
+                end = text.find('"', i + 1)
+                stop = n if end == -1 else end + 1
+            else:
+                terminator = '"' + "#" * hashes
+                end = text.find(terminator, i + 1)
+                stop = n if end == -1 else end + len(terminator)
+            out.append(text[i:stop])
+            i = stop
+        else:
+            if i + 1 < n and text[i + 1] == "\\":
+                j = i + 1
+                while j < n and text[j] != "'":
+                    j += 2 if text[j] == "\\" else 1
+                stop = n if j >= n else j + 1
+                out.append(text[i:stop])
+                i = stop
+            elif text[i + 1:i + 2] and text[i + 2:i + 3] == "'":
+                out.append(text[i:i + 3])
+                i += 3
+            else:
+                out.append("'")  # lifetime: emit the quote, open nothing
+                i += 1
+    return "".join(out)
+
+
+def _j11_code(text: str) -> str:
+    return _strip_rust_comments(text)
+
+
+def _j11_fn_body(code: str, fn_name: str) -> str:
+    """Return the body of `fn <fn_name>(` up to the next top-level item."""
+    match = re.search(r"fn\s+" + re.escape(fn_name) + r"\s*\(", code)
+    if not match:
+        return ""
+    rest = code[match.end():]
+    nxt = re.search(r"\n(?:pub\s+)?fn\s+", rest)
+    return rest[:nxt.start()] if nxt else rest
+
+
+_J11_MOVE_RESIZE_OWNER = "crates/flamewm-render-x11/src/surface_controller.rs"
+_J11_XLIB_DECL = "crates/flamewm-render-x11/src/xlib.rs"
+# J11-G01: move_resize is the single native geometry owner; size changes go
+# through commit_geometry, and no other production file issues
+# XMoveResizeWindow. xlib.rs only declares the FFI binding.
+_J11_G01_EXEMPT = frozenset({_J11_MOVE_RESIZE_OWNER, _J11_XLIB_DECL})
+
+
+def _j11_g01_message(rel: str) -> str:
+    return f"raw native move outside move_resize owner: {rel} (J11-G01)"
+
+
+def _j11_g01_nonowner_violation(rel: str, code: str) -> bool:
+    """True when a non-owner production file issues a raw native move.
+
+    `code` must already be comment-stripped by `_strip_rust_comments`.
+    """
+    if rel in _J11_G01_EXEMPT:
+        return False
+    return "XMoveResizeWindow" in code
+
+
+def _j11_g01_owner_errors(owner_path: Path) -> list[str]:
+    """J11-G01 checks on the canonical move_resize owner file."""
+    found: list[str] = []
+    if not owner_path.is_file():
+        return found
+    body = _j11_fn_body(_j11_code(owner_path.read_text(errors="ignore")), "move_resize")
+    if "commit_geometry" not in body:
+        found.append("move_resize bypasses commit_geometry (J11-G01)")
+    if "XMoveResizeWindow" not in body:
+        found.append("move_resize lost native move ownership (J11-G01)")
+    return found
+
+
+# Production shell topology, sourced from crates/flamewm-shell/build.rs: these
+# seven templates (and flamewm.css) are the documents the compiled .rwr
+# artifacts are actually built from.
+PRODUCTION_SHELL_CSS = "ui/shell/flamewm.css"
+PRODUCTION_SHELL_TEMPLATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ui/shell/panel.html",
+     ("taskbar.surface", "task-start", "task-slot-", "workspace-pager", "clock-button")),
+    ("ui/shell/start.html",
+     ("start.menu.surface", "start-search-field", "start-category-", "start-app-slot-")),
+    ("ui/shell/task-menu.html",
+     ("task.menu.surface", "context-task-", "context-workspace-", "context-taskbar-")),
+    ("ui/shell/media.html",
+     ("popup.surface", "media.previous", "media.playpause", "media.next")),
+    ("ui/shell/audio.html",
+     ("volume-mute", "volume-track-fill", "audio-list")),
+    ("ui/shell/network.html",
+     ("network-slots", "network-secret", "network-scan")),
+    ("ui/shell/calendar.html",
+     ("calendar-month", "calendar-days", "calendar-day-")),
+)
+PRODUCTION_SHELL_BUILD_RS = "crates/flamewm-shell/build.rs"
+PRODUCTION_UI_CONTRACT = "https://wm.arkflame.com"
+
+
+def _production_topology_errors(base: Path) -> list[str]:
+    """Audit the real multi-surface shell topology compiled by build.rs.
+
+    `base` is a tree root, so callers may point this at a throwaway copy.
+    """
+    found: list[str] = []
+    build_rs_path = base / PRODUCTION_SHELL_BUILD_RS
+    if not build_rs_path.is_file():
+        found.append(f"missing required path: {PRODUCTION_SHELL_BUILD_RS}")
+        build_rs = ""
+    else:
+        build_rs = build_rs_path.read_text(errors="ignore")
+    if not (base / PRODUCTION_SHELL_CSS).is_file():
+        found.append(f"missing required path: {PRODUCTION_SHELL_CSS}")
+    elif "flamewm.css" not in build_rs:
+        found.append("shell build.rs must compile ui/shell/flamewm.css")
+    audited = {rel.rsplit("/", 1)[-1] for rel, _ in PRODUCTION_SHELL_TEMPLATES}
+    for rel, nodes in PRODUCTION_SHELL_TEMPLATES:
+        name = rel.rsplit("/", 1)[-1]
+        template = base / rel
+        if not template.is_file():
+            found.append(f"missing required path: {rel}")
+        else:
+            source = template.read_text(errors="ignore")
+            for node in nodes:
+                if node not in source:
+                    found.append(
+                        f"compiled shell template {rel} missing required node: {node}"
+                    )
+        if name not in build_rs:
+            found.append(f"shell build.rs must compile {name}")
+    # A newly staged template must be guarded like the rest of the topology.
+    shell_dir = base / "ui/shell"
+    if shell_dir.is_dir():
+        for candidate in sorted(shell_dir.glob("*.html")):
+            if candidate.name not in audited and candidate.name in build_rs:
+                found.append(
+                    "shell build.rs compiles unguarded template: "
+                    f"ui/shell/{candidate.name}"
+                )
+    return found
+
+
+# ui/index.html is the document scripts/check and scripts/verify-visual
+# actually feed to the renderer, so it is a live gate input.
+LIVE_GATE_INPUT = "ui/index.html"
+
+
+def _live_gate_input_errors(base: Path) -> list[str]:
+    """Cheap, source-grounded audit of the compiled prototype gate input."""
+    found: list[str] = []
+    path = base / LIVE_GATE_INPUT
+    if not path.is_file():
+        found.append(f"missing required path: {LIVE_GATE_INPUT}")
+        return found
+    text = path.read_text(errors="ignore")
+    if not text.strip():
+        found.append(f"{LIVE_GATE_INPUT} must not be empty")
+        return found
+    if "<html" not in text.lower():
+        found.append(f"{LIVE_GATE_INPUT} must contain an <html> root")
+    if "<style" not in text.lower() and not re.search(
+        r'<link[^>]+stylesheet', text, re.I
+    ):
+        found.append(f"{LIVE_GATE_INPUT} must carry a <style> block or a linked stylesheet")
+    if "data-scroll" not in text and 'id="taskbar"' not in text:
+        found.append(
+            f"{LIVE_GATE_INPUT} must expose a scrollable region or a taskbar surface action"
+        )
+    if re.search(r"<script\b", text, re.I):
+        found.append(f"compiled production UI {LIVE_GATE_INPUT} must not embed JavaScript")
+    if PRODUCTION_UI_CONTRACT not in text:
+        found.append(f"{LIVE_GATE_INPUT} missing UI contract: {PRODUCTION_UI_CONTRACT}")
+    return found
+
+
+def _self_test() -> int:
+    """Fixture-driven self-test of the audit's own predicates.
+
+    Never reads or mutates the real repository files under test: the only
+    filesystem work is a throwaway tree copy in a temporary directory.
+    """
+    import shutil
+    import tempfile
+
+    results: list[tuple[str, bool, str]] = []
+
+    def record(name: str, ok: bool, detail: str = "") -> None:
+        results.append((name, ok, detail))
+
+    # 1. A lifetime followed by a comment-only retired symbol must NOT trip J11-G01.
+    comment_only = (
+        "pub fn configure_label() -> &'static str {\n"
+        "    // No XMoveResizeWindow echo: the native move is owned by\n"
+        "    // SurfaceController::move_resize only.\n"
+        '    "geometry"\n'
+        "}\n"
+    )
+    record(
+        "comment-only-lifetime",
+        not _j11_g01_nonowner_violation(
+            "crates/flamewm-render-x11/src/app/events.rs",
+            _strip_rust_comments(comment_only),
+        ),
+        "expect no J11-G01 violation for &'static str + comment-only symbol",
+    )
+
+    # 2. A real forbidden native move outside the owner MUST trip J11-G01.
+    forbidden = (
+        "pub fn nudge(display: Display, window: Window) {\n"
+        "    unsafe { XMoveResizeWindow(display, window, 4, 8, 32, 32) };\n"
+        "}\n"
+    )
+    hits = _j11_g01_nonowner_violation(
+        "crates/flamewm-render-x11/src/app/layout.rs",
+        _strip_rust_comments(forbidden),
+    )
+    record("real-forbidden-call", hits, _j11_g01_message("crates/flamewm-render-x11/src/app/layout.rs"))
+
+    with tempfile.TemporaryDirectory(prefix="flamewm-static-audit-selftest-") as tmp:
+        tmp_root = Path(tmp)
+
+        # 3. The canonical owner shape stays legal.
+        owner_fixture = (
+            "impl SurfaceController {\n"
+            "    fn move_resize(&mut self, window: Window, geometry: Geometry) {\n"
+            "        self.commit_geometry(geometry);\n"
+            "        unsafe {\n"
+            "            XMoveResizeWindow(self.display, window, geometry.x, geometry.y,\n"
+            "                              geometry.width, geometry.height)\n"
+            "        };\n"
+            "    }\n"
+            "}\n"
+        )
+        owner_path = tmp_root / _J11_MOVE_RESIZE_OWNER
+        owner_path.parent.mkdir(parents=True, exist_ok=True)
+        owner_path.write_text(owner_fixture)
+        owner_errors = _j11_g01_owner_errors(owner_path)
+        owner_exempt = not _j11_g01_nonowner_violation(
+            _J11_MOVE_RESIZE_OWNER, _strip_rust_comments(owner_fixture)
+        )
+        record(
+            "legal-canonical-owner",
+            not owner_errors and owner_exempt,
+            f"owner_errors={owner_errors}",
+        )
+
+        # 4. Negative production fixture: deleting a required node from a copy
+        #    of the real panel.html must fail the topology check.
+        (tmp_root / "ui/shell").mkdir(parents=True)
+        (tmp_root / "crates/flamewm-shell").mkdir(parents=True)
+        shutil.copy2(ROOT / PRODUCTION_SHELL_BUILD_RS,
+                     tmp_root / PRODUCTION_SHELL_BUILD_RS)
+        shutil.copy2(ROOT / PRODUCTION_SHELL_CSS, tmp_root / PRODUCTION_SHELL_CSS)
+        for rel, _nodes in PRODUCTION_SHELL_TEMPLATES:
+            shutil.copy2(ROOT / rel, tmp_root / rel)
+        pristine = _production_topology_errors(tmp_root)
+        panel = tmp_root / "ui/shell/panel.html"
+        panel.write_text(panel.read_text().replace('id="task-start"', "", 1))
+        broken = _production_topology_errors(tmp_root)
+        failure_line = next(
+            (e for e in broken if "panel.html" in e and "task-start" in e), None
+        )
+        record(
+            "negative-production-template",
+            not pristine and bool(failure_line),
+            f"pristine_copy_errors={len(pristine)} broken_copy_errors={len(broken)}"
+            f" :: captured: {failure_line or broken}",
+        )
+
+    failed = 0
+    for name, ok, detail in results:
+        print(f"{'PASS' if ok else 'FAIL'} self-test: {name}" + (f" :: {detail}" if detail else ""))
+        if not ok:
+            failed += 1
+    if failed:
+        print(f"FAIL static audit self-test: {failed}/{len(results)} cases failed",
+              file=sys.stderr)
+        return 1
+    print(f"OK static audit self-test: {len(results)} cases passed")
+    return 0
+
+
+# `--self-test` runs the fixtures and never audits the real tree; the default
+# invocation falls through to the real audit below.
+if "--self-test" in sys.argv[1:]:
+    raise SystemExit(_self_test())
+
 required = [
     "Cargo.toml",
     "FLAMEWM_VERSION",
     "README.md",
     "docs/TODO.md",
     "docs/ARCHITECTURE.md",
-    "ui/shell/index.html",
+    LIVE_GATE_INPUT,
     "ui/shell/flamewm.css",
     "crates/flamewm-wm/Cargo.toml",
     "crates/flamewm-wm/src/main.rs",
@@ -53,8 +428,8 @@ for path in required:
     require(path)
 
 version = read_required("FLAMEWM_VERSION").strip()
-if version != "0.0.8":
-    errors.append(f"project version must be 0.0.8, got {version!r}")
+if not version:
+    errors.append("project version in FLAMEWM_VERSION must not be empty")
 
 root_manifest = ROOT / "Cargo.toml"
 try:
@@ -64,8 +439,8 @@ except Exception as exc:
     root_cargo = {}
 workspace = root_cargo.get("workspace", {})
 package = workspace.get("package", {})
-if package.get("version") != "0.0.8":
-    errors.append("workspace.package.version must be 0.0.8")
+if package.get("version") != version:
+    errors.append(f"workspace.package.version must match FLAMEWM_VERSION ({version})")
 if package.get("rust-version") != "1.85":
     errors.append("workspace.package.rust-version must be 1.85")
 if workspace.get("members") != ["crates/*"]:
@@ -172,20 +547,10 @@ for base_name in ["crates", "ui", "assets", "scripts", "tools"]:
             if (ROOT / ".vendor") in resolved.parents or resolved == ROOT / ".vendor":
                 errors.append(f"active symlink reaches .vendor: {p.relative_to(ROOT)}")
 
-html = read_required("ui/shell/index.html")
-if 'src="assets/' not in html:
-    errors.append("ui/shell/index.html must consume local shell assets")
-assets_link = ROOT / "ui/shell/assets"
-if not assets_link.is_symlink() or assets_link.resolve() != (ROOT / "assets").resolve():
-    errors.append("ui/shell/assets must be an internal symlink to active assets")
-if re.search(r"<script\b", html, re.I):
-    errors.append("compiled production UI must not embed JavaScript")
-for src in re.findall(r'<img[^>]+src="([^"]+)"', html, re.I):
-    if src.startswith("assets/") and not (ROOT / "assets/raster" / src.removeprefix("assets/")).exists():
-        errors.append(f"missing UI asset: {src}")
-for required_id in ["taskbar", "start-menu", "desktop-menu", "settings-window"]:
-    if f'id="{required_id}"' not in html:
-        errors.append(f"web prototype port missing required UI node: {required_id}")
+errors.extend(_production_topology_errors(ROOT))
+errors.extend(_live_gate_input_errors(ROOT))
+# LEGACY_PROTOTYPE_REFERENCE: ui/shell/index.html is an optional historical
+# prototype, not a compiled template or product acceptance surface.
 
 shell = read_required("crates/flamewm-shell/src/main.rs")
 shell_runtime = read_required("crates/flamewm-shell/src/runtime.rs")
@@ -245,9 +610,8 @@ if "flamewm_ui_x11" not in desktop or "UiWindowRole::Desktop" not in desktop:
     errors.append("desktop must use the flamewm-ui-x11 desktop boundary")
 if "X11WindowRole::Desktop" in desktop:
     errors.append("desktop must not use raw X11WindowRole::Desktop")
-for contract in ["https://wm.arkflame.com"]:
-    if contract not in html:
-        errors.append(f"canonical shell UI missing contract: {contract}")
+if PRODUCTION_UI_CONTRACT not in read_required(LIVE_GATE_INPUT):
+    errors.append(f"canonical shell UI missing contract: {PRODUCTION_UI_CONTRACT}")
 
 stale_shell_name = "flamewm-" + "web-shell"
 for base in [ROOT / "crates", ROOT / "scripts", ROOT / "tools"]:
@@ -465,63 +829,6 @@ for _tpl in ["ui/shell/panel.html", "ui/shell/start.html"]:
 _J6_WARNINGS: list[str] = []
 # TODO(J12-PENDING): promote J6-G5/G6 to hard errors once packaged->system
 # and z-index-store migrations land; currently WARN-only by design.
-
-
-def _strip_rust_comments(text: str) -> str:
-    """Return source-context text with // and /* */ comments removed."""
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    in_str: str | None = None
-    in_block = 0
-    in_line = False
-    while i < n:
-        ch = text[i]
-        nxt = text[i + 1] if i + 1 < n else ""
-        if in_line:
-            if ch == "\n":
-                in_line = False
-                out.append(ch)
-            i += 1
-            continue
-        if in_block > 0:
-            if ch == "*" and nxt == "/":
-                in_block -= 1
-                i += 2
-            elif ch == "/" and nxt == "*":
-                in_block += 1
-                i += 2
-            else:
-                if ch == "\n":
-                    out.append(ch)
-                i += 1
-            continue
-        if in_str is not None:
-            out.append(ch)
-            if ch == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if ch == in_str:
-                in_str = None
-            i += 1
-            continue
-        if ch == "/" and nxt == "/":
-            in_line = True
-            i += 2
-            continue
-        if ch == "/" and nxt == "*":
-            in_block = 1
-            i += 2
-            continue
-        if ch == '"' or ch == "'":
-            in_str = ch
-            out.append(ch)
-            i += 1
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
 
 
 def _j6_code(text: str) -> str:
@@ -856,10 +1163,6 @@ if 'ProfilePoint::new("shell.' not in _J12H_MAIN and "flamewm_profiler::start(" 
 # pattern is reintroduced.
 
 
-def _j11_code(text: str) -> str:
-    return _strip_rust_comments(text)
-
-
 def _j11_prod_rs(base: Path):
     for p in active_files(base):
         if p.suffix == ".rs" and not _j7_is_test_file(p):
@@ -922,7 +1225,7 @@ for _p in _j11_prod_rs(ROOT / "crates"):
         continue
     _t = re.sub(r"#\[cfg\(test\)\].*?\nmod tests \{.*?\n\}\n", "",
                 _p.read_text(errors="ignore"), flags=re.S)
-    if "XMoveResizeWindow" in _strip_rust_comments(_t):
+    if _j11_g01_nonowner_violation(_rel, _strip_rust_comments(_t)):
         errors.append(f"raw native move outside move_resize owner: {_rel} (J11-G01)")
 # J11-G02: Start is one unified surface; the split start_submenu runtime
 # surface must not return (projection helper fn names carry the substring
@@ -1127,5 +1430,5 @@ if errors:
         print(f"ERROR {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("OK FlameWM Rust WebRender 0.0.8 static audit")
+print(f"OK FlameWM Rust WebRender {version} static audit")
 print("OK J7 icon/alpha guards G1-G8 clean")

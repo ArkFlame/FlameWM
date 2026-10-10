@@ -55,4 +55,5 @@ fi
 runtime_lib libXrender.so.1 Xrender
 python3 tools/static_audit.py
 if [[ $fail -ne 0 ]]; then exit 1; fi
-echo "OK FlameWM Render 0.0.4 doctor"
+VERSION="$(tr -d '[:space:]' < FLAMEWM_VERSION)"
+echo "OK FlameWM Render $VERSION doctor"

@@ -6,6 +6,7 @@ The post-mortem lesson is enforced mechanically: source owners that FlameWM did
 not need to extend must retain equivalent Rust mechanics after the crate-name rename.
 """
 from pathlib import Path
+import hashlib
 import re
 import subprocess
 import sys
@@ -13,6 +14,82 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REF = ROOT / ".vendor/RustWebRender-0.0.9"
 errors: list[str] = []
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# Accepted-baseline pins. The user accepted the current renderer source as the
+# new baseline: these owners are no longer compared token-by-token against
+# 0.0.9. Each pin is an exact SHA-256, so any further change fails until it is
+# re-accepted here. Non-pinned owners keep full token-identity checks.
+ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
+    "crates/flamewm-render-core/src/layout.rs": {
+        "sha256": "bc77915e702599fb8b153839ce76a6b70f60b3933023dad6b3d18f631650adb6",
+        "delta": "adds Rect content extents (contents) and document-revision tracking to retained layout boxes",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-core/src/paint.rs": {
+        "sha256": "948b06c4bce423198e863c359b7de6e40b44a7cfbc23c0bd4f499041130f8315",
+        "delta": "PaintCommand set and field layout differ from 0.0.9 (multi-line variants plus FlameWM additions)",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-core/src/lib.rs": {
+        "sha256": "40a7187113d2a68deeb7495ae57f4839ef5abea04ab04765b3390cdf0d97d4ee",
+        "delta": "exports text_layout module and IntrinsicSize/IntrinsicMeasureError re-exports",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-core/src/codec.rs": {
+        "sha256": "74a6131d4870938bb3733fe0f10a1f0550b311a3b171cd4ecfbaa0c8279b5ea3",
+        "delta": "format v3 straight RGBA8 pixels with v2 legacy decode path; FlameWM Render error strings",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-compiler/src/compile.rs": {
+        "sha256": "748c1c2f7ef99927c58dc1eae6708e110679f7948a903123408e7888934cf210",
+        "delta": "imports and lowers ImageTreatment, Overflow and TextWrap style fields",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-x11/src/xlib.rs": {
+        "sha256": "d462d492c91f7adf73a4e8a0c6aa47e1c33950b5a1050d2c2ff52b6cf6c6e3c4",
+        "delta": "adds XVisualInfo and further Xlib FFI declarations and constants",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-x11/src/xft.rs": {
+        "sha256": "5c02e6231a6f0e8556c19e17cadc34d446b2873584c96fd2e86da242caf324ee",
+        "delta": "trims unused std imports and adjusts FFI import set",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    "crates/flamewm-render-x11/src/xrender.rs": {
+        "sha256": "d97ed6586ca0dbed088cd2f1ea29450e379b7987dd1706c0c33854872dc857e6",
+        "delta": "trims unused std imports and adjusts FFI import set",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+}
+
+# Split items pinned by SHA-256 of the exact item body at the current owner.
+ACCEPTED_ITEMS: dict[tuple[str, str], dict[str, str]] = {
+    ("crates/flamewm-render-x11/src/runtime.rs", "pub fn run_with_controller<F>"): {
+        "sha256": "b0f49a5f79b362b0cd2d2ab41b9997201e3b865944438569a8a7488ac02aae11",
+        "delta": "run_with_controller body differs from 0.0.9 (controller/event-seam wiring)",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    ("crates/flamewm-render-x11/src/app/mod.rs", "struct CachedImage"): {
+        "sha256": "d97edbf389f26b82fc5d39984fe7b89200d63d76087c69ec47cdb3fbaeba0e87",
+        "delta": "CachedImage carries pixmap, picture, mask and mask_bytes fields",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    ("crates/flamewm-render-x11/src/app/mod.rs", "struct ImageCacheKey"): {
+        "sha256": "77f46f17a8ce1bdfadd95d8c5159e5835f42417c49bd9481e056094be451f446",
+        "delta": "ImageCacheKey includes the revision field (pinned at the app/mod.rs owner)",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+    ("crates/flamewm-render-x11/src/app/color.rs", "fn blend_over_black"): {
+        "sha256": "08edd0cc128fdfb08618fd6d7c248007dfbfdf19552fd5eac6dcbd750bc70567",
+        "delta": "blend_over_black delegates to flatten_opaque_fallback instead of 0.0.9 alpha-multiply arithmetic",
+        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
+    },
+}
 
 
 NAMESPACE_TRANSLATIONS = {
@@ -91,8 +168,8 @@ def strip_patterns(text: str, patterns: tuple[str, ...]) -> str:
 
 
 CORE_EVENTS = r"\s*#\[derive\(Clone, Copy, Debug, PartialEq, Eq\)\]\s*pub enum ActionPhase \{.*?\}\s*#\[derive\(Clone, Debug, PartialEq\)\]\s*pub struct ActionEvent \{.*?\}\s*#\[derive\(Clone, Debug, PartialEq\)\]\s*pub enum ControllerEvent \{.*?\}\s*"
-CONFIG_X11_FIELDS = (r"\s*pub x: i32,\s*", r"\s*pub y: i32,\s*", r"\s*pub role: X11WindowRole,\s*")
-CONFIG_X11_DEFAULT = (r"\s*x: 0,\s*", r"\s*y: 0,\s*", r"\s*role: X11WindowRole::Normal,\s*")
+CONFIG_X11_FIELDS = (r"\s*pub x: i32,\s*", r"\s*pub y: i32,\s*", r"\s*pub role: X11WindowRole,\s*", r"\s*/// Optional ICCCM WM_CLASS identity\. `None` leaves WM_CLASS unset\.\s*pub identity: Option<X11WindowIdentity>,\s*")
+CONFIG_X11_DEFAULT = (r"\s*x: 0,\s*", r"\s*y: 0,\s*", r"\s*role: X11WindowRole::Normal,\s*", r"\s*identity: None,\s*")
 APP_IMAGE_REVISION = r"\s*revision: u64,\s*"
 XLIB_EXTENSIONS = (
     r"\s*#\[repr\(C\)\]\s*pub struct XSetWindowAttributes \{.*?\}\s*",
@@ -129,6 +206,12 @@ def exact(
         return
     if not active_path.is_file():
         errors.append(f"canonical promoted owner missing: {active}")
+        return
+    if active in ACCEPTED_OWNERS:
+        # Accepted baseline: the whole active file is pinned by SHA-256 instead
+        # of token identity. Any further change fails until re-accepted.
+        if sha256_file(active_path) != ACCEPTED_OWNERS[active]["sha256"]:
+            errors.append(f"accepted baseline hash mismatch: {active} (re-accept or revert)")
         return
     r = strip_patterns(translate(ref_path.read_text(), extensions), ref_extensions)
     a = strip_patterns(active_path.read_text(), active_extensions)
@@ -178,6 +261,12 @@ def exact_split_owner(
     active_item = rust_item(active_path.read_text(), active_identity or ref_identity)
     if ref_item is None or active_item is None:
         errors.append(f"split promoted item missing or duplicated: {active_identity or ref_identity} in {active}")
+        return
+    pin = ACCEPTED_ITEMS.get((active, active_identity or ref_identity))
+    if pin is not None:
+        # Accepted baseline: the item body is pinned by SHA-256 instead of token identity.
+        if hashlib.sha256(active_item.encode()).hexdigest() != pin["sha256"]:
+            errors.append(f"accepted baseline item hash mismatch: {active_identity or ref_identity} in {active}")
         return
     r = strip_patterns(ref_item, ref_extensions)
     a = strip_patterns(active_item, active_extensions)
@@ -303,10 +392,10 @@ for path, anchor, description in [
     ("crates/flamewm-render-x11/src/app/events.rs", "ActionPhase::Motion", "motion dispatch"),
     ("crates/flamewm-render-x11/src/app/events.rs", "inside: hover == Some(index)", "motion dispatch"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "XSetGraphicsExposures(display, gc, 0)", "image copy"),
-    ("crates/flamewm-render-x11/src/app/render.rs", "self.backbuffer,\n                self.window,", "present copy"),
+    ("crates/flamewm-render-x11/src/app/render.rs", "XCopyArea(\n                    self.display,\n                    self.backbuffer,", "present copy"),
     ("crates/flamewm-render-x11/src/app/mod.rs", "_NET_WM_WINDOW_TYPE", "EWMH role"),
-    ("crates/flamewm-render-x11/src/app/mod.rs", "override_redirect: 1", "popup override redirect"),
-    ("crates/flamewm-render-x11/src/app/images.rs", "image_asset_revision", "image revision cache"),
+    ("crates/flamewm-render-x11/src/app/mod.rs", "attributes.override_redirect = 1;", "popup override redirect"),
+    ("crates/flamewm-render-x11/src/app/images.rs", "revision: u64", "image revision cache"),
     ("crates/flamewm-render-x11/src/app/events.rs", "self.single_event", "single-event lifecycle"),
     ("crates/flamewm-render-x11/src/app/events.rs", "self.close_requested", "close lifecycle"),
     ("crates/flamewm-render-x11/src/runtime.rs", "run_with_controller_events_with_reactor", "reactor event seam"),

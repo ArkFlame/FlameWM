@@ -9,15 +9,15 @@ fail() {
     exit 1
 }
 
-printf '%s\n' 'RELEASE_GATE 0.0.7'
+version="$(tr -d '[:space:]' < FLAMEWM_VERSION)"
+[[ -n "$version" ]] || fail 'FLAMEWM_VERSION is empty'
+printf 'RELEASE_GATE %s\n' "$version"
 printf '%s\n' 'GATE native checks: ./scripts/check'
 ./scripts/check
 
-version="$(tr -d '[:space:]' < FLAMEWM_VERSION)"
-[[ "$version" == 0.0.7 ]] || fail "FLAMEWM_VERSION must be 0.0.7, got $version"
-grep -Fqx 'version = "0.0.7"' Cargo.toml \
-    || fail 'workspace package version must be 0.0.7'
-printf '%s\n' 'OK metadata: FLAMEWM_VERSION and workspace are 0.0.7'
+grep -Fqx "version = \"$version\"" Cargo.toml \
+    || fail "workspace package version must be $version"
+printf 'OK metadata: FLAMEWM_VERSION and workspace are %s\n' "$version"
 
 printf '%s\n' 'GATE package assembly: ./scripts/package'
 ./scripts/package
@@ -31,12 +31,12 @@ checksums="$dist/SHA256SUMS"
 while IFS='  ' read -r checksum artifact; do
     [[ -n "$artifact" ]] || fail 'package checksum manifest contains an empty artifact'
     case "$artifact" in
-        flamewm-0.0.7-source.tar.gz|flamewm-0.0.7-linux-x86_64.tar.gz|flamewm_0.0.7_amd64.deb) ;;
+        "flamewm-$version-source.tar.gz"|"flamewm-$version-linux-x86_64.tar.gz"|"flamewm_${version}_amd64.deb") ;;
         *) fail "unexpected package artifact or version: $artifact" ;;
     esac
 done < "$checksums"
 
-printf '%s\n' 'OK package: 0.0.7 artifacts and SHA256SUMS verified'
+printf 'OK package: %s artifacts and SHA256SUMS verified\n' "$version"
 printf '%s\n' 'UNEXECUTED runtime gate: ./scripts/xephyr'
 printf '%s\n' 'UNEXECUTED visual gate: ./scripts/verify-visual'
 printf '%s\n' 'RELEASE_GATE PASS: build, metadata, and package proof only'

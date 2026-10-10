@@ -6,6 +6,11 @@ import re
 import sys
 import tomllib
 
+try:
+    from static_audit import _strip_rust_comments
+except ImportError:
+    from .static_audit import _strip_rust_comments
+
 
 PRODUCT_CRATES = {
     "flamewm-api",
@@ -297,59 +302,7 @@ J6_PENDING: list[str] = []
 
 
 def _j6_strip_comments(text: str) -> str:
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    in_str: str | None = None
-    in_block = 0
-    in_line = False
-    while i < n:
-        ch = text[i]
-        nxt = text[i + 1] if i + 1 < n else ""
-        if in_line:
-            if ch == "\n":
-                in_line = False
-                out.append(ch)
-            i += 1
-            continue
-        if in_block > 0:
-            if ch == "*" and nxt == "/":
-                in_block -= 1
-                i += 2
-            elif ch == "/" and nxt == "*":
-                in_block += 1
-                i += 2
-            else:
-                if ch == "\n":
-                    out.append(ch)
-                i += 1
-            continue
-        if in_str is not None:
-            out.append(ch)
-            if ch == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if ch == in_str:
-                in_str = None
-            i += 1
-            continue
-        if ch == "/" and nxt == "/":
-            in_line = True
-            i += 2
-            continue
-        if ch == "/" and nxt == "*":
-            in_block = 1
-            i += 2
-            continue
-        if ch == '"' or ch == "'":
-            in_str = ch
-            out.append(ch)
-            i += 1
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
+    return _strip_rust_comments(text)
 
 
 def print_j6_warnings(root):
