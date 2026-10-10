@@ -6,13 +6,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::span as registry;
 use crate::{now_cpu_ns, now_mono_ns};
 
-/// RAII span guard returned by [`start`]. Call [`SpanGuard::stop`] or drop it.
+/// RAII span guard returned by [`start`]. The span is recorded when it is dropped.
 pub struct SpanGuard {
     idx: usize,
     start_wall: u64,
     start_cpu: u64,
     on_stack: bool,
-    stopped: bool,
 }
 
 impl SpanGuard {
@@ -26,15 +25,12 @@ impl SpanGuard {
             start_wall,
             start_cpu,
             on_stack,
-            stopped: false,
         }
     }
+}
 
-    fn finish(&mut self) {
-        if self.stopped {
-            return;
-        }
-        self.stopped = true;
+impl Drop for SpanGuard {
+    fn drop(&mut self) {
         let end_wall = now_mono_ns();
         let end_cpu = now_cpu_ns();
         let wall_inclusive = end_wall.saturating_sub(self.start_wall);
@@ -62,17 +58,6 @@ impl SpanGuard {
                 cpu_inclusive,
             );
         }
-    }
-
-    /// Stop the span and record it.
-    pub fn stop(mut self) {
-        self.finish();
-    }
-}
-
-impl Drop for SpanGuard {
-    fn drop(&mut self) {
-        self.finish();
     }
 }
 

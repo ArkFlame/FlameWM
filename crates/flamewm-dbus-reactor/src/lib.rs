@@ -55,11 +55,6 @@ impl BusPump {
     }
 
     #[must_use]
-    pub fn is_connected(&self) -> bool {
-        self.channel.is_connected()
-    }
-
-    #[must_use]
     pub fn unique_name(&self) -> Option<&str> {
         self.channel.unique_name()
     }
@@ -138,11 +133,6 @@ impl BusPump {
                     format!("D-Bus reply failed: {error}"),
                 )
             })
-    }
-
-    #[must_use]
-    pub fn has_messages_to_send(&self) -> bool {
-        self.channel.has_messages_to_send()
     }
 
     /// Claim one well-known name before exposing the server object.

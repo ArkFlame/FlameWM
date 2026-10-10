@@ -47,17 +47,12 @@ pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 macro_rules! frame_ids {
     ($(($sym:ident, $name:literal)),* $(,)?) => {
         $(pub const $sym: DebugEventId = DebugEventId($name);)*
-        /// Allowlist of all `wm.frame.*` static ids for harness/profile checks.
-        pub const WM_FRAME_IDS: &[&str] = &[$($name),*];
     };
 }
 
 frame_ids!(
     (WM_FRAME_EVENT_DISPATCH, "wm.frame.event.dispatch"),
-    (WM_FRAME_SESSION_BEGIN, "wm.frame.session.begin"),
-    (WM_FRAME_SESSION_MOTION, "wm.frame.session.motion"),
     (WM_FRAME_GEOMETRY_PLAN, "wm.frame.geometry.plan"),
-    (WM_FRAME_GEOMETRY_COMMIT, "wm.frame.geometry.commit"),
     (
         WM_FRAME_GEOMETRY_MOVE_NATIVE,
         "wm.frame.geometry.move_native"
@@ -66,22 +61,8 @@ frame_ids!(
         WM_FRAME_GEOMETRY_RESIZE_NATIVE,
         "wm.frame.geometry.resize_native"
     ),
-    (WM_FRAME_INPUT_LAYOUT, "wm.frame.input_layout"),
-    (WM_FRAME_CHROME_RENDER, "wm.frame.chrome.render"),
-    (WM_FRAME_CHROME_TITLE, "wm.frame.chrome.title"),
-    (WM_FRAME_CHROME_CONTROLS, "wm.frame.chrome.controls"),
-    (WM_FRAME_CHROME_SHAPE, "wm.frame.chrome.shape"),
-    (WM_FRAME_CONFIGURE_NOTIFY, "wm.frame.configure_notify"),
     (WM_FRAME_GRAB, "wm.frame.grab"),
-    (WM_FRAME_MOTION_RECEIVED, "wm.frame.motion.received"),
-    (WM_FRAME_MOTION_COALESCED, "wm.frame.motion.coalesced"),
-    (WM_FRAME_GEOMETRY_REQUESTS, "wm.frame.geometry.requests"),
-    (WM_FRAME_GEOMETRY_NOOP, "wm.frame.geometry.noop"),
-    (WM_FRAME_GEOMETRY_COMMITS, "wm.frame.geometry.commits"),
     (WM_FRAME_MOVE_COMMITS, "wm.frame.move.commits"),
-    (WM_FRAME_RESIZE_COMMITS, "wm.frame.resize.commits"),
-    (WM_FRAME_INPUT_RELAYOUTS, "wm.frame.input.relayouts"),
-    (WM_FRAME_CHROME_REPAINTS, "wm.frame.chrome.repaints"),
     (WM_FRAME_GRAB_FAIL, "wm.frame.grab.fail"),
     (WM_CONFIGURE_SUMMARY, "wm.configure.summary"),
     (WM_CONFIGURE_MISMATCH, "wm.configure.mismatch"),
@@ -92,8 +73,6 @@ struct State {
     file: Option<PathBuf>,
     /// Last emission per event id.
     last_emit: HashMap<&'static str, Instant>,
-    /// Ids already emitted via [`emit_once`].
-    once_emitted: std::collections::HashSet<&'static str>,
     /// Whether the CAP marker was already written for this file.
     capped: bool,
 }
@@ -103,7 +82,6 @@ impl State {
         State {
             file: None,
             last_emit: HashMap::new(),
-            once_emitted: std::collections::HashSet::new(),
             capped: false,
         }
     }
@@ -247,34 +225,6 @@ pub fn emit(id: DebugEventId, cooldown: Duration, message: impl FnOnce() -> Stri
         return;
     };
     guard.last_emit.insert(id.0, now);
-    write_line(&path, &format!("{} {}", id.0, text), &mut guard.capped);
-}
-
-/// Emit at most once per process lifetime for `id`. The closure runs only on
-/// the first call (when enabled and initialised).
-pub fn emit_once(id: DebugEventId, message: impl FnOnce() -> String) {
-    if !enabled() {
-        return;
-    }
-    {
-        let guard = state().lock();
-        let Ok(guard) = guard else { return };
-        if guard.file.is_none() || guard.once_emitted.contains(id.0) {
-            return;
-        }
-    }
-    let text = message();
-    let mut guard = state().lock().ok();
-    let Some(guard) = guard.as_deref_mut() else {
-        return;
-    };
-    let Some(path) = guard.file.clone() else {
-        return;
-    };
-    // Re-check under the write lock so concurrent first calls emit once.
-    if !guard.once_emitted.insert(id.0) {
-        return;
-    }
     write_line(&path, &format!("{} {}", id.0, text), &mut guard.capped);
 }
 

@@ -279,11 +279,6 @@ impl ShortcutGrabs {
         self.staged.is_some()
     }
 
-    /// Drops any staged set without touching the active grabs.
-    pub fn discard_staged(&mut self) {
-        self.staged = None;
-    }
-
     /// Resolves every binding and stages the result. Never touches the active
     /// grabs. Any failure clears the staged set and leaves the active set as is.
     pub fn prepare(
