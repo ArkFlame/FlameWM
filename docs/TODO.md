@@ -17,7 +17,7 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [x] SourcePort post-mortem preserved and converted into `docs/PORTING_METHOD.md`.
 - [ ] Target machine: `./scripts/check` compiler/test/release gate PASS.
 - [ ] Target machine: `./scripts/xephyr` interactive PASS.
-- [ ] Target machine: `./verify-visual` differential metrics recorded.
+- [ ] Target machine: `./scripts/verify-visual` differential metrics recorded.
 
 ## Phase 1 — WebRender renderer
 
@@ -293,4 +293,4 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [ ] release archive reproducibility/manifest verification.
 - [ ] target-machine `./scripts/check` green.
 - [ ] `./scripts/xephyr` real interactive smoke green.
-- [ ] `./verify-visual` reviewed against approved reference.
+- [ ] `./scripts/verify-visual` reviewed against approved reference.
