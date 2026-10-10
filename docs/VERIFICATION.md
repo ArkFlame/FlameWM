@@ -1,14 +1,14 @@
-# Verification — 0.0.2
+# Verification — 0.0.9
 
 ## Mandatory target-machine gate
 
 ```bash
-./doctor
-./check
-./xephyr
+./scripts/doctor
+./scripts/check
+./scripts/xephyr
 ```
 
-`./check` executes:
+`./scripts/check` executes:
 
 1. static architecture/dependency audit;
 2. FlameWM Render 0.0.6 source promotion audit;
@@ -23,18 +23,28 @@
 Formatting/Clippy is intentionally a separate hygiene gate:
 
 ```bash
-./lint
+./scripts/lint
 ```
 
 It must not obscure the compiler/runtime gate when diagnosing a release candidate.
 
 ## Visual gate
 
+Default product mode launches `scripts/xephyr` with the hard T06/T07 and SR canary lane and captures a fresh root screenshot. It validates that root image only; it does not verify Settings, popups, or other interactive states.
+
 ```bash
-./verify-visual
+./scripts/verify-visual
 ```
 
-The current and approved images must have identical geometry. The script reports RMSE and absolute-error metrics without resizing either image.
+Reference mode compares two existing images and does not launch a session. Supply both paths explicitly:
+
+```bash
+FLAMEWM_VISUAL_CURRENT=/path/to/current.png \
+FLAMEWM_VISUAL_REFERENCE=/path/to/reference.png \
+./scripts/verify-visual --reference
+```
+
+Reference mode requires matching image geometry and reports RMSE and absolute-error metrics without resizing. Those metrics are advisory unless both `FLAMEWM_VISUAL_RMSE_MAX` and `FLAMEWM_VISUAL_AE_MAX` are set. The tool does not establish oracle approval.
 
 Reference:
 
@@ -42,6 +52,6 @@ Reference:
 project_sources/visual/rwr-0.0.6-target-xephyr.png
 ```
 
-## Packaging-environment limitation
+## Release gate status
 
-The artifact assembly environment does not provide Rust/Cargo/Xephyr. Therefore this archive is source-audited and packaged, but no compiler/runtime PASS is invented. The target-machine commands above determine `COMPILES`, `TESTED`, `RUNTIME_VERIFIED` and `DIFFERENTIAL_VERIFIED` status.
+Run these gates on the current checkout and report their actual results. A source audit or package build alone does not establish compiler or runtime verification. `scripts/release-gate` reports its Xephyr runtime and visual gates as `UNEXECUTED` until they are run separately.

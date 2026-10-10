@@ -3,15 +3,17 @@
 ## Commands
 
 ```bash
-./doctor         # dependency + source-boundary preflight
-./check          # static audit + Cargo metadata/check/test + release build + UI compile/inspect
-./xephyr         # independent FlameWM WM + compiled WebRender shell in nested X11
-./verify-visual  # standalone WebRender V8 screenshot differential against the 0.0.6 oracle
-./bench-memory   # PSS/RSS sampling for FlameWM-owned processes
-./lint           # optional strict rustfmt + Clippy hygiene gate
+./scripts/doctor         # dependency + source-boundary preflight
+./scripts/check          # static audit + Cargo metadata/check/test + release build + UI compile/inspect
+./scripts/xephyr         # FlameWM session in nested X11
+./scripts/verify-visual  # default: Xephyr product canaries + root screenshot capture
+./scripts/bench-memory   # PSS/RSS sampling for FlameWM-owned processes
+./scripts/lint           # optional strict rustfmt + Clippy hygiene gate
 ```
 
-There is deliberately no `xephyr-engine`, `xvfb-engine`, `/engine`, or external WM base in 0.0.2.
+For an existing-image comparison, use `scripts/verify-visual --reference` with `FLAMEWM_VISUAL_CURRENT` and `FLAMEWM_VISUAL_REFERENCE` set to image paths. This mode does not launch a session; metrics are advisory unless both comparison thresholds are set.
+
+The current repository version is recorded in `FLAMEWM_VERSION`. Historical references to 0.0.2 describe the earlier project layout.
 
 ## Work on the correct owner
 
@@ -35,4 +37,4 @@ For the independent FlameWM WM, historical IceWM/FlameWM implementations are edg
 
 ## Red gate law
 
-If `./check` fails, stop feature mutation and fix the first proven compiler/test failure, then rerun the same gate. Static audits are not substitutes for Cargo. If the target compiler was not executed, report the artifact as compiler-unverified rather than claiming runtime PASS.
+If `./scripts/check` fails, stop feature mutation and fix the first proven compiler/test failure, then rerun the same gate. Static audits are not substitutes for Cargo. If the target compiler was not executed, report the artifact as compiler-unverified rather than claiming runtime PASS.
