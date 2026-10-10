@@ -40,6 +40,13 @@ checks extension anchors:
   property assignment.
 - `crates/flamewm-render-x11/src/xlib.rs`: X11 property constants and
   `XChangeProperty` declaration required by role assignment.
+- `crates/flamewm-render-x11/src/config.rs`: Flame-only `X11WindowIdentity`
+  struct (ICCCM WM_CLASS instance/class pair) carried by the optional
+  `X11Config.identity` field, which defaults to `None`. The 0.0.9 reference has
+  no such type or field. The verifier removes the `pub identity` field and the
+  `identity: None` default entry through `CONFIG_X11_FIELDS` and
+  `CONFIG_X11_DEFAULT`. `X11WindowIdentity` and the `From<SurfaceConfig>` body
+  are not compared items.
 
 CSS and HTML are product-owned presentation inputs in this promotion; they are
 not silently treated as exact vendor copies.

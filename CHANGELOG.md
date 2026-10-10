@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.9 — 2026-09-24
+
+### Platform and desktop integration
+
+- Added typed settings/control transactions across platform services, D-Bus transport, and the Settings application.
+- Added desktop wallpaper loading and portal-backed file selection for desktop and Settings workflows.
+- Connected workspace synchronization and reactor presentation scenarios to event-driven desktop updates and verification.
+- Improved snap-preview lifecycle and settings/shell projection behavior.
+
 ## 0.0.8 — 2026-09-09
 
 ### Interaction and performance convergence

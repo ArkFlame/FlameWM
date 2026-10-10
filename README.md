@@ -1,8 +1,8 @@
-# FlameWM Rust WebRender 0.0.4
+# FlameWM Rust WebRender 0.0.9
 
 FlameWM Rust WebRender is the clean-room Rust/X11 branch of FlameWM.
 
-`0.0.4` continues the clean-room product line established in 0.0.2. There is no active IceWM engine, no `icewm-rust` dependency and no `/engine` directory. IceWM, FlameWM C, earlier FlameWM Rust, SourcePort and older renderer releases live only under `.vendor/` as source/reference corpora.
+`0.0.9` continues the clean-room product line established in 0.0.2. There is no active IceWM engine, no `icewm-rust` dependency and no `/engine` directory. IceWM, FlameWM C, earlier FlameWM Rust, SourcePort and older renderer releases live only under `.vendor/` as source/reference corpora.
 
 The active product is:
 
@@ -44,6 +44,14 @@ ui/index.html + ui/flamewm.css + raster assets
 ```
 
 There is no Chromium, Electron, WebKitGTK, JavaScript VM, Tauri, WGPU or browser networking stack in the shell.
+
+## Current release: 0.0.9
+
+- Added typed settings/control transactions across platform services, D-Bus transport, and the Settings application.
+- Added desktop wallpaper loading and portal-backed file selection for desktop and Settings workflows.
+- Connected workspace synchronization and reactor presentation scenarios to event-driven desktop updates and verification.
+- Improved snap-preview lifecycle and settings/shell projection behavior.
+- Earlier product-line milestones are recorded in [`CHANGELOG.md`](CHANGELOG.md); historical implementations remain in `.vendor/` as reference only.
 
 ## 0.0.4 product identity
 
@@ -90,7 +98,7 @@ The interactive contract is a **release build**. Debug renderer latency is not a
 
 ## Source status
 
-`0.0.4` is a real clean-room branch foundation plus a substantially ported V8 shell. It does **not** claim final FlameWM parity. The independent WM has the first functional X11/ICCCM/EWMH/window/workspace/snap foundation, while several complete-product surfaces remain in `docs/TODO.md`.
+`0.0.9` advances the clean-room FlameWM workspace and desktop integration. It does **not** claim final FlameWM parity; remaining product surfaces are tracked in `docs/TODO.md`.
 
 The packaging environment used to assemble this archive does not provide Rust/Cargo/Xephyr, so compiler/runtime PASS is not fabricated here. `./check`, `./xephyr` and `./verify-visual` are mandatory target-machine gates.
 
