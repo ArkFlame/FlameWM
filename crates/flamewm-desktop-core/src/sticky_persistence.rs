@@ -1,6 +1,5 @@
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult, OutputId, Rect};
@@ -34,26 +33,7 @@ pub fn load_from_xdg() -> FlameResult<StickyNoteStore> {
 }
 
 pub fn persist(path: &Path, store: &StickyNoteStore) -> FlameResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("sticky state path has no parent"))?;
-    fs::create_dir_all(parent).map_err(|error| io_error("create sticky state directory", error))?;
-    let temp = PathBuf::from(format!("{}.tmp", path.display()));
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temp)
-        .map_err(|error| io_error("open sticky state temp file", error))?;
-    file.write_all(serialize(store).as_bytes())
-        .map_err(|error| io_error("write sticky state", error))?;
-    file.sync_all()
-        .map_err(|error| io_error("sync sticky state", error))?;
-    fs::rename(&temp, path).map_err(|error| io_error("commit sticky state", error))?;
-    if let Ok(directory) = File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    Ok(())
+    super::atomic_file::write_text(path, "sticky state", &serialize(store))
 }
 
 pub fn persist_to_xdg(store: &StickyNoteStore) -> FlameResult<()> {
@@ -180,7 +160,6 @@ fn invalid(message: &str) -> FlameError {
 fn io_error(operation: &str, error: std::io::Error) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

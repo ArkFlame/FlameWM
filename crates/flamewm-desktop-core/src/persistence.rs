@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
@@ -69,27 +67,7 @@ impl LayoutStore {
     }
 
     pub fn persist(path: &Path, positions: &BTreeMap<PathBuf, StoredPosition>) -> FlameResult<()> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| FlameError::invalid("desktop layout path has no parent"))?;
-        fs::create_dir_all(parent)
-            .map_err(|error| io_error("create desktop layout directory", error))?;
-        let temp = PathBuf::from(format!("{}.tmp", path.display()));
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temp)
-            .map_err(|error| io_error("open desktop layout temp file", error))?;
-        file.write_all(Self::serialize(positions).as_bytes())
-            .map_err(|error| io_error("write desktop layout", error))?;
-        file.sync_all()
-            .map_err(|error| io_error("sync desktop layout", error))?;
-        fs::rename(&temp, path).map_err(|error| io_error("commit desktop layout", error))?;
-        if let Ok(directory) = File::open(parent) {
-            let _ = directory.sync_all();
-        }
-        Ok(())
+        super::atomic_file::write_text(path, "desktop layout", &Self::serialize(positions))
     }
 }
 
@@ -126,10 +104,6 @@ fn nibble(value: u8) -> FlameResult<u8> {
         b'A'..=b'F' => Ok(value - b'A' + 10),
         _ => Err(FlameError::invalid("invalid hex field")),
     }
-}
-
-fn io_error(operation: &str, error: std::io::Error) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }
 
 #[cfg(test)]
