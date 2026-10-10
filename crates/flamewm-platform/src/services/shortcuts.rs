@@ -119,14 +119,7 @@ impl ShortcutService {
         port: &mut P,
         registry: ShortcutRegistry,
     ) -> FlameResult<()> {
-        if let Err(error) = port.prepare_shortcuts(registry.bindings()) {
-            port.rollback_shortcuts();
-            return Err(error);
-        }
-        if let Err(error) = port.commit_shortcuts() {
-            port.rollback_shortcuts();
-            return Err(error);
-        }
+        Self::stage_and_commit(port, registry.bindings())?;
         if registry != self.registry {
             self.revision = self.revision.saturating_add(1);
         }
@@ -155,15 +148,7 @@ impl ShortcutService {
                 "shortcut action is unknown",
             ));
         }
-        let empty = BTreeMap::new();
-        if let Err(error) = port.prepare_shortcuts(&empty) {
-            port.rollback_shortcuts();
-            return Err(error);
-        }
-        if let Err(error) = port.commit_shortcuts() {
-            port.rollback_shortcuts();
-            return Err(error);
-        }
+        Self::stage_and_commit(port, &BTreeMap::new())?;
         let id = self.next_lease;
         self.next_lease = self.next_lease.saturating_add(1);
         self.capture = Some(CaptureLease {
@@ -207,15 +192,7 @@ impl ShortcutService {
     }
 
     fn restore_grabs<P: ShortcutPort>(&self, port: &mut P) -> FlameResult<()> {
-        if let Err(error) = port.prepare_shortcuts(self.registry.bindings()) {
-            port.rollback_shortcuts();
-            return Err(error);
-        }
-        if let Err(error) = port.commit_shortcuts() {
-            port.rollback_shortcuts();
-            return Err(error);
-        }
-        Ok(())
+        Self::stage_and_commit(port, self.registry.bindings())
     }
 
     fn require_idle(&self) -> FlameResult<()> {
@@ -236,7 +213,19 @@ impl ShortcutService {
         if candidate == self.registry {
             return Ok(());
         }
-        if let Err(error) = port.prepare_shortcuts(candidate.bindings()) {
+        Self::stage_and_commit(port, candidate.bindings())?;
+        self.registry = candidate;
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
+    }
+
+    /// Stages `desired` on the port and commits it. A failure at either step rolls the port back and
+    /// returns the original error; the caller's registry, revision, and lease are left untouched.
+    fn stage_and_commit<P: ShortcutPort>(
+        port: &mut P,
+        desired: &BTreeMap<String, KeyBinding>,
+    ) -> FlameResult<()> {
+        if let Err(error) = port.prepare_shortcuts(desired) {
             port.rollback_shortcuts();
             return Err(error);
         }
@@ -244,8 +233,6 @@ impl ShortcutService {
             port.rollback_shortcuts();
             return Err(error);
         }
-        self.registry = candidate;
-        self.revision = self.revision.saturating_add(1);
         Ok(())
     }
 

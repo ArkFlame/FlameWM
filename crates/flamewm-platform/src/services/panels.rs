@@ -199,30 +199,15 @@ impl PanelService {
     }
 
     pub fn pin_app(&mut self, app: DesktopAppId, expected_revision: u64) -> FlameResult<bool> {
-        self.require_revision(expected_revision)?;
-        let changed = self.tasks.pin_app(app);
-        if changed {
-            self.bump_revision();
-        }
-        Ok(changed)
+        self.mutate_tasks(expected_revision, |tasks| tasks.pin_app(app))
     }
 
     pub fn unpin_app(&mut self, app: &DesktopAppId, expected_revision: u64) -> FlameResult<bool> {
-        self.require_revision(expected_revision)?;
-        let changed = self.tasks.unpin_app(app);
-        if changed {
-            self.bump_revision();
-        }
-        Ok(changed)
+        self.mutate_tasks(expected_revision, |tasks| tasks.unpin_app(app))
     }
 
     pub fn reorder(&mut self, from: usize, to: usize, expected_revision: u64) -> FlameResult<bool> {
-        self.require_revision(expected_revision)?;
-        let changed = self.tasks.reorder_on_release(from, to);
-        if changed {
-            self.bump_revision();
-        }
-        Ok(changed)
+        self.mutate_tasks(expected_revision, |tasks| tasks.reorder_on_release(from, to))
     }
 
     pub fn reorder_entry(
@@ -249,11 +234,7 @@ impl PanelService {
                 "task insertion index is invalid",
             ));
         }
-        let changed = self.tasks.reorder_on_release(from, to);
-        if changed {
-            self.bump_revision();
-        }
-        Ok(changed)
+        self.mutate_tasks(expected_revision, |tasks| tasks.reorder_on_release(from, to))
     }
 
     #[must_use]
@@ -301,6 +282,21 @@ impl PanelService {
                 "panel revision is stale",
             ))
         }
+    }
+
+    /// Checks `expected_revision`, applies `mutate` to the task strip, and bumps the revision only when
+    /// `mutate` reports a change.
+    fn mutate_tasks(
+        &mut self,
+        expected_revision: u64,
+        mutate: impl FnOnce(&mut TaskStrip) -> bool,
+    ) -> FlameResult<bool> {
+        self.require_revision(expected_revision)?;
+        let changed = mutate(&mut self.tasks);
+        if changed {
+            self.bump_revision();
+        }
+        Ok(changed)
     }
 
     fn bump_revision(&mut self) {
