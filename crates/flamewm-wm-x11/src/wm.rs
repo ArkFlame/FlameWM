@@ -159,13 +159,35 @@ fn any_conn_err(error: x11rb::errors::ConnectionError) -> AnyError {
     ))
 }
 
+/// Profiler point plus the running total read by the summary lines.
+struct TotalledCounter {
+    point: flamewm_profiler::CounterPoint,
+    total: std::sync::atomic::AtomicU64,
+}
+
+impl TotalledCounter {
+    fn new(label: &'static str) -> Self {
+        Self {
+            point: flamewm_profiler::CounterPoint::new(label),
+            total: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn add(&self, value: u64) {
+        self.point.increment_by(value);
+        self.total
+            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn load(&self) -> u64 {
+        self.total.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 struct ResizeCounterSet {
-    received: flamewm_profiler::CounterPoint,
-    coalesced: flamewm_profiler::CounterPoint,
-    committed: flamewm_profiler::CounterPoint,
-    received_total: std::sync::atomic::AtomicU64,
-    coalesced_total: std::sync::atomic::AtomicU64,
-    committed_total: std::sync::atomic::AtomicU64,
+    received: TotalledCounter,
+    coalesced: TotalledCounter,
+    committed: TotalledCounter,
     max_batch: std::sync::atomic::AtomicU64,
 }
 
@@ -173,44 +195,28 @@ fn resize_counters() -> &'static ResizeCounterSet {
     use std::sync::OnceLock;
     static SET: OnceLock<ResizeCounterSet> = OnceLock::new();
     SET.get_or_init(|| ResizeCounterSet {
-        received: flamewm_profiler::CounterPoint::new("wm.resize.received"),
-        coalesced: flamewm_profiler::CounterPoint::new("wm.resize.coalesced"),
-        committed: flamewm_profiler::CounterPoint::new("wm.resize.commit"),
-        received_total: std::sync::atomic::AtomicU64::new(0),
-        coalesced_total: std::sync::atomic::AtomicU64::new(0),
-        committed_total: std::sync::atomic::AtomicU64::new(0),
+        received: TotalledCounter::new("wm.resize.received"),
+        coalesced: TotalledCounter::new("wm.resize.coalesced"),
+        committed: TotalledCounter::new("wm.resize.commit"),
         max_batch: std::sync::atomic::AtomicU64::new(0),
     })
 }
 
 impl ResizeCounterSet {
     fn record_received(&self, value: u64) {
-        self.received.increment_by(value);
-        self.received_total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        self.received.add(value);
     }
 
     fn record_coalesced(&self, value: u64) {
-        self.coalesced.increment_by(value);
-        self.coalesced_total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        self.coalesced.add(value);
     }
 
     fn record_committed(&self, value: u64) {
-        self.committed.increment_by(value);
-        self.committed_total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        self.committed.add(value);
     }
 
     fn snapshot(&self) -> (u64, u64, u64) {
-        (
-            self.received_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.coalesced_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.committed_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-        )
+        (self.received.load(), self.coalesced.load(), self.committed.load())
     }
 
     fn max_batch(&self) -> usize {
@@ -336,14 +342,11 @@ fn emit_configure_summary() {
 }
 
 struct MoveCounterSet {
-    received: flamewm_profiler::CounterPoint,
-    coalesced: flamewm_profiler::CounterPoint,
-    committed: flamewm_profiler::CounterPoint,
+    received: TotalledCounter,
+    coalesced: TotalledCounter,
+    committed: TotalledCounter,
     snap_target: flamewm_profiler::CounterPoint,
     preview: flamewm_profiler::CounterPoint,
-    received_total: std::sync::atomic::AtomicU64,
-    coalesced_total: std::sync::atomic::AtomicU64,
-    committed_total: std::sync::atomic::AtomicU64,
     snap_target_changes: std::sync::atomic::AtomicU64,
     preview_updates: std::sync::atomic::AtomicU64,
     last_target: std::sync::atomic::AtomicU64,
@@ -358,14 +361,11 @@ fn move_counters() -> &'static MoveCounterSet {
     use std::sync::OnceLock;
     static SET: OnceLock<MoveCounterSet> = OnceLock::new();
     SET.get_or_init(|| MoveCounterSet {
-        received: flamewm_profiler::CounterPoint::new("wm.move.received"),
-        coalesced: flamewm_profiler::CounterPoint::new("wm.move.coalesced"),
-        committed: flamewm_profiler::CounterPoint::new("wm.move.commit"),
+        received: TotalledCounter::new("wm.move.received"),
+        coalesced: TotalledCounter::new("wm.move.coalesced"),
+        committed: TotalledCounter::new("wm.move.commit"),
         snap_target: flamewm_profiler::CounterPoint::new("wm.move.snap_target.count"),
         preview: flamewm_profiler::CounterPoint::new("wm.move.preview.count"),
-        received_total: std::sync::atomic::AtomicU64::new(0),
-        coalesced_total: std::sync::atomic::AtomicU64::new(0),
-        committed_total: std::sync::atomic::AtomicU64::new(0),
         snap_target_changes: std::sync::atomic::AtomicU64::new(0),
         preview_updates: std::sync::atomic::AtomicU64::new(0),
         last_target: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -379,21 +379,15 @@ fn move_counters() -> &'static MoveCounterSet {
 
 impl MoveCounterSet {
     fn record_received(&self, value: u64) {
-        self.received.increment_by(value);
-        self.received_total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        self.received.add(value);
     }
 
     fn record_coalesced(&self, value: u64) {
-        self.coalesced.increment_by(value);
-        self.coalesced_total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        self.coalesced.add(value);
     }
 
     fn record_committed(&self, value: u64) {
-        self.committed.increment_by(value);
-        self.committed_total
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+        self.committed.add(value);
     }
 
     fn record_snap_target(&self, target_bits: u64) {
@@ -446,12 +440,9 @@ impl MoveCounterSet {
 
     fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) {
         (
-            self.received_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.coalesced_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.committed_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            self.received.load(),
+            self.coalesced.load(),
+            self.committed.load(),
             self.snap_target_changes
                 .load(std::sync::atomic::Ordering::Relaxed),
             self.preview_updates
@@ -773,6 +764,31 @@ pub(crate) fn next_wait_timeout(now_ms: u64, deadline_ms: Option<u64>) -> Option
     deadline_ms.map(|deadline| std::time::Duration::from_millis(deadline.saturating_sub(now_ms)))
 }
 
+/// Drains buffered X events through the coalescing pump, dispatching each one,
+/// then records the batch size. Callers own the commit boundary after it.
+fn drain_pumped_events(
+    wm: &mut Wm<'_, RustConnection>,
+    pump: &mut WmEventPump,
+    conn: &RustConnection,
+) -> Result<(), AnyError> {
+    let mut batch: usize = 0;
+    while let Some(pumped) = pump.next(conn).map_err(any_conn_err)? {
+        resize_counters().record_received(pumped.received as u64);
+        resize_counters().record_coalesced(pumped.coalesced as u64);
+        batch += 1;
+        {
+            let _guard = flamewm_profiler::start("wm.resize.motion.drain");
+            wm.probe_event_dispatch(&pumped.event, pumped.received);
+            wm.handle_event(pumped.event)?;
+        }
+    }
+    resize_counters().record_committed(batch as u64);
+    if batch > resize_counters().max_batch() {
+        resize_counters().set_max_batch(batch);
+    }
+    Ok(())
+}
+
 pub(crate) fn run_with_hook<F>(
     config: WmConfig,
     catalog: &std::sync::Arc<flamewm_applications::ApplicationCatalog>,
@@ -813,21 +829,7 @@ where
         // same event+child MotionNotify; order vs Button/Key/Configure/
         // Property/Enter/Leave/ClientMessage/Expose is preserved.
         let mut pump = WmEventPump::new();
-        let mut batch: usize = 0;
-        while let Some(pumped) = pump.next(conn.as_ref()).map_err(any_conn_err)? {
-            resize_counters().record_received(pumped.received as u64);
-            resize_counters().record_coalesced(pumped.coalesced as u64);
-            batch += 1;
-            {
-                let _guard = flamewm_profiler::start("wm.resize.motion.drain");
-                wm.probe_event_dispatch(&pumped.event, pumped.received);
-                wm.handle_event(pumped.event)?;
-            }
-        }
-        resize_counters().record_committed(batch as u64);
-        if batch > resize_counters().max_batch() {
-            resize_counters().set_max_batch(batch);
-        }
+        drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         // Batch boundary: a bare-Super tap completes only after its autorepeat
         // partner (same timestamp) had the chance to cancel it.
         wm.commit_super_tap();
@@ -835,21 +837,7 @@ where
         // the hook flushes them to snapshots/signals exactly once.
         let changes = wm.take_changes();
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
-        let mut batch: usize = 0;
-        while let Some(pumped) = pump.next(conn.as_ref()).map_err(any_conn_err)? {
-            resize_counters().record_received(pumped.received as u64);
-            resize_counters().record_coalesced(pumped.coalesced as u64);
-            batch += 1;
-            {
-                let _guard = flamewm_profiler::start("wm.resize.motion.drain");
-                wm.probe_event_dispatch(&pumped.event, pumped.received);
-                wm.handle_event(pumped.event)?;
-            }
-        }
-        resize_counters().record_committed(batch as u64);
-        if batch > resize_counters().max_batch() {
-            resize_counters().set_max_batch(batch);
-        }
+        drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         wm.commit_super_tap();
         emit_resize_summary();
         emit_move_summary();
@@ -2329,7 +2317,6 @@ impl<'a, C: Connection> Wm<'a, C> {
         let (icon, icon_fallback) = self.read_native_frame_icon(window);
         let transient_for = self.read_transient_for(window)?;
         let hints = self.read_hints(window);
-        let _wm_class = self.wm_class(window).unwrap_or_default();
         let workspace = transient_for
             .and_then(|owner| self.clients.get(&owner).map(|state| state.workspace))
             .unwrap_or(self.current_workspace);
@@ -4152,18 +4139,6 @@ impl<'a, C: Connection> Wm<'a, C> {
             &rects,
         )?;
         Ok(())
-    }
-
-    fn wm_class(&self, client: Window) -> Option<String> {
-        self.conn
-            .get_property(false, client, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .map(|reply| {
-                String::from_utf8_lossy(&reply.value)
-                    .trim_matches('\0')
-                    .to_owned()
-            })
     }
 
     /// Native EWMH icon only. A missing/invalid native property leaves an

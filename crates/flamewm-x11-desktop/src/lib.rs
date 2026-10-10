@@ -262,19 +262,17 @@ impl WindowPort for X11Desktop {
             .map_err(io_error)?
             .reply()
             .map_err(io_error)?;
-        let geometry = if tree.parent != self.root {
-            self.conn
-                .get_geometry(tree.parent)
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?
+        let geometry_target = if tree.parent != self.root {
+            tree.parent
         } else {
-            self.conn
-                .get_geometry(window)
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?
+            window
         };
+        let geometry = self
+            .conn
+            .get_geometry(geometry_target)
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?;
         let states = self.property32(window, "_NET_WM_STATE")?;
         let desktop = self
             .property32(window, "_NET_WM_DESKTOP")?
@@ -313,22 +311,18 @@ impl WindowPort for X11Desktop {
         } else {
             flamewm_api::window::WindowState::Normal
         };
+        let outer_geometry = Rect::new(
+            i32::from(geometry.x),
+            i32::from(geometry.y),
+            i32::from(geometry.width),
+            i32::from(geometry.height),
+        );
         Ok(flamewm_api::window::WindowSnapshot {
             reference,
             title,
             app_id: DesktopAppId::new(class),
-            outer_geometry: Rect::new(
-                i32::from(geometry.x),
-                i32::from(geometry.y),
-                i32::from(geometry.width),
-                i32::from(geometry.height),
-            ),
-            restore_geometry: Rect::new(
-                i32::from(geometry.x),
-                i32::from(geometry.y),
-                i32::from(geometry.width),
-                i32::from(geometry.height),
-            ),
+            outer_geometry,
+            restore_geometry: outer_geometry,
             state,
             sticky: has("_NET_WM_STATE_STICKY"),
             focused: self
