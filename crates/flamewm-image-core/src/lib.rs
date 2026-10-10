@@ -64,16 +64,6 @@ impl ImageSourceFormat {
             _ => None,
         }
     }
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ppm => "PPM",
-            Self::Svg => "SVG",
-            Self::Png => "PNG",
-            Self::Webp => "WebP",
-        }
-    }
 }
 
 /// Straight (non-premultiplied) RGBA8, row-major.

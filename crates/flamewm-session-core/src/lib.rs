@@ -47,11 +47,6 @@ impl SessionPaths {
     }
 
     #[must_use]
-    pub fn cursor_theme_dir(&self) -> PathBuf {
-        self.cursor_search_root().join(CURSOR_THEME_ID)
-    }
-
-    #[must_use]
     pub fn cursor_path(&self) -> PathBuf {
         self.cursor_search_root()
     }

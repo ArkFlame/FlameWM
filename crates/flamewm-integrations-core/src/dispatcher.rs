@@ -145,30 +145,10 @@ impl DispatcherState {
         Ok(registration)
     }
 
-    pub fn remove_timeout(&mut self, id: u64) -> Option<TimeoutRegistration> {
-        self.timeouts.remove(&id)
-    }
-
-    pub fn set_timeout_enabled(&mut self, id: u64, enabled: bool) -> FlameResult<()> {
-        let Some(timeout) = self.timeouts.get_mut(&id) else {
-            return Err(FlameError::new(
-                ErrorCode::NotFound,
-                "D-Bus timeout registration not found",
-            ));
-        };
-        timeout.enabled = enabled;
-        Ok(())
-    }
-
     pub fn request_reconcile(&mut self, service: &str) {
         if !self.shutdown {
             self.pending_reconcile.insert(service.to_owned());
         }
-    }
-
-    #[must_use]
-    pub fn take_reconcile(&mut self, service: &str) -> bool {
-        self.pending_reconcile.remove(service)
     }
 
     #[must_use]
@@ -185,16 +165,6 @@ impl DispatcherState {
         self.pending_reconcile.clear();
         self.watches.clear();
         self.timeouts.clear();
-    }
-
-    #[must_use]
-    pub fn watch_count(&self) -> usize {
-        self.watches.len()
-    }
-
-    #[must_use]
-    pub fn timeout_count(&self) -> usize {
-        self.timeouts.len()
     }
 
     fn ensure_running(&self) -> FlameResult<()> {
@@ -251,6 +221,6 @@ mod tests {
         );
         let _ = state.add_timeout(250, "MPRIS");
         state.shutdown();
-        assert_eq!((state.watch_count(), state.timeout_count()), (0, 0));
+        assert!(state.watches.is_empty() && state.timeouts.is_empty());
     }
 }

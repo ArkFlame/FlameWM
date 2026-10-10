@@ -70,23 +70,6 @@ impl StickyNote {
         }
     }
 
-    pub fn set_text_size(&mut self, size: u8) -> bool {
-        if !(MIN_TEXT_SIZE..=MAX_TEXT_SIZE).contains(&size) {
-            return false;
-        }
-        self.text_size = size;
-        true
-    }
-
-    pub fn set_bold(&mut self, bold: bool) {
-        self.bold = bold;
-    }
-
-    pub fn toggle_bold(&mut self) -> bool {
-        self.bold = !self.bold;
-        self.bold
-    }
-
     pub fn set_color(&mut self, preset: usize) -> bool {
         let (background, foreground) = match preset {
             0 => STICKY_COLOR_YELLOW,
@@ -227,27 +210,6 @@ impl StickyNoteStore {
         true
     }
 
-    pub fn set_style(&mut self, id: &str, background: Rgb, foreground: Rgb, text_size: u8) -> bool {
-        if !(MIN_TEXT_SIZE..=MAX_TEXT_SIZE).contains(&text_size) {
-            return false;
-        }
-        let Some(note) = self.get_mut(id) else {
-            return false;
-        };
-        note.background = background;
-        note.foreground = foreground;
-        note.text_size = text_size;
-        true
-    }
-
-    pub fn set_bold(&mut self, id: &str, bold: bool) -> bool {
-        let Some(note) = self.get_mut(id) else {
-            return false;
-        };
-        note.bold = bold;
-        true
-    }
-
     pub fn toggle_bold(&mut self, id: &str) -> Option<bool> {
         let note = self.get_mut(id)?;
         note.bold = !note.bold;
@@ -300,10 +262,6 @@ impl StickyNoteStore {
         if self.enabled {
             self.disable_pending = true;
         }
-    }
-
-    pub fn cancel_disable(&mut self) {
-        self.disable_pending = false;
     }
 
     /// Disabling sticky notes is destructive by product contract.

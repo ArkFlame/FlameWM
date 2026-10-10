@@ -325,11 +325,6 @@ impl ControlMutationQueue {
         self.lock().pending.len()
     }
 
-    #[must_use]
-    pub fn is_closed(&self) -> bool {
-        self.lock().closed
-    }
-
     pub fn close(&self) {
         let mut inner = self.lock();
         inner.closed = true;
@@ -458,6 +453,11 @@ mod tests {
         queue.close();
         let drained = handle.join().expect("worker joins after close");
         assert_eq!(drained, 0);
-        assert!(queue.is_closed());
+        assert!(
+            queue
+                .submit(MutationLane::Windows, ControlRequest::Ping)
+                .is_err(),
+            "closed queue must reject new submissions"
+        );
     }
 }
