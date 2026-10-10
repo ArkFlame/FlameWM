@@ -10,6 +10,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::icon_theme::configured_icon_theme;
 use crate::icon_theme::IconThemeCaches as ThemeLookupCaches;
 
 const GENERIC_FALLBACK: &str = "assets/web/flamewm-icon.svg";
@@ -483,11 +484,22 @@ impl IconResolver {
     /// configured `FLAMEWM_ICON_THEME` is always searched first.
     #[must_use]
     pub fn from_environment(packaged_root: impl Into<PathBuf>, theme_generation: u64) -> Self {
-        let theme_names = env::var_os("FLAMEWM_ICON_THEME")
+        // Order: FLAMEWM_ICON_THEME, then the desktop's configured theme,
+        // then Breeze. hicolor is appended by the inheritance chain.
+        let mut theme_names: Vec<String> = Vec::new();
+        if let Some(value) = env::var_os("FLAMEWM_ICON_THEME")
             .map(|value| value.to_string_lossy().into_owned())
             .filter(|value| !value.is_empty())
-            .map(|value| vec![value])
-            .unwrap_or_else(|| vec!["Breeze".to_owned()]);
+        {
+            theme_names.push(value);
+        }
+        if let Some(config_home) = xdg_config_home() {
+            if let Some(configured) = configured_icon_theme(&config_home) {
+                theme_names.push(configured);
+            }
+        }
+        theme_names.push("Breeze".to_owned());
+        let theme_names = unique_strings(theme_names);
         Self::new(
             packaged_root,
             theme_names,
@@ -821,7 +833,11 @@ impl IconResolver {
                 continue;
             }
             match self.cached_rasterize(&candidate.path, size, candidate.origin) {
-                Ok(raster) => return Ok(raster),
+                // A candidate that rasterises fully transparent (e.g. an SVG
+                // whose artwork falls outside the requested box) is not an
+                // icon: keep searching so a later pixmap candidate can win.
+                Ok(raster) if raster_has_visible_pixels(&raster) => return Ok(raster),
+                Ok(_) => {}
                 Err(error) => {
                     if candidate_error.is_none() {
                         candidate_error = Some(error);
@@ -1044,11 +1060,52 @@ fn rasterize_path_with_origin(
             })?;
             decode_png(path, &bytes, size, origin)
         }
+        "webp" => {
+            let bytes = fs::read(path).map_err(|error| RasterError::Io {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })?;
+            decode_webp(path, &bytes, size, origin)
+        }
         _ => Err(RasterError::UnsupportedFormat {
             path: path.to_path_buf(),
             extension,
         }),
     }
+}
+
+fn decode_webp(
+    path: &Path,
+    bytes: &[u8],
+    size: IconSize,
+    origin: IconOrigin,
+) -> Result<Rgb8Raster, RasterError> {
+    let natural = flamewm_image_core::webp::decode(bytes)
+        .map_err(|message| invalid_raster_error(path, "WebP", &message))?;
+    let image = if natural.width == size.physical && natural.height == size.physical {
+        natural
+    } else {
+        flamewm_image_core::scale::scale_rgba(
+            &natural,
+            size.physical,
+            size.physical,
+            flamewm_image_core::scale::ScaleFilter::Bilinear,
+        )
+        .ok_or_else(|| invalid_raster_error(path, "WebP", "requested dimensions overflow"))?
+    };
+    Ok(Rgba8Raster {
+        source: path.to_string_lossy().into_owned(),
+        width: image.width,
+        height: image.height,
+        pixels: image.pixels,
+        origin,
+        fallback_reason: None,
+    })
+}
+
+/// True when at least one pixel carries nonzero alpha.
+fn raster_has_visible_pixels(raster: &Rgba8Raster) -> bool {
+    raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0)
 }
 
 fn decode_svg(
@@ -1215,6 +1272,17 @@ fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
     unique
 }
 
+fn xdg_config_home() -> Option<PathBuf> {
+    env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".config"))
+        })
+}
+
 fn xdg_data_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let home = env::var_os("HOME").map(PathBuf::from);
@@ -1290,6 +1358,16 @@ mod tests {
                 .chunks_exact(4)
                 .any(|pixel| pixel[3] > 0 && pixel[..3] != [0, 0, 0])
         );
+    }
+
+    #[test]
+    fn webp_fixture_uses_shared_image_core_raster_contract() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/branding/flamewm-wallpaper.webp");
+        let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("WebP fixture");
+        assert_eq!((raster.width, raster.height), (8, 8));
+        assert_eq!(raster.pixels.len(), 8 * 8 * 4);
+        assert!(raster.pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
     }
 
     #[test]
@@ -1725,6 +1803,22 @@ mod tests {
             .prepare_semantic("j2-cached", size)
             .expect("semantic");
         assert!(resolver.cache_len() > after_first + 1 - 1);
+    }
+
+    #[test]
+    fn fully_transparent_raster_is_not_a_visible_icon() {
+        let blank = Rgba8Raster {
+            source: "blank.svg".to_owned(),
+            width: 2,
+            height: 2,
+            pixels: vec![0; 16],
+            origin: IconOrigin::SystemTheme,
+            fallback_reason: None,
+        };
+        let mut visible = blank.clone();
+        visible.pixels[7] = 255;
+        assert!(!raster_has_visible_pixels(&blank));
+        assert!(raster_has_visible_pixels(&visible));
     }
 
     #[test]

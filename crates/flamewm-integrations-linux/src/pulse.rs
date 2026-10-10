@@ -44,6 +44,7 @@ pub struct PulseAdapter {
     context: ContextSlot,
     controller: Arc<Mutex<PulseController>>,
     timer: TimerSlot,
+    on_snapshot: Arc<Mutex<Box<SnapshotCallback>>>,
 }
 
 impl PulseAdapter {
@@ -99,6 +100,7 @@ impl PulseAdapter {
             context: Rc::clone(&context),
             controller: Arc::clone(&controller),
             timer: Rc::clone(&timer),
+            on_snapshot: Arc::clone(&on_snapshot),
         };
 
         let generation = {
@@ -308,8 +310,11 @@ impl PulseAdapter {
                 }
                 Some(context) => {
                     let mut introspector = context.introspect();
-                    let _operation =
-                        introspector.set_sink_mute_by_index(endpoint_id, action.muted, None);
+                    let _operation = introspector.set_sink_mute_by_index(
+                        endpoint_id,
+                        action.muted,
+                        Some(self.write_failure_callback(action.generation, "sink mute")),
+                    );
                     Ok(())
                 }
             }
@@ -344,16 +349,28 @@ impl PulseAdapter {
                         id,
                         kind: AudioEndpointKind::Sink,
                     } => {
-                        let _ = introspector.set_sink_volume_by_index(id, &target, None);
+                        let _operation = introspector.set_sink_volume_by_index(
+                            id,
+                            &target,
+                            Some(self.write_failure_callback(action.generation, "sink volume")),
+                        );
                     }
                     AudioTarget::Endpoint {
                         id,
                         kind: AudioEndpointKind::Source,
                     } => {
-                        let _ = introspector.set_source_volume_by_index(id, &target, None);
+                        let _operation = introspector.set_source_volume_by_index(
+                            id,
+                            &target,
+                            Some(self.write_failure_callback(action.generation, "source volume")),
+                        );
                     }
                     AudioTarget::Stream { id } => {
-                        let _ = introspector.set_sink_input_volume(id, &target, None);
+                        let _operation = introspector.set_sink_input_volume(
+                            id,
+                            &target,
+                            Some(self.write_failure_callback(action.generation, "stream volume")),
+                        );
                     }
                 }
                 Ok(())
@@ -385,16 +402,28 @@ impl PulseAdapter {
                         id,
                         kind: AudioEndpointKind::Sink,
                     } => {
-                        let _ = introspector.set_sink_mute_by_index(id, action.muted, None);
+                        let _operation = introspector.set_sink_mute_by_index(
+                            id,
+                            action.muted,
+                            Some(self.write_failure_callback(action.generation, "sink mute")),
+                        );
                     }
                     AudioTarget::Endpoint {
                         id,
                         kind: AudioEndpointKind::Source,
                     } => {
-                        let _ = introspector.set_source_mute_by_index(id, action.muted, None);
+                        let _operation = introspector.set_source_mute_by_index(
+                            id,
+                            action.muted,
+                            Some(self.write_failure_callback(action.generation, "source mute")),
+                        );
                     }
                     AudioTarget::Stream { id } => {
-                        let _ = introspector.set_sink_input_mute(id, action.muted, None);
+                        let _operation = introspector.set_sink_input_mute(
+                            id,
+                            action.muted,
+                            Some(self.write_failure_callback(action.generation, "stream mute")),
+                        );
                     }
                 }
                 Ok(())
@@ -402,6 +431,29 @@ impl PulseAdapter {
         };
         mainloop.unlock();
         result
+    }
+}
+
+impl PulseAdapter {
+    /// Success callback for one queued write. PulseAudio reports the async
+    /// outcome only here, so a rejected write is diagnosed and reconciled
+    /// against the server instead of being silently treated as applied.
+    fn write_failure_callback(
+        &self,
+        generation: u64,
+        what: &'static str,
+    ) -> Box<dyn FnMut(bool) + 'static> {
+        let context = Rc::downgrade(&self.context);
+        let controller = Arc::clone(&self.controller);
+        let on_snapshot = Arc::clone(&self.on_snapshot);
+        let timer = Rc::downgrade(&self.timer);
+        Box::new(move |succeeded| {
+            if succeeded {
+                return;
+            }
+            eprintln!("flamewm-integrations-linux: PulseAudio {what} write rejected; reconciling");
+            request_reconcile(&context, &controller, &on_snapshot, &timer, generation);
+        })
     }
 }
 

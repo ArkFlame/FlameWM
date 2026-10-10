@@ -560,4 +560,92 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn wrong_secret_request_id_leaves_pending_secret_for_retry() {
+        let mut controller = NetworkController::default();
+        controller.service_appeared();
+        let generation = controller.generation();
+        let _ = controller.inject_status(
+            NetworkStatus {
+                visible_access_points: vec![AccessPoint {
+                    path: "/ap/secure".to_owned(),
+                    ssid: "Secure".to_owned(),
+                    strength_percent: 80,
+                    secured: true,
+                    known: false,
+                }],
+                ..NetworkStatus::default()
+            },
+            generation,
+        );
+        let _ = controller
+            .request_connect_wifi("/ap/secure", generation)
+            .expect("secure access point accepted");
+        let request = controller
+            .request_secret_from_agent("/ap/secure".to_owned())
+            .expect("agent request accepted");
+        assert!(
+            controller
+                .request_submit_secret(request.request_id + 1, generation, "wrong".to_owned())
+                .is_err()
+        );
+        assert_eq!(controller.snapshot().pending_secret, Some(request.clone()));
+        assert_eq!(
+            controller.request_submit_secret(request.request_id, generation, "right".to_owned()),
+            Ok(NetworkIntent::SubmitSecret {
+                request_id: request.request_id,
+                secret: "right".to_owned(),
+            })
+        );
+        assert_eq!(controller.snapshot().pending_secret, None);
+    }
+
+    #[test]
+    fn scan_error_completion_clears_pending_scan() {
+        let mut controller = NetworkController::default();
+        controller.service_appeared();
+        let generation = controller.generation();
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(NetworkIntent::Scan))
+        ));
+        assert!(
+            matches!(controller.request_scan(), Ok(None)),
+            "scan is pending"
+        );
+        // The adapter calls complete_scan on a Scan reply error.
+        assert!(controller.complete_scan(generation));
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(NetworkIntent::Scan))
+        ));
+    }
+
+    #[test]
+    fn stale_scan_completion_does_not_clear_new_generation_scan() {
+        let mut controller = NetworkController::default();
+        controller.service_appeared();
+        let old_generation = controller.generation();
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(NetworkIntent::Scan))
+        ));
+
+        controller.service_vanished();
+        controller.service_appeared();
+        let new_generation = controller.generation();
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(NetworkIntent::Scan))
+        ));
+
+        assert!(!controller.complete_scan(old_generation));
+        assert!(matches!(controller.request_scan(), Ok(None)));
+        assert!(controller.complete_scan(new_generation));
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(NetworkIntent::Scan))
+        ));
+    }
 }

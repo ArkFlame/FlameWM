@@ -51,6 +51,10 @@ pub struct NetworkManagerProperties {
     pub primary_connection: Option<String>,
     pub state: Option<u32>,
     pub last_scan: Option<i64>,
+    /// Device-level `ActiveConnection` (present on wireless device signals).
+    pub active_connection: Option<String>,
+    /// Device-level `ActiveAccessPoint` (present on wireless device signals).
+    pub active_access_point: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +91,9 @@ enum PendingRequest {
         profile: String,
     },
     RegisterSecretAgent,
-    Scan,
+    Scan {
+        generation: u64,
+    },
     Action,
 }
 
@@ -130,6 +136,49 @@ struct SecretContext {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct WifiDevice {
     active_connection: String,
+    active_access_point: String,
+    last_scan: Option<i64>,
+}
+
+/// Refresh work implied by one wireless device `PropertiesChanged` signal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DeviceRefresh {
+    /// Re-read the device (ActiveConnection / ActiveAccessPoint); its reply re-queues the AP list.
+    device: bool,
+    /// Re-read the device's access-point list (ActiveAccessPoint or LastScan changed).
+    access_points: bool,
+}
+
+/// Pure decision: the signal dict carries only changed properties, so a present value
+/// that differs from the cached one is a change. Unchanged data requests nothing.
+/// An undiscovered device (no cache) always requests a device read.
+fn device_signal_refresh(
+    cached: Option<&WifiDevice>,
+    signal: &NetworkManagerProperties,
+) -> DeviceRefresh {
+    let Some(cached) = cached else {
+        return DeviceRefresh {
+            device: true,
+            access_points: false,
+        };
+    };
+    let active_access_point = signal
+        .active_access_point
+        .as_deref()
+        .map(|path| if path == "/" { "" } else { path });
+    let access_point_changed =
+        active_access_point.is_some_and(|path| path != cached.active_access_point);
+    let connection_changed = signal
+        .active_connection
+        .as_deref()
+        .is_some_and(|path| path != cached.active_connection);
+    let scan_changed = signal
+        .last_scan
+        .is_some_and(|scan| Some(scan) != cached.last_scan);
+    DeviceRefresh {
+        device: access_point_changed || connection_changed,
+        access_points: access_point_changed || scan_changed,
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -348,6 +397,15 @@ impl NetworkManagerProvider {
                 generation,
                 secret,
             } => {
+                // Check the adapter's context before the controller consumes its pending
+                // secret, so a mismatched id leaves both records intact for the correct retry.
+                if self.secret_context.as_ref().map(|context| context.request_id) != Some(request_id)
+                {
+                    return Err(FlameError::new(
+                        ErrorCode::NotFound,
+                        "NetworkManager secret request was not found",
+                    ));
+                }
                 let _ = self.controller.request_submit_secret(
                     request_id,
                     generation,
@@ -359,13 +417,6 @@ impl NetworkManagerProvider {
                         "NetworkManager secret request was not found",
                     ));
                 };
-                if context.request_id != request_id {
-                    self.secret_context = Some(context);
-                    return Err(FlameError::new(
-                        ErrorCode::NotFound,
-                        "NetworkManager secret request was not found",
-                    ));
-                }
                 self.secret_access_point = None;
                 if let Some(reply) = context.reply {
                     self.pump.send(secret_reply(
@@ -399,18 +450,23 @@ impl NetworkManagerProvider {
                     let _ = self.controller.complete_scan(self.controller.generation());
                     return Err(unsupported("NetworkManager has no wireless device"));
                 }
-                for device in devices {
+                let controller = &mut self.controller;
+                let pump = &mut self.pump;
+                let pending = &mut self.pending;
+                let generation = controller.generation();
+                queue_scan_requests(controller, &devices, |device| {
                     let message = Message::new_method_call(
                         NETWORK_MANAGER_SERVICE,
-                        &device,
+                        device,
                         "org.freedesktop.NetworkManager.Device.Wireless",
                         REQUEST_SCAN,
                     )
                     .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
                     .append1(empty_dict());
-                    self.queue(message, PendingRequest::Scan)?;
-                }
-                Ok(())
+                    let serial = pump.send(message)?;
+                    pending.insert(serial, PendingRequest::Scan { generation });
+                    Ok(())
+                })
             }
             _ => Err(unsupported("system action is not a NetworkManager action")),
         }
@@ -749,7 +805,33 @@ impl NetworkManagerProvider {
             })
     }
 
+    /// Derive the connected AP object path from the wireless device whose
+    /// `ActiveConnection` matches the primary connection. Keyed by path, never SSID.
+    fn refresh_active_access_point(&mut self) {
+        let active_connection = self.status.active_path.as_str();
+        self.status.snapshot.active_access_point_path = if active_connection.is_empty() {
+            String::new()
+        } else {
+            self.wifi_devices
+                .values()
+                .find(|wifi| wifi.active_connection == active_connection)
+                .map_or_else(String::new, |wifi| wifi.active_access_point.clone())
+        };
+    }
+
+    /// Report a degraded (not absent) NetworkManager state: the shell treats
+    /// `Unknown` as visible but not enabled.
+    fn mark_degraded(&mut self) {
+        self.reconcile_pending = false;
+        self.status.snapshot.availability = flamewm_api::system::ServiceAvailability::Unknown;
+        let generation = self.controller.generation();
+        let _ = self
+            .controller
+            .inject_status(self.status.clone(), generation);
+    }
+
     fn publish_access_points(&mut self) {
+        self.refresh_active_access_point();
         let known_ssids = self.profile_ssids.values().collect::<BTreeSet<_>>();
         let mut access_points = self
             .access_points
@@ -770,16 +852,23 @@ impl NetworkManagerProvider {
                 .then_with(|| left.path.cmp(&right.path))
         });
         self.status.visible_access_points = access_points;
-        self.status.snapshot.label = self
-            .status
-            .visible_access_points
-            .first()
-            .map_or_else(String::new, |ap| ap.ssid.clone());
-        self.status.snapshot.strength_percent = self
-            .status
-            .visible_access_points
-            .first()
-            .map_or(0, |ap| ap.strength_percent);
+        let active = self.status.snapshot.active_access_point_path.clone();
+        let connected = (!active.is_empty())
+            .then(|| {
+                self.status
+                    .visible_access_points
+                    .iter()
+                    .find(|ap| ap.path == active)
+            })
+            .flatten();
+        self.status.snapshot.label = header_label(connected);
+        if let Some(ap) = connected {
+            self.status.snapshot.strength_percent = ap.strength_percent;
+        } else {
+            // Nothing connected: the strongest AP stays in the list; the header makes no claim.
+            let strongest = self.status.visible_access_points.first();
+            self.status.snapshot.strength_percent = strongest.map_or(0, |ap| ap.strength_percent);
+        }
         let generation = self.controller.generation();
         let _ = self
             .controller
@@ -836,10 +925,24 @@ impl NetworkManagerProvider {
                 }
                 if path == NETWORK_MANAGER_ROOT {
                     self.apply_properties(properties);
-                } else if self.wifi_devices.contains_key(&path) {
+                } else if self.wifi_devices.contains_key(&path)
+                    || path.starts_with("/org/freedesktop/NetworkManager/Devices/")
+                {
+                    let generation = self.controller.generation();
+                    let refresh = device_signal_refresh(self.wifi_devices.get(&path), &properties);
+                    if let Some(device) = self.wifi_devices.get_mut(&path) {
+                        if let Some(scan) = properties.last_scan {
+                            device.last_scan = Some(scan);
+                        }
+                    }
                     if properties.last_scan.is_some() {
-                        self.queue_access_points(self.controller.generation(), path)?;
-                        let _ = self.controller.complete_scan(self.controller.generation());
+                        let _ = self.controller.complete_scan(generation);
+                    }
+                    if refresh.device {
+                        // The device reply queues the AP list for wireless devices.
+                        self.queue_device_properties(generation, path)?;
+                    } else if refresh.access_points {
+                        self.queue_access_points(generation, path)?;
                     }
                 } else if self.access_points.contains_key(&path) {
                     self.queue_access_point_properties(self.controller.generation(), path)?;
@@ -863,10 +966,9 @@ impl NetworkManagerProvider {
         };
         if is_error {
             match request {
+                // Only a NameOwnerChanged-to-empty signal means NetworkManager is absent.
                 PendingRequest::ServiceOwner | PendingRequest::RootProperties { .. } => {
-                    self.controller.service_vanished();
-                    self.status = NetworkStatus::default();
-                    self.reconcile_pending = false;
+                    self.mark_degraded();
                     return Ok(());
                 }
                 PendingRequest::AddMatch => {
@@ -874,22 +976,33 @@ impl NetworkManagerProvider {
                         "NetworkManager D-Bus match subscription failed",
                     ));
                 }
-                PendingRequest::Action
-                | PendingRequest::Scan
-                | PendingRequest::RegisterSecretAgent => return Ok(()),
-                PendingRequest::Devices { .. }
-                | PendingRequest::DeviceProperties { .. }
-                | PendingRequest::AccessPoints { .. }
-                | PendingRequest::AccessPointProperties { .. }
-                | PendingRequest::Profiles { .. }
-                | PendingRequest::ProfileSettings { .. } => return Ok(()),
+                PendingRequest::Scan { generation } => {
+                    // Clear ap_refresh_pending so the next Scan request is not blocked.
+                    let _ = self.controller.complete_scan(generation);
+                    return Ok(());
+                }
+                PendingRequest::Action | PendingRequest::RegisterSecretAgent => return Ok(()),
+                PendingRequest::Devices { generation }
+                | PendingRequest::DeviceProperties { generation, .. }
+                | PendingRequest::AccessPoints { generation }
+                | PendingRequest::AccessPointProperties { generation, .. }
+                | PendingRequest::Profiles { generation }
+                | PendingRequest::ProfileSettings { generation, .. } => {
+                    if generation == self.controller.generation() {
+                        self.mark_degraded();
+                    }
+                    return Ok(());
+                }
             }
         }
         match request {
             PendingRequest::AddMatch
             | PendingRequest::Action
-            | PendingRequest::Scan
             | PendingRequest::RegisterSecretAgent => Ok(()),
+            PendingRequest::Scan { generation } => {
+                let _ = self.controller.complete_scan(generation);
+                Ok(())
+            }
             PendingRequest::ServiceOwner => {
                 let owner = one_string(&items, "NetworkManager owner reply")?;
                 if !owner.is_empty() {
@@ -926,12 +1039,16 @@ impl NetworkManagerProvider {
                 }
                 let properties = parse_device_properties(items.first())?;
                 if properties.is_wifi {
+                    let last_scan = self.wifi_devices.get(&device).and_then(|wifi| wifi.last_scan);
                     self.wifi_devices.insert(
                         device.clone(),
                         WifiDevice {
                             active_connection: properties.active_connection,
+                            active_access_point: properties.active_access_point,
+                            last_scan,
                         },
                     );
+                    self.refresh_active_access_point();
                     if self
                         .wifi_devices
                         .values()
@@ -1004,6 +1121,7 @@ impl NetworkManagerProvider {
         }
         if let Some(value) = properties.primary_connection {
             self.status.active_path = if value == "/" { String::new() } else { value };
+            self.refresh_active_access_point();
         }
         if let Some(state) = properties.state {
             self.status.snapshot.kind = match state {
@@ -1222,6 +1340,12 @@ fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManager
                 properties.primary_connection = Some(item_object_path(&value, &key)?)
             }
             "State" => properties.state = Some(item_u32(&value, &key)?),
+            "ActiveConnection" => {
+                properties.active_connection = Some(item_object_path(&value, &key)?)
+            }
+            "ActiveAccessPoint" => {
+                properties.active_access_point = Some(item_object_path(&value, &key)?)
+            }
             "LastScan" => properties.last_scan = Some(item_i64(&value, &key)?),
             _ => {}
         }
@@ -1232,6 +1356,7 @@ fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManager
 struct DeviceProperties {
     is_wifi: bool,
     active_connection: String,
+    active_access_point: String,
 }
 
 fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProperties> {
@@ -1242,18 +1367,25 @@ fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProp
     };
     let mut is_wifi = false;
     let mut active_connection = String::new();
+    let mut active_access_point = String::new();
     for (key, value) in dict.clone().into_vec() {
         let key = item_string(&key, "NetworkManager device property name")?;
         let value = unwrap_variant(value);
         match key.as_str() {
             "DeviceType" => is_wifi = item_u32(&value, &key)? == 2,
             "ActiveConnection" => active_connection = item_object_path(&value, &key)?,
+            "ActiveAccessPoint" => active_access_point = item_object_path(&value, &key)?,
             _ => {}
         }
+    }
+    // NetworkManager reports "/" when no access point is active.
+    if active_access_point == "/" {
+        active_access_point.clear();
     }
     Ok(DeviceProperties {
         is_wifi,
         active_connection,
+        active_access_point,
     })
 }
 
@@ -1416,12 +1548,37 @@ fn unwrap_variant(item: MessageItem) -> MessageItem {
     }
 }
 
+/// Header label for the network snapshot: the connected SSID, or a neutral label when no AP is connected.
+fn header_label(connected: Option<&AccessPoint>) -> String {
+    connected.map_or_else(|| "Not connected".to_owned(), |ap| ap.ssid.clone())
+}
+
 fn invalid(message: &str) -> FlameError {
     FlameError::new(ErrorCode::InvalidArgument, message)
 }
 
 fn unsupported(message: &str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
+}
+
+/// Queue one RequestScan per device. A failed queue clears the controller's pending scan so a
+/// later Scan is not blocked; replies already in flight complete harmlessly.
+fn queue_scan_requests<F>(
+    controller: &mut NetworkController,
+    devices: &[String],
+    mut queue_one: F,
+) -> FlameResult<()>
+where
+    F: FnMut(&str) -> FlameResult<()>,
+{
+    for device in devices {
+        if let Err(error) = queue_one(device) {
+            let generation = controller.generation();
+            let _ = controller.complete_scan(generation);
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1447,6 +1604,19 @@ mod tests {
                 secured: true,
             }
         );
+    }
+
+    #[test]
+    fn header_label_never_claims_connection_when_disconnected() {
+        assert_eq!(header_label(None), "Not connected");
+        let connected = AccessPoint {
+            path: "/nm/ap/1".to_owned(),
+            ssid: "FlameNet".to_owned(),
+            strength_percent: 80,
+            secured: true,
+            known: true,
+        };
+        assert_eq!(header_label(Some(&connected)), "FlameNet");
     }
 
     #[test]
@@ -1501,5 +1671,96 @@ mod tests {
             }
             SecretAgentCall::CancelGetSecrets { .. } => panic!("GetSecrets parsed as cancel"),
         }
+    }
+
+    #[test]
+    fn device_signal_requests_ap_refresh_only_for_changed_ap_or_scan() {
+        let cached = WifiDevice {
+            active_connection: "/c/3".to_owned(),
+            active_access_point: "/ap/7".to_owned(),
+            last_scan: Some(10),
+        };
+        let signal = |ap: Option<&str>, scan: Option<i64>| NetworkManagerProperties {
+            active_access_point: ap.map(str::to_owned),
+            last_scan: scan,
+            ..NetworkManagerProperties::default()
+        };
+        // New ActiveAccessPoint: device read, which queues the AP list.
+        let changed_ap = device_signal_refresh(Some(&cached), &signal(Some("/ap/8"), None));
+        assert!(changed_ap.device && changed_ap.access_points);
+        // New LastScan only: AP list refresh without a device read.
+        let changed_scan = device_signal_refresh(Some(&cached), &signal(None, Some(11)));
+        assert!(!changed_scan.device && changed_scan.access_points);
+        // ActiveAccessPoint cleared to "/" is a change to "no AP".
+        let cleared = device_signal_refresh(Some(&cached), &signal(Some("/"), None));
+        assert!(cleared.access_points);
+        // Unchanged device: nothing requested.
+        let unchanged = device_signal_refresh(Some(&cached), &signal(Some("/ap/7"), Some(10)));
+        assert_eq!(unchanged, DeviceRefresh::default());
+        // Undiscovered device: device read so the adapter learns it.
+        let unknown = device_signal_refresh(None, &signal(None, Some(1)));
+        assert!(unknown.device && !unknown.access_points);
+    }
+
+    #[test]
+    fn failed_scan_queue_does_not_block_next_scan() {
+        let mut controller = NetworkController::default();
+        controller.service_appeared();
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(flamewm_integrations_core::network::NetworkIntent::Scan))
+        ));
+        let devices = vec!["/org/freedesktop/NetworkManager/Devices/1".to_owned()];
+        let result = queue_scan_requests(&mut controller, &devices, |_| {
+            Err(FlameError::unavailable("injected queue failure"))
+        });
+        assert!(result.is_err());
+        assert!(matches!(
+            controller.request_scan(),
+            Ok(Some(flamewm_integrations_core::network::NetworkIntent::Scan))
+        ));
+    }
+
+    #[test]
+    fn device_parser_reads_active_access_point_and_treats_slash_as_none() {
+        let build = |active_ap: &str| {
+            MessageItem::from_dict(
+                vec![
+                    ("DeviceType".to_owned(), MessageItem::UInt32(2)),
+                    (
+                        "ActiveConnection".to_owned(),
+                        MessageItem::ObjectPath(
+                            object_path("/org/freedesktop/NetworkManager/ActiveConnection/3".to_owned())
+                                .expect("valid path"),
+                        ),
+                    ),
+                    (
+                        "ActiveAccessPoint".to_owned(),
+                        MessageItem::ObjectPath(object_path(active_ap.to_owned()).expect("valid path")),
+                    ),
+                ]
+                .into_iter()
+                .map(Ok::<_, FlameError>),
+            )
+            .expect("valid device properties")
+        };
+        let item = build("/org/freedesktop/NetworkManager/AccessPoint/7");
+        let parsed = parse_device_properties(Some(&item)).expect("valid device");
+        assert!(parsed.is_wifi);
+        assert_eq!(
+            parsed.active_connection,
+            "/org/freedesktop/NetworkManager/ActiveConnection/3"
+        );
+        assert_eq!(
+            parsed.active_access_point,
+            "/org/freedesktop/NetworkManager/AccessPoint/7"
+        );
+        let none = build("/");
+        assert_eq!(
+            parse_device_properties(Some(&none))
+                .expect("valid device")
+                .active_access_point,
+            ""
+        );
     }
 }

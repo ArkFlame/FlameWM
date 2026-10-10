@@ -148,25 +148,17 @@ impl NetworkQuery {
 
 /// Active-AP predicate shared by shell network views.
 ///
-/// `NetworkSnapshot::active_path` carries the provider's active
-/// `ActiveConnection` object path (see `NetworkManagerProperties ::
-/// primary_connection` in the NM adapter), which is *not* an AP object
-/// path and therefore never equals `access_point.path`. Callers comparing
-/// `ap.path == active_path` get `connected == false` for every row while
-/// a connection is up. There is no `active_ap_path` field on
-/// [`flamewm_api::system::NetworkSnapshot`], so until the snapshot gains
-/// one, treat `active_path` as connected only when it names a visible AP;
-/// otherwise fall back to `false` and let `can_disconnect`/`details` carry
-/// the connected state.
+/// `NetworkSnapshot::active_access_point_path` is the wireless device's
+/// `ActiveAccessPoint` object path. It is compared to the AP object path
+/// only, never to `active_path` (the ActiveConnection) and never by SSID,
+/// so duplicate SSIDs yield exactly one connected row.
 #[must_use]
 pub fn network_ap_connected(
     access_point_path: &str,
     snapshot: &flamewm_api::system::NetworkSnapshot,
 ) -> bool {
-    if snapshot.active_path.is_empty() || access_point_path.is_empty() {
-        return false;
-    }
-    snapshot.active_path == access_point_path
+    !snapshot.active_access_point_path.is_empty()
+        && access_point_path == snapshot.active_access_point_path
         && snapshot
             .access_points
             .iter()

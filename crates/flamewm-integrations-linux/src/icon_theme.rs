@@ -470,11 +470,82 @@ fn directory_distance(index: &IconLookupIndex, file: &IndexedIconFile, physical:
         .unwrap_or(u64::MAX / 2)
 }
 
+/// Depth below each search root that is watched for new icons.
+const WATCH_DEPTH: usize = 3;
+/// Upper bound on directories stat-ed per watch check (across all depths).
+const WATCH_DIR_CAP: usize = 2048;
+/// Per-depth share of `WATCH_DIR_CAP`, so a wide shallow level cannot starve
+/// the deeper category levels of every theme.
+const WATCH_LEVEL_CAP: usize = WATCH_DIR_CAP / (WATCH_DEPTH + 1);
+/// Set once per process so a capped watch set logs a single diagnostic line.
+static WATCH_CAP_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Directories whose mtime changes when an icon is added or removed:
+/// every search root plus theme subdirectories (`theme/size/category`) up to
+/// `WATCH_DEPTH`. Walks level by level; each level keeps at most
+/// `WATCH_LEVEL_CAP` dirs, interleaved round-robin across parents so every
+/// theme's shallow levels are covered before any one theme consumes a level.
+/// Data dirs are stat-only and not counted against the cap.
+fn watch_dirs(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = data_dirs.to_vec();
+    let mut level: Vec<PathBuf> = roots.to_vec();
+    let mut capped = false;
+    for depth in 0..=WATCH_DEPTH {
+        if level.len() > WATCH_LEVEL_CAP {
+            level.truncate(WATCH_LEVEL_CAP);
+            capped = true;
+        }
+        if depth == WATCH_DEPTH {
+            out.append(&mut level);
+            break;
+        }
+        let groups: Vec<Vec<PathBuf>> = level.iter().map(|dir| child_dirs(dir)).collect();
+        out.append(&mut level);
+        level = interleave_by_parent(&groups);
+    }
+    if capped {
+        log_watch_cap_once();
+    }
+    out
+}
+
+fn child_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+/// Round-robin merge of per-parent child lists: first child of every parent,
+/// then second child of every parent, and so on.
+fn interleave_by_parent(groups: &[Vec<PathBuf>]) -> Vec<PathBuf> {
+    let rounds = groups.iter().map(Vec::len).max().unwrap_or(0);
+    let mut out = Vec::new();
+    for index in 0..rounds {
+        for group in groups {
+            if let Some(path) = group.get(index) {
+                out.push(path.clone());
+            }
+        }
+    }
+    out
+}
+
+fn log_watch_cap_once() {
+    if !WATCH_CAP_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "flamewm-integrations-linux: icon watch set capped at {WATCH_LEVEL_CAP} dirs per depth (total cap {WATCH_DIR_CAP}); deeper icon dir changes may not trigger a refresh"
+        );
+    }
+}
+
 fn current_watch_mtime(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Option<std::time::SystemTime> {
     let mut latest: Option<std::time::SystemTime> = None;
-    let mut tops: Vec<PathBuf> = roots.to_vec();
-    tops.extend(data_dirs.iter().cloned());
-    for top in &tops {
+    for top in &watch_dirs(roots, data_dirs) {
         let mtime = fs::metadata(top).and_then(|m| m.modified()).ok();
         latest = match (latest, mtime) {
             (None, m) => m,
@@ -483,6 +554,44 @@ fn current_watch_mtime(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Option<std::
         };
     }
     latest
+}
+
+/// Value of `key` inside `[section]` of an INI-style text (KDE `kdeglobals`,
+/// GTK `settings.ini`). Empty values count as absent.
+#[must_use]
+pub fn parse_ini_value(text: &str, section: &str, key: &str) -> Option<String> {
+    let mut current = String::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+            current = name.trim().to_owned();
+            continue;
+        }
+        if current != section {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            let value = v.trim();
+            if k.trim() == key && !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// Configured icon theme under an XDG config home: KDE `kdeglobals`
+/// `[Icons] Theme=` first, then GTK 3 `settings.ini` `gtk-icon-theme-name=`.
+#[must_use]
+pub fn configured_icon_theme(config_home: &Path) -> Option<String> {
+    fs::read_to_string(config_home.join("kdeglobals"))
+        .ok()
+        .and_then(|text| parse_ini_value(&text, "Icons", "Theme"))
+        .or_else(|| {
+            fs::read_to_string(config_home.join("gtk-3.0/settings.ini"))
+                .ok()
+                .and_then(|text| parse_ini_value(&text, "Settings", "gtk-icon-theme-name"))
+        })
 }
 
 /// Cycle-safe recursive `Inherits` expansion. `hicolor` is always the final
@@ -931,9 +1040,11 @@ impl IconLookupIndex {
         (out, hit)
     }
 
-    /// At most one top-level mtime check per 5s. On change: atomically
-    /// rebuild, invalidate caller cache via generation owner, resubmit
-    /// visible high priority (caller performs resubmit when owner exists).
+    /// At most one watch-set mtime check per 5s. When the watched directory
+    /// mtimes changed, returns a replacement snapshot whose `generation` is
+    /// one past `self.generation`. The owner swaps it in and passes the new
+    /// generation to its caches (`IconThemeCaches::note_generation_bump`),
+    /// so generation-keyed entries from the old snapshot miss.
     #[must_use]
     pub fn needs_rebuild(&self) -> Option<IconLookupIndex> {
         let mut guard = self.last_mtime_check.lock().ok()?;
@@ -948,11 +1059,13 @@ impl IconLookupIndex {
         if current == self.watch_mtime {
             return None;
         }
-        Some(Self::build(
+        let mut next = Self::build(
             &self.theme_names,
             &self.data_dirs,
-            self.generation,
-        ))
+            self.generation.saturating_add(1),
+        );
+        next.last_mtime_check = std::sync::Mutex::new(Some(now));
+        Some(next)
     }
 
     /// (hits, misses) for the name memo.
@@ -1045,5 +1158,112 @@ mod tests {
         assert!(chain.contains(&"B".to_owned()));
         assert_eq!(chain.last().map(String::as_str), Some("hicolor"));
         assert!(chain.iter().filter(|n| *n == "A").count() == 1);
+    }
+
+    #[test]
+    fn configured_theme_parses_kdeglobals_style_text() {
+        let text = "[General]\nColorScheme=BreezeDark\n\n[Icons]\nTheme=Papirus-Dark\n\n[KDE]\nLookAndFeelPackage=org.kde.breeze.desktop\n";
+        assert_eq!(
+            parse_ini_value(text, "Icons", "Theme").as_deref(),
+            Some("Papirus-Dark")
+        );
+        assert_eq!(parse_ini_value(text, "General", "Theme"), None);
+        assert_eq!(parse_ini_value("[Icons]\nTheme=\n", "Icons", "Theme"), None);
+        let gtk = "[Settings]\ngtk-icon-theme-name = Adwaita\n";
+        assert_eq!(
+            parse_ini_value(gtk, "Settings", "gtk-icon-theme-name").as_deref(),
+            Some("Adwaita")
+        );
+    }
+
+    #[test]
+    fn shallow_watch_detects_nested_icon_directory_change() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-watch-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let nested = root.join("Theme/16x16/apps");
+        fs::create_dir_all(&nested).expect("nested theme dirs");
+        let before = current_watch_mtime(std::slice::from_ref(&root), &[]);
+        // Force a distinct mtime on the nested directory so the check does
+        // not depend on filesystem timestamp granularity.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+        fs::write(nested.join("new-app.png"), b"x").expect("add icon");
+        fs::File::open(&nested)
+            .and_then(|dir| dir.set_modified(later))
+            .expect("set nested mtime");
+        let after = current_watch_mtime(std::slice::from_ref(&root), &[]);
+        let _ = fs::remove_dir_all(&root);
+        assert_ne!(before, after);
+        assert_eq!(after, Some(later));
+    }
+
+    #[test]
+    fn watch_dirs_covers_depth_three_under_last_theme_past_cap() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-watch-cap-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        // First theme alone holds more than WATCH_DIR_CAP directories.
+        for i in 0..2100 {
+            fs::create_dir_all(root.join("A").join(format!("s{i}"))).expect("wide theme dirs");
+        }
+        // Last theme: a depth-3 category directory (theme/size/category).
+        let category = root.join("B").join("16x16").join("apps");
+        fs::create_dir_all(&category).expect("last theme category dir");
+        let watched = watch_dirs(std::slice::from_ref(&root), &[]);
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            watched.contains(&category),
+            "depth-3 category under last theme must be watched past the cap"
+        );
+    }
+
+    #[test]
+    fn warm_candidates_hit_memo_without_new_miss() {
+        let index = IconLookupIndex::new(
+            Vec::new(),
+            vec!["hicolor".to_owned()],
+            HashMap::new(),
+            HashMap::new(),
+            7,
+        );
+        let first = index.candidates("firefox", 48);
+        let (_, cold_misses) = index.stats();
+        let second = index.candidates("firefox", 48);
+        let (hits, misses) = index.stats();
+        assert_eq!(first, second);
+        assert_eq!(misses, cold_misses, "warm call must not miss again");
+        assert_eq!(hits, 1, "warm call must be served from the memo");
+        assert_eq!(index.memo_len(), 1);
+    }
+
+    #[test]
+    fn needs_rebuild_bumps_generation_when_watch_mtime_is_stale() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-rebuild-gen-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("watch root");
+        let mut index = IconLookupIndex::new(
+            vec![root.clone()],
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+            3,
+        );
+        index.watch_mtime = Some(std::time::UNIX_EPOCH);
+        let next = index.needs_rebuild();
+        let throttled = index.needs_rebuild();
+        let _ = fs::remove_dir_all(&root);
+        let next = next.expect("stale watch mtime must produce a rebuilt snapshot");
+        assert_eq!(next.generation, 4);
+        assert!(throttled.is_none(), "second check inside 5s must be throttled");
     }
 }

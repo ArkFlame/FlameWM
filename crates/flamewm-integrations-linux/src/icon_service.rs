@@ -11,9 +11,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use crate::icon_theme::IconLookupIndex;
@@ -57,11 +57,22 @@ pub enum IconSubmitError {
 /// Worker seam for deterministic service tests and alternate resolver setup.
 pub trait IconResolve: Send + 'static {
     fn resolve(&mut self, key: &IconKey) -> Result<Rgba8Raster, IconError>;
+
+    /// Adopts a refreshed theme index before the next resolve. Default is a
+    /// no-op for resolvers without theme state.
+    fn apply_theme(&mut self, _index: Arc<IconLookupIndex>) {}
 }
 
 impl IconResolve for IconResolver {
     fn resolve(&mut self, key: &IconKey) -> Result<Rgba8Raster, IconError> {
         self.prepare_key(key)
+    }
+
+    fn apply_theme(&mut self, index: Arc<IconLookupIndex>) {
+        let generation = index.generation;
+        self.set_shared_index(index);
+        // Clears this worker's theme caches (generation-scoped entries).
+        self.notify_theme_changed(generation);
     }
 }
 
@@ -121,6 +132,11 @@ impl Queue {
 struct SharedQueue {
     queue: Mutex<Queue>,
     ready: Condvar,
+    /// Current shared lookup index. Held only for an Arc clone/swap.
+    theme: Mutex<Arc<IconLookupIndex>>,
+    /// Bumped after every `theme` swap. Workers compare it to their applied
+    /// epoch before each resolve and adopt the new index when it differs.
+    theme_epoch: AtomicU64,
 }
 
 /// Exact worker count: one-time index build shared by all workers.
@@ -151,8 +167,6 @@ pub struct IconService<R = IconResolver> {
     results: Option<Receiver<IconResult>>,
     workers: Vec<JoinHandle<()>>,
     resolver: std::marker::PhantomData<R>,
-    /// One shared generation-scoped lookup index for all workers.
-    index: Arc<IconLookupIndex>,
     /// One shared result cache (key -> resolved raster) fed by workers.
     result_cache: Arc<Mutex<HashMap<IconKey, Result<Rgba8Raster, IconError>>>>,
     /// Wake FD: worker writes one byte per completed result; drained by poller.
@@ -161,6 +175,8 @@ pub struct IconService<R = IconResolver> {
     completed: Arc<AtomicU64>,
     coalesced: Arc<AtomicU64>,
     dropped_low: Arc<AtomicU64>,
+    /// Off-thread theme watch/rebuild owner (one thread, joined on drop).
+    theme_rebuilder: ThemeRebuilder,
 }
 
 impl<R: IconResolve> IconService<R> {
@@ -204,6 +220,8 @@ impl<R: IconResolve> IconService<R> {
                 stopped: false,
             }),
             ready: Condvar::new(),
+            theme: Mutex::new(Arc::clone(&index)),
+            theme_epoch: AtomicU64::new(0),
         });
         let (result_tx, results) = mpsc::sync_channel(capacity);
         let wake_pair: Option<(UnixStream, UnixStream)> = UnixStream::pair().ok();
@@ -251,20 +269,84 @@ impl<R: IconResolve> IconService<R> {
             results: Some(results),
             workers,
             resolver: std::marker::PhantomData,
-            index,
             result_cache,
             wake_reader,
             submitted,
             completed,
             coalesced,
             dropped_low,
+            theme_rebuilder: ThemeRebuilder::new(),
         }
     }
 
-    /// The one shared generation-scoped lookup index.
+    /// Queues a non-blocking theme watch check on the rebuild thread against
+    /// the currently installed index. Returns `false` (no-op) when a check is
+    /// already in flight or a finished index is still waiting in
+    /// [`IconService::poll_theme_rebuild`]. Never performs stat or build I/O
+    /// on the calling thread.
+    pub fn request_theme_rebuild(&self) -> bool {
+        self.theme_rebuilder.request(self.shared_index())
+    }
+
+    /// Non-blocking: returns the finished replacement index, if the rebuild
+    /// thread produced one since the last poll. The caller installs it with
+    /// [`IconService::install_theme_index`]. Returns `None` when the theme is
+    /// unchanged or the check is still running.
     #[must_use]
-    pub fn shared_index(&self) -> &Arc<IconLookupIndex> {
-        &self.index
+    pub fn poll_theme_rebuild(&self) -> Option<Arc<IconLookupIndex>> {
+        self.theme_rebuilder.take()
+    }
+
+    /// `true` when no theme watch check is queued or running.
+    #[must_use]
+    pub fn theme_rebuild_idle(&self) -> bool {
+        self.theme_rebuilder.is_idle()
+    }
+
+    /// The current shared generation-scoped lookup index (Arc clone).
+    #[must_use]
+    pub fn shared_index(&self) -> Arc<IconLookupIndex> {
+        self.shared
+            .theme
+            .lock()
+            .map(|slot| Arc::clone(&slot))
+            .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
+    }
+
+    /// Generation of the current shared index; keys built for new requests
+    /// should carry this value.
+    #[must_use]
+    pub fn theme_generation(&self) -> u64 {
+        self.shared_index().generation
+    }
+
+    /// Installs `next` as the shared index for subsequent requests and returns
+    /// its generation. O(1) on the caller: swaps an Arc under a short lock and
+    /// bumps the epoch. Workers adopt it (set index + `notify_theme_changed`)
+    /// right before their next resolve, so no worker is interrupted mid-job
+    /// and no caller thread waits on a worker.
+    pub fn install_theme_index(&self, next: Arc<IconLookupIndex>) -> u64 {
+        let mut installed = false;
+        let generation;
+        {
+            let mut slot = self
+                .shared
+                .theme
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // A rebuild is based on a snapshot captured when it was queued.
+            // Do not let a late result from that snapshot roll the service
+            // back after a newer generation has already been installed.
+            if next.generation > slot.generation {
+                *slot = next;
+                installed = true;
+            }
+            generation = slot.generation;
+        }
+        if installed {
+            self.shared.theme_epoch.fetch_add(1, Ordering::Release);
+        }
+        generation
     }
 
     /// Live worker count (clamped 1..=20 at construction).
@@ -378,6 +460,7 @@ impl<R: IconResolve> IconService<R> {
             .submit(job);
         match &submitted {
             Ok(IconSubmit::Enqueued) => {
+                note_icon_request();
                 self.submitted.fetch_add(1, Ordering::Relaxed);
                 self.shared.ready.notify_one();
             }
@@ -405,6 +488,7 @@ impl<R: IconResolve> IconService<R> {
             // Wake-to-apply: worker completion envelope -> applied here.
             let wake_to_apply = result.completed_at.elapsed();
             flamewm_profiler::record_elapsed("icon.result.wake_to_apply", wake_to_apply);
+            observe_icon_raster(is_non_fallback(&result.result));
             self.finish(&result);
             emit_apply(&result, wake_to_apply);
             ready.push(result);
@@ -418,6 +502,7 @@ impl<R: IconResolve> IconService<R> {
         let result = self.results.as_ref()?.recv().ok()?;
         let wake_to_apply = result.completed_at.elapsed();
         flamewm_profiler::record_elapsed("icon.result.wake_to_apply", wake_to_apply);
+        observe_icon_raster(is_non_fallback(&result.result));
         self.finish(&result);
         emit_apply(&result, wake_to_apply);
         self.emit_service_summary("take");
@@ -449,6 +534,12 @@ impl<R: IconResolve> IconService<R> {
     }
 }
 
+fn is_non_fallback(result: &Result<Rgba8Raster, IconError>) -> bool {
+    result
+        .as_ref()
+        .is_ok_and(|raster| raster.fallback_reason.is_none())
+}
+
 fn result_memory(result: &Result<Rgba8Raster, IconError>) -> usize {
     match result {
         Ok(raster) => raster.pixels.len() + 96,
@@ -469,6 +560,116 @@ fn empty_index() -> IconLookupIndex {
         HashMap::new(),
         0,
     )
+}
+
+/// Shared state between a [`ThemeRebuilder`] and its rebuild thread.
+struct RebuildState {
+    /// Set by `request` before sending; cleared by the thread after the
+    /// check (and after publishing any result into `ready`).
+    in_flight: AtomicBool,
+    /// Finished replacement index, waiting for the owner to poll it.
+    ready: Mutex<Option<Arc<IconLookupIndex>>>,
+}
+
+/// Off-thread theme watch and rebuild owner.
+///
+/// [`IconLookupIndex::needs_rebuild`] stats the watch set and, on change, does
+/// a full index build (directory walks). That work runs on one dedicated
+/// thread here; callers only submit the current index and poll for the
+/// result, so no UI or caller thread blocks on it. At most one check is in
+/// flight; a finished result is held until polled. The thread exits and is
+/// joined when the rebuilder is dropped.
+pub struct ThemeRebuilder {
+    tx: Option<mpsc::Sender<Arc<IconLookupIndex>>>,
+    state: Arc<RebuildState>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl ThemeRebuilder {
+    /// Spawns the rebuild thread (idle until a request arrives).
+    #[must_use]
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel::<Arc<IconLookupIndex>>();
+        let state = Arc::new(RebuildState {
+            in_flight: AtomicBool::new(false),
+            ready: Mutex::new(None),
+        });
+        let thread_state = Arc::clone(&state);
+        let handle = thread::Builder::new()
+            .name("icon-theme-rebuild".to_owned())
+            .spawn(move || rebuild_loop(&rx, &thread_state))
+            .expect("spawn icon theme rebuild thread");
+        Self {
+            tx: Some(tx),
+            state,
+            handle: Some(handle),
+        }
+    }
+
+    /// Queues a watch check of `current`. Non-blocking. Returns `true` when a
+    /// check was queued, `false` when one is already in flight or an
+    /// unpolled result is waiting.
+    pub fn request(&self, current: Arc<IconLookupIndex>) -> bool {
+        let Some(tx) = &self.tx else {
+            return false;
+        };
+        if self.state.in_flight.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        let has_ready = self
+            .state
+            .ready
+            .lock()
+            .map(|slot| slot.is_some())
+            .unwrap_or(true);
+        if has_ready || tx.send(current).is_err() {
+            self.state.in_flight.store(false, Ordering::Release);
+            return false;
+        }
+        true
+    }
+
+    /// Takes the finished replacement index, if any. Never blocks on the
+    /// rebuild thread (a short mutex guards only the slot swap).
+    #[must_use]
+    pub fn take(&self) -> Option<Arc<IconLookupIndex>> {
+        self.state.ready.lock().ok()?.take()
+    }
+
+    /// `true` when no check is queued or running on the rebuild thread.
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        !self.state.in_flight.load(Ordering::Acquire)
+    }
+}
+
+impl Default for ThemeRebuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ThemeRebuilder {
+    fn drop(&mut self) {
+        // Closing the sender ends the thread's `recv` loop.
+        self.tx.take();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn rebuild_loop(rx: &Receiver<Arc<IconLookupIndex>>, state: &RebuildState) {
+    while let Ok(current) = rx.recv() {
+        // Throttled (5s) stat; a full build only when watched mtimes changed.
+        if let Some(next) = current.needs_rebuild() {
+            if let Ok(mut slot) = state.ready.lock() {
+                *slot = Some(Arc::new(next));
+            }
+        }
+        // Cleared after publishing so `is_idle` implies the result is visible.
+        state.in_flight.store(false, Ordering::Release);
+    }
 }
 
 impl<R> Drop for IconService<R> {
@@ -495,6 +696,8 @@ fn worker_loop<R: IconResolve>(
     completed: Arc<AtomicU64>,
     mut resolver: R,
 ) {
+    // Epoch of the theme index this worker last adopted (0 = construction).
+    let mut applied_epoch: u64 = 0;
     loop {
         // Peek the next key; serve from the shared result cache when a prior
         // worker already completed it (still forwards so waiter observes it).
@@ -551,6 +754,19 @@ fn worker_loop<R: IconResolve>(
                 }
             }
             Some(Next::Resolve(key)) => {
+                // Adopt a theme swap before resolving: the epoch check is one
+                // atomic load; the index Arc is cloned under a short lock that
+                // the UI thread also holds only for the swap itself.
+                let epoch = shared.theme_epoch.load(Ordering::Acquire);
+                if epoch != applied_epoch {
+                    applied_epoch = epoch;
+                    let index = shared
+                        .theme
+                        .lock()
+                        .map(|slot| Arc::clone(&slot))
+                        .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()));
+                    resolver.apply_theme(index);
+                }
                 // Resolution runs without holding the queue lock.
                 let result = resolver.resolve(&key);
                 let ok = result.is_ok();
@@ -590,6 +806,52 @@ fn worker_loop<R: IconResolve>(
                 let _ = stream.write_all(&[1]);
             }
         }
+    }
+}
+
+/// Process-wide origin for the first-icon milestone: the first icon request.
+static FIRST_ICON_REQUEST: OnceLock<std::time::Instant> = OnceLock::new();
+/// Set once per process when the first non-fallback raster is observed.
+static FIRST_NON_FALLBACK_RECORDED: AtomicBool = AtomicBool::new(false);
+
+/// Profiler label for the one-shot time-to-first-non-fallback-icon milestone.
+pub const FIRST_RASTER_LABEL: &str = "icon.first_raster";
+
+/// Marks the first icon request of this process (first call wins).
+pub fn note_icon_request() {
+    let _ = FIRST_ICON_REQUEST.get_or_init(std::time::Instant::now);
+}
+
+/// Pure once-only milestone: returns the elapsed time from `origin` to `now`
+/// on the first call with `non_fallback == true`, and `None` afterwards.
+pub fn first_non_fallback_elapsed(
+    origin: std::time::Instant,
+    now: std::time::Instant,
+    non_fallback: bool,
+    recorded: &AtomicBool,
+) -> Option<std::time::Duration> {
+    if !non_fallback {
+        return None;
+    }
+    recorded
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()?;
+    Some(now.saturating_duration_since(origin))
+}
+
+/// Records the one-per-process first-non-fallback-icon event through the
+/// profiler. Shared by the service and the shell icon loader.
+pub fn observe_icon_raster(non_fallback: bool) {
+    let Some(origin) = FIRST_ICON_REQUEST.get() else {
+        return;
+    };
+    if let Some(elapsed) = first_non_fallback_elapsed(
+        *origin,
+        std::time::Instant::now(),
+        non_fallback,
+        &FIRST_NON_FALLBACK_RECORDED,
+    ) {
+        flamewm_profiler::record_elapsed(FIRST_RASTER_LABEL, elapsed);
     }
 }
 
@@ -701,7 +963,7 @@ mod tests {
             Arc::clone(&shared_index),
         );
         assert!(
-            Arc::ptr_eq(service.shared_index(), &shared_index),
+            Arc::ptr_eq(&service.shared_index(), &shared_index),
             "service shares the one built index with zero rebuilds"
         );
         assert_eq!(service.worker_count(), 20);
@@ -766,6 +1028,162 @@ mod tests {
     }
 
     #[test]
+    fn installed_theme_index_bumps_generation_and_old_generation_keys_miss() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        assert_eq!(service.theme_generation(), 0);
+        let next = Arc::new(IconLookupIndex::new(
+            Vec::new(),
+            vec!["hicolor".to_owned()],
+            HashMap::new(),
+            HashMap::new(),
+            1,
+        ));
+        assert_eq!(service.install_theme_index(next), 1);
+        assert_eq!(service.theme_generation(), 1);
+        assert_eq!(service.shared_index().generation, 1);
+
+        let old_key = IconKey::new(
+            IconLookupPurpose::Application,
+            IconRequest::name("app"),
+            IconSize::new(16, 16),
+            0,
+            0,
+        );
+        let new_key = IconKey::new(
+            IconLookupPurpose::Application,
+            IconRequest::name("app"),
+            IconSize::new(16, 16),
+            service.theme_generation(),
+            0,
+        );
+        assert_ne!(old_key, new_key, "generation is part of key identity");
+
+        // A result completed under the old generation is cached under the old
+        // key only; the new generation key misses it and must re-resolve.
+        assert_eq!(
+            service.submit(IconJob {
+                key: old_key.clone(),
+                priority: IconPriority::High,
+            }),
+            Ok(IconSubmit::Enqueued)
+        );
+        service.take_ready().expect("old-generation job completes");
+        assert!(service.cached(&old_key).is_some());
+        assert!(service.cached(&new_key).is_none());
+    }
+
+    #[test]
+    fn late_theme_rebuild_result_cannot_replace_newer_installed_generation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        let index = |generation| {
+            Arc::new(IconLookupIndex::new(
+                Vec::new(),
+                vec!["hicolor".to_owned()],
+                HashMap::new(),
+                HashMap::new(),
+                generation,
+            ))
+        };
+
+        assert_eq!(service.install_theme_index(index(8)), 8);
+        // This models an asynchronous rebuild result based on a prior
+        // generation arriving after a distinct newer refresh was installed.
+        assert_eq!(service.install_theme_index(index(7)), 8);
+        assert_eq!(service.theme_generation(), 8);
+        assert_eq!(service.shared_index().generation, 8);
+    }
+
+    fn wait_until_idle<R: IconResolve>(service: &IconService<R>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !service.theme_rebuild_idle() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "theme rebuild thread did not finish within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn submitted_theme_rebuild_completes_off_thread_with_next_generation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-service-rebuild-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("watch root");
+        let mut stale = IconLookupIndex::new(
+            vec![root.clone()],
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+            3,
+        );
+        // Epoch mtime never matches the real root, so the check must rebuild.
+        stale.watch_mtime = Some(std::time::UNIX_EPOCH);
+        service.install_theme_index(Arc::new(stale));
+
+        assert!(service.request_theme_rebuild(), "check must queue");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let rebuilt = loop {
+            if let Some(index) = service.poll_theme_rebuild() {
+                break index;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "rebuilt index must arrive within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        wait_until_idle(&service);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(rebuilt.generation, 4, "rebuilt generation is installed + 1");
+        assert_eq!(service.install_theme_index(rebuilt), 4);
+        assert_eq!(service.theme_generation(), 4);
+        assert!(service.poll_theme_rebuild().is_none(), "result taken once");
+    }
+
+    #[test]
+    fn unchanged_theme_queues_check_but_yields_no_new_index() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        // Built index records the live watch mtime, so the check finds no change.
+        let current = IconLookupIndex::build(&[], &[], 5);
+        service.install_theme_index(Arc::new(current));
+
+        assert!(service.request_theme_rebuild(), "check must queue");
+        wait_until_idle(&service);
+        assert!(
+            service.poll_theme_rebuild().is_none(),
+            "unchanged theme must not produce a replacement index"
+        );
+        assert_eq!(service.theme_generation(), 5, "generation unchanged");
+        assert!(
+            service.request_theme_rebuild(),
+            "idle service accepts a new check"
+        );
+        wait_until_idle(&service);
+        assert!(service.poll_theme_rebuild().is_none());
+    }
+
+    #[test]
     fn high_replaces_queued_low_but_full_high_queue_returns_job() {
         let mut queue = Queue {
             high: VecDeque::new(),
@@ -800,6 +1218,30 @@ mod tests {
                 priority: IconPriority::Low
             }),
             Ok(IconSubmit::DroppedLow)
+        );
+    }
+
+    #[test]
+    fn first_non_fallback_elapsed_fires_once_and_skips_fallbacks() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+
+        let origin = Instant::now();
+        let recorded = AtomicBool::new(false);
+        let fallback_at = origin + Duration::from_millis(5);
+        assert_eq!(
+            first_non_fallback_elapsed(origin, fallback_at, false, &recorded),
+            None
+        );
+        let first_at = origin + Duration::from_millis(12);
+        assert_eq!(
+            first_non_fallback_elapsed(origin, first_at, true, &recorded),
+            Some(Duration::from_millis(12))
+        );
+        let second_at = origin + Duration::from_millis(40);
+        assert_eq!(
+            first_non_fallback_elapsed(origin, second_at, true, &recorded),
+            None
         );
     }
 }

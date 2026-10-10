@@ -50,6 +50,8 @@ pub enum IconRole {
     Logout,
     Reboot,
     Shutdown,
+    /// Generic application glyph for app icon misses (never brand artwork).
+    Application,
 }
 
 impl IconRole {
@@ -102,6 +104,7 @@ impl IconRole {
             Self::Logout => "assets/web/breeze/system-log-out.svg",
             Self::Reboot => "assets/web/breeze/system-reboot.svg",
             Self::Shutdown => "assets/web/breeze/system-shutdown.svg",
+            Self::Application => "assets/web/breeze/application-menu.svg",
         };
         IconSource {
             path,
