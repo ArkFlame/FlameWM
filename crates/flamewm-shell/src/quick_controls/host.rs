@@ -1146,10 +1146,6 @@ fn create_surface(
         .map_err(|error| format!("{error:?}"))
 }
 
-fn ui_error(error: UiBackendError) -> String {
-    format!("{error:?}")
-}
-
 /// Parent-side helper: restart the supervisor with the J07 static span
 /// (shell.quick_control.restart). Failures are nonfatal: the caller logs
 /// and keeps the shell running without quick-control popups.

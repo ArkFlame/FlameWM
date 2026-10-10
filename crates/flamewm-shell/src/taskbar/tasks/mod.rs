@@ -1,11 +1,10 @@
 use super::intent::TaskbarIntent;
-use flamewm_api::applications::DesktopApplication;
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::{DesktopAppId, TaskEntryId, WindowRef};
 use flamewm_control_core::ControlRequest;
 use flamewm_platform::task::{ReorderSession, TaskStrip};
-use flamewm_shell_core::{task_click_action, task_visual_states, TaskClickAction, TaskVisualState};
+use flamewm_shell_core::{task_click_action, TaskClickAction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskIntent {
@@ -102,16 +101,6 @@ impl TaskReorderSession {
 
 fn current_ids(panels: &PanelsSnapshot) -> Vec<TaskEntryId> {
     panels.tasks.iter().map(|entry| entry.id.clone()).collect()
-}
-
-#[must_use]
-pub fn project(
-    panels: &PanelsSnapshot,
-    windows: &[WindowSnapshot],
-    apps: &[DesktopApplication],
-) -> Vec<TaskVisualState> {
-    let _span = crate::runtime::shell_span("shell.tasks.project").start();
-    task_visual_states(panels, windows, apps)
 }
 
 #[must_use]

@@ -66,16 +66,6 @@ pub fn fit_helper(request: &OpenRequest, intrinsic: Size) -> Result<Rect, PopupE
     )
 }
 
-/// Measure + fit in one turn for callers that do not split stages.
-pub fn measure_and_fit(
-    runtime: &mut SurfaceRuntime,
-    popup: SurfaceHandle,
-    request: &OpenRequest,
-) -> Result<Rect, PopupError> {
-    let intrinsic = measure_helper(runtime, popup, request)?;
-    fit_helper(request, intrinsic)
-}
-
 /// Prepare (`move_resize`) turn; refuses degenerate rects.
 pub fn prepare_commit(
     runtime: &mut SurfaceRuntime,

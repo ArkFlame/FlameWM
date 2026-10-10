@@ -13,7 +13,6 @@ pub mod quick_controls;
 pub mod runtime;
 pub mod start;
 pub mod status;
-pub mod tasks;
 
 /// The active taskbar status projection is compiled without activating stale
 /// taskbar controllers that target an older control contract.

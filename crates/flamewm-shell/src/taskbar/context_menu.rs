@@ -1,7 +1,6 @@
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
-use flamewm_api::WindowRef;
 use flamewm_ui_core::MenuEntry;
 
 pub use flamewm_shell_core::menu_policy::{
@@ -11,12 +10,6 @@ pub use flamewm_shell_core::menu_policy::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
-    MinimizeWindow(WindowRef),
-    RestoreWindow(WindowRef),
-    PinApp {
-        app: flamewm_api::DesktopAppId,
-        expected_revision: u64,
-    },
     ActivateWorkspace {
         index: usize,
         expected_revision: u64,
@@ -36,15 +29,6 @@ impl ContextAction {
     pub fn into_control_request(self) -> flamewm_control_core::ControlRequest {
         use flamewm_control_core::ControlRequest;
         match self {
-            Self::MinimizeWindow(window) => ControlRequest::MinimizeWindow(window),
-            Self::RestoreWindow(window) => ControlRequest::RestoreWindow(window),
-            Self::PinApp {
-                app,
-                expected_revision,
-            } => ControlRequest::PinApp {
-                app,
-                expected_revision,
-            },
             Self::ActivateWorkspace {
                 index,
                 expected_revision,
