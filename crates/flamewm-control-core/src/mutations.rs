@@ -42,7 +42,9 @@ impl MutationLane {
             ControlRequest::SetShortcut { .. }
             | ControlRequest::ClearShortcut { .. }
             | ControlRequest::ResetShortcut { .. }
-            | ControlRequest::ApplyShortcuts { .. } => Self::Shortcuts,
+            | ControlRequest::ApplyShortcuts { .. }
+            | ControlRequest::BeginHotkeyCapture { .. }
+            | ControlRequest::EndHotkeyCapture { .. } => Self::Shortcuts,
             ControlRequest::SetPanelEdge { .. }
             | ControlRequest::SetPanelSize { .. }
             | ControlRequest::PinApp { .. }
@@ -216,7 +218,7 @@ impl ControlMutationQueue {
     }
 
     /// Called only by the worker thread after executing a mutation.
-    pub fn push_result(&self, result: ControlMutationResult) {
+    pub fn push_result(&self, result: ControlMutationResult) -> std::io::Result<()> {
         {
             let mut inner = self.lock();
             inner.results.push_back(result);
@@ -226,7 +228,7 @@ impl ControlMutationQueue {
             .wake_writer
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let _ = writer.write_all(&[1]);
+        writer.write_all(&[1])
     }
 
     /// Nonblocking result drain for the reactor turn.
@@ -286,24 +288,36 @@ impl ControlMutationQueue {
     /// Sleep-free readiness probe: nonblocking read of one wake byte, then
     /// re-arm so the reactor pairing (one byte per queued result) is
     /// preserved. Returns true when a result wake was pending.
-    pub fn wake_ready_probe(&self) -> bool {
+    pub fn wake_ready_probe(&self) -> std::io::Result<bool> {
         use std::io::Read;
         let mut byte = [0_u8; 1];
-        let fired = {
+        let read = {
             let mut reader = self
                 .wake_reader
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            matches!(reader.read(&mut byte), Ok(1))
+            reader.read(&mut byte)
+        };
+        let fired = match read {
+            Ok(1) => true,
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "mutation queue wake reader reached EOF",
+                ));
+            }
+            Ok(_) => unreachable!("one-byte wake probe cannot read more than one byte"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(error) => return Err(error),
         };
         if fired {
             let mut writer = self
                 .wake_writer
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            let _ = writer.write_all(&byte);
+            writer.write_all(&byte)?;
         }
-        fired
+        Ok(fired)
     }
 
     #[must_use]
@@ -338,7 +352,8 @@ mod tests {
             id: mutation.id,
             lane: mutation.lane,
             outcome,
-        });
+        })
+        .expect("write mutation wake byte");
     }
 
     #[test]
@@ -418,7 +433,12 @@ mod tests {
             .expect("submit");
         let pending = queue.take_pending().expect("pending");
         execute_inline(&queue, pending);
-        assert!(queue.wake_ready_probe(), "wake fd must fire without sleep");
+        assert!(
+            queue
+                .wake_ready_probe()
+                .expect("read and re-arm wake byte"),
+            "wake fd must fire without sleep"
+        );
         let result = queue.try_recv_result().expect("drain");
         assert_eq!(result.id, id);
     }

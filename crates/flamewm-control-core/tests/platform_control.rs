@@ -500,6 +500,39 @@ fn canonical_dbus_protocol_keeps_snapshot_signals_with_legacy_compat() {
 }
 
 #[test]
+fn canonical_dbus_displays_snapshot_signal_matches_wire_contract() {
+    const XML: &str = include_str!("../protocol/com.arkflame.FlameWM1.xml");
+    let interface = XML
+        .split("<interface name=\"com.arkflame.FlameWM1.Displays\">")
+        .nth(1)
+        .and_then(|body| body.split("</interface>").next())
+        .expect("Displays interface is declared");
+    let signal = interface
+        .split("<signal name=\"DisplaysSnapshotChanged\">")
+        .nth(1)
+        .and_then(|body| body.split("</signal>").next())
+        .expect("DisplaysSnapshotChanged signal is declared");
+    assert!(signal.contains("<arg name=\"snapshot\" type=\"a{sv}\"/>"));
+
+    // The active wire contract places this signal on Displays with one dict snapshot.
+    assert!(interface.contains("DisplaysSnapshotChanged"));
+    assert_eq!(signal.matches("<arg ").count(), 1);
+}
+
+#[test]
+fn canonical_dbus_start_menu_toggle_signal_matches_wire_contract() {
+    const XML: &str = include_str!("../protocol/com.arkflame.FlameWM1.xml");
+    let root = XML
+        .split("<interface name=\"com.arkflame.FlameWM1\">")
+        .nth(1)
+        .and_then(|body| body.split("</interface>").next())
+        .expect("root interface is declared");
+    assert!(root.contains("<signal name=\"StartMenuToggleRequested\"/>"));
+    // Self-closing tag: the start-menu request is one zero-argument signal on the root object.
+    assert_eq!(root.matches("<signal ").count(), 1);
+}
+
+#[test]
 fn canonical_dbus_protocol_keeps_v8_identity_based_reorder() {
     const XML: &str = include_str!("../protocol/com.arkflame.FlameWM1.xml");
     assert!(XML.contains("<method name=\"Reorder\">"));

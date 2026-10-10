@@ -32,6 +32,11 @@ impl SessionPaths {
     }
 
     #[must_use]
+    pub fn desktop_binary(&self) -> PathBuf {
+        self.bindir.join("flamewm-desktop")
+    }
+
+    #[must_use]
     pub fn config_dir(&self) -> PathBuf {
         self.config_home.join("flamewm")
     }
@@ -55,6 +60,7 @@ impl SessionPaths {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRole {
     WindowManager,
+    Desktop,
     Shell,
 }
 
@@ -128,6 +134,13 @@ pub fn build_launch_plan_with_cursor_library_path(
                 required: true,
             },
             ProcessPlan {
+                role: SessionRole::Desktop,
+                program: paths.desktop_binary(),
+                arguments: Vec::new(),
+                environment: environment.clone(),
+                required: true,
+            },
+            ProcessPlan {
                 role: SessionRole::Shell,
                 program: paths.shell_binary(),
                 arguments: Vec::new(),
@@ -181,9 +194,15 @@ fn flame_environment(
             .cloned()
             .unwrap_or_else(|| "1".to_owned()),
     );
+    // An inherited FLAMEWM_CONFIG_DIR (isolated runs, tests) wins over the
+    // session default; overwriting it sent the WM to ~/.config/flamewm.
     environment.insert(
         "FLAMEWM_CONFIG_DIR".to_owned(),
-        paths.config_dir().display().to_string(),
+        existing_env
+            .get("FLAMEWM_CONFIG_DIR")
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .unwrap_or_else(|| paths.config_dir().display().to_string()),
     );
     environment.insert("FLAMEWM_DESKTOP".to_owned(), "FlameWM".to_owned());
     environment.insert(
@@ -360,12 +379,26 @@ mod tests {
     fn launch_plan_contains_only_flamewm_owned_processes() {
         let paths = default_paths_from_home("/usr/bin", "/home/test");
         let plan = build_launch_plan(&paths, &[], &BTreeMap::new());
-        assert_eq!(plan.processes.len(), 2);
-        assert_eq!(plan.processes[0].program, PathBuf::from("/usr/bin/flamewm"));
+        assert_eq!(plan.processes.len(), 3);
+        assert_eq!(plan.processes[0].role, SessionRole::WindowManager);
+        assert_eq!(plan.processes[0].program, paths.flamewm_binary());
+        assert_eq!(
+            plan.processes[1].role,
+            SessionRole::Desktop
+        );
         assert_eq!(
             plan.processes[1].program,
-            PathBuf::from("/usr/bin/flamewm-shell")
+            paths.desktop_binary()
         );
+        assert_eq!(plan.processes[1].arguments, Vec::<String>::new());
+        assert!(plan.processes[1].required);
+        assert_eq!(plan.processes[2].role, SessionRole::Shell);
+        assert_eq!(
+            plan.processes[2].program,
+            paths.shell_binary()
+        );
+        assert_eq!(plan.processes[2].arguments, Vec::<String>::new());
+        assert!(plan.processes[2].required);
     }
 
     #[test]

@@ -121,6 +121,7 @@ pub enum ControlRequest {
     },
     KeepDisplayMode {
         transaction: TransactionId,
+        now_ms: u64,
     },
     RevertDisplayMode {
         transaction: TransactionId,
@@ -147,6 +148,16 @@ pub enum ControlRequest {
     ApplyShortcuts {
         bindings: BTreeMap<String, KeyBinding>,
         expected_revision: u64,
+    },
+    /// Suspends every WM shortcut grab so Settings receives raw keys (bare Super included).
+    /// Refused with `Busy` while another lease is held. Restored by `EndHotkeyCapture`.
+    BeginHotkeyCapture {
+        action: String,
+        expected_revision: u64,
+    },
+    /// Ends the lease returned by `BeginHotkeyCapture` and restores the grab set.
+    EndHotkeyCapture {
+        lease: u64,
     },
     GetPanels,
     SetPanelEdge {
@@ -194,6 +205,7 @@ pub enum ControlResponse {
     Displays(DisplaySnapshot),
     Transaction(TransactionId),
     Shortcuts(ShortcutSnapshot),
+    CaptureLease(u64),
     Panels(PanelsSnapshot),
     SessionCapabilities(SessionCapabilities),
     Changed(bool),
@@ -341,8 +353,11 @@ impl Dispatcher {
                 expected_generation,
                 now_ms,
             )?),
-            ControlRequest::KeepDisplayMode { transaction } => {
-                host.keep_display_mode(transaction)?;
+            ControlRequest::KeepDisplayMode {
+                transaction,
+                now_ms,
+            } => {
+                host.keep_display_mode(transaction, now_ms)?;
                 ControlResponse::Unit
             }
             ControlRequest::RevertDisplayMode { transaction } => {
@@ -386,6 +401,17 @@ impl Dispatcher {
                 expected_revision,
             } => {
                 host.apply_shortcuts(&bindings, expected_revision)?;
+                ControlResponse::Unit
+            }
+            ControlRequest::BeginHotkeyCapture {
+                action,
+                expected_revision,
+            } => ControlResponse::CaptureLease(host.begin_hotkey_capture(
+                &action,
+                expected_revision,
+            )?),
+            ControlRequest::EndHotkeyCapture { lease } => {
+                host.end_hotkey_capture(lease)?;
                 ControlResponse::Unit
             }
             ControlRequest::GetPanels => ControlResponse::Panels(host.panels_snapshot()),

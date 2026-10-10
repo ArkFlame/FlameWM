@@ -118,7 +118,7 @@ impl MutationDispatcher {
                         message: "mutation worker bus unavailable".to_owned(),
                     }),
                 };
-                queue.push_result(ControlMutationResult {
+                let _ = queue.push_result(ControlMutationResult {
                     id: mutation.id,
                     lane: mutation.lane,
                     outcome,
@@ -198,7 +198,8 @@ pub fn drain_queue_inline(queue: &ControlMutationQueue) -> Vec<u64> {
             id,
             lane,
             outcome: Ok(ControlResponse::Unit),
-        });
+        })
+        .expect("write mutation wake byte");
         order.push(id);
     }
     order
@@ -277,7 +278,12 @@ mod tests {
             .submit(MutationLane::System, ControlRequest::Ping)
             .expect("submit");
         drain_queue_inline(&queue);
-        assert!(queue.wake_ready_probe(), "wake fd must fire without sleep");
+        assert!(
+            queue
+                .wake_ready_probe()
+                .expect("read and re-arm wake byte"),
+            "wake fd must fire without sleep"
+        );
         assert!(queue.try_recv_result().is_some());
     }
 

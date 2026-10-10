@@ -4,6 +4,7 @@ pub mod mutation_queue;
 
 pub use mutation_queue::{MutationDispatcher, drain_queue_inline};
 
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::time::Duration;
 
@@ -12,7 +13,9 @@ use dbus::strings::ErrorName;
 use dbus::{Message, MessageType, Signature};
 use flamewm_api::ports::EnginePorts;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
-use flamewm_control_core::{ControlError, ControlRequest, Dispatcher, OBJECT_PATH};
+use flamewm_control_core::{
+    ControlError, ControlRequest, ControlResponse, Dispatcher, OBJECT_PATH,
+};
 use flamewm_control_wire::{
     ControlSignal, WireCall, WireReply, WireSignal, WireValue, decode_call, decode_reply,
     decode_signal, encode_call, encode_reply, encode_signal,
@@ -23,14 +26,17 @@ use flamewm_platform::host::PlatformHost;
 pub struct ControlServer {
     pump: BusPump,
     dispatcher: Dispatcher,
+    capture_owner: RefCell<CaptureOwner>,
 }
 
 impl ControlServer {
     pub fn connect(pump: BusPump) -> FlameResult<Self> {
         pump.own_name(flamewm_control_core::BUS_NAME)?;
+        add_match_rule(&pump, OWNER_CHANGED_RULE)?;
         Ok(Self {
             pump,
             dispatcher: Dispatcher::new(),
+            capture_owner: RefCell::new(CaptureOwner::default()),
         })
     }
 
@@ -45,14 +51,19 @@ impl ControlServer {
     ) -> FlameResult<usize> {
         let pump = &self.pump;
         let dispatcher = &self.dispatcher;
+        let capture_owner = &self.capture_owner;
         pump.on_ready(|message| {
+            if let Some(name) = name_owner_lost(message) {
+                release_lost_capture_owner(dispatcher, host, capture_owner, &name);
+                return MessageDisposition::Unhandled;
+            }
             if message.msg_type() != MessageType::MethodCall
                 || message.path().map(|path| path.to_string()) != Some(OBJECT_PATH.to_owned())
             {
                 return MessageDisposition::Unhandled;
             }
-            let result =
-                handle_call(dispatcher, host, message, now_ms).and_then(|(reply, signals)| {
+            let result = handle_call(dispatcher, host, capture_owner, message, now_ms).and_then(
+                |(reply, signals)| {
                     if let Some(reply) = reply {
                         pump.send(reply)?;
                     }
@@ -60,7 +71,8 @@ impl ControlServer {
                         send_signal(pump, &signal)?;
                     }
                     Ok(())
-                });
+                },
+            );
             if let Err(error) = result {
                 if !message.get_no_reply() {
                     if let Ok(name) = ErrorName::new(error_name(&error)) {
@@ -87,6 +99,7 @@ impl ControlServer {
 fn handle_call<E: EnginePorts>(
     dispatcher: &Dispatcher,
     host: &mut PlatformHost<E>,
+    capture_owner: &RefCell<CaptureOwner>,
     message: &Message,
     now_ms: u64,
 ) -> FlameResult<(Option<Message>, Vec<ControlSignal>)> {
@@ -105,6 +118,18 @@ fn handle_call<E: EnginePorts>(
         .collect::<Result<Vec<_>, _>>()?;
     let call = WireCall::new(interface, member, args).with_now_ms(now_ms);
     let request = decode_call(&call).map_err(to_flame_error)?;
+    let sender = message
+        .sender()
+        .map(|name| name.to_string())
+        .unwrap_or_default();
+    let mut ended_lease = None;
+    if let ControlRequest::EndHotkeyCapture { lease } = &request {
+        capture_owner
+            .borrow()
+            .authorize_end(&sender, *lease)
+            .map_err(to_flame_error)?;
+        ended_lease = Some(*lease);
+    }
     let settings_keys = match &request {
         ControlRequest::ApplySettings(transaction) => Some(
             transaction
@@ -116,8 +141,14 @@ fn handle_call<E: EnginePorts>(
         _ => None,
     };
     let response = dispatcher.dispatch(host, request).map_err(to_flame_error)?;
+    if let ControlResponse::CaptureLease(lease) = &response {
+        capture_owner.borrow_mut().record_begin(&sender, *lease);
+    }
+    if let Some(lease) = ended_lease {
+        capture_owner.borrow_mut().record_end(lease);
+    }
     let signals = match (settings_keys, &response) {
-        (Some(keys), flamewm_control_core::ControlResponse::Settings(snapshot)) => vec![
+        (Some(keys), ControlResponse::Settings(snapshot)) => vec![
             ControlSignal::SettingsSnapshotChanged {
                 snapshot: snapshot.clone(),
             },
@@ -142,6 +173,87 @@ fn handle_call<E: EnginePorts>(
             .map_err(|error| invalid(&error))?,
     );
     Ok((Some(output), signals))
+}
+
+/// Restores the grab set when the bus client that owns a hotkey capture lease disconnects.
+/// The lease is kept on a failed restore so a later owner-loss signal or End can retry.
+fn release_lost_capture_owner<E: EnginePorts>(
+    dispatcher: &Dispatcher,
+    host: &mut PlatformHost<E>,
+    capture_owner: &RefCell<CaptureOwner>,
+    name: &str,
+) {
+    let Some(lease) = capture_owner.borrow().owner_lease(name) else {
+        return;
+    };
+    match dispatcher.dispatch(host, ControlRequest::EndHotkeyCapture { lease }) {
+        Ok(_) => capture_owner.borrow_mut().record_end(lease),
+        Err(error) if error.code == ErrorCode::NotFound => {
+            capture_owner.borrow_mut().record_end(lease);
+        }
+        Err(error) => eprintln!(
+            "flamewm: hotkey capture restore after owner {name} left failed: {}",
+            error.message
+        ),
+    }
+}
+
+/// Owner rules for the single hotkey capture lease. The lease id is per-WM-process and not a
+/// secret, so the bus sender that began the lease is the only client allowed to end it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CaptureOwner {
+    active: Option<(String, u64)>,
+}
+
+impl CaptureOwner {
+    pub fn record_begin(&mut self, sender: &str, lease: u64) {
+        self.active = Some((sender.to_owned(), lease));
+    }
+
+    pub fn record_end(&mut self, lease: u64) {
+        if matches!(&self.active, Some((_, held)) if *held == lease) {
+            self.active = None;
+        }
+    }
+
+    /// Refuses an End for the held lease from any sender other than its owner. Other ids pass to
+    /// the dispatcher, which reports `NotFound` or `Conflict` without changing grabs.
+    pub fn authorize_end(&self, sender: &str, lease: u64) -> Result<(), ControlError> {
+        match &self.active {
+            Some((owner, held)) if *held == lease && owner != sender => Err(ControlError {
+                name: flamewm_control_core::error_name(ErrorCode::PermissionDenied),
+                code: ErrorCode::PermissionDenied,
+                message: "hotkey capture belongs to another client".to_owned(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    #[must_use]
+    pub fn owner_lease(&self, name: &str) -> Option<u64> {
+        match &self.active {
+            Some((owner, lease)) if owner == name => Some(*lease),
+            _ => None,
+        }
+    }
+}
+
+const OWNER_CHANGED_RULE: &str = "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'";
+
+/// Returns the unique name when a `NameOwnerChanged` signal reports that name lost its owner.
+fn name_owner_lost(message: &Message) -> Option<String> {
+    if message.msg_type() != MessageType::Signal
+        || message.interface().map(|i| i.to_string()).as_deref() != Some("org.freedesktop.DBus")
+        || message.member().map(|m| m.to_string()).as_deref() != Some("NameOwnerChanged")
+    {
+        return None;
+    }
+    match message.get_items().as_slice() {
+        [MessageItem::Str(name), _, MessageItem::Str(new_owner)] if new_owner.is_empty() => {
+            Some(name.clone())
+        }
+        _ => None,
+    }
 }
 
 fn send_signal(pump: &BusPump, signal: &ControlSignal) -> FlameResult<()> {
@@ -174,6 +286,14 @@ impl ControlClient {
         &self,
         request: &ControlRequest,
     ) -> Result<flamewm_control_core::ControlResponse, ControlError> {
+        self.call_with_timeout(request, Duration::from_secs(10))
+    }
+
+    pub fn call_with_timeout(
+        &self,
+        request: &ControlRequest,
+        timeout: Duration,
+    ) -> Result<flamewm_control_core::ControlResponse, ControlError> {
         let call = encode_call(request)?;
         let message = Message::new_method_call(
             flamewm_control_core::BUS_NAME,
@@ -193,7 +313,7 @@ impl ControlClient {
         );
         let reply = self
             .pump
-            .send_with_reply(message, Duration::from_secs(10))
+            .send_with_reply(message, timeout)
             .map_err(control_error_from_transport)?;
         let values = reply
             .get_items()
@@ -241,6 +361,10 @@ fn signal_match_rule() -> String {
 }
 
 fn install_match_rule(pump: &BusPump) -> FlameResult<()> {
+    add_match_rule(pump, &signal_match_rule())
+}
+
+fn add_match_rule(pump: &BusPump, rule: &str) -> FlameResult<()> {
     let call = Message::new_method_call(
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
@@ -248,7 +372,7 @@ fn install_match_rule(pump: &BusPump) -> FlameResult<()> {
         "AddMatch",
     )
     .map_err(|error| invalid(&error))?;
-    let call = call.append1(signal_match_rule());
+    let call = call.append1(rule);
     pump.send_with_reply(call, Duration::from_secs(5))
         .map(|_| ())
 }
@@ -521,6 +645,14 @@ mod tests {
         assert_eq!(encode_signal(&decoded), expected);
     }
 
+    // TRIGGER: send the zero-argument StartMenuToggleRequested signal over the bus and decode it.
+    // OBSERVABLE: the decoded signal equals the emitted unit variant; no payload is required.
+    #[test]
+    fn start_menu_toggle_requested_round_trips_through_dbus() {
+        let signal = ControlSignal::StartMenuToggleRequested;
+        assert_eq!(decode_bus_signal(&signal_message(&signal)), Some(signal));
+    }
+
     // CONTRACT-REGRESSION: T12 ApplySettings success order is reply, snapshot signal, legacy signal.
     // TRIGGER: decode a revision N+1 reply followed by both ordered D-Bus signals.
     // OBSERVABLE: the snapshot-bearing signal is first; legacy compatibility follows it.
@@ -760,5 +892,59 @@ mod tests {
 
     fn client_transport_error_fixture(error: FlameError) -> ControlError {
         control_error_from_transport(error)
+    }
+}
+
+#[cfg(test)]
+mod capture_owner_tests {
+    use super::*;
+
+    #[test]
+    fn owner_disconnect_yields_the_lease_to_restore() {
+        let mut owner = CaptureOwner::default();
+        owner.record_begin(":1.42", 5);
+        assert_eq!(owner.owner_lease(":1.42"), Some(5));
+        owner.record_end(5);
+        assert_eq!(owner.owner_lease(":1.42"), None);
+    }
+
+    #[test]
+    fn unrelated_client_disconnect_keeps_the_lease() {
+        let mut owner = CaptureOwner::default();
+        owner.record_begin(":1.42", 5);
+        assert_eq!(owner.owner_lease(":1.7"), None);
+        assert_eq!(owner.owner_lease(":1.42"), Some(5), "owner still recorded");
+    }
+
+    #[test]
+    fn end_from_a_non_owner_is_refused_with_permission_denied() {
+        let mut owner = CaptureOwner::default();
+        owner.record_begin(":1.42", 5);
+        let error = owner.authorize_end(":1.7", 5).expect_err("non-owner end");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(owner.owner_lease(":1.42"), Some(5), "refusal keeps the lease");
+    }
+
+    #[test]
+    fn end_from_the_owner_is_authorized_and_clears_the_record() {
+        let mut owner = CaptureOwner::default();
+        owner.record_begin(":1.42", 5);
+        owner.authorize_end(":1.42", 5).expect("owner end");
+        owner.record_end(5);
+        assert_eq!(owner.owner_lease(":1.42"), None);
+    }
+
+    #[test]
+    fn end_with_a_stale_lease_id_does_not_clear_the_current_record() {
+        let mut owner = CaptureOwner::default();
+        owner.record_begin(":1.42", 5);
+        owner.record_end(4);
+        assert_eq!(owner.owner_lease(":1.42"), Some(5));
+    }
+
+    #[test]
+    fn no_recorded_lease_passes_authorization_to_the_dispatcher() {
+        let owner = CaptureOwner::default();
+        owner.authorize_end(":1.7", 1).expect("dispatcher reports NotFound");
     }
 }

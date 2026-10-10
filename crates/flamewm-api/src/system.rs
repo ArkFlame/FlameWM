@@ -43,6 +43,9 @@ pub struct NetworkSnapshot {
     pub wifi_enabled: bool,
     pub networking_enabled: bool,
     pub active_path: String,
+    /// Object path of the access point the wireless device is connected to (empty when none).
+    /// Additive: defaults to empty; compare against `NetworkAccessPointSnapshot::path`.
+    pub active_access_point_path: String,
     pub access_points: Vec<NetworkAccessPointSnapshot>,
     pub pending_secret: Option<NetworkSecretRequestSnapshot>,
 }
@@ -58,6 +61,7 @@ impl Default for NetworkSnapshot {
             wifi_enabled: false,
             networking_enabled: false,
             active_path: String::new(),
+            active_access_point_path: String::new(),
             access_points: Vec::new(),
             pending_secret: None,
         }

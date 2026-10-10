@@ -27,6 +27,14 @@ impl PanelService {
     }
 
     #[must_use]
+    pub fn work_area_view(&self) -> Vec<(OutputId, flamewm_api::Rect, flamewm_api::Rect, bool)> {
+        self.manager.panels().map(|panel| (
+            panel.output.clone(), panel.output_rect, panel.work_area(),
+            self.manager.primary_output() == Some(&panel.output),
+        )).collect()
+    }
+
+    #[must_use]
     pub fn tasks(&self) -> &TaskStrip {
         &self.tasks
     }

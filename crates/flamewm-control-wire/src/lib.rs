@@ -305,6 +305,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
             expect_arity(call, 1)?;
             Ok(ControlRequest::KeepDisplayMode {
                 transaction: TransactionId(required_u64(&call.args[0], "transaction")?),
+                now_ms: call.now_ms,
             })
         }
         (IFACE_DISPLAYS, "Revert") => {
@@ -324,6 +325,20 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
         }
         (IFACE_SHORTCUTS, "GetSnapshot") => {
             expect_arity(call, 0).map(|()| ControlRequest::GetShortcuts)
+        }
+        (IFACE_SHORTCUTS, "BeginCapture") => {
+            shortcut_action_request(call, |action, expected_revision| {
+                ControlRequest::BeginHotkeyCapture {
+                    action,
+                    expected_revision,
+                }
+            })
+        }
+        (IFACE_SHORTCUTS, "EndCapture") => {
+            expect_arity(call, 1)?;
+            Ok(ControlRequest::EndHotkeyCapture {
+                lease: required_u64(&call.args[0], "lease")?,
+            })
         }
         (IFACE_SHORTCUTS, "SetBinding") => {
             expect_arity(call, 3)?;
@@ -493,7 +508,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
                 WireValue::U64(*expected_generation),
             ],
         ),
-        ControlRequest::KeepDisplayMode { transaction } => {
+        ControlRequest::KeepDisplayMode { transaction, .. } => {
             WireCall::new(IFACE_DISPLAYS, "Keep", vec![WireValue::U64(transaction.0)])
         }
         ControlRequest::RevertDisplayMode { transaction } => WireCall::new(
@@ -515,6 +530,20 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             ],
         ),
         ControlRequest::GetShortcuts => WireCall::new(IFACE_SHORTCUTS, "GetSnapshot", Vec::new()),
+        ControlRequest::BeginHotkeyCapture {
+            action,
+            expected_revision,
+        } => WireCall::new(
+            IFACE_SHORTCUTS,
+            "BeginCapture",
+            vec![
+                WireValue::String(action.clone()),
+                WireValue::U64(*expected_revision),
+            ],
+        ),
+        ControlRequest::EndHotkeyCapture { lease } => {
+            WireCall::new(IFACE_SHORTCUTS, "EndCapture", vec![WireValue::U64(*lease)])
+        }
         ControlRequest::SetShortcut {
             action,
             binding,
@@ -696,6 +725,9 @@ pub fn encode_reply(
         (IFACE_SHORTCUTS, "GetSnapshot", ControlResponse::Shortcuts(snapshot)) => {
             vec![WireValue::Dict(shortcut_dict(snapshot))]
         }
+        (IFACE_SHORTCUTS, "BeginCapture", ControlResponse::CaptureLease(lease)) => {
+            vec![WireValue::U64(*lease)]
+        }
         (IFACE_PANELS, "GetSnapshot", ControlResponse::Panels(snapshot)) => {
             vec![WireValue::Dict(panels_dict(snapshot))]
         }
@@ -798,6 +830,13 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
                 "transaction",
             )?)))
         }
+        (IFACE_SHORTCUTS, "BeginCapture") => {
+            expect_reply_arity(reply, 1)?;
+            Ok(ControlResponse::CaptureLease(required_u64(
+                &reply.values[0],
+                "lease",
+            )?))
+        }
         (IFACE_SHORTCUTS, "GetSnapshot") => {
             expect_reply_arity(reply, 1)?;
             Ok(ControlResponse::Shortcuts(shortcut_snapshot(
@@ -846,7 +885,7 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
         }
         (IFACE_WORKSPACES, "Activate" | "InsertAfter" | "Remove")
         | (IFACE_DISPLAYS, "Keep" | "Revert" | "SetShellScale")
-        | (IFACE_SHORTCUTS, "SetBinding" | "ClearBinding" | "ResetBinding")
+        | (IFACE_SHORTCUTS, "SetBinding" | "ClearBinding" | "ResetBinding" | "EndCapture")
         | (IFACE_PANELS, "SetEdge" | "SetSize" | "Pin" | "Unpin" | "Reorder")
         | (IFACE_SESSION, "Lock" | "Logout" | "Suspend" | "Reboot" | "Shutdown")
         | (IFACE_WINDOWS, "ActivateWindow" | "MinimizeWindow" | "RestoreWindow" | "CloseWindow")
@@ -1218,11 +1257,15 @@ pub enum ControlSignal {
     TopologyChanged {
         generation: u64,
     },
+    DisplaysSnapshotChanged {
+        snapshot: DisplaySnapshot,
+    },
     DisplayTransactionChanged {
         transaction: u64,
         state: String,
         deadline_ms: u64,
     },
+    StartMenuToggleRequested,
     ShortcutsChanged {
         revision: u64,
     },
@@ -1295,6 +1338,16 @@ pub fn encode_signal(signal: &ControlSignal) -> WireSignal {
         ControlSignal::TopologyChanged { generation } => {
             revision_signal(IFACE_DISPLAYS, "TopologyChanged", *generation)
         }
+        ControlSignal::DisplaysSnapshotChanged { snapshot } => WireSignal {
+            interface: IFACE_DISPLAYS.to_owned(),
+            member: "DisplaysSnapshotChanged".to_owned(),
+            args: vec![WireValue::Dict(display_dict(snapshot))],
+        },
+        ControlSignal::StartMenuToggleRequested => WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "StartMenuToggleRequested".to_owned(),
+            args: Vec::new(),
+        },
         ControlSignal::ShortcutsChanged { revision } => {
             revision_signal(IFACE_SHORTCUTS, "ShortcutsChanged", *revision)
         }
@@ -1372,6 +1425,16 @@ pub fn decode_signal(signal: &WireSignal) -> Result<ControlSignal, ControlError>
         (IFACE_DISPLAYS, "TopologyChanged") => Ok(ControlSignal::TopologyChanged {
             generation: signal_revision(&call)?,
         }),
+        (IFACE_DISPLAYS, "DisplaysSnapshotChanged") => {
+            expect_arity(&call, 1)?;
+            Ok(ControlSignal::DisplaysSnapshotChanged {
+                snapshot: display_snapshot(required_dict(&call.args[0], "snapshot")?)?,
+            })
+        }
+        (IFACE_ROOT, "StartMenuToggleRequested") => {
+            expect_arity(&call, 0)?;
+            Ok(ControlSignal::StartMenuToggleRequested)
+        }
         (IFACE_SHORTCUTS, "ShortcutsChanged") => Ok(ControlSignal::ShortcutsChanged {
             revision: signal_revision(&call)?,
         }),
@@ -1560,6 +1623,10 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
     out.insert(
         "networkActivePath".to_owned(),
         WireValue::String(snapshot.network.active_path.clone()),
+    );
+    out.insert(
+        "networkActiveAccessPointPath".to_owned(),
+        WireValue::String(snapshot.network.active_access_point_path.clone()),
     );
     out.insert(
         "accessPoints".to_owned(),
@@ -1804,6 +1871,11 @@ fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
             wifi_enabled: dict_bool(dict, "wifiEnabled")?,
             networking_enabled: dict_bool(dict, "networkingEnabled")?,
             active_path: dict_string(dict, "networkActivePath")?.to_owned(),
+            // Optional for older peers that predate this key: absent means no connected AP.
+            active_access_point_path: match dict.get("networkActiveAccessPointPath") {
+                Some(value) => required_string(value, "networkActiveAccessPointPath")?.to_owned(),
+                None => String::new(),
+            },
             access_points: dict_value(dict, "accessPoints").and_then(|value| {
                 required_array(value, "accessPoints")?
                     .iter()
@@ -1819,6 +1891,7 @@ fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
             } else {
                 None
             },
+            ..Default::default()
         },
         media: MediaSnapshot {
             availability: parse_availability(dict_string(dict, "mediaAvailability")?)?,
@@ -2659,6 +2732,23 @@ mod tests {
     }
 
     #[test]
+    fn keep_display_mode_uses_reactor_clock_for_deadline_enforcement() {
+        let call = WireCall::new(
+            IFACE_DISPLAYS,
+            "Keep",
+            vec![WireValue::U64(7)],
+        )
+        .with_now_ms(15_001);
+        assert_eq!(
+            decode_call(&call).expect("valid"),
+            ControlRequest::KeepDisplayMode {
+                transaction: TransactionId(7),
+                now_ms: 15_001,
+            }
+        );
+    }
+
+    #[test]
     fn v8_reorder_decodes_stable_entry_identity() {
         let call = WireCall::new(
             IFACE_PANELS,
@@ -2994,6 +3084,7 @@ mod tests {
                 wifi_enabled: true,
                 networking_enabled: true,
                 active_path: "/nm/ap/1".to_owned(),
+                active_access_point_path: "/nm/ap/1".to_owned(),
                 access_points: vec![NetworkAccessPointSnapshot {
                     path: "/nm/ap/1".to_owned(),
                     ssid: "ArkNet 5G".to_owned(),
@@ -3002,6 +3093,7 @@ mod tests {
                     known: true,
                 }],
                 pending_secret: None,
+                ..Default::default()
             },
             media: MediaSnapshot {
                 availability: ServiceAvailability::Available,
@@ -3186,6 +3278,36 @@ mod tests {
             decode_signal(&encode_signal(&legacy_panels)).expect("decode"),
             legacy_panels
         );
+        let displays = ControlSignal::DisplaysSnapshotChanged {
+            snapshot: DisplaySnapshot {
+                generation: 9,
+                outputs: Vec::new(),
+                pending: None,
+            },
+        };
+        assert_eq!(
+            decode_signal(&encode_signal(&displays)).expect("decode"),
+            displays
+        );
+    }
+
+    // Start-menu toggle is a zero-argument root-interface signal; it must survive the
+    // wire round trip as the unit variant and must reject a stray payload argument.
+    #[test]
+    fn start_menu_toggle_requested_round_trips_through_wire() {
+        let signal = ControlSignal::StartMenuToggleRequested;
+        let wire = encode_signal(&signal);
+        assert_eq!(wire.interface, IFACE_ROOT);
+        assert_eq!(wire.member, "StartMenuToggleRequested");
+        assert!(wire.args.is_empty());
+        assert_eq!(decode_signal(&wire), Ok(signal));
+
+        let with_payload = WireSignal {
+            interface: IFACE_ROOT.to_owned(),
+            member: "StartMenuToggleRequested".to_owned(),
+            args: vec![WireValue::U64(1)],
+        };
+        assert!(decode_signal(&with_payload).is_err());
     }
 
     // CONTRACT-REGRESSION: T05 SystemSnapshotChanged carries the complete authoritative snapshot.
@@ -3215,5 +3337,68 @@ mod tests {
 
         let legacy = ControlSignal::SystemChanged { revision: 12 };
         assert_eq!(decode_signal(&encode_signal(&legacy)), Ok(legacy));
+    }
+}
+
+#[cfg(test)]
+mod hotkey_capture_lease_wire_tests {
+    use super::*;
+
+    #[test]
+    fn begin_capture_request_and_lease_reply_round_trip_through_wire() {
+        let request = ControlRequest::BeginHotkeyCapture {
+            action: flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU.to_owned(),
+            expected_revision: 7,
+        };
+        let call = encode_call(&request).expect("encode request");
+        assert_eq!(call.interface, IFACE_SHORTCUTS);
+        assert_eq!(call.member, "BeginCapture");
+        assert_eq!(decode_call(&call).expect("decode request"), request);
+
+        let response = ControlResponse::CaptureLease(3);
+        let reply = encode_reply(&call, &response).expect("encode reply");
+        assert_eq!(reply.values, vec![WireValue::U64(3)]);
+        assert_eq!(decode_reply(&call, &reply).expect("decode reply"), response);
+    }
+
+    #[test]
+    fn end_capture_request_and_unit_reply_round_trip_through_wire() {
+        let request = ControlRequest::EndHotkeyCapture { lease: 3 };
+        let call = encode_call(&request).expect("encode request");
+        assert_eq!(call.interface, IFACE_SHORTCUTS);
+        assert_eq!(call.member, "EndCapture");
+        assert_eq!(call.args, vec![WireValue::U64(3)]);
+        assert_eq!(decode_call(&call).expect("decode request"), request);
+
+        let reply = encode_reply(&call, &ControlResponse::Unit).expect("encode reply");
+        assert!(reply.values.is_empty());
+        assert_eq!(
+            decode_reply(&call, &reply).expect("decode reply"),
+            ControlResponse::Unit
+        );
+    }
+
+    #[test]
+    fn capture_lease_calls_reject_wrong_arity_and_types() {
+        let begin_wrong_type = WireCall::new(
+            IFACE_SHORTCUTS,
+            "BeginCapture",
+            vec![WireValue::U64(1), WireValue::U64(1)],
+        );
+        assert!(decode_call(&begin_wrong_type).is_err());
+
+        let begin_short = WireCall::new(
+            IFACE_SHORTCUTS,
+            "BeginCapture",
+            vec![WireValue::String("x".to_owned())],
+        );
+        assert!(decode_call(&begin_short).is_err());
+
+        let end_wrong_type = WireCall::new(
+            IFACE_SHORTCUTS,
+            "EndCapture",
+            vec![WireValue::String("3".to_owned())],
+        );
+        assert!(decode_call(&end_wrong_type).is_err());
     }
 }

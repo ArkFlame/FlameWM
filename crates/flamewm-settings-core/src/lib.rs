@@ -3,7 +3,7 @@
 //! The GUI process is intentionally separate from the WM process. It owns only transient UI state
 //! and cached immutable snapshots; all authoritative mutations cross Flame Control.
 
-use flamewm_api::display::DisplaySnapshot;
+use flamewm_api::display::{DisplayMode, DisplaySnapshot};
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::settings::{
     AppearanceMode, SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction,
@@ -110,11 +110,16 @@ impl HotkeyCapture {
     }
 }
 
+/// Number of display-mode slots the Displays page exposes.
+pub const DISPLAY_MODE_SLOTS: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsUiState {
     pub page: SettingsPage,
     pub selected_output: Option<OutputId>,
     pub hotkey_capture: Option<HotkeyCapture>,
+    /// Server-owned grab suspension; shortcut writes are forbidden until it is ended.
+    pub hotkey_capture_lease: Option<u64>,
     pub pending_display_transaction: Option<TransactionId>,
 }
 
@@ -124,6 +129,7 @@ impl Default for SettingsUiState {
             page: SettingsPage::Appearance,
             selected_output: None,
             hotkey_capture: None,
+            hotkey_capture_lease: None,
             pending_display_transaction: None,
         }
     }
@@ -207,6 +213,67 @@ impl<T: ControlTransport> SettingsClient<T> {
             snapshot.pending.as_ref().map(|pending| pending.transaction);
         self.displays = Some(snapshot);
         Ok(())
+    }
+
+    /// First-page modes offered as selectable slots for the selected output, in
+    /// snapshot order. Slot `k` is `modes[k]`; later pages are available through
+    /// [`Self::display_mode_page`]. Modes beyond [`DISPLAY_MODE_SLOTS`] are
+    /// reported by [`Self::display_mode_overflow`].
+    #[must_use]
+    pub fn display_mode_slots(&self) -> &[DisplayMode] {
+        self.selected_output_modes()
+            .map_or(&[] as &[DisplayMode], |modes| {
+                &modes[..modes.len().min(DISPLAY_MODE_SLOTS)]
+            })
+    }
+
+    /// Number of selected-output modes beyond the first page.
+    #[must_use]
+    pub fn display_mode_overflow(&self) -> usize {
+        self.selected_output_modes()
+            .map_or(0, |modes| modes.len().saturating_sub(DISPLAY_MODE_SLOTS))
+    }
+
+    /// ModeId behind slot `slot` of the selected output, if that slot exists.
+    #[must_use]
+    pub fn display_mode_for_slot(&self, slot: usize) -> Option<ModeId> {
+        self.display_mode_slots().get(slot).map(|mode| mode.id)
+    }
+
+    /// ModeId at `index` across every mode of the selected output, including modes beyond
+    /// [`DISPLAY_MODE_SLOTS`] (indices `0..DISPLAY_MODE_SLOTS` are the slots, the rest overflow).
+    #[must_use]
+    pub fn display_mode_for_index(&self, index: usize) -> Option<ModeId> {
+        self.selected_output_modes()
+            .and_then(|modes| modes.get(index))
+            .map(|mode| mode.id)
+    }
+
+    /// Modes on one page of the selected output: `modes[page*8 .. min(len, (page+1)*8)]`.
+    /// Empty past the last page. Read-only: never changes selection or the snapshot cache.
+    #[must_use]
+    pub fn display_mode_page(&self, page: usize) -> &[DisplayMode] {
+        self.selected_output_modes().map_or(&[] as &[DisplayMode], |modes| {
+            let start = page.saturating_mul(DISPLAY_MODE_SLOTS).min(modes.len());
+            let end = start.saturating_add(DISPLAY_MODE_SLOTS).min(modes.len());
+            &modes[start..end]
+        })
+    }
+
+    /// Number of modes the selected output reports across all pages (0 when none).
+    #[must_use]
+    pub fn display_mode_count(&self) -> usize {
+        self.selected_output_modes().map_or(0, <[DisplayMode]>::len)
+    }
+
+    fn selected_output_modes(&self) -> Option<&[DisplayMode]> {
+        let output = self.ui.selected_output.as_ref()?;
+        self.displays
+            .as_ref()?
+            .outputs
+            .iter()
+            .find(|candidate| &candidate.id == output)
+            .map(|output| output.modes.as_slice())
     }
 
     pub fn refresh_shortcuts(&mut self) -> Result<(), ControlError> {
@@ -393,8 +460,34 @@ impl<T: ControlTransport> SettingsClient<T> {
         ])
     }
 
-    pub fn begin_hotkey_capture(&mut self, action: impl Into<String>) {
+    pub fn begin_hotkey_capture(&mut self, action: impl Into<String>) -> Result<(), ControlError> {
+        self.cancel_hotkey_capture()?;
+        let action = action.into();
+        let expected_revision = self
+            .shortcuts
+            .as_ref()
+            .map(|snapshot| snapshot.revision)
+            .ok_or_else(|| missing_snapshot("shortcut"))?;
+        let response = self.transport.call(ControlRequest::BeginHotkeyCapture {
+            action: action.clone(),
+            expected_revision,
+        })?;
+        let ControlResponse::CaptureLease(lease) = response else {
+            return Err(unexpected_response("hotkey capture lease"));
+        };
+        self.ui.hotkey_capture_lease = Some(lease);
         self.ui.hotkey_capture = Some(HotkeyCapture::new(action));
+        Ok(())
+    }
+
+    /// Ends the server grab lease and discards any locally captured key.
+    pub fn cancel_hotkey_capture(&mut self) -> Result<(), ControlError> {
+        if let Some(lease) = self.ui.hotkey_capture_lease {
+            expect_unit(self.transport.call(ControlRequest::EndHotkeyCapture { lease })?)?;
+        }
+        self.ui.hotkey_capture_lease = None;
+        self.ui.hotkey_capture = None;
+        Ok(())
     }
 
     pub fn capture_hotkey(&mut self, normalized_key: &str) -> bool {
@@ -406,14 +499,32 @@ impl<T: ControlTransport> SettingsClient<T> {
     }
 
     pub fn commit_hotkey_capture(&mut self) -> Result<(), ControlError> {
-        let Some(capture) = self.ui.hotkey_capture.take() else {
+        let Some(capture) = self.ui.hotkey_capture.as_ref() else {
             return Ok(());
         };
+        let capture = capture.clone();
+        let lease = self.ui.hotkey_capture_lease.ok_or_else(|| unexpected_response("hotkey capture lease"))?;
+        // Restore WM grabs before the shortcut mutation. If End fails, retain the lease
+        // and capture so the UI can retry or cancel instead of mutating under suspension.
+        expect_unit(self.transport.call(ControlRequest::EndHotkeyCapture { lease })?)?;
+        self.ui.hotkey_capture_lease = None;
+        self.ui.hotkey_capture = None;
         let expected_revision = self
             .shortcuts
             .as_ref()
             .map_or(0, |snapshot| snapshot.revision);
         let binding = capture.captured.unwrap_or_default();
+        let unchanged = self.shortcuts.as_ref().is_some_and(|snapshot| {
+            let assigned = snapshot
+                .bindings
+                .get(&capture.action)
+                .and_then(|flamewm_api::shortcuts::KeyBinding(value)| value.as_deref())
+                .filter(|value| !value.is_empty());
+            assigned == (!binding.is_empty()).then_some(binding.as_str())
+        });
+        if unchanged {
+            return Ok(());
+        }
         let request = if binding.is_empty() {
             ControlRequest::ClearShortcut {
                 action: capture.action,
@@ -431,6 +542,13 @@ impl<T: ControlTransport> SettingsClient<T> {
     }
 
     pub fn reset_hotkey(&mut self, action: impl Into<String>) -> Result<(), ControlError> {
+        if self.ui.hotkey_capture_lease.is_some() {
+            return Err(ControlError {
+                name: "com.arkflame.FlameWM1.Error.Busy",
+                code: flamewm_api::ErrorCode::Busy,
+                message: "end hotkey capture before changing shortcuts".to_owned(),
+            });
+        }
         let expected_revision = self
             .shortcuts
             .as_ref()
@@ -469,13 +587,13 @@ impl<T: ControlTransport> SettingsClient<T> {
         Ok(transaction)
     }
 
-    pub fn keep_display_mode(&mut self) -> Result<(), ControlError> {
+    pub fn keep_display_mode(&mut self, now_ms: u64) -> Result<(), ControlError> {
         let Some(transaction) = self.ui.pending_display_transaction else {
             return Ok(());
         };
         expect_unit(
             self.transport
-                .call(ControlRequest::KeepDisplayMode { transaction })?,
+                .call(ControlRequest::KeepDisplayMode { transaction, now_ms })?,
         )?;
         self.ui.pending_display_transaction = None;
         self.refresh_displays()
@@ -756,6 +874,15 @@ mod tests {
     #[test]
     fn escape_capture_commits_clear_binding() {
         let mut transport = FakeTransport::default();
+        transport.responses.push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+            revision: 1,
+            bindings: [(
+                "ToggleStartMenu".to_owned(),
+                flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())),
+            )].into_iter().collect(),
+        })));
+        transport.responses.push_back(Ok(ControlResponse::CaptureLease(9)));
+        transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport
             .responses
@@ -764,13 +891,103 @@ mod tests {
                 bindings: Default::default(),
             })));
         let mut client = SettingsClient::new(transport);
-        client.begin_hotkey_capture("ToggleStartMenu");
+        client.refresh_shortcuts().expect("initial shortcut snapshot");
+        client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
         assert!(client.capture_hotkey("Escape"));
         client.commit_hotkey_capture().expect("commit");
         assert_eq!(
             client.shortcuts().map(|snapshot| snapshot.revision),
             Some(2)
         );
+        assert_eq!(client.ui().hotkey_capture_lease, None);
+        assert!(matches!(
+            client.transport.requests.as_slice(),
+            [
+                ControlRequest::GetShortcuts,
+                ControlRequest::BeginHotkeyCapture { action, expected_revision: 1 },
+                ControlRequest::EndHotkeyCapture { lease: 9 },
+                ControlRequest::ClearShortcut { action: clear_action, expected_revision: 1 },
+                ControlRequest::GetShortcuts,
+            ] if action == "ToggleStartMenu" && clear_action == action
+        ));
+    }
+
+    #[test]
+    fn hotkey_cancel_restores_grabs_and_end_failure_blocks_mutation() {
+        let mut transport = FakeTransport::default();
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                revision: 3,
+                bindings: [("ToggleWorkspaceLeft".to_owned(),
+                    flamewm_api::shortcuts::KeyBinding(Some("Ctrl+Left".to_owned())))
+                ].into_iter().collect(),
+            })),
+            Ok(ControlResponse::CaptureLease(44)),
+            Err(ControlError {
+                name: "com.arkflame.FlameWM1.Error.Unavailable",
+                code: flamewm_api::ErrorCode::Unavailable,
+                message: "bus lost".to_owned(),
+            }),
+            Ok(ControlResponse::Unit),
+        ]);
+        let mut client = SettingsClient::new(transport);
+        client.refresh_shortcuts().expect("initial shortcut snapshot");
+        client.begin_hotkey_capture("ToggleWorkspaceLeft").expect("begin lease");
+        assert!(client.capture_hotkey("Super+Left"));
+        assert!(client.commit_hotkey_capture().is_err());
+        assert_eq!(client.ui().hotkey_capture_lease, Some(44));
+        assert_eq!(client.transport.requests.len(), 3, "snapshot, lease acquisition, and failed End; no shortcut mutation");
+        assert!(matches!(
+            client.transport.requests.as_slice(),
+            [
+                ControlRequest::GetShortcuts,
+                ControlRequest::BeginHotkeyCapture { action, expected_revision: 3 },
+                ControlRequest::EndHotkeyCapture { lease: 44 },
+            ] if action == "ToggleWorkspaceLeft"
+        ));
+        assert_eq!(
+            client.shortcuts().and_then(|snapshot| snapshot.bindings.get("ToggleWorkspaceLeft")),
+            Some(&flamewm_api::shortcuts::KeyBinding(Some("Ctrl+Left".to_owned()))),
+            "failed lease end preserves the authoritative binding"
+        );
+        client.cancel_hotkey_capture().expect("retry lease end");
+        assert_eq!(client.ui().hotkey_capture_lease, None);
+        assert_eq!(client.ui().hotkey_capture, None);
+        assert!(matches!(
+            client.transport.requests.as_slice(),
+            [
+                ControlRequest::GetShortcuts,
+                ControlRequest::BeginHotkeyCapture { expected_revision: 3, .. },
+                ControlRequest::EndHotkeyCapture { lease: 44 },
+                ControlRequest::EndHotkeyCapture { lease: 44 },
+            ]
+        ));
+    }
+
+    #[test]
+    fn unchanged_capture_ends_lease_without_shortcut_mutation() {
+        let mut transport = FakeTransport::default();
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                revision: 8,
+                bindings: [("ToggleStartMenu".to_owned(), flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())))].into_iter().collect(),
+            })),
+            Ok(ControlResponse::CaptureLease(23)),
+            Ok(ControlResponse::Unit),
+        ]);
+        let mut client = SettingsClient::new(transport);
+        client.refresh_shortcuts().expect("initial snapshot");
+        client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
+        assert!(client.capture_hotkey("Super"));
+        client.commit_hotkey_capture().expect("unchanged capture");
+        assert!(matches!(
+            client.transport.requests.as_slice(),
+            [
+                ControlRequest::GetShortcuts,
+                ControlRequest::BeginHotkeyCapture { expected_revision: 8, .. },
+                ControlRequest::EndHotkeyCapture { lease: 23 },
+            ]
+        ));
     }
 
     #[test]
@@ -1060,6 +1277,105 @@ mod tests {
                 "Hotkeys",
                 "About"
             ]
+        );
+    }
+
+    /// Fake two-output topology: DP-B (primary, selected by default) has 12 modes, DP-A has 2.
+    fn two_output_display_snapshot() -> DisplaySnapshot {
+        let mode = |id: u64| DisplayMode {
+            id: ModeId(id),
+            resolution: Size::new(640 + id as i32, 360),
+            refresh_millihz: 60_000,
+            preferred: false,
+        };
+        let output = |id: &str, primary: bool, current: u64, modes: Vec<DisplayMode>| OutputSnapshot {
+            id: OutputId::new(id),
+            connector: id.to_owned(),
+            edid_identity: format!("edid-{id}"),
+            connected: true,
+            primary,
+            geometry: Rect::new(0, 0, 1920, 1080),
+            current_mode: ModeId(current),
+            modes,
+            shell_scale_percent: 100,
+        };
+        DisplaySnapshot {
+            generation: 5,
+            outputs: vec![
+                output("DP-A", false, 1, vec![mode(1), mode(2)]),
+                output("DP-B", true, 101, (101..=112).map(mode).collect()),
+            ],
+            pending: None,
+        }
+    }
+
+    #[test]
+    fn two_output_fixture_reaches_every_mode_and_begins_exact_output_and_mode() {
+        let mut transport = FakeTransport::default();
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
+        for transaction in 1..=13 {
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Transaction(TransactionId(transaction))));
+        }
+        let mut client = SettingsClient::new(transport);
+        client.refresh_displays().expect("refresh");
+        assert_eq!(
+            client.ui().selected_output.as_ref().map(|id| id.as_str()),
+            Some("DP-B")
+        );
+
+        // Slots cover the first DISPLAY_MODE_SLOTS modes; the rest are overflow but still reachable.
+        let slots: Vec<ModeId> = client.display_mode_slots().iter().map(|m| m.id).collect();
+        assert_eq!(slots, (101..=108).map(ModeId).collect::<Vec<_>>());
+        assert_eq!(client.display_mode_overflow(), 12 - DISPLAY_MODE_SLOTS);
+        assert_eq!(client.display_mode_for_slot(8), None);
+        let reachable: Vec<ModeId> = (0..12)
+            .filter_map(|index| client.display_mode_for_index(index))
+            .collect();
+        assert_eq!(reachable, (101..=112).map(ModeId).collect::<Vec<_>>());
+        assert_eq!(client.display_mode_for_index(12), None);
+
+        // Selected/current state of the selected output.
+        let current = client
+            .displays()
+            .and_then(|snapshot| snapshot.outputs.iter().find(|o| o.id.as_str() == "DP-B"))
+            .map(|output| output.current_mode);
+        assert_eq!(current, Some(ModeId(101)));
+
+        // Every B mode, slot and overflow alike, produces a BeginDisplayMode for DP-B and that ModeId.
+        for index in 0..12u64 {
+            let mode = client.display_mode_for_index(index as usize).expect("mode");
+            client.begin_display_mode(mode, 1000 + index).expect("begin");
+            assert_eq!(
+                client.transport.requests[index as usize + 1],
+                ControlRequest::BeginDisplayMode {
+                    output: OutputId::new("DP-B"),
+                    mode: ModeId(101 + index),
+                    expected_generation: 5,
+                    now_ms: 1000 + index,
+                }
+            );
+        }
+        assert_eq!(
+            client.ui().pending_display_transaction,
+            Some(TransactionId(12))
+        );
+
+        // Switching to the two-mode output begins on DP-A with its own ModeId.
+        assert!(client.select_output(&OutputId::new("DP-A")));
+        assert_eq!(client.display_mode_for_index(1), Some(ModeId(2)));
+        client.begin_display_mode(ModeId(2), 2000).expect("begin on DP-A");
+        assert_eq!(
+            client.transport.requests.last(),
+            Some(&ControlRequest::BeginDisplayMode {
+                output: OutputId::new("DP-A"),
+                mode: ModeId(2),
+                expected_generation: 5,
+                now_ms: 2000,
+            })
         );
     }
 }

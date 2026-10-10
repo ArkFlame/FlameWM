@@ -2,7 +2,7 @@ use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::{DesktopAppId, ErrorCode, FlameError, FlameResult};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopEntry {
@@ -104,7 +104,7 @@ impl DesktopEntry {
         expand_exec_with_path(&self.exec, &self.application, &self.path, options)
     }
 
-    pub fn launch(&self, options: &ApplicationLaunchOptions) -> FlameResult<Child> {
+    pub fn launch(&self, options: &ApplicationLaunchOptions) -> FlameResult<()> {
         let argv = self.argv(options)?;
         launch_argv(&argv, &ApplicationLaunchOptions::default())
     }
@@ -259,11 +259,7 @@ impl ApplicationCatalog {
             .collect()
     }
 
-    pub fn launch(
-        &self,
-        id: &DesktopAppId,
-        options: &ApplicationLaunchOptions,
-    ) -> FlameResult<Child> {
+    pub fn launch(&self, id: &DesktopAppId, options: &ApplicationLaunchOptions) -> FlameResult<()> {
         let entry = self.find(id)?;
         let argv = expand_exec_with_path(&entry.exec, &entry.application, &entry.path, options)?;
         launch_argv(&argv, &ApplicationLaunchOptions::default())
@@ -390,6 +386,8 @@ fn expand_exec_with_path(
                     }
                     argv.extend(options.uris.iter().cloned());
                 }
+                // Deprecated by the XDG Desktop Entry spec: must be ignored (removed).
+                Some('d' | 'D' | 'n' | 'N' | 'v' | 'm') => {}
                 Some(code) => {
                     return Err(FlameError::invalid(format!(
                         "unsupported Exec field code %{code}"
@@ -406,7 +404,7 @@ fn expand_exec_with_path(
     Ok(argv)
 }
 
-pub fn launch_argv(argv: &[String], options: &ApplicationLaunchOptions) -> FlameResult<Child> {
+pub fn launch_argv(argv: &[String], options: &ApplicationLaunchOptions) -> FlameResult<()> {
     let program = argv
         .first()
         .ok_or_else(|| FlameError::invalid("empty application argv"))?;
@@ -415,9 +413,30 @@ pub fn launch_argv(argv: &[String], options: &ApplicationLaunchOptions) -> Flame
         .args(&argv[1..])
         .args(&options.extra_args)
         .args(&options.uris);
-    command.spawn().map_err(|error| {
+    spawn_reaped(&mut command).map(|_| ())
+}
+
+/// Spawns `command` and gives the child to a detached waiter thread that calls
+/// `wait()`, so the child is reaped when it exits. Returns the child pid.
+///
+/// Why this shape: every caller drops the launched handle, and dropping a
+/// `Child` does not reap it, so the WM would accumulate zombies. Returning the
+/// handle does not help because callers discard it. `SIGCHLD = SIG_IGN` would
+/// reap globally and disturb the WM's own children. One blocked-in-`waitpid`
+/// thread per launched application exits as soon as that application exits.
+fn spawn_reaped(command: &mut Command) -> FlameResult<u32> {
+    let mut child = command.spawn().map_err(|error| {
         FlameError::new(ErrorCode::IoFailure, format!("launch application: {error}"))
-    })
+    })?;
+    let pid = child.id();
+    // If the OS refuses the thread, the closure (and the child handle) is dropped
+    // and this child stays unreaped. The application itself did launch.
+    let _ = std::thread::Builder::new()
+        .name(format!("flamewm-reap-{pid}"))
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    Ok(pid)
 }
 
 fn collect_desktop_files(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> FlameResult<()> {
@@ -656,6 +675,72 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spawned_application_is_reaped_after_exit() {
+        let pid = spawn_reaped(&mut Command::new("true")).unwrap();
+        let proc_entry = PathBuf::from(format!("/proc/{pid}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // A zombie keeps /proc/<pid> alive; reaping removes it.
+        while proc_entry.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child {pid} was not reaped"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn app_with_icon(icon: &str) -> DesktopApplication {
+        DesktopApplication {
+            id: DesktopAppId::new("example.desktop"),
+            name: "Example".into(),
+            generic_name: String::new(),
+            comment: String::new(),
+            startup_wm_class: String::new(),
+            argv: Vec::new(),
+            keywords: Vec::new(),
+            icon_name: icon.into(),
+            categories: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn expand_exec_ignores_deprecated_field_codes() {
+        let options = ApplicationLaunchOptions {
+            extra_args: Vec::new(),
+            uris: vec!["file:///tmp/a".into()],
+        };
+        assert_eq!(
+            expand_exec("prog %d %U", &app_with_icon(""), &options).unwrap(),
+            vec!["prog", "file:///tmp/a"]
+        );
+        assert_eq!(
+            expand_exec(
+                "prog %d %D %n %N %v %m",
+                &app_with_icon(""),
+                &ApplicationLaunchOptions::default()
+            )
+            .unwrap(),
+            vec!["prog"]
+        );
+    }
+
+    #[test]
+    fn expand_exec_standalone_codes_without_uris_and_percent_literal() {
+        let options = ApplicationLaunchOptions::default();
+        // Empty icon: %i contributes nothing; %F and %u contribute nothing without uris.
+        assert_eq!(
+            expand_exec("prog %F %u %i %%", &app_with_icon(""), &options).unwrap(),
+            vec!["prog", "%"]
+        );
+        // Non-empty icon: %i pushes the --icon pair before the %% literal.
+        assert_eq!(
+            expand_exec("prog %F %u %i %%", &app_with_icon("example"), &options).unwrap(),
+            vec!["prog", "--icon", "example", "%"]
+        );
+    }
+
     fn write_entry(root: &Path, name: &str, body: &str) -> PathBuf {
         let path = root.join(name);
         fs::write(&path, body).unwrap();
@@ -816,6 +901,16 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(found.id.as_str(), "org.kde.dolphin.desktop");
+        assert_eq!(found.application.id, found.id);
+        assert_eq!(
+            catalog
+                .all()
+                .into_iter()
+                .find(|application| application.name == "Dolphin")
+                .unwrap()
+                .id,
+            found.id
+        );
     }
 
     #[test]
@@ -838,6 +933,30 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(found.id.as_str(), "org.prismlauncher.PrismLauncher.desktop");
+    }
+
+    #[test]
+    fn identity_matches_class_and_desktop_file_stem() {
+        let catalog = identity_catalog();
+        let by_class = catalog
+            .find_by_window_identity(&WindowApplicationIdentity::new("", "DOLPHIN", ""))
+            .unwrap();
+        let by_stem = catalog
+            .find_by_window_identity(&WindowApplicationIdentity::new("", "", "org.kde.dolphin"))
+            .unwrap();
+        assert_eq!(by_class.id.as_str(), "org.kde.dolphin.desktop");
+        assert_eq!(by_stem.id.as_str(), "org.kde.dolphin.desktop");
+        assert_eq!(by_stem.application.id, by_stem.id);
+    }
+
+    #[test]
+    fn identity_matches_wm_class_instance() {
+        let catalog = identity_catalog();
+        let found = catalog
+            .find_by_window_identity(&WindowApplicationIdentity::new("PrismLauncher", "", ""))
+            .unwrap();
+        assert_eq!(found.id.as_str(), "org.prismlauncher.PrismLauncher.desktop");
+        assert_eq!(found.application.id, found.id);
     }
 
     #[test]

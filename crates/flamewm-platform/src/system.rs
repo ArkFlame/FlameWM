@@ -147,7 +147,10 @@ impl SystemService {
         action: SystemAction,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        if expected_revision != self.snapshot.revision {
+        // Audio volume/mute writes are fenced by PulseAudio generation (checked
+        // below), so repeated clicks before the next snapshot signal must not be
+        // rejected by the whole-snapshot revision. Other actions stay revision-fenced.
+        if !bypasses_revision_fence(&action) && expected_revision != self.snapshot.revision {
             return Err(FlameError::stale("stale system snapshot revision"));
         }
         match &action {
@@ -219,6 +222,34 @@ mod tests {
     }
 
     #[test]
+    fn volume_and_mute_bypass_revision_fence_but_other_actions_do_not() {
+        let volume = SystemAction::SetVolume(flamewm_api::system::AudioVolumeAction {
+            target: flamewm_api::system::AudioTarget::Stream { id: 1 },
+            percent: 40,
+            generation: 0,
+            server_generation: 0,
+        });
+        let mute = SystemAction::SetMute(flamewm_api::system::AudioMuteAction {
+            target: flamewm_api::system::AudioTarget::Stream { id: 1 },
+            muted: true,
+            generation: 0,
+            server_generation: 0,
+        });
+        assert!(bypasses_revision_fence(&volume));
+        assert!(bypasses_revision_fence(&mute));
+        assert!(!bypasses_revision_fence(&SystemAction::SetWifiEnabled(true)));
+    }
+
+    #[test]
+    fn stale_revision_still_rejects_non_audio_actions() {
+        let mut service = SystemService::default();
+        service.set_action_handler(Box::new(|_, _| Ok(())));
+        let stale = service.snapshot.revision.wrapping_add(1);
+        let result = service.perform_action(SystemAction::SetWifiEnabled(true), stale);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn reconnect_backoff_is_bounded() {
         let mut backoff = ReconnectBackoff::default();
         let mut last = 0;
@@ -249,4 +280,11 @@ mod tests {
             .expect_err("stale action must fail");
         assert_eq!(error.code, ErrorCode::StaleRevision);
     }
+}
+
+/// Volume and mute writes carry their own PulseAudio generation fences, so the
+/// snapshot-wide revision is not required for them.
+#[must_use]
+pub fn bypasses_revision_fence(action: &SystemAction) -> bool {
+    matches!(action, SystemAction::SetVolume(_) | SystemAction::SetMute(_))
 }

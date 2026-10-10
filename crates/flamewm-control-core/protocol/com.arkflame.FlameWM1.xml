@@ -15,6 +15,7 @@
     <method name="Ping">
       <arg name="reply" type="s" direction="out"/>
     </method>
+    <signal name="StartMenuToggleRequested"/>
   </interface>
 
   <!-- Windows -->
@@ -133,6 +134,9 @@
     <signal name="TopologyChanged">
       <arg name="generation" type="t"/>
     </signal>
+    <signal name="DisplaysSnapshotChanged">
+      <arg name="snapshot" type="a{sv}"/>
+    </signal>
     <signal name="DisplayTransactionChanged">
       <arg name="transaction" type="t"/>
       <arg name="state" type="s"/>
@@ -157,6 +161,14 @@
     <method name="ResetBinding">
       <arg name="action" type="s" direction="in"/>
       <arg name="expectedRevision" type="t" direction="in"/>
+    </method>
+    <method name="BeginCapture">
+      <arg name="action" type="s" direction="in"/>
+      <arg name="expectedRevision" type="t" direction="in"/>
+      <arg name="lease" type="t" direction="out"/>
+    </method>
+    <method name="EndCapture">
+      <arg name="lease" type="t" direction="in"/>
     </method>
     <signal name="ShortcutsChanged">
       <arg name="revision" type="t"/>

@@ -243,6 +243,11 @@ impl PanelManager {
     }
 
     #[must_use]
+    pub fn primary_output(&self) -> Option<&OutputId> {
+        self.primary_output.as_ref()
+    }
+
+    #[must_use]
     pub fn work_areas(&self) -> Vec<(OutputId, Rect)> {
         self.panels
             .iter()
@@ -302,6 +307,33 @@ mod tests {
         assert_eq!(right.panel_rect(), Rect::new(-44, 0, 44, 1080));
         assert_eq!(right.strut().right, 44);
         assert_eq!(right.work_area(), Rect::new(-1920, 0, 1876, 1080));
+    }
+
+    #[test]
+    fn default_logical_panel_size_scales_to_physical_geometry() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        for (scale, expected) in [(100, 44), (125, 55), (150, 66), (175, 77), (200, 88)] {
+            let panel = OutputPanel::new(id("eDP-1"), output, PanelEdge::Bottom, scale);
+            assert_eq!(panel.logical_size, 44);
+            assert_eq!(panel.thickness(), expected);
+            assert_eq!(
+                panel.panel_rect(),
+                Rect::new(0, 1080 - expected, 1920, expected)
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_panel_scale_falls_back_to_one_hundred_percent() {
+        assert!(!supported_scale(110));
+        let panel = OutputPanel::new(
+            id("eDP-1"),
+            Rect::new(0, 0, 1920, 1080),
+            PanelEdge::Bottom,
+            110,
+        );
+        assert_eq!(panel.scale_percent, 100);
+        assert_eq!(panel.thickness(), 44);
     }
 
     #[test]
