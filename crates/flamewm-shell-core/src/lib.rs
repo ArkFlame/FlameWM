@@ -20,6 +20,7 @@ use flamewm_ui_core::IconRole;
 use flamewm_ui_core::style::ShellMetrics;
 
 pub use start_menu::{StartModel, StartSurfaceLayout, start_surface_layout};
+pub use workspaces::workspace_labels;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkView {
@@ -487,11 +488,6 @@ pub fn calendar_popover_size(metrics: ShellMetrics) -> Size {
         i32::from(metrics.clock_popover_width),
         i32::from(metrics.popover_padding) * 2 + 7 * 32,
     )
-}
-
-#[must_use]
-pub fn workspace_labels(count: usize) -> Vec<String> {
-    (1..=count).map(|index| index.to_string()).collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
