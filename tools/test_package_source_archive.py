@@ -17,7 +17,7 @@ class SourceArchiveTests(unittest.TestCase):
         self.root = Path(self.temp.name) / "flamewm"
         self.root.mkdir()
         self.manifest = self.root / "manifest.txt"
-        self.manifest.write_text("crates/\nassets/\nui/\nroot-check\n@exec crates/run.sh\n@exec root-check\n", encoding="utf-8")
+        self.manifest.write_text("crates/\nassets/\nui/\n.agents/\nroot-check\n@exec crates/run.sh\n@exec root-check\n", encoding="utf-8")
         (self.root / "crates").mkdir()
         (self.root / "assets").mkdir()
         (self.root / "assets/raster").mkdir()
