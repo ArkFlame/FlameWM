@@ -66,10 +66,8 @@ fi
 rm -rf "$STAGE/DEBIAN"
 
 # Keep source and installable binary artifacts distinct and reproducible.
-tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" --owner=0 --group=0 --numeric-owner \
-    -czf "$SOURCE_ARCHIVE" -C "$(dirname "$ROOT")" \
-    --exclude="$(basename "$ROOT")/.git" --exclude="$(basename "$ROOT")/.target" \
-    "$(basename "$ROOT")"
+python3 "$ROOT/scripts/package-source-archive" "$ROOT" \
+    "$ROOT/packaging/source-manifest.txt" "$SOURCE_ARCHIVE"
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" --owner=0 --group=0 --numeric-owner \
     -czf "$LINUX_ARCHIVE" -C "$DIST" "flamewm-$VERSION"
 ARTIFACTS=("$SOURCE_ARCHIVE" "$LINUX_ARCHIVE")

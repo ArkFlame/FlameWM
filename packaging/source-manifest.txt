@@ -1,0 +1,79 @@
+# Source archive allowlist: one root-relative path per line; trailing slash includes a tree.
+AGENTS.md
+.cargo/
+.github/
+.gitattributes
+.gitignore
+.opencode/
+CHANGELOG.md
+CONTRIBUTING.md
+Cargo.lock
+Cargo.toml
+FLAMEWM_VERSION
+LICENSE
+LICENSES/
+MANIFEST.sha256
+README.md
+SECURITY.md
+assets/
+crates/
+docs/
+packaging/
+project_sources/
+rust-toolchain.toml
+scripts/
+tools/
+ui/
+.vendor/RustWebRender-0.0.9/
+bench-memory
+check
+doctor
+lint
+package
+verify-visual
+xephyr
+@exec LICENSES/FontAwesome.txt
+@exec assets/web/FONTAWESOME_LICENSE.txt
+@exec assets/web/github.svg
+@exec assets/web/paypal.svg
+@exec scripts/prepare-ibm-plex
+@exec scripts/settings-installed-acceptance
+@exec scripts/lint
+@exec scripts/verify-visual
+@exec scripts/doctor
+@exec scripts/release-gate
+@exec scripts/xephyr
+@exec scripts/package
+@exec scripts/install-deps-ubuntu.sh
+@exec scripts/bench-memory
+@exec scripts/check
+@exec scripts/package-source-archive
+@exec scripts/settings-acceptance
+@exec tools/performance_bundle.py
+@exec tools/static_audit.py
+@exec tools/profile_summary.py
+@exec tools/verify_rwr_promotion.py
+@exec tools/performance_retention.py
+@exec .vendor/RustWebRender-0.0.9/verify-visual
+@exec .vendor/RustWebRender-0.0.9/doctor
+@exec .vendor/RustWebRender-0.0.9/xephyr
+@exec .vendor/RustWebRender-0.0.9/check
+@exec .vendor/RustWebRender-0.0.9/demo
+@exec .vendor/RustWebRender-0.0.9/scripts/prepare-ibm-plex
+@exec .vendor/RustWebRender-0.0.9/scripts/verify-visual
+@exec .vendor/RustWebRender-0.0.9/scripts/doctor
+@exec .vendor/RustWebRender-0.0.9/scripts/xephyr
+@exec .vendor/RustWebRender-0.0.9/scripts/prepare-demo-assets
+@exec .vendor/RustWebRender-0.0.9/scripts/bench-memory
+@exec .vendor/RustWebRender-0.0.9/scripts/check
+@exec .vendor/RustWebRender-0.0.9/scripts/demo
+@exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/FONTAWESOME_LICENSE.txt
+@exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/github.svg
+@exec .vendor/RustWebRender-0.0.9/reference/flamewm-html-css-js-v8/assets/paypal.svg
+@exec bench-memory
+@exec check
+@exec doctor
+@exec lint
+@exec package
+@exec verify-visual
+@exec xephyr
