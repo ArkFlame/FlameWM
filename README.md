@@ -75,15 +75,15 @@ Ubuntu/Debian development dependencies:
 Then:
 
 ```bash
-./doctor
-./check
-./xephyr
+./scripts/doctor
+./scripts/check
+./scripts/xephyr
 ```
 
 Visual differential:
 
 ```bash
-./verify-visual
+./scripts/verify-visual
 ```
 
 The interactive contract is a **release build**. Debug renderer latency is not accepted as product performance evidence.
