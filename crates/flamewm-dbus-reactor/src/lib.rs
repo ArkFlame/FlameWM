@@ -112,7 +112,7 @@ impl BusPump {
     ) -> FlameResult<usize> {
         self.on_ready(|message| {
             if message.msg_type() == dbus::MessageType::MethodCall
-                && message.path().map(|path| path.to_string()) == Some(object_path.to_owned())
+                && message.path().is_some_and(|path| path == object_path)
             {
                 object_handler(message)
             } else {
