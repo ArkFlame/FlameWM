@@ -126,3 +126,22 @@ pub fn parse_smaps_text(text: &str) -> SmapsSummary {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gauge_registration_tracks_current_and_peak_in_snapshot() {
+        let _guard = crate::span::TEST_LOCK.lock().unwrap();
+        let gauge = MemoryGauge::new("t_gauge_current_peak");
+        gauge.set(13);
+        gauge.set(8);
+
+        assert_eq!(gauge.current(), 8);
+        assert_eq!(gauge.peak(), 13);
+        assert!(gauge_snapshot().iter().any(|(label, current, peak)| {
+            *label == "t_gauge_current_peak" && *current == 8 && *peak == 13
+        }));
+    }
+}

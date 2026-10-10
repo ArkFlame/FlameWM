@@ -208,6 +208,33 @@ mod tests {
         assert!(!rows2.iter().any(|(l, _)| *l == "t_ctr_reset"));
     }
 
+    #[test]
+    fn concurrent_same_label_registration_shares_counter() {
+        let _guard = crate::span::TEST_LOCK.lock().unwrap();
+        counter_reset_for_test();
+        const THREADS: usize = 8;
+        const INCREMENTS: usize = 100;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    let counter = CounterPoint::new("t_ctr_concurrent_same_label");
+                    for _ in 0..INCREMENTS {
+                        counter.increment();
+                    }
+                });
+            }
+        });
+
+        let rows = counter_snapshot_and_reset();
+        assert_eq!(
+            rows.iter()
+                .filter(|(label, _)| *label == "t_ctr_concurrent_same_label")
+                .map(|(_, value)| *value)
+                .collect::<Vec<_>>(),
+            [THREADS as u64 * INCREMENTS as u64]
+        );
+    }
+
     fn cap_ctr_label(i: usize) -> &'static str {
         match i {
             0 => "t_cap_ctr_00",
