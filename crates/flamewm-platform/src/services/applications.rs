@@ -2,8 +2,6 @@ use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::ports::ApplicationPort;
 use flamewm_api::{DesktopAppId, ErrorCode, FlameError, FlameResult};
 
-use crate::identity::normalize_identity;
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ApplicationService {
     applications: Vec<DesktopApplication>,
@@ -37,14 +35,6 @@ impl ApplicationService {
             .iter()
             .find(|app| &app.id == id)
             .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "application id not found"))
-    }
-
-    pub fn find_by_window_class(&self, wm_class: &str) -> FlameResult<&DesktopApplication> {
-        let needle = normalize_identity(wm_class);
-        self.applications
-            .iter()
-            .find(|app| normalize_identity(&app.startup_wm_class) == needle)
-            .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "window class not found"))
     }
 
     #[must_use]

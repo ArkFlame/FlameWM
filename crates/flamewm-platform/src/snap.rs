@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use flamewm_api::{Point, Rect, Size, WindowRef};
+use flamewm_api::{Point, Rect, Size};
 
 pub const EDGE_THRESHOLD: i32 = 16;
 pub const CORNER_THRESHOLD: i32 = 32;
@@ -236,43 +234,6 @@ impl SnapState {
             .map(|rect| rect.clamp_inside(surviving_work_area));
         self.manual_resize();
         restore
-    }
-}
-
-/// Product-owned snap state keyed by generation-fenced window identity.
-#[derive(Debug, Default)]
-pub struct SnapService {
-    states: HashMap<WindowRef, SnapState>,
-}
-
-impl SnapService {
-    #[must_use]
-    pub fn state(&self, window: WindowRef) -> Option<&SnapState> {
-        self.states.get(&window)
-    }
-
-    pub fn record_snap(&mut self, window: WindowRef, target: SnapTarget, current_outer: Rect) {
-        self.states
-            .entry(window)
-            .or_default()
-            .snap(target, current_outer);
-    }
-
-    pub fn manual_resize(&mut self, window: WindowRef) {
-        if let Some(state) = self.states.get_mut(&window) {
-            state.manual_resize();
-        }
-    }
-
-    #[must_use]
-    pub fn consume_drag_away(&mut self, window: WindowRef, work_area: Rect) -> Option<Rect> {
-        self.states
-            .get_mut(&window)
-            .and_then(|state| state.consume_drag_away(work_area))
-    }
-
-    pub fn forget(&mut self, window: WindowRef) {
-        self.states.remove(&window);
     }
 }
 

@@ -2,7 +2,6 @@ pub mod applications;
 pub mod background;
 pub mod display;
 pub mod panels;
-pub mod reactor;
 pub mod session;
 pub mod settings;
 pub mod shortcuts;

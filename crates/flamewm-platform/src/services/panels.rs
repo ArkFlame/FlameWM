@@ -157,11 +157,6 @@ impl PanelService {
         changed
     }
 
-    pub fn set_activity_outputs(&mut self, focused: Option<OutputId>, pointer: Option<OutputId>) {
-        self.manager.set_focused_frame_output(focused);
-        self.manager.set_pointer_output(pointer);
-    }
-
     pub fn toggle_start(&mut self) -> bool {
         self.start.toggle(self.manager.active_output())
     }
