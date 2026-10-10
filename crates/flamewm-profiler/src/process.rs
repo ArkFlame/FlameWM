@@ -31,8 +31,7 @@ pub(crate) fn parse_status_vmrss(text: &str) -> Option<u64> {
 }
 
 fn now_process_cpu_ns() -> u64 {
-    let ts = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
-    (ts.tv_sec.max(0) as u64) * 1_000_000_000 + (ts.tv_nsec.max(0) as u64)
+    crate::clock_ns(rustix::time::ClockId::ProcessCPUTime)
 }
 
 /// One-core CPU percent: `cpu_delta / window * 100`. 100% = one core.
@@ -89,5 +88,29 @@ mod tests {
         let text = "Name:\tx\nVmRSS:\t   12345 kB\n";
         assert_eq!(parse_status_vmrss(text), Some(12345));
         assert_eq!(parse_status_vmrss("Name:\tx\n"), None);
+    }
+
+    #[test]
+    fn process_cpu_clock_counts_other_threads() {
+        let process_start = now_process_cpu_ns();
+        let thread_start = crate::clock_ns(rustix::time::ClockId::ThreadCPUTime);
+        std::thread::spawn(|| {
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_millis(30) {
+                std::hint::black_box(());
+            }
+        })
+        .join()
+        .unwrap();
+        let process_delta = now_process_cpu_ns() - process_start;
+        let thread_delta = crate::clock_ns(rustix::time::ClockId::ThreadCPUTime) - thread_start;
+        assert!(
+            process_delta >= 20_000_000,
+            "process CPU clock advanced only {process_delta} ns"
+        );
+        assert!(
+            thread_delta < 10_000_000,
+            "calling thread CPU clock advanced {thread_delta} ns"
+        );
     }
 }
