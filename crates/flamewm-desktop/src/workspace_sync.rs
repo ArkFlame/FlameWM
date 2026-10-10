@@ -115,22 +115,31 @@ mod tests {
         // CONTRACT: a workspace visual transition is separate from filesystem dirtiness.
         // TRIGGER: apply a workspace signal without an inotify desktop-directory event.
         // OBSERVABLE: no model rescan and no launcher-cache refresh are scheduled.
-        // CURRENT BAD MECHANISM: refresh_if_changed_direct stores true in the shared dirty
-        // flag, so the next UI turn calls rescan and refresh_launchers.
-        // FAILURE MUTATION: reintroduce the shared dirty store or either filesystem action;
-        // this test must fail on that mutation.
+        // CURRENT MECHANISM: refresh_workspace_projection consumes workspace_visual_dirty and
+        // only projects sticky/menu state; the filesystem dirty flag is never touched.
+        // FAILURE MUTATION: reintroduce the shared dirty store or either filesystem action in
+        // refresh_workspace_projection; this test must fail on that mutation.
         let source = include_str!("main.rs");
-        let direct = source_between(
+        let projection = source_between(
             source,
-            "fn refresh_if_changed_direct",
-            "fn register_sticky_persist_timer",
+            "fn refresh_workspace_projection",
+            "/// Launcher metadata cache",
         );
         assert!(
-            !direct.contains("dirty.store"),
+            !projection.contains("dirty.store"),
             "workspace visual dirtiness must not enter the filesystem dirty flag"
         );
-        assert!(!direct.contains("rescan"));
-        assert!(!direct.contains("refresh_launchers"));
+        assert!(
+            !projection.contains("dirty.swap"),
+            "workspace projection must not consume the filesystem dirty flag"
+        );
+        assert!(
+            !projection.contains("refresh_if_changed"),
+            "workspace projection must not rescan through the filesystem refresh path"
+        );
+        assert!(!projection.contains("rescan"));
+        assert!(!projection.contains("model.rescan"));
+        assert!(!projection.contains("refresh_launchers"));
     }
 
     #[test]

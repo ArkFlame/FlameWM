@@ -873,13 +873,6 @@ fn refresh_settings_projection(
     Ok(())
 }
 
-fn refresh_if_changed_direct(state: &mut DesktopState) -> Result<(), String> {
-    // Kept as a narrow compatibility seam for the startup/event boundary:
-    // workspace visual dirtiness is never filesystem dirtiness.
-    state.workspace_visual_dirty = true;
-    Ok(())
-}
-
 fn register_sticky_persist_timer(reactor: &mut Reactor) -> Result<(), String> {
     // Debounce owner is the reactor tick: the flag is armed by mutations and
     // flushed in poll_sticky_persist/flush_sticky_persist_if_due (<=500ms via
