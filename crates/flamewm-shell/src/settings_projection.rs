@@ -31,10 +31,10 @@ pub(crate) fn project(
     let accent = color_setting(snapshot, "accent", DEFAULT_ACCENT);
     let font_family = text_setting(snapshot, "fontFamily", DEFAULT_FONT_FAMILY);
     let font_bold = bool_setting(snapshot, "fontBold", false);
-    let font_size_offset = integer_setting(snapshot, "fontSizeOffset", 0) as f32;
+    let font_size = font_size_px(snapshot);
 
     document.font_family(font_family)?;
-    document.font_size(root, (DEFAULT_FONT_SIZE + font_size_offset).max(6.0))?;
+    document.font_size(root, font_size)?;
     document.font_weight(root, if font_bold { 700 } else { 400 })?;
 
     match surface {
@@ -58,6 +58,11 @@ pub(crate) fn project(
         }
     }
     Ok(())
+}
+
+fn font_size_px(snapshot: &SettingsSnapshot) -> f32 {
+    let font_size_offset = integer_setting(snapshot, "fontSizeOffset", 0) as f32;
+    (DEFAULT_FONT_SIZE + font_size_offset).max(6.0)
 }
 
 fn text_setting(snapshot: &SettingsSnapshot, key: &str, default: &str) -> String {
@@ -109,5 +114,55 @@ fn rgb(value: u32, alpha: u8) -> UiColor {
         g: (value >> 8) as u8,
         b: value as u8,
         a: alpha,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot_with(key: &str, value: &str) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert(key.to_owned(), SettingValue::Text(value.to_owned()));
+        snapshot
+    }
+
+    #[test]
+    fn font_mapping_applies_saved_family_and_size_offset() {
+        let mut saved = SettingsSnapshot::new(2);
+        saved
+            .values
+            .insert("fontFamily".to_owned(), SettingValue::Text("DejaVu Sans".to_owned()));
+        saved
+            .values
+            .insert("fontSizeOffset".to_owned(), SettingValue::Integer(3));
+        assert_eq!(text_setting(&saved, "fontFamily", DEFAULT_FONT_FAMILY), "DejaVu Sans");
+        assert_eq!(font_size_px(&saved), 16.0);
+
+        let defaults = SettingsSnapshot::new(1);
+        assert_eq!(text_setting(&defaults, "fontFamily", DEFAULT_FONT_FAMILY), DEFAULT_FONT_FAMILY);
+        assert_eq!(font_size_px(&defaults), DEFAULT_FONT_SIZE);
+
+        let mut tiny = SettingsSnapshot::new(3);
+        tiny.values
+            .insert("fontSizeOffset".to_owned(), SettingValue::Integer(-40));
+        assert_eq!(font_size_px(&tiny), 6.0);
+    }
+
+    #[test]
+    fn color_setting_parses_hex_and_falls_back_to_default() {
+        let red = color_setting(&snapshot_with("taskbarColor", "#FF0000"), "taskbarColor", 0);
+        assert_eq!((red.r, red.g, red.b, red.a), (255, 0, 0, 255));
+        let green = color_setting(&snapshot_with("accent", "00ff00"), "accent", 0);
+        assert_eq!((green.r, green.g, green.b), (0, 255, 0));
+        let bad = color_setting(&snapshot_with("accent", "#GG0000"), "accent", DEFAULT_ACCENT);
+        assert_eq!(
+            (bad.r, bad.g, bad.b),
+            ((DEFAULT_ACCENT >> 16) as u8, (DEFAULT_ACCENT >> 8) as u8, DEFAULT_ACCENT as u8)
+        );
+        let missing = color_setting(&SettingsSnapshot::new(1), "taskbarColor", DEFAULT_TASKBAR_COLOR);
+        assert_eq!(missing.r, 0x19);
     }
 }

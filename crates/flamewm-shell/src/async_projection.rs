@@ -440,6 +440,28 @@ impl PanelScope {
     }
 }
 
+/// Startup task-icon prime: whether the one-shot task-slot projection may run.
+/// It needs live task states to request icons for and a loader to request on.
+pub fn task_icon_prime_should_run(
+    armed: bool,
+    task_state_count: usize,
+    loader_present: bool,
+) -> bool {
+    armed && task_state_count > 0 && loader_present
+}
+
+/// Startup task-icon prime: whether the prime stays armed after a run.
+/// Disarms only once a run with task states, a loader, and a successful
+/// projection has submitted icon requests; an empty snapshot keeps it armed.
+pub fn task_icon_prime_still_armed(
+    armed: bool,
+    task_state_count: usize,
+    loader_present: bool,
+    projection_ok: bool,
+) -> bool {
+    armed && !(task_state_count > 0 && loader_present && projection_ok)
+}
+
 /// Domain-scoped panel dispatcher for the shell loop (`refresh_dynamic`):
 /// WindowsChanged -> task slots only, WorkspacesChanged -> pager only,
 /// PanelsChanged -> geometry only, SystemChanged -> tray only. Combined
@@ -661,6 +683,7 @@ pub fn project_panel_geometry(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
 ) -> Result<(), String> {
+    crate::projection::project_taskbar_height(document, snapshot)?;
     let states = flamewm_shell_core::task_visual_states(
         &snapshot.panels,
         &snapshot.windows,
@@ -1009,6 +1032,24 @@ mod tests {
     fn icon_test_lock() -> &'static std::sync::Mutex<()> {
         static M: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[test]
+    fn task_icon_prime_stays_armed_until_a_request_round_runs() {
+        // Empty snapshot at first tick: nothing to request, stays armed.
+        assert!(!task_icon_prime_should_run(true, 0, true));
+        assert!(task_icon_prime_still_armed(true, 0, true, true));
+        // No loader yet: cannot request, stays armed.
+        assert!(!task_icon_prime_should_run(true, 2, false));
+        assert!(task_icon_prime_still_armed(true, 2, false, true));
+        // Failed projection: stays armed for a retry.
+        assert!(task_icon_prime_still_armed(true, 2, true, false));
+        // Task states plus loader plus successful projection: disarms.
+        assert!(task_icon_prime_should_run(true, 2, true));
+        assert!(!task_icon_prime_still_armed(true, 2, true, true));
+        // Once disarmed it never re-runs.
+        assert!(!task_icon_prime_should_run(false, 2, true));
+        assert!(!task_icon_prime_still_armed(false, 2, true, true));
     }
 
     #[test]

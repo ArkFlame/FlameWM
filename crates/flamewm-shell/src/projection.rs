@@ -1,6 +1,7 @@
 use chrono::{DateTime, Datelike, Local};
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::session::SessionCapabilities;
+use flamewm_api::system::ServiceAvailability;
 use flamewm_integrations_linux::icons::{IconResolver, IconSize, Rgb8Raster};
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
@@ -13,6 +14,106 @@ use flamewm_shell_core::{task_visual_states, CalendarGrid, StartModel};
 
 const TASK_SLOT_COUNT: usize = 8;
 const START_APP_SLOT_COUNT: usize = 8;
+/// Bar height in CSS px used when the panel snapshot carries no logical size.
+/// Matches the `.taskbar` height in ui/shell/flamewm.css.
+const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
+
+/// Maps the panel's logical (settings) height to the CSS height of the bar.
+/// A zero logical size falls back to the stylesheet default so 100% output
+/// stays identical to the 44px layout.
+#[must_use]
+pub fn taskbar_css_height(logical_size: u16) -> f32 {
+    if logical_size == 0 {
+        TASKBAR_DEFAULT_HEIGHT
+    } else {
+        f32::from(logical_size)
+    }
+}
+
+/// Panel width in CSS px. `geometry.width` is device pixels; the document
+/// lays out in CSS px at `scale_percent`, so dividing by the scale keeps the
+/// bar exactly one window wide. Unsupported scales fall back to 100%, as the
+/// panel surface does when it applies its UI scale.
+pub fn taskbar_css_width(device_width: i32, scale_percent: u16) -> f32 {
+    let percent = if matches!(scale_percent, 100 | 125 | 150 | 175 | 200) {
+        scale_percent
+    } else {
+        100
+    };
+    device_width.max(0) as f32 * 100.0 / f32::from(percent)
+}
+
+/// Sizes the `taskbar` node to the panel's logical width and height so the
+/// painted bar fills the panel window instead of leaving an undrawn band.
+/// A device-pixel width here pushed the pager, tray and clock past the
+/// layout viewport at 125% scale.
+pub(crate) fn project_taskbar_height(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &ShellSnapshot,
+) -> Result<(), String> {
+    let Some(panel) = snapshot.panels.panels.first() else {
+        return Ok(());
+    };
+    let scale_percent = snapshot
+        .displays
+        .outputs
+        .iter()
+        .find(|output| output.id == panel.output && output.connected)
+        .map(|output| output.shell_scale_percent)
+        .unwrap_or(100);
+    document.size(
+        "taskbar",
+        taskbar_css_width(panel.geometry.width, scale_percent),
+        taskbar_css_height(panel.logical_size),
+    )
+}
+
+/// Narrows `snapshot` to one panel record: only that record's output and
+/// panel stay in the view, so the existing panel projection reads the
+/// record's own geometry and output scale. Everything else is shared.
+#[must_use]
+pub fn panel_record_view(
+    snapshot: &ShellSnapshot,
+    output: &flamewm_api::display::OutputSnapshot,
+    panel: &flamewm_api::panels::PanelSnapshot,
+) -> ShellSnapshot {
+    let mut view = snapshot.clone();
+    view.displays.outputs = vec![output.clone()];
+    view.panels.panels = vec![panel.clone()];
+    view
+}
+
+/// Calls `project` once per panel record, in order, with that record's
+/// narrowed view of the live snapshot. A record whose connected output or
+/// panel is absent from the snapshot is skipped; sync removes its surface.
+/// The first error stops the walk.
+pub fn for_each_panel_record<K, E>(
+    snapshot: &ShellSnapshot,
+    records: impl IntoIterator<Item = (K, flamewm_api::OutputId)>,
+    mut project: impl FnMut(K, &ShellSnapshot) -> Result<(), E>,
+) -> Result<(), E> {
+    for (key, output_id) in records {
+        let Some(output) = snapshot
+            .displays
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id && output.connected)
+        else {
+            continue;
+        };
+        let Some(panel) = snapshot
+            .panels
+            .panels
+            .iter()
+            .find(|panel| panel.output == output_id)
+        else {
+            continue;
+        };
+        let view = panel_record_view(snapshot, output, panel);
+        project(key, &view)?;
+    }
+    Ok(())
+}
 
 pub fn project(
     document: &mut impl UiDocumentAccess,
@@ -27,6 +128,7 @@ pub fn project_panel(
     snapshot: &ShellSnapshot,
     icon_resolver: &mut IconResolver,
 ) -> Result<(), String> {
+    project_taskbar_height(document, snapshot)?;
     let states = task_visual_states(&snapshot.panels, &snapshot.windows, &snapshot.applications);
     let status = crate::taskbar::status::project(&snapshot.system).views;
     let workspaces = project_workspaces(snapshot.workspaces.as_ref());
@@ -279,6 +381,23 @@ pub fn project_start_submenu(
     Ok(())
 }
 
+/// Start error line. Markup must provide this node (hidden by default).
+pub const START_STATUS_NODE: &str = "start-status-label";
+
+/// Project the Start error line: shown with `message`, hidden when `None`.
+pub fn project_start_error(
+    document: &mut impl UiDocumentAccess,
+    message: Option<&str>,
+) -> Result<(), String> {
+    match message {
+        Some(message) => {
+            document.text(START_STATUS_NODE, message.to_owned())?;
+            document.visible(START_STATUS_NODE, true)
+        }
+        None => document.visible(START_STATUS_NODE, false),
+    }
+}
+
 #[must_use]
 pub fn start_application_for_slot(
     model: &StartModel,
@@ -289,6 +408,19 @@ pub fn start_application_for_slot(
     model_view(model, category, query)
         .get(slot)
         .map(|application| application.id.clone())
+}
+
+/// User-visible name of the application in `slot`, for Start error text.
+#[must_use]
+pub fn start_application_name_for_slot(
+    model: &StartModel,
+    category: StartCategory,
+    query: &str,
+    slot: usize,
+) -> Option<String> {
+    model_view(model, category, query)
+        .get(slot)
+        .map(|application| application.name.clone())
 }
 
 pub fn project_task_menu(
@@ -391,10 +523,14 @@ pub fn project_audio_full(
 ) -> Result<(), String> {
     let view = crate::taskbar::status::audio::project(&snapshot.system);
     let popover = crate::taskbar::status::audio::popover_view(&snapshot.system);
-    let details = popover
-        .as_ref()
-        .map(|popover| popover.popover.details.clone())
-        .unwrap_or_else(|| view.label.clone());
+    let details = if snapshot.system.audio.availability == ServiceAvailability::Unavailable {
+        "Audio unavailable".to_owned()
+    } else {
+        popover
+            .as_ref()
+            .map(|popover| popover.popover.details.clone())
+            .unwrap_or_else(|| view.label.clone())
+    };
     let (volume_percent, muted) = popover
         .as_ref()
         .map(|popover| (popover.popover.volume_percent, popover.popover.muted))
@@ -504,6 +640,15 @@ pub fn project_network_full(
     // secret value itself is never projected.
     let view = crate::taskbar::status::network::project(&snapshot.system);
     let popover = crate::taskbar::status::network::popover_view(&snapshot.system);
+    // Dedicated connected container: independent of paging, shown on every page.
+    let connected = crate::taskbar::status::network::connected_row(&snapshot.system);
+    document.text(
+        "network-connected",
+        connected
+            .as_ref()
+            .map_or_else(String::new, |row| row.label.clone()),
+    )?;
+    document.visible("network-connected", connected.is_some())?;
     if let Some(popover) = popover {
         document.text("wifi-connected-name", popover.connected_label.clone())?;
         document.text(
@@ -518,57 +663,30 @@ pub fn project_network_full(
         document.visible("network-scan", popover.can_scan)?;
         document.visible("network-disconnect", popover.can_disconnect)?;
         document.visible("network-secret", popover.secret_masked)?;
-        let all: Vec<_> = snapshot
-            .system
-            .network
-            .access_points
-            .iter()
-            .map(|ap| {
-                let label = if ap.ssid.is_empty() {
-                    "Hidden network".to_owned()
-                } else {
-                    ap.ssid.clone()
-                };
-                (ap, label)
-            })
-            .filter(|(_, label)| query.matches(label))
-            .collect();
-        let (connected, available): (Vec<_>, Vec<_>) = all.iter().partition(|(ap, _)| {
-            !snapshot.system.network.active_path.is_empty()
-                && ap.path == snapshot.system.network.active_path
-        });
-        let ordered: Vec<(&flamewm_api::system::NetworkAccessPointSnapshot, String)> = connected
-            .iter()
-            .chain(available.iter())
-            .map(|(ap, label)| (*ap, label.clone()))
-            .collect();
-        let (first, last) =
-            flamewm_shell_core::status::visible_window(ordered.len(), 44, 180, scroll_offset);
-        let window: Vec<_> = ordered
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| *index >= first && *index < last)
-            .take(crate::taskbar::status::network::NETWORK_SLOT_COUNT)
-            .map(|(_, pair)| pair)
-            .collect();
+        let window = crate::taskbar::status::network::project_visible_rows(
+            &snapshot.system,
+            query,
+            scroll_offset,
+        );
         for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
             let row = window.get(slot);
             document.visible(&format!("network-slot-{}", slot + 1), row.is_some())?;
-            if let Some((ap, label)) = row {
-                document.text(&format!("network-slot-{}-name", slot + 1), label.clone())?;
-                let mut status = format!("{}%", ap.strength_percent.min(100));
-                if ap.secured {
+            if let Some(row) = row {
+                document.text(
+                    &format!("network-slot-{}-name", slot + 1),
+                    row.label.clone(),
+                )?;
+                let mut status = format!("{}%", row.strength_percent);
+                if row.secured {
                     status.push_str(" · secured");
                 }
-                if ap.known {
+                if row.known {
                     status.push_str(" · known");
                 }
-                let connected = !snapshot.system.network.active_path.is_empty()
-                    && ap.path == snapshot.system.network.active_path;
-                if connected {
+                if row.connected {
                     status.push_str(" · connected");
                 }
-                if popover.pending_secret_path.as_deref() == Some(ap.path.as_str()) {
+                if popover.pending_secret_path.as_deref() == Some(row.path.as_str()) {
                     status.push_str(" · password required");
                 }
                 document.text(&format!("network-slot-{}-status", slot + 1), status)?;
@@ -654,6 +772,14 @@ pub fn project_calendar(
 mod calendar_tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn taskbar_css_height_follows_logical_size_with_44_default() {
+        assert_eq!(taskbar_css_height(0), 44.0);
+        assert_eq!(taskbar_css_height(44), 44.0);
+        assert_eq!(taskbar_css_height(72), 72.0);
+        assert_eq!(taskbar_css_height(34), 34.0);
+    }
 
     #[derive(Default)]
     struct FakeDocument {
@@ -910,5 +1036,355 @@ fn runtime_image(raster: Rgb8Raster) -> RuntimeImage {
         width: raster.width,
         height: raster.height,
         pixels: raster.pixels,
+    }
+}
+
+#[cfg(test)]
+mod network_template_tests {
+    use super::*;
+
+    const NETWORK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
+
+    // CONTRACT-REGRESSION: every text target the network projection writes must be a
+    // single-text-node element in the compiled network template.
+    // TRIGGER: network.html id/child edits or project_network_full id changes.
+    // OBSERVABLE: set_text on each projected id succeeds against the real artifact.
+    // MUTATION: drop the text child of #network-connected; the open must be refused.
+    #[test]
+    fn every_projected_network_id_is_a_text_target() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let mut ids = vec![
+            "network-connected".to_owned(),
+            "wifi-connected-name".to_owned(),
+            "network-filter-label".to_owned(),
+            "network-secret-value".to_owned(),
+        ];
+        for slot in 1..=8 {
+            ids.push(format!("network-slot-{slot}-name"));
+            ids.push(format!("network-slot-{slot}-status"));
+        }
+        for id in &ids {
+            document
+                .text(id, String::new())
+                .unwrap_or_else(|error| panic!("network text target '{id}' refused: {error}"));
+        }
+    }
+
+    // Forwards every write to the real decoded template while recording the
+    // text and visibility the projection assigned to each id.
+    struct NetworkRecorder<'a> {
+        document: &'a mut flamewm_ui_x11::UiDocument,
+        texts: std::collections::HashMap<String, String>,
+        visible: std::collections::HashMap<String, bool>,
+    }
+
+    macro_rules! forward {
+        ($($method:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
+            $(fn $method(&mut self, $($arg: $ty),*) -> Result<(), String> {
+                UiDocumentAccess::$method(self.document, $($arg),*)
+            })*
+        };
+    }
+
+    impl UiDocumentAccess for NetworkRecorder<'_> {
+        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            self.texts.insert(id.to_owned(), text.clone());
+            UiDocumentAccess::text(self.document, id, text)
+        }
+        fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
+            self.visible.insert(id.to_owned(), visible);
+            UiDocumentAccess::visible(self.document, id, visible)
+        }
+        forward!(
+            image_rgb8(id: &str, image: RuntimeImage),
+            image_rgba8(id: &str, image: RuntimeImage),
+            toggle(track_id: &str, knob_id: &str, checked: bool),
+            position(id: &str, left: f32, top: f32),
+            size(id: &str, width: f32, height: f32),
+            background(id: &str, color: UiColor),
+            border(id: &str, color: UiColor),
+            foreground(id: &str, color: UiColor),
+            background_clear(id: &str),
+            border_clear(id: &str),
+            foreground_clear(id: &str),
+            font_size(id: &str, size_px: f32),
+            font_weight(id: &str, weight: u16),
+            overflow(id: &str, x: flamewm_ui_x11::Overflow, y: flamewm_ui_x11::Overflow),
+            layer(id: &str, layer: flamewm_ui_core::style::UiLayer),
+        );
+    }
+
+    // REGRESSION: with two access points (one connected), the real network
+    // template must receive the connected row in #network-connected and the
+    // first two Available slots must carry name text and visible=true.
+    // OBSERVABLE: slot-1 name is the strongest AP, slot-2 the next; the
+    // connected AP appears in the Connected container and the slot list.
+    #[test]
+    fn projected_access_points_reach_slot_name_and_visible_flags() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.network.availability = ServiceAvailability::Available;
+        snapshot.system.network.wifi_enabled = true;
+        snapshot.system.network.networking_enabled = true;
+        snapshot.system.network.label = "LinsaFTW".to_owned();
+        snapshot.system.network.active_access_point_path =
+            "/org/freedesktop/NetworkManager/AccessPoint/1".to_owned();
+        snapshot.system.network.access_points = vec![
+            flamewm_api::system::NetworkAccessPointSnapshot {
+                path: "/org/freedesktop/NetworkManager/AccessPoint/1".to_owned(),
+                ssid: "LinsaFTW".to_owned(),
+                strength_percent: 80,
+                secured: true,
+                known: true,
+            },
+            flamewm_api::system::NetworkAccessPointSnapshot {
+                path: "/org/freedesktop/NetworkManager/AccessPoint/2".to_owned(),
+                ssid: "StubNeighbor".to_owned(),
+                strength_percent: 42,
+                secured: false,
+                known: false,
+            },
+        ];
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
+        assert_eq!(recorder.visible.get("network-connected"), Some(&true));
+        assert_eq!(recorder.texts["network-slot-1-name"], "LinsaFTW");
+        assert_eq!(recorder.visible.get("network-slot-1"), Some(&true));
+        assert_eq!(recorder.texts["network-slot-2-name"], "StubNeighbor");
+        assert_eq!(recorder.visible.get("network-slot-2"), Some(&true));
+        assert_eq!(recorder.visible.get("network-slot-3"), Some(&false));
+    }
+}
+
+#[cfg(test)]
+mod panel_template_tests {
+    use super::*;
+
+    const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
+
+    // CONTRACT-REGRESSION: the clock and workspace pager text targets and the
+    // tray visibility targets written by the panel projection must exist in the
+    // compiled panel template. A refused write aborts the scoped panel pass
+    // after the Start button, which is the "only Start renders" failure.
+    // TRIGGER: panel.html id/child edits or project_clock / project_workspaces changes.
+    // OBSERVABLE: project_clock_at and each pager/tray target succeed on the real artifact.
+    // MUTATION: drop the text child of #clock-time; project_clock_at must be refused.
+    #[test]
+    fn every_projected_panel_clock_and_pager_target_is_writable() {
+        let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
+            .expect("panel artifact must decode");
+        project_clock_at(&mut document, Local::now())
+            .unwrap_or_else(|error| panic!("panel clock refused: {error}"));
+        for slot in 1..=PAGE_SIZE {
+            let id = format!("workspace-{slot}");
+            document
+                .text(&id, String::new())
+                .unwrap_or_else(|error| panic!("panel pager text '{id}' refused: {error}"));
+            document
+                .visible(&id, true)
+                .unwrap_or_else(|error| panic!("panel pager visible '{id}' refused: {error}"));
+        }
+        for id in ["tray-media", "tray-volume", "tray-network"] {
+            document
+                .visible(id, true)
+                .unwrap_or_else(|error| panic!("panel tray '{id}' refused: {error}"));
+        }
+    }
+
+    // REGRESSION: the clock, workspace pager and tray must lay out with a
+    // non-zero rect inside the panel viewport. The live panel window is
+    // 1350x90 device px at 125%, i.e. a 1080x72 CSS viewport. A device-pixel
+    // taskbar width (1350) pushed these nodes past the right edge, so they
+    // were laid out but never painted.
+    // OBSERVABLE: every listed node has width/height > 0 and lies inside 1080x72.
+    // MUTATION: pass geometry.width unscaled to taskbar_css_width (or to size)
+    // and the rightmost nodes fall outside and this test fails.
+    #[test]
+    fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
+        let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
+            .expect("panel artifact must decode");
+        // Live panel: 1350x90 device px window, 125% output scale, logical 72.
+        let output = flamewm_api::OutputId::new("HDMI-1");
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.displays.outputs.push(flamewm_api::display::OutputSnapshot {
+            id: output.clone(),
+            connector: "HDMI-1".to_owned(),
+            edid_identity: String::new(),
+            connected: true,
+            primary: true,
+            geometry: flamewm_api::Rect::new(0, 0, 1350, 641),
+            current_mode: flamewm_api::ModeId(1),
+            modes: Vec::new(),
+            shell_scale_percent: 125,
+        });
+        snapshot.panels.panels.push(flamewm_api::panels::PanelSnapshot {
+            output,
+            edge: flamewm_api::PanelEdge::Bottom,
+            logical_size: 72,
+            visible: true,
+            geometry: flamewm_api::Rect::new(0, 551, 1350, 90),
+        });
+        project_taskbar_height(&mut document, &snapshot)
+            .expect("taskbar size projects from the panel snapshot");
+        project_clock_at(&mut document, Local::now()).expect("clock projects");
+        for slot in 1..=PAGE_SIZE {
+            let id = format!("workspace-{slot}");
+            document.text(&id, slot.to_string()).expect("pager text projects");
+            document.visible(&id, true).expect("pager visible projects");
+        }
+        for id in [
+            "tray-media",
+            "tray-play-icon",
+            "tray-volume",
+            "tray-volume-icon",
+            "tray-network",
+        ] {
+            document.visible(id, true).expect("tray visible projects");
+        }
+        let mut checked = Vec::new();
+        for id in [
+            "clock-time",
+            "clock-date",
+            "clock-button",
+            "workspace-1",
+            "workspace-2",
+            "workspace-3",
+            "workspace-4",
+            "workspace-pager",
+            "tray-media",
+            "tray-volume",
+            "tray-network",
+            "tray-wifi",
+        ] {
+            let (x, y, width, height) = document
+                .layout_box_by_id(id, (1080.0, 72.0))
+                .unwrap_or_else(|| panic!("panel node '{id}' missing from artifact"));
+            assert!(
+                width > 0.0 && height > 0.0,
+                "panel node '{id}' is zero-size: ({x}, {y}, {width}, {height})"
+            );
+            assert!(
+                x >= 0.0 && y >= 0.0 && x + width <= 1080.5 && y + height <= 72.5,
+                "panel node '{id}' lies outside the 1080x72 viewport: ({x}, {y}, {width}, {height})"
+            );
+            checked.push(id);
+        }
+        assert_eq!(checked.len(), 12);
+    }
+
+    // Full cold-start panel pass against the real artifact: a refused write in
+    // any scope (task slots, geometry, pager, tray, clock) aborts the pass
+    // before the later nodes are written.
+    #[test]
+    fn full_panel_projection_succeeds_on_real_artifact() {
+        let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
+            .expect("panel artifact must decode");
+        crate::async_projection::project_panel_async(
+            &mut document,
+            &crate::ShellSnapshot::default(),
+            None,
+        )
+        .unwrap_or_else(|error| panic!("full panel projection refused: {error}"));
+    }
+}
+
+#[cfg(test)]
+mod panel_record_tests {
+    use super::*;
+    use flamewm_api::{OutputId, PanelEdge, Rect};
+
+    fn output(id: &str, x: i32, scale: u16) -> flamewm_api::display::OutputSnapshot {
+        flamewm_api::display::OutputSnapshot {
+            id: OutputId::new(id),
+            connector: id.to_owned(),
+            edid_identity: String::new(),
+            connected: true,
+            primary: x == 0,
+            geometry: Rect::new(x, 0, 1920, 1080),
+            current_mode: flamewm_api::ModeId::default(),
+            modes: Vec::new(),
+            shell_scale_percent: scale,
+        }
+    }
+
+    fn panel(id: &str, x: i32) -> flamewm_api::panels::PanelSnapshot {
+        flamewm_api::panels::PanelSnapshot {
+            output: OutputId::new(id),
+            edge: PanelEdge::Bottom,
+            logical_size: 44,
+            visible: true,
+            geometry: Rect::new(x, 1036, 1920, 44),
+        }
+    }
+
+    #[test]
+    fn panel_projection_visits_every_record_with_its_own_geometry_and_scale() {
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.displays.outputs = vec![output("A", 0, 100), output("B", 1920, 150)];
+        snapshot.panels.panels = vec![panel("A", 0), panel("B", 1920)];
+        let mut seen: Vec<(&str, Rect, u16)> = Vec::new();
+        let result = for_each_panel_record(
+            &snapshot,
+            vec![
+                ("primary", OutputId::new("A")),
+                ("secondary", OutputId::new("B")),
+            ],
+            |key: &str, view: &ShellSnapshot| -> Result<(), String> {
+                seen.push((
+                    key,
+                    view.panels.panels[0].geometry,
+                    view.displays.outputs[0].shell_scale_percent,
+                ));
+                Ok(())
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            seen,
+            vec![
+                ("primary", Rect::new(0, 1036, 1920, 44), 100),
+                ("secondary", Rect::new(1920, 1036, 1920, 44), 150),
+            ]
+        );
+    }
+
+    #[test]
+    fn panel_projection_skips_disconnected_outputs_and_revisits_replugged_output() {
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.displays.outputs = vec![output("A", 0, 100), output("B", 1920, 150)];
+        snapshot.panels.panels = vec![panel("A", 0), panel("B", 1920)];
+        let records = vec![
+            ("primary", OutputId::new("A")),
+            ("secondary", OutputId::new("B")),
+        ];
+        let mut seen = Vec::new();
+
+        snapshot.displays.outputs[1].connected = false;
+        for_each_panel_record(&snapshot, records.clone(), |key, _| {
+            seen.push(key);
+            Ok::<_, String>(())
+        })
+        .expect("partial output snapshot projects");
+        assert_eq!(seen, vec!["primary"]);
+
+        snapshot.displays.outputs[1].connected = true;
+        snapshot.displays.outputs[1].shell_scale_percent = 175;
+        for_each_panel_record(&snapshot, records, |key, view| {
+            seen.push(key);
+            if key == "secondary" {
+                assert_eq!(view.panels.panels[0].geometry, Rect::new(1920, 1036, 1920, 44));
+                assert_eq!(view.displays.outputs[0].shell_scale_percent, 175);
+            }
+            Ok::<_, String>(())
+        })
+        .expect("replugged output projects with fresh scale");
+        assert_eq!(seen, vec!["primary", "primary", "secondary"]);
     }
 }

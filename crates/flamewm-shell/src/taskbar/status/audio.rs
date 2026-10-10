@@ -47,10 +47,20 @@ pub struct AudioPopoverView {
     pub visible_rows: Vec<AudioRowView>,
 }
 
+/// Single availability predicate for audio visibility, popover and actions.
+/// `Unknown` means pending (the provider has not reported yet): it stays
+/// visible and its actions are allowed, because the write is revision- and
+/// generation-fenced and a rejected write is reconciled by the provider.
+/// Only `Unavailable` disables the surface.
+#[must_use]
+pub fn audio_available(snapshot: &SystemSnapshot) -> bool {
+    snapshot.audio.availability != ServiceAvailability::Unavailable
+}
+
 #[must_use]
 pub fn project(snapshot: &SystemSnapshot) -> AudioView {
     let mut view = flamewm_shell_core::StatusViews::from_snapshot(snapshot).audio;
-    view.visible = snapshot.audio.availability == ServiceAvailability::Available;
+    view.visible = audio_available(snapshot);
     view
 }
 
@@ -123,7 +133,7 @@ pub fn slot_for_row(snapshot: &AudioSnapshot, id: &str) -> Option<usize> {
 
 #[must_use]
 pub fn popover(snapshot: &SystemSnapshot) -> Option<AudioPopoverModel> {
-    if snapshot.audio.availability != ServiceAvailability::Available {
+    if !audio_available(snapshot) {
         return None;
     }
     flamewm_shell_core::StatusPopovers::from_snapshot(snapshot).audio
@@ -163,7 +173,7 @@ pub fn system_action_for_row(
     percent: Option<u8>,
     muted: Option<bool>,
 ) -> Option<ControlRequest> {
-    if snapshot.audio.availability != ServiceAvailability::Available {
+    if !audio_available(snapshot) {
         return None;
     }
     let target = if let Some(rest) = row_id.strip_prefix("endpoint:") {
@@ -301,7 +311,7 @@ impl RowSource {
 
 #[must_use]
 pub fn intent(snapshot: &SystemSnapshot) -> Option<StatusIntent> {
-    (snapshot.audio.availability == ServiceAvailability::Available).then_some(StatusIntent::Audio)
+    audio_available(snapshot).then_some(StatusIntent::Audio)
 }
 
 fn ceil_div(total: usize, per_page: usize) -> usize {
@@ -374,5 +384,53 @@ mod tests {
         assert_eq!(active_page(&snapshot), 1);
         assert_eq!(slot_id(&snapshot, 0), Some("endpoint:sink:4".to_owned()));
         assert_eq!(slot_id(&snapshot, 1), Some("stream:9".to_owned()));
+    }
+
+    fn sink_fixture(availability: ServiceAvailability) -> SystemSnapshot {
+        let mut snapshot = SystemSnapshot::default();
+        snapshot.revision = 5;
+        snapshot.audio.availability = availability;
+        snapshot.audio.generation = 1;
+        snapshot.audio.server_generation = 2;
+        snapshot.audio.endpoints.push(AudioEndpointSnapshot {
+            id: 7,
+            kind: AudioEndpointKind::Sink,
+            name: "sink".to_owned(),
+            description: String::new(),
+            volume_percent: 50,
+            muted: false,
+            is_default: true,
+        });
+        snapshot
+    }
+
+    #[test]
+    fn availability_predicate_is_shared_by_visibility_popover_actions_and_intent() {
+        for availability in [
+            ServiceAvailability::Unknown,
+            ServiceAvailability::Available,
+            ServiceAvailability::Unavailable,
+        ] {
+            let snapshot = sink_fixture(availability);
+            let allowed = audio_available(&snapshot);
+            assert_eq!(project(&snapshot).visible, allowed, "{availability:?} visibility");
+            assert_eq!(popover(&snapshot).is_some(), allowed, "{availability:?} popover");
+            assert_eq!(
+                system_action_for_row(&snapshot, "endpoint:sink:7", Some(60), None).is_some(),
+                allowed,
+                "{availability:?} volume action"
+            );
+            assert_eq!(
+                intent(&snapshot).is_some(),
+                allowed,
+                "{availability:?} intent"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_unknown_audio_allows_volume_and_mute_actions() {
+        let snapshot = sink_fixture(ServiceAvailability::Unknown);
+        assert!(system_action_for_row(&snapshot, "endpoint:sink:7", None, Some(true)).is_some());
     }
 }

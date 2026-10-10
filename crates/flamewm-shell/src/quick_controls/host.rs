@@ -23,7 +23,7 @@ use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_ui_x11::{
     decode_document, ActionPhase, PointerButton, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
-    SurfaceRole, SurfaceRuntime, UiBackendError, UiTemplate,
+    SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 use self::popup::{close_helper, fit_helper, grab, measure_helper, prepare_commit, present};
@@ -105,7 +105,15 @@ pub struct QuickControlSnapshot {
     pub audio_tab: AudioTab,
     pub audio_settings: AudioSettings,
     pub network_query: NetworkQuery,
+    pub network_scroll_offset: u32,
     pub network_secret_masked_len: usize,
+    /// Ephemeral helper-only editor value; never projected except as a mask.
+    pub network_secret: String,
+    pub network_secret_request: Option<(u64, u64)>,
+    pub network_secret_focused: bool,
+    pub network_filter_focused: bool,
+    pub network_secret_error: bool,
+    pub network_secret_submit_id: Option<u64>,
 }
 
 impl QuickControlSnapshot {
@@ -116,7 +124,14 @@ impl QuickControlSnapshot {
                 audio_tab: AudioTab::default(),
                 audio_settings: AudioSettings::default(),
                 network_query: NetworkQuery::default(),
+                network_scroll_offset: 0,
                 network_secret_masked_len: 0,
+                network_secret: String::new(),
+                network_secret_request: None,
+                network_secret_focused: false,
+                network_filter_focused: false,
+                network_secret_error: false,
+                network_secret_submit_id: None,
             }),
             Ok(response) => Err(HostError::Control(format!(
                 "GetSystem returned {response:?}"
@@ -268,7 +283,16 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
     let mut runtime = SurfaceRuntime::new()
         .map_err(|error| HostError::Ui(format!("create UI runtime: {error:?}")))?;
     let surfaces = HelperSurfaces::create(&mut runtime).map_err(HostError::Ui)?;
-    let dispatcher = flamewm_control_dbus::MutationDispatcher::start(BusKind::Session, 64).ok();
+    let dispatcher = match flamewm_control_dbus::MutationDispatcher::start(BusKind::Session, 64) {
+        Ok(dispatcher) => Some(dispatcher),
+        Err(error) => {
+            eprintln!(
+                "flamewm-quick-control: mutation dispatcher unavailable; audio/network actions will be dropped: {}",
+                error.message
+            );
+            None
+        }
+    };
     let state = std::rc::Rc::new(std::cell::RefCell::new(HostState {
         surfaces,
         snapshot,
@@ -348,9 +372,26 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
     if let Some(dispatcher) = state.borrow().dispatcher.as_ref() {
         let watch_fd = dispatcher.wake_fd();
         let wake = Arc::clone(dispatcher);
+        let outcome_state = std::rc::Rc::clone(&state);
         reactor
             .register_raw_fd_with_action(watch_fd, calloop::Interest::READ, move |_, _| {
                 crate::control_actions::drain_results(Some(&wake));
+                let outcomes = crate::control_actions::take_network_secret_outcomes();
+                if !outcomes.is_empty() {
+                    let mut state = outcome_state.borrow_mut();
+                    for outcome in outcomes {
+                        if state.snapshot.network_secret_submit_id != Some(outcome.id)
+                            || state.snapshot.network_secret_request != Some(outcome.identity)
+                        {
+                            continue;
+                        }
+                        state.snapshot.network_secret_submit_id = None;
+                        match outcome.result {
+                            Ok(()) => clear_network_secret(&mut state.snapshot),
+                            Err(()) => state.snapshot.network_secret_error = true,
+                        }
+                    }
+                }
                 flamewm_reactor::FdAction::Continue
             })
             .map_err(|error| HostError::Control(format!("register mutation fd: {error}")))?;
@@ -751,10 +792,23 @@ fn project_snapshot(
             ),
             QuickControlKind::Network => {
                 let query = snapshot.network_query.clone();
-                crate::projection::project_network_full(document, &shell, &query, 0)?;
+                crate::projection::project_network_full(
+                    document,
+                    &shell,
+                    &query,
+                    snapshot.network_scroll_offset,
+                )?;
                 crate::projection::project_network_secret(
                     document,
                     &"*".repeat(snapshot.network_secret_masked_len),
+                )?;
+                document.text(
+                    "network-secret-error",
+                    if snapshot.network_secret_error {
+                        "Could not connect. Check the password and try again.".to_owned()
+                    } else {
+                        String::new()
+                    },
                 )
             }
             QuickControlKind::Calendar => {
@@ -778,12 +832,32 @@ pub fn route_helper_event(
     snapshot: &mut QuickControlSnapshot,
     dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
 ) -> bool {
+    sync_network_secret(snapshot);
     let action = event.action.action.as_str();
     if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
         let input = event.action.text.as_deref().unwrap_or_default();
         if input == "\u{1b}" {
             surfaces.close(runtime);
             return true;
+        }
+    }
+    if action == "network.secret.focus" { snapshot.network_secret_focused = true; snapshot.network_filter_focused = false; }
+    if action == "network.filter.focus" { snapshot.network_filter_focused = true; snapshot.network_secret_focused = false; }
+    if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
+        if let Some(text) = event.action.text.as_deref() {
+            if text == "\u{8}" || text == "\u{7f}" {
+                if snapshot.network_secret_focused { snapshot.network_secret.pop(); snapshot.network_secret_masked_len = snapshot.network_secret.chars().count(); }
+                else if snapshot.network_filter_focused { snapshot.network_query.filter.pop(); snapshot.network_scroll_offset = 0; }
+            } else if text == "\r" || text == "\n" {
+                if snapshot.network_secret_focused { return submit_network_secret(snapshot, dispatcher); }
+            } else if snapshot.network_secret_focused {
+                snapshot.network_secret.push_str(text);
+                snapshot.network_secret_masked_len = snapshot.network_secret.chars().count();
+                snapshot.network_secret_error = false;
+            } else if snapshot.network_filter_focused {
+                snapshot.network_query.filter.push_str(text);
+                snapshot.network_scroll_offset = 0;
+            }
         }
     }
     let open_surface = surfaces.open.map(|kind| surfaces.surface_for(kind));
@@ -801,12 +875,93 @@ pub fn route_helper_event(
         return true;
     }
     if event.action.phase == ActionPhase::Release && event.action.inside {
+        match action {
+            "audio.tab.devices" => snapshot.audio_tab = AudioTab::Devices,
+            "audio.tab.apps" => snapshot.audio_tab = AudioTab::Applications,
+            "audio.raise.toggle" => {
+                snapshot.audio_settings.raise_maximum = !snapshot.audio_settings.raise_maximum;
+                if let Some(dispatcher) = dispatcher {
+                    let request = ControlRequest::ApplySettings(
+                        flamewm_api::settings::SettingsTransaction {
+                            expected_revision: snapshot.system.revision,
+                            changes: vec![flamewm_api::settings::SettingsChange {
+                                key: AudioSettings::SETTINGS_KEY.to_owned(),
+                                value: Some(SettingValue::Boolean(
+                                    snapshot.audio_settings.raise_maximum,
+                                )),
+                            }],
+                            reset_section: None,
+                        },
+                    );
+                    crate::control_actions::enqueue_action(Some(dispatcher), request);
+                }
+            }
+            "network.filter.clear" => snapshot.network_query.filter.clear(),
+            "network.filter.focus" | "network.secret.focus" => {},
+            "network.secret.cancel" => {
+                if let Some((request_id, generation)) = snapshot.network_secret_request {
+                    let request = ControlRequest::SystemAction {
+                        action: flamewm_api::system::SystemAction::CancelNetworkSecret { request_id, generation },
+                        expected_revision: snapshot.system.revision,
+                    };
+                    crate::control_actions::enqueue_action(dispatcher, request);
+                }
+                clear_network_secret(snapshot);
+                return true;
+            }
+            "network.disconnect" => {
+                clear_network_secret(snapshot);
+                if let Some(request) = helper_control_request(action, snapshot) {
+                    crate::control_actions::enqueue_action(dispatcher, request);
+                }
+                return true;
+            }
+            "network.secret.submit" => {
+                return submit_network_secret(snapshot, dispatcher);
+            }
+            value if value.starts_with("network.filter.") => {
+                snapshot.network_query.filter = value["network.filter.".len()..].to_owned();
+                snapshot.network_scroll_offset = 0;
+            }
+            _ => {}
+        }
         if let Some(request) = helper_control_request(action, snapshot) {
             crate::control_actions::enqueue_action(dispatcher, request);
         }
         let _ = PointerButton::from_raw_x(event.action.button);
     }
     true
+}
+
+fn clear_network_secret(snapshot: &mut QuickControlSnapshot) {
+    snapshot.network_secret.clear();
+    snapshot.network_secret_masked_len = 0;
+    snapshot.network_secret_request = None;
+    snapshot.network_secret_submit_id = None;
+    snapshot.network_secret_error = false;
+}
+
+fn submit_network_secret(snapshot: &mut QuickControlSnapshot, dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>) -> bool {
+    let Some(identity @ (request_id, generation)) = snapshot.network_secret_request else { return true; };
+    let request = ControlRequest::SystemAction {
+        action: flamewm_api::system::SystemAction::SubmitNetworkSecret { request_id, generation, secret: snapshot.network_secret.clone() },
+        expected_revision: snapshot.system.revision,
+    };
+    snapshot.network_secret_submit_id = crate::control_actions::enqueue_network_secret(dispatcher, identity, request);
+    if snapshot.network_secret_submit_id.is_none() { snapshot.network_secret_error = true; }
+    true
+}
+
+fn sync_network_secret(snapshot: &mut QuickControlSnapshot) {
+    let key = snapshot.system.network.pending_secret.as_ref().map(|pending| {
+        (pending.request_id, snapshot.system.network.generation)
+    });
+    if snapshot.network_secret_request != key {
+        clear_network_secret(snapshot);
+        snapshot.network_secret_focused = false;
+        snapshot.network_filter_focused = false;
+        snapshot.network_secret_request = key;
+    }
 }
 
 fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Option<ControlRequest> {
@@ -828,8 +983,13 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|slot| slot.checked_sub(1))
     {
-        let path = crate::taskbar::status::network::popover_view(system)
-            .and_then(|popover| popover.visible_rows.get(slot).map(|row| row.path.clone()))?;
+        let path = crate::taskbar::status::network::project_visible_rows(
+            system,
+            &snapshot.network_query,
+            snapshot.network_scroll_offset,
+        )
+        .get(slot)
+        .map(|row| row.path.clone())?;
         return crate::taskbar::status::network::system_action_for_path(
             system, &path, false, false,
         );
@@ -1046,7 +1206,14 @@ mod tests {
             audio_tab: AudioTab::Devices,
             audio_settings: AudioSettings::default(),
             network_query: NetworkQuery::default(),
+            network_scroll_offset: 0,
             network_secret_masked_len: 8,
+            network_secret: String::new(),
+            network_secret_request: None,
+            network_secret_focused: false,
+            network_filter_focused: false,
+            network_secret_error: false,
+            network_secret_submit_id: None,
         };
         let debug = format!("{snapshot:?}");
         assert!(
@@ -1069,13 +1236,80 @@ mod tests {
             audio_tab: AudioTab::default(),
             audio_settings: AudioSettings::default(),
             network_query: NetworkQuery::default(),
+            network_scroll_offset: 0,
             network_secret_masked_len: 0,
+            network_secret: String::new(),
+            network_secret_request: None,
+            network_secret_focused: false,
+            network_filter_focused: false,
+            network_secret_error: false,
+            network_secret_submit_id: None,
         };
         let mut next = quick.system.clone();
         next.revision = 7;
         assert!(apply_system_snapshot(&mut quick, next.clone()));
         assert_eq!(quick.system, next);
         assert!(!apply_system_snapshot(&mut quick, next));
+    }
+
+    #[test]
+    fn filtered_sorted_scrolled_network_slot_resolves_the_projected_ap() {
+        use flamewm_api::system::{NetworkAccessPointSnapshot, ServiceAvailability, SystemAction};
+
+        let mut system = flamewm_api::system::SystemSnapshot::default();
+        system.revision = 9;
+        system.network.availability = ServiceAvailability::Available;
+        system.network.active_access_point_path = "/ap/4".to_owned();
+        system.network.access_points = (0..8)
+            .map(|index| NetworkAccessPointSnapshot {
+                path: format!("/ap/{index}"),
+                ssid: if matches!(index, 1 | 3 | 4 | 6 | 7) {
+                    format!("match-{index}")
+                } else {
+                    format!("other-{index}")
+                },
+                strength_percent: 50,
+                secured: false,
+                known: true,
+            })
+            .collect();
+        let quick = QuickControlSnapshot {
+            system,
+            audio_tab: AudioTab::Devices,
+            audio_settings: AudioSettings::default(),
+            network_query: NetworkQuery {
+                filter: "MATCH".to_owned(),
+            },
+            network_scroll_offset: 44,
+            network_secret_masked_len: 0,
+            network_secret: String::new(),
+            network_secret_request: None,
+            network_secret_focused: false,
+            network_filter_focused: false,
+            network_secret_error: false,
+            network_secret_submit_id: None,
+        };
+
+        // Filtering leaves five rows; connected-first ordering moves provider
+        // index 4 ahead of them, then one-row scrolling makes provider index 1
+        // the visible slot 0. This differs from raw provider slot 0.
+        let rows = crate::taskbar::status::network::project_visible_rows(
+            &quick.system,
+            &quick.network_query,
+            quick.network_scroll_offset,
+        );
+        assert_eq!(rows[0].path, "/ap/1");
+        let request = helper_control_request("network.connect.1", &quick)
+            .expect("projected slot resolves to a connect request");
+        assert_eq!(
+            request,
+            ControlRequest::SystemAction {
+                action: SystemAction::ConnectKnown {
+                    access_point_path: rows[0].path.clone(),
+                },
+                expected_revision: 9,
+            }
+        );
     }
 
     #[test]

@@ -13,6 +13,47 @@ macro_rules! shell_stage {
 }
 
 const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
+/// Tray volume source node; its release toggles the audio popup.
+const TRAY_VOLUME_ACTION: &str = "volume.open";
+
+/// What a release outside the active popup does to the quick-control popups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutsideReleaseDecision {
+    /// Not an outside release: the normal routing continues.
+    Ignore,
+    /// Close the popup; the release is consumed.
+    Close,
+    /// The tray volume node toggles an open audio popup closed. The release is
+    /// consumed, so the same click cannot reopen it on this turn.
+    ToggleTrayVolumeClosed,
+}
+
+/// Pure decision for release handling. Non-Escape keyboard releases never
+/// close popups (Escape is handled before this point). A release on the tray
+/// volume node is an outside release for the popup, but only closes an open
+/// audio popup; with no audio popup open it falls through to the open path.
+pub(crate) fn outside_release_decision(
+    action: &str,
+    is_release: bool,
+    is_keyboard: bool,
+    inside: bool,
+    audio_popup_open: bool,
+) -> OutsideReleaseDecision {
+    if !is_release || is_keyboard {
+        return OutsideReleaseDecision::Ignore;
+    }
+    if action != OUTSIDE_RELEASE_ACTION && inside {
+        return OutsideReleaseDecision::Ignore;
+    }
+    if action == TRAY_VOLUME_ACTION {
+        return if audio_popup_open {
+            OutsideReleaseDecision::ToggleTrayVolumeClosed
+        } else {
+            OutsideReleaseDecision::Ignore
+        };
+    }
+    OutsideReleaseDecision::Close
+}
 
 impl ShellLoop {
     pub(crate) fn route_event(
@@ -77,14 +118,24 @@ impl ShellLoop {
                 return Ok(());
             }
         }
-        let outside = event.action.phase == ActionPhase::Release
-            && (action == OUTSIDE_RELEASE_ACTION || !event.action.inside);
-        if outside {
-            self.shell.dispatch("popover.close");
-            // C04: geometry-invalidating or menu-opening paths also drop
-            // any helper popup on the same turn (nonfatal, loop survives).
-            self.close_quick_control_nonfatal();
-            return self.apply_controls(runtime);
+        let decision = outside_release_decision(
+            action,
+            event.action.phase == ActionPhase::Release,
+            is_keyboard,
+            event.action.inside,
+            self.quick_audio_open,
+        );
+        match decision {
+            OutsideReleaseDecision::Ignore => {}
+            // Toggle-closed and close share the same teardown; the early
+            // return is what prevents the same-turn OpenPopover reopen.
+            OutsideReleaseDecision::Close | OutsideReleaseDecision::ToggleTrayVolumeClosed => {
+                self.shell.dispatch("popover.close");
+                // C04: geometry-invalidating or menu-opening paths also drop
+                // any helper popup on the same turn (nonfatal, loop survives).
+                self.close_quick_control_nonfatal();
+                return self.apply_controls(runtime);
+            }
         }
 
         // context menus here.
@@ -335,5 +386,54 @@ impl ShellLoop {
             viewport_height: 1,
             scroll_offset: 0,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_release_while_audio_open_toggles_closed_without_reopen() {
+        assert_eq!(
+            outside_release_decision(TRAY_VOLUME_ACTION, true, false, false, true),
+            OutsideReleaseDecision::ToggleTrayVolumeClosed
+        );
+    }
+
+    #[test]
+    fn tray_release_with_no_audio_popup_falls_through_to_open() {
+        assert_eq!(
+            outside_release_decision(TRAY_VOLUME_ACTION, true, false, false, false),
+            OutsideReleaseDecision::Ignore
+        );
+    }
+
+    #[test]
+    fn non_escape_keyboard_release_never_closes_popups() {
+        assert_eq!(
+            outside_release_decision("keyboard.input", true, true, false, true),
+            OutsideReleaseDecision::Ignore
+        );
+    }
+
+    #[test]
+    fn genuine_outside_release_closes_and_inside_release_is_kept() {
+        assert_eq!(
+            outside_release_decision(OUTSIDE_RELEASE_ACTION, true, false, false, true),
+            OutsideReleaseDecision::Close
+        );
+        assert_eq!(
+            outside_release_decision("network.open", true, false, false, true),
+            OutsideReleaseDecision::Close
+        );
+        assert_eq!(
+            outside_release_decision("network.open", true, false, true, true),
+            OutsideReleaseDecision::Ignore
+        );
+        assert_eq!(
+            outside_release_decision("network.open", false, false, false, true),
+            OutsideReleaseDecision::Ignore
+        );
     }
 }

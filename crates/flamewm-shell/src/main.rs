@@ -15,6 +15,7 @@ use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_reactor::Reactor;
 use flamewm_shell::async_projection;
+use flamewm_shell::projection;
 use flamewm_shell::start;
 use flamewm_shell::{ShellSnapshot, ShellSurfaces};
 use flamewm_ui_x11::{run_surface_runtime_with_reactor_access, SurfaceEvent, SurfaceRuntime};
@@ -55,6 +56,22 @@ fn execute() -> Result<(), String> {
         let _s = scope.start();
         ShellSnapshot::load(&client)?
     };
+    // Settings are not part of the shell bootstrap aggregate. Fetch the
+    // current settings once here so the first projection applies saved
+    // presentation values (font family/size, accent, taskbar color) instead
+    // of waiting for a live SettingsSnapshotChanged signal. Nonfatal: defaults
+    // remain in effect when the fetch fails.
+    let startup_settings = match client.call(&flamewm_control_core::ControlRequest::GetSettings) {
+        Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => Some(snapshot),
+        Ok(response) => {
+            eprintln!("flamewm-shell: GetSettings returned {response:?} (nonfatal)");
+            None
+        }
+        Err(error) => {
+            eprintln!("flamewm-shell: GetSettings failed (nonfatal): {}", error.message);
+            None
+        }
+    };
     // The startup client owns only the bootstrap roundtrip. Steady-state
     // mutations use the dispatcher worker and snapshots arrive by signal.
     drop(client);
@@ -77,9 +94,11 @@ fn execute() -> Result<(), String> {
     {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.panel_show");
         let _s = scope.start();
-        runtime
-            .show(surfaces.panel)
-            .map_err(|e| format!("show panel: {e:?}"))?;
+        for panel in surfaces.panel_handles() {
+            runtime
+                .show(panel)
+                .map_err(|e| format!("show panel: {e:?}"))?;
+        }
     }
     let loader_root = packaged_root();
 
@@ -119,6 +138,10 @@ fn execute() -> Result<(), String> {
         loader_root,
         current_exe_program(),
     )));
+    if let Some(snapshot) = startup_settings {
+        // Same entry point as the live SettingsSnapshotChanged path.
+        state.borrow_mut().apply_settings_snapshot(snapshot);
+    }
     if let Some(dispatcher) = state.borrow().dispatcher.as_ref() {
         let watch_fd = dispatcher.wake_fd();
         let wake_dispatcher = Arc::clone(dispatcher);
@@ -218,11 +241,16 @@ fn project_panel_critical(
     snapshot: &ShellSnapshot,
     start_model: &flamewm_shell_core::StartModel,
 ) -> Result<(), String> {
-    runtime
-        .with_document(surfaces.panel, |document| {
-            async_projection::project_panel_async(document, snapshot, None)
-        })
-        .map_err(|error| format!("project panel: {error:?}"))?;
+    projection::for_each_panel_record(
+        snapshot,
+        surfaces.panel_outputs(),
+        |handle, view| {
+            runtime.with_document(handle, |document| {
+                async_projection::project_panel_async(document, view, None)
+            })
+        },
+    )
+    .map_err(|error| format!("project panel: {error:?}"))?;
     runtime
         .with_document(surfaces.start, |document| {
             async_projection::project_start_unified(
@@ -258,9 +286,40 @@ fn profile_interval_secs() -> u64 {
 }
 
 fn packaged_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .expect("flamewm workspace root")
+        .expect("flamewm workspace root");
+    resolve_packaged_root(
+        std::env::current_exe().ok().as_deref(),
+        &manifest_root,
+        |root| root.join("assets").is_dir(),
+    )
+}
+
+// Mirrors flamewm-desktop's resolve_packaged_root: an installed
+// /usr/bin/flamewm-shell resolves to /usr/share/flamewm when it has assets/,
+// otherwise the checkout manifest root is used.
+fn resolve_packaged_root(
+    executable: Option<&Path>,
+    manifest_root: &Path,
+    assets_available: impl FnOnce(&Path) -> bool,
+) -> PathBuf {
+    executable
+        .and_then(installed_data_root)
+        .filter(|root| assets_available(root))
+        .unwrap_or_else(|| manifest_root.to_path_buf())
+}
+
+fn installed_data_root(executable: &Path) -> Option<PathBuf> {
+    let bin_dir = executable.parent()?;
+    if bin_dir.file_name()? != "bin" {
+        return None;
+    }
+    let usr_dir = bin_dir.parent()?;
+    if usr_dir.file_name()? != "usr" {
+        return None;
+    }
+    Some(usr_dir.join("share/flamewm"))
 }

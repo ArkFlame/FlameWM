@@ -41,6 +41,51 @@ pub struct NetworkPopoverView {
     pub secret_masked: bool,
 }
 
+/// Project the filtered, connected-first AP list into the exact row slots
+/// shown by the network surface. `slot` is the visible slot (not a provider
+/// list index); `path` remains the stable NetworkManager object identity.
+#[must_use]
+pub fn project_visible_rows(
+    snapshot: &SystemSnapshot,
+    query: &flamewm_shell_core::status::NetworkQuery,
+    scroll_offset: u32,
+) -> Vec<NetworkRowView> {
+    let network = &snapshot.network;
+    let mut rows: Vec<_> = network
+        .access_points
+        .iter()
+        .filter_map(|access_point| {
+            let label = if access_point.ssid.is_empty() {
+                "Hidden network".to_owned()
+            } else {
+                access_point.ssid.clone()
+            };
+            query.matches(&label).then(|| NetworkRowView {
+                slot: 0,
+                path: access_point.path.clone(),
+                label,
+                strength_percent: access_point.strength_percent.min(100),
+                secured: access_point.secured,
+                known: access_point.known,
+                connected: is_connected_path(network, &access_point.path),
+            })
+        })
+        .collect();
+    rows.sort_by_key(|row| !row.connected);
+
+    let (first, last) =
+        flamewm_shell_core::status::visible_window(rows.len(), 44, 180, scroll_offset);
+    rows.into_iter()
+        .skip(first)
+        .take(last.saturating_sub(first).min(NETWORK_SLOT_COUNT))
+        .enumerate()
+        .map(|(slot, mut row)| {
+            row.slot = slot;
+            row
+        })
+        .collect()
+}
+
 #[must_use]
 pub fn project(snapshot: &SystemSnapshot) -> NetworkView {
     let mut view = flamewm_shell_core::StatusViews::from_snapshot(snapshot).network;
@@ -56,17 +101,49 @@ pub fn page_count(snapshot: &NetworkSnapshot) -> usize {
     ceil_div(snapshot.access_points.len(), NETWORK_SLOT_COUNT)
 }
 
-/// Page containing the connected AP (`active_path`) when present, else the
-/// first page. Keeps the connected row visible while paging the full model.
+/// True when `path` is the connected access-point object path. Keyed by AP
+/// path (never SSID), so duplicate SSIDs yield exactly one connected row.
+#[must_use]
+pub fn is_connected_path(snapshot: &NetworkSnapshot, path: &str) -> bool {
+    !snapshot.active_access_point_path.is_empty()
+        && path == snapshot.active_access_point_path
+}
+
+/// The single connected row, for the dedicated `#network-connected` container.
+/// It is independent of paging, so it stays visible on every page.
+#[must_use]
+pub fn connected_row(snapshot: &SystemSnapshot) -> Option<NetworkRowView> {
+    let network = &snapshot.network;
+    let access_point = network
+        .access_points
+        .iter()
+        .find(|access_point| is_connected_path(network, &access_point.path))?;
+    Some(NetworkRowView {
+        slot: 0,
+        path: access_point.path.clone(),
+        label: if access_point.ssid.is_empty() {
+            "Hidden network".to_owned()
+        } else {
+            access_point.ssid.clone()
+        },
+        strength_percent: access_point.strength_percent.min(100),
+        secured: access_point.secured,
+        known: access_point.known,
+        connected: true,
+    })
+}
+
+/// Page containing the connected AP when present, else the first page.
+/// Keeps the connected row visible while paging the full model.
 #[must_use]
 pub fn active_page(snapshot: &NetworkSnapshot) -> usize {
-    if snapshot.active_path.is_empty() {
+    if snapshot.active_access_point_path.is_empty() {
         return 0;
     }
     snapshot
         .access_points
         .iter()
-        .position(|access_point| access_point.path == snapshot.active_path)
+        .position(|access_point| is_connected_path(snapshot, &access_point.path))
         .map_or(0, |index| index / NETWORK_SLOT_COUNT)
 }
 
@@ -154,7 +231,7 @@ pub fn popover_view(snapshot: &SystemSnapshot) -> Option<NetworkPopoverView> {
             strength_percent: access_point.strength_percent.min(100),
             secured: access_point.secured,
             known: access_point.known,
-            connected: !network.active_path.is_empty() && access_point.path == network.active_path,
+            connected: is_connected_path(network, &access_point.path),
         })
         .collect();
     Some(NetworkPopoverView {
@@ -286,4 +363,66 @@ mod tests {
             })
         );
     }
+
+    fn duplicate_ssid_snapshot(active_ap: &str) -> SystemSnapshot {
+        let mut snapshot = SystemSnapshot::default();
+        snapshot.network.availability = ServiceAvailability::Available;
+        snapshot.network.active_path = "/nm/ac/1".to_owned();
+        snapshot.network.active_access_point_path = active_ap.to_owned();
+        snapshot.network.access_points = ["/nm/ap/1", "/nm/ap/2"]
+            .iter()
+            .map(|path| NetworkAccessPointSnapshot {
+                path: (*path).to_owned(),
+                ssid: "FlameNet".to_owned(),
+                strength_percent: 60,
+                secured: true,
+                known: true,
+            })
+            .collect();
+        snapshot
+    }
+
+    #[test]
+    fn duplicate_ssids_yield_exactly_one_connected_row_keyed_by_path() {
+        let snapshot = duplicate_ssid_snapshot("/nm/ap/2");
+        let query = flamewm_shell_core::status::NetworkQuery::default();
+        let rows = project_visible_rows(&snapshot, &query, 0);
+        let connected: Vec<_> = rows.iter().filter(|row| row.connected).collect();
+        assert_eq!(connected.len(), 1);
+        assert_eq!(connected[0].path, "/nm/ap/2");
+        let header = connected_row(&snapshot).expect("connected row");
+        assert_eq!(header.path, "/nm/ap/2");
+        assert!(header.connected);
+    }
+
+    #[test]
+    fn connection_path_alone_never_marks_an_access_point_connected() {
+        // ActiveConnection ("/nm/ac/1") is not an AP path and must not match any row.
+        let snapshot = duplicate_ssid_snapshot("");
+        let query = flamewm_shell_core::status::NetworkQuery::default();
+        assert!(project_visible_rows(&snapshot, &query, 0)
+            .iter()
+            .all(|row| !row.connected));
+        assert!(connected_row(&snapshot).is_none());
+        assert!(!is_connected_path(&snapshot.network, "/nm/ac/1"));
+    }
+
+    #[test]
+    fn connected_row_is_available_on_every_page() {
+        let mut snapshot = duplicate_ssid_snapshot("/nm/ap/10");
+        snapshot.network.access_points = (1..=10)
+            .map(|index| NetworkAccessPointSnapshot {
+                path: format!("/nm/ap/{index}"),
+                ssid: format!("Net{index}"),
+                strength_percent: 50,
+                secured: false,
+                known: false,
+            })
+            .collect();
+        // Connected AP is on page 2 (index 9); the connected container still resolves it.
+        assert_eq!(active_page(&snapshot.network), 1);
+        assert_eq!(connected_row(&snapshot).expect("connected").path, "/nm/ap/10");
+        assert_eq!(page_count(&snapshot.network), 2);
+    }
+
 }

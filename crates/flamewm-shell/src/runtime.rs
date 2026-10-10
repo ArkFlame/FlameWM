@@ -231,6 +231,15 @@ impl ShellRuntime {
                     self.dirty.panels = true;
                 }
             }
+            ControlSignal::DisplaysSnapshotChanged { snapshot } => {
+                // Output shell scale lives only in the display snapshot. Refreshing it here lets
+                // resync_panel_geometry see the scale drift; panels are marked dirty so the
+                // frame loop runs the panel projection path this turn.
+                if *snapshot != self.snapshot.displays {
+                    self.snapshot.displays = snapshot.clone();
+                    self.dirty.panels = true;
+                }
+            }
             ControlSignal::SystemSnapshotChanged { snapshot } => {
                 let _s = crate::runtime::shell_span("shell.signal_to_visual.system").start();
                 if snapshot != &self.snapshot.system {
@@ -239,6 +248,10 @@ impl ShellRuntime {
                 }
             }
             ControlSignal::SystemChanged { .. } => {}
+            // Same path as the `start.toggle` dispatch: one queued ToggleStart control.
+            ControlSignal::StartMenuToggleRequested => {
+                self.controls.push_back(ShellControl::ToggleStart);
+            }
             _ => {}
         }
     }
@@ -522,6 +535,12 @@ impl ShellRuntime {
     pub fn drain_controls(&mut self) -> impl Iterator<Item = ShellControl> + '_ {
         self.controls.drain(..)
     }
+
+    /// True when a signal- or dispatch-queued control awaits the drain.
+    #[must_use]
+    pub fn has_pending_controls(&self) -> bool {
+        !self.controls.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -598,6 +617,56 @@ pub fn panel_context_for_snapshot(
     ))
 }
 
+/// One placement context per connected panel whose edge matches
+/// `expected_edge`, each tied to its own output. Single-output snapshots
+/// yield the same single context as [`panel_context_for_snapshot`].
+#[must_use]
+pub fn panel_contexts_for_snapshot(
+    snapshot: &ShellSnapshot,
+    expected_edge: flamewm_api::PanelEdge,
+) -> Vec<PanelPlacementContext> {
+    snapshot
+        .panels
+        .panels
+        .iter()
+        .filter(|panel| panel.edge == expected_edge)
+        .filter_map(|panel| {
+            let output = snapshot
+                .displays
+                .outputs
+                .iter()
+                .find(|output| output.id == panel.output && output.connected)
+                .cloned()?;
+            Some(PanelPlacementContext::new(
+                output,
+                panel.clone(),
+                snapshot.displays.generation,
+                snapshot.panels.revision,
+            ))
+        })
+        .collect()
+}
+
+/// Pure hotplug seam: panel surfaces (keyed by output) whose output is no
+/// longer a connected panel output in `snapshot`. Only those are removed.
+#[must_use]
+pub fn panel_surface_outputs_to_remove(
+    existing: &[flamewm_api::OutputId],
+    snapshot: &ShellSnapshot,
+) -> Vec<flamewm_api::OutputId> {
+    existing
+        .iter()
+        .filter(|id| {
+            !snapshot
+                .displays
+                .outputs
+                .iter()
+                .any(|output| output.connected && output.id == **id)
+        })
+        .cloned()
+        .collect()
+}
+
 /// F10: pure edge/geometry consistency predicate shared by
 /// `check_edge_consistent` and unit tests.
 #[must_use]
@@ -632,66 +701,112 @@ pub fn synced_placement_for_snapshot(
     panel_context_for_snapshot(snapshot, first.edge)
 }
 
+/// One native panel surface for one connected panel output. Each record
+/// owns its handle and the placement context resolved from the snapshot.
+pub struct PanelSurfaceRecord {
+    pub panel: SurfaceHandle,
+    pub placement: PanelPlacementContext,
+}
+
 /// J07 parent role: panel + Start + task menu + media only. The parent no
 /// longer creates or owns audio/network/calendar native surfaces; the
 /// quick-control helper owns those surfaces and the parent reaches them
 /// through [`crate::quick_controls::QuickControlSupervisor`].
+///
+/// `panels` holds one record per connected panel output. Index 0 is the
+/// primary record (the output of the first snapshot panel); every
+/// single-output code path reads only the primary record.
 pub struct ShellSurfaces {
-    pub panel: SurfaceHandle,
     pub start: SurfaceHandle,
     pub task_menu: SurfaceHandle,
     pub media: SurfaceHandle,
-    output: flamewm_api::display::OutputSnapshot,
-    panel_snapshot: flamewm_api::panels::PanelSnapshot,
-    #[allow(dead_code)]
-    start_layout: flamewm_shell_core::StartSurfaceLayout,
-    placement: PanelPlacementContext,
+    panels: Vec<PanelSurfaceRecord>,
     transient: Option<Transient>,
 }
 
+fn create_panel_surface(
+    runtime: &mut SurfaceRuntime,
+    placement: &PanelPlacementContext,
+) -> Result<SurfaceHandle, String> {
+    let panel_snapshot = &placement.panel;
+    let panel = create_surface(
+        runtime,
+        PANEL_ARTIFACT,
+        SurfaceConfig {
+            width: checked_size(panel_snapshot.geometry.width)?,
+            height: checked_size(panel_snapshot.geometry.height)?,
+            title: "FlameWM panel".to_owned(),
+            role: SurfaceRole::Dock,
+            input: SurfaceInputMode::Interactive,
+            initially_visible: panel_snapshot.visible,
+            x: panel_snapshot.geometry.x,
+            y: panel_snapshot.geometry.y,
+        },
+    )?;
+    // The window is `logical * scale` device pixels tall while the bar is
+    // laid out in CSS pixels; without the document scale the bar stops at
+    // 44 device pixels and leaves an undrawn band at the bottom edge.
+    runtime
+        .apply_output_scale(
+            panel,
+            panel_ui_scale(placement.output.shell_scale_percent),
+        )
+        .map_err(|error| format!("panel ui scale: {error:?}"))?;
+    Ok(panel)
+}
+
 impl ShellSurfaces {
+    fn primary(&self) -> &PanelSurfaceRecord {
+        // Invariant: `create` and `sync_panel_context` never leave `panels`
+        // empty, and the primary record is kept at index 0.
+        &self.panels[0]
+    }
+
+    /// Native handle of the primary panel surface.
+    #[must_use]
+    pub fn panel(&self) -> SurfaceHandle {
+        self.primary().panel
+    }
+
+    /// Every native panel surface handle, primary first.
+    #[must_use]
+    pub fn panel_handles(&self) -> Vec<SurfaceHandle> {
+        self.panels.iter().map(|record| record.panel).collect()
+    }
+
+    /// Every panel record as (native handle, output id), primary first.
+    #[must_use]
+    pub fn panel_outputs(&self) -> Vec<(SurfaceHandle, flamewm_api::OutputId)> {
+        self.panels
+            .iter()
+            .map(|record| (record.panel, record.placement.output.id.clone()))
+            .collect()
+    }
+
     pub fn create(runtime: &mut SurfaceRuntime, snapshot: &ShellSnapshot) -> Result<Self, String> {
-        let panel_snapshot = snapshot
+        let first = snapshot
             .panels
             .panels
             .first()
             .cloned()
             .ok_or_else(|| "GetPanels returned no panel".to_owned())?;
-        let output = snapshot
-            .displays
-            .outputs
+        let contexts = panel_contexts_for_snapshot(snapshot, first.edge);
+        let primary_placement = contexts
             .iter()
-            .find(|output| output.id == panel_snapshot.output && output.connected)
+            .find(|context| context.panel.output == first.output)
             .cloned()
             .ok_or_else(|| "GetDisplays returned no connected panel output".to_owned())?;
         let metrics = ShellMetrics::default();
-        let start_layout = start_surface_layout(
-            panel_snapshot.output.clone(),
-            output.geometry,
-            panel_snapshot.edge,
-            metrics,
-        );
-        let panel = create_surface(
-            runtime,
-            PANEL_ARTIFACT,
-            SurfaceConfig {
-                width: checked_size(panel_snapshot.geometry.width)?,
-                height: checked_size(panel_snapshot.geometry.height)?,
-                title: "FlameWM panel".to_owned(),
-                role: SurfaceRole::Dock,
-                input: SurfaceInputMode::Interactive,
-                initially_visible: panel_snapshot.visible,
-                x: panel_snapshot.geometry.x,
-                y: panel_snapshot.geometry.y,
-            },
-        )?;
+        let primary_panel = create_panel_surface(runtime, &primary_placement)?;
+        let output = primary_placement.output.clone();
+        let panel_snapshot = primary_placement.panel.clone();
         let start = create_surface(
             runtime,
             START_ARTIFACT,
             popup_config(
                 "FlameWM start",
                 SurfaceRole::PopupMenu,
-                start_layout.popover,
+                primary_placement.start_layout.popover,
             ),
         )?;
         let task_menu = create_surface(
@@ -712,22 +827,25 @@ impl ShellSurfaces {
                 panel_anchor(&panel_snapshot, &output, metrics, 1),
             ),
         )?;
-        let placement = PanelPlacementContext::new(
-            output.clone(),
-            panel_snapshot.clone(),
-            snapshot.displays.generation,
-            snapshot.panels.revision,
-        );
-        let start_layout = placement.start_layout.clone();
+        let mut panels = vec![PanelSurfaceRecord {
+            panel: primary_panel,
+            placement: primary_placement.clone(),
+        }];
+        for context in contexts {
+            if context.output.id == primary_placement.output.id {
+                continue;
+            }
+            let panel = create_panel_surface(runtime, &context)?;
+            panels.push(PanelSurfaceRecord {
+                panel,
+                placement: context,
+            });
+        }
         Ok(Self {
-            panel,
             start,
             task_menu,
             media,
-            output,
-            panel_snapshot,
-            start_layout,
-            placement,
+            panels,
             transient: None,
         })
     }
@@ -756,9 +874,9 @@ impl ShellSurfaces {
     /// transaction (`runtime::start_surface`). Never mapped at 0,0:
     /// missing layout/anchor refuses via `PopupError`.
     fn open_start_group_measured(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        let work_area = self.placement.work_area;
-        let edge = self.panel_snapshot.edge;
-        start_surface::open(runtime, self.panel, self.start, work_area, edge)?;
+        let work_area = self.primary().placement.work_area;
+        let edge = self.primary().placement.panel.edge;
+        start_surface::open(runtime, self.primary().panel, self.start, work_area, edge)?;
         self.transient = Some(Transient::StartGroup);
         Ok(())
     }
@@ -780,9 +898,9 @@ impl ShellSurfaces {
     /// via the shared `start_surface::refit` (anchor -> measure -> fit);
     /// prepared before re-map without dropping the group grab.
     fn resize_start_group_measured(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        let work_area = self.placement.work_area;
-        let edge = self.panel_snapshot.edge;
-        let rect = start_surface::refit(runtime, self.panel, self.start, work_area, edge, 8)
+        let work_area = self.primary().placement.work_area;
+        let edge = self.primary().placement.panel.edge;
+        let rect = start_surface::refit(runtime, self.primary().panel, self.start, work_area, edge, 8)
             .map_err(|error| error.to_string())?;
         self.map_raise(runtime, self.start, rect)
     }
@@ -854,10 +972,10 @@ impl ShellSurfaces {
         self.close_transients(runtime)?;
         status_surface::open(
             runtime,
-            self.panel,
+            self.primary().panel,
             surface,
-            self.placement.work_area,
-            self.panel_snapshot.edge,
+            self.primary().placement.work_area,
+            self.primary().placement.panel.edge,
         )?;
         self.transient = Some(transient);
         Ok(())
@@ -874,10 +992,10 @@ impl ShellSurfaces {
         };
         let rect = status_surface::refit(
             runtime,
-            self.panel,
+            self.primary().panel,
             surface,
-            self.placement.work_area,
-            self.panel_snapshot.edge,
+            self.primary().placement.work_area,
+            self.primary().placement.panel.edge,
         )
         .map_err(|error| error.to_string())?;
         self.map_raise(runtime, surface, rect)
@@ -900,8 +1018,8 @@ impl ShellSurfaces {
         );
         let size = context_menu_size(rows);
         let rect = context_menu_rect(
-            self.panel_snapshot.output.clone(),
-            self.output.geometry,
+            self.primary().placement.panel.output.clone(),
+            self.primary().placement.output.geometry,
             state.anchor,
             size,
         );
@@ -917,50 +1035,96 @@ impl ShellSurfaces {
         fallback: &flamewm_api::Rect,
         source_id: &str,
     ) -> flamewm_api::Rect {
-        crate::runtime::retained_source_rect(runtime, self.panel, source_id).unwrap_or(*fallback)
+        crate::runtime::retained_source_rect(runtime, self.primary().panel, source_id).unwrap_or(*fallback)
     }
 
-    /// Recompute the stored placement context from a fresh snapshot.
-    /// Pure/state only: resolve the panel's output, validate that the
-    /// snapshot edge matches the stored panel edge (reject mixed-edge
-    /// snapshots), recompute work area + Start layout, then update all
-    /// placement fields atomically. Returns `false` when the output or
-    /// panel is missing (state untouched). Wired to main.rs (F10):
-    /// `resync_panel_geometry` calls this BEFORE next open/projection.
-    /// F10: on an edge switch (stored Top, snapshot Bottom) the gated
-    /// resolve misses; fall back to the snapshot's own edge so a
-    /// genuine Top -> Bottom move still resyncs (geometry-driven).
-    #[must_use]
-    pub fn sync_panel_context(&mut self, snapshot: &ShellSnapshot) -> bool {
-        if let Some(placement) = panel_context_for_snapshot(snapshot, self.panel_snapshot.edge) {
-            self.output = placement.output.clone();
-            self.panel_snapshot = placement.panel.clone();
-            self.start_layout = placement.start_layout.clone();
-            self.placement = placement;
-            return true;
-        }
+    /// Recompute the panel placement records from a fresh snapshot. Updates
+    /// every retained output's record in place, creates a native panel
+    /// surface for a newly connected panel output, and destroys records
+    /// whose output disconnected. The primary record stays at index 0 and
+    /// tracks the snapshot's first panel. Returns `Ok(false)` when no panel
+    /// resolves (state untouched). On an edge switch (stored Top, snapshot
+    /// Bottom) the stored edge misses, so the snapshot's own edge is used.
+    pub fn sync_panel_context(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        snapshot: &ShellSnapshot,
+    ) -> Result<bool, String> {
+        let stored_edge = self.primary().placement.panel.edge;
         let Some(first) = snapshot.panels.panels.first() else {
-            return false;
+            return Ok(false);
         };
-        let edge = first.edge;
-        if edge == self.panel_snapshot.edge {
-            return false;
+        let primary_output = first.output.clone();
+        let mut contexts = panel_contexts_for_snapshot(snapshot, stored_edge);
+        if contexts.is_empty() {
+            if first.edge == stored_edge {
+                return Ok(false);
+            }
+            contexts = panel_contexts_for_snapshot(snapshot, first.edge);
         }
-        let Some(placement) = panel_context_for_snapshot(snapshot, edge) else {
-            return false;
-        };
-        self.output = placement.output.clone();
-        self.panel_snapshot = placement.panel.clone();
-        self.start_layout = placement.start_layout.clone();
-        self.placement = placement;
-        true
+        if contexts.is_empty() {
+            return Ok(false);
+        }
+        let retained: Vec<flamewm_api::OutputId> = contexts
+            .iter()
+            .map(|context| context.output.id.clone())
+            .collect();
+        let existing: Vec<flamewm_api::OutputId> = self
+            .panels
+            .iter()
+            .map(|record| record.placement.output.id.clone())
+            .collect();
+        let mut stale = panel_surface_outputs_to_remove(&existing, snapshot);
+        for id in &existing {
+            if !retained.contains(id) && !stale.contains(id) {
+                stale.push(id.clone());
+            }
+        }
+        for context in contexts {
+            match self
+                .panels
+                .iter()
+                .position(|record| record.placement.output.id == context.output.id)
+            {
+                Some(index) => self.panels[index].placement = context,
+                None => {
+                    let panel = create_panel_surface(runtime, &context)?;
+                    if context.panel.visible {
+                        runtime.show(panel).map_err(ui_error)?;
+                    }
+                    self.panels.push(PanelSurfaceRecord {
+                        panel,
+                        placement: context,
+                    });
+                }
+            }
+        }
+        for id in stale {
+            if let Some(index) = self
+                .panels
+                .iter()
+                .position(|record| record.placement.output.id == id)
+            {
+                let record = self.panels.remove(index);
+                runtime.destroy(record.panel).map_err(ui_error)?;
+            }
+        }
+        if let Some(index) = self
+            .panels
+            .iter()
+            .position(|record| record.placement.output.id == primary_output)
+        {
+            let record = self.panels.remove(index);
+            self.panels.insert(0, record);
+        }
+        Ok(true)
     }
 
     /// Parent-side anchor inputs for a helper open: retained anchor +
     /// work area + panel edge. The parent computes, the helper places.
     #[must_use]
     pub fn work_area(&self) -> flamewm_api::Rect {
-        self.placement.work_area
+        self.primary().placement.work_area
     }
 
     /// F10: current context generation read by every Start/Quick open
@@ -969,8 +1133,8 @@ impl ShellSurfaces {
     #[must_use]
     pub fn placement_generation(&self) -> (u64, u64) {
         (
-            self.placement.display_generation,
-            self.placement.panels_revision,
+            self.primary().placement.display_generation,
+            self.primary().placement.panels_revision,
         )
     }
 
@@ -978,77 +1142,112 @@ impl ShellSurfaces {
     #[allow(dead_code)]
     #[must_use]
     pub fn panel_handle(&self) -> SurfaceHandle {
-        self.panel
+        self.primary().panel
     }
 
     /// F10: last-synced panel snapshot geometry.
     #[must_use]
     pub fn panel_geometry(&self) -> flamewm_api::Rect {
-        self.panel_snapshot.geometry
+        self.primary().placement.panel.geometry
     }
 
-    /// F10: edge/geometry consistency gate. `Bottom` requires
-    /// `panel.bottom == output.bottom`, `Top` requires `panel.y ==
-    /// output.y`, `Left` requires `panel.x == output.x`, `Right`
-    /// requires `panel.right == output.right`. Returns a diagnostic
-    /// refusal string; callers refuse popup open on `Err`.
+    /// F10: true when any panel output's shell scale differs from the scale
+    /// last synced into its panel document. A scale change keeps the logical
+    /// panel geometry, so geometry/generation alone cannot detect it.
+    #[must_use]
+    pub fn output_scale_drifted(&self, snapshot: &ShellSnapshot) -> bool {
+        self.panels.iter().any(|record| {
+            let id = &record.placement.output.id;
+            snapshot.panels.panels.iter().any(|panel| panel.output == *id)
+                && snapshot
+                    .displays
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == *id && output.connected)
+                    .map(|output| {
+                        output.shell_scale_percent != record.placement.output.shell_scale_percent
+                    })
+                    .unwrap_or(false)
+        })
+    }
+
+    /// F10: edge/geometry consistency gate for every panel record.
+    /// Refusal strings are returned to callers, which refuse popup open on `Err`.
     pub fn check_edge_consistent(&self) -> Result<(), String> {
-        let panel = self.panel_snapshot.geometry;
-        let output = self.output.geometry;
-        let edge = self.panel_snapshot.edge;
-        let consistent = match edge {
-            flamewm_api::PanelEdge::Bottom => panel.bottom() == output.bottom(),
-            flamewm_api::PanelEdge::Top => panel.y == output.y,
-            flamewm_api::PanelEdge::Left => panel.x == output.x,
-            flamewm_api::PanelEdge::Right => panel.right() == output.right(),
-        };
-        debug_assert!(
-            consistent,
-            "panel edge {edge:?} inconsistent: panel={panel:?} output={output:?}"
-        );
-        if consistent {
-            Ok(())
-        } else {
-            Err(format!(
+        for record in &self.panels {
+            let panel = record.placement.panel.geometry;
+            let output = record.placement.output.geometry;
+            let edge = record.placement.panel.edge;
+            let consistent = edge_geometry_consistent(edge, panel, output);
+            debug_assert!(
+                consistent,
                 "panel edge {edge:?} inconsistent: panel={panel:?} output={output:?}"
-            ))
+            );
+            if !consistent {
+                return Err(format!(
+                    "panel edge {edge:?} inconsistent: panel={panel:?} output={output:?}"
+                ));
+            }
         }
+        Ok(())
     }
 
-    /// F10: move_resize the panel native surface to the synced snapshot
-    /// geometry. Returns `true` when a move_resize was issued.
-    pub fn move_panel_to_synced(&self, runtime: &mut SurfaceRuntime) -> Result<bool, String> {
-        let target = self.panel_snapshot.geometry;
-        let current = runtime
-            .surface_device_rect(self.panel)
-            .map(|rect| {
-                flamewm_api::Rect::new(
-                    rect.x as i32,
-                    rect.y as i32,
-                    rect.width as i32,
-                    rect.height as i32,
+    /// Reapplies each panel document UI scale from its synced output. The
+    /// scale is otherwise set only at surface creation, so a live scale
+    /// change left the retained bar laid out at the old scale. Setting a
+    /// changed scale bumps the document revision, forcing a layout recompute
+    /// on the next redraw.
+    pub fn sync_panel_ui_scale(&self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        for record in &self.panels {
+            runtime
+                .apply_output_scale(
+                    record.panel,
+                    panel_ui_scale(record.placement.output.shell_scale_percent),
                 )
-            })
-            .unwrap_or(self.panel_snapshot.geometry);
-        if current == target {
-            return Ok(false);
+                .map(|_| ())
+                .map_err(|error| format!("panel ui scale: {error:?}"))?;
         }
-        let width = checked_size(target.width)?;
-        let height = checked_size(target.height)?;
-        runtime
-            .move_resize(self.panel, target.x, target.y, width, height)
-            .map_err(ui_error)?;
-        Ok(true)
+        Ok(())
+    }
+
+    /// F10: move_resize every panel native surface to its synced snapshot
+    /// geometry. Returns `true` when at least one move_resize was issued.
+    pub fn move_panel_to_synced(&self, runtime: &mut SurfaceRuntime) -> Result<bool, String> {
+        let mut moved = false;
+        for record in &self.panels {
+            let target = record.placement.panel.geometry;
+            let current = runtime
+                .surface_device_rect(record.panel)
+                .map(|rect| {
+                    flamewm_api::Rect::new(
+                        rect.x as i32,
+                        rect.y as i32,
+                        rect.width as i32,
+                        rect.height as i32,
+                    )
+                })
+                .unwrap_or(target);
+            if current == target {
+                continue;
+            }
+            let width = checked_size(target.width)?;
+            let height = checked_size(target.height)?;
+            runtime
+                .move_resize(record.panel, target.x, target.y, width, height)
+                .map_err(ui_error)?;
+            moved = true;
+        }
+        Ok(moved)
     }
 
     #[must_use]
     pub fn placement(&self) -> &PanelPlacementContext {
-        &self.placement
+        &self.primary().placement
     }
 
     #[must_use]
     pub fn panel_edge(&self) -> flamewm_api::PanelEdge {
-        self.panel_snapshot.edge
+        self.primary().placement.panel.edge
     }
 
     /// Resolve a surface-local pointer position (ActionEvent x/y from the
@@ -1058,11 +1257,11 @@ impl ShellSurfaces {
     #[must_use]
     pub fn root_pointer(&self, runtime: &SurfaceRuntime, x: f32, y: f32) -> flamewm_api::Point {
         let origin = runtime
-            .surface_device_rect(self.panel)
+            .surface_device_rect(self.primary().panel)
             .map(|rect| (rect.x as i32, rect.y as i32))
             .unwrap_or((
-                self.panel_snapshot.geometry.x,
-                self.panel_snapshot.geometry.y,
+                self.primary().placement.panel.geometry.x,
+                self.primary().placement.panel.geometry.y,
             ));
         flamewm_api::Point::new(origin.0 + x as i32, origin.1 + y as i32)
     }
@@ -1217,6 +1416,19 @@ fn checked_size(value: i32) -> Result<u32, String> {
     u32::try_from(value).map_err(|_| format!("invalid surface size {value}"))
 }
 
+/// Document UI scale for the panel surface. Must match the physical thickness
+/// rule in `flamewm_platform::panel` (supported scales only; others fall back
+/// to 100%) so the CSS-sized bar fills the whole panel window.
+fn panel_ui_scale(scale_percent: u16) -> f32 {
+    const SUPPORTED: [u16; 5] = [100, 125, 150, 175, 200];
+    let percent = if SUPPORTED.contains(&scale_percent) {
+        scale_percent
+    } else {
+        100
+    };
+    f32::from(percent) / 100.0
+}
+
 /// Retained-device anchor: live panel node rect (`node_device_rect_by_id`,
 /// root-space device rect, no recompute) when retained layout exists.
 #[allow(dead_code)]
@@ -1358,6 +1570,17 @@ mod tests {
         flamewm_api::Rect::new(0, 0, 1920, 1080)
     }
 
+    #[test]
+    fn panel_ui_scale_matches_platform_physical_thickness() {
+        // 44 logical px * scale must equal the document's laid-out bar height.
+        for percent in [100u16, 125, 150, 175, 200] {
+            let scale = panel_ui_scale(percent);
+            let thickness = (44.0 * scale).round() as i32;
+            assert_eq!(thickness, ((44 * u32::from(percent) + 50) / 100) as i32);
+        }
+        assert_eq!(panel_ui_scale(110), 1.0);
+    }
+
     fn test_output_id() -> flamewm_api::OutputId {
         flamewm_api::OutputId::new("HDMI-1")
     }
@@ -1437,6 +1660,29 @@ mod tests {
         runtime.mark_signal(&ControlSignal::PanelsChanged { revision: 4 });
         runtime.mark_signal(&ControlSignal::SystemChanged { revision: 6 });
         assert!(!runtime.dirty().any());
+    }
+
+    #[test]
+    fn start_menu_toggle_signal_queues_one_toggle_start_control() {
+        let mut runtime = ShellRuntime::default();
+        runtime.mark_signal(&ControlSignal::StartMenuToggleRequested);
+        let controls: Vec<_> = runtime.drain_controls().collect();
+        assert_eq!(controls, vec![ShellControl::ToggleStart]);
+        assert!(!runtime.dirty().any());
+    }
+
+    #[test]
+    fn start_menu_signal_and_click_dispatch_queue_identical_controls() {
+        let mut by_signal = ShellRuntime::default();
+        by_signal.mark_signal(&ControlSignal::StartMenuToggleRequested);
+        assert!(by_signal.has_pending_controls());
+        let mut by_click = ShellRuntime::default();
+        by_click.dispatch("start.toggle");
+        assert!(by_click.has_pending_controls());
+        let signal_controls: Vec<_> = by_signal.drain_controls().collect();
+        let click_controls: Vec<_> = by_click.drain_controls().collect();
+        assert_eq!(signal_controls, click_controls);
+        assert!(!by_signal.has_pending_controls());
     }
 
     #[test]
@@ -1721,5 +1967,74 @@ mod tests {
             flamewm_api::Rect::new(0, 0, 1920, 1080),
         )];
         assert!(panel_context_for_snapshot(&empty, PanelEdge::Bottom).is_none());
+    }
+
+    fn two_output_snapshot() -> ShellSnapshot {
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.displays.generation = 3;
+        snapshot.displays.outputs = vec![
+            panel_output("HDMI-1", flamewm_api::Rect::new(0, 0, 1920, 1080)),
+            panel_output("HDMI-2", flamewm_api::Rect::new(1920, 0, 1280, 1024)),
+        ];
+        snapshot.panels.revision = 5;
+        snapshot.panels.panels = vec![
+            panel_entry(
+                "HDMI-1",
+                flamewm_api::PanelEdge::Bottom,
+                flamewm_api::Rect::new(0, 1036, 1920, 44),
+            ),
+            panel_entry(
+                "HDMI-2",
+                flamewm_api::PanelEdge::Bottom,
+                flamewm_api::Rect::new(1920, 980, 1280, 44),
+            ),
+        ];
+        snapshot
+    }
+
+    #[test]
+    fn two_outputs_two_panels_yield_one_context_per_output() {
+        use flamewm_api::PanelEdge;
+        let snapshot = two_output_snapshot();
+        let contexts = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].output.id, flamewm_api::OutputId::new("HDMI-1"));
+        assert_eq!(contexts[0].output.geometry, flamewm_api::Rect::new(0, 0, 1920, 1080));
+        assert_eq!(contexts[0].work_area, flamewm_api::Rect::new(0, 0, 1920, 1036));
+        assert_eq!(contexts[1].output.id, flamewm_api::OutputId::new("HDMI-2"));
+        assert_eq!(contexts[1].output.geometry, flamewm_api::Rect::new(1920, 0, 1280, 1024));
+        assert_eq!(contexts[1].panel.geometry, flamewm_api::Rect::new(1920, 980, 1280, 44));
+        assert_eq!(contexts[1].work_area, flamewm_api::Rect::new(1920, 0, 1280, 980));
+        assert!(panel_contexts_for_snapshot(&snapshot, PanelEdge::Top).is_empty());
+    }
+
+    #[test]
+    fn single_output_contexts_match_legacy_single_context() {
+        use flamewm_api::PanelEdge;
+        let snapshot = placement_snapshot(
+            flamewm_api::Rect::new(0, 0, 1920, 1080),
+            flamewm_api::Rect::new(0, 1036, 1920, 44),
+            PanelEdge::Bottom,
+            1,
+            1,
+        );
+        let contexts = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
+        let legacy = panel_context_for_snapshot(&snapshot, PanelEdge::Bottom);
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(Some(contexts[0].clone()), legacy);
+    }
+
+    #[test]
+    fn hotplug_removal_of_one_output_removes_only_its_panel_surface() {
+        let mut snapshot = two_output_snapshot();
+        snapshot.displays.outputs[1].connected = false;
+        let existing = vec![
+            flamewm_api::OutputId::new("HDMI-1"),
+            flamewm_api::OutputId::new("HDMI-2"),
+        ];
+        let stale = panel_surface_outputs_to_remove(&existing, &snapshot);
+        assert_eq!(stale, vec![flamewm_api::OutputId::new("HDMI-2")]);
+        let kept = panel_surface_outputs_to_remove(&existing[..1], &snapshot);
+        assert!(kept.is_empty());
     }
 }

@@ -5,11 +5,116 @@
 //! via `wake_fd` on the reactor turn. Full/closed queue is a nonfatal
 //! diagnostic (counter + stderr), never a panic or blocking call.
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use flamewm_api::settings::SettingsSnapshot as ApiSettingsSnapshot;
 use flamewm_control_core::{ControlMutationQueue, ControlRequest, MutationLane};
 use flamewm_control_dbus::MutationDispatcher;
+
+/// Result of a Start-menu launch, correlated back to the app that was asked
+/// to start. `app` is the user-visible application name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StartLaunchOutcome {
+    Started { invocation: u64, app: String },
+    Failed { invocation: u64, app: String, message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkSecretOutcome {
+    pub id: u64,
+    pub identity: (u64, u64),
+    pub result: Result<(), ()>,
+}
+
+thread_local! {
+    // Reactor-thread only: enqueue and drain both run on the shell loop.
+    // Queue ids correlate replies; invocation ids fence replies from older
+    // Start-menu sessions after a close/reopen.
+    static PENDING_LAUNCHES: RefCell<Vec<(u64, u64, String)>> = RefCell::new(Vec::new());
+    static LAUNCH_OUTCOMES: RefCell<VecDeque<StartLaunchOutcome>> = RefCell::new(VecDeque::new());
+    static PENDING_NETWORK_SECRETS: RefCell<Vec<(u64, (u64, u64))>> = RefCell::new(Vec::new());
+    static NETWORK_SECRET_OUTCOMES: RefCell<VecDeque<NetworkSecretOutcome>> = RefCell::new(VecDeque::new());
+}
+
+pub fn enqueue_network_secret(dispatcher: Option<&Arc<MutationDispatcher>>, identity: (u64, u64), request: ControlRequest) -> Option<u64> {
+    let id = enqueue_action(dispatcher, request)?;
+    PENDING_NETWORK_SECRETS.with(|pending| pending.borrow_mut().push((id, identity)));
+    Some(id)
+}
+
+pub fn take_network_secret_outcomes() -> Vec<NetworkSecretOutcome> {
+    NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
+}
+
+#[must_use]
+pub fn network_secret_result(id: u64, identity: (u64, u64), succeeded: bool) -> NetworkSecretOutcome {
+    NetworkSecretOutcome { id, identity, result: if succeeded { Ok(()) } else { Err(()) } }
+}
+
+/// Enqueue a Start-menu launch and remember the app name against the queue
+/// id so the matching result can be correlated. A refused enqueue is recorded
+/// as an immediate failed outcome. Never blocks.
+pub fn enqueue_start_launch(
+    dispatcher: Option<&Arc<MutationDispatcher>>,
+    app: String,
+    request: ControlRequest,
+) -> u64 {
+    static NEXT_INVOCATION: AtomicU64 = AtomicU64::new(1);
+    let invocation = NEXT_INVOCATION.fetch_add(1, Ordering::Relaxed);
+    match enqueue_action(dispatcher, request) {
+        Some(id) => PENDING_LAUNCHES.with(|pending| pending.borrow_mut().push((id, invocation, app))),
+        None => record_launch_outcome(StartLaunchOutcome::Failed {
+            invocation,
+            app,
+            message: "control queue refused the launch request".to_owned(),
+        }),
+    }
+    invocation
+}
+
+/// Take all launch outcomes recorded since the last call, oldest first.
+pub fn take_launch_outcomes() -> Vec<StartLaunchOutcome> {
+    LAUNCH_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
+}
+
+/// Select only the result belonging to the currently active Start launch.
+/// Draining the queue first ensures stale completions cannot be replayed.
+#[must_use]
+pub fn matching_launch_outcome(
+    outcomes: Vec<StartLaunchOutcome>,
+    invocation: u64,
+) -> Option<StartLaunchOutcome> {
+    outcomes.into_iter().find(|outcome| match outcome {
+        StartLaunchOutcome::Started { invocation: id, .. }
+        | StartLaunchOutcome::Failed { invocation: id, .. } => *id == invocation,
+    })
+}
+
+/// Pure mapping from a launch outcome to the Start error line: a failure
+/// names the application, a success clears the line.
+#[must_use]
+pub fn start_error_after_launch(outcome: &StartLaunchOutcome) -> Option<String> {
+    match outcome {
+        StartLaunchOutcome::Started { .. } => None,
+        StartLaunchOutcome::Failed { app, .. } => Some(format!("Could not start {app}")),
+    }
+}
+
+fn record_launch_outcome(outcome: StartLaunchOutcome) {
+    LAUNCH_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(outcome));
+}
+
+fn take_pending_launch(id: u64) -> Option<(u64, String)> {
+    PENDING_LAUNCHES.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        let index = pending.iter().position(|(pending_id, _, _)| *pending_id == id)?;
+        let (_, invocation, app) = pending.swap_remove(index);
+        Some((invocation, app))
+    })
+}
 
 /// Enqueue one control mutation; returns the queue id on success, `None`
 /// on full/closed queue (counted, stderr diagnostic, loop survives).
@@ -17,7 +122,11 @@ pub fn enqueue_action(
     dispatcher: Option<&Arc<MutationDispatcher>>,
     request: ControlRequest,
 ) -> Option<u64> {
-    let dispatcher = dispatcher?;
+    let Some(dispatcher) = dispatcher else {
+        action_fail_counter().increment();
+        eprintln!("flamewm-shell: mutation dropped: no control dispatcher (action unavailable)");
+        return None;
+    };
     enqueue_on_queue(dispatcher.queue(), request)
 }
 
@@ -54,6 +163,26 @@ pub fn drain_results_with_settings(
         return;
     };
     while let Some(result) = dispatcher.try_recv_result() {
+        let network_identity = PENDING_NETWORK_SECRETS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            let position = pending.iter().position(|(id, _)| *id == result.id)?;
+            Some(pending.swap_remove(position).1)
+        });
+        if let Some(identity) = network_identity {
+            NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(NetworkSecretOutcome {
+                id: result.id,
+                identity,
+                result: result.outcome.as_ref().map(|_| ()).map_err(|_| ()),
+            }));
+        }
+        let launch_outcome = take_pending_launch(result.id).map(|(invocation, app)| match &result.outcome {
+            Ok(_) => StartLaunchOutcome::Started { invocation, app },
+            Err(error) => StartLaunchOutcome::Failed {
+                invocation,
+                app,
+                message: error.message.clone(),
+            },
+        });
         match result.outcome {
             Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => {
                 result_ok_counter().increment();
@@ -67,6 +196,9 @@ pub fn drain_results_with_settings(
                     result.id, error.message
                 );
             }
+        }
+        if let Some(outcome) = launch_outcome {
+            record_launch_outcome(outcome);
         }
     }
 }
@@ -133,6 +265,12 @@ mod tests {
     }
 
     #[test]
+    fn missing_dispatcher_is_a_diagnosed_none_not_a_silent_drop() {
+        let request = ControlRequest::Ping;
+        assert_eq!(enqueue_action(None, request), None);
+    }
+
+    #[test]
     fn red_t06_settings_mutation_result_requires_direct_snapshot_application() {
         // RED(T06): the current drain path matches Ok(_) and discards this
         // Settings snapshot instead of handing it to the shell state owner.
@@ -148,5 +286,64 @@ mod tests {
             production_source().contains("ControlResponse::Settings"),
             "T06 RED: drain_results must consume Settings(snapshot) directly; current mutation only logs generic Ok(_)"
         );
+    }
+
+    #[test]
+    fn red_start_launch_failure_sets_error_and_success_clears_it() {
+        // Launch failure must surface as Start error state; success clears it.
+        let failed = StartLaunchOutcome::Failed {
+            invocation: 1,
+            app: "Calculator".to_owned(),
+            message: "exec failed".to_owned(),
+        };
+        assert_eq!(
+            start_error_after_launch(&failed),
+            Some("Could not start Calculator".to_owned()),
+            "a failed launch must set the Start error message"
+        );
+        let started = StartLaunchOutcome::Started {
+            invocation: 2,
+            app: "Calculator".to_owned(),
+        };
+        assert_eq!(
+            start_error_after_launch(&started),
+            None,
+            "a successful launch must clear the Start error message"
+        );
+    }
+
+    #[test]
+    fn stale_out_of_order_launch_results_do_not_match_active_invocation() {
+        let outcomes = vec![
+            StartLaunchOutcome::Failed {
+                invocation: 1,
+                app: "Old app".to_owned(),
+                message: "old failure".to_owned(),
+            },
+            StartLaunchOutcome::Started {
+                invocation: 2,
+                app: "Current app".to_owned(),
+            },
+        ];
+        let current = matching_launch_outcome(outcomes, 2).expect("current result is retained");
+        assert!(matches!(current, StartLaunchOutcome::Started { invocation: 2, .. }));
+        assert!(matching_launch_outcome(
+            vec![StartLaunchOutcome::Failed {
+                invocation: 1,
+                app: "Old app".to_owned(),
+                message: "old failure".to_owned(),
+            }],
+            2,
+        ).is_none());
+    }
+
+    #[test]
+    fn network_secret_results_preserve_queue_and_identity_for_stale_fencing() {
+        let success = network_secret_result(41, (7, 3), true);
+        let failure = network_secret_result(42, (8, 3), false);
+        assert_eq!(success, NetworkSecretOutcome { id: 41, identity: (7, 3), result: Ok(()) });
+        assert_eq!(failure, NetworkSecretOutcome { id: 42, identity: (8, 3), result: Err(()) });
+        assert_ne!(success.id, failure.id);
+        assert_ne!(success.identity, failure.identity);
     }
 }

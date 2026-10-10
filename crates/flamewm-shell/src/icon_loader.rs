@@ -6,7 +6,30 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 
+use flamewm_integrations_linux::icon_service::ThemeRebuilder;
 use flamewm_integrations_linux::icons::{IconResolver, IconSize, Rgb8Raster};
+
+/// Swaps in a rebuilt lookup index when the theme directories changed and
+/// notifies the resolver's generation-keyed caches. Returns true on swap.
+/// The watch check and any full rebuild run on `rebuilder`'s thread: this
+/// call only queues a check (if none is in flight) and applies a finished
+/// result, so the loader worker never blocks on index build I/O.
+fn refresh_icon_index(resolver: &mut IconResolver, rebuilder: &ThemeRebuilder) -> bool {
+    rebuilder.request(resolver.shared_index().clone());
+    let Some(next) = rebuilder.take() else {
+        return false;
+    };
+    let generation = next.generation;
+    resolver.set_shared_index(next);
+    resolver.notify_theme_changed(generation);
+    true
+}
+
+/// Generic application glyph used when an application name misses. Brand
+/// artwork is still rejected by `is_brand_fallback`.
+const GENERIC_APP_ICON: &str = "application-x-executable";
+/// Bound on visible requests waiting for worker queue capacity.
+const RETRY_CAP: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconTarget {
@@ -52,6 +75,9 @@ pub struct IconLoader {
     pub low_enqueued: u64,
     pub coalesced: u64,
     pub dropped_low: u64,
+    /// Visible requests refused by a full worker queue; their keys stay
+    /// pending and are re-issued by `flush_retries` on the next drain.
+    retry: Vec<IconRequest>,
 }
 
 impl IconLoader {
@@ -71,17 +97,31 @@ impl IconLoader {
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
                 let mut resolver = IconResolver::from_environment(packaged_root, 0);
+                let rebuilder = ThemeRebuilder::new();
                 while let Ok(req) = req_rx.recv() {
+                    // Throttled (5s) mtime check runs off this thread; a finished
+                    // rebuilt index is applied here and advances the resolver's
+                    // theme generation when themes change.
+                    refresh_icon_index(&mut resolver, &rebuilder);
                     // Generic app miss must never rasterize brand artwork:
                     // no empty-name retry (it resolves to the brand
                     // fallback) and any brand fallback raster is dropped to
                     // None. Miss -> caller keeps last valid or the
                     // transparent empty placeholder. Applies to every
                     // request type/role uniformly.
+                    let size = IconSize::new(req.width, req.height);
+                    let accept = |raster: &Rgb8Raster| !is_brand_fallback(raster);
                     let raster = resolver
-                        .prepare_name(&req.name, IconSize::new(req.width, req.height))
+                        .prepare_name(&req.name, size)
                         .ok()
-                        .filter(|raster| !is_brand_fallback(raster));
+                        .filter(accept)
+                        .or_else(|| {
+                            // Miss -> generic application role, never brand.
+                            resolver
+                                .prepare_name(GENERIC_APP_ICON, size)
+                                .ok()
+                                .filter(accept)
+                        });
                     let res = IconResult {
                         target: req.target,
                         generation: req.generation,
@@ -90,7 +130,11 @@ impl IconLoader {
                         height: req.height,
                         raster,
                     };
-                    let _ = res_tx.try_send(res);
+                    // Blocking send: a dropped result left its key pending
+                    // forever. Only a closed receiver ends the worker.
+                    if res_tx.send(res).is_err() {
+                        break;
+                    }
                     let _ = wake_writer.write_all(&[1]);
                 }
             })
@@ -108,6 +152,7 @@ impl IconLoader {
             low_enqueued: 0,
             coalesced: 0,
             dropped_low: 0,
+            retry: Vec::new(),
         }
     }
 
@@ -125,7 +170,8 @@ impl IconLoader {
         if self.pending.contains(&key) {
             return;
         }
-        self.pending.insert(key.clone());
+        self.pending.insert(key);
+        flamewm_integrations_linux::icon_service::note_icon_request();
         let req = IconRequest {
             target,
             generation: self.generation,
@@ -133,25 +179,43 @@ impl IconLoader {
             width,
             height,
         };
+        self.submit(req);
+    }
+
+    fn submit(&mut self, req: IconRequest) {
         match self.req_tx.try_send(req) {
             Ok(()) => {}
             Err(TrySendError::Full(returned)) => {
-                self.pending.remove(&(
-                    returned.target,
-                    returned.name,
-                    returned.width,
-                    returned.height,
-                ));
                 self.queue_full_drops += 1;
+                if self.retry.len() < RETRY_CAP {
+                    // Key stays pending so duplicate requests coalesce.
+                    self.retry.push(returned);
+                } else {
+                    self.pending.remove(&pending_key(&returned));
+                }
             }
             Err(TrySendError::Disconnected(returned)) => {
-                self.pending.remove(&(
-                    returned.target,
-                    returned.name,
-                    returned.width,
-                    returned.height,
-                ));
+                // Worker is gone: clear the key so it is never stranded.
                 self.queue_full_drops += 1;
+                self.pending.remove(&pending_key(&returned));
+            }
+        }
+    }
+
+    /// Re-issues refused requests. Stale-generation entries are discarded
+    /// and their keys released.
+    fn flush_retries(&mut self) {
+        for req in std::mem::take(&mut self.retry) {
+            if req.generation != self.generation {
+                self.pending.remove(&pending_key(&req));
+                continue;
+            }
+            match self.req_tx.try_send(req) {
+                Ok(()) => {}
+                Err(TrySendError::Full(returned)) => self.retry.push(returned),
+                Err(TrySendError::Disconnected(returned)) => {
+                    self.pending.remove(&pending_key(&returned));
+                }
             }
         }
     }
@@ -170,6 +234,7 @@ impl IconLoader {
         let mut wake_buf = [0u8; 64];
         use std::io::Read;
         let _ = (&self.wake_reader).read(&mut wake_buf);
+        self.flush_retries();
         while let Ok(res) = self.res_rx.try_recv() {
             self.pending
                 .remove(&(res.target, res.name.clone(), res.width, res.height));
@@ -177,6 +242,7 @@ impl IconLoader {
                 self.stale_drops += 1;
                 continue;
             }
+            flamewm_integrations_linux::icon_service::observe_icon_raster(res.raster.is_some());
             out.push(res);
         }
         self.results_applied += out.len() as u64;
@@ -213,6 +279,10 @@ impl IconLoader {
     }
 }
 
+fn pending_key(req: &IconRequest) -> (IconTarget, String, u32, u32) {
+    (req.target, req.name.clone(), req.width, req.height)
+}
+
 /// True when a worker raster is brand artwork that a generic app miss
 /// must never show. Covers the packaged brand fallback path and the
 /// explicit brand names; other packaged/system hits pass through.
@@ -223,6 +293,50 @@ fn is_brand_fallback(raster: &Rgb8Raster) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_icon_index_advances_generation_when_watch_mtime_is_stale() {
+        use flamewm_integrations_linux::IconLookupIndex;
+        use std::collections::HashMap;
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-loader-refresh-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("watch root");
+        let mut index = IconLookupIndex::new(
+            vec![root.clone()],
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+            3,
+        );
+        index.watch_mtime = Some(std::time::UNIX_EPOCH);
+        let mut resolver = IconResolver::from_shared_index(
+            root.clone(),
+            Vec::new(),
+            Vec::new(),
+            3,
+            std::sync::Arc::new(index),
+        );
+        let rebuilder = ThemeRebuilder::new();
+        // The check runs off-thread: poll (bounded) until the swap lands.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut first = false;
+        while !first && std::time::Instant::now() < deadline {
+            first = refresh_icon_index(&mut resolver, &rebuilder);
+            if !first {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let second = refresh_icon_index(&mut resolver, &rebuilder);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(first, "stale watch mtime must swap in a rebuilt index");
+        assert_eq!(resolver.theme_generation(), 4);
+        assert_eq!(resolver.shared_index().generation, 4);
+        assert!(!second, "second refresh inside 5s must be throttled");
+    }
 
     #[test]
     fn request_channel_is_nonblocking_when_full() {
@@ -264,6 +378,7 @@ mod tests {
             low_enqueued: 0,
             coalesced: 0,
             dropped_low: 0,
+            retry: Vec::new(),
         };
         let _ = req_rx;
         res_tx
@@ -312,6 +427,7 @@ mod tests {
             low_enqueued: 0,
             coalesced: 0,
             dropped_low: 0,
+            retry: Vec::new(),
         };
         tx.try_send(IconRequest {
             target: IconTarget::StartSlot(0),
@@ -347,6 +463,117 @@ mod tests {
             height: 20,
             pixels: vec![1; 20 * 20 * 4],
             origin: IconOrigin::PackagedBreeze,
+            fallback_reason: None,
+        }));
+    }
+
+    fn loader_with_channels(
+        req_tx: SyncSender<IconRequest>,
+        res_rx: Receiver<IconResult>,
+    ) -> IconLoader {
+        let (wake_reader, _w) = UnixStream::pair().expect("wake pair");
+        IconLoader {
+            req_tx,
+            res_rx,
+            wake_reader,
+            generation: 1,
+            pending: std::collections::HashSet::new(),
+            queue_full_drops: 0,
+            stale_drops: 0,
+            results_applied: 0,
+            high_enqueued: 0,
+            low_enqueued: 0,
+            coalesced: 0,
+            dropped_low: 0,
+            retry: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn undeliverable_request_clears_its_pending_key() {
+        let (tx, rx) = sync_channel::<IconRequest>(4);
+        drop(rx);
+        let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
+        let mut loader = loader_with_channels(tx, res_rx);
+        loader.request(IconTarget::TaskSlot(3), "gone", 24, 24);
+        assert!(loader.pending.is_empty());
+        assert!(loader.retry.is_empty());
+    }
+
+    #[test]
+    fn drained_result_clears_pending_key() {
+        let (tx, _rx) = sync_channel::<IconRequest>(4);
+        let (res_tx, res_rx) = sync_channel::<IconResult>(4);
+        let mut loader = loader_with_channels(tx, res_rx);
+        loader.request(IconTarget::TaskSlot(0), "firefox", 24, 24);
+        assert_eq!(loader.pending.len(), 1);
+        res_tx
+            .try_send(IconResult {
+                target: IconTarget::TaskSlot(0),
+                generation: 1,
+                name: "firefox".to_owned(),
+                width: 24,
+                height: 24,
+                raster: None,
+            })
+            .expect("queue result");
+        assert_eq!(loader.drain_ready().len(), 1);
+        assert!(loader.pending.is_empty());
+    }
+
+    #[test]
+    fn refused_visible_request_is_retried_after_capacity_frees() {
+        let (tx, rx) = sync_channel::<IconRequest>(1);
+        let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
+        let mut loader = loader_with_channels(tx.clone(), res_rx);
+        tx.try_send(IconRequest {
+            target: IconTarget::StartSlot(0),
+            generation: 1,
+            name: "fill".to_owned(),
+            width: 20,
+            height: 20,
+        })
+        .expect("fill");
+        loader.request(IconTarget::StartSlot(1), "retry-me", 20, 20);
+        assert_eq!(loader.retry.len(), 1);
+        assert_eq!(loader.pending.len(), 1);
+        assert!(rx.try_recv().is_ok());
+        let _ = loader.drain_ready();
+        assert!(loader.retry.is_empty());
+        let reissued = rx.try_recv().expect("retried request queued");
+        assert_eq!(reissued.name, "retry-me");
+    }
+
+    #[test]
+    fn stale_retry_is_discarded_and_key_released() {
+        let (tx, rx) = sync_channel::<IconRequest>(1);
+        let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
+        let mut loader = loader_with_channels(tx.clone(), res_rx);
+        tx.try_send(IconRequest {
+            target: IconTarget::StartSlot(0),
+            generation: 1,
+            name: "fill".to_owned(),
+            width: 20,
+            height: 20,
+        })
+        .expect("fill");
+        loader.request(IconTarget::StartSlot(1), "old", 20, 20);
+        loader.bump_generation();
+        assert!(rx.try_recv().is_ok());
+        let _ = loader.drain_ready();
+        assert!(loader.retry.is_empty());
+        assert!(loader.pending.is_empty());
+    }
+
+    #[test]
+    fn generic_application_icon_is_not_brand_artwork() {
+        assert_ne!(GENERIC_APP_ICON, "flamewm-icon");
+        assert!(!is_brand_fallback(&Rgb8Raster {
+            source: format!("packaged/assets/web/breeze/{GENERIC_APP_ICON}.svg"),
+            width: 20,
+            height: 20,
+            pixels: vec![1; 20 * 20 * 4],
+            origin: flamewm_integrations_linux::icons::IconOrigin::PackagedBreeze,
             fallback_reason: None,
         }));
     }

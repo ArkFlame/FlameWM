@@ -7,10 +7,10 @@
 </head>
 <body class="popup-body">
   <section id="wifi-popup" class="tray-popup wifi-popup" data-action="popup.surface">
-    <div class="popup-title">Networks</div><div class="network-search"><div id="network-filter-label">Filter</div></div>
+    <div class="popup-title">Networks</div><div class="network-search"><label id="network-filter-label" for="network-filter">Filter</label><input id="network-filter" type="text" aria-label="Filter networks" data-action="network.filter.focus"></div>
     <div class="popup-subtitle">Connected to <span id="wifi-connected-name">&#8203;</span></div>
     <div class="network-actions"><button id="network-wifi-toggle" data-action="network.wifi.toggle">Wi-Fi</button><button id="network-scan" data-action="network.scan">Scan</button><button id="network-disconnect" data-action="network.disconnect">Disconnect</button></div>
-    <div class="popup-subtitle">Connected</div><div id="network-connected" class="network-slots"></div><div class="popup-subtitle">Available</div><div id="network-slots" class="network-slots" data-scroll="network-slots">
+    <div class="popup-subtitle">Connected</div><div id="network-connected" class="network-slots">&#8203;</div><div class="popup-subtitle">Available</div><div id="network-slots" class="network-slots" data-scroll="network-slots">
       <button id="network-slot-1" class="wifi-row" data-action="network.connect.1"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-1-name">&#8203;</div><div id="network-slot-1-status" class="wifi-status">&#8203;</div></div></button>
       <button id="network-slot-2" class="wifi-row" data-action="network.connect.2"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-2-name">&#8203;</div><div id="network-slot-2-status" class="wifi-status">&#8203;</div></div></button>
       <button id="network-slot-3" class="wifi-row" data-action="network.connect.3"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-3-name">&#8203;</div><div id="network-slot-3-status" class="wifi-status">&#8203;</div></div></button>
@@ -20,7 +20,7 @@
       <button id="network-slot-7" class="wifi-row" data-action="network.connect.7"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-7-name">&#8203;</div><div id="network-slot-7-status" class="wifi-status">&#8203;</div></div></button>
       <button id="network-slot-8" class="wifi-row" data-action="network.connect.8"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-8-name">&#8203;</div><div id="network-slot-8-status" class="wifi-status">&#8203;</div></div></button>
     </div>
-    <div id="network-secret" class="network-secret"><div id="network-secret-value" class="network-secret-value">&#8203;</div><button data-action="network.secret.submit">Connect</button><button data-action="network.secret.cancel">Cancel</button></div>
+    <div id="network-secret" class="network-secret"><label for="network-secret-input">Network password</label><input id="network-secret-input" type="password" autocomplete="new-password" aria-label="Network password" data-action="network.secret.focus"><div id="network-secret-value" class="network-secret-value">&#8203;</div><div id="network-secret-error" role="status" aria-live="polite"></div><button data-action="network.secret.submit">Connect</button><button data-action="network.secret.cancel">Cancel</button></div>
   </section>
 </body>
 </html>
