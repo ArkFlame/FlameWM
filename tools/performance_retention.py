@@ -23,130 +23,40 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 import time
 from pathlib import Path
 
-RUN_RE = re.compile(r"^\d{8}T\d{6}Z-\d+$")
-RETENTION_FILE = "retention.txt"
+if __package__:
+    from . import retention_core
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import retention_core
+    finally:
+        sys.path.pop(0)
+
+RUN_RE = retention_core.RUN_RE
+RETENTION_FILE = retention_core.RETENTION_FILE
 
 
 def _env_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.environ.get(name, str(default))))
-    except ValueError:
-        return default
+    return retention_core.env_int(name, default)
 
 
 def _latest_target(perf: Path) -> str:
-    link = perf / "latest"
-    try:
-        if link.is_symlink():
-            target = os.readlink(link)
-            resolved = (perf / target).resolve() if not os.path.isabs(target) else Path(target)
-            try:
-                name = resolved.relative_to(perf.resolve()).parts[0]
-            except ValueError:
-                return resolved.name
-            return name
-    except OSError:
-        pass
-    return ""
+    return retention_core.latest_target(perf)
 
 
 def retain(perf: Path, current: str = "", keep_runs: int = 12,
            max_age_days: int = 7) -> tuple[list[str], list[str], list[str]]:
-    """Return (kept, deleted, protected) run names. Performs deletion."""
-    latest = _latest_target(perf)
-    try:
-        perf_real = perf.resolve()
-    except OSError:
-        return [], [], []
-    entries: list[tuple[str, float]] = []
-    protected: list[str] = []
-    for child in sorted(perf.iterdir(), key=lambda p: p.name):
-        name = child.name
-        if not RUN_RE.match(name):
-            continue
-        if child.is_symlink():
-            protected.append(name)
-            continue
-        if not child.is_dir():
-            protected.append(name)
-            continue
-        try:
-            if child.resolve() != perf_real / name or perf_real not in child.resolve().parents:
-                protected.append(name)
-                continue
-        except OSError:
-            protected.append(name)
-            continue
-        if name == current or name == latest:
-            protected.append(name)
-            continue
-        if (child / ".keep").exists():
-            protected.append(name)
-            continue
-        try:
-            mtime = child.stat().st_mtime
-        except OSError:
-            protected.append(name)
-            continue
-        entries.append((name, mtime))
-    entries.sort(key=lambda e: e[1], reverse=True)
-    now = time.time()
-    max_age_secs = max_age_days * 86400
-    # `current` is protected above, but it still consumes one unpinned run slot.
-    # Otherwise KEEP_RUNS=1 retains current plus one historical run.
-    current_counts_toward_floor = bool(current and RUN_RE.match(current)
-                                      and (perf / current).is_dir()
-                                      and not (perf / current).is_symlink()
-                                      and not (perf / current / ".keep").exists())
-    historical_slots = max(0, keep_runs - int(current_counts_toward_floor))
-    kept = [n for n, _ in entries[:historical_slots]]
-    kept_set = set(kept)
-    deleted: list[str] = []
-    for name, mtime in entries[historical_slots:]:
-        if now - mtime < max_age_secs:
-            kept.append(name)
-            kept_set.add(name)
-            continue
-        target = perf / name
-        try:
-            if target.is_symlink() or not target.is_dir():
-                protected.append(name)
-                continue
-            if target.resolve() != perf_real / name:
-                protected.append(name)
-                continue
-            import shutil
-            shutil.rmtree(target)
-            deleted.append(name)
-        except OSError:
-            protected.append(name)
-    return kept, deleted, sorted(set(protected))
+    return retention_core.retain(perf, current, keep_runs, max_age_days)
 
 
 def write_retention(perf: Path, kept, deleted, protected, keep_runs, max_age_days,
                       current: str = "") -> None:
-    lines = [
-        f"keep_runs={keep_runs}",
-        f"max_age_days={max_age_days}",
-        f"kept={' '.join(sorted(set(kept)))}",
-        f"deleted={' '.join(sorted(deleted))}",
-        f"protected={' '.join(sorted(protected))}",
-    ]
-    text = "\n".join(lines) + "\n"
-    targets: list[Path] = []
-    if current and RUN_RE.match(current):
-        targets.append(perf / current / RETENTION_FILE)
-    targets.append(perf / RETENTION_FILE)
-    for target in targets:
-        try:
-            target.write_text(text)
-        except OSError:
-            pass
+    retention_core.write_retention(perf, kept, deleted, protected, keep_runs,
+                                   max_age_days, current)
 
 
 def self_test() -> int:
