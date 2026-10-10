@@ -19,5 +19,5 @@ Key current additions:
 - `RUSTWEBRENDER_PROTOTYPE_PORT_0.0.6.md`
 - `RUSTWEBRENDER_SUPPORTED_HTML_CSS_0.0.6.md`
 - `reports/ICEWM_RUST_PORT_POST_MORTEM_SOURCEPORT_LAW.md`
-- `visual/rwr-0.0.6-target-xephyr.png`
+- `visual/rwr-0.0.6-target-xephyr.png` (historical; not present in this checkout)
 - `visual/user-rwr-0.0.6-xephyr.png`

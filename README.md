@@ -68,7 +68,7 @@ There is no Chromium, Electron, WebKitGTK, JavaScript VM, Tauri, WGPU or browser
   - press/motion/release action phases;
   - retained Xft/font/image caches.
 - Promoted the 0.0.6 V8 showcase presentation and raster mappings as the active visual baseline. This is the branch that produced the near-reference Xephyr screenshot supplied for this iteration.
-- Added deterministic visual comparison through `./verify-visual`.
+- Added deterministic visual comparison through `./scripts/verify-visual`.
 - Added the porting post-mortem to project sources and made its core lesson an engineering rule: preserve exact owner/source identity for parity surfaces before refactoring.
 - Kept all historical implementations in `.vendor/` only; production code is under `/crates`.
 
@@ -100,7 +100,7 @@ The interactive contract is a **release build**. Debug renderer latency is not a
 
 `0.0.9` advances the clean-room FlameWM workspace and desktop integration. It does **not** claim final FlameWM parity; remaining product surfaces are tracked in `docs/TODO.md`.
 
-The packaging environment used to assemble this archive does not provide Rust/Cargo/Xephyr, so compiler/runtime PASS is not fabricated here. `./check`, `./xephyr` and `./verify-visual` are mandatory target-machine gates.
+The packaging environment used to assemble this archive does not provide Rust/Cargo/Xephyr, so compiler/runtime PASS is not fabricated here. `./scripts/check`, `./scripts/xephyr` and `./scripts/verify-visual` are mandatory target-machine gates.
 
 ## Performance target
 

@@ -46,7 +46,7 @@ FLAMEWM_VISUAL_REFERENCE=/path/to/reference.png \
 
 Reference mode requires matching image geometry and reports RMSE and absolute-error metrics without resizing. Those metrics are advisory unless both `FLAMEWM_VISUAL_RMSE_MAX` and `FLAMEWM_VISUAL_AE_MAX` are set. The tool does not establish oracle approval.
 
-Reference:
+Historical reference (not present in this checkout; not current oracle approval):
 
 ```text
 project_sources/visual/rwr-0.0.6-target-xephyr.png

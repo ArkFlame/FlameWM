@@ -20,7 +20,7 @@ need Xvfb xvfb
 if command -v Xephyr >/dev/null 2>&1; then
   echo "OK command: Xephyr -> $(command -v Xephyr)"
 else
-  echo "MISSING command: Xephyr (xserver-xephyr; required for ./xephyr)"
+  echo "MISSING command: Xephyr (xserver-xephyr; required for ./scripts/xephyr)"
 fi
 for pc in x11 dbus-1; do
   if pkg-config --exists "$pc" 2>/dev/null; then
