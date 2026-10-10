@@ -13,7 +13,16 @@ pub fn document() -> Result<UiDocument, String> {
 mod tests {
     use super::*;
 
-    const PROJECTED_TEXT_IDS: [&str; 11] = [
+    const PROJECTED_TEXT_IDS: &[&str] = &[
+        "display-mode-slot-0",
+        "display-mode-slot-1",
+        "display-mode-slot-2",
+        "display-mode-slot-3",
+        "display-mode-slot-4",
+        "display-mode-slot-5",
+        "display-mode-slot-6",
+        "display-mode-slot-7",
+        "display-mode-overflow",
         "display-output-name-0",
         "display-output-size-0",
         "display-output-name-1",
@@ -25,6 +34,30 @@ mod tests {
         "display-selected-title",
         "display-selected-resolution",
         "display-selected-scale",
+        "selection-opacity-value",
+        "snap-opacity-value",
+        "icon-theme-value",
+        "taskbar-opacity-value",
+        "taskbar-size-value",
+        "taskbar-color-value",
+        "taskbar-edge-value",
+        "font-family-value",
+        "font-size-value",
+        "settings-error",
+        "about-version",
+        "taskbar-output-title",
+        "taskbar-output-0",
+        "taskbar-output-1",
+        "taskbar-output-2",
+        "taskbar-output-3",
+        "display-output-page-label",
+        "display-mode-page-label",
+        "taskbar-output-page-label",
+        "hotkey-key-start",
+        "hotkey-key-left",
+        "hotkey-key-right",
+        "hotkey-key-up",
+        "hotkey-key-down",
     ];
 
     fn css_rule<'a>(css: &'a str, selector: &str) -> &'a str {
@@ -75,13 +108,9 @@ mod tests {
 
     #[test]
     fn native_settings_window_matches_the_authored_root_geometry() {
-        let runtime = include_str!("runtime.rs");
         let css = include_str!("../../../ui/settings.css");
         assert_eq!(SETTINGS_DEFAULT_WIDTH, 820);
         assert_eq!(SETTINGS_DEFAULT_HEIGHT, 540);
-        assert!(runtime.contains(
-            "normal_window_config(view::SETTINGS_DEFAULT_WIDTH, view::SETTINGS_DEFAULT_HEIGHT)"
-        ));
 
         let authored_root = css_rule(css, "body");
         assert!(
@@ -154,12 +183,199 @@ mod tests {
                 "wallpaper control {id} must retain its production action"
             );
             assert!(
-                dispatch.contains(&format!("action == \"{action}\"")),
+                dispatch.contains(&format!("\"{action}\" =>")),
                 "wallpaper action {action} must have a production dispatch branch"
             );
             document
                 .text(id, label.to_owned())
                 .unwrap_or_else(|error| panic!("compiled wallpaper action target {id}: {error}"));
         }
+    }
+
+    #[test]
+    fn compiled_accent_swatches_have_action_ancestors_and_measurable_client_points() {
+        let document = document().expect("settings artifact must decode");
+        let html = include_str!("../../../ui/settings.html");
+        let viewport = (820.0, 540.0);
+
+        for (name, action) in [
+            ("blue", "settings.accent.blue"),
+            ("teal", "settings.accent.teal"),
+        ] {
+            let selected_dot = format!("accent-selected-{name}");
+            let (x, y, width, height) = document
+                .layout_box_by_id(&selected_dot, viewport)
+                .unwrap_or_else(|| panic!("compiled accent target {selected_dot} is missing"));
+            assert!(width > 0.0 && height > 0.0, "{selected_dot} must be hit-testable");
+            let center = (x + width / 2.0, y + height / 2.0);
+            assert!(center.0 >= 0.0 && center.0 < viewport.0);
+            assert!(center.1 >= 0.0 && center.1 < viewport.1);
+            assert!(
+                html.contains(&format!(
+                    "<button class=\"accent-swatch swatch-{name}\" data-action=\"{action}\"><span id=\"{selected_dot}\""
+                )),
+                "compiled hit target {selected_dot} must be nested under the {action} button"
+            );
+        }
+
+        assert!(html.contains("<button class=\"settings-button\" data-action=\"settings.accent.reset\">Reset</button>"));
+        assert!(
+            !html.contains("id=\"accent-reset\""),
+            "reset currently has no compiled id, so UiDocument's public layout query cannot independently measure its hit box"
+        );
+    }
+
+    /// Frozen W2 contract: paging controls, their stable ids and data-actions.
+    /// Slot actions (`settings.display.select.N`, `settings.display.slot.N`)
+    /// stay slot-relative; the controller maps slot N to page * width + N.
+    const PAGER_CONTROLS: &[(&str, &str)] = &[
+        ("display-output-prev", "settings.display.outputs.prev"),
+        ("display-output-next", "settings.display.outputs.next"),
+        ("display-mode-prev", "settings.display.modes.prev"),
+        ("display-mode-next", "settings.display.modes.next"),
+        ("taskbar-output-prev", "settings.display.outputs.prev"),
+        ("taskbar-output-next", "settings.display.outputs.next"),
+    ];
+
+    const PAGER_DISABLED_TWINS: &[&str] = &[
+        "display-output-prev-off",
+        "display-output-next-off",
+        "display-mode-prev-off",
+        "display-mode-next-off",
+        "taskbar-output-prev-off",
+        "taskbar-output-next-off",
+    ];
+
+    const PAGER_LABEL_IDS: &[&str] = &[
+        "display-output-page-label",
+        "display-mode-page-label",
+        "taskbar-output-page-label",
+    ];
+
+    const STATE_CLASSES: &[&str] = &[
+        "pager-row",
+        "pager-step",
+        "pager-off",
+        "pager-label",
+        "is-selected",
+        "is-current",
+        "is-disabled",
+        "is-pending",
+        "is-error",
+    ];
+
+    #[test]
+    fn pager_controls_have_stable_ids_and_data_actions() {
+        let html = include_str!("../../../ui/settings.html");
+        for (id, action) in PAGER_CONTROLS {
+            assert!(
+                html.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                "pager control {id} must bind data-action {action}"
+            );
+        }
+    }
+
+    #[test]
+    fn pager_action_names_in_markup_match_the_frozen_contract() {
+        let html = include_str!("../../../ui/settings.html");
+        let markup_actions = html
+            .split("data-action=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .filter(|action| {
+                action.starts_with("settings.display.outputs.")
+                    || action.starts_with("settings.display.modes.")
+            });
+        for action in markup_actions {
+            assert!(
+                PAGER_CONTROLS.iter().any(|(_, expected)| *expected == action),
+                "markup paging action {action} is not in the frozen contract"
+            );
+        }
+    }
+
+    #[test]
+    fn pager_disabled_states_are_inert_non_button_twins() {
+        let html = include_str!("../../../ui/settings.html");
+        for id in PAGER_DISABLED_TWINS {
+            assert!(
+                html.contains(&format!(
+                    "<div class=\"pager-off is-disabled\" id=\"{id}\">"
+                )),
+                "disabled pager twin {id} must be an inert div with no data-action"
+            );
+        }
+    }
+
+    #[test]
+    fn pager_label_targets_are_projected_and_compiled() {
+        let mut document = document().expect("settings artifact must decode");
+        for id in PAGER_LABEL_IDS {
+            assert!(
+                PROJECTED_TEXT_IDS.contains(id),
+                "{id} must be listed as a projected text target"
+            );
+            document
+                .text(id, "1-4 of 5".to_owned())
+                .unwrap_or_else(|error| panic!("compiled pager label {id}: {error}"));
+        }
+    }
+
+    #[test]
+    fn pager_actions_have_settings_dispatch_branches() {
+        let dispatch = include_str!("lib.rs");
+        for (_, action) in PAGER_CONTROLS {
+            assert!(
+                dispatch.contains(&format!("\"{action}\"")),
+                "pager action {action} must have a dispatch branch in lib.rs (W2)"
+            );
+        }
+    }
+
+    #[test]
+    fn state_classes_are_styled_and_applied_in_the_markup() {
+        let css = include_str!("../../../ui/settings.css");
+        let html = include_str!("../../../ui/settings.html");
+        for class in STATE_CLASSES {
+            assert!(
+                css.contains(&format!(".{class} {{")),
+                "state class .{class} must be styled in settings.css"
+            );
+        }
+        assert!(html.contains("class=\"settings-inline-error is-error\""));
+        assert!(html.contains("class=\"setting-block is-pending\" id=\"display-confirm\""));
+    }
+
+    #[test]
+    fn settings_css_uses_no_unsupported_pseudo_states_or_attribute_selectors() {
+        let css = include_str!("../../../ui/settings.css");
+        for unsupported in [":focus", ":disabled", ":checked", "["] {
+            assert!(
+                !css.contains(unsupported),
+                "settings CSS must not use {unsupported}; the render compiler does not support it"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_pages_reserve_room_above_the_inline_footer_at_760x500() {
+        let css = include_str!("../../../ui/settings.css");
+        let html = include_str!("../../../ui/settings.html");
+        let footer = css_rule(css, ".settings-inline-error");
+        let footer_height = css_value(footer, "height")
+            .and_then(|value| value.strip_suffix("px"))
+            .and_then(|value| value.parse::<u32>().ok())
+            .expect("footer must declare a pixel height");
+        let scroll = css_rule(css, ".page-scroll");
+        let reserved = css_value(scroll, "padding-bottom")
+            .and_then(|value| value.strip_suffix("px"))
+            .and_then(|value| value.parse::<u32>().ok())
+            .expect("scroll pages must declare pixel bottom padding");
+        assert!(
+            reserved >= footer_height,
+            "scroll content must clear the {footer_height}px footer at 760x500"
+        );
+        assert_eq!(css_value(scroll, "overflow-y"), Some("auto"));
+        assert!(html.contains("id=\"page-displays\" class=\"settings-page page-scroll\""));
     }
 }

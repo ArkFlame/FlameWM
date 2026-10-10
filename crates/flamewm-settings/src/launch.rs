@@ -3,12 +3,15 @@ use flamewm_settings_core::SettingsPage;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SettingsLaunchOptions {
     pub page: SettingsPage,
+    /// Optional bounded geometry used by the native acceptance runner.
+    pub window_size: Option<(u32, u32)>,
 }
 
 impl Default for SettingsLaunchOptions {
     fn default() -> Self {
         Self {
             page: SettingsPage::Appearance,
+            window_size: None,
         }
     }
 }
@@ -20,6 +23,7 @@ where
 {
     let mut options = SettingsLaunchOptions::default();
     let mut page_was_set = false;
+    let mut window_size_was_set = false;
     let mut args = args.into_iter();
     while let Some(raw) = args.next() {
         let arg = raw.into();
@@ -36,10 +40,37 @@ where
                 page_was_set = true;
                 options.page = page;
             }
+            "--window-size" => {
+                let value: String = args
+                    .next()
+                    .ok_or_else(|| "--window-size requires a value".to_owned())?
+                    .into();
+                if window_size_was_set {
+                    return Err("--window-size may be specified only once".to_owned());
+                }
+                window_size_was_set = true;
+                options.window_size = Some(parse_window_size(&value)?);
+            }
             value => return Err(format!("unknown argument '{value}'")),
         }
     }
     Ok(options)
+}
+
+fn parse_window_size(value: &str) -> Result<(u32, u32), String> {
+    let (width, height) = value
+        .split_once('x')
+        .ok_or_else(|| "--window-size must be WIDTHxHEIGHT".to_owned())?;
+    let width = width
+        .parse::<u32>()
+        .map_err(|_| "--window-size must be WIDTHxHEIGHT".to_owned())?;
+    let height = height
+        .parse::<u32>()
+        .map_err(|_| "--window-size must be WIDTHxHEIGHT".to_owned())?;
+    match (width, height) {
+        (760, 500) | (820, 540) | (960, 640) => Ok((width, height)),
+        _ => Err("--window-size supports 760x500, 820x540, or 960x640".to_owned()),
+    }
 }
 
 fn parse_page(value: &str) -> Option<SettingsPage> {
@@ -73,6 +104,19 @@ mod tests {
             parse_args(["--page", "about"]).unwrap().page,
             SettingsPage::About
         );
+    }
+
+    #[test]
+    fn parser_accepts_only_the_bounded_geometry_matrix() {
+        assert_eq!(parse_args::<_, &str>([]).unwrap().window_size, None);
+        for size in ["760x500", "820x540", "960x640"] {
+            assert_eq!(parse_args(["--window-size", size]).unwrap().window_size,
+                Some(parse_window_size(size).unwrap()));
+        }
+        for size in ["0x0", "761x500", "760", "960x641", "760X500"] {
+            assert!(parse_args(["--window-size", size]).is_err(), "accepted {size}");
+        }
+        assert!(parse_args(["--window-size", "760x500", "--window-size", "820x540"]).is_err());
     }
 
     #[test]

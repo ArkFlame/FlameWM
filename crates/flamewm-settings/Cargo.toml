@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-control-wire = { path = "../flamewm-control-wire" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }

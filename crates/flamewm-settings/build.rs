@@ -10,6 +10,13 @@ fn main() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
+    let version_path = root.join("FLAMEWM_VERSION");
+    let version_text = fs::read_to_string(&version_path).expect("read FlameWM version");
+    let version = version_text.trim();
+    assert!(!version.is_empty(), "FlameWM version must not be empty");
+    println!("cargo:rustc-env=FLAMEWM_SETTINGS_VERSION={version}");
+    println!("cargo:rerun-if-changed={}", version_path.display());
+
     let ui = root.join("ui/settings.html");
     let css = root.join("ui/settings.css");
     let web = root.join("assets/web");
