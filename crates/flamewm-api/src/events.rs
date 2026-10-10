@@ -37,36 +37,6 @@ impl Drop for Subscription {
     }
 }
 
-#[derive(Default)]
-pub struct ScopedSubscriptions {
-    subscriptions: Vec<Subscription>,
-}
-
-impl ScopedSubscriptions {
-    pub fn add(&mut self, subscription: Subscription) {
-        if subscription.is_active() {
-            self.subscriptions.push(subscription);
-        }
-    }
-
-    pub fn clear(&mut self) {
-        for subscription in &mut self.subscriptions {
-            subscription.reset();
-        }
-        self.subscriptions.clear();
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.subscriptions.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.subscriptions.is_empty()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsChangedEvent {
     pub revision: u64,

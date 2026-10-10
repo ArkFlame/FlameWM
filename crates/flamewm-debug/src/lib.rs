@@ -40,17 +40,8 @@ pub const ICON_APPLY_SUMMARY_COOLDOWN: Duration = Duration::from_millis(5000);
 pub const WM_RESIZE_SUMMARY: DebugEventId = DebugEventId("wm.resize.summary");
 /// Default cooldown for [`WM_RESIZE_SUMMARY`]; enforced via `emit` arg.
 pub const WM_RESIZE_SUMMARY_COOLDOWN: Duration = Duration::from_secs(1);
-/// wm.cursor.transition event; call sites pass `WM_CURSOR_TRANSITION_COOLDOWN`.
-pub const WM_CURSOR_TRANSITION: DebugEventId = DebugEventId("wm.cursor.transition");
-/// Default cooldown for [`WM_CURSOR_TRANSITION`]; enforced via `emit` arg.
-pub const WM_CURSOR_TRANSITION_COOLDOWN: Duration = Duration::from_millis(100);
-
 /// Maximum bytes per log file before the CAP marker + drop behaviour.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
-/// shell.popup.measure event; call sites pass `SHELL_POPUP_MEASURE_COOLDOWN`.
-pub const SHELL_POPUP_MEASURE: DebugEventId = DebugEventId("shell.popup.measure");
-/// Default cooldown for [`SHELL_POPUP_MEASURE`]; enforced via `emit` arg.
-pub const SHELL_POPUP_MEASURE_COOLDOWN: Duration = Duration::from_millis(1000);
 
 /// New `wm.frame.*` ids. Static `&'static str` only (profiler/arch-guard).
 macro_rules! frame_ids {

@@ -85,11 +85,6 @@ impl Capabilities {
     }
 
     #[must_use]
-    pub fn from_items(items: Vec<String>) -> Self {
-        Self { items }
-    }
-
-    #[must_use]
     pub fn has(&self, capability: &str) -> bool {
         self.items.iter().any(|item| item == capability)
     }
