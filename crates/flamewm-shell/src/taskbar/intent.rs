@@ -11,7 +11,6 @@ pub enum TaskbarIntent {
     ActivateWorkspace(usize),
     OpenStatus(StatusIntent),
     OpenClock,
-    OpenContextMenu(ContextMenuIntent),
     Dock(DockingIntent),
 }
 
@@ -20,12 +19,6 @@ pub enum StatusIntent {
     Audio,
     Media,
     Network,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContextMenuIntent {
-    Task(TaskEntryId),
-    Surface,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

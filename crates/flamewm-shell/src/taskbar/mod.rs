@@ -6,4 +6,4 @@ pub mod status;
 pub mod tasks;
 pub mod workspaces;
 
-pub use intent::{ContextMenuIntent, DockingIntent, StatusIntent, TaskbarIntent};
+pub use intent::{DockingIntent, StatusIntent, TaskbarIntent};

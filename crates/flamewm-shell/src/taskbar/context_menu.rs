@@ -1,7 +1,7 @@
-use flamewm_api::panels::{PanelsSnapshot, TaskEntryKind};
+use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
-use flamewm_api::{TaskEntryId, WindowRef};
+use flamewm_api::WindowRef;
 use flamewm_ui_core::MenuEntry;
 
 pub use flamewm_shell_core::menu_policy::{
@@ -11,15 +11,9 @@ pub use flamewm_shell_core::menu_policy::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
-    ActivateWindow(WindowRef),
-    CloseWindow(WindowRef),
     MinimizeWindow(WindowRef),
     RestoreWindow(WindowRef),
     PinApp {
-        app: flamewm_api::DesktopAppId,
-        expected_revision: u64,
-    },
-    UnpinApp {
         app: flamewm_api::DesktopAppId,
         expected_revision: u64,
     },
@@ -42,21 +36,12 @@ impl ContextAction {
     pub fn into_control_request(self) -> flamewm_control_core::ControlRequest {
         use flamewm_control_core::ControlRequest;
         match self {
-            Self::ActivateWindow(window) => ControlRequest::ActivateWindow(window),
-            Self::CloseWindow(window) => ControlRequest::CloseWindow(window),
             Self::MinimizeWindow(window) => ControlRequest::MinimizeWindow(window),
             Self::RestoreWindow(window) => ControlRequest::RestoreWindow(window),
             Self::PinApp {
                 app,
                 expected_revision,
             } => ControlRequest::PinApp {
-                app,
-                expected_revision,
-            },
-            Self::UnpinApp {
-                app,
-                expected_revision,
-            } => ControlRequest::UnpinApp {
                 app,
                 expected_revision,
             },
@@ -82,41 +67,6 @@ impl ContextAction {
                 expected_revision,
             },
         }
-    }
-}
-
-/// Map a stable task row id to a typed control. Row identity is the id,
-/// never the label. Pinned entries resolve Unpin only; running non-pinned
-/// entries resolve Activate/Close.
-#[must_use]
-pub fn task_action(
-    snapshot: &PanelsSnapshot,
-    windows: &[WindowSnapshot],
-    id: &TaskEntryId,
-    row: &str,
-) -> Option<ContextAction> {
-    let entry = snapshot.tasks.iter().find(|entry| &entry.id == id)?;
-    if entry.id.is_pinned() {
-        if row != TASK_ROW_UNPIN {
-            return None;
-        }
-        return Some(ContextAction::UnpinApp {
-            app: entry.app_id.clone(),
-            expected_revision: snapshot.revision,
-        });
-    }
-    let window = match entry.kind {
-        TaskEntryKind::PinnedSlot { window } => window,
-        TaskEntryKind::Window { window } => Some(window),
-    }?;
-    let known = windows.iter().any(|snapshot| snapshot.reference == window);
-    if !known {
-        return None;
-    }
-    match row {
-        TASK_ROW_ACTIVATE => Some(ContextAction::ActivateWindow(window)),
-        TASK_ROW_CLOSE => Some(ContextAction::CloseWindow(window)),
-        _ => None,
     }
 }
 
