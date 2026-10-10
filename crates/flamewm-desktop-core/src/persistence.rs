@@ -42,8 +42,9 @@ impl LayoutStore {
                     format!("bad desktop layout line {}", line_number + 1),
                 ));
             }
-            let path = PathBuf::from(OsString::from_vec(unhex(fields[0])?));
-            let output = String::from_utf8(unhex(fields[1])?).map_err(|_| {
+            let decode = |value| unhex(value, "hex field has odd length", "invalid hex field");
+            let path = PathBuf::from(OsString::from_vec(decode(fields[0])?));
+            let output = String::from_utf8(decode(fields[1])?).map_err(|_| {
                 FlameError::new(ErrorCode::InvalidArgument, "desktop output id is not UTF-8")
             })?;
             let column = fields[2]
@@ -72,7 +73,7 @@ impl LayoutStore {
 }
 
 #[must_use]
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -82,27 +83,31 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-fn unhex(value: &str) -> FlameResult<Vec<u8>> {
+pub(super) fn unhex(
+    value: &str,
+    odd_length_error: &str,
+    invalid_digit_error: &str,
+) -> FlameResult<Vec<u8>> {
     if value.len() % 2 != 0 {
-        return Err(FlameError::invalid("hex field has odd length"));
+        return Err(FlameError::invalid(odd_length_error));
     }
     value
         .as_bytes()
         .chunks_exact(2)
         .map(|pair| {
-            let high = nibble(pair[0])?;
-            let low = nibble(pair[1])?;
+            let high = nibble(pair[0]).ok_or_else(|| FlameError::invalid(invalid_digit_error))?;
+            let low = nibble(pair[1]).ok_or_else(|| FlameError::invalid(invalid_digit_error))?;
             Ok((high << 4) | low)
         })
         .collect()
 }
 
-fn nibble(value: u8) -> FlameResult<u8> {
+fn nibble(value: u8) -> Option<u8> {
     match value {
-        b'0'..=b'9' => Ok(value - b'0'),
-        b'a'..=b'f' => Ok(value - b'a' + 10),
-        b'A'..=b'F' => Ok(value - b'A' + 10),
-        _ => Err(FlameError::invalid("invalid hex field")),
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -121,5 +126,33 @@ mod tests {
         )]);
         let parsed = LayoutStore::parse(&LayoutStore::serialize(&positions)).expect("round trip");
         assert_eq!(parsed, positions);
+    }
+
+    #[test]
+    fn layout_serialization_keeps_lowercase_hex_bytes() {
+        let positions = BTreeMap::from([(
+            PathBuf::from("/a"),
+            StoredPosition {
+                output: OutputId::new("B"),
+                cell: Cell::new(1, 2),
+            },
+        )]);
+        assert_eq!(LayoutStore::serialize(&positions), "2f61\t42\t1\t2\n");
+    }
+
+    #[test]
+    fn layout_hex_errors_keep_their_existing_messages() {
+        assert_eq!(
+            unhex("0", "hex field has odd length", "invalid hex field").unwrap_err(),
+            FlameError::invalid("hex field has odd length")
+        );
+        assert_eq!(
+            unhex("gg", "hex field has odd length", "invalid hex field").unwrap_err(),
+            FlameError::invalid("invalid hex field")
+        );
+        assert_eq!(
+            unhex("AF", "odd", "invalid").expect("uppercase hex"),
+            vec![0xaf]
+        );
     }
 }

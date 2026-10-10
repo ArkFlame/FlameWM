@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult, OutputId, Rect};
 
+use crate::persistence::{hex, unhex};
 use crate::sticky::{MAX_TEXT_SIZE, MIN_TEXT_SIZE, Rgb, StickyNote, StickyNoteStore};
 
 pub const STATE_FILE_NAME: &str = "sticky-notes.state";
@@ -126,25 +127,13 @@ pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
     Ok(StickyNoteStore::from_persisted(enabled, notes))
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
-}
 fn string(value: &str) -> FlameResult<String> {
-    String::from_utf8(unhex(value)?).map_err(|_| invalid("sticky state text is not UTF-8"))
-}
-fn unhex(value: &str) -> FlameResult<Vec<u8>> {
-    if value.len() % 2 != 0 {
-        return Err(invalid("invalid sticky state hex"));
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let pair =
-                std::str::from_utf8(pair).map_err(|_| invalid("invalid sticky state hex"))?;
-            u8::from_str_radix(pair, 16).map_err(|_| invalid("invalid sticky state hex"))
-        })
-        .collect()
+    String::from_utf8(unhex(
+        value,
+        "invalid sticky state hex",
+        "invalid sticky state hex",
+    )?)
+    .map_err(|_| invalid("sticky state text is not UTF-8"))
 }
 fn number<T: std::str::FromStr>(value: &str) -> FlameResult<T> {
     value
@@ -175,5 +164,31 @@ mod tests {
         let loaded = load(&path).expect("reload");
         assert_eq!(loaded.get("note").expect("note").text, "Žluťoučký 🦕");
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn serialization_keeps_lowercase_hex_bytes() {
+        let mut store = StickyNoteStore::default();
+        assert!(store.create(StickyNote::new("note", OutputId::new("eDP-1"), 0, 10, 20)));
+        assert_eq!(
+            serialize(&store),
+            "v2\t1\n6e6f7465\t0\t6544502d31\t10\t20\t190\t190\t\t255\t229\t107\t23\t23\t23\t15\t0\n"
+        );
+    }
+
+    #[test]
+    fn malformed_hex_keeps_sticky_error_behavior() {
+        assert_eq!(
+            string("0").unwrap_err(),
+            invalid("invalid sticky state hex")
+        );
+        assert_eq!(
+            string("gg").unwrap_err(),
+            invalid("invalid sticky state hex")
+        );
+        assert_eq!(
+            string("ff").unwrap_err(),
+            invalid("sticky state text is not UTF-8")
+        );
     }
 }
