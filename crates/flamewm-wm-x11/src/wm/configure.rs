@@ -207,8 +207,10 @@ mod tests {
     use super::*;
     use crate::frame::coords::{RootPoint, RootRect};
     use crate::frame::geometry::FrameExtents;
-    use crate::frame::model::SnapTarget;
-    use crate::frame::session::{ControlPressSession, InteractionSession, MoveAnchor, MoveSession};
+    use crate::frame::model::{ResizeEdges, SnapTarget};
+    use crate::frame::session::{
+        ControlPressSession, InteractionSession, MoveAnchor, MoveSession, ResizeSession,
+    };
 
     fn extents() -> FrameExtents {
         FrameExtents::new(24, 1)
@@ -261,7 +263,6 @@ mod tests {
         for i in 0..1000 {
             let class = classify_notify(9000 + (i % 64) as u32, 11, 12, false, false, false);
             assert_eq!(class, NotifyClass::StaleUnknown, "iter {i}");
-            assert_eq!(Observation::Stale, Observation::Stale, "iter {i}");
         }
         assert_eq!(geometry_effects, 0);
     }
@@ -285,11 +286,15 @@ mod tests {
         assert_eq!(decision, RequestDecision::AcceptOnce);
         assert_eq!(decision.geometry_effects(), 1);
         assert!(!decision.needs_synthetic_notify());
+        assert_eq!(carry_stack_intent(decision, true), (decision, true));
+        assert_eq!(carry_stack_intent(decision, false), (decision, false));
+        let frame = RootRect::new(100, 100, 400, 300);
+        assert_eq!(observe_frame(frame, frame), Observation::Current);
     }
 
     // T05: active gesture refuses; synthetic notify owed.
     #[test]
-    fn t05_interactive_refuses_with_synthetic() {
+    fn t05_interactive_sessions_refuse_with_synthetic() {
         let mut session = InteractionSession::Idle;
         session.begin_move(MoveSession {
             client: 7,
@@ -301,11 +306,32 @@ mod tests {
             anchor: MoveAnchor::new(20, 400, 30),
             grab_window: 99,
         });
-        let decision = decide_request(&session, PlacementMode::Floating);
-        assert_eq!(decision, RequestDecision::RefuseInteractive);
-        assert_eq!(decision.geometry_effects(), 0);
-        assert!(decision.needs_synthetic_notify());
-        let _ = ControlPressSession::new(7, crate::frame::model::FrameControl::Close, 99);
+        let mut resize = InteractionSession::Idle;
+        resize.begin_resize(ResizeSession {
+            client: 7,
+            start_pointer: RootPoint::new(100, 100),
+            start_placement: crate::frame::model::PlacementSnapshot {
+                mode: PlacementMode::Floating,
+                rect: RootRect::new(100, 100, 400, 300),
+            },
+            edges: ResizeEdges::bottom_right(),
+            grab_window: 99,
+        });
+        let mut control = InteractionSession::Idle;
+        control.begin_control(ControlPressSession::new(
+            7,
+            crate::frame::model::FrameControl::Close,
+            99,
+        ));
+
+        for (name, session) in [("move", session), ("resize", resize), ("control", control)] {
+            let decision = decide_request(&session, PlacementMode::Floating);
+            assert_eq!(decision, RequestDecision::RefuseInteractive, "{name}");
+            assert_eq!(decision.geometry_effects(), 0, "{name}");
+            assert!(decision.needs_synthetic_notify(), "{name}");
+            assert_eq!(carry_stack_intent(decision, true), (decision, true));
+            assert_eq!(carry_stack_intent(decision, false), (decision, false));
+        }
     }
 
     // T05: WM-owned modes refuse even when idle; stack intent orthogonal.
@@ -315,11 +341,13 @@ mod tests {
             PlacementMode::Maximized,
             PlacementMode::Fullscreen,
             PlacementMode::Snapped(SnapTarget::Left),
+            PlacementMode::Snapped(SnapTarget::Right),
         ];
         for mode in modes {
             let decision = decide_request(&idle(), mode);
             assert_eq!(decision, RequestDecision::RefuseMode, "mode {mode:?}");
             assert!(decision.needs_synthetic_notify(), "mode {mode:?}");
+            assert_eq!(decision.geometry_effects(), 0, "mode {mode:?}");
             assert_eq!(carry_stack_intent(decision, true), (decision, true));
             assert_eq!(carry_stack_intent(decision, false), (decision, false));
         }
