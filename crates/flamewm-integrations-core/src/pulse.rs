@@ -260,6 +260,28 @@ mod tests {
     }
 
     #[test]
+    fn server_restart_uses_bounded_reconnect_backoff() {
+        let mut pulse = PulseController::default();
+        pulse.server_restarted();
+        assert_eq!(
+            (0..=8)
+                .map(|_| pulse.next_reconnect_delay_ms())
+                .collect::<Vec<_>>(),
+            [
+                Some(300),
+                Some(600),
+                Some(1_200),
+                Some(2_400),
+                Some(4_800),
+                Some(8_000),
+                Some(8_000),
+                Some(8_000),
+                None,
+            ]
+        );
+    }
+
+    #[test]
     fn subscription_burst_coalesces_to_one_reconcile() {
         let mut pulse = PulseController::default();
         pulse.connect_started();
