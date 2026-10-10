@@ -13,7 +13,7 @@ use flamewm_api::ports::FdEvents;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::BusKind;
-use flamewm_reactor::Reactor;
+use flamewm_reactor::{Reactor, SystemWallClock, WallClockSource};
 use flamewm_shell::async_projection;
 use flamewm_shell::projection;
 use flamewm_shell::start;
@@ -114,7 +114,7 @@ fn execute() -> Result<(), String> {
     };
     drop(total_guard);
     let clock_due = Arc::new(AtomicBool::new(false));
-    let plan = flamewm_shell_core::clock_timer_plan("%H:%M", epoch_ms());
+    let plan = flamewm_shell_core::clock_timer_plan("%H:%M", SystemWallClock.now_epoch_ms());
     let initial_due = Arc::clone(&clock_due);
     reactor
         .register_timer(
@@ -266,10 +266,6 @@ fn project_panel_critical(
     Ok(())
 }
 
-fn epoch_ms() -> u64 {
-    chrono::Local::now().timestamp_millis().max(0) as u64
-}
-
 fn signal_interest(events: FdEvents) -> calloop::Interest {
     match (
         events.contains(FdEvents::READABLE),
@@ -322,4 +318,19 @@ fn installed_data_root(executable: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(usr_dir.join("share/flamewm"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wall_clock_is_utc_epoch_millis() {
+        let now = SystemWallClock.now_epoch_ms();
+        let utc = chrono::Utc::now().timestamp_millis() as u64;
+        assert!(
+            now.abs_diff(utc) < 1_000,
+            "wall clock {now} vs chrono UTC {utc}"
+        );
+    }
 }

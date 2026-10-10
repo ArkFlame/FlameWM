@@ -1244,7 +1244,7 @@ fn unique_strings(values: Vec<String>) -> Vec<String> {
     unique
 }
 
-fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut unique = Vec::new();
     for value in values {
         if !value.as_os_str().is_empty() && !unique.contains(&value) {

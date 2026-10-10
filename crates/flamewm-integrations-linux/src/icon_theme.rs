@@ -644,13 +644,9 @@ pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     for data_dir in data_dirs {
         roots.push(data_dir.join("icons"));
     }
-    let mut unique = Vec::new();
-    for root in roots {
-        if !unique.contains(&root) {
-            unique.push(root);
-        }
-    }
-    unique
+    // Roots are always non-empty (`join` appends a component), so the
+    // empty-path filter in `unique_paths` never drops anything here.
+    crate::icons::unique_paths(roots)
 }
 
 /// Locate `index.theme` for `theme` under `data_dirs`.
