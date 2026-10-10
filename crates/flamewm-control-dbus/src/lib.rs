@@ -147,32 +147,32 @@ fn handle_call<E: EnginePorts>(
     if let Some(lease) = ended_lease {
         capture_owner.borrow_mut().record_end(lease);
     }
-    let signals = match (settings_keys, &response) {
-        (Some(keys), ControlResponse::Settings(snapshot)) => vec![
-            ControlSignal::SettingsSnapshotChanged {
-                snapshot: snapshot.clone(),
-            },
-            ControlSignal::SettingsChanged {
-                revision: snapshot.revision,
-                keys,
-            },
-        ],
+    let output = if message.get_no_reply() {
+        None
+    } else {
+        let reply = encode_reply(&call, &response).map_err(to_flame_error)?;
+        let mut output = message.method_return();
+        output.append_items(
+            &reply
+                .values
+                .iter()
+                .map(to_item)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| invalid(&error))?,
+        );
+        Some(output)
+    };
+    let signals = match (settings_keys, response) {
+        (Some(keys), ControlResponse::Settings(snapshot)) => {
+            let revision = snapshot.revision;
+            vec![
+                ControlSignal::SettingsSnapshotChanged { snapshot },
+                ControlSignal::SettingsChanged { revision, keys },
+            ]
+        }
         _ => Vec::new(),
     };
-    if message.get_no_reply() {
-        return Ok((None, signals));
-    }
-    let reply = encode_reply(&call, &response).map_err(to_flame_error)?;
-    let mut output = message.method_return();
-    output.append_items(
-        &reply
-            .values
-            .iter()
-            .map(to_item)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| invalid(&error))?,
-    );
-    Ok((Some(output), signals))
+    Ok((output, signals))
 }
 
 /// Restores the grab set when the bus client that owns a hotkey capture lease disconnects.

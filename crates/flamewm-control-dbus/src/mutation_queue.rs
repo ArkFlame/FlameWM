@@ -58,7 +58,7 @@ fn execute_with_calls(
     let first = call(request);
     let action = match (request, &first) {
         (ControlRequest::SystemAction { action, .. }, outcome) if is_stale_revision(outcome) => {
-            action.clone()
+            action
         }
         _ => return first,
     };
@@ -67,7 +67,7 @@ fn execute_with_calls(
         Ok(ControlResponse::System(snapshot)) => snapshot,
         _ => return first,
     };
-    let Some(fresh_action) = retryable_system_action(&action, &snapshot) else {
+    let Some(fresh_action) = retryable_system_action(action, &snapshot) else {
         RETRY_REJECTED_GENERATION_COUNT.fetch_add(1, Ordering::Relaxed);
         return first;
     };
