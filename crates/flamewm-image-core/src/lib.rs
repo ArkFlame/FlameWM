@@ -1,7 +1,7 @@
 //! Shared deterministic image decode core (J01).
 //!
-//! Single owner for PPM/SVG/PNG decoding into straight (non-premultiplied)
-//! RGBA8. PPM inputs are always opaque (alpha=255); SVG/PNG preserve alpha.
+//! Single owner for PPM/SVG/PNG/WebP decoding into straight (non-premultiplied)
+//! RGBA8. PPM inputs are always opaque (alpha=255); SVG/PNG/WebP preserve alpha.
 //! Size limits: max 4096x4096, max 64 MiB decoded.
 
 use std::path::Path;
@@ -10,6 +10,7 @@ pub mod png;
 pub mod ppm;
 pub mod scale;
 pub mod svg;
+pub mod webp;
 pub mod xpm;
 
 /// Semantic Breeze-style color scheme for SVG `ColorScheme-*` classes.
@@ -44,6 +45,7 @@ pub enum ImageSourceFormat {
     Ppm,
     Svg,
     Png,
+    Webp,
 }
 
 impl ImageSourceFormat {
@@ -58,6 +60,7 @@ impl ImageSourceFormat {
             "ppm" => Some(Self::Ppm),
             "svg" => Some(Self::Svg),
             "png" => Some(Self::Png),
+            "webp" => Some(Self::Webp),
             _ => None,
         }
     }
@@ -68,6 +71,7 @@ impl ImageSourceFormat {
             Self::Ppm => "PPM",
             Self::Svg => "SVG",
             Self::Png => "PNG",
+            Self::Webp => "WebP",
         }
     }
 }
@@ -158,6 +162,7 @@ pub fn decode_bytes(bytes: &[u8], format: ImageSourceFormat) -> Result<RgbaImage
             svg::render(bytes, width, height)
         }
         ImageSourceFormat::Png => png::decode(bytes),
+        ImageSourceFormat::Webp => webp::decode(bytes),
     }
 }
 
@@ -179,6 +184,14 @@ pub fn decode_bytes_at(
         ImageSourceFormat::Svg => svg::render(bytes, width, height),
         ImageSourceFormat::Png => {
             let natural = png::decode(bytes)?;
+            if natural.width == width && natural.height == height {
+                return Ok(natural);
+            }
+            scale::scale_rgba(&natural, width, height, filter)
+                .ok_or_else(|| "requested dimensions overflow".to_string())
+        }
+        ImageSourceFormat::Webp => {
+            let natural = webp::decode(bytes)?;
             if natural.width == width && natural.height == height {
                 return Ok(natural);
             }
@@ -248,6 +261,10 @@ mod tests {
         assert_eq!(
             ImageSourceFormat::from_extension(Path::new("icon.SVG")),
             Some(ImageSourceFormat::Svg)
+        );
+        assert_eq!(
+            ImageSourceFormat::from_extension(Path::new("wallpaper.WEBP")),
+            Some(ImageSourceFormat::Webp)
         );
     }
 

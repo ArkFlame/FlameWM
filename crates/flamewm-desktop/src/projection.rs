@@ -11,6 +11,12 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::wallpaper_loader::WallpaperPresentation;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Mirror of the shared icon theme generation for [`ParallelIconService::icon_key`],
+/// which stays a static constructor for its existing callers. Written only by
+/// [`ParallelIconService::refresh_theme`] on the UI thread.
+static THEME_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 const ICON_KINDS: [&str; 5] = ["directory", "desktop-launcher", "file", "symlink", "trash"];
 const LABEL_WIDTH_PX: f32 = 76.0;
@@ -22,10 +28,10 @@ const ICON_TILE_PX: u32 = 44;
 
 pub fn project_background(
     document: &mut impl UiDocumentAccess,
-    wallpaper: Option<&SettingValue>,
+    _wallpaper: Option<&SettingValue>,
     presentation: &WallpaperPresentation,
 ) -> Result<(), String> {
-    let selected = matches!(wallpaper, Some(SettingValue::Text(path)) if !path.trim().is_empty());
+    let has_image = matches!(presentation, WallpaperPresentation::Image(_));
     document.background(
         "desktop",
         UiColor {
@@ -35,20 +41,18 @@ pub fn project_background(
             a: 255,
         },
     )?;
-    document.visible("desktop-watermark", !selected)?;
-    document.visible("desktop-wallpaper-selection", selected)?;
-    if selected {
-        if let WallpaperPresentation::Image(raster) = presentation {
-            document.image_rgba8(
-                "desktop-wallpaper-selection",
-                RuntimeImage {
-                    source: raster.source.clone(),
-                    width: raster.width,
-                    height: raster.height,
-                    pixels: raster.pixels.clone(),
-                },
-            )?;
-        }
+    document.visible("desktop-watermark", true)?;
+    document.visible("desktop-wallpaper-selection", has_image)?;
+    if let WallpaperPresentation::Image(raster) = presentation {
+        document.image_rgba8(
+            "desktop-wallpaper-selection",
+            RuntimeImage {
+                source: raster.source.clone(),
+                width: raster.width,
+                height: raster.height,
+                pixels: raster.pixels.clone(),
+            },
+        )?;
     }
     Ok(())
 }
@@ -58,7 +62,7 @@ pub fn project_background(
 pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<(), String> {
     document.layer("desktop", UiLayer::SurfaceBackground)?;
     document.layer("desktop-wallpaper-selection", UiLayer::Background)?;
-    document.layer("desktop-watermark", UiLayer::Background)?;
+    document.layer("desktop-watermark", UiLayer::Content)?;
     for index in 0..SLOT_COUNT {
         document.layer(&format!("desktop-item-{index}"), UiLayer::Content)?;
     }
@@ -116,9 +120,11 @@ pub struct ParallelIconService {
 impl ParallelIconService {
     #[must_use]
     pub fn spawn(packaged_root: PathBuf) -> Self {
-        let service = IconService::new(2, 128, move || {
-            IconResolver::from_environment(packaged_root.clone(), 0)
-        });
+        // One generation-scoped index build shared by both workers.
+        let base = IconResolver::from_environment(packaged_root, 0);
+        let index = std::sync::Arc::clone(base.shared_index());
+        let base = std::sync::Arc::new(base);
+        let service = IconService::with_index(2, 128, move || base.fork_worker(), index);
         Self { service }
     }
 
@@ -129,9 +135,23 @@ impl ParallelIconService {
             icon_purpose(kind, override_name.is_some()),
             IconRequest::name(launcher_icon_name(kind, icon_override)),
             IconSize::new(ICON_TILE_PX, ICON_TILE_PX),
-            0,
+            THEME_GENERATION.load(Ordering::Acquire),
             0,
         )
+    }
+
+    /// UI-thread, non-blocking theme watch. Queues a check on the rebuild
+    /// thread (no-op when one is already in flight), then installs any finished
+    /// replacement index. Returns true when a new generation was installed.
+    /// The mirror takes the generation returned by `install_theme_index`.
+    pub fn refresh_theme(&mut self) -> bool {
+        self.service.request_theme_rebuild();
+        let Some(next) = self.service.poll_theme_rebuild() else {
+            return false;
+        };
+        let generation = self.service.install_theme_index(next);
+        THEME_GENERATION.store(generation, Ordering::Release);
+        true
     }
 
     /// Raw FD readable whenever a worker result completes. Register with
@@ -164,6 +184,9 @@ impl ParallelIconService {
         document.visible(&item_id, true)?;
         document.position(&item_id, point.x as f32, point.y as f32)?;
         document.size(&item_id, DESKTOP_TILE_WIDTH, DESKTOP_TILE_HEIGHT)?;
+        // Per-frame theme watch (throttled inside needs_rebuild). A new
+        // generation changes the key below, so stale cache entries miss.
+        self.refresh_theme();
         let key = Self::icon_key(kind, icon_override);
         if let Some(Ok(raster)) = self.service.cached(&key) {
             apply_raster(document, index, kind, raster)?;
@@ -387,7 +410,7 @@ fn icon_name(kind: DesktopItemKind) -> &'static str {
     match kind {
         DesktopItemKind::Directory => "folder",
         DesktopItemKind::DesktopLauncher => "desktop",
-        DesktopItemKind::File => "text-x-generic",
+        DesktopItemKind::File => "document-edit",
         DesktopItemKind::Symlink => "link",
         DesktopItemKind::TrashPseudo => "trash",
     }
@@ -428,9 +451,96 @@ mod tests {
     }
 
     #[test]
+    fn file_item_semantic_icon_is_packaged_document_not_brand_fallback() {
+        use std::path::Path;
+        let packaged_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let packaged_root = packaged_root.canonicalize().expect("workspace root");
+        let missing_data = std::env::temp_dir().join("flamewm-projection-no-such-data-dir");
+        let mut resolver = IconResolver::new(
+            packaged_root.clone(),
+            vec!["hicolor".to_owned()],
+            vec![missing_data],
+            0,
+        );
+        let name = icon_name(DesktopItemKind::File);
+        let raster = resolver
+            .prepare_semantic(name, IconSize::new(ICON_TILE_PX, ICON_TILE_PX))
+            .expect("file icon must resolve");
+        assert_ne!(
+            raster.origin,
+            flamewm_integrations_linux::icons::IconOrigin::PackagedFallback,
+            "file icon must not fall through to the brand fallback"
+        );
+        assert_ne!(
+            raster.origin,
+            flamewm_integrations_linux::icons::IconOrigin::PackagedFlame,
+        );
+        assert_eq!(
+            raster.origin,
+            flamewm_integrations_linux::icons::IconOrigin::PackagedBreeze
+        );
+        let expected = packaged_root.join("assets/web/breeze").join(format!("{name}.svg"));
+        assert!(
+            expected.is_file(),
+            "packaged document icon missing on disk: {}",
+            expected.display()
+        );
+        assert_eq!(Path::new(&raster.source), expected.as_path());
+    }
+
+    #[test]
     fn tile_geometry_stays_centered_in_generated_tile() {
         assert_eq!(DESKTOP_TILE_WIDTH, 82.0);
         assert_eq!(DESKTOP_TILE_HEIGHT, 82.0);
+    }
+
+    /// Reads an integer `prop:Npx` declaration from the body of `.<selector> { ... }`.
+    fn css_px(css: &str, selector: &str, prop: &str) -> i32 {
+        let head = format!(".{selector} {{");
+        let start = css
+            .find(&head)
+            .unwrap_or_else(|| panic!("missing rule {head}"))
+            + head.len();
+        let body = &css[start..start + css[start..].find('}').expect("unclosed rule")];
+        let key = format!("{prop}:");
+        let value_start = body
+            .find(&key)
+            .unwrap_or_else(|| panic!("missing {prop} in {selector}"))
+            + key.len();
+        let value: String = body[value_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        value.parse().expect("integer px value")
+    }
+
+    #[test]
+    fn desktop_label_is_horizontally_centered_in_item_padding_box() {
+        // The item is 82px with a 1px border, so its padding box is 80px wide.
+        // A centered label satisfies left * 2 + width == padding box width.
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        let padding_box = DESKTOP_TILE_WIDTH as i32 - 2;
+        let left = css_px(css, "desktop-label", "left");
+        let width = css_px(css, "desktop-label", "width");
+        assert_eq!(
+            left * 2 + width,
+            padding_box,
+            "label box (left={left}, width={width}) is off-center in {padding_box}px item"
+        );
+    }
+
+    #[test]
+    fn desktop_label_line_centers_text_within_its_box() {
+        // The label line is overflow:hidden and sized to the label box; centering
+        // keeps the text inside that box when the estimate fits (see text_layout).
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        let head = ".desktop-label-line {";
+        let start = css.find(head).expect("missing .desktop-label-line") + head.len();
+        let body = &css[start..start + css[start..].find('}').expect("unclosed rule")];
+        assert!(
+            body.contains("justify-content:center"),
+            "label line must center text in its box, got: {body}"
+        );
     }
 
     #[test]
@@ -445,7 +555,7 @@ mod tests {
         );
         assert_eq!(
             launcher_icon_name(DesktopItemKind::File, Some("  ")),
-            "text-x-generic"
+            "document-edit"
         );
         assert_eq!(
             launcher_icon_name(DesktopItemKind::File, Some("editor")),
@@ -542,8 +652,10 @@ mod tests {
         let modal = layer_of(&probe, "desktop-confirm");
         assert_eq!(root, UiLayer::SurfaceBackground.z_index());
         assert_eq!(wallpaper, UiLayer::Background.z_index());
-        assert_eq!(watermark, UiLayer::Background.z_index());
+        assert_eq!(watermark, UiLayer::Content.z_index());
         assert!(root < wallpaper);
+        assert!(wallpaper < watermark);
+        assert!(watermark <= item);
         assert!(wallpaper < item);
         assert!(item < selection);
         assert!(selection < menu);
@@ -558,6 +670,53 @@ mod tests {
     struct VisibilityProbe {
         hidden: Vec<String>,
         shown: Vec<String>,
+    }
+
+    #[test]
+    fn default_and_custom_image_presentations_project_independent_of_setting_text() {
+        let image = WallpaperPresentation::Image(Rgba8Raster {
+            source: "packaged/default.webp".to_owned(),
+            width: 1,
+            height: 1,
+            pixels: vec![0, 0, 0, 255],
+            origin: flamewm_integrations_linux::icons::IconOrigin::PackagedFlame,
+            fallback_reason: None,
+        });
+        for wallpaper in [
+            None,
+            Some(SettingValue::Text(String::new())),
+            Some(SettingValue::Text("custom.webp".to_owned())),
+        ] {
+            let mut probe = VisibilityProbe {
+                hidden: Vec::new(),
+                shown: Vec::new(),
+            };
+            project_background(&mut probe, wallpaper.as_ref(), &image).expect("project image");
+            assert!(
+                probe
+                    .shown
+                    .contains(&"desktop-wallpaper-selection".to_owned())
+            );
+            assert!(probe.shown.contains(&"desktop-watermark".to_owned()));
+            assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
+        }
+
+        let mut reset = VisibilityProbe {
+            hidden: Vec::new(),
+            shown: Vec::new(),
+        };
+        project_background(
+            &mut reset,
+            Some(&SettingValue::Text(String::new())),
+            &WallpaperPresentation::DefaultBlackWatermark,
+        )
+        .expect("project reset fallback");
+        assert!(
+            reset
+                .hidden
+                .contains(&"desktop-wallpaper-selection".to_owned())
+        );
+        assert!(reset.shown.contains(&"desktop-watermark".to_owned()));
     }
 
     impl UiDocumentAccess for VisibilityProbe {
@@ -734,5 +893,15 @@ mod tests {
             icon_purpose(DesktopItemKind::TrashPseudo, false),
             IconLookupPurpose::Semantic
         );
+    }
+
+    #[test]
+    fn refresh_theme_unchanged_index_returns_false_and_keeps_mirror() {
+        let mut icons = ParallelIconService::spawn(
+            std::env::temp_dir().join("flamewm-projection-refresh-theme-no-such-root"),
+        );
+        let before = THEME_GENERATION.load(Ordering::Acquire);
+        assert!(!icons.refresh_theme());
+        assert_eq!(THEME_GENERATION.load(Ordering::Acquire), before);
     }
 }

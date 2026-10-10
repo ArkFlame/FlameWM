@@ -9,6 +9,9 @@ use flamewm_ui_core::popover::{PopoverEdge, PopoverGeometry};
 pub const WATERMARK_WIDTH: i32 = 220;
 pub const WATERMARK_HEIGHT: i32 = 73;
 pub const WATERMARK_PADDING: i32 = 24;
+/// Extra bottom clearance on top of the padding; keeps the CSS `bottom` value
+/// (ui/desktop/desktop.css `.watermark`) at its current visual position.
+pub const WATERMARK_BOTTOM_CLEARANCE: i32 = 31;
 pub const DESKTOP_SELECTION_INSET: i32 = 4;
 pub const DESKTOP_LABEL_RESERVE: i32 = 16;
 
@@ -395,6 +398,25 @@ mod tests {
         );
     }
     #[test]
+    fn watermark_css_offsets_match_core_padding_constants() {
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        let rule_start = css.find(".watermark {").expect("missing .watermark rule");
+        let body = &css[rule_start..rule_start + css[rule_start..].find('}').expect("unclosed")];
+        let px = |prop: &str| -> i32 {
+            let key = format!("{prop}:");
+            let start = body.find(&key).unwrap_or_else(|| panic!("missing {prop}")) + key.len();
+            body[start..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .expect("integer px")
+        };
+        assert_eq!(px("right"), WATERMARK_PADDING);
+        assert_eq!(px("bottom"), WATERMARK_PADDING + WATERMARK_BOTTOM_CLEARANCE);
+    }
+
+    #[test]
     fn desktop_icon_fallback_keeps_semantic_then_generic_order() {
         assert_eq!(
             desktop_icon_candidates("folder"),
@@ -436,6 +458,24 @@ mod tests {
         assert_eq!(first, "café");
         assert_eq!(second, "résumé na…");
         assert!(second.chars().count() <= 10);
+    }
+    #[test]
+    fn label_bounds_single_long_word_lines_to_capacity() {
+        // Capacity at 76px / 13px font is floor(76 / 7.28) = 10 chars per line.
+        for text in ["readme.txt", "a-very-long-filename.txt"] {
+            let [first, second] = desktop_label_lines(text, 76.0, 13.0);
+            assert!(
+                first.chars().count() <= 10,
+                "first line too long: {first:?}"
+            );
+            assert!(
+                second.chars().count() <= 10,
+                "second line too long: {second:?}"
+            );
+        }
+        let [first, second] = desktop_label_lines("a-very-long-filename.txt", 76.0, 13.0);
+        assert_eq!(first, "a-very-lon");
+        assert_eq!(second, "g-filenam…");
     }
     #[test]
     fn label_empty_returns_two_empty_lines() {

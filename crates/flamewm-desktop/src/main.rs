@@ -46,7 +46,7 @@ use flamewm_ui_x11::PointerButton;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiWindowConfig,
     UiWindowRole, decode_document, pointer_button_from_raw, root_geometry,
-    run_with_controller_events_role_with_reactor,
+    WindowGeometry, WindowGeometrySlot, run_with_controller_events_role_with_reactor_geometry,
 };
 
 mod projection;
@@ -418,6 +418,7 @@ fn main() -> Result<(), String> {
     let mut wallpaper_loader = wallpaper_loader::WallpaperLoader::new(
         work_area.width.max(1) as u32,
         work_area.height.max(1) as u32,
+        packaged_root(),
     )?;
     wallpaper_loader
         .request(setting_text(&settings, "wallpaper"))
@@ -532,6 +533,9 @@ fn main() -> Result<(), String> {
         )
         .map_err(|error| format!("register profiler timer: {error}"))?;
     register_sticky_persist_timer(&mut reactor)?;
+    // Panel strut changes arrive as control signals. The signal handler only
+    // sets this flag; the reactor tick re-resolves the work area once per burst.
+    let panels_dirty = std::rc::Rc::new(std::cell::Cell::new(false));
     // Best-effort workspace signal subscription: startup query already ran.
     // WorkspacesSnapshotChanged is the live workspace authority; the legacy
     // revision-only signal is intentionally not a fetch trigger.
@@ -552,9 +556,11 @@ fn main() -> Result<(), String> {
                 _ => calloop::Interest::READ,
             };
             let workspace_cell = std::rc::Rc::clone(&state_cell);
+            let panels_signal_flag = std::rc::Rc::clone(&panels_dirty);
             let registration = reactor.register_raw_fd_with_action(watch_fd, interest, {
                 move |_, _| {
                     let state_cell = &workspace_cell;
+                    let panels_flag = &panels_signal_flag;
                     let _ = client.on_ready(|signal| {
                         match signal {
                             flamewm_control_wire::ControlSignal::SettingsSnapshotChanged {
@@ -591,6 +597,10 @@ fn main() -> Result<(), String> {
                             }
                             signal if workspace_sync::is_legacy_workspace_signal(&signal) => {
                                 workspace_legacy_ignored_counter().increment();
+                            }
+                            flamewm_control_wire::ControlSignal::PanelsSnapshotChanged { .. }
+                            | flamewm_control_wire::ControlSignal::PanelsChanged { .. } => {
+                                panels_flag.set(true);
                             }
                             _ => {}
                         }
@@ -690,7 +700,16 @@ fn main() -> Result<(), String> {
     if let Err(error) = registration {
         eprintln!("desktop: degraded wallpaper completion subscription: {error}");
     }
-    run_with_controller_events_role_with_reactor(
+    // Known outer rect of the desktop window (created at the work area); updated
+    // whenever a geometry request is issued. Read back by the resize decision.
+    let mut window_rect = Rect::new(
+        work_area.x,
+        work_area.y,
+        work_area.width.max(1),
+        work_area.height.max(1),
+    );
+    let geometry_slot = WindowGeometrySlot::default();
+    run_with_controller_events_role_with_reactor_geometry(
         document,
         UiWindowConfig {
             width: work_area.width.max(1) as u32,
@@ -698,9 +717,11 @@ fn main() -> Result<(), String> {
             x: work_area.x,
             y: work_area.y,
             title: "FlameWM Desktop".to_owned(),
+            identity: None,
         },
         UiWindowRole::Desktop,
         &mut reactor,
+        std::rc::Rc::clone(&geometry_slot),
         {
             let event_cell = std::rc::Rc::clone(&state_cell);
             let mutation_dispatcher = workspace_mutations.clone();
@@ -722,7 +743,17 @@ fn main() -> Result<(), String> {
         },
         {
             let flush_cell = std::rc::Rc::clone(&state_cell);
+            let panels_flag = std::rc::Rc::clone(&panels_dirty);
+            let mut current_work_area = work_area;
+            let geometry_out = std::rc::Rc::clone(&geometry_slot);
             move |document| {
+                if panels_flag.replace(false) {
+                    refresh_work_area_after_panel_change(
+                        &mut current_work_area,
+                        &mut window_rect,
+                        &geometry_out,
+                    );
+                }
                 let state_cell = &flush_cell;
                 let mut state = state_cell.borrow_mut();
                 let _completed_workspace_present = state.workspace_present_span.take();
@@ -941,6 +972,49 @@ fn panel_geometries() -> Result<Vec<Rect>, String> {
         Ok(response) => Err(format!("GetPanels returned {response:?}")),
         Err(error) => Err(error.message.clone()),
     }
+}
+
+/// Re-resolves the work area after a panel signal. Errors keep the current
+/// area and are reported once per signal burst. When the desktop window's
+/// known rect differs from the new work area, a move+size request is written
+/// to the geometry slot for the X11 loop to apply.
+fn refresh_work_area_after_panel_change(
+    current: &mut Rect,
+    window: &mut Rect,
+    geometry: &WindowGeometrySlot,
+) {
+    let next = match resolve_work_area() {
+        Ok(next) => next,
+        Err(error) => {
+            eprintln!("desktop: work area refresh after panel change failed: {error}");
+            return;
+        }
+    };
+    let Some(area) = changed_work_area(*current, next) else {
+        return;
+    };
+    *current = area;
+    let Some(target) = window_resize_request(*window, area) else {
+        return;
+    };
+    geometry.set(Some(WindowGeometry {
+        x: target.x,
+        y: target.y,
+        width: target.width.max(1) as u32,
+        height: target.height.max(1) as u32,
+    }));
+    *window = target;
+}
+
+/// Pure work-area change detector: `None` means no resize request.
+fn changed_work_area(current: Rect, next: Rect) -> Option<Rect> {
+    (current != next).then_some(next)
+}
+
+/// Pure window decision: `None` when the window already matches the target
+/// rect (position and size), otherwise the rect to request.
+fn window_resize_request(window: Rect, target: Rect) -> Option<Rect> {
+    (window != target).then_some(target)
 }
 
 fn subtract_panel_strip(mut area: Rect, panel: Rect) -> Rect {
@@ -2666,9 +2740,128 @@ fn normalized_selection_rect(start: Point, end: Point, bounds: Rect) -> Rect {
 }
 
 fn packaged_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .expect("flamewm workspace root")
+        .expect("flamewm workspace root");
+    resolve_packaged_root(env::current_exe().ok().as_deref(), &manifest_root, |root| {
+        root.join("assets").is_dir()
+    })
+}
+
+fn resolve_packaged_root(
+    executable: Option<&Path>,
+    manifest_root: &Path,
+    assets_available: impl FnOnce(&Path) -> bool,
+) -> PathBuf {
+    executable
+        .and_then(installed_data_root)
+        .filter(|root| assets_available(root))
+        .unwrap_or_else(|| manifest_root.to_path_buf())
+}
+
+fn installed_data_root(executable: &Path) -> Option<PathBuf> {
+    let bin_dir = executable.parent()?;
+    if bin_dir.file_name()? != "bin" {
+        return None;
+    }
+    let usr_dir = bin_dir.parent()?;
+    if usr_dir.file_name()? != "usr" {
+        return None;
+    }
+    Some(usr_dir.join("share/flamewm"))
+}
+
+#[cfg(test)]
+mod work_area_tests {
+    use super::{changed_work_area, subtract_panel_strip, window_resize_request};
+    use flamewm_api::Rect;
+
+    #[test]
+    fn window_already_matching_work_area_requests_no_resize() {
+        let area = Rect::new(0, 0, 1350, 586);
+
+        assert_eq!(window_resize_request(area, area), None);
+    }
+
+    #[test]
+    fn window_mismatching_work_area_requests_resize_to_target() {
+        let window = Rect::new(0, 0, 1350, 641);
+        let target = Rect::new(0, 0, 1350, 586);
+
+        assert_eq!(window_resize_request(window, target), Some(target));
+    }
+
+    #[test]
+    fn bottom_panel_strip_leaves_root_minus_panel_height_at_origin() {
+        let root = Rect::new(0, 0, 1350, 641);
+        let panel = Rect::new(0, 641 - 55, 1350, 55);
+
+        assert_eq!(
+            subtract_panel_strip(root, panel),
+            Rect::new(0, 0, 1350, 586)
+        );
+    }
+
+    #[test]
+    fn panel_height_change_produces_new_work_area() {
+        let root = Rect::new(0, 0, 1350, 641);
+        let before = subtract_panel_strip(root, Rect::new(0, 641 - 44, 1350, 44));
+        let after = subtract_panel_strip(root, Rect::new(0, 641 - 55, 1350, 55));
+
+        assert_eq!(
+            changed_work_area(before, after),
+            Some(Rect::new(0, 0, 1350, 586))
+        );
+    }
+
+    #[test]
+    fn unchanged_work_area_produces_no_resize_request() {
+        let area = Rect::new(0, 0, 1350, 586);
+
+        assert_eq!(changed_work_area(area, area), None);
+    }
+}
+
+#[cfg(test)]
+mod packaged_root_tests {
+    use super::{installed_data_root, resolve_packaged_root};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn installed_binary_maps_to_sibling_share_data_root() {
+        let executable = Path::new("/opt/flamewm/usr/bin/flamewm-desktop");
+
+        assert_eq!(
+            installed_data_root(executable),
+            Some(PathBuf::from("/opt/flamewm/usr/share/flamewm"))
+        );
+        assert_eq!(
+            resolve_packaged_root(Some(executable), Path::new("/workspace/flamewm"), |_| true),
+            PathBuf::from("/opt/flamewm/usr/share/flamewm")
+        );
+    }
+
+    #[test]
+    fn unavailable_install_assets_fall_back_to_manifest_root() {
+        let executable = Path::new("/opt/flamewm/usr/bin/flamewm-desktop");
+        let manifest_root = Path::new("/workspace/flamewm");
+
+        assert_eq!(
+            resolve_packaged_root(Some(executable), manifest_root, |_| false),
+            manifest_root.to_path_buf()
+        );
+    }
+
+    #[test]
+    fn development_executable_uses_manifest_root_without_cwd_lookup() {
+        let executable = Path::new("/workspace/flamewm/target/debug/flamewm-desktop");
+        let manifest_root = Path::new("/workspace/flamewm");
+
+        assert_eq!(
+            resolve_packaged_root(Some(executable), manifest_root, |_| true),
+            manifest_root.to_path_buf()
+        );
+    }
 }

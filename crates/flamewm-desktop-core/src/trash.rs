@@ -93,7 +93,6 @@ impl Trash {
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
             .unwrap_or("item");
-        let (stored, info) = reserve_unique(&location, original_name)?;
         let info_path_value = info_path_for(path, &location)?;
         let content = format!(
             "[Trash Info]\nPath={}\nDeletionDate={}\n",
@@ -101,11 +100,8 @@ impl Trash {
             deletion_date_utc(SystemTime::now())
         );
 
-        let mut info_file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&info)
-            .map_err(|error| io_error("create .trashinfo", error))?;
+        // `reserve_unique` atomically claims the `.trashinfo` name, so the file is already open.
+        let (stored, info, mut info_file) = reserve_unique(&location, original_name)?;
         if let Err(error) = info_file
             .write_all(content.as_bytes())
             .and_then(|()| info_file.sync_all())
@@ -114,9 +110,9 @@ impl Trash {
             return Err(io_error("write .trashinfo", error));
         }
 
-        if let Err(error) = fs::rename(path, &stored) {
+        if let Err(error) = rename_no_replace(path, &stored) {
             let _ = fs::remove_file(&info);
-            return Err(io_error("move item into Trash", error));
+            return Err(error);
         }
         Ok(TrashedItem {
             original: path.to_path_buf(),
@@ -238,7 +234,13 @@ fn ensure_private_dir(path: &Path) -> FlameResult<()> {
     Ok(())
 }
 
-fn reserve_unique(location: &TrashLocation, name: &str) -> FlameResult<(PathBuf, PathBuf)> {
+/// Claims a unique Trash name. The `.trashinfo` file is created with `create_new`
+/// (atomic), and the stored name is checked with `symlink_metadata` so dangling
+/// symlinks count as occupied. The returned file handle is the claimed info file.
+fn reserve_unique(
+    location: &TrashLocation,
+    name: &str,
+) -> FlameResult<(PathBuf, PathBuf, fs::File)> {
     for sequence in 0_u32..10_000 {
         let candidate = if sequence == 0 {
             name.to_owned()
@@ -247,14 +249,45 @@ fn reserve_unique(location: &TrashLocation, name: &str) -> FlameResult<(PathBuf,
         };
         let stored = location.files_dir().join(&candidate);
         let info = location.info_dir().join(format!("{candidate}.trashinfo"));
-        if !stored.exists() && !info.exists() {
-            return Ok((stored, info));
+        let info_file = match OpenOptions::new().create_new(true).write(true).open(&info) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(io_error("create .trashinfo", error)),
+        };
+        if fs::symlink_metadata(&stored).is_ok() {
+            drop(info_file);
+            let _ = fs::remove_file(&info);
+            continue;
         }
+        return Ok((stored, info, info_file));
     }
     Err(FlameError::new(
         ErrorCode::Conflict,
         "unable to allocate unique Trash name",
     ))
+}
+
+/// Move `source` to `target` without replacing an existing entry (dangling symlinks included).
+fn rename_no_replace(source: &Path, target: &Path) -> FlameResult<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        target,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| match error {
+        rustix::io::Errno::EXIST => {
+            FlameError::new(ErrorCode::Conflict, "Trash entry already exists")
+        }
+        rustix::io::Errno::NOSYS | rustix::io::Errno::NOTSUP => {
+            FlameError::new(ErrorCode::Unsupported, "atomic rename not supported")
+        }
+        other => FlameError::new(
+            ErrorCode::IoFailure,
+            format!("move item into Trash: {other}"),
+        ),
+    })
 }
 
 fn info_path_for(path: &Path, location: &TrashLocation) -> FlameResult<PathBuf> {
@@ -345,5 +378,59 @@ mod tests {
             current_uid_from_proc("Name:\tx\nUid:\t1000\t1000\t1000\t1000\n"),
             Some(1000)
         );
+    }
+
+    /// Removes the fixture tree on drop so the test cleans up even on failure.
+    struct TempTree(PathBuf);
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn unique_temp_root(label: &str) -> TempTree {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-trash-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        TempTree(root)
+    }
+
+    #[test]
+    fn trash_does_not_reuse_name_held_by_dangling_symlink() {
+        let tree = unique_temp_root("dangling");
+        let root = &tree.0;
+        let home = root.join("home");
+        let xdg = root.join("xdg");
+        let work = root.join("home").join("work");
+        let files = xdg.join("Trash").join("files");
+        let info = xdg.join("Trash").join("info");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(&files).unwrap();
+        fs::create_dir_all(&info).unwrap();
+
+        // Dangling symlink already occupies the Trash name `foo`.
+        std::os::unix::fs::symlink(root.join("missing-target"), files.join("foo")).unwrap();
+
+        let source = work.join("foo");
+        fs::write(&source, b"data").unwrap();
+
+        let item = Trash::move_to_trash(&source, &home, &xdg, 1000).unwrap();
+
+        assert_eq!(item.stored, files.join("foo.1"));
+        assert!(
+            fs::symlink_metadata(files.join("foo"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "pre-existing dangling symlink must survive the trash move"
+        );
+        assert_eq!(fs::read(files.join("foo.1")).unwrap(), b"data");
     }
 }

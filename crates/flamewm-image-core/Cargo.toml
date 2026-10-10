@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+image-webp = "=0.2.4"
 resvg = { version = "=0.48.1", default-features = false, features = ["raster-images"] }
 
 [lints]

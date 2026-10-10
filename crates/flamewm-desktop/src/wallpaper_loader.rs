@@ -7,6 +7,8 @@ use std::thread::{self, JoinHandle};
 
 use flamewm_integrations_linux::icons::{IconSize, Rgba8Raster, rasterize_path};
 
+const DEFAULT_WALLPAPER_PATH: &str = "assets/branding/flamewm-wallpaper.webp";
+
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WallpaperPresentation {
@@ -52,7 +54,6 @@ struct WallpaperRequest {
 
 #[derive(Debug)]
 enum LoadResult {
-    Default,
     Image(Rgba8Raster),
     Failure(String),
 }
@@ -101,7 +102,7 @@ pub struct WallpaperLoader {
 
 impl WallpaperLoader {
     /// Starts the single bounded worker used by this loader.
-    pub fn new(width: u32, height: u32) -> Result<Self, String> {
+    pub fn new(width: u32, height: u32, packaged_root: impl Into<PathBuf>) -> Result<Self, String> {
         let (wake_read, wake_write) =
             UnixStream::pair().map_err(|error| format!("create wallpaper wake pair: {error}"))?;
         wake_read
@@ -121,10 +122,12 @@ impl WallpaperLoader {
             wake: Condvar::new(),
         });
         let worker_control = Arc::clone(&control);
+        let packaged_root = packaged_root.into();
+        let worker_root = packaged_root.clone();
         let target = IconSize::new(width, height);
         let worker = thread::Builder::new()
             .name("flamewm-wallpaper-loader".to_owned())
-            .spawn(move || wallpaper_worker(worker_control, target, wake_write))
+            .spawn(move || wallpaper_worker(worker_control, target, worker_root, wake_write))
             .map_err(|error| format!("failed to start wallpaper loader: {error}"))?;
         Ok(Self {
             control,
@@ -182,14 +185,6 @@ impl WallpaperLoader {
         }
         let generation = completion.request.generation;
         match completion.result {
-            LoadResult::Default => {
-                self.state = WallpaperState {
-                    generation,
-                    presentation: WallpaperPresentation::DefaultBlackWatermark,
-                    diagnostic: None,
-                };
-                PollOutcome::Applied { generation }
-            }
             LoadResult::Image(image) => {
                 self.state = WallpaperState {
                     generation,
@@ -263,7 +258,12 @@ impl Drop for WallpaperLoader {
     }
 }
 
-fn wallpaper_worker(control: Arc<WorkerControl>, target: IconSize, mut wake_write: UnixStream) {
+fn wallpaper_worker(
+    control: Arc<WorkerControl>,
+    target: IconSize,
+    packaged_root: PathBuf,
+    mut wake_write: UnixStream,
+) {
     loop {
         let request = {
             let mut state = control
@@ -281,10 +281,13 @@ fn wallpaper_worker(control: Arc<WorkerControl>, target: IconSize, mut wake_writ
             }
             state.pending.take()
         };
-        let Some(request) = request else {
+        let Some(mut request) = request else {
             continue;
         };
-        let result = load_wallpaper(&request.path, target);
+        let result = load_wallpaper(&request.path, target, &packaged_root);
+        if request.path.as_os_str().is_empty() || request.path.to_string_lossy().trim().is_empty() {
+            request.path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
+        }
         let mut state = control
             .state
             .lock()
@@ -306,9 +309,16 @@ fn wallpaper_worker(control: Arc<WorkerControl>, target: IconSize, mut wake_writ
     }
 }
 
-fn load_wallpaper(path: &Path, target: IconSize) -> LoadResult {
+fn load_wallpaper(path: &Path, target: IconSize, packaged_root: &Path) -> LoadResult {
     if path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty() {
-        return LoadResult::Default;
+        let default_path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
+        return match rasterize_path(&default_path, target) {
+            Ok(image) => LoadResult::Image(image),
+            Err(error) => LoadResult::Failure(format!(
+                "packaged default wallpaper {} unavailable: {error}",
+                default_path.display()
+            )),
+        };
     }
     if !is_supported_wallpaper(path) {
         return LoadResult::Failure(format!("unsupported wallpaper format: {}", path.display()));
@@ -325,7 +335,7 @@ fn is_supported_wallpaper(path: &Path) -> bool {
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("png" | "svg" | "ppm")
+        Some("png" | "svg" | "ppm" | "webp")
     )
 }
 
@@ -360,6 +370,24 @@ mod tests {
         ))
     }
 
+    fn packaged_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    fn packaged_fixture_root(label: &str) -> PathBuf {
+        let root = temp_path(label);
+        let default_path = root.join(DEFAULT_WALLPAPER_PATH);
+        fs::create_dir_all(default_path.parent().expect("default parent"))
+            .expect("create packaged asset directory");
+        fs::write(default_path, include_bytes!("testdata/wallpaper-test.webp"))
+            .expect("write small packaged wallpaper fixture");
+        root
+    }
+
     fn ppm(path: &Path, color: [u8; 3]) {
         fs::write(
             path,
@@ -372,7 +400,7 @@ mod tests {
     }
 
     fn wait_for(loader: &mut WallpaperLoader, generation: u64) -> PollOutcome {
-        for _ in 0..100 {
+        for _ in 0..5_000 {
             let outcome = loader.poll();
             if !matches!(outcome, PollOutcome::Idle) {
                 if matches!(outcome, PollOutcome::Applied { generation: value } if value == generation)
@@ -413,7 +441,8 @@ mod tests {
         let second = temp_path("ppm");
         ppm(&first, [255, 0, 0]);
         ppm(&second, [0, 255, 0]);
-        let mut loader = WallpaperLoader::new(1, 1).expect("start wallpaper loader");
+        let mut loader =
+            WallpaperLoader::new(1, 1, packaged_root()).expect("start wallpaper loader");
         let first_generation = loader.request(&first).expect("request first wallpaper");
         let second_generation = loader.request(&second).expect("request second wallpaper");
         assert!(second_generation > first_generation);
@@ -448,7 +477,8 @@ mod tests {
         let valid = temp_path("ppm");
         ppm(&valid, [32, 64, 96]);
         let missing = temp_path("png");
-        let mut loader = WallpaperLoader::new(1, 1).expect("start wallpaper loader");
+        let mut loader =
+            WallpaperLoader::new(1, 1, packaged_root()).expect("start wallpaper loader");
         let valid_generation = loader.request(&valid).expect("request valid wallpaper");
         assert!(matches!(
             wait_for(&mut loader, valid_generation),
@@ -469,16 +499,17 @@ mod tests {
 
     #[test]
     fn empty_and_unsupported_requests_have_explicit_contracts() {
-        let mut loader = WallpaperLoader::new(1, 1).expect("start wallpaper loader");
+        let root = packaged_fixture_root("empty-and-unsupported-root");
+        let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper loader");
         let empty_generation = loader.request("").expect("request default wallpaper");
         assert!(matches!(
             wait_for(&mut loader, empty_generation),
             PollOutcome::Applied { .. }
         ));
-        assert_eq!(
+        assert!(matches!(
             loader.state().presentation,
-            WallpaperPresentation::DefaultBlackWatermark
-        );
+            WallpaperPresentation::Image(_)
+        ));
         let unsupported = temp_path("jpg");
         fs::write(&unsupported, b"not a supported wallpaper").expect("write unsupported file");
         let failed_generation = loader
@@ -488,12 +519,70 @@ mod tests {
             wait_for(&mut loader, failed_generation),
             PollOutcome::Failed { .. }
         ));
-        assert_eq!(
+        assert!(matches!(
             loader.state().presentation,
-            WallpaperPresentation::DefaultBlackWatermark
-        );
+            WallpaperPresentation::Image(_)
+        ));
         loader.shutdown();
         let _ = fs::remove_file(unsupported);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn packaged_fixture_and_custom_webp_load_and_empty_resets_to_packaged() {
+        let root = packaged_fixture_root("packaged-root");
+        let default_path = root.join(DEFAULT_WALLPAPER_PATH);
+        let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper worker");
+        let default_generation = loader.request("").expect("request packaged default");
+        assert!(matches!(
+            wait_for(&mut loader, default_generation),
+            PollOutcome::Applied { .. }
+        ));
+        let packaged = loader.state().presentation.clone();
+        assert!(matches!(
+            &packaged,
+            WallpaperPresentation::Image(image)
+                if image.source == default_path.to_string_lossy().as_ref()
+        ));
+
+        let custom = temp_path("webp");
+        fs::write(&custom, include_bytes!("testdata/wallpaper-test.webp"))
+            .expect("write custom WebP fixture");
+        let custom_generation = loader.request(&custom).expect("request custom WebP");
+        assert!(matches!(
+            wait_for(&mut loader, custom_generation),
+            PollOutcome::Applied { .. }
+        ));
+        assert!(matches!(
+            &loader.state().presentation,
+            WallpaperPresentation::Image(image)
+                if image.source.as_str() == custom.to_string_lossy().as_ref()
+        ));
+
+        let reset_generation = loader.request("").expect("reset to packaged default");
+        assert!(matches!(
+            wait_for(&mut loader, reset_generation),
+            PollOutcome::Applied { .. }
+        ));
+        assert_eq!(loader.state().presentation, packaged);
+        loader.shutdown();
+        let _ = fs::remove_file(custom);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_packaged_default_reports_runtime_asset_path() {
+        let root = temp_path("missing-packaged-root");
+        let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper worker");
+        let generation = loader.request("").expect("request packaged default");
+        assert!(matches!(
+            wait_for(&mut loader, generation),
+            PollOutcome::Failed { .. }
+        ));
+        let diagnostic = loader.state().diagnostic.as_ref().expect("load diagnostic");
+        assert_eq!(diagnostic.path, root.join(DEFAULT_WALLPAPER_PATH));
+        assert!(diagnostic.message.contains("packaged default wallpaper"));
+        loader.shutdown();
     }
 
     #[test]

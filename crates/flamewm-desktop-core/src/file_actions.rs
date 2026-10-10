@@ -3,15 +3,20 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+/// Treat dangling symlinks as occupied directory entries too.
+fn path_entry_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
 #[must_use]
 pub fn next_new_folder_path(desktop: &Path) -> PathBuf {
     let first = desktop.join("New Folder");
-    if !first.exists() {
+    if !path_entry_exists(&first) {
         return first;
     }
     for number in 2_u32..=u32::MAX {
         let candidate = desktop.join(format!("New Folder ({number})"));
-        if !candidate.exists() {
+        if !path_entry_exists(&candidate) {
             return candidate;
         }
     }
@@ -161,6 +166,7 @@ pub fn rename_entry_no_replace(old: &Path, new: &Path) -> FlameResult<()> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| FlameError::new(ErrorCode::InvalidArgument, "invalid rename target"))?;
+    // Use the validated (trimmed) name for both the check and the rename.
     let validated = validate_rename_name(new_name)?;
     if old_name == validated {
         return Err(FlameError::new(
@@ -168,13 +174,14 @@ pub fn rename_entry_no_replace(old: &Path, new: &Path) -> FlameResult<()> {
             "rename name unchanged",
         ));
     }
+    let target = old_parent.join(&validated);
     if !old.exists() && !old.is_symlink() {
         return Err(FlameError::new(
             ErrorCode::NotFound,
             "rename source not found",
         ));
     }
-    if new.exists() || new.is_symlink() {
+    if target.exists() || target.is_symlink() {
         return Err(FlameError::new(
             ErrorCode::Conflict,
             "rename target already exists",
@@ -184,7 +191,7 @@ pub fn rename_entry_no_replace(old: &Path, new: &Path) -> FlameResult<()> {
         rustix::fs::CWD,
         old,
         rustix::fs::CWD,
-        new,
+        &target,
         rustix::fs::RenameFlags::NOREPLACE,
     )
     .map_err(|error| match error {
@@ -233,12 +240,12 @@ pub fn shortcut_destination(desktop: &Path, file_name: &str) -> PathBuf {
         None => desktop.join(stem),
     };
     let first = join(&format!("{stem} link"));
-    if !first.exists() {
+    if !path_entry_exists(&first) {
         return first;
     }
     for number in 2_u32..=u32::MAX {
         let candidate = join(&format!("{stem} link ({number})"));
-        if !candidate.exists() {
+        if !path_entry_exists(&candidate) {
             return candidate;
         }
     }
@@ -290,6 +297,93 @@ mod tests {
         assert_eq!(
             shortcut_destination(&root, "notes"),
             root.join("notes link")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_renames_to_the_validated_trimmed_name() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-rename-trim-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"x").unwrap();
+
+        let result = rename_entry_no_replace(&root.join("a.txt"), &root.join("b.txt "));
+
+        let renamed_to_trimmed = root.join("b.txt").exists();
+        let created_untrimmed = root.join("b.txt ").exists();
+        let source_left = root.join("a.txt").exists();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(result.is_ok(), "rename with padded name should succeed");
+        assert!(renamed_to_trimmed, "entry must be renamed to trimmed name");
+        assert!(!created_untrimmed, "untrimmed name must not be created");
+        assert!(!source_left, "source must no longer exist under old name");
+    }
+
+    #[test]
+    fn new_folder_and_shortcut_skip_dangling_symlink_collisions() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-file-actions-collision-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        symlink(root.join("missing-folder-target"), root.join("New Folder")).unwrap();
+        assert_eq!(
+            create_new_folder(&root).unwrap(),
+            root.join("New Folder (2)")
+        );
+
+        symlink(
+            root.join("missing-link-target"),
+            root.join("app link.desktop"),
+        )
+        .unwrap();
+        assert_eq!(
+            shortcut_destination(&root, "app.desktop"),
+            root.join("app link (2).desktop")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_rejects_existing_dangling_symlink_without_clobbering() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-rename-collision-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source file");
+        let target = root.join("target file");
+        fs::write(&source, b"source").unwrap();
+        symlink(root.join("missing-target"), &target).unwrap();
+
+        let result = rename_entry_no_replace(&source, &target);
+        assert_eq!(result.unwrap_err().code, ErrorCode::Conflict);
+        assert_eq!(fs::read(&source).unwrap(), b"source");
+        assert!(
+            fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
         );
         fs::remove_dir_all(root).unwrap();
     }

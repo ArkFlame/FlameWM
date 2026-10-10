@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use flamewm_render_compiler::{CompileOptions, CompileOutput, compile_file, encode};
 
-const DESKTOP_ASSETS: [&str; 2] = ["wallpaper.ppm", "watermark.ppm"];
+const DESKTOP_ASSETS: [&str; 2] = ["wallpaper.ppm", "watermark.png"];
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -15,10 +15,17 @@ fn main() {
     let html_path = manifest.join("../../ui/desktop/index.html");
     let css_path = manifest.join("../../ui/desktop/desktop.css");
     let raster = root.join("assets/raster");
+    let wallpaper = root.join("assets/branding/flamewm-wallpaper.webp");
     let breeze = root.join("assets/web/breeze");
     println!("cargo:rerun-if-changed={}", html_path.display());
     println!("cargo:rerun-if-changed={}", css_path.display());
     println!("cargo:rerun-if-changed={}", breeze.display());
+    println!("cargo:rerun-if-changed={}", wallpaper.display());
+    assert!(
+        wallpaper.is_file(),
+        "required packaged default wallpaper is missing: {}",
+        wallpaper.display()
+    );
     for asset in DESKTOP_ASSETS {
         println!("cargo:rerun-if-changed={}", raster.join(asset).display());
     }
