@@ -136,7 +136,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         page_status = [pages.get("SS01", {}).get("status")]
         if not identity_ok:
             status, reason = "FAIL", "native result did not identify unchanged staged binaries"
-        elif "FAIL" in page_status or completed.returncode != 0:
+        elif "FAIL" in page_status or native.get("verdict") == "FAIL" or completed.returncode != 0:
             status, reason = "FAIL", "installed-prefix native page launch failed; see native result"
         elif "ENVIRONMENT_BLOCKED" in page_status:
             status, reason = "ENVIRONMENT_BLOCKED", "native page launch blocked by a reported environment capability"
@@ -144,9 +144,13 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             status, reason = "NOT_RUN", "installed-prefix page launch did not reach PASS; see native result"
         else:
             status, reason = "PASS", "staged version/assets verified and staged binaries opened all Settings pages in private native session"
+    # The overall verdict is the native verdict once the installed launch gate passes; any
+    # non-PASS gate (FAIL, NOT_RUN, ENVIRONMENT_BLOCKED) stays the overall verdict.
+    verdict = native.get("verdict", "INCOMPLETE") if status == "PASS" else status
     document = {
         "schema": "flamewm-settings-installed-acceptance-v1",
-        "verdict": status,
+        "verdict": verdict,
+        "launch_gate": status,
         "version": version,
         "prefix": str(prefix),
         "installed_files_sha256": hashes,
