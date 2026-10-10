@@ -142,14 +142,6 @@ impl NativeSurfaceTarget {
         ["picture", "pixmap", "gc", "colormap"]
     }
 
-    #[allow(dead_code)]
-    pub fn drop_plan(&mut self) {
-        self.colormap = 0;
-        self.pixmap = 0;
-        self.gc = 0;
-        self.picture = 0;
-    }
-
     /// Resize plan: returns the new commit when the size actually changes.
     #[allow(dead_code)]
     pub fn resize_plan(

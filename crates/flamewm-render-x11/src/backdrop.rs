@@ -13,10 +13,6 @@ use crate::xlib::*;
 /// Accent from the shared `flamewm-skin` selection contract (0xef4048).
 pub const BACKDROP_ACCENT_RGB: (u8, u8, u8) = (0xef, 0x40, 0x48);
 
-/// Fill alpha family for the snap preview (20% default). Shared with
-/// `flamewm-desktop-core` selection material semantics: accent blended in
-/// `fill_color` below, border at full-accent strength.
-pub const BACKDROP_FILL_ALPHA_DEFAULT: u8 = 51;
 /// Border alpha family: strong accent edge over the captured backdrop.
 pub const BACKDROP_BORDER_ALPHA: u8 = 0xdd;
 /// Border width family in device px: matches the compiled snap-preview CSS.
@@ -275,25 +271,6 @@ pub fn capture_root_rect(
         height: height_px,
         pixels,
     })
-}
-
-/// Capture on a short-lived connection opened here, so overlay owners
-/// without a borrowed display (e.g. the snap-preview surface) can read
-/// back root content only when their target/rect changes. Opens with
-/// `XOpenDisplay`, captures via [`capture_root_rect`], closes. `Err`
-/// means the caller falls back to the border-only preview.
-pub fn capture_root_rect_auto(rect: (i32, i32, u32, u32)) -> Result<BackdropCapture, String> {
-    let display = unsafe { XOpenDisplay(ptr::null()) };
-    if display.is_null() {
-        eprintln!("debug render.overlay.capture reason=no-display");
-        return Err("backdrop capture: XOpenDisplay failed".to_string());
-    }
-    install_x_io_error_handler();
-    let screen = unsafe { XDefaultScreen(display) };
-    let root = unsafe { XRootWindow(display, screen) };
-    let result = capture_root_rect(display, root as u64, rect);
-    unsafe { XCloseDisplay(display) };
-    result
 }
 
 #[cfg(test)]

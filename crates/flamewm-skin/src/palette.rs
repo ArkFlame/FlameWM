@@ -23,33 +23,13 @@ pub const ACCENT_SOFT: AlphaColor = AlphaColor {
     color: ACCENT,
     alpha: 0x38,
 };
-pub const ACCENT_STRONG: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0xdd,
-};
 pub const DESKTOP_HOVER: AlphaColor = AlphaColor {
     color: ACCENT,
     alpha: 0x26,
 };
-pub const DESKTOP_HOVER_BORDER: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0x4d,
-};
 pub const DESKTOP_SELECTED: AlphaColor = AlphaColor {
     color: ACCENT,
     alpha: 0x47,
-};
-pub const DESKTOP_SELECTED_BORDER: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0xa6,
-};
-pub const SELECTION_FILL: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0x33,
-};
-pub const SNAP_FILL: AlphaColor = AlphaColor {
-    color: ACCENT,
-    alpha: 0x33,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
