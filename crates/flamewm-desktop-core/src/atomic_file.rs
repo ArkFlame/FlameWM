@@ -17,11 +17,20 @@ pub(crate) fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()
         .write(true)
         .open(&temp)
         .map_err(|error| io_error(&format!("open {owner} temp file"), error))?;
-    file.write_all(text.as_bytes())
-        .map_err(|error| io_error(&format!("write {owner}"), error))?;
-    file.sync_all()
-        .map_err(|error| io_error(&format!("sync {owner}"), error))?;
-    fs::rename(&temp, path).map_err(|error| io_error(&format!("commit {owner}"), error))?;
+    let committed = file
+        .write_all(text.as_bytes())
+        .map_err(|error| io_error(&format!("write {owner}"), error))
+        .and_then(|()| {
+            file.sync_all()
+                .map_err(|error| io_error(&format!("sync {owner}"), error))
+        })
+        .and_then(|()| {
+            fs::rename(&temp, path).map_err(|error| io_error(&format!("commit {owner}"), error))
+        });
+    if let Err(error) = committed {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
     if let Ok(directory) = File::open(parent) {
         let _ = directory.sync_all();
     }
@@ -30,4 +39,34 @@ pub(crate) fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()
 
 pub(crate) fn io_error(operation: &str, error: std::io::Error) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_removes_temp_file_when_commit_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let target = root.join("layout.txt");
+        // A directory at the target makes rename(file, dir) fail with EISDIR after the temp file exists.
+        fs::create_dir_all(&target).unwrap();
+        let error =
+            write_text(&target, "test owner", "payload").expect_err("commit onto directory fails");
+        assert_eq!(error.code, ErrorCode::IoFailure);
+        assert!(
+            error.message.starts_with("commit test owner:"),
+            "{}",
+            error.message
+        );
+        assert!(!root.join("layout.txt.tmp").exists(), "temp file leaked");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
