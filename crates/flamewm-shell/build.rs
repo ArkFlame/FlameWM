@@ -11,7 +11,6 @@ fn main() {
         .and_then(Path::parent)
         .expect("workspace root");
     let css = root.join("ui/shell/flamewm.css");
-    let raster = root.join("assets/raster");
     let sources = [
         "panel.html",
         "start.html",
@@ -32,7 +31,6 @@ fn main() {
     ];
 
     println!("cargo:rerun-if-changed={}", css.display());
-    println!("cargo:rerun-if-changed={}", raster.display());
     for source in sources {
         println!(
             "cargo:rerun-if-changed={}",
@@ -60,15 +58,6 @@ fn main() {
         &shell_assets.join("branding"),
         &staged_assets.join("branding"),
     );
-    for entry in fs::read_dir(&raster).expect("read shell raster assets") {
-        let entry = entry.expect("read shell raster asset entry");
-        let asset = entry.path();
-        if asset.is_file() {
-            fs::copy(&asset, staged_assets.join(entry.file_name()))
-                .expect("stage shell raster asset");
-        }
-    }
-
     for (artifact, source) in artifacts {
         compile_to(&staged_ui.join(source), &out_dir.join(artifact));
     }
