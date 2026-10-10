@@ -179,26 +179,11 @@ ln -sfn "$DEBUG_RUN_DIR" "$DEBUG_ROOT/latest" 2>/dev/null || true
 # Bounded debug retention: keep latest + previous 9, never current run.
 run_debug_retention(){
   if [[ "$ISOLATED_OUTPUT" == 1 ]]; then return 0; fi
-  if [[ -x tools/debug_retention.py || -f tools/debug_retention.py ]]; then
-    FLAMEWM_CURRENT_RUN="${RUN_ID:-}" python3 tools/debug_retention.py "$DEBUG_ROOT" 2>/dev/null || true
-  else
-    # Fallback: same policy inline (keep 10 newest, protect latest+current).
-    python3 - "$DEBUG_ROOT" "${RUN_ID:-}" <<'EOF' 2>/dev/null || true
-import os, re, shutil, sys
-base, current = sys.argv[1], sys.argv[2]
-pat = re.compile(r"^\d{8}T\d{6}Z-\d+$")
-try:
-    latest = os.readlink(os.path.join(base, "latest"))
-    latest = os.path.basename(os.path.normpath(latest))
-except OSError:
-    latest = ""
-runs = sorted((d for d in os.listdir(base)
-               if pat.match(d) and os.path.isdir(os.path.join(base, d))
-               and d != current and d != latest))
-for stale in runs[:max(0, len(runs) - 9)]:
-    shutil.rmtree(os.path.join(base, stale), ignore_errors=True)
-EOF
+  if [[ ! -f tools/debug_retention.py ]]; then
+    echo "xephyr: tools/debug_retention.py missing; debug retention skipped" >&2
+    return 0
   fi
+  FLAMEWM_CURRENT_RUN="${RUN_ID:-}" python3 tools/debug_retention.py "$DEBUG_ROOT" 2>/dev/null || true
 }
 run_debug_retention
 # Manifest: run identity + environment (best-effort fields never fail the run).
