@@ -31,31 +31,6 @@ impl LifecycleIds {
         }
     }
 
-    /// Split `child_ids` into resource sets matching `manage` convention.
-    #[must_use]
-    pub const fn resize(self) -> [u32; 8] {
-        [
-            self.child_ids[0],
-            self.child_ids[1],
-            self.child_ids[2],
-            self.child_ids[3],
-            self.child_ids[4],
-            self.child_ids[5],
-            self.child_ids[6],
-            self.child_ids[7],
-        ]
-    }
-
-    #[must_use]
-    pub const fn title_drag(self) -> u32 {
-        self.child_ids[8]
-    }
-
-    #[must_use]
-    pub const fn controls(self) -> [u32; 3] {
-        [self.child_ids[9], self.child_ids[10], self.child_ids[11]]
-    }
-
     /// Resource value for `FrameRegistry::register`.
     #[must_use]
     pub const fn resources(self) -> FrameResources {

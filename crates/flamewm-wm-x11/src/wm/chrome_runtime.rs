@@ -1,15 +1,10 @@
-//! Chrome runtime: cached metadata/invalidation/paint bridge.
-//!
-//! Owns title/class/icon refresh decisions, paint invalidation, and the
-//! bridge from a cached [`ChromeScene`]/[`ChromePaintPlan`] to the external
-//! renderer. Manage/property paths own all X round-trips, catalog, and
-//! decode work; paint consumes cached rasters only via `J08` `paint_plan`
-//! and the `with_icon`/`render` path. No icon I/O during paint.
+//! Chrome runtime: cached scene invalidation and the bridge from a cached
+//! [`ChromeScene`] to the external renderer. Manage/property paths own all X
+//! round-trips, catalog, and decode work; paint consumes cached rasters only
+//! via the `with_icon`/`render` path. No icon I/O during paint.
 
 use crate::chrome::IconImage;
-use crate::frame::chrome::{
-    ChromePaintPlan, ChromeScene, paint_plan, plan_scene, render, with_icon,
-};
+use crate::frame::chrome::{ChromeScene, plan_scene, render, with_icon};
 use crate::frame::model::FrameControl;
 
 /// Cached identity inputs owned outside paint (manage/property paths).
@@ -30,39 +25,6 @@ pub struct ChromeState {
     pub pressed: Option<FrameControl>,
     pub maximized: bool,
     pub fullscreen: bool,
-}
-
-/// What changed after a manage/property refresh (already performed I/O).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ChromeRefresh {
-    pub title_changed: bool,
-    pub class_changed: bool,
-    pub icon_changed: bool,
-}
-
-impl ChromeRefresh {
-    /// True when any refresh facet requires a repaint.
-    #[must_use]
-    pub fn needs_repaint(self) -> bool {
-        self.title_changed || self.class_changed || self.icon_changed
-    }
-}
-
-/// Decide whether already-fetched title/class values require a refresh.
-/// Pure string comparison; performs no X or catalog work.
-#[must_use]
-pub fn decide_refresh(
-    old: &ChromeIdentity,
-    title: &str,
-    wm_instance: &str,
-    wm_class: &str,
-    icon_changed: bool,
-) -> ChromeRefresh {
-    ChromeRefresh {
-        title_changed: old.title != title,
-        class_changed: old.wm_instance != wm_instance || old.wm_class != wm_class,
-        icon_changed,
-    }
 }
 
 /// Decide whether state inputs differ enough to invalidate the scene.
@@ -87,30 +49,6 @@ impl ChromeRuntime {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// True when no scene is cached or an invalidation is pending.
-    #[must_use]
-    pub fn is_dirty(&self) -> bool {
-        self.dirty || self.scene.is_none()
-    }
-
-    /// Record a metadata refresh decision. Returns true when repaint is needed.
-    pub fn note_refresh(&mut self, refresh: ChromeRefresh) -> bool {
-        if refresh.needs_repaint() {
-            self.dirty = true;
-        }
-        refresh.needs_repaint()
-    }
-
-    /// Record a state transition. Returns true when repaint is needed.
-    pub fn note_state(&mut self, next: ChromeState) -> bool {
-        if state_changed(self.state, next) {
-            self.state = Some(next);
-            self.dirty = true;
-            return true;
-        }
-        false
     }
 
     /// Rebuild (when dirty) and return the cached scene for these inputs.
@@ -145,13 +83,6 @@ impl ChromeRuntime {
             self.dirty = false;
         }
         self.scene.as_ref().expect("scene rebuilt when missing")
-    }
-
-    /// Derive the production paint plan from the cached scene.
-    /// Returns `None` when no scene has been planned yet.
-    #[must_use]
-    pub fn cached_plan(&self) -> Option<ChromePaintPlan> {
-        self.scene.as_ref().map(paint_plan)
     }
 
     /// Paint bridge: execute the cached scene against the external renderer.

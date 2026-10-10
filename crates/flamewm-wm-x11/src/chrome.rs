@@ -343,16 +343,6 @@ pub fn title_baseline(titlebar_height: u16) -> f32 {
     f32::from(titlebar_height.saturating_sub(11).max(11))
 }
 
-/// Live icon blit plan: raster pixels (pure/cached asset only) plus the
-/// destination rect derived from skin geometry. No catalog lookup.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IconBlit {
-    pub raster: flamewm_image_core::RgbaImage,
-    pub dest_x: f32,
-    pub dest_y: f32,
-    pub dest_edge: f32,
-}
-
 /// Live control blit plan: one cached glyph raster per visible control,
 /// destination rects from skin `control_button_geometries`.
 #[derive(Debug, Clone, PartialEq)]
@@ -364,23 +354,6 @@ pub struct ControlBlit {
     pub dest_y: f32,
     pub dest_w: f32,
     pub dest_h: f32,
-}
-
-/// Resolve the icon blit for a live frame: scale the native `_NET_WM_ICON`
-/// selection into the skin icon slot and center it vertically in the
-/// 31px titlebar with 6px left padding. Pure/cached path only.
-#[must_use]
-pub fn icon_blit_for(icon: &IconImage, titlebar_height: u16) -> Option<IconBlit> {
-    let slot = u32::from(icon_slot_for(titlebar_height));
-    let raster = native_icon_rgba(icon, slot)?;
-    let edge = slot as f32;
-    let titlebar = titlebar_height as f32;
-    Some(IconBlit {
-        raster,
-        dest_x: recipe::ICON_PAD_LEFT as f32,
-        dest_y: (titlebar - edge) / 2.0,
-        dest_edge: edge,
-    })
 }
 
 /// Resolve the live control blits for one frame: exact skin control

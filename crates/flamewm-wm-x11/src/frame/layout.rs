@@ -136,12 +136,6 @@ pub fn layout_frame_children(
     }
 }
 
-/// Layout with frozen J06 defaults.
-#[must_use]
-pub fn layout_frame_children_default(outer_w: i32, outer_h: i32) -> FrameChildLayout {
-    layout_frame_children(outer_w, outer_h, TITLEBAR_H, CONTROLS_WIDTH, RESIZE_T)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1868,12 +1868,6 @@ impl<'a, C: Connection> Wm<'a, C> {
         result
     }
 
-    fn hover_control_engine(&self, client: Window) -> Option<FrameControl> {
-        self.clients
-            .get(&client)
-            .and_then(|state| state.hover_control)
-    }
-
     fn paint_chrome(&mut self, client: Window) -> Result<(), ReplyError> {
         // Single chrome paint path: delegate scene build to chrome_runtime
         // (J08 paint_plan seam); this owner only bridges cached rasters.
