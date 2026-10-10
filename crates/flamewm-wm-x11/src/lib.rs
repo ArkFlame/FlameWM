@@ -12,8 +12,6 @@ mod runtime;
 mod size_hints;
 pub(crate) mod snap_preview;
 mod wm;
-#[cfg(test)]
-mod wm_configure_tests;
 
 pub use runtime::run;
 pub use wm::WmConfig;
