@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 VERSION="$(tr -d '[:space:]' < "$ROOT/FLAMEWM_VERSION")"
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 BUILD_DIR="$ROOT/.target/release"
 DIST="$ROOT/.target/dist"
 STAGE="$DIST/flamewm-$VERSION"
