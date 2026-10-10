@@ -15,8 +15,8 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [x] V8 0.0.6 presentation/assets promoted as active visual baseline.
 - [x] `doctor`, `check`, release `xephyr`, `verify-visual`, memory helper.
 - [x] SourcePort post-mortem preserved and converted into `docs/PORTING_METHOD.md`.
-- [ ] Target machine: `./check` compiler/test/release gate PASS.
-- [ ] Target machine: `./xephyr` interactive PASS.
+- [ ] Target machine: `./scripts/check` compiler/test/release gate PASS.
+- [ ] Target machine: `./scripts/xephyr` interactive PASS.
 - [ ] Target machine: `./verify-visual` differential metrics recorded.
 
 ## Phase 1 — WebRender renderer
@@ -291,6 +291,6 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [ ] ASan/Valgrind equivalents where applicable to FFI renderer boundary.
 - [ ] complete license/provenance audit.
 - [ ] release archive reproducibility/manifest verification.
-- [ ] target-machine `./check` green.
-- [ ] `./xephyr` real interactive smoke green.
+- [ ] target-machine `./scripts/check` green.
+- [ ] `./scripts/xephyr` real interactive smoke green.
 - [ ] `./verify-visual` reviewed against approved reference.
