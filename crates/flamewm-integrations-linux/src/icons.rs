@@ -10,7 +10,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::icon_theme::configured_icon_theme;
+use crate::icon_theme::{configured_icon_theme, unique_paths};
 use crate::icon_theme::IconThemeCaches as ThemeLookupCaches;
 
 const GENERIC_FALLBACK: &str = "assets/web/flamewm-icon.svg";
@@ -1238,16 +1238,6 @@ fn unique_strings(values: Vec<String>) -> Vec<String> {
     let mut unique = Vec::new();
     for value in values {
         if !value.is_empty() && !unique.contains(&value) {
-            unique.push(value);
-        }
-    }
-    unique
-}
-
-pub(crate) fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut unique = Vec::new();
-    for value in values {
-        if !value.as_os_str().is_empty() && !unique.contains(&value) {
             unique.push(value);
         }
     }

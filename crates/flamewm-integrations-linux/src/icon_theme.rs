@@ -92,9 +92,6 @@ pub struct IconThemeIndex {
 #[derive(Clone, Debug, Default)]
 pub struct IconThemeCaches {
     exists: HashMap<(PathBuf, u64), bool>,
-    inheritance: HashMap<(String, u64), Vec<String>>,
-    index: HashMap<(String, u64), Option<IconThemeIndex>>,
-    roots: HashMap<(String, u64), Vec<PathBuf>>,
     hits: u64,
     misses: u64,
 }
@@ -121,62 +118,6 @@ impl IconThemeCaches {
             exists,
             4096,
         );
-    }
-
-    pub(crate) fn cached_inheritance(&mut self, key: &str, generation: u64) -> Option<Vec<String>> {
-        let k = (key.to_owned(), generation);
-        if let Some(hit) = self.inheritance.get(&k) {
-            self.hits += 1;
-            return Some(hit.clone());
-        }
-        self.misses += 1;
-        None
-    }
-
-    pub(crate) fn store_inheritance(&mut self, key: &str, generation: u64, value: Vec<String>) {
-        bound_insert(
-            &mut self.inheritance,
-            (key.to_owned(), generation),
-            value,
-            256,
-        );
-    }
-
-    pub(crate) fn cached_index(
-        &mut self,
-        theme: &str,
-        generation: u64,
-    ) -> Option<Option<IconThemeIndex>> {
-        let k = (theme.to_owned(), generation);
-        if let Some(hit) = self.index.get(&k) {
-            self.hits += 1;
-            return Some(hit.clone());
-        }
-        self.misses += 1;
-        None
-    }
-
-    pub(crate) fn store_index(
-        &mut self,
-        theme: &str,
-        generation: u64,
-        value: Option<IconThemeIndex>,
-    ) {
-        bound_insert(&mut self.index, (theme.to_owned(), generation), value, 256);
-    }
-
-    pub(crate) fn cached_roots(&mut self, theme: &str, generation: u64) -> Option<Vec<PathBuf>> {
-        let k = (theme.to_owned(), generation);
-        if let Some(hit) = self.roots.get(&k) {
-            self.hits += 1;
-            return Some(hit.clone());
-        }
-        self.misses += 1;
-        None
-    }
-
-    pub(crate) fn store_roots(&mut self, theme: &str, generation: u64, value: Vec<PathBuf>) {
-        bound_insert(&mut self.roots, (theme.to_owned(), generation), value, 256);
     }
 
     /// (hits, misses) across exists lookups.
@@ -631,6 +572,17 @@ fn expand(
     visiting.pop();
 }
 
+/// Drop empty paths and later duplicates, keeping first-seen order.
+pub(crate) fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for value in values {
+        if !value.as_os_str().is_empty() && !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    unique
+}
+
 /// Search roots: `$HOME/.icons`, `$XDG_DATA_HOME/icons`, each
 /// `$XDG_DATA_DIRS/icons`. Returned roots may not exist; callers skip missing.
 #[must_use]
@@ -646,7 +598,7 @@ pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     }
     // Roots are always non-empty (`join` appends a component), so the
     // empty-path filter in `unique_paths` never drops anything here.
-    crate::icons::unique_paths(roots)
+    unique_paths(roots)
 }
 
 /// Locate `index.theme` for `theme` under `data_dirs`.
@@ -1124,6 +1076,20 @@ impl IconLookupIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unique_paths_drops_empty_and_repeats_keeping_first_order() {
+        let input = vec![
+            PathBuf::from("/b"),
+            PathBuf::new(),
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+        ];
+        assert_eq!(
+            unique_paths(input),
+            vec![PathBuf::from("/b"), PathBuf::from("/a")]
+        );
+    }
 
     #[test]
     fn parses_directories_and_inherits() {
