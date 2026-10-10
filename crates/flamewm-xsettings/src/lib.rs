@@ -93,17 +93,12 @@ pub fn theme_name_for(appearance: AppearanceMode) -> &'static str {
 }
 
 #[must_use]
-pub fn gtk_theme_name_for(appearance: AppearanceMode) -> &'static str {
-    theme_name_for(appearance)
-}
-
-#[must_use]
 pub fn build_settings(input: &XSettingsInput) -> XSettingsSnapshot {
     let dark = published_appearance(input.appearance).prefers_dark();
     let mut settings = BTreeMap::new();
     settings.insert(
         "Net/ThemeName".to_owned(),
-        XSettingsValue::Text(gtk_theme_name_for(input.appearance).to_owned()),
+        XSettingsValue::Text(theme_name_for(input.appearance).to_owned()),
     );
     settings.insert(
         "Net/IconThemeName".to_owned(),
@@ -147,7 +142,7 @@ pub fn string_table(input: &XSettingsInput) -> BTreeMap<String, String> {
     BTreeMap::from([
         (
             "Net/ThemeName".to_owned(),
-            gtk_theme_name_for(input.appearance).to_owned(),
+            theme_name_for(input.appearance).to_owned(),
         ),
         ("Net/IconThemeName".to_owned(), input.icon_theme.clone()),
         ("Xft/HintStyle".to_owned(), input.hint_style.clone()),

@@ -54,10 +54,6 @@ impl IconResolver {
         self.overrides.insert(role, path.into());
     }
 
-    pub fn clear_override(&mut self, role: IconRole) {
-        self.overrides.remove(&role);
-    }
-
     pub fn notify_theme_changed(&mut self, generation: u64) {
         self.theme_generation = generation;
     }

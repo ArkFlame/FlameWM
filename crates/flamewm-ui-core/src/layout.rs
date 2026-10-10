@@ -160,12 +160,6 @@ impl LayoutItem {
     }
 
     #[must_use]
-    pub fn with_spec(mut self, spec: LayoutSpec) -> Self {
-        self.spec = spec;
-        self
-    }
-
-    #[must_use]
     pub fn visible(mut self, visible: bool) -> Self {
         self.spec.visible = visible;
         self
@@ -214,11 +208,6 @@ pub struct Stack {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Grid {
     pub items: Vec<LayoutItem>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FormRows {
-    pub rows: Vec<(String, LayoutItem)>,
 }
 
 #[must_use]
@@ -315,44 +304,6 @@ pub fn solve_grid(
                 ),
                 visible: true,
             }
-        })
-        .collect()
-}
-
-#[must_use]
-pub fn solve_form_rows(
-    form: &FormRows,
-    bounds: Rect,
-    label_width: i32,
-    row_gap: i32,
-    options: LayoutOptions,
-) -> Vec<LayoutResult> {
-    if form.rows.is_empty() {
-        return Vec::new();
-    }
-    let inner_width = (bounds.width - options.padding.left - options.padding.right).max(0);
-    let widget_width = (inner_width - label_width.max(0) - options.gap).max(0);
-    let inner_height = (bounds.height - options.padding.top - options.padding.bottom).max(0);
-    let row_count = i32::try_from(form.rows.len()).unwrap_or(i32::MAX);
-    let row_height = ((inner_height - (row_count - 1) * row_gap) / row_count).max(0);
-
-    form.rows
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (_, item))| {
-            let index = i32::try_from(index).ok()?;
-            let row = Rect::new(
-                bounds.x + options.padding.left + label_width.max(0) + options.gap,
-                bounds.y + options.padding.top + index * (row_height + row_gap),
-                widget_width,
-                row_height,
-            );
-            let mut row_options = options;
-            row_options.gap = 0;
-            row_options.padding = Insets::default();
-            solve_linear(std::slice::from_ref(item), row, true, row_options)
-                .into_iter()
-                .next()
         })
         .collect()
 }

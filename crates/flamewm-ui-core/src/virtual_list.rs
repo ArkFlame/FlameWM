@@ -11,11 +11,6 @@ pub struct VirtualListModel {
 
 impl VirtualListModel {
     #[must_use]
-    pub const fn total_height(self) -> u64 {
-        self.row_count as u64 * self.row_height as u64
-    }
-
-    #[must_use]
     pub fn visible_range(self) -> (usize, usize) {
         if self.row_count == 0 || self.row_height == 0 || self.viewport_height == 0 {
             return (0, 0);
@@ -26,17 +21,5 @@ impl VirtualListModel {
             ((self.viewport_height + self.row_height - 1) / self.row_height) as usize;
         let last = (first + rows_visible.max(1)).min(self.row_count);
         (first, last)
-    }
-
-    #[must_use]
-    pub fn row_offset(self, row: usize) -> u32 {
-        (row as u64 * self.row_height as u64).min(u32::MAX as u64) as u32
-    }
-
-    #[must_use]
-    pub fn clamp_offset(self) -> u32 {
-        let total = self.total_height();
-        let max = total.saturating_sub(self.viewport_height as u64) as u32;
-        self.scroll_offset.min(max)
     }
 }

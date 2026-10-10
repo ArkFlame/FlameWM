@@ -52,9 +52,6 @@ impl ScrollStore {
         next
     }
 
-    pub fn retain_only(&mut self, live: &[u32]) {
-        self.offsets.retain(|node, _| live.contains(node));
-    }
 }
 
 /// Pure thumb-drag mapping: pointer position on a track of `track_len` with

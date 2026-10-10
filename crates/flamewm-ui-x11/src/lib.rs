@@ -14,7 +14,7 @@ pub use flamewm_render_x11::{
     GeometryTrace, WindowGeometry, WindowGeometrySlot, X11WindowIdentity,
 };
 pub use input::{
-    SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, action_scroll_delta, pointer_button_from_raw,
+    SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw,
     surface_event_to_ui_event, wheel_scroll_delta,
 };
 pub use popup::PopupState;
@@ -268,31 +268,6 @@ pub enum UiWakeDrain {
     Keep,
     /// Stop watching. The caller has already queued the failure for `on_wake`.
     Retire,
-}
-
-/// Runs the reactor-backed window loop with one extra readable wake descriptor.
-///
-/// `drain` runs when the reactor reports the descriptor readable. It has no document access and
-/// must only move data into the caller's queue. `on_wake` runs once per reactor turn with document
-/// access, so it must stay cheap while its queue is empty. The descriptor is not owned or closed
-/// here; the caller keeps it open until this function returns.
-pub fn run_with_controller_events_role_and_readable_fd<F, W, D>(
-    document: UiDocument,
-    config: UiWindowConfig,
-    role: UiWindowRole,
-    readable_fd: RawFd,
-    mut drain: D,
-    on_event: F,
-    on_wake: W,
-) -> Result<(), String>
-where
-    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
-    W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
-    D: FnMut() -> UiWakeDrain + 'static,
-{
-    run_with_controller_events_role_and_two_readable_fds(
-        document, config, role, readable_fd, drain, None, on_event, on_wake,
-    )
 }
 
 /// Same reactor-backed window loop with a second independent readable wake source.

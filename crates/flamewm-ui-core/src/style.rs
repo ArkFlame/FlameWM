@@ -138,12 +138,6 @@ pub struct BoxStyle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OverlayRectStyle {
-    pub opacity_percent: u8,
-    pub material: Material,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellMetrics {
     pub panel_height: u16,
     pub panel_pad_x: u16,

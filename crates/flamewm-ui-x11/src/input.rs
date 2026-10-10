@@ -26,12 +26,6 @@ pub fn wheel_scroll_delta(button: PointerButton) -> Option<ScrollDelta> {
     }
 }
 
-/// Map a raw action button to its semantic scroll delta (Button4/5 wheel
-/// ticks). Returns None for non-wheel buttons.
-pub fn action_scroll_delta(event: &ActionEvent) -> Option<ScrollDelta> {
-    wheel_scroll_delta(pointer_button_from_raw(event.button))
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceEvent {
     pub surface: crate::SurfaceHandle,
