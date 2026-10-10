@@ -469,9 +469,9 @@ fn parse_message(
     if message.msg_type() != MessageType::Signal {
         return None;
     }
-    let interface = message.interface().map(|value| value.to_string());
-    let member = message.member().map(|value| value.to_string());
-    let path = message.path().map(|value| value.to_string());
+    let interface = message.interface();
+    let member = message.member();
+    let path = message.path();
     if interface.as_deref() == Some(DBUS_INTERFACE)
         && member.as_deref() == Some(NAME_OWNER_CHANGED)
         && path.as_deref() == Some(DBUS_ROOT)
@@ -665,4 +665,43 @@ fn invalid(message: &str) -> FlameError {
 
 fn unsupported(message: &str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owner_changed_signal(path: &str, interface: &str, member: &str) -> Message {
+        Message::new_signal(path, interface, member)
+            .expect("valid signal header")
+            .append3(
+                "org.mpris.MediaPlayer2.test".to_owned(),
+                String::new(),
+                ":1.42".to_owned(),
+            )
+    }
+
+    #[test]
+    fn owner_change_requires_exact_signal_header() {
+        let owners = BTreeMap::new();
+        let incoming = parse_message(
+            &owner_changed_signal(DBUS_ROOT, DBUS_INTERFACE, NAME_OWNER_CHANGED),
+            &owners,
+        );
+        assert!(matches!(
+            incoming,
+            Some(Ok(Incoming::OwnerChanged { name, new_owner, .. }))
+                if name == "org.mpris.MediaPlayer2.test" && new_owner == ":1.42"
+        ));
+
+        for (path, interface, member) in [
+            ("/wrong", DBUS_INTERFACE, NAME_OWNER_CHANGED),
+            (DBUS_ROOT, "org.example.Other", NAME_OWNER_CHANGED),
+            (DBUS_ROOT, DBUS_INTERFACE, "Other"),
+        ] {
+            assert!(
+                parse_message(&owner_changed_signal(path, interface, member), &owners).is_none()
+            );
+        }
+    }
 }
