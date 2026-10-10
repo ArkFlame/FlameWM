@@ -190,13 +190,11 @@ fn validate_parent_window(parent_window: &str) -> FlameResult<()> {
 
 fn is_response_signal(message: &Message, request_path: &str) -> bool {
     message.msg_type() == dbus::MessageType::Signal
-        && message.path().map(|value| value.to_string()).as_deref() == Some(request_path)
+        && message.path().is_some_and(|value| value == request_path)
         && message
             .interface()
-            .map(|value| value.to_string())
-            .as_deref()
-            == Some(REQUEST_INTERFACE)
-        && message.member().map(|value| value.to_string()).as_deref() == Some(RESPONSE)
+            .is_some_and(|value| value == REQUEST_INTERFACE)
+        && message.member().is_some_and(|value| value == RESPONSE)
 }
 
 fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
@@ -405,5 +403,21 @@ mod tests {
             parse_response(vec![MessageItem::UInt32(1), results]),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn response_signal_matches_borrowed_path_interface_and_member() {
+        let signal = Message::new_signal("/request/1", REQUEST_INTERFACE, RESPONSE)
+            .expect("valid portal response signal");
+        assert!(is_response_signal(&signal, "/request/1"));
+        assert!(!is_response_signal(&signal, "/request/2"));
+
+        let wrong_interface =
+            Message::new_signal("/request/1", "org.example.Other", RESPONSE).expect("valid signal");
+        assert!(!is_response_signal(&wrong_interface, "/request/1"));
+
+        let wrong_member =
+            Message::new_signal("/request/1", REQUEST_INTERFACE, "Other").expect("valid signal");
+        assert!(!is_response_signal(&wrong_member, "/request/1"));
     }
 }
