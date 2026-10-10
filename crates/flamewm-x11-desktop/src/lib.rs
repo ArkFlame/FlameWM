@@ -10,7 +10,6 @@ use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
 use flamewm_api::input::PointerPosition;
 use flamewm_api::ports::*;
 use flamewm_api::session::{SessionAction, SessionCapabilities};
-use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::wm_features::{FeatureAction, WindowFeature, WindowFeatureSnapshot};
 use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
 use flamewm_api::{
@@ -48,7 +47,6 @@ pub struct X11Desktop {
     next_transaction: u64,
     pending_mode: Option<PendingMode>,
     catalog: Option<std::sync::Arc<ApplicationCatalog>>,
-    grabs: shortcuts::ShortcutGrabs,
 }
 
 impl X11Desktop {
@@ -104,7 +102,6 @@ impl X11Desktop {
             next_transaction: 0,
             pending_mode: None,
             catalog: None,
-            grabs: shortcuts::ShortcutGrabs::new(),
         })
     }
 
@@ -602,21 +599,6 @@ impl SessionPort for X11Desktop {
     }
 }
 
-impl ShortcutPort for X11Desktop {
-    fn prepare_shortcuts(&mut self, desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
-        self.grabs.discard_staged();
-        let table = shortcuts::read_keyboard_table(&self.conn)?;
-        self.grabs.prepare(desired, &table)
-    }
-    fn commit_shortcuts(&mut self) -> FlameResult<()> {
-        let mut backend = shortcuts::XGrabBackend::new(&self.conn, self.root);
-        self.grabs.commit(&mut backend)
-    }
-    fn rollback_shortcuts(&mut self) {
-        let mut backend = shortcuts::XGrabBackend::new(&self.conn, self.root);
-        self.grabs.rollback(&mut backend);
-    }
-}
 impl MainLoopPort for X11Desktop {
     fn add_poll(
         &mut self,
