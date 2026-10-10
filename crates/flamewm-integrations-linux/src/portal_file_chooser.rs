@@ -148,7 +148,7 @@ fn wallpaper_options(handle_token: &str) -> FlameResult<MessageItem> {
                     signature("a(us)")?,
                 )
                 .map_err(|error| {
-                    invalid(format!("portal filter patterns are invalid: {error:?}"))
+                    FlameError::invalid(format!("portal filter patterns are invalid: {error:?}"))
                 })?,
             );
             Ok(MessageItem::Struct(vec![
@@ -159,7 +159,9 @@ fn wallpaper_options(handle_token: &str) -> FlameResult<MessageItem> {
         .collect::<FlameResult<Vec<_>>>()?;
     let filters = MessageItem::Array(
         MessageItemArray::new(filters, signature("a(sa(us))")?)
-            .map_err(|error| invalid(format!("portal filters are invalid: {error:?}")))?,
+            .map_err(|error| {
+                FlameError::invalid(format!("portal filters are invalid: {error:?}"))
+            })?,
     );
     MessageItem::from_dict(
         vec![
@@ -178,12 +180,13 @@ fn wallpaper_options(handle_token: &str) -> FlameResult<MessageItem> {
 }
 
 fn signature(value: &'static str) -> FlameResult<Signature<'static>> {
-    Signature::new(value).map_err(|error| invalid(format!("invalid D-Bus signature: {error}")))
+    Signature::new(value)
+        .map_err(|error| FlameError::invalid(format!("invalid D-Bus signature: {error}")))
 }
 
 fn validate_parent_window(parent_window: &str) -> FlameResult<()> {
     if parent_window.contains('\0') {
-        return Err(invalid("portal parent window contains a NUL byte"));
+        return Err(FlameError::invalid("portal parent window contains a NUL byte"));
     }
     Ok(())
 }
@@ -199,7 +202,7 @@ fn is_response_signal(message: &Message, request_path: &str) -> bool {
 
 fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
     if items.len() != 2 {
-        return Err(invalid("portal FileChooser response has invalid arguments"));
+        return Err(FlameError::invalid("portal FileChooser response has invalid arguments"));
     }
     let response = item_u32(&items[0], "portal FileChooser response code")?;
     if response == 1 {
@@ -212,7 +215,7 @@ fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
         ));
     }
     let MessageItem::Dict(results) = unwrap_variant(items[1].clone()) else {
-        return Err(invalid("portal FileChooser results are not a dictionary"));
+        return Err(FlameError::invalid("portal FileChooser results are not a dictionary"));
     };
     let mut uris = None;
     for (key, value) in results.into_vec() {
@@ -223,9 +226,10 @@ fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
             )?);
         }
     }
-    let uris = uris.ok_or_else(|| invalid("portal FileChooser response has no URI list"))?;
+    let uris =
+        uris.ok_or_else(|| FlameError::invalid("portal FileChooser response has no URI list"))?;
     if uris.len() != 1 {
-        return Err(invalid(
+        return Err(FlameError::invalid(
             "portal FileChooser returned a non-single wallpaper selection",
         ));
     }
@@ -236,24 +240,24 @@ fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
 pub fn file_uri_to_path(uri: &str) -> FlameResult<PathBuf> {
     let rest = uri
         .strip_prefix("file://")
-        .ok_or_else(|| invalid("portal FileChooser returned a non-file URI"))?;
+        .ok_or_else(|| FlameError::invalid("portal FileChooser returned a non-file URI"))?;
     let slash = rest
         .find('/')
-        .ok_or_else(|| invalid("portal file URI has no local path"))?;
+        .ok_or_else(|| FlameError::invalid("portal file URI has no local path"))?;
     let authority = &rest[..slash];
     if !authority.is_empty() && !authority.eq_ignore_ascii_case("localhost") {
-        return Err(invalid("portal file URI is not local"));
+        return Err(FlameError::invalid("portal file URI is not local"));
     }
     let decoded = percent_decode(&rest[slash..])?;
     if decoded.is_empty() || decoded.chars().any(char::is_control) {
-        return Err(invalid("portal file URI contains an invalid path"));
+        return Err(FlameError::invalid("portal file URI contains an invalid path"));
     }
     let path = PathBuf::from(decoded);
     if !path.is_absolute() {
-        return Err(invalid("portal file URI path is not absolute"));
+        return Err(FlameError::invalid("portal file URI path is not absolute"));
     }
     if ImageSourceFormat::from_extension(&path).is_none() {
-        return Err(invalid(
+        return Err(FlameError::invalid(
             "portal file URI does not name a supported wallpaper format",
         ));
     }
@@ -271,7 +275,7 @@ fn percent_decode(value: &str) -> FlameResult<String> {
             continue;
         }
         if index + 2 >= bytes.len() {
-            return Err(invalid("portal file URI has an incomplete percent escape"));
+            return Err(FlameError::invalid("portal file URI has an incomplete percent escape"));
         }
         let high = hex_value(bytes[index + 1])?;
         let low = hex_value(bytes[index + 2])?;
@@ -279,7 +283,7 @@ fn percent_decode(value: &str) -> FlameResult<String> {
         index += 3;
     }
     String::from_utf8(decoded)
-        .map_err(|_| invalid("portal file URI is not valid UTF-8 after decoding"))
+        .map_err(|_| FlameError::invalid("portal file URI is not valid UTF-8 after decoding"))
 }
 
 fn hex_value(value: u8) -> FlameResult<u8> {
@@ -287,37 +291,37 @@ fn hex_value(value: u8) -> FlameResult<u8> {
         b'0'..=b'9' => Ok(value - b'0'),
         b'a'..=b'f' => Ok(value - b'a' + 10),
         b'A'..=b'F' => Ok(value - b'A' + 10),
-        _ => Err(invalid("portal file URI has an invalid percent escape")),
+        _ => Err(FlameError::invalid("portal file URI has an invalid percent escape")),
     }
 }
 
 fn one_object_path(items: &[MessageItem], context: &str) -> FlameResult<String> {
     if items.len() != 1 {
-        return Err(invalid(context));
+        return Err(FlameError::invalid(context));
     }
     match &items[0] {
         MessageItem::ObjectPath(value) => Ok(value.to_string()),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_string(item: &MessageItem, context: &str) -> FlameResult<String> {
     match item {
         MessageItem::Str(value) => Ok(value.clone()),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_u32(item: &MessageItem, context: &str) -> FlameResult<u32> {
     match item {
         MessageItem::UInt32(value) => Ok(*value),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
     let MessageItem::Array(values) = item else {
-        return Err(invalid(context));
+        return Err(FlameError::invalid(context));
     };
     values
         .clone()
@@ -332,10 +336,6 @@ fn unwrap_variant(item: MessageItem) -> MessageItem {
         MessageItem::Variant(value) => unwrap_variant(*value),
         item => item,
     }
-}
-
-fn invalid(message: impl Into<String>) -> FlameError {
-    FlameError::new(ErrorCode::InvalidArgument, message)
 }
 
 #[cfg(test)]

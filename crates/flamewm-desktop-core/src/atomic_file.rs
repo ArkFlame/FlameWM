@@ -28,6 +28,6 @@ pub(crate) fn write_text(path: &Path, owner: &str, text: &str) -> FlameResult<()
     Ok(())
 }
 
-fn io_error(operation: &str, error: std::io::Error) -> FlameError {
+pub(crate) fn io_error(operation: &str, error: std::io::Error) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }

@@ -1031,47 +1031,29 @@ fn rasterize_path_with_origin(
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    match extension.as_str() {
-        "ppm" => {
-            let bytes = fs::read(path).map_err(|error| RasterError::Io {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })?;
-            decode_ppm(path, &bytes, size, origin)
-        }
-        "xpm" => {
-            let bytes = fs::read(path).map_err(|error| RasterError::Io {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })?;
-            decode_xpm(path, &bytes, size, origin)
-        }
-        "svg" => {
-            let bytes = fs::read(path).map_err(|error| RasterError::Io {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })?;
-            decode_svg(path, &bytes, size, origin)
-        }
-        "png" => {
-            let bytes = fs::read(path).map_err(|error| RasterError::Io {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })?;
-            decode_png(path, &bytes, size, origin)
-        }
-        "webp" => {
-            let bytes = fs::read(path).map_err(|error| RasterError::Io {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })?;
-            decode_webp(path, &bytes, size, origin)
-        }
-        _ => Err(RasterError::UnsupportedFormat {
-            path: path.to_path_buf(),
-            extension,
-        }),
-    }
+    let decode: fn(&Path, &[u8], IconSize, IconOrigin) -> Result<Rgb8Raster, RasterError> =
+        match extension.as_str() {
+            "ppm" => decode_ppm,
+            "xpm" => decode_xpm,
+            "svg" => decode_svg,
+            "png" => decode_png,
+            "webp" => decode_webp,
+            _ => {
+                return Err(RasterError::UnsupportedFormat {
+                    path: path.to_path_buf(),
+                    extension,
+                });
+            }
+        };
+    let bytes = read_raster_bytes(path)?;
+    decode(path, &bytes, size, origin)
+}
+
+fn read_raster_bytes(path: &Path) -> Result<Vec<u8>, RasterError> {
+    fs::read(path).map_err(|error| RasterError::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })
 }
 
 fn decode_webp(

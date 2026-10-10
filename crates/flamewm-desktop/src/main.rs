@@ -245,12 +245,6 @@ fn workspace_legacy_ignored_counter() -> &'static CounterPoint {
     COUNTER.get_or_init(|| CounterPoint::new("desktop.workspace.legacy_ignored"))
 }
 
-#[allow(dead_code)]
-fn workspace_filesystem_rescan_from_workspace_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.workspace.filesystem_rescan_from_workspace"))
-}
-
 fn model_gauge() -> &'static MemoryGauge {
     static GAUGE: OnceLock<MemoryGauge> = OnceLock::new();
     GAUGE.get_or_init(|| MemoryGauge::new("desktop.model"))

@@ -683,7 +683,7 @@ impl NetworkManagerProvider {
                 .into_iter()
                 .map(Ok::<_, FlameError>),
         )
-        .map_err(|_| invalid("NetworkManager open wireless settings are invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager open wireless settings are invalid"))?;
         let connection = MessageItem::from_dict(
             vec![
                 ("id".to_owned(), MessageItem::Str(ssid)),
@@ -695,12 +695,12 @@ impl NetworkManagerProvider {
             .into_iter()
             .map(Ok::<_, FlameError>),
         )
-        .map_err(|_| invalid("NetworkManager open connection settings are invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager open connection settings are invalid"))?;
         let settings = MessageItem::new_dict(vec![
             (MessageItem::Str("connection".to_owned()), connection),
             (MessageItem::Str("802-11-wireless".to_owned()), wireless),
         ])
-        .map_err(|_| invalid("NetworkManager open settings are invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager open settings are invalid"))?;
         let message = Message::new_method_call(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
@@ -723,7 +723,7 @@ impl NetworkManagerProvider {
                 .into_iter()
                 .map(Ok::<_, FlameError>),
         )
-        .map_err(|_| invalid("NetworkManager secure wireless settings are invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager secure wireless settings are invalid"))?;
         let security = MessageItem::from_dict(
             vec![(
                 "key-mgmt".to_owned(),
@@ -732,7 +732,9 @@ impl NetworkManagerProvider {
             .into_iter()
             .map(Ok::<_, FlameError>),
         )
-        .map_err(|_| invalid("NetworkManager secure wireless security settings are invalid"))?;
+        .map_err(|_| {
+            FlameError::invalid("NetworkManager secure wireless security settings are invalid")
+        })?;
         let connection = MessageItem::from_dict(
             vec![
                 ("id".to_owned(), MessageItem::Str(ssid)),
@@ -744,7 +746,7 @@ impl NetworkManagerProvider {
             .into_iter()
             .map(Ok::<_, FlameError>),
         )
-        .map_err(|_| invalid("NetworkManager secure connection settings are invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager secure connection settings are invalid"))?;
         let settings = MessageItem::new_dict(vec![
             (MessageItem::Str("connection".to_owned()), connection),
             (MessageItem::Str("802-11-wireless".to_owned()), wireless),
@@ -753,7 +755,7 @@ impl NetworkManagerProvider {
                 security,
             ),
         ])
-        .map_err(|_| invalid("NetworkManager secure settings are invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager secure settings are invalid"))?;
         let message = Message::new_method_call(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
@@ -1235,13 +1237,13 @@ fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
         .as_deref()
         != Some(SECRET_AGENT_INTERFACE)
     {
-        return Err(invalid("NetworkManager SecretAgent interface is invalid"));
+        return Err(FlameError::invalid("NetworkManager SecretAgent interface is invalid"));
     }
     match message.member().map(|value| value.to_string()).as_deref() {
         Some(GET_SECRETS) => {
             let items = message.get_items();
             if items.len() != 5 || !matches!(items[0], MessageItem::Dict(_)) {
-                return Err(invalid(
+                return Err(FlameError::invalid(
                     "NetworkManager SecretAgent GetSecrets arguments are invalid",
                 ));
             }
@@ -1257,7 +1259,7 @@ fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
         }
         Some(CANCEL_GET_SECRETS) => {
             if !message.get_items().is_empty() {
-                return Err(invalid(
+                return Err(FlameError::invalid(
                     "NetworkManager SecretAgent CancelGetSecrets arguments are invalid",
                 ));
             }
@@ -1265,7 +1267,7 @@ fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
                 reply: (!message.get_no_reply()).then(|| message.method_return()),
             })
         }
-        _ => Err(invalid("NetworkManager SecretAgent method is unsupported")),
+        _ => Err(FlameError::invalid("NetworkManager SecretAgent method is unsupported")),
     }
 }
 
@@ -1283,9 +1285,9 @@ fn secret_reply(
         .into_iter()
         .map(Ok::<_, FlameError>),
     )
-    .map_err(|_| invalid("NetworkManager SecretAgent secret reply is invalid"))?;
+    .map_err(|_| FlameError::invalid("NetworkManager SecretAgent secret reply is invalid"))?;
     let secrets = MessageItem::new_dict(vec![(MessageItem::Str(setting_name), setting)])
-        .map_err(|_| invalid("NetworkManager SecretAgent secret reply is invalid"))?;
+        .map_err(|_| FlameError::invalid("NetworkManager SecretAgent secret reply is invalid"))?;
     Ok(reply.append1(secrets))
 }
 
@@ -1303,7 +1305,7 @@ fn user_canceled_reply(reply: Message) -> FlameResult<Message> {
 
 fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, FlameError> {
     if items.len() != 3 {
-        return Err(invalid("NetworkManager owner event has invalid arguments"));
+        return Err(FlameError::invalid("NetworkManager owner event has invalid arguments"));
     }
     Ok(Incoming::OwnerChanged {
         name: item_string(&items[0], "owner event name")?,
@@ -1314,7 +1316,7 @@ fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, FlameError> 
 
 fn parse_properties_changed(items: Vec<MessageItem>, path: String) -> Result<Incoming, FlameError> {
     if items.len() < 2 {
-        return Err(invalid(
+        return Err(FlameError::invalid(
             "NetworkManager property event has invalid arguments",
         ));
     }
@@ -1327,7 +1329,7 @@ fn parse_properties_changed(items: Vec<MessageItem>, path: String) -> Result<Inc
 
 fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManagerProperties> {
     let Some(MessageItem::Dict(dict)) = item else {
-        return Err(invalid("NetworkManager properties are not a dictionary"));
+        return Err(FlameError::invalid("NetworkManager properties are not a dictionary"));
     };
     let mut properties = NetworkManagerProperties::default();
     for (key, value) in dict.clone().into_vec() {
@@ -1361,7 +1363,7 @@ struct DeviceProperties {
 
 fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProperties> {
     let Some(MessageItem::Dict(dict)) = item else {
-        return Err(invalid(
+        return Err(FlameError::invalid(
             "NetworkManager device properties are not a dictionary",
         ));
     };
@@ -1391,7 +1393,7 @@ fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProp
 
 fn parse_access_point_properties(item: Option<&MessageItem>) -> FlameResult<AccessPointProperties> {
     let Some(MessageItem::Dict(dict)) = item else {
-        return Err(invalid(
+        return Err(FlameError::invalid(
             "NetworkManager access point properties are not a dictionary",
         ));
     };
@@ -1419,7 +1421,7 @@ fn parse_access_point_properties(item: Option<&MessageItem>) -> FlameResult<Acce
 
 fn parse_profile_ssid(item: Option<&MessageItem>) -> FlameResult<Option<String>> {
     let Some(MessageItem::Dict(sections)) = item else {
-        return Err(invalid(
+        return Err(FlameError::invalid(
             "NetworkManager profile settings are not a dictionary",
         ));
     };
@@ -1428,7 +1430,7 @@ fn parse_profile_ssid(item: Option<&MessageItem>) -> FlameResult<Option<String>>
             continue;
         }
         let MessageItem::Dict(properties) = unwrap_variant(value) else {
-            return Err(invalid(
+            return Err(FlameError::invalid(
                 "NetworkManager wireless profile section is not a dictionary",
             ));
         };
@@ -1449,7 +1451,7 @@ fn parse_profile_ssid(item: Option<&MessageItem>) -> FlameResult<Option<String>>
 
 fn object_paths(items: &[MessageItem], context: &str) -> FlameResult<Vec<String>> {
     let Some(MessageItem::Array(paths)) = items.first() else {
-        return Err(invalid(context));
+        return Err(FlameError::invalid(context));
     };
     paths
         .clone()
@@ -1471,27 +1473,27 @@ fn object_path(value: String) -> FlameResult<dbus::Path<'static>> {
 fn one_string(items: &[MessageItem], context: &str) -> FlameResult<String> {
     items
         .first()
-        .ok_or_else(|| invalid(context))
+        .ok_or_else(|| FlameError::invalid(context))
         .and_then(|item| item_string(item, context))
 }
 
 fn item_string(item: &MessageItem, context: &str) -> FlameResult<String> {
     match item {
         MessageItem::Str(value) => Ok(value.clone()),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_object_path(item: &MessageItem, context: &str) -> FlameResult<String> {
     match item {
         MessageItem::ObjectPath(value) => Ok(value.to_string()),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
     let MessageItem::Array(values) = item else {
-        return Err(invalid(context));
+        return Err(FlameError::invalid(context));
     };
     values
         .clone()
@@ -1504,34 +1506,34 @@ fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
 fn item_bool(item: &MessageItem, context: &str) -> FlameResult<bool> {
     match item {
         MessageItem::Bool(value) => Ok(*value),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_u32(item: &MessageItem, context: &str) -> FlameResult<u32> {
     match item {
         MessageItem::UInt32(value) => Ok(*value),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_i64(item: &MessageItem, context: &str) -> FlameResult<i64> {
     match item {
         MessageItem::Int64(value) => Ok(*value),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_byte(item: &MessageItem, context: &str) -> FlameResult<u8> {
     match item {
         MessageItem::Byte(value) => Ok(*value),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_bytes(item: &MessageItem, context: &str) -> FlameResult<Vec<u8>> {
     let MessageItem::Array(values) = item else {
-        return Err(invalid(context));
+        return Err(FlameError::invalid(context));
     };
     values
         .clone()
@@ -1551,10 +1553,6 @@ fn unwrap_variant(item: MessageItem) -> MessageItem {
 /// Header label for the network snapshot: the connected SSID, or a neutral label when no AP is connected.
 fn header_label(connected: Option<&AccessPoint>) -> String {
     connected.map_or_else(|| "Not connected".to_owned(), |ap| ap.ssid.clone())
-}
-
-fn invalid(message: &str) -> FlameError {
-    FlameError::new(ErrorCode::InvalidArgument, message)
 }
 
 fn unsupported(message: &str) -> FlameError {

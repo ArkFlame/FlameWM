@@ -2,8 +2,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use flamewm_api::{ErrorCode, FlameError, FlameResult, OutputId, Rect};
+use flamewm_api::{FlameError, FlameResult, OutputId, Rect};
 
+use crate::atomic_file::io_error;
 use crate::persistence::{hex, unhex};
 use crate::sticky::{MAX_TEXT_SIZE, MIN_TEXT_SIZE, Rgb, StickyNote, StickyNoteStore};
 
@@ -12,8 +13,10 @@ pub const STATE_FILE_NAME: &str = "sticky-notes.state";
 pub fn state_path() -> FlameResult<PathBuf> {
     let base = match env::var_os("XDG_STATE_HOME") {
         Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from(env::var_os("HOME").ok_or_else(|| invalid("HOME is not set"))?)
-            .join(".local/state"),
+        _ => PathBuf::from(
+            env::var_os("HOME").ok_or_else(|| FlameError::invalid("HOME is not set"))?,
+        )
+        .join(".local/state"),
     };
     Ok(base.join(STATE_FILE_NAME))
 }
@@ -69,13 +72,13 @@ pub fn serialize(store: &StickyNoteStore) -> String {
 
 pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
     let mut lines = text.lines();
-    let header = lines.next().ok_or_else(|| invalid("empty sticky state"))?;
+    let header = lines.next().ok_or_else(|| FlameError::invalid("empty sticky state"))?;
     let (version, enabled) = match header {
         "v1\t0" => (1_u8, false),
         "v1\t1" => (1_u8, true),
         "v2\t0" => (2_u8, false),
         "v2\t1" => (2_u8, true),
-        _ => return Err(invalid("invalid sticky state header")),
+        _ => return Err(FlameError::invalid("invalid sticky state header")),
     };
     let mut notes = Vec::new();
     for line in lines {
@@ -85,7 +88,7 @@ pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
         let fields: Vec<&str> = line.split('\t').collect();
         let expected = if version == 1 { 15 } else { 16 };
         if fields.len() != expected {
-            return Err(invalid("invalid sticky state note"));
+            return Err(FlameError::invalid("invalid sticky state note"));
         }
         let bold = if version == 1 {
             false
@@ -93,7 +96,7 @@ pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
             match fields[15] {
                 "0" => false,
                 "1" => true,
-                _ => return Err(invalid("invalid sticky state bold flag")),
+                _ => return Err(FlameError::invalid("invalid sticky state bold flag")),
             }
         };
         let note = StickyNote {
@@ -120,7 +123,7 @@ pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
                 .iter()
                 .any(|existing: &StickyNote| existing.id == note.id)
         {
-            return Err(invalid("invalid sticky state note values"));
+            return Err(FlameError::invalid("invalid sticky state note values"));
         }
         notes.push(note);
     }
@@ -133,21 +136,15 @@ fn string(value: &str) -> FlameResult<String> {
         "invalid sticky state hex",
         "invalid sticky state hex",
     )?)
-    .map_err(|_| invalid("sticky state text is not UTF-8"))
+    .map_err(|_| FlameError::invalid("sticky state text is not UTF-8"))
 }
 fn number<T: std::str::FromStr>(value: &str) -> FlameResult<T> {
     value
         .parse()
-        .map_err(|_| invalid("invalid sticky state number"))
+        .map_err(|_| FlameError::invalid("invalid sticky state number"))
 }
 fn byte(value: &str) -> FlameResult<u8> {
     number(value)
-}
-fn invalid(message: &str) -> FlameError {
-    FlameError::new(ErrorCode::InvalidArgument, message)
-}
-fn io_error(operation: &str, error: std::io::Error) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }
 #[cfg(test)]
 mod tests {
@@ -180,15 +177,15 @@ mod tests {
     fn malformed_hex_keeps_sticky_error_behavior() {
         assert_eq!(
             string("0").unwrap_err(),
-            invalid("invalid sticky state hex")
+            FlameError::invalid("invalid sticky state hex")
         );
         assert_eq!(
             string("gg").unwrap_err(),
-            invalid("invalid sticky state hex")
+            FlameError::invalid("invalid sticky state hex")
         );
         assert_eq!(
             string("ff").unwrap_err(),
-            invalid("sticky state text is not UTF-8")
+            FlameError::invalid("sticky state text is not UTF-8")
         );
     }
 }

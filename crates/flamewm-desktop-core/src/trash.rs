@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+use crate::atomic_file::io_error;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrashScope {
     Home,
@@ -349,10 +351,6 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     year += if month <= 2 { 1 } else { 0 };
     (year, month, day)
-}
-
-fn io_error(operation: &str, error: std::io::Error) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }
 
 #[cfg(test)]

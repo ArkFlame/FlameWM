@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use flamewm_api::{ErrorCode, FlameError, FlameResult, OutputId};
+use flamewm_api::{FlameResult, OutputId};
 
+use crate::atomic_file::io_error;
 use crate::layout::{Cell, GridConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,10 +202,6 @@ fn classify(entry: &fs::DirEntry) -> FlameResult<DesktopItemKind> {
         return Ok(DesktopItemKind::DesktopLauncher);
     }
     Ok(DesktopItemKind::File)
-}
-
-fn io_error(operation: &str, error: std::io::Error) -> FlameError {
-    FlameError::new(ErrorCode::IoFailure, format!("{operation}: {error}"))
 }
 
 #[cfg(test)]

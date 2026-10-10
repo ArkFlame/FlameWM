@@ -380,7 +380,7 @@ impl MprisProvider {
         let pending = self
             .pending_players
             .get_mut(&player)
-            .ok_or_else(|| invalid("MPRIS property reply has no pending player"))?;
+            .ok_or_else(|| FlameError::invalid("MPRIS property reply has no pending player"))?;
         if interface == MPRIS_ROOT_INTERFACE {
             pending.identity = changes.identity;
         } else {
@@ -493,7 +493,7 @@ fn parse_message(
 
 fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, FlameError> {
     if items.len() != 3 {
-        return Err(invalid("MPRIS owner event has invalid arguments"));
+        return Err(FlameError::invalid("MPRIS owner event has invalid arguments"));
     }
     Ok(Incoming::OwnerChanged {
         name: item_string(&items[0], "owner event name")?,
@@ -507,7 +507,7 @@ fn parse_properties_changed(
     owner: String,
 ) -> Result<Incoming, FlameError> {
     if items.len() < 2 {
-        return Err(invalid("MPRIS property event has invalid arguments"));
+        return Err(FlameError::invalid("MPRIS property event has invalid arguments"));
     }
     let interface = item_string(&items[0], "MPRIS property interface")?;
     let changed = parse_property_changes(Some(&items[1]), interface.as_str())?;
@@ -520,7 +520,7 @@ fn parse_properties_changed(
 
 fn names_from_reply(items: &[MessageItem]) -> FlameResult<Vec<String>> {
     let Some(MessageItem::Array(names)) = items.first() else {
-        return Err(invalid("MPRIS ListNames reply is not an array"));
+        return Err(FlameError::invalid("MPRIS ListNames reply is not an array"));
     };
     names
         .clone()
@@ -539,7 +539,7 @@ fn parse_property_changes(
     interface: &str,
 ) -> FlameResult<PropertyChanges> {
     let Some(MessageItem::Dict(dict)) = item else {
-        return Err(invalid("MPRIS properties are not a dictionary"));
+        return Err(FlameError::invalid("MPRIS properties are not a dictionary"));
     };
     let mut changes = PropertyChanges::default();
     for (key, value) in dict.clone().into_vec() {
@@ -580,7 +580,7 @@ fn parse_property_changes(
 
 fn parse_metadata(item: &MessageItem, changes: &mut PropertyChanges) -> FlameResult<()> {
     let MessageItem::Dict(dict) = item else {
-        return Err(invalid("MPRIS metadata is not a dictionary"));
+        return Err(FlameError::invalid("MPRIS metadata is not a dictionary"));
     };
     for (key, value) in dict.clone().into_vec() {
         let key = item_string(&key, "MPRIS metadata key")?;
@@ -596,7 +596,7 @@ fn parse_metadata(item: &MessageItem, changes: &mut PropertyChanges) -> FlameRes
 
 fn artists(item: &MessageItem) -> FlameResult<String> {
     let MessageItem::Array(values) = item else {
-        return Err(invalid("MPRIS artist metadata is not an array"));
+        return Err(FlameError::invalid("MPRIS artist metadata is not an array"));
     };
     values
         .clone()
@@ -634,21 +634,21 @@ fn apply_changes(info: &mut PlayerInfo, changes: PropertyChanges) {
 fn one_string(items: &[MessageItem], context: &str) -> FlameResult<String> {
     items
         .first()
-        .ok_or_else(|| invalid(context))
+        .ok_or_else(|| FlameError::invalid(context))
         .and_then(|item| item_string(item, context))
 }
 
 fn item_string(item: &MessageItem, context: &str) -> FlameResult<String> {
     match item {
         MessageItem::Str(value) => Ok(value.clone()),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
 fn item_bool(item: &MessageItem, context: &str) -> FlameResult<bool> {
     match item {
         MessageItem::Bool(value) => Ok(*value),
-        _ => Err(invalid(context)),
+        _ => Err(FlameError::invalid(context)),
     }
 }
 
@@ -657,10 +657,6 @@ fn unwrap_variant(item: MessageItem) -> MessageItem {
         MessageItem::Variant(value) => unwrap_variant(*value),
         item => item,
     }
-}
-
-fn invalid(message: &str) -> FlameError {
-    FlameError::new(ErrorCode::InvalidArgument, message)
 }
 
 fn unsupported(message: &str) -> FlameError {
