@@ -416,21 +416,19 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
         &mut runtime,
         &mut reactor,
         move |event, runtime| {
-            let dispatcher = event_state.borrow().dispatcher.clone();
             let mut guard = event_state.borrow_mut();
-            // Clone-then-write-back: route needs &mut surfaces + &mut
-            // snapshot, which cannot co-borrow from one RefMut pair.
-            let mut snapshot = guard.snapshot.clone();
+            // Disjoint field borrows through one &mut HostState: route gets
+            // &mut surfaces and &mut snapshot in place, no snapshot clone.
+            let state = &mut *guard;
             let keep = route_helper_event(
                 &event,
                 runtime,
-                &mut guard.surfaces,
-                &mut snapshot,
-                dispatcher.as_ref(),
+                &mut state.surfaces,
+                &mut state.snapshot,
+                state.dispatcher.as_ref(),
             );
-            guard.snapshot = snapshot;
             if !keep {
-                guard.shutdown = true;
+                state.shutdown = true;
             }
             Ok(())
         },

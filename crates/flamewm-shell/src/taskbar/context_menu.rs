@@ -1,4 +1,3 @@
-use super::intent::{ContextMenuIntent, TaskbarIntent};
 use flamewm_api::panels::{PanelsSnapshot, TaskEntryKind};
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
@@ -86,19 +85,6 @@ impl ContextAction {
     }
 }
 
-#[must_use]
-pub fn task_menu(id: TaskEntryId) -> (Vec<MenuEntry>, TaskbarIntent) {
-    (
-        vec![MenuEntry::Action {
-            id: TASK_ROW_ACTIVATE.to_owned(),
-            label: "Activate".to_owned(),
-            icon: None,
-            enabled: true,
-        }],
-        TaskbarIntent::OpenContextMenu(ContextMenuIntent::Task(id)),
-    )
-}
-
 /// Map a stable task row id to a typed control. Row identity is the id,
 /// never the label. Pinned entries resolve Unpin only; running non-pinned
 /// entries resolve Activate/Close.
@@ -132,21 +118,6 @@ pub fn task_action(
         TASK_ROW_CLOSE => Some(ContextAction::CloseWindow(window)),
         _ => None,
     }
-}
-
-/// Legacy single-arg lookup kept for the old caller shape: resolves the
-/// first policy row for the entry (Unpin for pinned, Activate for running).
-#[must_use]
-pub fn task_action_legacy(
-    snapshot: &PanelsSnapshot,
-    windows: &[WindowSnapshot],
-    id: TaskEntryId,
-) -> Option<ContextAction> {
-    let entry = snapshot.tasks.iter().find(|entry| entry.id == id)?;
-    if entry.id.is_pinned() {
-        return task_action(snapshot, windows, &entry.id.clone(), TASK_ROW_UNPIN);
-    }
-    task_action(snapshot, windows, &entry.id.clone(), TASK_ROW_ACTIVATE)
 }
 
 #[must_use]

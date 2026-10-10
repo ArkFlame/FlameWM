@@ -170,15 +170,6 @@ pub fn paged_paths_for_page(snapshot: &NetworkSnapshot, page: usize) -> Vec<(usi
         .collect()
 }
 
-/// Stable AP path for network slot `slot` on the active page.
-#[must_use]
-pub fn slot_path(snapshot: &NetworkSnapshot, slot: usize) -> Option<String> {
-    paged_paths(snapshot)
-        .into_iter()
-        .find(|(page_slot, _)| *page_slot == slot)
-        .map(|(_, path)| path)
-}
-
 /// Snapshot AP count (full model rows, never the paged window).
 #[must_use]
 pub fn snapshot_ap_count(snapshot: &NetworkSnapshot) -> usize {
@@ -189,15 +180,6 @@ pub fn snapshot_ap_count(snapshot: &NetworkSnapshot) -> usize {
 #[must_use]
 pub fn project_visible_count(snapshot: &NetworkSnapshot) -> usize {
     paged_paths(snapshot).len()
-}
-
-/// Stable slot index for an AP path on the active page.
-#[must_use]
-pub fn slot_for_path(snapshot: &NetworkSnapshot, path: &str) -> Option<usize> {
-    paged_paths(snapshot)
-        .into_iter()
-        .find(|(_, candidate)| candidate == path)
-        .map(|(slot, _)| slot)
 }
 
 #[must_use]
