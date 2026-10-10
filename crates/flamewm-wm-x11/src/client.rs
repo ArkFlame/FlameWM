@@ -1,6 +1,7 @@
 use x11rb::protocol::xproto::Window;
 
 use crate::chrome::IconImage;
+use flamewm_integrations_linux::icons::IconKey;
 use crate::classifier::WindowKind;
 use crate::frame::coords::RootRect;
 use crate::frame::model::{FrameControl, PlacementMode, PlacementState};
@@ -29,6 +30,10 @@ pub struct ManagedClient {
     pub icon: Option<IconImage>,
     /// Debug reason when the icon slot falls back to `WM_CLASS` identity.
     pub icon_fallback: Option<String>,
+    /// Monotonic lifetime/request fence for asynchronous catalog icons.
+    pub icon_request_token: u64,
+    /// Catalog request currently expected for this client, if any.
+    pub catalog_icon_key: Option<IconKey>,
     /// Parsed `WM_CLASS` identity cached at manage time: instance (first
     /// NUL-separated token) and class (second token). Paint never performs
     /// an X round-trip for these; the `_NET_WM_ICON` property path refreshes
@@ -133,6 +138,8 @@ mod tests {
             title_text_width: 0,
             icon: None,
             icon_fallback: None,
+            icon_request_token: 0,
+            catalog_icon_key: None,
             wm_instance: String::new(),
             wm_class: String::new(),
             transient_for: None,

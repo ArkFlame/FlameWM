@@ -64,6 +64,22 @@ pub trait UiDocumentAccess {
 }
 
 impl UiDocument {
+    /// Layout box `(x, y, width, height)` of a node by id, laid out in a CSS
+    /// viewport of `viewport` (the same viewport the render path lays out at).
+    /// Read-only: owned by `flamewm_render_core::LayoutEngine`. `None` when the
+    /// id is absent from the template.
+    pub fn layout_box_by_id(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        let index = self.document.node_by_id(id)?;
+        let layout = flamewm_render_core::LayoutEngine::compute(
+            &self.document,
+            viewport.0,
+            viewport.1,
+            flamewm_render_core::InteractionState::default(),
+        );
+        let rect = layout.boxes.get(index as usize)?.rect;
+        Some((rect.x, rect.y, rect.width, rect.height))
+    }
+
     pub fn text(&mut self, id: &str, text: String) -> Result<(), String> {
         self.document.set_text(id, text)
     }

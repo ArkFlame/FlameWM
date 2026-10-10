@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::env;
 use std::io::{self, Read, Write};
+use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -9,7 +10,7 @@ use std::time::Instant;
 
 use calloop::{Interest, RegistrationToken};
 
-use crate::X11Desktop;
+use crate::{X11Desktop, log_committed_startup_shortcuts};
 use flamewm_api::ports::FdEvents;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::system::{AudioSnapshot, SystemAction};
@@ -20,7 +21,7 @@ use flamewm_integrations_linux::{
     LinuxIntegrationRuntime, LinuxIntegrationSource, pulse::PulseAdapter,
 };
 use flamewm_platform::host::PlatformHost;
-use flamewm_reactor::{FdAction, Reactor};
+use flamewm_reactor::{FdAction, FdReadiness, Reactor};
 
 use crate::atoms::AnyError;
 use crate::wm::{WmChangeSet, WmConfig, run_with_hook};
@@ -48,10 +49,89 @@ fn discover_catalog_once() -> Result<std::sync::Arc<ApplicationCatalog>, AnyErro
     Ok(std::sync::Arc::new(ApplicationCatalog::discover()?))
 }
 
+/// Callback invoked with the current settings snapshot at each settings sync
+/// point (after host start and after every control-channel dispatch). Runs on
+/// the WM thread; it must not block.
+pub type SettingsObserver = Box<dyn FnMut(&SettingsSnapshot)>;
+
+/// Shared, optional observer handle threaded through the reactor callbacks.
+type SharedSettingsObserver = Rc<RefCell<Option<SettingsObserver>>>;
+
+/// Wake source for a settings owner (for example the XSettings manager). `fd`
+/// is watched for read readiness on the reactor; `on_readable` drains the
+/// owner's pending events and must not publish. An `Err` or error/hangup
+/// readiness removes the registration, so a broken descriptor cannot spin the
+/// level-triggered loop.
+pub struct SettingsWake {
+    pub fd: RawFd,
+    pub on_readable: Box<dyn FnMut() -> Result<(), String>>,
+}
+
+/// Run the window manager with no settings observer.
 pub fn run(config: WmConfig) -> Result<(), AnyError> {
+    run_session(config, None, None)
+}
+
+/// Run the window manager, notifying `observer` at every settings sync point.
+/// When `wake` is given, its descriptor is registered with the reactor so the
+/// settings owner is drained on readiness without any timer or poll.
+/// Behaviour is otherwise identical to [`run`].
+pub fn run_with_settings_observer(
+    config: WmConfig,
+    observer: impl FnMut(&SettingsSnapshot) + 'static,
+    wake: Option<SettingsWake>,
+) -> Result<(), AnyError> {
+    run_session(config, Some(Box::new(observer)), wake)
+}
+
+/// Decide the reactor action for one settings-owner wake. Error or hangup
+/// readiness removes the source without draining. A failed drain removes it
+/// too. Only a clean drain keeps it registered.
+fn settings_wake_step(
+    readiness: FdReadiness,
+    drain: impl FnOnce() -> Result<(), String>,
+) -> FdAction {
+    if readiness.error || readiness.hangup {
+        eprintln!("flamewm: XSettings manager connection closed; no longer watching it");
+        return FdAction::Remove;
+    }
+    match drain() {
+        Ok(()) => FdAction::Continue,
+        Err(error) => {
+            eprintln!("flamewm: XSettings manager wake failed; no longer watching it: {error}");
+            FdAction::Remove
+        }
+    }
+}
+
+fn register_settings_wake(
+    reactor: &Rc<RefCell<Reactor>>,
+    wake: SettingsWake,
+) -> Result<RegistrationToken, AnyError> {
+    let SettingsWake {
+        fd,
+        mut on_readable,
+    } = wake;
+    reactor
+        .borrow_mut()
+        .register_raw_fd_with_action(fd, Interest::READ, move |_, readiness| {
+            settings_wake_step(readiness, || on_readable())
+        })
+        .map_err(Into::into)
+}
+
+fn run_session(
+    config: WmConfig,
+    settings_observer: Option<SettingsObserver>,
+    settings_wake: Option<SettingsWake>,
+) -> Result<(), AnyError> {
     flamewm_profiler::init_process("flamewm-wm");
     flamewm_debug::init_process("wm");
-    let settings_path = settings_path();
+    let (settings_path, settings_source) = settings_path();
+    eprintln!(
+        "flamewm-wm: settings path={} source={settings_source}",
+        settings_path.display()
+    );
     let control = Rc::new(ControlServer::connect_session()?);
     let reactor = Rc::new(RefCell::new(Reactor::new()?));
     let integrations = Rc::new(RefCell::new(LinuxIntegrationRuntime::connect()?));
@@ -144,10 +224,17 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
         }
     };
     let host = Rc::new(RefCell::new(None::<PlatformHost<X11Desktop>>));
+    let settings_observer: SharedSettingsObserver = Rc::new(RefCell::new(settings_observer));
     let control_now_ms = Rc::new(Cell::new(0_u64));
     let control_error = Rc::new(RefCell::new(None::<AnyError>));
-    let mut control_registration =
-        match register_control(&reactor, &control, &host, &control_now_ms, &control_error) {
+    let mut control_registration = match register_control(
+        &reactor,
+        &control,
+        &host,
+        &control_now_ms,
+        &control_error,
+        &settings_observer,
+    ) {
             Ok(registration) => registration,
             Err(error) => {
                 drop(pulse);
@@ -176,6 +263,49 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
     let _startup_guard = flamewm_profiler::start("wm.startup.catalog");
     let catalog = discover_catalog_once()?;
     drop(_startup_guard);
+    // One worker is sufficient for this single WM; the shared index is built
+    // before the event loop and all cold reads/decodes remain off-loop.
+    let icon_base = flamewm_integrations_linux::IconResolver::from_environment(
+        crate::wm::flamewm_workspace_root(),
+        0,
+    );
+    let icon_index = std::sync::Arc::clone(icon_base.shared_index());
+    let icon_base = std::sync::Arc::new(icon_base);
+    let icon_service = Rc::new(RefCell::new(
+        flamewm_integrations_linux::icon_service::IconService::with_index(
+            1,
+            128,
+            move || icon_base.fork_worker(),
+            icon_index,
+        ),
+    ));
+    let icon_fd = icon_service.borrow().wake_fd();
+    let _icon_registration = if let Some(icon_fd) = icon_fd {
+        let icon_service_for_wake = Rc::clone(&icon_service);
+        Some(reactor.borrow_mut().register_raw_fd_with_action(
+            icon_fd,
+            Interest::READ,
+            move |_, _| {
+                icon_service_for_wake.borrow_mut().wake_drain();
+                FdAction::Continue
+            },
+        )?)
+    } else {
+        return Err(Box::new(io::Error::new(io::ErrorKind::Other, "IconService wake FD unavailable")));
+    };
+    // Settings owner wake: SelectionClear on the manager connection is observed
+    // without waiting for the next publish. A failed registration leaves the WM
+    // running without live XSettings wake, like a refused claim.
+    let _settings_wake_registration = match settings_wake {
+        Some(wake) => match register_settings_wake(&reactor, wake) {
+            Ok(token) => Some(token),
+            Err(error) => {
+                eprintln!("flamewm: XSettings wake not registered: {error}");
+                None
+            }
+        },
+        None => None,
+    };
     let catalog_for_hook = std::sync::Arc::clone(&catalog);
     let started = Instant::now();
     let mut host_started = false;
@@ -188,8 +318,9 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
     let control_for_hook = Rc::clone(&control);
     let control_now_ms_for_hook = Rc::clone(&control_now_ms);
     let control_error_for_hook = Rc::clone(&control_error);
+    let settings_observer_for_hook = Rc::clone(&settings_observer);
 
-    let result = run_with_hook(config, &catalog, &reactor, move |conn, screen, changes| {
+    let result = run_with_hook(config, &catalog, &reactor, Rc::clone(&icon_service), move |wm, conn, screen, changes| {
         if let Some(error) = control_error_for_hook.borrow_mut().take() {
             return Err(error);
         }
@@ -200,13 +331,14 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
             &host_for_hook,
             &control_now_ms_for_hook,
             &control_error_for_hook,
+            &settings_observer_for_hook,
         )?;
-        let mut host = host_for_hook.borrow_mut();
+        let mut host_guard = host_for_hook.borrow_mut();
         // Scoped per-turn span: the whole-process `wm.loop` guard above has
         // been removed so loop-turn CPU is attributed per turn, not once
         // across the full process lifetime.
         let _turn_guard = flamewm_profiler::start("wm.loop");
-        if host.is_none() {
+        if host_guard.is_none() {
             let mut new_host = PlatformHost::new(
                 X11Desktop::from_connection(
                     conn.clone(),
@@ -238,13 +370,22 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
                     &snapshot.media,
                 ),
             }));
-            *host = Some(new_host);
+            *host_guard = Some(new_host);
         }
-        let host = host.as_mut().expect("host initialized");
+        let host = host_guard.as_mut().expect("host initialized");
         if !host_started {
             let _host_guard = flamewm_profiler::start("wm.startup.host");
             host.start()?;
-            sync_snap_preview_opacity(&host.settings_snapshot());
+            match host.commit_startup_shortcuts() {
+                Ok(()) => {
+                    let snapshot = host.shortcut_snapshot();
+                    log_committed_startup_shortcuts(host.engine(), &snapshot.bindings);
+                }
+                Err(error) => {
+                    eprintln!("flamewm: startup shortcuts were not grabbed: {error}");
+                }
+            }
+            publish_settings_snapshot(&settings_observer_for_hook, &host.settings_snapshot());
             host_started = true;
         }
         // ProviderDirty audio domain: drain only snapshots the audio fd delivered.
@@ -263,12 +404,16 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
         // without polling; snapshots only refresh on reported change.
         {
             let mut integrations = integrations_for_hook.borrow_mut();
-            if integrations.reconcile()? {
-                let network = integrations.network_snapshot();
+            let reconciled = integrations.reconcile()?;
+            // Network replies (access points, profiles) land after reconcile
+            // queues its requests, so the network snapshot is compared on every
+            // turn; `update_network` dedupes, so unchanged state emits nothing.
+            let network = integrations.network_snapshot();
+            if host.system_mut().update_network(network) {
+                emit_system_signals(host, control_for_hook.as_ref())?;
+            }
+            if reconciled {
                 let media = integrations.media_snapshot();
-                if host.system_mut().update_network(network) {
-                    emit_system_signals(host, control_for_hook.as_ref())?;
-                }
                 if host.system_mut().update_media(media) {
                     emit_system_signals(host, control_for_hook.as_ref())?;
                 }
@@ -288,9 +433,29 @@ pub fn run(config: WmConfig) -> Result<(), AnyError> {
         )?;
         let now_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         control_now_ms_for_hook.set(now_ms);
+        // Deadline check only: reverts an unconfirmed display mode once its deadline passes.
+        let display_before = host.cached_display_snapshot();
+        // The transaction is retired before any native call, so a failed or disconnected-output
+        // revert is reported once here and never retried; it must not abort the WM loop.
+        if let Err(error) = host.tick_display_transactions(now_ms) {
+            eprintln!("flamewm: display mode transaction: {error}");
+        }
+        let display_after = host.cached_display_snapshot();
+        if display_after != display_before {
+            if let Some(snapshot) = display_after {
+                control_for_hook.emit_signal(&ControlSignal::DisplaysSnapshotChanged { snapshot })?;
+            }
+        }
         flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
-        Ok(())
+        let areas = host.output_work_areas();
+        let wait = crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
+        drop(host);
+        drop(host_guard);
+        wm.set_output_work_areas(areas)?;
+        // Wake the reactor at the pending display revert deadline; None when nothing is pending.
+        Ok(wait)
     });
+    drop(icon_service);
     drop(pulse);
     integrations.borrow_mut().stop();
     result
@@ -310,6 +475,15 @@ where
     Ok(())
 }
 
+/// Single settings sync point: applies the WM-owned snapshot effects, then
+/// notifies the optional observer with the same snapshot.
+fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &SettingsSnapshot) {
+    sync_snap_preview_opacity(snapshot);
+    if let Some(observer) = observer.borrow_mut().as_mut() {
+        observer(snapshot);
+    }
+}
+
 fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {
     if let Some(SettingValue::Percent(opacity)) =
         snapshot.values.get("WindowSnapPreviewFillOpacity")
@@ -325,13 +499,21 @@ fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {
 fn flush_wm_changes<E>(
     host: &mut PlatformHost<E>,
     control: &ControlServer,
-    changes: WmChangeSet,
+    mut changes: WmChangeSet,
 ) -> Result<(), AnyError>
 where
     E: flamewm_api::ports::EnginePorts,
 {
+    // Take the one-shot start-menu request out of the drained set so it is emitted
+    // exactly once for this turn and never carried into a later flush.
+    let start_menu_toggle = std::mem::take(&mut changes.start_menu_toggle);
     for signal in collect_wm_signals(host, changes).map_err(any_from_flame)? {
         control.emit_signal(&signal).map_err(any_from_flame)?;
+    }
+    if start_menu_toggle {
+        control
+            .emit_signal(&ControlSignal::StartMenuToggleRequested)
+            .map_err(any_from_flame)?;
     }
     Ok(())
 }
@@ -397,12 +579,14 @@ fn register_control(
     host: &Rc<RefCell<Option<PlatformHost<X11Desktop>>>>,
     now_ms: &Rc<Cell<u64>>,
     control_error: &Rc<RefCell<Option<AnyError>>>,
+    settings_observer: &SharedSettingsObserver,
 ) -> Result<ControlRegistration, AnyError> {
     let watch = control.watch();
     let control = Rc::clone(control);
     let host = Rc::clone(host);
     let now_ms = Rc::clone(now_ms);
     let control_error = Rc::clone(control_error);
+    let settings_observer = Rc::clone(settings_observer);
     let token = reactor.borrow_mut().register_raw_fd_with_action(
         watch.fd,
         interest_for(watch.events),
@@ -425,6 +609,7 @@ fn register_control(
                 return FdAction::Continue;
             };
             let panels_before = host.panels_snapshot();
+            let displays_before = host.cached_display_snapshot();
             let result = control.on_ready(host, now_ms.get());
             if let Err(error) = result {
                 let mut control_error = control_error.borrow_mut();
@@ -433,12 +618,21 @@ fn register_control(
                 }
                 FdAction::Remove
             } else {
-                sync_snap_preview_opacity(&host.settings_snapshot());
+                publish_settings_snapshot(&settings_observer, &host.settings_snapshot());
+                // Displays first so the shell's display snapshot is current before panel geometry lands.
+                let mut signals = Vec::new();
+                let displays = host.cached_display_snapshot();
+                if displays != displays_before {
+                    if let Some(snapshot) = displays {
+                        signals.push(ControlSignal::DisplaysSnapshotChanged { snapshot });
+                    }
+                }
                 let panels = host.panels_snapshot();
                 if panels != panels_before {
-                    if let Err(error) = control
-                        .emit_signal(&ControlSignal::PanelsSnapshotChanged { snapshot: panels })
-                    {
+                    signals.push(ControlSignal::PanelsSnapshotChanged { snapshot: panels });
+                }
+                for signal in &signals {
+                    if let Err(error) = control.emit_signal(signal) {
                         let mut control_error = control_error.borrow_mut();
                         if control_error.is_none() {
                             *control_error = Some(Box::new(error));
@@ -464,13 +658,21 @@ fn refresh_control(
     host: &Rc<RefCell<Option<PlatformHost<X11Desktop>>>>,
     now_ms: &Rc<Cell<u64>>,
     control_error: &Rc<RefCell<Option<AnyError>>>,
+    settings_observer: &SharedSettingsObserver,
 ) -> Result<(), AnyError> {
     let watch = control.watch();
     if watch.fd == registration.fd && watch.events == registration.events {
         return Ok(());
     }
     reactor.borrow_mut().remove(registration.token)?;
-    *registration = register_control(reactor, control, host, now_ms, control_error)?;
+    *registration = register_control(
+        reactor,
+        control,
+        host,
+        now_ms,
+        control_error,
+        settings_observer,
+    )?;
     Ok(())
 }
 
@@ -543,13 +745,96 @@ fn profile_report_interval() -> std::time::Duration {
     std::time::Duration::from_secs(flamewm_profiler::profile_interval_secs())
 }
 
-fn settings_path() -> PathBuf {
-    env::var_os("FLAMEWM_SETTINGS_PATH")
+/// Resolves the product settings file. Precedence: `FLAMEWM_SETTINGS_PATH`,
+/// then `FLAMEWM_CONFIG_DIR/settings.toml`, then the XDG default
+/// (`XDG_CONFIG_HOME` or `$HOME/.config`, `/flamewm/settings.toml`). The
+/// last fallback never depends on the current working directory.
+fn settings_path() -> (PathBuf, &'static str) {
+    if let Some(path) = env::var_os("FLAMEWM_SETTINGS_PATH").filter(|value| !value.is_empty()) {
+        return (PathBuf::from(path), "FLAMEWM_SETTINGS_PATH");
+    }
+    if let Some(dir) = env::var_os("FLAMEWM_CONFIG_DIR").filter(|value| !value.is_empty()) {
+        return (PathBuf::from(dir).join("settings.toml"), "FLAMEWM_CONFIG_DIR");
+    }
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("FLAMEWM_CONFIG_DIR").map(|path| PathBuf::from(path).join("settings.toml"))
-        })
-        .unwrap_or_else(|| PathBuf::from("settings.toml"))
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("/root/.config"));
+    (config_home.join("flamewm").join("settings.toml"), "xdg-default")
+}
+
+#[cfg(test)]
+mod settings_observer_tests {
+    use super::*;
+
+    #[test]
+    fn publish_settings_snapshot_notifies_observer_with_same_snapshot() {
+        let seen: Rc<RefCell<Vec<SettingsSnapshot>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        let boxed: SettingsObserver = Box::new(move |snapshot: &SettingsSnapshot| {
+            sink.borrow_mut().push(snapshot.clone());
+        });
+        let observer: SharedSettingsObserver = Rc::new(RefCell::new(Some(boxed)));
+        let mut snapshot = SettingsSnapshot::new(7);
+        snapshot
+            .values
+            .insert("appearance".to_owned(), SettingValue::Text("light".to_owned()));
+        publish_settings_snapshot(&observer, &snapshot);
+        assert_eq!(seen.borrow().as_slice(), std::slice::from_ref(&snapshot));
+    }
+
+    #[test]
+    fn publish_settings_snapshot_without_observer_is_a_noop() {
+        let observer: SharedSettingsObserver = Rc::new(RefCell::new(None));
+        publish_settings_snapshot(&observer, &SettingsSnapshot::new(1));
+    }
+
+    fn readable() -> FdReadiness {
+        FdReadiness {
+            readable: true,
+            ..FdReadiness::default()
+        }
+    }
+
+    #[test]
+    fn settings_wake_clean_drain_keeps_registration() {
+        let mut drained = 0;
+        let action = settings_wake_step(readable(), || {
+            drained += 1;
+            Ok(())
+        });
+        assert_eq!(action, FdAction::Continue);
+        assert_eq!(drained, 1);
+    }
+
+    #[test]
+    fn settings_wake_drain_error_removes_registration() {
+        let action = settings_wake_step(readable(), || Err("drain failed".to_owned()));
+        assert_eq!(action, FdAction::Remove);
+    }
+
+    #[test]
+    fn settings_wake_hangup_or_error_readiness_removes_without_draining() {
+        for readiness in [
+            FdReadiness {
+                error: true,
+                ..FdReadiness::default()
+            },
+            FdReadiness {
+                hangup: true,
+                ..FdReadiness::default()
+            },
+        ] {
+            let mut drained = false;
+            let action = settings_wake_step(readiness, || {
+                drained = true;
+                Ok(())
+            });
+            assert_eq!(action, FdAction::Remove);
+            assert!(!drained);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -609,6 +894,13 @@ mod tests {
             }
         }
 
+        /// Simulates a desktop change that bypasses activate_workspace, as a
+        /// root-property change observed by the WM would. Bumps the revision.
+        fn external_desktop_change(&mut self, index: usize) {
+            self.workspaces.active_index = index;
+            self.workspaces.revision += 1;
+        }
+
         fn host(self) -> PlatformHost<Self> {
             use std::sync::atomic::{AtomicU64, Ordering};
             static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -665,7 +957,10 @@ mod tests {
         fn workspace_snapshot(&self) -> FlameResult<WorkspaceSnapshot> {
             Ok(self.workspaces.clone())
         }
-        fn activate_workspace(&mut self, index: usize, _revision: u64) -> FlameResult<()> {
+        fn activate_workspace(&mut self, index: usize, revision: u64) -> FlameResult<()> {
+            if revision != self.workspaces.revision {
+                return Err(flamewm_api::FlameError::stale("workspace revision changed"));
+            }
             self.workspaces.active_index = index;
             self.workspaces.revision += 1;
             Ok(())
@@ -775,6 +1070,7 @@ mod tests {
             workspaces,
             panels,
             work_area: false,
+            start_menu_toggle: false,
         }
     }
 
@@ -846,6 +1142,19 @@ mod tests {
     }
 
     #[test]
+    fn workspace_activation_rejects_revision_stale_after_external_desktop_change() {
+        let mut engine = FakeEngine::new();
+        let revision = engine.workspace_snapshot().expect("snapshot").revision;
+        engine.external_desktop_change(1);
+        let after = engine.workspace_snapshot().expect("snapshot");
+        assert_ne!(after.revision, revision);
+        let err = engine
+            .activate_workspace(0, revision)
+            .expect_err("stale revision must be rejected");
+        assert_eq!(err.code, flamewm_api::ErrorCode::StaleRevision);
+    }
+
+    #[test]
     fn work_area_only_emits_nothing() {
         let mut host = FakeEngine::new().host();
         let only_area = WmChangeSet {
@@ -853,6 +1162,7 @@ mod tests {
             workspaces: false,
             panels: false,
             work_area: true,
+            start_menu_toggle: false,
         };
         let signals = collect_wm_signals(&mut host, only_area).expect("collect");
         assert!(signals.is_empty());

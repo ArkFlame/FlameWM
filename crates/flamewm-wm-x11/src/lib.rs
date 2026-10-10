@@ -13,10 +13,12 @@ mod size_hints;
 pub(crate) mod snap_preview;
 mod wm;
 
-pub use runtime::run;
+pub use runtime::{SettingsObserver, SettingsWake, run, run_with_settings_observer};
 pub use wm::WmConfig;
 
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
@@ -35,7 +37,8 @@ use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, Size,
     TransactionId, WindowRef, WorkspaceRef,
 };
-use flamewm_applications::ApplicationCatalog;
+use flamewm_applications::{ApplicationCatalog, WindowApplicationIdentity};
+use flamewm_x11_desktop::shortcuts::{ShortcutGrabs, XGrabBackend, read_keyboard_table};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
@@ -53,6 +56,23 @@ struct PendingMode {
     old_x: i16,
     old_y: i16,
     old_rotation: randr::Rotation,
+}
+
+/// Process-wide workspace revision fence. `Wm` advances it on desktop root
+/// property changes; `X11Desktop` is rebuilt per event, so the counter must
+/// not live on the instance.
+static WORKSPACE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Advances the workspace revision fence. Called from the WM when
+/// _NET_CURRENT_DESKTOP, _NET_NUMBER_OF_DESKTOPS, or _NET_DESKTOP_NAMES change.
+pub(crate) fn bump_workspace_generation() -> u64 {
+    WORKSPACE_GENERATION
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
+}
+
+fn workspace_generation() -> u64 {
+    WORKSPACE_GENERATION.load(Ordering::Relaxed)
 }
 
 pub struct X11Desktop {
@@ -135,6 +155,7 @@ impl X11Desktop {
     fn atom(&self, name: &str) -> Atom {
         self.atoms[name]
     }
+
     fn flush(&self) -> FlameResult<()> {
         self.conn.flush().map_err(io_error)
     }
@@ -284,6 +305,34 @@ fn signed(value: u32) -> i32 {
     value as i32
 }
 
+fn window_application_id(
+    catalog: &ApplicationCatalog,
+    wm_instance: &str,
+    wm_class: &str,
+) -> DesktopAppId {
+    let identity = WindowApplicationIdentity::new(wm_instance, wm_class, "");
+    catalog
+        .find_by_window_identity(&identity)
+        .map(|entry| entry.id.clone())
+        .unwrap_or_else(|| {
+            let fallback = [wm_class, wm_instance]
+                .into_iter()
+                .map(str::trim)
+                .find(|value| !value.is_empty())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_else(|| "unknown".to_owned());
+            DesktopAppId::new(fallback)
+        })
+}
+
+fn parse_wm_class(raw: &[u8]) -> (String, String) {
+    let text = String::from_utf8_lossy(raw);
+    let mut parts = text.split('\0');
+    let instance = parts.next().unwrap_or_default().trim().to_owned();
+    let class = parts.next().unwrap_or_default().trim().to_owned();
+    (instance, class)
+}
+
 impl WindowPort for X11Desktop {
     fn get(&self, reference: WindowRef) -> FlameResult<flamewm_api::window::WindowSnapshot> {
         let window = self.check_window(reference)?;
@@ -328,12 +377,7 @@ impl WindowPort for X11Desktop {
         let title = self
             .text(window, "_NET_WM_NAME")
             .or_else(|_| self.text(window, "WM_NAME"))?;
-        let class = self
-            .text(window, "WM_CLASS")?
-            .split('\0')
-            .nth(1)
-            .unwrap_or_default()
-            .to_owned();
+        let (wm_instance, wm_class) = parse_wm_class(&self.property_bytes(window, "WM_CLASS")?);
         let has = |name: &str| states.contains(&self.atom(name));
         let state = if has("_NET_WM_STATE_FULLSCREEN") {
             flamewm_api::window::WindowState::Fullscreen
@@ -347,7 +391,7 @@ impl WindowPort for X11Desktop {
         Ok(flamewm_api::window::WindowSnapshot {
             reference: WindowRef::new(u64::from(window), self.ensure_generation(window)),
             title,
-            app_id: DesktopAppId::new(class),
+            app_id: window_application_id(&self.catalog, &wm_instance, &wm_class),
             outer_geometry: Rect::new(
                 i32::from(geometry.x),
                 i32::from(geometry.y),
@@ -522,7 +566,7 @@ impl WorkspacePort for X11Desktop {
             .map(|v| String::from_utf8_lossy(v).into_owned())
             .collect();
         Ok(WorkspaceSnapshot {
-            revision: 0,
+            revision: workspace_generation(),
             count: count.max(1),
             active_index: active_index.min(count.max(1) - 1),
             last_index: None,
@@ -530,11 +574,19 @@ impl WorkspacePort for X11Desktop {
         })
     }
     fn activate_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
-        let current = self.workspace_snapshot()?;
-        if expected_revision != current.revision {
+        // Only the desktop count is needed here; reading the full snapshot
+        // costs three blocking GetProperty round trips. The revision is checked
+        // against the workspace generation counter, not a second snapshot fetch.
+        let count = self
+            .property32(self.root, "_NET_NUMBER_OF_DESKTOPS")?
+            .first()
+            .copied()
+            .unwrap_or(1)
+            .max(1) as usize;
+        if expected_revision != workspace_generation() {
             return Err(FlameError::stale("workspace revision changed"));
         }
-        if index >= current.count {
+        if index >= count {
             return Err(FlameError::invalid("workspace index is outside topology"));
         }
         self.client_message(
@@ -648,19 +700,93 @@ impl SessionPort for X11Desktop {
     }
 }
 
+/// Process-wide passive-grab state for Settings hotkeys. `X11Desktop` is
+/// rebuilt per event, so the grab set must not live on the instance.
+static SHORTCUT_GRABS: Mutex<ShortcutGrabs> = Mutex::new(ShortcutGrabs::new());
+
+fn shortcut_grabs() -> MutexGuard<'static, ShortcutGrabs> {
+    SHORTCUT_GRABS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Resolves a KeyPress (keycode and modifier state) to the active action id.
+pub(crate) fn shortcut_action_for_key(keycode: u8, state: u16) -> Option<String> {
+    let matched = shortcut_grabs()
+        .action_for_key(keycode, state)
+        .map(str::to_owned);
+    if wm::key_diag_enabled() {
+        // Same masking as ShortcutGrabs::action_for_key: NumLock/CapsLock ignored.
+        let lock_bits = flamewm_x11_desktop::shortcuts::MOD_LOCK
+            | flamewm_x11_desktop::shortcuts::MOD_NUM_LOCK;
+        eprintln!(
+            "flamewm: shortcut lookup keycode={} masked_state={:04x} grab_matched={} action={}",
+            keycode,
+            state & !lock_bits,
+            matched.is_some(),
+            matched.as_deref().unwrap_or("none")
+        );
+    }
+    matched
+}
+
 impl ShortcutPort for X11Desktop {
-    fn prepare_shortcuts(&mut self, _desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not own shortcut bindings",
-        ))
+    fn prepare_shortcuts(&mut self, desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
+        let table = read_keyboard_table(&*self.conn)?;
+        shortcut_grabs().prepare(desired, &table)
     }
     fn commit_shortcuts(&mut self) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not own shortcut bindings",
-        ))
+        let mut backend = XGrabBackend::new(&*self.conn, self.root);
+        shortcut_grabs().commit(&mut backend)
     }
-    fn rollback_shortcuts(&mut self) {}
+    fn rollback_shortcuts(&mut self) {
+        let mut backend = XGrabBackend::new(&*self.conn, self.root);
+        shortcut_grabs().rollback(&mut backend);
+    }
 }
+
+/// Diagnostic only (FLAMEWM_KEY_DIAG=1): one line per committed startup binding
+/// (the effective set, persisted hotkeys over defaults) with the keysym and
+/// every keycode the server maps that keysym to. The grab itself is performed by
+/// `PlatformHost::commit_startup_shortcuts` through `ShortcutPort`.
+pub(crate) fn log_committed_startup_shortcuts(
+    port: &X11Desktop,
+    bindings: &BTreeMap<String, KeyBinding>,
+) {
+    if !wm::key_diag_enabled() {
+        return;
+    }
+    let table = match read_keyboard_table(&*port.conn) {
+        Ok(table) => table,
+        Err(error) => {
+            eprintln!("flamewm: shortcut commit diag: keyboard table unreadable: {}", error.message);
+            return;
+        }
+    };
+    for (action, binding) in bindings {
+        let Some(value) = binding.0.as_deref() else {
+            eprintln!("flamewm: shortcut committed action={action} binding=unbound");
+            continue;
+        };
+        match flamewm_x11_desktop::shortcuts::parse_binding(value) {
+            Ok(chord) => {
+                let keycodes = flamewm_x11_desktop::shortcuts::KeycodeLookup::keycodes_for(
+                    &table,
+                    chord.keysym,
+                );
+                eprintln!(
+                    "flamewm: shortcut committed action={action} binding={value} keysym=0x{:04x} keycodes={keycodes:?}",
+                    chord.keysym
+                );
+            }
+            Err(error) => eprintln!(
+                "flamewm: shortcut committed action={action} binding={value} parse_error={}",
+                error.message
+            ),
+        }
+    }
+}
+
 impl MainLoopPort for X11Desktop {
     fn add_poll(
         &mut self,
@@ -970,5 +1096,62 @@ impl DisplayPort for X11Desktop {
         }
         self.pending_mode = None;
         self.flush()
+    }
+}
+
+#[cfg(test)]
+mod application_identity_tests {
+    use super::{ApplicationCatalog, DesktopAppId, parse_wm_class, window_application_id};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn wm_class_property_preserves_instance_and_class_order() {
+        assert_eq!(
+            parse_wm_class(b"firefox\0Firefox\0"),
+            ("firefox".to_owned(), "Firefox".to_owned())
+        );
+    }
+
+    #[test]
+    fn unmatched_identity_uses_normalized_class_then_instance_fallback() {
+        let catalog = ApplicationCatalog::default();
+        assert_eq!(
+            window_application_id(&catalog, "  MyInstance  ", "  MyClass  "),
+            DesktopAppId::new("myclass")
+        );
+        assert_eq!(
+            window_application_id(&catalog, "  MyInstance  ", "  "),
+            DesktopAppId::new("myinstance")
+        );
+        assert_eq!(
+            window_application_id(&catalog, "", ""),
+            DesktopAppId::new("unknown")
+        );
+    }
+
+    #[test]
+    fn matched_window_identity_uses_canonical_desktop_entry_id() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-window-identity-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create desktop fixture directory");
+        std::fs::write(
+            root.join("org.example.Editor.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Editor\nExec=editor\nStartupWMClass=EditorClass\n",
+        )
+        .expect("write desktop fixture");
+        let catalog = ApplicationCatalog::from_dirs(std::slice::from_ref(&root))
+            .expect("load desktop fixture");
+
+        assert_eq!(
+            window_application_id(&catalog, "editor-instance", "EditorClass"),
+            DesktopAppId::new("org.example.Editor.desktop")
+        );
+        std::fs::remove_dir_all(root).expect("remove desktop fixture directory");
     }
 }

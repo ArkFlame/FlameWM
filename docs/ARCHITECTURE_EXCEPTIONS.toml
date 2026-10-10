@@ -14,3 +14,17 @@ capability = "core-source-loc>2400"
 reason = "0.0.8 convergence adds measured popup refusal/placement math (PopupRefusal, measured_popup_rect, context menu placement) to the single popup owner; split deferred to avoid half-migration."
 canonical_target = "crates/flamewm-shell-core/src/popup.rs"
 remove_by = "0.0.9"
+
+[[exception]]
+path = "crates/flamewm-wm/Cargo.toml"
+capability = "x11rb-dependency"
+reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
+canonical_target = "crates/flamewm-wm-x11"
+remove_by = "0.0.10"
+
+[[exception]]
+path = "crates/flamewm-wm/src/bin/flamewm-session.rs"
+capability = "x11rb-symbol"
+reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
+canonical_target = "crates/flamewm-wm-x11"
+remove_by = "0.0.10"

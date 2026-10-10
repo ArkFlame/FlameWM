@@ -1,4 +1,5 @@
 use super::*;
+use crate::WindowGeometrySlot;
 
 fn keyboard_text(symbol: u64) -> Option<String> {
     match symbol {
@@ -643,6 +644,7 @@ impl X11App {
         on_action: &mut F,
         reactor: &mut Reactor,
         on_reactor: &mut R,
+        geometry: &WindowGeometrySlot,
     ) -> Result<(), String>
     where
         F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
@@ -650,8 +652,16 @@ impl X11App {
     {
         // No unconditional redraw on entry; reactor ticks/damage drive paints.
         loop {
-            reactor.dispatch(None).map_err(|error| error.to_string())?;
+            // XNextEvent can leave already-read events in Xlib's queue after
+            // single_event returns. Avoid blocking on the fd reactor in that case.
+            let timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
+                .then_some(std::time::Duration::ZERO);
+            reactor.dispatch(timeout).map_err(|error| error.to_string())?;
             on_reactor(document)?;
+            // Pending geometry request (if any) is applied before the damage
+            // gate so the resized window repaints in this same wake.
+            let requested = geometry.take();
+            unsafe { self.apply_window_geometry(document, requested)? };
             // Reactor callbacks may mutate the document without producing
             // an X event. The retained damage/revision gate presents that
             // mutation once and skips no-op wakes.

@@ -1,8 +1,13 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::rc::Rc;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
+use flamewm_api::shortcuts::{
+    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
+    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+};
 use flamewm_window_core::{
     SnapTarget, snap_geometry as core_snap_geometry, snap_target as core_snap_target,
 };
@@ -42,6 +47,32 @@ pub mod interaction;
 pub mod lifecycle;
 
 const BUTTON_PRIMARY: Button = 1;
+/// Shortcut action ids that were bound but have no WM handler, logged once each.
+static UNHANDLED_SHORTCUTS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn log_unhandled_shortcut_once(action: &str) {
+    let mut seen = UNHANDLED_SHORTCUTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if seen.insert(action.to_owned()) {
+        eprintln!("flamewm: shortcut action {action} has no WM handler; ignored");
+    }
+}
+
+/// Neighbour workspace index for a relative step without wrap-around.
+/// Returns `None` when the step would leave `[0, count)`.
+/// Gated key diagnostics: `FLAMEWM_KEY_DIAG=1` enables stderr key logging.
+/// Read once per process; normal runs print nothing.
+pub(crate) fn key_diag_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("FLAMEWM_KEY_DIAG").is_ok_and(|value| value == "1"))
+}
+
+fn next_workspace(current: usize, count: usize, delta: isize) -> Option<usize> {
+    let target = current.checked_add_signed(delta)?;
+    (target < count).then_some(target)
+}
+
 const WM_STATE_WITHDRAWN: u32 = 0;
 const WM_STATE_NORMAL: u32 = 1;
 const WM_STATE_ICONIC: u32 = 3;
@@ -54,6 +85,8 @@ pub struct WmChangeSet {
     pub workspaces: bool,
     pub panels: bool,
     pub work_area: bool,
+    /// One-shot request from the ToggleStartMenu shortcut; the flush emits it once.
+    pub start_menu_toggle: bool,
 }
 
 impl WmChangeSet {
@@ -65,7 +98,7 @@ impl WmChangeSet {
 
     #[cfg(test)]
     fn any(self) -> bool {
-        self.windows || self.workspaces || self.panels || self.work_area
+        self.windows || self.workspaces || self.panels || self.work_area || self.start_menu_toggle
     }
 }
 
@@ -734,14 +767,21 @@ fn workspace_counters() -> &'static WorkspaceCounterSet {
     })
 }
 
+/// Wait timeout for the reactor: `None` (block until an event) when no display
+/// transaction is pending, otherwise the time left until its revert deadline.
+pub(crate) fn next_wait_timeout(now_ms: u64, deadline_ms: Option<u64>) -> Option<std::time::Duration> {
+    deadline_ms.map(|deadline| std::time::Duration::from_millis(deadline.saturating_sub(now_ms)))
+}
+
 pub(crate) fn run_with_hook<F>(
     config: WmConfig,
     catalog: &std::sync::Arc<flamewm_applications::ApplicationCatalog>,
     reactor: &Rc<RefCell<flamewm_reactor::Reactor>>,
+    icon_service: Rc<RefCell<flamewm_integrations_linux::icon_service::IconService>>,
     mut hook: F,
 ) -> Result<(), AnyError>
 where
-    F: FnMut(&Rc<RustConnection>, usize, WmChangeSet) -> Result<(), AnyError>,
+    F: FnMut(&mut Wm<'_, RustConnection>, &Rc<RustConnection>, usize, WmChangeSet) -> Result<Option<std::time::Duration>, AnyError>,
 {
     use std::os::fd::AsRawFd;
     let (conn, screen_num) = x11rb::connect(None)?;
@@ -754,6 +794,7 @@ where
         screen_num,
         config,
         std::sync::Arc::clone(catalog),
+        icon_service,
     )?;
     wm.publish_desktop_state()?;
     wm.scan_existing()?;
@@ -767,14 +808,6 @@ where
         calloop::Interest::READ,
         |_, _| flamewm_reactor::FdAction::Continue,
     )?;
-    // Snap worker fd source: borrowed fd wakes dispatch; result drain stays at
-    // the loop boundary below, on the WM thread. The callback never borrows Wm.
-    let _snap_preview_token = reactor.borrow_mut().register_raw_fd_with_action(
-        wm.snap_preview.wake_fd(),
-        calloop::Interest::READ,
-        |_, _| flamewm_reactor::FdAction::Continue,
-    )?;
-
     loop {
         // Buffered drain before block: one pump collapses contiguous
         // same event+child MotionNotify; order vs Button/Key/Configure/
@@ -795,10 +828,13 @@ where
         if batch > resize_counters().max_batch() {
             resize_counters().set_max_batch(batch);
         }
+        // Batch boundary: a bare-Super tap completes only after its autorepeat
+        // partner (same timestamp) had the chance to cancel it.
+        wm.commit_super_tap();
         // Drain once per reactor turn: semantic owners marked facets above;
         // the hook flushes them to snapshots/signals exactly once.
         let changes = wm.take_changes();
-        hook(&conn, screen_num, changes)?;
+        let wait = hook(&mut wm, &conn, screen_num, changes)?;
         let mut batch: usize = 0;
         while let Some(pumped) = pump.next(conn.as_ref()).map_err(any_conn_err)? {
             resize_counters().record_received(pumped.received as u64);
@@ -814,26 +850,113 @@ where
         if batch > resize_counters().max_batch() {
             resize_counters().set_max_batch(batch);
         }
-        // Worker readiness is only a wakeup. Drain bytes and consume the
-        // latest result after both event-pump passes, before the next block.
-        {
-            let _guard = flamewm_profiler::start("wm.snap.wake.dispatch");
-            wm.snap_preview.drain_worker();
-        }
+        wm.commit_super_tap();
         emit_resize_summary();
         emit_move_summary();
         // Flush once per reactor turn.
         conn.flush()?;
         // Blocking wait: woken by X, provider, audio, or profiler sources.
-        reactor.borrow_mut().dispatch(None)?;
+        reactor.borrow_mut().dispatch(wait)?;
+        wm.drain_catalog_icon_results();
     }
+}
+
+/// Result of a `SuperTap` transition. `Toggle` asks the WM to flip Start once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuperTapOutcome {
+    Idle,
+    Toggle,
+}
+
+/// Bare-Super tap detector with KDE Meta semantics: a tap is a bare Super press
+/// whose release is not followed by any other key while Super is held.
+///
+/// X autorepeat on a held key emits a KeyRelease and KeyPress pair that share
+/// one server timestamp. A release is therefore held as `candidate` and only
+/// completes when the event batch ends (`commit`) or another key arrives; a
+/// same-timestamp Super press cancels it, so repeat pairs never toggle.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SuperTap {
+    /// Keycode of the Super key currently held.
+    held: Option<u8>,
+    /// Another key was pressed while Super was held, so its release is not a tap.
+    chorded: bool,
+    /// Keycode and timestamp of a completed bare-Super release awaiting commit.
+    candidate: Option<(u8, u32)>,
+}
+
+impl SuperTap {
+    /// Bare Start-bound Super press.
+    fn press_super(&mut self, keycode: u8, time: u32) -> SuperTapOutcome {
+        let mut outcome = SuperTapOutcome::Idle;
+        if let Some((key, stamp)) = self.candidate.take() {
+            if key == keycode && stamp == time {
+                // Autorepeat pair: this press shares the release's timestamp.
+                self.held = Some(keycode);
+                return SuperTapOutcome::Idle;
+            }
+            // A new press after a completed tap: the previous tap completes now.
+            outcome = SuperTapOutcome::Toggle;
+        }
+        if self.held == Some(keycode) {
+            // Repeat press with no intervening release: still the same hold.
+            return outcome;
+        }
+        self.held = Some(keycode);
+        self.chorded = false;
+        outcome
+    }
+
+    /// Any release. Only the release of the held Super key can complete a tap.
+    fn release_super(&mut self, keycode: u8, time: u32) {
+        if self.held != Some(keycode) {
+            return;
+        }
+        self.held = None;
+        if !self.chorded {
+            self.candidate = Some((keycode, time));
+        }
+        self.chorded = false;
+    }
+
+    /// Any key press that is not a bare Start-bound Super press.
+    fn press_other(&mut self) -> SuperTapOutcome {
+        if self.held.is_some() {
+            self.chorded = true;
+            return SuperTapOutcome::Idle;
+        }
+        // A completed tap followed by another key still counts as a tap.
+        self.commit()
+    }
+
+    /// Completes a pending tap at the end of an event batch.
+    fn commit(&mut self) -> SuperTapOutcome {
+        if self.candidate.take().is_some() {
+            SuperTapOutcome::Toggle
+        } else {
+            SuperTapOutcome::Idle
+        }
+    }
+
+    /// Forgets all Super state so a later release cannot toggle Start.
+    fn focus_lost(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// True when the modifier state has no bits besides the ignored lock keys.
+fn is_bare_state(state: u16) -> bool {
+    use flamewm_x11_desktop::shortcuts::{MOD_LOCK, MOD_NUM_LOCK};
+    state & !(MOD_LOCK | MOD_NUM_LOCK) == 0
 }
 
 fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError> {
     let attrs = ChangeWindowAttributesAux::new().event_mask(
         EventMask::SUBSTRUCTURE_REDIRECT
             | EventMask::SUBSTRUCTURE_NOTIFY
-            | EventMask::PROPERTY_CHANGE,
+            | EventMask::PROPERTY_CHANGE
+            | EventMask::KEY_PRESS
+            | EventMask::KEY_RELEASE,
     );
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
     if let Err(ReplyError::X11Error(ref error)) = result {
@@ -844,14 +967,17 @@ fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError>
     result
 }
 
-struct Wm<'a, C: Connection> {
+pub(crate) struct Wm<'a, C: Connection> {
     conn: &'a C,
     screen_num: usize,
     config: WmConfig,
     atoms: Atoms,
     support_window: Window,
     catalog: std::sync::Arc<flamewm_applications::ApplicationCatalog>,
-    icon_resolver: flamewm_integrations_linux::IconResolver,
+    icon_service: Rc<RefCell<flamewm_integrations_linux::icon_service::IconService>>,
+    deferred_icon_jobs: HashMap<Window, (u64, flamewm_integrations_linux::icon_service::IconJob)>,
+    icon_requests: HashMap<flamewm_integrations_linux::icons::IconKey, Vec<(Window, u64)>>,
+    next_client_lifetime: u64,
     clients: HashMap<Window, ManagedClient>,
     managed_order: Vec<Window>,
     frame_to_client: HashMap<Window, Window>,
@@ -861,13 +987,57 @@ struct Wm<'a, C: Connection> {
     current_workspace: usize,
     workspace_count: usize,
     active: Option<Window>,
+    /// Last focused window per workspace, recorded when leaving that workspace.
+    workspace_focus: Vec<Option<Window>>,
     screen_rect: Rect,
+    output_work_areas: Vec<OutputWorkArea>,
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
     changes: WmChangeSet,
+    /// Bare-Super tap state; see `SuperTap`. Start toggles only through it.
+    super_tap: SuperTap,
     pointer_ingress_probe: PointerIngressProbe,
     resize_probe: Option<ResizeProbe>,
+}
+
+fn icon_completion_matches(
+    current_token: u64,
+    expected_key: Option<&flamewm_integrations_linux::icons::IconKey>,
+    result_token: u64,
+    result_key: &flamewm_integrations_linux::icons::IconKey,
+) -> bool {
+    current_token == result_token && expected_key == Some(result_key)
+}
+
+fn retain_deferred_icon_job(
+    deferred: &mut HashMap<Window, (u64, flamewm_integrations_linux::icon_service::IconJob)>,
+    client: Window,
+    token: u64,
+    job: flamewm_integrations_linux::icon_service::IconJob,
+) {
+    deferred.insert(client, (token, job));
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OutputWorkArea {
+    output: flamewm_api::OutputId,
+    geometry: Rect,
+    work_area: Rect,
+    primary: bool,
+}
+
+impl OutputWorkArea {
+    fn from_host(
+        (output, geometry, work_area, primary): (
+            flamewm_api::OutputId,
+            flamewm_api::Rect,
+            flamewm_api::Rect,
+            bool,
+        ),
+    ) -> Self {
+        Self { output, geometry: from_core_rect(geometry), work_area: from_core_rect(work_area), primary }
+    }
 }
 
 impl<'a, C: Connection> Wm<'a, C> {
@@ -876,6 +1046,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         screen_num: usize,
         config: WmConfig,
         catalog: std::sync::Arc<flamewm_applications::ApplicationCatalog>,
+        icon_service: Rc<RefCell<flamewm_integrations_linux::icon_service::IconService>>,
     ) -> Result<Self, AnyError> {
         let screen = &conn.setup().roots[screen_num];
         let atoms = Atoms::new(conn)?;
@@ -896,10 +1067,6 @@ impl<'a, C: Connection> Wm<'a, C> {
         )?;
 
         let workspace_count = config.workspaces.max(1);
-        // Retain the discover-once catalog (runtime composition root owns
-        // discovery); `Wm` is the synchronous icon fallback owner.
-        let icon_resolver =
-            flamewm_integrations_linux::IconResolver::from_environment(flamewm_workspace_root(), 0);
         Ok(Self {
             conn,
             screen_num,
@@ -907,7 +1074,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             atoms,
             support_window,
             catalog,
-            icon_resolver,
+            icon_service,
+            deferred_icon_jobs: HashMap::new(),
+            icon_requests: HashMap::new(),
+            next_client_lifetime: 1,
             clients: HashMap::new(),
             managed_order: Vec::new(),
             frame_to_client: HashMap::new(),
@@ -917,19 +1087,122 @@ impl<'a, C: Connection> Wm<'a, C> {
             current_workspace: 0,
             workspace_count,
             active: None,
+            workspace_focus: vec![None; workspace_count],
             screen_rect: Rect::new(
                 0,
                 0,
                 u32::from(screen.width_in_pixels),
                 u32::from(screen.height_in_pixels),
             ),
+            output_work_areas: Vec::new(),
             dock_struts: HashMap::new(),
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),
             changes: WmChangeSet::default(),
+            super_tap: SuperTap::default(),
             pointer_ingress_probe: PointerIngressProbe::default(),
             resize_probe: None,
         })
+    }
+
+    /// Consume worker completions on the WM owner thread and retry retained
+    /// HIGH jobs only after a wake, so queue pressure never causes polling.
+    fn drain_catalog_icon_results(&mut self) {
+        use flamewm_integrations_linux::icon_service::IconSubmit;
+
+        let ready = self.icon_service.borrow_mut().drain_ready();
+        for result in ready {
+            let requesters = self.icon_requests.remove(&result.key).unwrap_or_default();
+            if let Ok(raster) = result.result {
+                for (client_id, token) in requesters {
+                    let Some(client) = self.clients.get_mut(&client_id) else { continue };
+                    if !icon_completion_matches(
+                        client.icon_request_token,
+                        client.catalog_icon_key.as_ref(),
+                        token,
+                        &result.key,
+                    )
+                    { continue; }
+                    client.icon = crate::decoration::cache::catalog_icon_image(&raster);
+                    client.icon_fallback = client.icon.is_none().then(|| "catalog-raster-invalid".to_owned());
+                    self.mark_windows();
+                    let _ = self.paint_chrome(client_id);
+                }
+            }
+        }
+
+        let deferred = std::mem::take(&mut self.deferred_icon_jobs);
+        for (client_id, (token, job)) in deferred {
+            let current = self.clients.get(&client_id).is_some_and(|client| {
+                client.icon_request_token == token
+                    && client.catalog_icon_key.as_ref() == Some(&job.key)
+            });
+            if !current {
+                continue;
+            }
+            match self.icon_service.borrow().submit(job.clone()) {
+                Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
+                Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
+                Err(flamewm_integrations_linux::icon_service::IconSubmitError::HighQueueFull(job)) => {
+                    retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
+                }
+                Err(flamewm_integrations_linux::icon_service::IconSubmitError::Stopped(_)) => {}
+            }
+        }
+    }
+
+    fn request_catalog_icon(&mut self, client_id: Window) {
+        use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconSubmit, IconSubmitError};
+        use flamewm_integrations_linux::icons::{IconKey, IconLookupPurpose, IconRequest, IconSize};
+
+        let Some((instance, class, token)) = self.clients.get(&client_id).map(|client| {
+            (client.wm_instance.clone(), client.wm_class.clone(), client.icon_request_token)
+        }) else { return };
+        let identity = flamewm_applications::WindowApplicationIdentity::new(&instance, &class, String::new());
+        let Some(icon_name) = self.catalog.find_by_window_identity(&identity).map(|app| app.icon().to_owned()) else {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.icon_fallback = Some("catalog-icon-not-found".to_owned());
+            }
+            return;
+        };
+        if icon_name.trim().is_empty() { return; }
+        let edge = u32::from(crate::chrome::icon_slot_for(crate::chrome::TITLEBAR_HEIGHT));
+        let service = self.icon_service.borrow();
+        let key = IconKey::new(
+            IconLookupPurpose::Application,
+            IconRequest::name(icon_name),
+            IconSize::new(edge, edge),
+            service.theme_generation(),
+            0,
+        );
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.catalog_icon_key = Some(key.clone());
+            client.icon_fallback = Some("catalog-icon-pending".to_owned());
+        }
+        let job = IconJob { key: key.clone(), priority: IconPriority::High };
+        if let Some(Ok(raster)) = service.cached(&key) {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                if client.icon_request_token == token && client.catalog_icon_key.as_ref() == Some(&key) {
+                    client.icon = crate::decoration::cache::catalog_icon_image(&raster);
+                    client.icon_fallback = None;
+                }
+            }
+            return;
+        }
+        drop(service);
+        self.icon_requests.entry(key).or_default().push((client_id, token));
+        match self.icon_service.borrow().submit(job.clone()) {
+            Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
+            Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
+            Err(IconSubmitError::HighQueueFull(job)) => {
+                retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
+            }
+            Err(IconSubmitError::Stopped(_)) => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.icon_fallback = Some("catalog-icon-service-stopped".to_owned());
+                }
+            }
+        }
     }
 
     fn probe_event_dispatch(&mut self, event: &Event, received: usize) {
@@ -1057,6 +1330,33 @@ impl<'a, C: Connection> Wm<'a, C> {
         )
     }
 
+    pub(crate) fn set_output_work_areas(
+        &mut self,
+        areas: Vec<(flamewm_api::OutputId, flamewm_api::Rect, flamewm_api::Rect, bool)>,
+    ) -> Result<(), ReplyError> {
+        let next = areas.into_iter().map(OutputWorkArea::from_host).collect::<Vec<_>>();
+        if self.output_work_areas != next {
+            self.output_work_areas = next;
+            self.reconcile_work_area()?;
+        }
+        Ok(())
+    }
+
+    fn output_for_rect(&self, rect: Rect) -> Option<&OutputWorkArea> {
+        select_output_for_rect(&self.output_work_areas, rect).map(|index| &self.output_work_areas[index])
+    }
+
+    fn work_area_for_rect(&self, rect: Rect) -> Rect {
+        self.output_for_rect(rect).map_or_else(|| self.work_area(), |output| output.work_area)
+    }
+
+    fn output_for_point(&self, x: i32, y: i32, fallback: Rect) -> Option<&OutputWorkArea> {
+        self.output_work_areas.iter().find(|output| {
+            x >= output.geometry.x && x < output.geometry.right()
+                && y >= output.geometry.y && y < output.geometry.bottom()
+        }).or_else(|| self.output_for_rect(fallback))
+    }
+
     pub fn take_changes(&mut self) -> WmChangeSet {
         self.changes.take()
     }
@@ -1111,7 +1411,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             client,
             state.frame,
             state.placement,
-            self.work_root(),
+            {
+                let work = self.work_area_for_rect(state.outer);
+                RootRect::new(work.x, work.y, work.width.max(1) as i32, work.height.max(1) as i32)
+            },
             screen_rect,
             state.hints,
             self.extents(),
@@ -1680,13 +1983,6 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     fn reconcile_work_area(&mut self) -> Result<(), ReplyError> {
         self.snap_preview.hide();
-        let work = self.work_area();
-        let work_root = RootRect::new(
-            work.x,
-            work.y,
-            work.width.max(1) as i32,
-            work.height.max(1) as i32,
-        );
         let ids = self.clients.keys().copied().collect::<Vec<_>>();
         for id in ids {
             let (mode, outer, minimized) = match self.clients.get(&id) {
@@ -1699,7 +1995,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             match mode {
                 PlacementMode::Fullscreen => continue,
                 PlacementMode::Maximized => {
-                    let next = work;
+                    let next = self.work_area_for_rect(outer);
                     if next != outer {
                         if let Some(state) = self.clients.get_mut(&id) {
                             state.set_outer(next);
@@ -1709,7 +2005,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                     }
                 }
                 PlacementMode::Floating | PlacementMode::Snapped(_) => {
-                    let clamped = outer.clamp_inside(work);
+                    let clamped = outer.clamp_inside(self.work_area_for_rect(outer));
                     if clamped != outer {
                         if let Some(state) = self.clients.get_mut(&id) {
                             state.set_outer(clamped);
@@ -1719,7 +2015,6 @@ impl<'a, C: Connection> Wm<'a, C> {
                     }
                 }
             }
-            let _ = work_root;
         }
         self.mark_work_area();
         self.mark_windows();
@@ -2031,7 +2326,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             .read_title(window)
             .unwrap_or_else(|_| "Application".to_owned());
         let (wm_instance, wm_class) = self.wm_identity(window);
-        let (icon, icon_fallback) = self.read_frame_icon(&wm_instance, &wm_class, window);
+        let (icon, icon_fallback) = self.read_native_frame_icon(window);
         let transient_for = self.read_transient_for(window)?;
         let hints = self.read_hints(window);
         let _wm_class = self.wm_class(window).unwrap_or_default();
@@ -2172,6 +2467,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             title_text_width: title_width,
             icon,
             icon_fallback,
+            icon_request_token: self.next_client_lifetime,
+            catalog_icon_key: None,
             wm_instance,
             wm_class,
             transient_for,
@@ -2186,8 +2483,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.frame_to_client.insert(xid, window);
         }
         self.clients.insert(window, client);
+        self.next_client_lifetime = self.next_client_lifetime.saturating_add(1);
         self.chrome_runtimes
             .insert(window, chrome_runtime::ChromeRuntime::new());
+        if self.clients.get(&window).is_some_and(|client| client.icon.is_none()) {
+            self.request_catalog_icon(window);
+        }
         self.managed_order.push(window);
         let controller = self.controller_for(window).unwrap_or_else(|| {
             ControllerState::new(
@@ -2252,6 +2553,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         let Some(client) = self.clients.remove(&window) else {
             return Ok(());
         };
+        self.deferred_icon_jobs.remove(&window);
+        for requesters in self.icon_requests.values_mut() {
+            requesters.retain(|(id, _)| *id != window);
+        }
+        self.icon_requests.retain(|_, requesters| !requesters.is_empty());
         self.managed_order.retain(|managed| *managed != window);
         self.frame_to_client.remove(&client.frame);
         self.chrome_runtimes.remove(&window);
@@ -2314,12 +2620,96 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::LeaveNotify(event) => self.handle_leave(event)?,
             Event::ButtonPress(event) => self.handle_button_press(event)?,
             Event::ButtonRelease(event) => self.handle_button_release(event)?,
+            Event::KeyPress(event) => self.handle_key_press(event)?,
+            Event::KeyRelease(event) => self.handle_key_release(event)?,
+            Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
             Event::ClientMessage(event) => self.handle_client_message(event)?,
             _ => {}
         }
         Ok(())
+    }
+
+    /// Dispatches a passive-grab KeyPress to the bound action. Only actions
+    /// with an existing WM path are executed; the rest are logged once.
+    fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyError> {
+        let state = u16::from(event.state);
+        let matched = crate::shortcut_action_for_key(event.detail, state);
+        if key_diag_enabled() {
+            eprintln!(
+                "flamewm: keypress detail={} state={:04x} action={}",
+                event.detail,
+                state,
+                matched.as_deref().unwrap_or("none")
+            );
+        }
+        // A bare Start-bound Super press only arms the tap; Start toggles on its
+        // completed release. Any other press completes or cancels a pending tap.
+        if matched.as_deref() == Some(ACTION_TOGGLE_START_MENU) && is_bare_state(state) {
+            let outcome = self.super_tap.press_super(event.detail, event.time);
+            self.apply_super_tap(outcome);
+            return Ok(());
+        }
+        let outcome = self.super_tap.press_other();
+        self.apply_super_tap(outcome);
+        let Some(action) = matched else {
+            return Ok(());
+        };
+        match action.as_str() {
+            ACTION_WINDOW_CLOSE => {
+                if let Some(client) = self.active {
+                    self.close(client)?;
+                }
+            }
+            ACTION_WINDOW_MINIMIZE => {
+                if let Some(client) = self.active {
+                    self.minimize(client)?;
+                }
+            }
+            ACTION_WINDOW_MAXIMIZE => {
+                if let Some(client) = self.active {
+                    self.toggle_maximize(client)?;
+                }
+            }
+            ACTION_WORKSPACE_LEFT => {
+                if let Some(target) = next_workspace(self.current_workspace, self.workspace_count, -1)
+                {
+                    self.switch_workspace(target)?;
+                }
+            }
+            ACTION_WORKSPACE_RIGHT => {
+                if let Some(target) = next_workspace(self.current_workspace, self.workspace_count, 1)
+                {
+                    self.switch_workspace(target)?;
+                }
+            }
+            // Single-row desktop layout (KDE default): up/down intentionally do nothing.
+            ACTION_WORKSPACE_UP | ACTION_WORKSPACE_DOWN => {}
+            // Chorded start-menu binding: toggle on press. Bare Super is handled above
+            // and toggles through the SuperTap commit at the end of the batch.
+            ACTION_TOGGLE_START_MENU => self.changes.start_menu_toggle = true,
+            other => log_unhandled_shortcut_once(other),
+        }
+        Ok(())
+    }
+
+    /// Bare-Super release only completes a tap; Start toggles at batch commit.
+    fn handle_key_release(&mut self, event: KeyReleaseEvent) -> Result<(), ReplyError> {
+        self.super_tap.release_super(event.detail, event.time);
+        Ok(())
+    }
+
+    /// Completes a pending bare-Super tap. Called at each event-batch boundary.
+    fn commit_super_tap(&mut self) {
+        let outcome = self.super_tap.commit();
+        self.apply_super_tap(outcome);
+    }
+
+    fn apply_super_tap(&mut self, outcome: SuperTapOutcome) {
+        if outcome == SuperTapOutcome::Toggle {
+            self.changes.start_menu_toggle = true;
+        }
     }
 
     fn handle_configure_notify(&mut self, event: ConfigureNotifyEvent) -> Result<(), ReplyError> {
@@ -2696,6 +3086,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.publish_workspace_metadata()?;
             return Ok(());
         }
+        if window == self.conn.setup().roots[self.screen_num].root
+            && (atom == self.atoms.net_current_desktop
+                || atom == self.atoms.net_number_of_desktops
+                || atom == self.atoms.net_desktop_names)
+        {
+            crate::bump_workspace_generation();
+        }
         let Some(client_id) = self.client_for(window) else {
             return Ok(());
         };
@@ -2712,16 +3109,25 @@ impl<'a, C: Connection> Wm<'a, C> {
                 self.paint_chrome(client_id)?;
             }
         } else if atom == self.atoms.net_wm_icon {
-            // Icon property path only: refresh the cached identity (the
-            // client may have set WM_CLASS after the initial map) and the
-            // cached raster, then repaint exactly this frame.
+            // A fresh icon property invalidates every catalog result/request.
             let (wm_instance, wm_class) = self.wm_identity(client_id);
-            let (icon, fallback) = self.read_frame_icon(&wm_instance, &wm_class, client_id);
+            let (icon, fallback) = self.read_native_frame_icon(client_id);
+            self.deferred_icon_jobs.remove(&client_id);
+            for requesters in self.icon_requests.values_mut() {
+                requesters.retain(|(id, _)| *id != client_id);
+            }
+            self.icon_requests.retain(|_, requesters| !requesters.is_empty());
             if let Some(client) = self.clients.get_mut(&client_id) {
                 client.wm_instance = wm_instance;
                 client.wm_class = wm_class;
                 client.icon = icon;
                 client.icon_fallback = fallback;
+                client.icon_request_token = self.next_client_lifetime;
+                client.catalog_icon_key = None;
+            }
+            self.next_client_lifetime = self.next_client_lifetime.saturating_add(1);
+            if self.clients.get(&client_id).is_some_and(|client| client.icon.is_none()) {
+                self.request_catalog_icon(client_id);
             }
             self.mark_windows();
             self.paint_chrome(client_id)?;
@@ -2938,7 +3344,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             let _guard = flamewm_profiler::start("wm.move.snap_target");
             core_snap_target(
                 flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
-                to_core_rect(self.work_area()),
+                to_core_rect(self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer)).map_or(self.work_area(), |o| o.work_area)),
             )
         };
         move_counters().record_snap_target(snap_target_bits(target));
@@ -3005,7 +3411,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 if move_active {
                     let target = core_snap_target(
                         flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
-                        to_core_rect(self.work_area()),
+                        to_core_rect(self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer)).map_or(self.work_area(), |o| o.work_area)),
                     );
                     Some(format!("{target:?}"))
                 } else {
@@ -3014,7 +3420,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 if move_active {
                     let target = core_snap_target(
                         flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
-                        to_core_rect(self.work_area()),
+                        to_core_rect(self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer)).map_or(self.work_area(), |o| o.work_area)),
                     );
                     Some(target != SnapTarget::None)
                 } else {
@@ -3038,7 +3444,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .get(&client_id)
                     .is_some_and(|state| state.placement.mode == PlacementMode::Floating);
             if preview_allowed {
-                self.update_snap_preview(event.root_x, event.root_y, self.work_area(), client_id);
+                let fallback = self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer);
+                let work = self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), fallback).map_or(self.work_area(), |o| o.work_area);
+                self.update_snap_preview(event.root_x, event.root_y, work, client_id);
             } else if move_active {
                 self.snap_preview.hide();
             }
@@ -3474,35 +3882,35 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         self.snap_preview.hide();
         let old = self.current_workspace;
-        self.current_workspace = target;
-        let ids = self.clients.keys().copied().collect::<Vec<_>>();
-        workspace_counters().switch_total.increment();
-        {
-            let _guard = flamewm_profiler::start("wm.workspace.switch.visibility");
-            for id in ids {
-                let (frame, old_visible, new_visible) = {
-                    let Some(state) = self.clients.get(&id) else {
-                        continue;
-                    };
-                    (state.frame, state.visible_on(old), state.visible_on(target))
-                };
-                if old_visible == new_visible {
-                    continue;
-                }
-                if new_visible {
-                    self.conn.map_window(frame)?;
-                } else {
-                    if let Some(state) = self.clients.get_mut(&id) {
-                        state.ignore_unmap = state.ignore_unmap.saturating_add(1);
-                    }
-                    self.conn.unmap_window(frame)?;
-                }
-            }
-            workspace_counters().visibility.increment();
+        if let Some(slot) = self.workspace_focus.get_mut(old) {
+            *slot = self.active;
         }
+        self.current_workspace = target;
+        workspace_counters().switch_total.increment();
+        // One server grab so the map/unmap batch presents as a single frame.
+        self.conn.grab_server()?;
+        let visibility = self.apply_workspace_visibility(old, target);
+        let _ = self.conn.ungrab_server();
+        let flips = visibility?;
+        let previous_active = self.active;
         self.active = None;
+        let restored = self
+            .workspace_focus
+            .get(target)
+            .copied()
+            .flatten()
+            .filter(|w| {
+                self.clients
+                    .get(w)
+                    .is_some_and(|state| state.visible_on(target))
+            });
+        if let Some(window) = restored {
+            self.focus(window)?;
+        }
+        if workspace_switch_touches_windows(&flips, self.active != previous_active) {
+            self.mark_windows();
+        }
         self.mark_workspaces();
-        self.mark_windows();
         self.publish_current_workspace()?;
         {
             let _guard = flamewm_profiler::start("wm.workspace.switch.shell_publish");
@@ -3510,6 +3918,40 @@ impl<'a, C: Connection> Wm<'a, C> {
             workspace_counters().shell_publish.increment();
         }
         Ok(())
+    }
+
+    /// Maps/unmaps frames whose visibility differs between `old` and `target`.
+    /// Returns the (old_visible, new_visible) pair for every client considered.
+    fn apply_workspace_visibility(
+        &mut self,
+        old: usize,
+        target: usize,
+    ) -> Result<Vec<(bool, bool)>, ReplyError> {
+        let _guard = flamewm_profiler::start("wm.workspace.switch.visibility");
+        let ids = self.clients.keys().copied().collect::<Vec<_>>();
+        let mut pairs = Vec::with_capacity(ids.len());
+        for id in ids {
+            let (frame, old_visible, new_visible) = {
+                let Some(state) = self.clients.get(&id) else {
+                    continue;
+                };
+                (state.frame, state.visible_on(old), state.visible_on(target))
+            };
+            pairs.push((old_visible, new_visible));
+            if old_visible == new_visible {
+                continue;
+            }
+            if new_visible {
+                self.conn.map_window(frame)?;
+            } else {
+                if let Some(state) = self.clients.get_mut(&id) {
+                    state.ignore_unmap = state.ignore_unmap.saturating_add(1);
+                }
+                self.conn.unmap_window(frame)?;
+            }
+        }
+        workspace_counters().visibility.increment();
+        Ok(pairs)
     }
 
     fn set_workspace_count(&mut self, requested: usize) -> Result<(), ReplyError> {
@@ -3724,71 +4166,17 @@ impl<'a, C: Connection> Wm<'a, C> {
             })
     }
 
-    /// EWMH icon path: cached `_NET_WM_ICON` selection, else catalog
-    /// `find_by_window_identity` (cached `WM_CLASS` instance/class; exec
-    /// basename left empty — no `/proc` polling) -> `DesktopEntry` `Icon=`
-    /// -> indexed `IconResolver` raster -> cached RGBA. Empty slot on miss,
-    /// never the Flame logo. Arrow cursor is untouched.
-    ///
-    /// Manage/property callers only: performs X round-trips plus bounded
-    /// catalog/indexed-icon work. Paint consumes `ManagedClient::icon`.
-    fn read_frame_icon(
-        &mut self,
-        wm_instance: &str,
-        wm_class: &str,
+    /// Native EWMH icon only. A missing/invalid native property leaves an
+    /// empty slot while the catalog fallback is resolved asynchronously.
+    fn read_native_frame_icon(
+        &self,
         client: Window,
     ) -> (Option<chrome::IconImage>, Option<String>) {
-        let native = self.read_net_wm_icon(client);
-        match native {
+        match self.read_net_wm_icon(client) {
             Ok(Some(icon)) => (Some(icon), None),
-            Ok(None) => self.catalog_or_empty(wm_instance, wm_class, "absent"),
-            Err(reason) => self.catalog_or_empty(wm_instance, wm_class, reason),
+            Ok(None) => (None, Some("native-icon-absent".to_owned())),
+            Err(reason) => (None, Some(reason.to_owned())),
         }
-    }
-
-    fn catalog_or_empty(
-        &mut self,
-        wm_instance: &str,
-        wm_class: &str,
-        reason: &str,
-    ) -> (Option<chrome::IconImage>, Option<String>) {
-        match self.catalog_fallback_icon(wm_instance, wm_class) {
-            Some(icon) => (Some(icon), None),
-            None => (
-                None,
-                Some(self.icon_fallback_reason_with(wm_instance, wm_class, reason)),
-            ),
-        }
-    }
-
-    /// Synchronous catalog/indexed-icon fallback. Caller must have measured
-    /// evidence when this still exceeds 16.67ms under manage-profile; then
-    /// route via the existing `IconService` instead of adding a new worker.
-    fn catalog_fallback_icon(
-        &mut self,
-        wm_instance: &str,
-        wm_class: &str,
-    ) -> Option<chrome::IconImage> {
-        let _guard = flamewm_profiler::start("wm.manage.catalog_icon");
-        let identity = flamewm_applications::WindowApplicationIdentity::new(
-            wm_instance,
-            wm_class,
-            String::new(),
-        );
-        let icon_name = self
-            .catalog
-            .find_by_window_identity(&identity)?
-            .icon()
-            .to_owned();
-        // Decoration/cache owner resolves the catalog `Icon=` name via the
-        // shared memory-only indexed lookup and converts to cached ARGB32
-        // (pure memory convert). Miss keeps the transparent empty slot,
-        // never brand artwork.
-        crate::decoration::cache::resolve_catalog_icon_rgba(
-            &mut self.icon_resolver,
-            &icon_name,
-            crate::chrome::TITLEBAR_HEIGHT,
-        )
     }
 
     fn read_net_wm_icon(&self, client: Window) -> Result<Option<chrome::IconImage>, &'static str> {
@@ -3921,6 +4309,25 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 }
 
+fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> Option<usize> {
+    let center_x = rect.x.saturating_add(i32::try_from(rect.width / 2).unwrap_or(i32::MAX));
+    let center_y = rect.y.saturating_add(i32::try_from(rect.height / 2).unwrap_or(i32::MAX));
+    if let Some(index) = outputs.iter().position(|output| {
+        center_x >= output.geometry.x && center_x < output.geometry.right()
+            && center_y >= output.geometry.y && center_y < output.geometry.bottom()
+    }) {
+        return Some(index);
+    }
+    let mut best: Option<(usize, u64)> = None;
+    for (index, output) in outputs.iter().enumerate() {
+        let area = rect_overlap_area(rect, output.geometry);
+        if area > 0 && best.map_or(true, |(_, score)| area > score) {
+            best = Some((index, area));
+        }
+    }
+    best.map(|(index, _)| index).or_else(|| outputs.iter().position(|output| output.primary))
+}
+
 fn resolve_frame_event_source(registry: &FrameRegistry, event: Window, child: Window) -> Window {
     registry.lookup_by_xid(child).map_or(event, |_| child)
 }
@@ -3961,10 +4368,16 @@ fn from_core_rect(rect: flamewm_api::Rect) -> Rect {
     )
 }
 
+fn rect_overlap_area(a: Rect, b: Rect) -> u64 {
+    let width = a.right().min(b.right()).saturating_sub(a.x.max(b.x));
+    let height = a.bottom().min(b.bottom()).saturating_sub(a.y.max(b.y));
+    u64::try_from(width).unwrap_or(0).saturating_mul(u64::try_from(height).unwrap_or(0))
+}
+
 /// Workspace root for the canonical indexed `IconResolver` (packaged icon
 /// assets live under `<workspace>/assets`). Pure path probe for resolver
 /// construction; no icon decode happens here.
-fn flamewm_workspace_root() -> std::path::PathBuf {
+pub(crate) fn flamewm_workspace_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
@@ -3983,11 +4396,114 @@ fn parse_wm_class(raw: &[u8]) -> (String, String) {
     (instance, class)
 }
 
+/// Windows need re-publishing only when a client's visibility flipped across a
+/// workspace switch or the focused window changed; a plain workspace change
+/// emits workspace state only.
+fn workspace_switch_touches_windows(visibility: &[(bool, bool)], focus_changed: bool) -> bool {
+    focus_changed || visibility.iter().any(|(old, new)| old != new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frame::model::ResizeEdges;
     use crate::frame::session::{MoveAnchor, MoveSession};
+
+    fn test_icon_key(name: &str) -> flamewm_integrations_linux::icons::IconKey {
+        use flamewm_integrations_linux::icons::{IconKey, IconLookupPurpose, IconRequest, IconSize};
+        IconKey::new(
+            IconLookupPurpose::Application,
+            IconRequest::name(name),
+            IconSize::new(24, 24),
+            7,
+            0,
+        )
+    }
+
+    #[test]
+    fn catalog_result_requires_matching_client_lifetime_and_full_icon_key() {
+        let key = test_icon_key("terminal");
+        assert!(icon_completion_matches(42, Some(&key), 42, &key));
+        assert!(!icon_completion_matches(43, Some(&key), 42, &key));
+        assert!(!icon_completion_matches(42, Some(&test_icon_key("other")), 42, &key));
+        let mut stale_theme = key.clone();
+        stale_theme.theme_generation += 1;
+        assert!(!icon_completion_matches(42, Some(&stale_theme), 42, &key));
+        assert!(!icon_completion_matches(42, None, 42, &key));
+    }
+
+    #[test]
+    fn deferred_high_icon_work_is_bounded_to_one_current_job_per_client() {
+        use flamewm_integrations_linux::icon_service::{IconJob, IconPriority};
+        let mut deferred = HashMap::new();
+        retain_deferred_icon_job(
+            &mut deferred,
+            5,
+            10,
+            IconJob { key: test_icon_key("old"), priority: IconPriority::High },
+        );
+        retain_deferred_icon_job(
+            &mut deferred,
+            5,
+            11,
+            IconJob { key: test_icon_key("new"), priority: IconPriority::High },
+        );
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred.get(&5).map(|(token, job)| (*token, job.key.clone())),
+            Some((11, test_icon_key("new"))));
+    }
+
+    fn output(id: &str, geometry: Rect, work_area: Rect, primary: bool) -> OutputWorkArea {
+        OutputWorkArea { output: flamewm_api::OutputId::new(id), geometry, work_area, primary }
+    }
+
+    #[test]
+    fn local_output_selection_handles_adjacent_vertical_gap_and_spanning_windows() {
+        let outputs = vec![
+            output("left", Rect::new(0, 0, 1000, 800), Rect::new(0, 0, 1000, 756), true),
+            output("right", Rect::new(1000, 0, 1200, 900), Rect::new(1000, 0, 1200, 845), false),
+            output("above", Rect::new(0, -700, 900, 700), Rect::new(0, -700, 900, 656), false),
+        ];
+        assert_eq!(select_output_for_rect(&outputs, Rect::new(1100, 40, 100, 100)), Some(1));
+        assert_eq!(select_output_for_rect(&outputs, Rect::new(50, -650, 200, 200)), Some(2));
+        assert_eq!(select_output_for_rect(&outputs, Rect::new(900, 100, 200, 100)), Some(1));
+        assert_eq!(select_output_for_rect(&outputs, Rect::new(2300, 100, 100, 100)), Some(0));
+    }
+
+    #[test]
+    fn output_reconciliation_drops_unplugged_and_accepts_replugged_geometry() {
+        let mut outputs = vec![output("panel", Rect::new(0, 0, 100, 100), Rect::new(0, 0, 100, 56), true)];
+        assert_eq!(select_output_for_rect(&outputs, Rect::new(20, 20, 10, 10)), Some(0));
+        outputs.clear();
+        assert_eq!(select_output_for_rect(&outputs, Rect::new(20, 20, 10, 10)), None);
+        outputs.push(output("panel", Rect::new(0, 0, 100, 100), Rect::new(0, 0, 100, 45), true));
+        assert_eq!(outputs[0].work_area.height, 45);
+    }
+
+    #[test]
+    fn next_wait_timeout_is_none_without_pending_deadline() {
+        assert_eq!(next_wait_timeout(1_000, None), None);
+    }
+
+    #[test]
+    fn next_wait_timeout_returns_remaining_time_until_deadline() {
+        assert_eq!(
+            next_wait_timeout(1_000, Some(1_500)),
+            Some(std::time::Duration::from_millis(500))
+        );
+    }
+
+    #[test]
+    fn next_wait_timeout_clamps_past_deadline_to_zero() {
+        assert_eq!(
+            next_wait_timeout(2_000, Some(1_500)),
+            Some(std::time::Duration::ZERO)
+        );
+        assert_eq!(
+            next_wait_timeout(1_500, Some(1_500)),
+            Some(std::time::Duration::ZERO)
+        );
+    }
 
     fn observed_release_mapping(target: SnapTarget) -> ReleaseAction {
         release_action(target)
@@ -4016,6 +4532,15 @@ mod tests {
             anchor: MoveAnchor::new(20, 400, 30),
             grab_window: 99,
         })
+    }
+
+    #[test]
+    fn workspace_switch_marks_windows_only_on_visibility_or_focus_change() {
+        assert!(!workspace_switch_touches_windows(&[], false));
+        assert!(!workspace_switch_touches_windows(&[(true, true), (false, false)], false));
+        assert!(workspace_switch_touches_windows(&[(true, false)], false));
+        assert!(workspace_switch_touches_windows(&[(false, true)], false));
+        assert!(workspace_switch_touches_windows(&[], true));
     }
 
     #[test]
@@ -4102,6 +4627,184 @@ mod tests {
         };
         assert_eq!(south.cursor_kind(), CursorKind::ResizeVertical);
         assert_eq!(ResizeEdges::default().cursor_kind(), CursorKind::Default);
+    }
+
+    #[test]
+    fn start_menu_toggle_flag_defaults_to_false() {
+        assert!(!WmChangeSet::default().start_menu_toggle);
+        let mut changes = WmChangeSet::default();
+        changes.start_menu_toggle = true;
+        let drained = changes.take();
+        assert!(drained.start_menu_toggle);
+        assert!(!changes.start_menu_toggle);
+    }
+
+    /// Replays one event batch: events in order, then the batch-boundary commit.
+    /// Returns how many times Start toggled in that batch.
+    fn run_batch(tap: &mut SuperTap, events: &[(&str, u8, u32)]) -> usize {
+        let mut toggles = 0;
+        for &(kind, keycode, time) in events {
+            let outcome = match kind {
+                "super-press" => tap.press_super(keycode, time),
+                "super-release" => {
+                    tap.release_super(keycode, time);
+                    SuperTapOutcome::Idle
+                }
+                "other-press" => tap.press_other(),
+                other => panic!("unknown test event kind {other}"),
+            };
+            toggles += usize::from(outcome == SuperTapOutcome::Toggle);
+        }
+        toggles + usize::from(tap.commit() == SuperTapOutcome::Toggle)
+    }
+
+    const SUPER_KEY: u8 = 133;
+    const RIGHT_KEY: u8 = 114;
+
+    #[test]
+    fn super_tap_toggles_exactly_once() {
+        let mut tap = SuperTap::default();
+        assert_eq!(run_batch(&mut tap, &[("super-press", SUPER_KEY, 100)]), 0);
+        assert_eq!(run_batch(&mut tap, &[("super-release", SUPER_KEY, 150)]), 1);
+        assert_eq!(tap.commit(), SuperTapOutcome::Idle);
+    }
+
+    #[test]
+    fn super_autorepeat_pairs_while_held_never_toggle() {
+        let mut tap = SuperTap::default();
+        assert_eq!(run_batch(&mut tap, &[("super-press", SUPER_KEY, 100)]), 0);
+        // Each repeat is a KeyRelease and KeyPress sharing one timestamp.
+        for stamp in [200, 225, 250] {
+            let batch = [
+                ("super-release", SUPER_KEY, stamp),
+                ("super-press", SUPER_KEY, stamp),
+            ];
+            assert_eq!(run_batch(&mut tap, &batch), 0, "repeat at {stamp}");
+        }
+        // The final real release is the single toggle for the whole hold.
+        assert_eq!(run_batch(&mut tap, &[("super-release", SUPER_KEY, 400)]), 1);
+    }
+
+    #[test]
+    fn super_press_with_no_release_yet_is_a_repeat_not_a_new_tap() {
+        let mut tap = SuperTap::default();
+        assert_eq!(
+            run_batch(
+                &mut tap,
+                &[
+                    ("super-press", SUPER_KEY, 100),
+                    ("super-press", SUPER_KEY, 125),
+                    ("super-press", SUPER_KEY, 150),
+                ],
+            ),
+            0
+        );
+        assert_eq!(run_batch(&mut tap, &[("super-release", SUPER_KEY, 175)]), 1);
+    }
+
+    #[test]
+    fn super_right_chord_never_toggles() {
+        let mut tap = SuperTap::default();
+        assert_eq!(
+            run_batch(
+                &mut tap,
+                &[
+                    ("super-press", SUPER_KEY, 100),
+                    ("other-press", RIGHT_KEY, 120),
+                    ("super-release", SUPER_KEY, 150),
+                ],
+            ),
+            0
+        );
+        // The Right key's own autorepeat must not start a tap either.
+        assert_eq!(
+            run_batch(
+                &mut tap,
+                &[
+                    ("other-press", RIGHT_KEY, 200),
+                    ("other-press", RIGHT_KEY, 225),
+                ],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn ctrl_super_right_never_starts_a_tap() {
+        // Ctrl is a plain other-key press; Super with Ctrl held is not bare.
+        let mut tap = SuperTap::default();
+        assert_eq!(
+            run_batch(
+                &mut tap,
+                &[
+                    ("other-press", 37, 100),
+                    ("other-press", SUPER_KEY, 110),
+                    ("other-press", RIGHT_KEY, 120),
+                    ("other-press", RIGHT_KEY, 150),
+                ],
+            ),
+            0
+        );
+        assert_eq!(run_batch(&mut tap, &[("super-release", SUPER_KEY, 200)]), 0);
+    }
+
+    #[test]
+    fn tap_followed_by_other_key_in_same_batch_still_toggles_once() {
+        let mut tap = SuperTap::default();
+        assert_eq!(
+            run_batch(
+                &mut tap,
+                &[
+                    ("super-press", SUPER_KEY, 100),
+                    ("super-release", SUPER_KEY, 150),
+                    ("other-press", RIGHT_KEY, 160),
+                ],
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn focus_loss_while_held_cancels_the_tap() {
+        let mut tap = SuperTap::default();
+        assert_eq!(run_batch(&mut tap, &[("super-press", SUPER_KEY, 100)]), 0);
+        tap.focus_lost();
+        assert_eq!(run_batch(&mut tap, &[("super-release", SUPER_KEY, 150)]), 0);
+    }
+
+    #[test]
+    fn focus_loss_after_release_cancels_pending_commit() {
+        let mut tap = SuperTap::default();
+        assert_eq!(run_batch(&mut tap, &[("super-press", SUPER_KEY, 100)]), 0);
+        tap.release_super(SUPER_KEY, 150);
+        tap.focus_lost();
+        assert_eq!(tap.commit(), SuperTapOutcome::Idle);
+    }
+
+    #[test]
+    fn two_separate_taps_toggle_twice() {
+        let mut tap = SuperTap::default();
+        assert_eq!(
+            run_batch(
+                &mut tap,
+                &[
+                    ("super-press", SUPER_KEY, 100),
+                    ("super-release", SUPER_KEY, 150),
+                    ("super-press", SUPER_KEY, 300),
+                    ("super-release", SUPER_KEY, 350),
+                ],
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn bare_state_ignores_lock_bits_only() {
+        assert!(is_bare_state(0));
+        assert!(is_bare_state(0x0002)); // CapsLock
+        assert!(is_bare_state(0x0010)); // NumLock
+        assert!(!is_bare_state(0x0040)); // Super held as modifier
+        assert!(!is_bare_state(0x0004)); // Ctrl
     }
 
     #[test]
@@ -4274,5 +4977,15 @@ mod tests {
         assert!(src.contains("ConfigureClientLocal"));
         assert!(src.contains("ConfigureFrameRoot"));
         assert!(src.contains("with_screen_rect"));
+    }
+
+    #[test]
+    fn next_workspace_clamps_without_wrap() {
+        assert_eq!(next_workspace(0, 3, -1), None);
+        assert_eq!(next_workspace(2, 3, 1), None);
+        assert_eq!(next_workspace(0, 3, 1), Some(1));
+        assert_eq!(next_workspace(2, 3, -1), Some(1));
+        assert_eq!(next_workspace(0, 1, 1), None);
+        assert_eq!(next_workspace(0, 1, -1), None);
     }
 }

@@ -21,9 +21,14 @@ pub fn line_height(font_size: f32) -> f32 {
     font_size.max(0.0) * 1.30
 }
 
+/// Estimated advance per char, in em. 0.49em matches IBM Plex Sans Regular
+/// (installed at /usr/share/fonts/truetype/ibm-plex): "readme.txt" measures
+/// 63.6px at 13px via PIL. The earlier 0.58em overestimated by ~18%.
+/// This is a font-measured estimate, not a shaped advance; native checks
+/// still govern any visual claim.
 #[must_use]
 pub fn char_width(font_size: f32) -> f32 {
-    font_size.max(0.0) * 0.58
+    font_size.max(0.0) * 0.49
 }
 
 fn text_width(text: &str, font_size: f32) -> f32 {
@@ -241,6 +246,25 @@ mod tests {
         let layout = layout_text("a b c\nd e", 10.0, 1.0, TextWrap::NoWrap, false);
         let texts: Vec<&str> = layout.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, vec!["a b c", "d e"]);
+    }
+
+    #[test]
+    fn readme_txt_width_tracks_installed_plex_measurement() {
+        // Measured: IBM Plex Sans Regular "readme.txt" at 13px = 63.6px (PIL).
+        // Desktop label line box is 76px wide; estimate must fit with 4px slack.
+        let layout = layout_text("readme.txt", 13.0, 76.0, TextWrap::NoWrap, false);
+        let width = layout.lines[0].width;
+        let measured = 63.6f32;
+        let expected = 10.0 * 13.0 * 0.49;
+        assert!((expected - measured).abs() <= 2.0);
+        assert!(
+            (width - measured).abs() <= 2.0,
+            "estimated width {width} not within 2px of measured {measured}"
+        );
+        assert!(
+            width <= 76.0 - 4.0,
+            "estimated width {width} exceeds label box minus 4px"
+        );
     }
 
     #[test]

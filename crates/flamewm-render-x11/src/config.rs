@@ -7,6 +7,15 @@ pub struct X11Config {
     pub y: i32,
     pub title: String,
     pub role: X11WindowRole,
+    /// Optional ICCCM WM_CLASS identity. `None` leaves WM_CLASS unset.
+    pub identity: Option<X11WindowIdentity>,
+}
+
+/// ICCCM WM_CLASS pair (instance, class) plus EWMH UTF-8 name is taken from the title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct X11WindowIdentity {
+    pub instance: String,
+    pub class: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,6 +317,7 @@ impl Default for X11Config {
             y: 0,
             title: "FlameWM Render 0.0.9".to_string(),
             role: X11WindowRole::Normal,
+            identity: None,
         }
     }
 }
@@ -321,6 +331,7 @@ impl From<SurfaceConfig> for X11Config {
             y: config.y,
             title: config.title,
             role: config.role.into(),
+            identity: None,
         }
     }
 }

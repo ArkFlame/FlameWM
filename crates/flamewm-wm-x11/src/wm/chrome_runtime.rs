@@ -167,3 +167,66 @@ impl ChromeRuntime {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity() -> ChromeIdentity {
+        ChromeIdentity {
+            title: "xterm".to_owned(),
+            wm_instance: "xterm".to_owned(),
+            wm_class: "XTerm".to_owned(),
+        }
+    }
+
+    fn state() -> ChromeState {
+        ChromeState {
+            frame_w: 320,
+            frame_h: 240,
+            active: true,
+            hover: None,
+            pressed: None,
+            maximized: false,
+            fullscreen: false,
+        }
+    }
+
+    fn catalog_icon() -> IconImage {
+        IconImage {
+            width: 2,
+            height: 2,
+            argb: vec![0xff11_2233, 0xff44_5566, 0x8077_8899, 0x0000_0000],
+        }
+    }
+
+    #[test]
+    fn catalog_icon_is_used_for_titlebar_slot_and_retained_across_rebuild() {
+        let mut runtime = ChromeRuntime::new();
+        let scene = runtime.scene_for(&identity(), state(), Some(catalog_icon()));
+        assert!(scene.icon_present, "catalog raster must reach the scene");
+        assert_eq!(scene.icon.as_ref(), Some(&catalog_icon()));
+
+        // Unchanged inputs reuse the cached scene and keep the raster.
+        let scene = runtime.scene_for(&identity(), state(), Some(catalog_icon()));
+        assert!(scene.icon_present, "cached rebuild must keep the raster");
+        assert_eq!(scene.icon.as_ref(), Some(&catalog_icon()));
+
+        // A state change (e.g. hover) rebuilds the scene; the icon must
+        // still be carried from the cached raster the caller passes in.
+        let mut hovered = state();
+        hovered.hover = Some(FrameControl::Close);
+        let scene = runtime.scene_for(&identity(), hovered, Some(catalog_icon()));
+        assert!(scene.icon_present, "state rebuild must keep the raster");
+        assert_eq!(scene.icon.as_ref(), Some(&catalog_icon()));
+    }
+
+    #[test]
+    fn missing_icon_clears_slot_only_when_caller_passes_none() {
+        let mut runtime = ChromeRuntime::new();
+        runtime.scene_for(&identity(), state(), Some(catalog_icon()));
+        let scene = runtime.scene_for(&identity(), state(), None);
+        assert!(!scene.icon_present);
+        assert!(scene.icon.is_none());
+    }
+}

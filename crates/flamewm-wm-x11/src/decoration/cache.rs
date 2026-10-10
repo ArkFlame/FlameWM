@@ -166,32 +166,12 @@ impl DecorationCache {
     }
 }
 
-/// Manage-time catalog icon resolution (decoration/cache owner).
-///
-/// Resolves a catalog `Icon=` name through the shared memory-only indexed
-/// application lookup at the given titlebar edge, then converts the
-/// straight RGBA8 raster to a cached ARGB32 `IconImage` (pure memory
-/// convert; no catalog/filesystem/decode here). Explicit-extension names
-/// and pixmaps resolve through the same frozen index order; misses (empty
-/// or unknown name, decode failure, size mismatch) return `None` so the
-/// caller keeps the transparent empty slot, never brand artwork.
+/// Convert a worker-produced straight RGBA8 catalog raster to ARGB32.
+/// Resolution and decoding belong to `IconService`, never the WM event loop.
 #[must_use]
-pub fn resolve_catalog_icon_rgba(
-    resolver: &mut flamewm_integrations_linux::IconResolver,
-    icon_name: &str,
-    titlebar_edge: u16,
+pub fn catalog_icon_image(
+    raster: &flamewm_integrations_linux::icons::Rgba8Raster,
 ) -> Option<crate::chrome::IconImage> {
-    if icon_name.trim().is_empty() {
-        return None;
-    }
-    // Shared memory-only indexed lookup; warm path is cache-only.
-    let slot = u32::from(crate::chrome::icon_slot_for(titlebar_edge));
-    let raster = resolver
-        .prepare_application(
-            icon_name.to_owned(),
-            flamewm_integrations_linux::icons::IconSize::new(slot, slot),
-        )
-        .ok()?;
     if raster.width == 0 || raster.height == 0 {
         return None;
     }
@@ -291,6 +271,21 @@ mod tests {
         assert!(cache.icon_raster("1").is_none());
         assert!(cache.icon_raster("0").is_some());
         assert_eq!(cache.icon_raster_count(), ICON_RASTER_CACHE_CAPACITY);
+    }
+
+    #[test]
+    fn worker_catalog_raster_converts_to_argb_without_resolving() {
+        let raster = flamewm_integrations_linux::icons::Rgba8Raster {
+            source: "worker".to_owned(),
+            width: 1,
+            height: 1,
+            pixels: vec![0x11, 0x22, 0x33, 0x80],
+            origin: flamewm_integrations_linux::icons::IconOrigin::SystemTheme,
+            fallback_reason: None,
+        };
+        let image = catalog_icon_image(&raster).expect("valid worker raster");
+        assert_eq!((image.width, image.height), (1, 1));
+        assert_eq!(image.argb, vec![0x8011_2233]);
     }
 
     fn test_raster() -> flamewm_integrations_linux::icons::Rgba8Raster {

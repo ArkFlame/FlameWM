@@ -10,7 +10,9 @@ mod template;
 pub use event_source::{
     pump_events, run_surface_runtime_with_reactor, run_surface_runtime_with_reactor_access,
 };
-pub use flamewm_render_x11::GeometryTrace;
+pub use flamewm_render_x11::{
+    GeometryTrace, WindowGeometry, WindowGeometrySlot, X11WindowIdentity,
+};
 pub use input::{
     SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, action_scroll_delta, pointer_button_from_raw,
     surface_event_to_ui_event, wheel_scroll_delta,
@@ -25,7 +27,10 @@ pub use template::{
     decode_document,
 };
 
-use flamewm_reactor::Reactor;
+use std::os::fd::RawFd;
+
+use calloop::Interest;
+use flamewm_reactor::{FdAction, Reactor};
 
 pub use flamewm_render_core::{ActionPhase, Overflow, PointerButton};
 pub use flamewm_render_x11::{
@@ -134,6 +139,7 @@ pub struct UiWindowConfig {
     pub x: i32,
     pub y: i32,
     pub title: String,
+    pub identity: Option<X11WindowIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +181,7 @@ where
             x: config.x,
             y: config.y,
             title: config.title,
+            identity: config.identity,
             role: match role {
                 UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
                 UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
@@ -194,6 +201,33 @@ pub fn run_with_controller_events_role_with_reactor<F, R>(
     config: UiWindowConfig,
     role: UiWindowRole,
     reactor: &mut Reactor,
+    on_event: F,
+    on_reactor: R,
+) -> Result<(), String>
+where
+    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
+    R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
+{
+    run_with_controller_events_role_with_reactor_geometry(
+        document,
+        config,
+        role,
+        reactor,
+        WindowGeometrySlot::default(),
+        on_event,
+        on_reactor,
+    )
+}
+
+/// Same as `run_with_controller_events_role_with_reactor`, plus a geometry
+/// request slot. A geometry written by `on_reactor` is applied to the window
+/// (move + size) on the next event-loop wake.
+pub fn run_with_controller_events_role_with_reactor_geometry<F, R>(
+    document: UiDocument,
+    config: UiWindowConfig,
+    role: UiWindowRole,
+    reactor: &mut Reactor,
+    geometry: WindowGeometrySlot,
     mut on_event: F,
     mut on_reactor: R,
 ) -> Result<(), String>
@@ -201,7 +235,7 @@ where
     F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
-    flamewm_render_x11::run_with_controller_events_with_reactor(
+    flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
         document.document,
         flamewm_render_x11::X11Config {
             width: config.width,
@@ -209,6 +243,7 @@ where
             x: config.x,
             y: config.y,
             title: config.title,
+            identity: config.identity,
             role: match role {
                 UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
                 UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
@@ -216,6 +251,7 @@ where
             },
         },
         reactor,
+        geometry,
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
             let event = controller_event(action);
@@ -223,4 +259,105 @@ where
         },
         move |document| on_reactor(&mut UiDocumentView { document }),
     )
+}
+
+/// Whether a caller-owned readable descriptor stays registered after one drain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiWakeDrain {
+    /// Keep watching the descriptor.
+    Keep,
+    /// Stop watching. The caller has already queued the failure for `on_wake`.
+    Retire,
+}
+
+/// Runs the reactor-backed window loop with one extra readable wake descriptor.
+///
+/// `drain` runs when the reactor reports the descriptor readable. It has no document access and
+/// must only move data into the caller's queue. `on_wake` runs once per reactor turn with document
+/// access, so it must stay cheap while its queue is empty. The descriptor is not owned or closed
+/// here; the caller keeps it open until this function returns.
+pub fn run_with_controller_events_role_and_readable_fd<F, W, D>(
+    document: UiDocument,
+    config: UiWindowConfig,
+    role: UiWindowRole,
+    readable_fd: RawFd,
+    mut drain: D,
+    on_event: F,
+    on_wake: W,
+) -> Result<(), String>
+where
+    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
+    W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
+    D: FnMut() -> UiWakeDrain + 'static,
+{
+    run_with_controller_events_role_and_two_readable_fds(
+        document, config, role, readable_fd, drain, None, on_event, on_wake,
+    )
+}
+
+/// Same reactor-backed window loop with a second independent readable wake source.
+/// Both drains only queue data; document access stays in `on_wake`.
+pub fn run_with_controller_events_role_and_two_readable_fds<F, W, D>(
+    document: UiDocument,
+    config: UiWindowConfig,
+    role: UiWindowRole,
+    readable_fd: RawFd,
+    mut drain: D,
+    second_readable: Option<(RawFd, Box<dyn FnMut() -> UiWakeDrain>)>,
+    on_event: F,
+    on_wake: W,
+) -> Result<(), String>
+where
+    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
+    W: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
+    D: FnMut() -> UiWakeDrain + 'static,
+{
+    let mut reactor = Reactor::new().map_err(|error| error.to_string())?;
+    // Level-triggered registration: a retired source is removed by the reactor, and the reactor
+    // itself is dropped when this function returns, so no explicit removal is needed.
+    let _registration = reactor
+        .register_raw_fd_with_action(readable_fd, Interest::READ, move |_, _| match drain() {
+            UiWakeDrain::Keep => FdAction::Continue,
+            UiWakeDrain::Retire => FdAction::Remove,
+        })
+        .map_err(|error| error.to_string())?;
+    let _second_registration = second_readable
+        .map(|(fd, mut second_drain)| {
+            reactor
+                .register_raw_fd_with_action(fd, Interest::READ, move |_, _| match second_drain() {
+                    UiWakeDrain::Keep => FdAction::Continue,
+                    UiWakeDrain::Retire => FdAction::Remove,
+                })
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
+    run_with_controller_events_role_with_reactor_geometry(
+        document,
+        config,
+        role,
+        &mut reactor,
+        WindowGeometrySlot::default(),
+        on_event,
+        on_wake,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn readable_fd_seam_is_a_reactor_source_not_a_timer() {
+        let source = include_str!("lib.rs");
+        let production = source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("ui production source");
+        assert!(
+            production.contains("register_raw_fd_with_action(readable_fd"),
+            "external wake descriptors must enter through the reactor"
+        );
+        assert!(
+            !production.contains("register_timer"),
+            "external wake delivery must not use timers"
+        );
+    }
 }

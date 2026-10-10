@@ -146,6 +146,24 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
+    /// Apply the consumer-selected output scale to one retained surface.
+    /// Call before first presentation and again when output assignment or
+    /// output scale changes. Invalid scales fall back to 1.0; the document
+    /// owns scale state and invalidates retained layout/paint on change.
+    pub fn apply_output_scale(
+        &mut self,
+        surface: SurfaceHandle,
+        scale: f32,
+    ) -> Result<f32, UiBackendError> {
+        let scale = effective_output_scale(scale);
+        self.controller
+            .document_mut(surface.0)
+            .map_err(UiBackendError::Document)?
+            .set_ui_scale(scale)
+            .map_err(UiBackendError::Document)?;
+        Ok(scale)
+    }
+
     pub fn show(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
         self.controller.show(surface.0).map_err(Into::into)
     }
@@ -523,6 +541,17 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
+    /// Publishes window-relative pager cell rects on the surface's X window.
+    pub fn set_pager_cells(
+        &mut self,
+        surface: SurfaceHandle,
+        cells: &[[u64; 4]],
+    ) -> Result<(), UiBackendError> {
+        self.controller
+            .set_pager_cells(surface.0, cells)
+            .map_err(UiBackendError::Renderer)
+    }
+
     /// Node rect by string id from retained layout (root-space device rect).
     pub fn node_device_rect_by_id(
         &self,
@@ -746,9 +775,27 @@ fn document_space_extent(document: &RuntimeDocument) -> (f32, f32) {
     (width.max(1.0), height.max(1.0))
 }
 
+fn effective_output_scale(scale: f32) -> f32 {
+    if scale.is_finite() && (0.5..=4.0).contains(&scale) {
+        scale
+    } else {
+        1.0
+    }
+}
+
 #[cfg(test)]
 mod intrinsic_tests {
     use super::*;
+
+    #[test]
+    fn output_scale_validation_falls_back_to_one() {
+        for scale in [0.0, -1.0, 0.25, 4.1, f32::NAN, f32::INFINITY] {
+            assert_eq!(effective_output_scale(scale), 1.0);
+        }
+        for (input, expected) in [(1.0, 1.0), (1.25, 1.25), (1.5, 1.5), (2.0, 2.0)] {
+            assert_eq!(effective_output_scale(input), expected);
+        }
+    }
 
     #[test]
     fn device_constraint_scales_exact() {

@@ -145,21 +145,35 @@ fn expected_sticky_signature(workspace: u32) -> StickySignature {
     }
 }
 
-fn workspace_button(target: u32, root: (u16, u16)) -> (i16, i16) {
-    let x = if target == 0 {
-        i32::from(root.0).saturating_sub(173)
-    } else {
-        i32::from(root.0).saturating_sub(150)
-    };
-    let y = i32::from(root.1).saturating_sub(30);
-    (
-        x.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-        y.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-    )
+/// Centre of pager cell `target`, read from the `FLAMEWM_PAGER_CELLS`
+/// property the shell publishes on the panel window (window-relative x, y,
+/// width, height per cell, CARDINAL format 32). No fallback: a missing or
+/// short property returns None and the click is refused.
+fn pager_cell_center(canary: &crate::Canary, target: u32) -> Option<(i16, i16)> {
+    let panel = canary
+        .find("FlameWM panel")
+        .into_iter()
+        .find(|window| window.map_state == 2)?;
+    let atom = canary.intern("FLAMEWM_PAGER_CELLS")?;
+    let values: Vec<u32> = canary
+        .prop_bytes(panel.id, atom)
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+    let base = (target as usize).checked_mul(4)?;
+    let cell = values.get(base..base + 4)?;
+    let centre_x = i32::from(panel.x) + cell[0] as i32 + cell[2] as i32 / 2;
+    let centre_y = i32::from(panel.y) + cell[1] as i32 + cell[3] as i32 / 2;
+    Some((
+        centre_x.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+        centre_y.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+    ))
 }
 
 fn real_workspace_click(canary: &crate::Canary, target: u32) -> bool {
-    let point = workspace_button(target, canary.root_geometry());
+    let Some(point) = pager_cell_center(canary, target) else {
+        return false;
+    };
     xtest_motion(canary, point.0, point.1)
         && xtest_button_press(canary, point.0, point.1, 1)
         && xtest_button_release(canary, point.0, point.1, 1)

@@ -870,6 +870,7 @@ impl RuntimeDocument {
             .ok_or_else(|| format!("no node with id '{id}'"))?;
         self.style_overrides.entry(index).or_default().background =
             Some(ColorValue::Literal(color));
+        self.touch();
         Ok(())
     }
 
@@ -879,6 +880,7 @@ impl RuntimeDocument {
             .ok_or_else(|| format!("no node with id '{id}'"))?;
         self.style_overrides.entry(index).or_default().border_color =
             Some(ColorValue::Literal(color));
+        self.touch();
         Ok(())
     }
 
@@ -889,6 +891,7 @@ impl RuntimeDocument {
         if let Some(override_style) = self.style_overrides.get_mut(&index) {
             override_style.background = None;
         }
+        self.touch();
         Ok(())
     }
 
@@ -899,6 +902,7 @@ impl RuntimeDocument {
         if let Some(override_style) = self.style_overrides.get_mut(&index) {
             override_style.border_color = None;
         }
+        self.touch();
         Ok(())
     }
 
@@ -907,6 +911,7 @@ impl RuntimeDocument {
             .node_by_id(id)
             .ok_or_else(|| format!("no node with id '{id}'"))?;
         self.style_overrides.entry(index).or_default().color = Some(color);
+        self.touch();
         Ok(())
     }
 
@@ -917,6 +922,7 @@ impl RuntimeDocument {
         if let Some(override_style) = self.style_overrides.get_mut(&index) {
             override_style.color = None;
         }
+        self.touch();
         Ok(())
     }
 
@@ -1007,7 +1013,11 @@ impl RuntimeDocument {
         if !scale.is_finite() || scale <= 0.0 {
             return Err("UI scale must be finite and positive".to_string());
         }
-        self.ui_scale = scale.clamp(0.5, 4.0);
+        let scale = scale.clamp(0.5, 4.0);
+        if self.ui_scale != scale {
+            self.ui_scale = scale;
+            self.touch();
+        }
         Ok(())
     }
 
@@ -1106,6 +1116,138 @@ impl RuntimeDocument {
                 .get(index as usize)
                 .copied()
                 .unwrap_or(Color::TRANSPARENT),
+        }
+    }
+}
+
+#[cfg(test)]
+mod ui_scale_tests {
+    use super::*;
+
+    fn clickable_document() -> RuntimeDocument {
+        let root = CompiledNode {
+            kind: NodeKind::Element,
+            parent: None,
+            first_child: Some(1),
+            next_sibling: None,
+            id: String::new(),
+            action: String::new(),
+            text: String::new(),
+            image: None,
+            style: Style::default(),
+            hover_style: None,
+            active_style: None,
+        };
+        let button = CompiledNode {
+            kind: NodeKind::Element,
+            parent: Some(0),
+            first_child: None,
+            next_sibling: None,
+            id: "button".to_string(),
+            action: "activate".to_string(),
+            text: String::new(),
+            image: None,
+            style: Style {
+                width: Length::Px(40.0),
+                height: Length::Px(20.0),
+                background: ColorValue::Literal(Color::WHITE),
+                ..Style::default()
+            },
+            hover_style: None,
+            active_style: None,
+        };
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![root, button],
+        })
+        .expect("fixture document validates")
+    }
+
+    #[test]
+    fn color_override_mutation_invalidates_paint_and_applies_to_runtime_style() {
+        let mut document = clickable_document();
+        let button = document.node_by_id("button").expect("button node");
+        let revision = document.revision();
+        let _ = document.take_damage();
+
+        document
+            .set_background_color("button", Color::rgb(255, 0, 0))
+            .expect("background override");
+        assert_eq!(document.revision(), revision.wrapping_add(1));
+        assert_eq!(document.peek_damage(), SurfaceDamage::Full);
+        let style = document.runtime_style(button, InteractionState::default());
+        assert_eq!(document.resolve_color(style.background), Color::rgb(255, 0, 0));
+
+        let revision = document.revision();
+        let _ = document.take_damage();
+        document
+            .clear_background_color("button")
+            .expect("background clear");
+        assert_eq!(document.revision(), revision.wrapping_add(1));
+        assert_eq!(document.peek_damage(), SurfaceDamage::Full);
+    }
+
+    #[test]
+    fn ui_scale_mutation_invalidates_retained_layout_and_paint_once() {
+        let mut document = clickable_document();
+        let revision = document.revision();
+        let _ = document.take_damage();
+
+        document.set_ui_scale(1.5).expect("valid scale");
+        assert_eq!(document.ui_scale(), 1.5);
+        assert_eq!(document.revision(), revision.wrapping_add(1));
+        assert_eq!(document.peek_damage(), SurfaceDamage::Full);
+
+        let revision = document.revision();
+        let _ = document.take_damage();
+        document.set_ui_scale(1.5).expect("same scale is valid");
+        assert_eq!(document.revision(), revision);
+        assert_eq!(document.peek_damage(), SurfaceDamage::None);
+
+        // Layout and paint retain logical coordinates. Viewport and pointer
+        // coordinates cross the device boundary using this document scale.
+        let scale = document.ui_scale();
+        let layout = crate::layout::LayoutEngine::compute(
+            &document,
+            100.0 / scale,
+            100.0 / scale,
+            InteractionState::default(),
+        );
+        assert_eq!(layout.revision, document.revision());
+        assert_eq!(layout.boxes[1].rect.width, 40.0);
+        assert_eq!(layout.boxes[1].rect.height, 20.0);
+        assert_eq!(
+            layout.hit_test_action(&document, 58.5 / scale, 28.5 / scale),
+            Some(1)
+        );
+        assert_eq!(
+            layout.hit_test_action(&document, 60.0 / scale, 15.0 / scale),
+            None
+        );
+        let paint =
+            crate::paint::build_paint_commands(&document, &layout, InteractionState::default());
+        let button_paint = crate::paint::PaintCommand::FillRect {
+            rect: layout.boxes[1].rect,
+            color: Color::WHITE,
+            radius: 0.0,
+        };
+        assert!(paint.contains(&button_paint));
+        let crate::paint::PaintCommand::FillRect { rect, .. } = button_paint else {
+            unreachable!("button paint is a fill rect")
+        };
+        assert_eq!(rect.width * scale, 60.0);
+        assert_eq!(rect.height * scale, 30.0);
+    }
+
+    #[test]
+    fn ui_scale_rejects_non_finite_and_non_positive_values() {
+        let mut document = clickable_document();
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(document.set_ui_scale(scale).is_err());
+            assert_eq!(document.ui_scale(), 1.0);
         }
     }
 }

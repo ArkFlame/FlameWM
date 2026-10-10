@@ -303,6 +303,7 @@ impl X11App {
         unsafe {
             XStoreName(display, window, title.as_ptr());
         }
+        set_window_identity(display, window, config.title.as_str(), config.identity.as_ref());
         set_window_role(display, window, config.role);
         if config.role == X11WindowRole::Dock {
             let root_w = unsafe { XDisplayWidth(display, screen).max(1) as u32 };
@@ -692,6 +693,87 @@ pub(crate) fn apply_dock_strut(
             XDeleteProperty(display, window, partial);
             XDeleteProperty(display, window, strut);
         },
+    }
+}
+
+/// Publishes the pager cell rectangles on a panel window as the
+/// `FLAMEWM_PAGER_CELLS` CARDINAL list: four values (x, y, width, height)
+/// per cell, window-relative, in cell order. Empty input deletes it.
+pub(crate) fn apply_pager_cells(display: *mut Display, window: Window, cells: &[[u64; 4]]) {
+    let property_name = CString::new("FLAMEWM_PAGER_CELLS").expect("static atom contains no NUL");
+    let property = unsafe { XInternAtom(display, property_name.as_ptr(), 0) };
+    if property == 0 {
+        return;
+    }
+    if cells.is_empty() {
+        unsafe { XDeleteProperty(display, window, property) };
+        return;
+    }
+    let flat: Vec<u64> = cells.iter().flat_map(|cell| cell.iter().copied()).collect();
+    unsafe {
+        XChangeProperty(
+            display,
+            window,
+            property,
+            XA_CARDINAL,
+            32,
+            PROP_MODE_REPLACE,
+            flat.as_ptr() as *const u8,
+            flat.len() as c_int,
+        );
+    }
+}
+
+/// ICCCM WM_CLASS (instance\0class\0, STRING) and EWMH `_NET_WM_NAME`
+/// (UTF8_STRING). WM_CLASS is written only when an identity is configured.
+fn set_window_identity(
+    display: *mut Display,
+    window: Window,
+    title: &str,
+    identity: Option<&super::config::X11WindowIdentity>,
+) {
+    const XA_STRING: Atom = 31;
+    let intern = |name: &str| -> Atom {
+        let name = CString::new(name).expect("static atom contains no NUL");
+        unsafe { XInternAtom(display, name.as_ptr(), 0) }
+    };
+    if let Some(identity) = identity {
+        let wm_class = intern("WM_CLASS");
+        if wm_class != 0 {
+            let mut bytes = Vec::with_capacity(identity.instance.len() + identity.class.len() + 2);
+            bytes.extend_from_slice(identity.instance.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(identity.class.as_bytes());
+            bytes.push(0);
+            unsafe {
+                XChangeProperty(
+                    display,
+                    window,
+                    wm_class,
+                    XA_STRING,
+                    8,
+                    PROP_MODE_REPLACE,
+                    bytes.as_ptr(),
+                    bytes.len() as c_int,
+                );
+            }
+        }
+    }
+    let net_wm_name = intern("_NET_WM_NAME");
+    let utf8_string = intern("UTF8_STRING");
+    if net_wm_name != 0 && utf8_string != 0 {
+        unsafe {
+            XChangeProperty(
+                display,
+                window,
+                net_wm_name,
+                utf8_string,
+                8,
+                PROP_MODE_REPLACE,
+                title.as_ptr(),
+                title.len() as c_int,
+            );
+        }
     }
 }
 

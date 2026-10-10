@@ -836,51 +836,39 @@ fn preview(canary: &crate::Canary) -> Option<crate::WinInfo> {
         .find(|window| window.parent == canary.root && window.map_state == 2 && window.width > 0)
 }
 
-fn preview_pixels(canary: &crate::Canary, window: &crate::WinInfo) -> (usize, usize, bool) {
-    let width = window.width.min(64).max(4);
-    let height = window.height.min(64).max(4);
-    let points = [
+fn preview_border_only(canary: &crate::Canary, window: &crate::WinInfo) -> (usize, bool, bool) {
+    let width = i16::try_from(window.width).unwrap_or(i16::MAX);
+    let height = i16::try_from(window.height).unwrap_or(i16::MAX);
+    if width < 8 || height < 8 {
+        return (0, false, false);
+    }
+    let corners = [
         (0_i16, 0_i16),
-        (width as i16 / 2, 0),
-        (0, height as i16 / 2),
-        (width as i16 / 2, height as i16 / 2),
+        (width - 2, 0),
+        (0, height - 2),
+        (width - 2, height - 2),
     ];
     let mut delivered = 0;
-    let mut non_black = 0;
-    let mut red_dominant = 0;
-    let mut colors = Vec::with_capacity(points.len());
-    for (x, y) in points {
-        let sample_width = (width / 2).max(2);
-        let sample_height = (height / 2).max(2);
-        let Ok(data) = canary.sample(window.id, x, y, sample_width, sample_height) else {
+    let mut accent_border = true;
+    for (x, y) in corners {
+        let Ok(data) = canary.sample(window.id, x, y, 2, 2) else {
+            accent_border = false;
             continue;
         };
-        let (all_zero, _, r, g, b) = crate::Canary::pixel_stats(&data);
         delivered += 1;
-        if !all_zero {
-            non_black += 1;
-        }
-        if r > g.saturating_add(4) && r > b.saturating_add(4) {
-            red_dominant += 1;
-        }
-        colors.push((r, g, b));
+        let (_, _, r, g, b) = crate::Canary::pixel_stats(&data);
+        accent_border &= r > g.saturating_add(4) && r > b.saturating_add(4);
     }
-    let pattern = colors.windows(2).any(|pair| pair[0] != pair[1]);
-    (
-        delivered,
-        non_black,
-        delivered == points.len() && red_dominant > 0 && pattern,
-    )
+    let center = canary
+        .sample(window.id, width / 2 - 2, height / 2 - 2, 4, 4)
+        .ok()
+        .is_some_and(|data| crate::Canary::pixel_stats(&data).0);
+    (delivered, accent_border, center)
 }
 
-fn preview_composite_ready(canary: &crate::Canary, window: &crate::WinInfo) -> bool {
-    let (delivered, non_black, tinted_pattern) = preview_pixels(canary, window);
-    delivered == 4 && non_black == delivered && tinted_pattern
-}
-
-/// T15: real titlebar drag to the left snap edge.  The observable is a
-/// root-owned, viewable preview with the expected native snap geometry and
-/// red-tinted, non-black pixels; private preview counters are not asserted.
+/// T15: real titlebar drag to the left snap edge. The observable is a
+/// root-owned, viewable preview with the expected native snap geometry, an
+/// accent border, and no captured pixels in its clear center.
 pub fn run_t15(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(area) = work_area(canary) else {
         return (
@@ -910,40 +898,54 @@ pub fn run_t15(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let start = title(&frame);
     let held = hold_drag(canary, start, destination, 8);
     let held_preview = held && wait_until(|| preview(canary).is_some());
-    let composite_ready = held_preview
+    let border_only_ready = held_preview
         && wait_until(|| {
-            preview(canary).is_some_and(|window| preview_composite_ready(canary, &window))
+            preview(canary).is_some_and(|window| {
+                let (delivered, accent_border, clear_center) = preview_border_only(canary, &window);
+                delivered == 4 && accent_border && clear_center
+            })
         });
     let preview_window = preview(canary);
     let geometry = preview_window
         .as_ref()
         .is_some_and(|window| frame_matches(window, left_snap_geometry(area)));
-    let (delivered, non_black, tinted_pattern) = preview_window
-        .as_ref()
-        .map_or((0, 0, false), |window| preview_pixels(canary, window));
+    let (delivered, accent_border, clear_center) =
+        preview_window.as_ref().map_or((0, false, false), |window| {
+            preview_border_only(canary, window)
+        });
     let cleaned = release(canary, destination);
+    let committed = cleaned
+        && wait_until(|| {
+            canary
+                .by_id(client.id)
+                .and_then(|current| input_surface(canary, &current))
+                .is_some_and(|current| frame_matches(&current, left_snap_geometry(area)))
+        });
     let hidden = wait_until(|| preview(canary).is_none());
     let pass = held_preview
-        && composite_ready
+        && border_only_ready
         && geometry
         && delivered == 4
-        && non_black == delivered
-        && tinted_pattern
+        && accent_border
+        && clear_center
         && cleaned
+        && committed
         && hidden;
     (
         pass,
         format!(
-            "scenario=T15 client={} preview_native={} held_preview={} composite_ready={} geometry_left_half={} delivered={delivered}/4 non_black={non_black}/4 red_tinted_pattern={} cleanup_release={} preview_hidden={} assertions={} observable=native-root-window-pixels failure_mutation=preview-geometry-red-tint-or-black-pixel-change path=real-pointer",
+            "scenario=T15 client={} preview_native={} held_preview={} border_only_ready={} geometry_left_half={} border_samples={delivered}/4 accent_border={} clear_center_no_backdrop={} cleanup_release={} snap_committed={} preview_hidden={} assertions={} observable=native-border-only-preview-and-snap-commit failure_mutation=preview-geometry-border-backdrop-or-commit-change path=real-pointer",
             client.id,
             preview_window
                 .as_ref()
                 .is_some_and(|window| window.parent == canary.root),
             held_preview,
-            composite_ready,
+            border_only_ready,
             geometry,
-            tinted_pattern,
+            accent_border,
+            clear_center,
             cleaned,
+            committed,
             hidden,
             pass
         ),

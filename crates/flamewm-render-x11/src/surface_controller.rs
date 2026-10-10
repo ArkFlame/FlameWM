@@ -755,6 +755,38 @@ impl SurfaceController {
         Ok(())
     }
 
+    /// Native owner for an X11App window's requested move+size. Keeps the
+    /// established order: one XMoveResizeWindow to the requested rect, then
+    /// the transactional commit for the requested size.
+    pub(crate) unsafe fn move_app_window_geometry(
+        app: &mut crate::app::X11App,
+        document: &RuntimeDocument,
+        request: crate::WindowGeometry,
+    ) -> Result<(), String> {
+        unsafe {
+            XMoveResizeWindow(
+                app.display,
+                app.window,
+                request.x,
+                request.y,
+                request.width,
+                request.height,
+            )
+        };
+        unsafe { app.commit_geometry(document, request.width, request.height) }
+    }
+
+    /// Publishes window-relative pager cell rects on a surface's X window
+    /// (`FLAMEWM_PAGER_CELLS`). Callers pass rects derived from the retained
+    /// layout of that same surface.
+    pub fn set_pager_cells(&mut self, id: SurfaceId, cells: &[[u64; 4]]) -> Result<(), String> {
+        let display = self.display;
+        let instance = self.instance_mut(id)?;
+        crate::app::apply_pager_cells(instance.app.display, instance.app.window, cells);
+        unsafe { XFlush(display) };
+        Ok(())
+    }
+
     /// Debug/roundtrip-only observed-rect probe for one surface. Off the
     /// hot path: reads retained state (no X sync). Real async
     /// ConfigureNotify/MapNotify reconciliation stays in `app/events.rs`.

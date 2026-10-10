@@ -11,6 +11,12 @@ flamewm-wm-x11 = { path = "../flamewm-wm-x11" }
 flamewm-api = { path = "../flamewm-api" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-xsettings = { path = "../flamewm-xsettings" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-control-core = { path = "../flamewm-control-core" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+x11rb.workspace = true
+rustix = { version = "=1.1.4", default-features = false, features = ["process", "std"] }
+signal-hook = { version = "=0.4.5", default-features = false }
 
 [lints]
 workspace = true

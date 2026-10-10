@@ -26,6 +26,8 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+pub mod shortcuts;
+
 pub const ICONIC_STATE: u32 = 3;
 
 #[derive(Debug, Clone, Copy)]
@@ -46,6 +48,7 @@ pub struct X11Desktop {
     next_transaction: u64,
     pending_mode: Option<PendingMode>,
     catalog: Option<std::sync::Arc<ApplicationCatalog>>,
+    grabs: shortcuts::ShortcutGrabs,
 }
 
 impl X11Desktop {
@@ -101,6 +104,7 @@ impl X11Desktop {
             next_transaction: 0,
             pending_mode: None,
             catalog: None,
+            grabs: shortcuts::ShortcutGrabs::new(),
         })
     }
 
@@ -605,17 +609,19 @@ impl SessionPort for X11Desktop {
 }
 
 impl ShortcutPort for X11Desktop {
-    fn prepare_shortcuts(&mut self, _desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not own shortcut bindings",
-        ))
+    fn prepare_shortcuts(&mut self, desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
+        self.grabs.discard_staged();
+        let table = shortcuts::read_keyboard_table(&self.conn)?;
+        self.grabs.prepare(desired, &table)
     }
     fn commit_shortcuts(&mut self) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not own shortcut bindings",
-        ))
+        let mut backend = shortcuts::XGrabBackend::new(&self.conn, self.root);
+        self.grabs.commit(&mut backend)
     }
-    fn rollback_shortcuts(&mut self) {}
+    fn rollback_shortcuts(&mut self) {
+        let mut backend = shortcuts::XGrabBackend::new(&self.conn, self.root);
+        self.grabs.rollback(&mut backend);
+    }
 }
 impl MainLoopPort for X11Desktop {
     fn add_poll(
@@ -854,6 +860,10 @@ impl DisplayPort for X11Desktop {
         if pending.transaction != transaction {
             return Err(FlameError::not_found("RandR mode transaction not found"));
         }
+        // The product coordinator retires the transaction before this call, so the adapter must
+        // retire it too even when RandR refuses or fails the rollback; otherwise apply_mode
+        // returns Busy for every later mode change.
+        self.pending_mode = None;
         let resources = self
             .conn
             .randr_get_screen_resources_current(self.root)
@@ -882,7 +892,6 @@ impl DisplayPort for X11Desktop {
                 "RandR rejected mode rollback",
             ));
         }
-        self.pending_mode = None;
         self.flush()
     }
 }

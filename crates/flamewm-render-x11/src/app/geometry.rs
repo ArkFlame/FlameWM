@@ -1,6 +1,7 @@
 //! Transactional geometry commit + presenter helpers on X11App.
 
 use super::*;
+use crate::WindowGeometry;
 
 impl X11App {
     /// Transactional geometry commit: retained size -> backbuffer ->
@@ -38,6 +39,26 @@ impl X11App {
                 .advance_to(PresentationState::GeometryCommitted)?;
         }
         Ok(())
+    }
+
+    /// Apply a requested move+size to the app window, then run the same
+    /// transactional commit as any other geometry change. `None` is a no-op.
+    pub(crate) unsafe fn apply_window_geometry(
+        &mut self,
+        document: &RuntimeDocument,
+        request: Option<WindowGeometry>,
+    ) -> Result<(), String> {
+        let Some(request) = request else {
+            return Ok(());
+        };
+        if request.width == 0 || request.height == 0 {
+            return Err(presenter_error("window geometry request must be non-empty"));
+        }
+        unsafe {
+            crate::surface_controller::SurfaceController::move_app_window_geometry(
+                self, document, request,
+            )
+        }
     }
 
     /// First present per SurfaceAlphaMode: composited ARGB scene is already

@@ -38,10 +38,46 @@ where
     })
 }
 
+/// Requested outer geometry (root-relative position and client size) for the
+/// single app window. Applied by the X11 event loop on its next reactor wake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Single-slot geometry request shared between the reactor callback (writer)
+/// and the X11 event loop (taker). Latest request wins; `None` means no-op.
+pub type WindowGeometrySlot = std::rc::Rc<std::cell::Cell<Option<WindowGeometry>>>;
+
 pub fn run_with_controller_events_with_reactor<F, R>(
+    document: RuntimeDocument,
+    config: X11Config,
+    reactor: &mut Reactor,
+    on_event: F,
+    on_reactor: R,
+) -> Result<(), String>
+where
+    F: FnMut(&ControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
+    R: FnMut(&mut RuntimeDocument) -> Result<(), String>,
+{
+    run_with_controller_events_with_reactor_geometry(
+        document,
+        config,
+        reactor,
+        WindowGeometrySlot::default(),
+        on_event,
+        on_reactor,
+    )
+}
+
+pub fn run_with_controller_events_with_reactor_geometry<F, R>(
     mut document: RuntimeDocument,
     config: X11Config,
     reactor: &mut Reactor,
+    geometry: WindowGeometrySlot,
     mut on_event: F,
     mut on_reactor: R,
 ) -> Result<(), String>
@@ -80,6 +116,7 @@ where
             &mut |event, document| on_event(&ControllerEvent::Action(event.clone()), document),
             reactor,
             &mut on_reactor,
+            &geometry,
         );
         let remove_result = reactor.remove(token).map_err(|error| error.to_string());
         let deferred_native = app.take_deferred_native_libraries();
