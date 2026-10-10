@@ -635,6 +635,8 @@ fn toggle_fullscreen(state: &ControllerState) -> (ControllerState, Vec<FrameEffe
 mod tests {
     use super::super::geometry::FrameExtents;
     use super::*;
+    use flamewm_api::{Rect as CoreRect, Size as CoreSize};
+    use flamewm_window_core::{SnapTarget as CoreSnapTarget, snap_geometry};
 
     const WA: RootRect = RootRect::new(0, 0, 1920, 1080);
     const EXT: FrameExtents = FrameExtents::new(31, 1);
@@ -1743,5 +1745,93 @@ mod tests {
             },
         );
         assert_position_only(&second_effects);
+    }
+
+    const ALL_SNAP_TARGETS: [SnapTarget; 8] = [
+        SnapTarget::Left,
+        SnapTarget::Right,
+        SnapTarget::Top,
+        SnapTarget::Bottom,
+        SnapTarget::TopLeft,
+        SnapTarget::TopRight,
+        SnapTarget::BottomLeft,
+        SnapTarget::BottomRight,
+    ];
+
+    const EVEN_WORK_AREAS: [RootRect; 3] = [
+        RootRect::new(0, 0, 1920, 1080),
+        RootRect::new(7, 9, 1366, 768),
+        RootRect::new(100, 40, 1280, 1024),
+    ];
+
+    const ODD_WORK_AREAS: [RootRect; 4] = [
+        RootRect::new(0, 0, 1921, 1080),
+        RootRect::new(3, 5, 1920, 1081),
+        RootRect::new(100, 40, 801, 601),
+        RootRect::new(11, 13, 1367, 769),
+    ];
+
+    // Preview owner: window-core snap_geometry, reached through the same
+    // frame-to-core target mapping that wm.rs uses for release actions.
+    fn preview_snap_rect(work_area: RootRect, target: SnapTarget) -> RootRect {
+        let core_target = match target {
+            SnapTarget::Left => CoreSnapTarget::LeftHalf,
+            SnapTarget::Right => CoreSnapTarget::RightHalf,
+            SnapTarget::Top => CoreSnapTarget::TopHalf,
+            SnapTarget::Bottom => CoreSnapTarget::BottomHalf,
+            SnapTarget::TopLeft => CoreSnapTarget::TopLeftQuarter,
+            SnapTarget::TopRight => CoreSnapTarget::TopRightQuarter,
+            SnapTarget::BottomLeft => CoreSnapTarget::BottomLeftQuarter,
+            SnapTarget::BottomRight => CoreSnapTarget::BottomRightQuarter,
+        };
+        let area = CoreRect::new(work_area.x, work_area.y, work_area.w, work_area.h);
+        let size = CoreSize::new(work_area.w, work_area.h);
+        let rect = snap_geometry(core_target, area, size);
+        RootRect::new(rect.x, rect.y, rect.width, rect.height)
+    }
+
+    fn snap_commit_mismatches(work_areas: &[RootRect]) -> Vec<String> {
+        let mut out = Vec::new();
+        for &work_area in work_areas {
+            for target in ALL_SNAP_TARGETS {
+                let commit = snap_rect(work_area, target);
+                let preview = preview_snap_rect(work_area, target);
+                if commit != preview {
+                    out.push(format!(
+                        "work_area={:?} target={:?} commit={:?} preview={:?}",
+                        work_area, target, commit, preview
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    // GREEN INVARIANT: on even work areas the committed rect equals the preview rect.
+    #[test]
+    fn snap_commit_matches_preview_on_even_work_areas() {
+        let mismatches = snap_commit_mismatches(&EVEN_WORK_AREAS);
+        assert!(
+            mismatches.is_empty(),
+            "commit/preview divergence:\n{}",
+            mismatches.join("\n")
+        );
+    }
+
+    // GREEN INVARIANT: odd widths/heights. snap_rect places the right/bottom half at
+    // floor(size/2) extent starting at the ceil offset; snap_geometry mirrors that exactly.
+    #[test]
+    fn snap_commit_matches_preview_on_odd_work_areas() {
+        let all: Vec<RootRect> = EVEN_WORK_AREAS
+            .iter()
+            .chain(ODD_WORK_AREAS.iter())
+            .copied()
+            .collect();
+        let mismatches = snap_commit_mismatches(&all);
+        assert!(
+            mismatches.is_empty(),
+            "commit/preview divergence:\n{}",
+            mismatches.join("\n")
+        );
     }
 }

@@ -50,28 +50,25 @@ pub fn snap_target(pointer: Point, work_area: Rect) -> SnapTarget {
     }
 }
 
+/// Snapped geometry for drag previews. Mirrors the committed frame snap rectangles: the
+/// half extent is `floor(size / 2)` (min 1) and the right/bottom halves start at
+/// `size - half` so odd work areas preview exactly what a release commits.
 #[must_use]
 pub fn snap_geometry(target: SnapTarget, work_area: Rect, current: Size) -> Rect {
-    let left = work_area.width / 2;
-    let right = work_area.width - left;
-    let top = work_area.height / 2;
-    let bottom = work_area.height - top;
+    let half_w = (work_area.width / 2).max(1);
+    let half_h = (work_area.height / 2).max(1);
+    let right_x = work_area.x.saturating_add(work_area.width.saturating_sub(half_w));
+    let bottom_y = work_area.y.saturating_add(work_area.height.saturating_sub(half_h));
     match target {
         SnapTarget::None => Rect::new(work_area.x, work_area.y, current.width, current.height),
-        SnapTarget::LeftHalf => Rect::new(work_area.x, work_area.y, left, work_area.height),
-        SnapTarget::RightHalf => {
-            Rect::new(work_area.x + left, work_area.y, right, work_area.height)
-        }
-        SnapTarget::TopHalf => Rect::new(work_area.x, work_area.y, work_area.width, top),
-        SnapTarget::BottomHalf => {
-            Rect::new(work_area.x, work_area.y + top, work_area.width, bottom)
-        }
-        SnapTarget::TopLeftQuarter => Rect::new(work_area.x, work_area.y, left, top),
-        SnapTarget::TopRightQuarter => Rect::new(work_area.x + left, work_area.y, right, top),
-        SnapTarget::BottomLeftQuarter => Rect::new(work_area.x, work_area.y + top, left, bottom),
-        SnapTarget::BottomRightQuarter => {
-            Rect::new(work_area.x + left, work_area.y + top, right, bottom)
-        }
+        SnapTarget::LeftHalf => Rect::new(work_area.x, work_area.y, half_w, work_area.height),
+        SnapTarget::RightHalf => Rect::new(right_x, work_area.y, half_w, work_area.height),
+        SnapTarget::TopHalf => Rect::new(work_area.x, work_area.y, work_area.width, half_h),
+        SnapTarget::BottomHalf => Rect::new(work_area.x, bottom_y, work_area.width, half_h),
+        SnapTarget::TopLeftQuarter => Rect::new(work_area.x, work_area.y, half_w, half_h),
+        SnapTarget::TopRightQuarter => Rect::new(right_x, work_area.y, half_w, half_h),
+        SnapTarget::BottomLeftQuarter => Rect::new(work_area.x, bottom_y, half_w, half_h),
+        SnapTarget::BottomRightQuarter => Rect::new(right_x, bottom_y, half_w, half_h),
         SnapTarget::Maximize => work_area,
     }
 }
@@ -218,6 +215,24 @@ mod tests {
         assert_eq!(
             snap_geometry(SnapTarget::RightHalf, work, Size::new(800, 600)),
             Rect::new(-960, 44, 960, 1036)
+        );
+    }
+
+    #[test]
+    fn odd_work_area_halves_match_committed_extent() {
+        let work = Rect::new(0, 0, 1921, 1081);
+        let current = Size::new(800, 600);
+        assert_eq!(
+            snap_geometry(SnapTarget::RightHalf, work, current),
+            Rect::new(961, 0, 960, 1081)
+        );
+        assert_eq!(
+            snap_geometry(SnapTarget::BottomHalf, work, current),
+            Rect::new(0, 541, 1921, 540)
+        );
+        assert_eq!(
+            snap_geometry(SnapTarget::BottomRightQuarter, work, current),
+            Rect::new(961, 541, 960, 540)
         );
     }
 
