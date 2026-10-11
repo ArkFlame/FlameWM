@@ -26,17 +26,17 @@ Schema: `flamewm-settings-acceptance/2` (`schema_version` 2). Each run writes `<
 | SS01 | seven pages open | implemented (7 pages at the base screen size) |
 | SS02 | seven pages x 760x500/820x540/960x640 | implemented; FAIL unless all 21 captures are live/nonblank and measured client geometry exactly matches |
 | SS03 | accent | NOT_RUN (no runner) |
-| SS04 | icon theme | partial typed settings cycle/unknown-value snapshot; canonical NOT_RUN without shell icon-cache/fallback consumer and persistence probe |
+| SS04 | icon theme | typed cycle/unknown snapshot plus a real GTK3 client (owned display) reading XSETTINGS `gtk-icon-theme-name` and `folder` icon lookup; unrelated-setting control; fresh client after an owned WM restart. Shell does not read `iconTheme`, XSETTINGS is the only consumer. PASS needs the client to report each requested theme |
 | SS05 | wallpaper | NOT_RUN (chooser is interactive; no non-interactive path on this host) |
-| SS06 | sticky notes/opacities | partial typed value snapshot and WM restart persistence; canonical NOT_RUN because `flamewm-desktop` is not launched for visual proof |
-| SS07 | taskbar | partial Settings and private Panels snapshot mutation; canonical NOT_RUN without Shell taskbar rendering and restart equivalence |
+| SS06 | sticky notes/opacities | typed snapshot, WM restart persistence, and real `flamewm-desktop` captures from private-HOME fixtures (one Desktop file, one sticky note): note pixel hidden after `stickyNotesEnabled=false`, selection fill red level at 20/21/50 percent, unrelated-setting and unchanged-capture controls. NOT_RUN overall: `flamewm_xtest.py` has no drag primitive, so the WM snap-preview fill (`snap_preview_consumer`) cannot be driven |
+| SS07 | taskbar | Settings and Panels snapshots plus real `flamewm-shell` captures: taskbar extent, color x opacity pixel, edge move, unchanged-capture and unrelated-setting controls, and a freshly started Shell after an owned WM restart. Panel edge is reported (not gated) as persisted or reset |
 | SS08 | displays 1/2/4/5+ outputs and modes | NOT_RUN; partial: `LEGACY_HARNESS_NATIVE_ONE_OUTPUT` covers only the 1-output case |
 | SS09 | 15s rollback | NOT_RUN (a real 15 s revert cannot run in Xephyr; needs a fake-clock test) |
 | SS10 | scale | native runner (`run_ss10`); needs `--ss10-scale-click`, plus `--ss10-wheel-steps` and `--ss10-scrolled-click` when the output lists modes. PASS only when the Displays 125 click changes the output `scale` to 125, the mode list is unchanged, and the value persists after an owned WM restart; otherwise NOT_RUN |
 | SS11 | fonts | native runner (`run_ss11`); needs `--ss11-family-click` and `--ss11-size-click`. PASS only when both clicks change `fontFamily` / `fontSizeOffset` in the Settings snapshot and both persist after an owned WM restart; otherwise NOT_RUN |
 | SS12 | hotkeys | native runner; PASS only when lease, stored binding, action, grab restoration, owner loss, Escape clear (empty binding, persisted after restart) and Reset (`Super_L`, persisted after restart) all pass; Start is observed as the `StartMenuToggleRequested` D-Bus signal (no Start window exists in the session); clicks default to measured screen points 593,180 / 733,180, valid only for the 820x540 client at (0,31) (otherwise refused NOT_RUN); `--ss12-click` and `--ss12-reset-click` override |
 | SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 and the Rust test `about_version_text_is_exact_flamewm_version` passes via `cargo test`; NOT_RUN when cargo is not on PATH |
-| SS14 | external signal + auto-revert | partial Settings accent driver; canonical NOT_RUN until panel, shortcut, display rollback and signal-loss paths are also exercised |
+| SS14 | external signal + auto-revert | Settings accent, `Panels.SetEdge` on the open Taskbar page, `Shortcuts.SetBinding` on the open Hotkeys page (each with unchanged-capture and unrelated-setting controls, no input), and an owned WM restart under an open Settings client followed by an external accent Apply. Display rollback stays NOT_RUN: Xephyr exposes no alternative modes, so no revert transaction can start |
 | SS15 | traversal/disabled states | NOT_RUN (no runner) |
 | SS16 | cargo/CSS/architecture gates | runner executes `static_audit`, `architecture_guard`, `verify_rwr_promotion`, `test_j18_frame_guard.py`; PASS only when all exit 0 on one source (cargo gates are not run here) |
 | SS17 | private XTEST+screenshot matrix | NOT_RUN (no runner) |
@@ -153,3 +153,5 @@ scripts/settings-acceptance --run-dir <fresh-empty-dir> --hotkey-click 400,300 -
 The live runner needs a built `.target/debug/flamewm` and `.target/debug/flamewm-settings`
 (or `--wm-bin` and `--settings-bin`). Read `<run>/result.json` and the shots; do not rely on the
 exit code alone. Exit 0 is not readiness.
+
+Runner options for consumers: `--shell-bin` and `--desktop-bin` (default `.target/debug/flamewm-shell` / `flamewm-desktop`); both are spawned as owned children in the private session with the same environment plus `XDG_SESSION_TYPE=x11`, only inside the SS04/SS06/SS07 handlers, and stopped before the handler returns.

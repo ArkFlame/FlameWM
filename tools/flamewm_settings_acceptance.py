@@ -179,6 +179,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--display", default=None, help="explicit display in :90..:99; refused when already in use")
     parser.add_argument("--wm-bin", default=str(ROOT / ".target/debug/flamewm"))
     parser.add_argument("--settings-bin", default=str(ROOT / ".target/debug/flamewm-settings"))
+    parser.add_argument("--shell-bin", default=str(ROOT / ".target/debug/flamewm-shell"))
+    parser.add_argument("--desktop-bin", default=str(ROOT / ".target/debug/flamewm-desktop"))
     parser.add_argument("--settle-seconds", type=float, default=3.0)
     parser.add_argument("--hotkey-click", metavar="X,Y", default=None, help="XTEST click before the NATIVE_HOTKEY_INPUT key press")
     parser.add_argument("--hotkey-key", metavar="KEYSYM", default=None, help="XTEST key for NATIVE_HOTKEY_INPUT (needs --hotkey-click too)")
@@ -770,7 +772,8 @@ def assess_ss04(observations: dict[str, bool | None]) -> tuple[str, str]:
 
 
 def assess_ss06(observations: dict[str, bool | None]) -> tuple[str, str]:
-    required = ("desktop_values_snapshot", "settings_persisted_after_wm_restart", "desktop_visual_consumer")
+    required = ("desktop_values_snapshot", "settings_persisted_after_wm_restart", "desktop_visual_consumer",
+                "snap_preview_consumer")
     failed = [key for key in required if observations.get(key) is False]
     if failed:
         return STATUS_FAIL, "measured Desktop settings failure: " + ", ".join(failed)
@@ -1811,6 +1814,180 @@ def run_ss19(ctx: Ctx, args: argparse.Namespace, external_update: bool | None) -
     return finish()
 
 
+def gdbus_call(ctx: Ctx, interface_method: str, args_list: list[str], details: dict) -> tuple[int, str]:
+    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1", "--object-path", "/com/arkflame/FlameWM1",
+            "--method", "com.arkflame.FlameWM1." + interface_method, *args_list]
+    result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True, timeout=10, check=False)
+    details["commands"].append(shell(argv))
+    return result.returncode, (result.stdout if result.returncode == 0 else result.stderr).strip()
+
+
+def settings_client_digest(ctx: Ctx, name: str, evidence: Path) -> tuple[str | None, dict | None]:
+    """Capture the root, locate the Settings client by xwininfo and hash exactly that client rectangle."""
+    geometry = wait_for_settings_window(ctx, evidence, timeout=3.0)
+    path = ctx.run / "shots" / f"{name}.png"
+    ok, _ = capture(ctx, path)
+    if geometry is None or not ok:
+        return None, geometry
+    return image_region_digest(path, (geometry["x"], geometry["y"], geometry["width"], geometry["height"])), geometry
+
+
+def ss14_ui_refresh(ctx: Ctx, args: argparse.Namespace, details: dict, key: str, page: str,
+                    external, unrelated) -> bool | None:
+    """Open Settings on `page`; an external D-Bus mutation must repaint the client with no input.
+
+    Controls: a second capture with no change and an unrelated external mutation must both leave
+    the client pixels identical before the real external change is allowed to differ."""
+    record: dict = {"page": page}
+    details[key] = record
+    window = ctx.spawn(f"settings-ss14-{key}", [args.settings_bin, "--page", page], ctx.app_env)
+    time.sleep(args.settle_seconds)
+    evidence = ctx.run / "logs" / f"ss14-{key}-window-tree.txt"
+    try:
+        if window.proc.poll() is not None:
+            record["reason"] = "Settings exited before measurement"
+            return None
+        first, geometry = settings_client_digest(ctx, f"ss14-{key}-0", evidence)
+        second, _ = settings_client_digest(ctx, f"ss14-{key}-0b", evidence)
+        record["geometry"] = geometry
+        if first is None or second is None:
+            record["reason"] = "Settings client rectangle or capture unavailable"
+            return None
+        record["unchanged_capture_equal"] = first == second
+        ok, detail = unrelated()
+        record["unrelated"] = detail
+        time.sleep(args.settle_seconds)
+        after_unrelated, _ = settings_client_digest(ctx, f"ss14-{key}-unrelated", evidence)
+        record["unrelated_leaves_client_unchanged"] = bool(ok and after_unrelated == first)
+        ok, detail = external()
+        record["external"] = detail
+        time.sleep(args.settle_seconds)
+        changed, geometry_after = settings_client_digest(ctx, f"ss14-{key}-external", evidence)
+        record["geometry_after"] = geometry_after
+        record["client_changed_without_input"] = bool(ok and changed is not None and changed != first)
+        record["settings_alive"] = window.proc.poll() is None
+        if not (record["unchanged_capture_equal"] and record["unrelated_leaves_client_unchanged"] and ok):
+            record["reason"] = "negative control failed or external call rejected; measurement not attributable"
+            return None
+        return bool(record["client_changed_without_input"] and record["settings_alive"])
+    finally:
+        ctx.stop(window)
+
+
+def ss14_external_paths(ctx: Ctx, args: argparse.Namespace, details: dict, observations: dict) -> None:
+    def desktop_opacity_unrelated() -> tuple[bool, dict]:
+        text, _ = dbus_settings_snapshot(ctx)
+        revision = gvariant_field_u64(text or "", "revision")
+        current = gvariant_field_uint(text or "", "DesktopSelectionFillOpacity")
+        if revision is None or current is None:
+            return False, {"reason": "settings snapshot unavailable"}
+        code, reply = gdbus_call(ctx, "Settings.Apply", [f"uint64 {revision}", "{'DesktopSelectionFillOpacity': <uint32 "
+                                                         + str(21 if current != 21 else 20) + ">}"], details)
+        return code == 0, {"exit": code, "reply": reply}
+
+    # Panels: the Taskbar page shows the Edge selector for the output.
+    panels_text, _ = dbus_panels_snapshot(ctx)
+    panels = parse_panels_snapshot(panels_text or "")
+    if panels is None or not panels["panels"]:
+        details["panels_reason"] = "Panels snapshot unavailable or no panel output"
+    else:
+        output = panels["panels"][0]["output"]
+        original_edge = panels["panels"][0]["edge"]
+
+        def panels_external() -> tuple[bool, dict]:
+            current_text, _ = dbus_panels_snapshot(ctx)
+            current = parse_panels_snapshot(current_text or "")
+            if current is None:
+                return False, {"reason": "Panels snapshot unavailable"}
+            edge = "top" if current["panels"][0]["edge"] != "top" else "bottom"
+            code, reply = gdbus_call(ctx, "Panels.SetEdge", ["'" + output + "'", "'" + edge + "'", f"uint64 {current['revision']}"], details)
+            return code == 0, {"exit": code, "reply": reply, "edge": edge}
+
+        observations["panels_external_change"] = ss14_ui_refresh(
+            ctx, args, details, "panels", "taskbar", panels_external, desktop_opacity_unrelated)
+        restored_text, _ = dbus_panels_snapshot(ctx)
+        restored = parse_panels_snapshot(restored_text or "")
+        if restored and restored["panels"] and restored["panels"][0]["edge"] != original_edge:
+            gdbus_call(ctx, "Panels.SetEdge", ["'" + output + "'", "'" + original_edge + "'", f"uint64 {restored['revision']}"], details)
+
+    # Shortcuts: a row shown on the Hotkeys page (Desktop down) receives a new binding from a second client.
+    def shortcuts_external() -> tuple[bool, dict]:
+        text, _ = dbus_shortcuts_snapshot(ctx)
+        revision = gvariant_field_u64(text or "", "revision")
+        current = gvariant_field_string(text or "", "WorkspaceDown")
+        if revision is None or current is None:
+            return False, {"reason": "shortcuts snapshot unavailable"}
+        binding = "Ctrl+Alt+J" if current != "Ctrl+Alt+J" else "Ctrl+Alt+K"
+        code, reply = gdbus_call(ctx, "Shortcuts.SetBinding", ["'WorkspaceDown'", "'" + binding + "'", f"uint64 {revision}"], details)
+        return code == 0, {"exit": code, "reply": reply, "binding": binding}
+
+    shortcuts_before, _ = dbus_shortcuts_snapshot(ctx)
+    observations["shortcuts_external_change"] = ss14_ui_refresh(
+        ctx, args, details, "shortcuts", "hotkeys", shortcuts_external, desktop_opacity_unrelated)
+    text, _ = dbus_shortcuts_snapshot(ctx)
+    revision = gvariant_field_u64(text or "", "revision")
+    if revision is not None and gvariant_field_string(text or "", "WorkspaceDown") != \
+            gvariant_field_string(shortcuts_before or "", "WorkspaceDown"):
+        gdbus_call(ctx, "Shortcuts.ResetBinding", ["'WorkspaceDown'", f"uint64 {revision}"], details)
+
+
+def ss14_signal_loss(ctx: Ctx, args: argparse.Namespace, details: dict, observations: dict) -> None:
+    """Restart the owned WM (bus-name owner loss) under an open Settings client; it must keep following changes."""
+    record: dict = {}
+    details["signal_loss"] = record
+    snapshot, _ = dbus_settings_snapshot(ctx)
+    accent = gvariant_field_string(snapshot or "", "accent")
+    point = (170, int(args.ss14_accent_pixel.split(",")[1]))  # selected-row interior right of the label text
+    if accent is None or Image is None:
+        record["reason"] = "settings snapshot or Pillow unavailable"
+        return
+    window = ctx.spawn("settings-ss14-signal-loss", [args.settings_bin, "--page", "appearance"], ctx.app_env)
+    time.sleep(args.settle_seconds)
+    evidence = ctx.run / "logs" / "ss14-signal-loss-window-tree.txt"
+    try:
+        geometry = wait_for_settings_window(ctx, evidence)
+        if geometry is None:
+            record["reason"] = "Settings client was not mapped"
+            return
+        pixel_x, pixel_y = ss14_accent_screen_point(geometry, point)
+        pre = ctx.run / "shots" / "ss14-signal-loss-pre.png"
+        capture(ctx, pre)
+        pre_pixel = image_pixel(pre, pixel_x, pixel_y)
+        restarted = restart_owned_wm(ctx, args, "flamewm-ss14-signal-loss-restart")
+        record["wm_restarted"] = restarted
+        time.sleep(args.settle_seconds)
+        mid = ctx.run / "shots" / "ss14-signal-loss-restarted.png"
+        capture(ctx, mid)
+        geometry = wait_for_settings_window(ctx, evidence) or geometry
+        pixel_x, pixel_y = ss14_accent_screen_point(geometry, point)
+        mid_pixel = image_pixel(mid, pixel_x, pixel_y)
+        record["settings_alive_after_restart"] = window.proc.poll() is None
+        text, _ = dbus_settings_snapshot(ctx)
+        revision = gvariant_field_u64(text or "", "revision")
+        current = gvariant_field_string(text or "", "accent") or accent
+        target = next(value for value in ("#2878D7", "#23A982", "#EF4048") if value.lower() != current.lower())
+        if not restarted or revision is None or pre_pixel is None or mid_pixel is None:
+            record["reason"] = "restart, snapshot or pixel sample unavailable"
+            return
+        code, reply = gdbus_call(ctx, "Settings.Apply", [f"uint64 {revision}", "{'accent': <'" + target + "'>}"], details)
+        record["apply"] = {"exit": code, "reply": reply, "target": target}
+        time.sleep(args.settle_seconds)
+        post = ctx.run / "shots" / "ss14-signal-loss-post.png"
+        capture(ctx, post)
+        post_pixel = image_pixel(post, pixel_x, pixel_y)
+        expected = expected_selected_row_pixel(target)
+        record.update({"pre_pixel": pre_pixel, "restarted_pixel": mid_pixel, "post_pixel": post_pixel,
+                       "expected_pixel": expected})
+        if code != 0:
+            return
+        observations["signal_loss_recovery"] = bool(
+            record["settings_alive_after_restart"] and mid_pixel == pre_pixel
+            and post_pixel is not None and post_pixel != mid_pixel and rgb_close(post_pixel, expected, 8))
+    finally:
+        ctx.stop(window)
+
+
+
 def run_ss14(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Mutate one Settings value through a second D-Bus client; require idle visible propagation."""
     observations: dict[str, bool | None] = {
@@ -1936,6 +2113,19 @@ def run_ss14(ctx: Ctx, args: argparse.Namespace) -> dict:
     details["idle_observation"] = "no mouse/key input after the external Apply call"
     details["evidence"] = [str(before_path), str(after_path), str(monitor_path)]
     ctx.stop(settings)
+    details["paths_exercised"] += ["Panels.SetEdge refresh of open Taskbar page", "Shortcuts.SetBinding refresh of open Hotkeys page",
+                                   "owned WM restart under an open Settings client"]
+    details["paths_not_exercised"] = []
+    ss14_external_paths(ctx, args, details, observations)
+    ss14_signal_loss(ctx, args, details, observations)
+    snapshot, _ = dbus_displays_snapshot(ctx)
+    modes = display_mode_count(snapshot or "")
+    details["display_rollback"] = {
+        "mode_count": modes,
+        "reason": "Displays snapshot exposes no alternative modes under Xephyr (modes=[]); "
+                  "BeginModeChange has no mode id and no 15 s transaction can be started" if not modes else
+                  "runner does not drive a timed revert transaction"}
+    details["paths_not_exercised"].append("display timeout rollback: " + details["display_rollback"]["reason"])
     return finish()
 
 
@@ -1964,14 +2154,188 @@ def restart_owned_wm(ctx: Ctx, args: argparse.Namespace, name: str) -> bool:
     return False
 
 
+GTK_ICON_CONSUMER = """
+import json, sys, time, gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib
+settings = Gtk.Settings.get_default()
+def sample():
+    info = Gtk.IconTheme.get_default().lookup_icon("folder", 48, 0)
+    rec = {"t": time.time(), "name": settings.get_property("gtk-icon-theme-name"),
+           "folder": info.get_filename() if info else None}
+    with open(sys.argv[1], "a") as out:
+        out.write(json.dumps(rec) + "\\n")
+    return True
+GLib.timeout_add(250, sample)
+Gtk.main()
+"""
+
+
+def start_session_clients(ctx: Ctx, args: argparse.Namespace, which: tuple[str, ...], tag: str) -> dict[str, Owned]:
+    """Spawn flamewm-desktop / flamewm-shell as owned children with the product-session environment."""
+    env = dict(ctx.app_env, XDG_SESSION_TYPE="x11")
+    started: dict[str, Owned] = {}
+    for name in which:
+        binary = getattr(args, f"{name}_bin")
+        if os.access(binary, os.X_OK):
+            started[name] = ctx.spawn(f"{name}-{tag}", [binary], env)
+    time.sleep(args.settle_seconds)
+    return started
+
+
+def stop_session_clients(ctx: Ctx, clients: dict[str, Owned]) -> None:
+    for owned in clients.values():
+        ctx.stop(owned)
+
+
+def clients_alive(clients: dict[str, Owned]) -> bool:
+    return all(owned.proc.poll() is None for owned in clients.values())
+
+
+def rgb_close(actual: tuple[int, int, int] | None, expected: tuple[int, int, int] | None, tolerance: int) -> bool:
+    return (actual is not None and expected is not None
+            and max(abs(a - e) for a, e in zip(actual, expected)) <= tolerance)
+
+
+def taskbar_measure(ctx: Ctx, name: str) -> dict | None:
+    """Real capture of the Shell taskbar: contiguous non-black extent at screen mid-column."""
+    if Image is None:
+        return None
+    path = ctx.run / "shots" / f"{name}.png"
+    ok, _ = capture(ctx, path)
+    if not ok:
+        return None
+    try:
+        with Image.open(path) as shot:
+            image = shot.convert("RGB")
+    except OSError:
+        return None
+    width, height = image.size
+    column = width // 2
+
+    def extent(rows) -> int:
+        count = 0
+        for row in rows:
+            if image.getpixel((column, row)) == (0, 0, 0):
+                break
+            count += 1
+        return count
+
+    top, bottom = extent(range(height)), extent(range(height - 1, -1, -1))
+    if top == 0 and bottom == 0:
+        return {"shot": str(path), "edge": None, "extent": 0, "inside": None, "band_digest": None}
+    edge, size = ("bottom", bottom) if bottom >= top else ("top", top)
+    band_y = height - size if edge == "bottom" else 0
+    inside_y = band_y + size // 2
+    return {"shot": str(path), "edge": edge, "extent": size, "inside": image.getpixel((column, inside_y)),
+            "band_digest": image_region_digest(path, (100, band_y, max(1, width - 400), size))}
+
+
+def taskbar_matches(measure: dict | None, edge: str, height: int, color: str, opacity: int) -> bool:
+    rgb = accent_rgb(color)
+    if measure is None or rgb is None or measure["edge"] != edge or measure["extent"] != height:
+        return False
+    expected = tuple(round(channel * opacity / 100) for channel in rgb)
+    return rgb_close(measure["inside"], expected, 16)
+
+
+def gtk_consumer_latest(path: Path) -> dict | None:
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return json.loads(lines[-1]) if lines else None
+    except (OSError, ValueError):
+        return None
+
+
+def gtk_consumer_wait(path: Path, expected: str, timeout: float = 4.0) -> dict | None:
+    """Wait for the real GTK client to report the expected icon theme; return the last sample either way."""
+    deadline = time.monotonic() + timeout
+    latest = gtk_consumer_latest(path)
+    while time.monotonic() < deadline:
+        latest = gtk_consumer_latest(path)
+        if latest is not None and latest.get("name") == expected:
+            return latest
+        time.sleep(0.25)
+    return latest
+
+
+
+def ss04_gtk_consumer(ctx: Ctx, args: argparse.Namespace, details: dict, observations: dict) -> None:
+    """Real XSETTINGS consumer: a GTK3 client under the owned display reads gtk-icon-theme-name."""
+    probe = subprocess.run([sys.executable, "-c", "import gi;gi.require_version('Gtk','3.0');from gi.repository import Gtk"],
+                           capture_output=True, timeout=30, check=False)
+    if probe.returncode != 0:
+        details["consumer_reason"] = "python3 GTK3 bindings unavailable; no real icon-theme consumer"
+        return
+    out = ctx.run / "logs" / "ss04-gtk-consumer.jsonl"
+    consumer = ctx.spawn("ss04-gtk-consumer", [sys.executable, "-c", GTK_ICON_CONSUMER, str(out)], ctx.app_env)
+    time.sleep(2.0)
+    base = gtk_consumer_latest(out)
+    time.sleep(1.0)
+    idle = gtk_consumer_latest(out)
+    live = (consumer.proc.poll() is None and base is not None and idle is not None and idle["t"] > base["t"])
+    details["consumer"] = {"baseline": base, "idle": idle, "live": live}
+    if not live:
+        details["consumer_reason"] = "GTK consumer did not produce live samples"
+        return
+    snapshot, _ = dbus_settings_snapshot(ctx)
+    revision = gvariant_field_u64(snapshot or "", "revision")
+    if revision is None:
+        return
+    # Negative control: unrelated setting must not move the consumer's icon theme.
+    opacity = gvariant_field_uint(snapshot or "", "taskbarOpacity")
+    applied = apply_and_read_settings(ctx, revision, {"taskbarOpacity": f"uint32 {67 if opacity != 67 else 68}"}, details)
+    revision = (applied or {}).get("revision") or revision
+    time.sleep(1.5)
+    unrelated = gtk_consumer_latest(out)
+    details["consumer"]["after_unrelated_change"] = unrelated
+    unrelated_unchanged = unrelated is not None and unrelated["name"] == idle["name"]
+    target = "breeze-dark" if idle["name"] != "breeze-dark" else "HighContrast"
+    applied = apply_and_read_settings(ctx, revision, {"iconTheme": "'" + target + "'"}, details)
+    revision = (applied or {}).get("revision") or revision
+    seen = gtk_consumer_wait(out, target)
+    details["consumer"]["after_supported_theme"] = {"requested": target, "observed": seen}
+    unknown = "FlameWM-Unknown-Theme-Fixture"
+    applied = apply_and_read_settings(ctx, revision, {"iconTheme": "'" + unknown + "'"}, details)
+    revision = (applied or {}).get("revision") or revision
+    fallback = gtk_consumer_wait(out, unknown)
+    details["consumer"]["after_unknown_theme"] = {"requested": unknown, "observed": fallback}
+    log_text = (ctx.run / "logs" / "ss04-gtk-consumer.log").read_text(encoding="utf-8", errors="replace") \
+        if (ctx.run / "logs" / "ss04-gtk-consumer.log").exists() else ""
+    details["consumer"]["invalid_xsettings_warnings"] = log_text.count("Invalid XSETTINGS property")
+    details["consumer"]["invalid_xsettings_sample"] = next(
+        (line for line in log_text.splitlines() if "Invalid XSETTINGS" in line), None)
+    if not unrelated_unchanged:
+        observations["real_icon_fallback_consumer"] = False
+        return
+    observations["real_icon_fallback_consumer"] = bool(
+        seen and seen.get("name") == target and fallback and fallback.get("name") == unknown
+        and fallback.get("folder"))
+    # Restart persistence: a fresh GTK client after a WM restart must read the last applied theme.
+    ctx.stop(consumer)
+    restarted = restart_owned_wm(ctx, args, "flamewm-ss04-persistence-restart")
+    details["consumer"]["wm_restarted"] = restarted
+    if not restarted:
+        return
+    out2 = ctx.run / "logs" / "ss04-gtk-consumer-restart.jsonl"
+    second = ctx.spawn("ss04-gtk-consumer-restart", [sys.executable, "-c", GTK_ICON_CONSUMER, str(out2)], ctx.app_env)
+    persisted = gtk_consumer_wait(out2, unknown, timeout=6.0)
+    details["consumer"]["after_restart"] = persisted
+    observations["theme_persistence_after_restart"] = bool(persisted and persisted.get("name") == unknown)
+    ctx.stop(second)
+
+
+
 def run_ss04(ctx: Ctx, args: argparse.Namespace) -> dict:
     observations: dict[str, bool | None] = {
         "supported_theme_snapshots": None, "unknown_theme_snapshot": None,
         "real_icon_fallback_consumer": None, "theme_persistence_after_restart": None,
     }
     details: dict = {"observations": observations,
-                     "paths_exercised": ["Settings.Apply(iconTheme) supported cycle and unknown value snapshot"],
-                     "paths_not_exercised": ["Shell icon-cache invalidation", "installed-theme icon fallback", "restart persistence"],
+                     "paths_exercised": ["Settings.Apply(iconTheme) supported cycle and unknown value snapshot",
+                                         "real GTK3 client XSETTINGS gtk-icon-theme-name + icon lookup fallback",
+                                         "WM restart persistence read by a fresh GTK client"],
+                     "paths_not_exercised": ["Shell icon-cache invalidation (flamewm-shell does not read the iconTheme setting; XSETTINGS Net/IconThemeName is the only consumer path)"],
                      "commands": [], "theme_observations": []}
     initial, command = dbus_settings_snapshot(ctx)
     details["commands"].append(command)
@@ -2006,8 +2370,13 @@ def run_ss04(ctx: Ctx, args: argparse.Namespace) -> dict:
     observations["unknown_theme_snapshot"] = (
         unknown_value == unknown and isinstance(unknown_revision, int) and unknown_revision > current_revision
     ) if applied else False
-    latest_revision = unknown_revision if isinstance(unknown_revision, int) else current_revision
-    if original != unknown_value:
+    ss04_gtk_consumer(ctx, args, details, observations)
+    refreshed, command = dbus_settings_snapshot(ctx)
+    details["commands"].append(command)
+    latest_revision = gvariant_field_u64(refreshed or "", "revision")
+    if latest_revision is None:
+        latest_revision = unknown_revision if isinstance(unknown_revision, int) else current_revision
+    if original != gvariant_field_string(refreshed or "", "iconTheme"):
         restored = apply_and_read_settings(ctx, latest_revision, {"iconTheme": "'" + original + "'"}, details)
         details["restored_theme"] = gvariant_field_string((restored or {}).get("text") or "", "iconTheme")
     status, reason = assess_ss04(observations)
@@ -2310,15 +2679,78 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
     return finish()
 
 
+SS06_NOTE_RECT = (600, 300, 240, 160)
+SS06_NOTE_COLOR = (255, 235, 59)
+SS06_ICON_CLICK = "37,30"
+SS06_ICON_RECT = (0, 0, 80, 100)
+
+
+def ss06_seed_fixtures(ctx: Ctx) -> None:
+    """Private-HOME input fixtures: one Desktop file and one sticky note on output 'default', workspace 0."""
+    home = ctx.run / "home"
+    (home / "Desktop").mkdir(parents=True, exist_ok=True)
+    (home / "Desktop" / "ss06-fixture.txt").write_text("fixture\n", encoding="utf-8")
+    state = home / ".local" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    x, y, width, height = SS06_NOTE_RECT
+    hexed = lambda text: text.encode("utf-8").hex()
+    fields = [hexed("ss06-note"), "0", hexed("default"), str(x), str(y), str(width), str(height),
+              hexed("ss06"), *(str(v) for v in SS06_NOTE_COLOR), "0", "0", "0", "16", "0"]
+    (state / "sticky-notes.state").write_text("v2\t1\n" + "\t".join(fields) + "\n", encoding="utf-8")
+
+
+def ss06_capture(ctx: Ctx, name: str) -> Path | None:
+    path = ctx.run / "shots" / f"{name}.png"
+    ok, _ = capture(ctx, path)
+    return path if ok else None
+
+
+def ss06_note_visible(path: Path | None) -> bool | None:
+    if path is None:
+        return None
+    pixel = image_pixel(path, SS06_NOTE_RECT[0] + SS06_NOTE_RECT[2] // 2, SS06_NOTE_RECT[1] + SS06_NOTE_RECT[3] - 20)
+    if pixel is None:
+        return None
+    return rgb_close(pixel, SS06_NOTE_COLOR, 8)
+
+
+def ss06_selection_red(base: Path | None, selected: Path | None) -> int | None:
+    """Median red channel of the pixels the selection fill changed inside the Desktop icon rect."""
+    if base is None or selected is None or Image is None:
+        return None
+    x, y, width, height = SS06_ICON_RECT
+    try:
+        with Image.open(base) as first, Image.open(selected) as second:
+            rect = (x, y, x + width, y + height)
+            before = list(zip(*[iter(first.convert("RGB").crop(rect).tobytes())] * 3))
+            after = list(zip(*[iter(second.convert("RGB").crop(rect).tobytes())] * 3))
+    except OSError:
+        return None
+    reds = sorted(a[0] for b, a in zip(before, after) if b == (0, 0, 0) and a != (0, 0, 0))
+    return reds[len(reds) // 2] if len(reds) >= 200 else None
+
+
+def ss06_select_and_capture(ctx: Ctx, name: str, settle: float, base: Path | None) -> tuple[Path | None, int | None]:
+    send_input(ctx, SS06_ICON_CLICK, None)
+    send_input(ctx, None, None, move="700,600")
+    time.sleep(settle)
+    path = ss06_capture(ctx, name)
+    return path, ss06_selection_red(base, path)
+
+
+
 def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     observations: dict[str, bool | None] = {
         "desktop_values_snapshot": None, "settings_persisted_after_wm_restart": None,
-        "desktop_visual_consumer": None,
+        "desktop_visual_consumer": None, "snap_preview_consumer": None,
     }
     details: dict = {"observations": observations,
-                     "paths_exercised": ["Settings.Apply(stickyNotesEnabled, DesktopSelectionFillOpacity, WindowSnapPreviewFillOpacity)"],
-                     "paths_not_exercised": ["Desktop scene visual/snap-preview consumer (flamewm-desktop is not launched by this runner)"],
+                     "paths_exercised": ["Settings.Apply(stickyNotesEnabled, DesktopSelectionFillOpacity, WindowSnapPreviewFillOpacity)",
+                                         "flamewm-desktop sticky-note visibility and selection fill pixels (real captures)"],
+                     "paths_not_exercised": ["WM snap preview fill: flamewm_xtest.py has no button-hold/drag primitive, "
+                                             "so no real window drag to a snap edge can be produced"],
                      "commands": []}
+    clients: dict[str, Owned] = {}
     initial, command = dbus_settings_snapshot(ctx)
     details["commands"].append(command)
     revision = gvariant_field_u64(initial or "", "revision")
@@ -2334,6 +2766,35 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
         return entry
     next_selection = next_desktop_opacity(selection)
     next_snap = next_desktop_opacity(snap)
+    visual: dict = {}
+    base_path: Path | None = None
+    details["visual"] = visual
+    settle = min(args.settle_seconds, 1.5)
+    if Image is not None and os.access(args.desktop_bin, os.X_OK) and sticky:
+        ss06_seed_fixtures(ctx)
+        clients = start_session_clients(ctx, args, ("desktop",), "ss06")
+        base_path = ss06_capture(ctx, "ss06-base")
+        visual["alive"] = clients_alive(clients)
+        visual["note_visible_base"] = ss06_note_visible(base_path)
+        sel0_path, red0 = ss06_select_and_capture(ctx, "ss06-selected", settle, base_path)
+        again = ss06_capture(ctx, "ss06-selected-unchanged")
+        visual["selection_red_before"] = red0
+        visual["selection_red_unchanged_capture"] = ss06_selection_red(base_path, again)
+        visual["expected_red_before"] = round(239 * selection / 100)
+        unrelated = apply_and_read_settings(ctx, revision, {
+            "taskbarOpacity": "uint32 " + str(67 if gvariant_field_uint(initial, "taskbarOpacity") != 67 else 68)}, details)
+        time.sleep(settle)
+        after_unrelated = ss06_capture(ctx, "ss06-after-unrelated")
+        visual["unrelated_applied"] = unrelated is not None
+        visual["selection_red_after_unrelated"] = ss06_selection_red(base_path, after_unrelated)
+        visual["note_visible_after_unrelated"] = ss06_note_visible(after_unrelated)
+        if unrelated and isinstance(unrelated.get("revision"), int):
+            revision = unrelated["revision"]
+        visual["base_path"] = str(base_path)
+    elif not sticky:
+        visual["reason"] = "stickyNotesEnabled starts false; no visible-note control possible"
+    else:
+        visual["reason"] = "Pillow or flamewm-desktop binary unavailable"
     changes = {"stickyNotesEnabled": "false" if sticky else "true",
                "DesktopSelectionFillOpacity": f"uint32 {next_selection}",
                "WindowSnapPreviewFillOpacity": f"uint32 {next_snap}"}
@@ -2347,6 +2808,45 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     expected = {"stickyNotesEnabled": not sticky, "selectionOpacity": next_selection, "snapOpacity": next_snap}
     values_ok = updated == expected and isinstance(new_revision, int) and new_revision > revision
     observations["desktop_values_snapshot"] = values_ok if applied else False
+    if values_ok and visual.get("selection_red_before") is not None:
+        time.sleep(settle)
+        shot = ss06_capture(ctx, "ss06-after-apply")
+        red_apply = ss06_selection_red(base_path, shot)
+        if red_apply is None:  # settings refresh may drop the selection; select again, then measure
+            shot, red_apply = ss06_select_and_capture(ctx, "ss06-after-apply-reselect", settle, base_path)
+        visual["note_visible_after_apply"] = ss06_note_visible(shot)
+        visual["selection_red_after_apply"] = red_apply
+        visual["expected_red_after_apply"] = round(239 * next_selection / 100)
+        # Distinguishable fill: 21% vs 20% differs by ~2 red levels, so also drive a 50% fill.
+        high = apply_and_read_settings(ctx, new_revision, {"DesktopSelectionFillOpacity": "uint32 50"}, details)
+        time.sleep(settle)
+        high_shot = ss06_capture(ctx, "ss06-selection-50")
+        red_high = ss06_selection_red(base_path, high_shot)
+        if red_high is None:
+            high_shot, red_high = ss06_select_and_capture(ctx, "ss06-selection-50-reselect", settle, base_path)
+        visual["selection_red_at_50"] = red_high
+        visual["expected_red_at_50"] = round(239 * 50 / 100)
+        restore_revision = (high or {}).get("revision")
+        restored = apply_and_read_settings(
+            ctx, restore_revision if isinstance(restore_revision, int) else new_revision,
+            {"DesktopSelectionFillOpacity": f"uint32 {next_selection}"}, details)
+        visual["selection_restored"] = restored is not None
+        controls = (
+            visual.get("alive") is True and clients_alive(clients)
+            and visual.get("note_visible_base") is True
+            and visual.get("selection_red_unchanged_capture") == visual["selection_red_before"]
+            and visual.get("note_visible_after_unrelated") is True
+            and visual.get("selection_red_after_unrelated") is not None
+            and abs(visual["selection_red_after_unrelated"] - visual["selection_red_before"]) <= 2
+            and abs(visual["selection_red_before"] - round(239 * selection / 100)) <= 12)
+        visual["controls_ok"] = controls
+        if controls and red_apply is not None and red_high is not None and high is not None:
+            observations["desktop_visual_consumer"] = bool(
+                visual["note_visible_after_apply"] is False
+                and abs(red_apply - visual["expected_red_after_apply"]) <= 12
+                and abs(red_high - visual["expected_red_at_50"]) <= 12
+                and red_high - visual["selection_red_before"] >= 40)
+    stop_session_clients(ctx, clients)
     if values_ok:
         restarted = restart_owned_wm(ctx, args, "flamewm-ss06-persistence-restart")
         details["wm_restarted"] = restarted
@@ -2372,8 +2872,11 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     }
     details: dict = {"observations": observations,
                      "paths_exercised": ["Settings.Apply(taskbarHeight/taskbarOpacity/taskbarColor)", "Panels.SetEdge/GetSnapshot"],
-                     "paths_not_exercised": ["Shell taskbar rendering (flamewm-shell is not launched by this runner)", "restart equivalence"],
+                     "paths_not_exercised": [],
                      "commands": []}
+    clients: dict[str, Owned] = {}
+    visual: dict = {}
+    details["visual"] = visual
     settings_before, command = dbus_settings_snapshot(ctx)
     details["commands"].append(command)
     panels_before_text, command = dbus_panels_snapshot(ctx)
@@ -2399,6 +2902,29 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     next_height = 53 if current_height != 53 else 54
     next_opacity = 67 if current_opacity != 67 else 68
     color = "#284F77" if gvariant_field_string(settings_before, "taskbarColor") != "#284F77" else "#4A3828"
+    shell_ok = Image is not None and os.access(args.shell_bin, os.X_OK)
+    if shell_ok:
+        clients = start_session_clients(ctx, args, ("shell",), "ss07")
+        first = taskbar_measure(ctx, "ss07-before-a")
+        second = taskbar_measure(ctx, "ss07-before-b")
+        visual["before"] = first
+        visual["unchanged_capture_equal"] = bool(
+            first and second and first["band_digest"] and first["band_digest"] == second["band_digest"]
+            and first["extent"] == second["extent"])
+        unrelated = apply_and_read_settings(ctx, settings_revision, {
+            "DesktopSelectionFillOpacity": "uint32 " + str(
+                21 if gvariant_field_uint(settings_before, "DesktopSelectionFillOpacity") != 21 else 20)}, details)
+        time.sleep(min(args.settle_seconds, 1.5))
+        after_unrelated = taskbar_measure(ctx, "ss07-after-unrelated")
+        visual["after_unrelated"] = after_unrelated
+        visual["unrelated_leaves_taskbar_unchanged"] = bool(
+            unrelated and first and after_unrelated and first["band_digest"]
+            and first["band_digest"] == after_unrelated["band_digest"]
+            and first["extent"] == after_unrelated["extent"])
+        if unrelated and isinstance(unrelated.get("revision"), int):
+            settings_revision = unrelated["revision"]
+    else:
+        visual["reason"] = "Pillow or flamewm-shell binary unavailable"
     changes = {"taskbarHeight": f"uint32 {next_height}",
                "taskbarOpacity": f"uint32 {next_opacity}",
                "taskbarColor": "'" + color + "'"}
@@ -2415,6 +2941,13 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     details["settings_after"] = {"revision": new_settings_revision, "taskbarHeight": gvariant_field_uint(text, "taskbarHeight"),
                                  "taskbarOpacity": gvariant_field_uint(text, "taskbarOpacity"),
                                  "taskbarColor": gvariant_field_string(text, "taskbarColor")}
+    if shell_ok and settings_ok:
+        time.sleep(min(args.settle_seconds, 1.5))
+        applied_measure = taskbar_measure(ctx, "ss07-after-apply")
+        visual["after_apply"] = applied_measure
+        visual["expected"] = {"height": next_height, "color": color, "opacity": next_opacity}
+        visual["after_apply_matches"] = taskbar_matches(
+            applied_measure, (visual.get("before") or {}).get("edge") or "bottom", next_height, color, next_opacity)
     panels_current_text, command = dbus_panels_snapshot(ctx)
     details["commands"].append(command)
     panels_current = parse_panels_snapshot(panels_current_text or "")
@@ -2448,6 +2981,46 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
             )
             details["selected_output"] = output_key
             details["expected_panel_edge"] = next_edge
+            if shell_ok and observations["panel_edge_and_size_snapshot"] is True and settings_ok:
+                time.sleep(min(args.settle_seconds, 1.5))
+                moved = taskbar_measure(ctx, "ss07-after-edge")
+                visual["after_edge"] = moved
+                visual["after_edge_matches"] = taskbar_matches(moved, next_edge, next_height, color, next_opacity)
+                controls = bool(visual.get("unchanged_capture_equal") and visual.get("unrelated_leaves_taskbar_unchanged")
+                                and clients_alive(clients) and (visual.get("before") or {}).get("extent"))
+                visual["controls_ok"] = controls
+                if controls:
+                    observations["taskbar_visual_consumer"] = bool(
+                        visual.get("after_apply_matches") and visual["after_edge_matches"]
+                        and (visual["before"]["inside"] != (visual.get("after_apply") or {}).get("inside")
+                             or visual["before"]["extent"] != (visual.get("after_apply") or {}).get("extent")))
+                restarted = restart_owned_wm(ctx, args, "flamewm-ss07-persistence-restart")
+                visual["wm_restarted"] = restarted
+                if restarted:
+                    time.sleep(args.settle_seconds)
+                    # Evidence only: the Shell that survived the WM restart vs the WM's Panels snapshot.
+                    visual["surviving_shell_after_restart"] = taskbar_measure(ctx, "ss07-surviving-shell")
+                    stop_session_clients(ctx, clients)
+                    clients = start_session_clients(ctx, args, ("shell",), "ss07-restart")
+                    persisted_text, command = dbus_settings_snapshot(ctx)
+                    details["commands"].append(command)
+                    persisted_panels_text, command = dbus_panels_snapshot(ctx)
+                    details["commands"].append(command)
+                    persisted_panels = parse_panels_snapshot(persisted_panels_text or "")
+                    persisted_panel = next((item for item in (persisted_panels or {}).get("panels", [])
+                                            if item["output"] == output_key), None)
+                    values_persisted = (
+                        gvariant_field_uint(persisted_text or "", "taskbarHeight") == next_height
+                        and gvariant_field_uint(persisted_text or "", "taskbarOpacity") == next_opacity
+                        and gvariant_field_string(persisted_text or "", "taskbarColor") == color)
+                    restarted_measure = taskbar_measure(ctx, "ss07-after-restart")
+                    visual["after_restart"] = restarted_measure
+                    visual["panel_after_restart"] = persisted_panel
+                    visual["panel_edge_persisted"] = bool(persisted_panel and persisted_panel["edge"] == next_edge)
+                    observations["settings_persistence_after_restart"] = bool(
+                        values_persisted and persisted_panel is not None and clients_alive(clients)
+                        and taskbar_matches(restarted_measure, persisted_panel["edge"], next_height, color, next_opacity))
+    stop_session_clients(ctx, clients)
     status, reason = assess_ss07(observations)
     entry = result_entry("SS07", status, reason, commands=details["commands"])
     entry["details"] = details

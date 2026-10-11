@@ -537,6 +537,95 @@ class AppearanceDesktopTaskbarScenarioTests(unittest.TestCase):
         self.assertIsNone(acc.parse_panels_snapshot("{'panels': <[]>}"))
 
 
+class RealConsumerObservableTests(unittest.TestCase):
+    """Pure checks of the real-capture consumer observables (synthetic images, no X server)."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="ss-consumer-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _shot(self, name: str, draw) -> Path:
+        from PIL import Image
+        image = Image.new("RGB", (1280, 800), (0, 0, 0))
+        draw(image)
+        path = self.tmp / name
+        image.save(path)
+        return path
+
+    def test_ss06_requires_snap_preview_consumer(self) -> None:
+        observations = {"desktop_values_snapshot": True, "settings_persisted_after_wm_restart": True,
+                        "desktop_visual_consumer": True, "snap_preview_consumer": None}
+        status, reason = acc.assess_ss06(observations)
+        self.assertEqual(status, "NOT_RUN")
+        self.assertIn("snap_preview_consumer", reason)
+        observations["snap_preview_consumer"] = True
+        self.assertEqual(acc.assess_ss06(observations)[0], "PASS")
+
+    def test_rgb_close_rejects_far_and_missing(self) -> None:
+        self.assertTrue(acc.rgb_close((35, 62, 90), (27, 53, 80), 16))
+        self.assertFalse(acc.rgb_close((35, 62, 90), (0, 0, 0), 16))
+        self.assertFalse(acc.rgb_close(None, (0, 0, 0), 16))
+
+    def test_taskbar_matches_needs_edge_height_and_color(self) -> None:
+        measure = {"edge": "bottom", "extent": 53, "inside": (35, 62, 90)}
+        self.assertTrue(acc.taskbar_matches(measure, "bottom", 53, "#284F77", 67))
+        self.assertFalse(acc.taskbar_matches(measure, "top", 53, "#284F77", 67))
+        self.assertFalse(acc.taskbar_matches(measure, "bottom", 44, "#284F77", 67))
+        self.assertFalse(acc.taskbar_matches(measure, "bottom", 53, "#4A3828", 67))
+        self.assertFalse(acc.taskbar_matches(None, "bottom", 53, "#284F77", 67))
+
+    def test_taskbar_measure_unchanged_capture_has_equal_band_and_change_differs(self) -> None:
+        def bar(color, height):
+            return lambda image: image.paste(color, (0, 800 - height, 1280, 800))
+        shots = {"a": self._shot("a.png", bar((24, 26, 28), 44)), "b": self._shot("b.png", bar((24, 26, 28), 44)),
+                 "c": self._shot("c.png", bar((35, 62, 90), 53))}
+        measures = {}
+        for key, path in shots.items():
+            def fake_capture(ctx, out, source=path):
+                shutil.copy(source, out)
+                return True, "copy"
+            ctx = SimpleNamespace(run=self.tmp)
+            (self.tmp / "shots").mkdir(exist_ok=True)
+            with patch("flamewm_settings_acceptance.capture", side_effect=fake_capture):
+                measures[key] = acc.taskbar_measure(ctx, "m-" + key)
+        self.assertEqual(measures["a"]["band_digest"], measures["b"]["band_digest"])
+        self.assertNotEqual(measures["a"]["band_digest"], measures["c"]["band_digest"])
+        self.assertEqual((measures["c"]["edge"], measures["c"]["extent"]), ("bottom", 53))
+
+    def test_ss06_selection_red_measures_fill_not_noise(self) -> None:
+        def fill(red):
+            return lambda image: image.paste((red, 14, 14), (5, 5, 70, 80))
+        base = self._shot("base.png", lambda image: None)
+        low, high = self._shot("low.png", fill(48)), self._shot("high.png", fill(120))
+        self.assertEqual(acc.ss06_selection_red(base, low), 48)
+        self.assertEqual(acc.ss06_selection_red(base, high), 120)
+        self.assertIsNone(acc.ss06_selection_red(base, base))  # unchanged capture must not count
+        self.assertIsNone(acc.ss06_selection_red(None, low))
+
+    def test_ss06_note_visibility_tracks_note_color(self) -> None:
+        x, y, w, h = acc.SS06_NOTE_RECT
+        shown = self._shot("shown.png", lambda image: image.paste(acc.SS06_NOTE_COLOR, (x, y, x + w, y + h)))
+        hidden = self._shot("hidden.png", lambda image: None)
+        self.assertTrue(acc.ss06_note_visible(shown))
+        self.assertFalse(acc.ss06_note_visible(hidden))
+        self.assertIsNone(acc.ss06_note_visible(None))
+
+    def test_gtk_consumer_latest_reads_last_sample_and_tolerates_garbage(self) -> None:
+        log = self.tmp / "c.jsonl"
+        self.assertIsNone(acc.gtk_consumer_latest(log))
+        log.write_text('{"name": "Yaru"}\n{"name": "breeze-dark"}\n', encoding="utf-8")
+        self.assertEqual(acc.gtk_consumer_latest(log)["name"], "breeze-dark")
+        log.write_text("not json\n", encoding="utf-8")
+        self.assertIsNone(acc.gtk_consumer_latest(log))
+        log.write_text('{"name": "Yaru"}\n', encoding="utf-8")
+        self.assertEqual(acc.gtk_consumer_wait(log, "breeze-dark", timeout=0.3)["name"], "Yaru")
+
+    def test_new_binary_args_default_to_debug_build(self) -> None:
+        args = acc.parse_args(["--run-dir", str(self.tmp / "r")])
+        self.assertTrue(args.shell_bin.endswith(".target/debug/flamewm-shell"))
+        self.assertTrue(args.desktop_bin.endswith(".target/debug/flamewm-desktop"))
+
+
 class XtestHeldKeyTests(unittest.TestCase):
     class FakeBackend:
         KEYCODES = {"shift": 10, "F2": 11}
