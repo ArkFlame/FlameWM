@@ -12,6 +12,7 @@ pub mod mpris;
 pub mod network_manager;
 pub mod portal_file_chooser;
 pub mod pulse;
+pub mod themes;
 
 pub use icon_service::{
     IconJob, IconPriority, IconResult, IconService, IconSubmit, IconSubmitError,

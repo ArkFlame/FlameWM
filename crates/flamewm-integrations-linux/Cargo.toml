@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 dbus = { version = "=0.9.12", default-features = false }
+flate2 = "=1.1.10"
 flamewm-api = { path = "../flamewm-api" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-debug = { path = "../flamewm-debug" }
