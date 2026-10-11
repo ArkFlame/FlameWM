@@ -159,7 +159,7 @@ TITLES.update({lid: f"{LEGACY_PREFIX}{lid}: {desc}" for lid, desc, _ in LEGACY_S
 # Why a canonical scenario is not runnable on this host or by this runner (appended to NOT_RUN reasons).
 CANONICAL_NOTES: dict[str, str] = {
     "SS08": "the 2/4/5+ output and mode fixtures need a virtual RandR provider this host does not supply",
-    "SS09": "a real 15-second mode revert cannot be produced inside Xephyr; needs a fake-clock test",
+    "SS09": "run_ss09 was not reached",
     "SS14": "the native Settings accent case does not cover panels, shortcuts, display rollback or signal loss",
     "SS18": "the installed-prefix release gate is outside the isolated runner",
 }
@@ -196,6 +196,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="SS12 binding to capture and replay after lease end (default Super+F8)")
     parser.add_argument("--ss18-installed-result", metavar="PATH", default=None,
                         help="installed-result.json from tools/flamewm_settings_installed_acceptance.py to map into SS18")
+    parser.add_argument("--ss18-prefix", metavar="DIR", default=None,
+                        help="staged package prefix; the runner invokes scripts/settings-installed-acceptance on it and "
+                             "ingests installed-result.json (ignored when --ss18-installed-result is given)")
+    parser.add_argument("--canary-bin", default=str(ROOT / ".target/debug/flamewm-x11-canary"),
+                        help="flamewm-x11-canary binary used by SS17 j07 rows")
     parser.add_argument("--ss14-accent-pixel", metavar="X,Y", default="100,92",
                         help="SS14 client-relative point inside the selected nav-row background (default: 100,92)")
     parser.add_argument("--ss05-click", metavar="X,Y", default="755,195",
@@ -215,6 +220,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     # Children start with cwd set to the run directory, so relative binary paths must be resolved first.
     args.wm_bin = str(Path(args.wm_bin).resolve())
     args.settings_bin = str(Path(args.settings_bin).resolve())
+    args.shell_bin = str(Path(args.shell_bin).resolve())
+    args.desktop_bin = str(Path(args.desktop_bin).resolve())
+    args.canary_bin = str(Path(args.canary_bin).resolve())
     return args
 
 
@@ -254,6 +262,8 @@ def validate(args: argparse.Namespace) -> Path:
         click_x, click_y = (int(part) for part in args.ss12_reset_click.split(","))
         if click_x >= width or click_y >= height:
             raise SystemExit("error: --ss12-reset-click must lie inside --geometry")
+    if args.ss18_prefix is not None and not Path(args.ss18_prefix).is_dir():
+        raise SystemExit("error: --ss18-prefix must be an existing directory")
     if not re.fullmatch(r"\d+,\d+", args.ss05_click):
         raise SystemExit("error: --ss05-click must be X,Y")
     ss05_x, ss05_y = (int(part) for part in args.ss05_click.split(","))
@@ -349,6 +359,9 @@ class Ctx:
         self.marker: Path = run / "xephyr-owner"
         self.wm: Owned | None = None
 
+    def wm_dead(self) -> bool:
+        return self.wm is None or self.wm.proc.poll() is not None
+
     def build_app_env(self) -> None:
         self.app_env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -442,12 +455,28 @@ def nonblank(path: Path) -> bool | None:
 
 
 def parse_window_tree(text: str) -> dict | None:
-    """Select the named Settings client from an xwininfo recursive tree."""
+    """Select the named Settings client from an xwininfo recursive tree.
+
+    xwininfo prints x/y relative to the parent, which is the WM frame. The returned x/y are
+    screen coordinates (sum of the relative positions up the chain), so a frame the WM moved
+    (for example on re-adoption) is reflected instead of the client's constant frame offset.
+    """
     best = None
-    for _, name, width, height, x, y in TREE_WINDOW_RE.findall(text):
-        if not re.search(r"(?i)settings", name):
+    stack: list[tuple[int, int, int]] = []  # (indent, screen_x, screen_y) of the ancestors
+    for line in text.splitlines():
+        match = TREE_WINDOW_RE.match(line)
+        if not match:
             continue
-        candidate = {"name": name, "width": int(width), "height": int(height), "x": int(x), "y": int(y)}
+        indent = len(line) - len(line.lstrip())
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        _, name, width, height, rel_x, rel_y = match.groups()
+        base_x, base_y = (stack[-1][1], stack[-1][2]) if stack else (0, 0)
+        screen_x, screen_y = base_x + int(rel_x), base_y + int(rel_y)
+        stack.append((indent, screen_x, screen_y))
+        if not name or not re.search(r"(?i)settings", name):
+            continue
+        candidate = {"name": name, "width": int(width), "height": int(height), "x": screen_x, "y": screen_y}
         if best is None or candidate["width"] * candidate["height"] > best["width"] * best["height"]:
             best = candidate
     return best
@@ -920,7 +949,8 @@ def stop_dbus_monitor(ctx: Ctx, monitor: Owned | None) -> None:
 
 
 def send_input(ctx: Ctx, click: str | None, key: str | None, chord: str | None = None,
-               move: str | None = None, wheel: str | None = None) -> tuple[int, str]:
+               move: str | None = None, wheel: str | None = None, drag: str | None = None,
+               drag_keep: bool = False, release: bool = False) -> tuple[int, str]:
     """Delegate XTEST input to tools/flamewm_xtest.py; token is redacted in the recorded command."""
     script = ROOT / "tools" / "flamewm_xtest.py"
     base = [sys.executable, str(script), "--display", ctx.display,
@@ -941,6 +971,15 @@ def send_input(ctx: Ctx, click: str | None, key: str | None, chord: str | None =
     if wheel:
         base += ["--wheel", wheel]
         recorded += ["--wheel", wheel]
+    if drag:
+        base += ["--drag", drag]
+        recorded += ["--drag", drag]
+        if drag_keep:
+            base.append("--drag-keep")
+            recorded.append("--drag-keep")
+    if release:
+        base.append("--release")
+        recorded.append("--release")
     result = subprocess.run(base, env=ctx.host_env, capture_output=True, text=True, timeout=60, check=False)
     return result.returncode, shell(recorded)
 
@@ -1599,6 +1638,9 @@ def display_mode_count(snapshot: str) -> int | None:
     return count if depth == 0 and not quoted else None
 
 
+SS15_RENDER_SETTLE = 0.4
+
+
 def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Exercise disabled pager endpoints and the actual hotkey Escape keyboard path."""
     observations: dict[str, bool | None] = {
@@ -1671,6 +1713,7 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
         prev_coordinate = settings_relative_point(ctx, geometry, (268, 497))
         code, command = send_input(ctx, prev_coordinate, None)
         details["commands"].append(command)
+        time.sleep(SS15_RENDER_SETTLE)  # the page repaints asynchronously after the click
         after_text, query = dbus_displays_snapshot(ctx)
         details["commands"].append(query)
         prev_path = ctx.run / "shots" / "ss15-mode-prev-label.png"
@@ -1682,6 +1725,7 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
             coordinate = settings_relative_point(ctx, geometry, (760, 497))
             code, command = send_input(ctx, coordinate, None)
             details["commands"].append(command)
+            time.sleep(SS15_RENDER_SETTLE)
             after_text, query = dbus_displays_snapshot(ctx)
             details["commands"].append(query)
             next_path = ctx.run / "shots" / f"ss15-mode-label-page-{next_page}.png"
@@ -1697,6 +1741,7 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
         next_coordinate = settings_relative_point(ctx, geometry, (760, 497))
         code, command = send_input(ctx, next_coordinate, None)
         details["commands"].append(command)
+        time.sleep(SS15_RENDER_SETTLE)
         after_text, query = dbus_displays_snapshot(ctx)
         details["commands"].append(query)
         end_path = ctx.run / "shots" / "ss15-mode-label-end.png"
@@ -1931,6 +1976,23 @@ def ss14_external_paths(ctx: Ctx, args: argparse.Namespace, details: dict, obser
         gdbus_call(ctx, "Shortcuts.ResetBinding", ["'WorkspaceDown'", f"uint64 {revision}"], details)
 
 
+def ss14_stable_pixel(ctx: Ctx, evidence: Path, name: str, point: tuple[int, int]) -> tuple[tuple | None, dict | None]:
+    """Capture and sample the point at the live Settings geometry; the geometry must be unchanged across the capture."""
+    for _ in range(3):
+        before = wait_for_settings_window(ctx, evidence)
+        if before is None:
+            return None, None
+        shot = ctx.run / "shots" / f"{name}.png"
+        if not capture(ctx, shot)[0]:
+            return None, before
+        after = window_geometry(ctx, evidence)
+        if after == before:
+            x, y = ss14_accent_screen_point(before, point)
+            return image_pixel(shot, x, y), before
+        time.sleep(0.3)
+    return None, None
+
+
 def ss14_signal_loss(ctx: Ctx, args: argparse.Namespace, details: dict, observations: dict) -> None:
     """Restart the owned WM (bus-name owner loss) under an open Settings client; it must keep following changes."""
     record: dict = {}
@@ -1949,18 +2011,14 @@ def ss14_signal_loss(ctx: Ctx, args: argparse.Namespace, details: dict, observat
         if geometry is None:
             record["reason"] = "Settings client was not mapped"
             return
-        pixel_x, pixel_y = ss14_accent_screen_point(geometry, point)
-        pre = ctx.run / "shots" / "ss14-signal-loss-pre.png"
-        capture(ctx, pre)
-        pre_pixel = image_pixel(pre, pixel_x, pixel_y)
+        pre_pixel, pre_geometry = ss14_stable_pixel(ctx, evidence, "ss14-signal-loss-pre", point)
+        record["pre_geometry"] = pre_geometry
         restarted = restart_owned_wm(ctx, args, "flamewm-ss14-signal-loss-restart")
         record["wm_restarted"] = restarted
         time.sleep(args.settle_seconds)
-        mid = ctx.run / "shots" / "ss14-signal-loss-restarted.png"
-        capture(ctx, mid)
-        geometry = wait_for_settings_window(ctx, evidence) or geometry
-        pixel_x, pixel_y = ss14_accent_screen_point(geometry, point)
-        mid_pixel = image_pixel(mid, pixel_x, pixel_y)
+        # The WM re-adopts and re-places the client on restart: sample at the live post-restart geometry.
+        mid_pixel, mid_geometry = ss14_stable_pixel(ctx, evidence, "ss14-signal-loss-restarted", point)
+        record["restarted_geometry"] = mid_geometry
         record["settings_alive_after_restart"] = window.proc.poll() is None
         text, _ = dbus_settings_snapshot(ctx)
         revision = gvariant_field_u64(text or "", "revision")
@@ -1972,9 +2030,8 @@ def ss14_signal_loss(ctx: Ctx, args: argparse.Namespace, details: dict, observat
         code, reply = gdbus_call(ctx, "Settings.Apply", [f"uint64 {revision}", "{'accent': <'" + target + "'>}"], details)
         record["apply"] = {"exit": code, "reply": reply, "target": target}
         time.sleep(args.settle_seconds)
-        post = ctx.run / "shots" / "ss14-signal-loss-post.png"
-        capture(ctx, post)
-        post_pixel = image_pixel(post, pixel_x, pixel_y)
+        post_pixel, post_geometry = ss14_stable_pixel(ctx, evidence, "ss14-signal-loss-post", point)
+        record["post_geometry"] = post_geometry
         expected = expected_selected_row_pixel(target)
         record.update({"pre_pixel": pre_pixel, "restarted_pixel": mid_pixel, "post_pixel": post_pixel,
                        "expected_pixel": expected})
@@ -2739,6 +2796,104 @@ def ss06_select_and_capture(ctx: Ctx, name: str, settle: float, base: Path | Non
 
 
 
+SNAP_PREVIEW_TITLE = "FlameWM snap preview"
+SS06_SNAP_MIN_CHANGED_FRACTION = 0.05
+SS06_SNAP_NOISE_MAX_FRACTION = 0.001
+
+
+def ss06_snap_preview_observed(preview_before: bool | None, preview_during: bool | None,
+                               changed_fraction: float | None, noise_fraction: float | None,
+                               committed_narrower: bool | None, preview_after: bool | None) -> bool | None:
+    """Real-difference rule: no preview in the control, a preview surface at the edge whose rect differs
+    from the control capture (and the control is stable), then gone after release with the window snapped."""
+    values = (preview_before, preview_during, changed_fraction, noise_fraction, committed_narrower, preview_after)
+    if any(value is None for value in values):
+        return None
+    return bool(not preview_before and preview_during
+                and changed_fraction >= SS06_SNAP_MIN_CHANGED_FRACTION
+                and noise_fraction <= SS06_SNAP_NOISE_MAX_FRACTION
+                and committed_narrower and not preview_after)
+
+
+def ss06_preview_rect(ctx: Ctx) -> dict | None:
+    """Geometry of the mapped (IsViewable) snap-preview surface; the WM keeps it created but unmapped when idle."""
+    tree = subprocess.run(["xwininfo", "-display", ctx.display, "-root", "-children"], env=ctx.host_env,
+                          capture_output=True, text=True, timeout=20, check=False)
+    for window_id in re.findall(r'(0x[0-9a-fA-F]+) "' + re.escape(SNAP_PREVIEW_TITLE) + '"', tree.stdout):
+        info = subprocess.run(["xwininfo", "-display", ctx.display, "-id", window_id], env=ctx.host_env,
+                              capture_output=True, text=True, timeout=20, check=False).stdout
+        if "Map State: IsViewable" not in info:
+            continue
+        box = {key: re.search(rf"{label}:\s+(-?\d+)", info) for key, label in
+               (("x", "Absolute upper-left X"), ("y", "Absolute upper-left Y"), ("width", "Width"), ("height", "Height"))}
+        if all(box.values()):
+            return {key: int(match.group(1)) for key, match in box.items()}
+    return None
+
+
+def ss06_snap_preview(ctx: Ctx, args: argparse.Namespace, details: dict, observations: dict) -> None:
+    """Drag a real Settings window title to the left edge with flamewm-desktop running and compare captures.
+
+    The control is the same drag held at a mid-screen point (identical window position, no snap candidate);
+    a second control capture measures capture noise.
+    """
+    record: dict = {}
+    details["snap_preview"] = record
+    if Image is None or ctx.display not in (f":{n}" for n in XTEST_DISPLAY_RANGE):
+        record["reason"] = "Pillow or an XTEST-range owned display is unavailable"
+        return
+    settle = min(args.settle_seconds, 1.5)
+    settings = ctx.spawn("settings-ss06-snap", [args.settings_bin, "--page", "appearance"], ctx.app_env)
+    held = False
+    try:
+        time.sleep(args.settle_seconds)
+        geometry = wait_for_settings_window(ctx, ctx.run / "logs" / "ss06-snap-window-tree.txt")
+        if geometry is None:
+            record["reason"] = "Settings client was not mapped"
+            return
+        record["window_before"] = geometry
+        title = (geometry["x"] + geometry["width"] // 2, geometry["y"] - 16)
+        mid, edge = (640, 400), (2, 400)
+        nodrag = ss06_capture(ctx, "ss06-snap-nodrag")
+        code, command = send_input(ctx, None, None, drag=f"{title[0]},{title[1]},{mid[0]},{mid[1]}:15:300",
+                                   drag_keep=True)
+        held = True
+        details["commands"].append(command)
+        time.sleep(settle)
+        control = ss06_capture(ctx, "ss06-snap-control")
+        control2 = ss06_capture(ctx, "ss06-snap-control2")
+        preview_before = ss06_preview_rect(ctx) is not None
+        code2, command = send_input(ctx, None, None, drag=f"{mid[0]},{mid[1]},{edge[0]},{edge[1]}:15:300",
+                                    drag_keep=True)
+        details["commands"].append(command)
+        time.sleep(settle)
+        preview_rect = ss06_preview_rect(ctx)
+        shot = ss06_capture(ctx, "ss06-snap-preview")
+        fraction = noise = None
+        if None not in (nodrag, control, control2, shot) and preview_rect is not None:
+            rect = (preview_rect["x"], preview_rect["y"], preview_rect["width"], preview_rect["height"])
+            fraction = pixel_change(str(control), str(shot), rect).get("fraction")
+            noise = pixel_change(str(control), str(control2), rect).get("fraction")
+        code3, command = send_input(ctx, None, None, release=True)
+        held = False
+        details["commands"].append(command)
+        time.sleep(settle)
+        after = wait_for_settings_window(ctx, ctx.run / "logs" / "ss06-snap-window-after.txt")
+        preview_after = ss06_preview_rect(ctx) is not None
+        narrower = None if after is None else after["width"] < geometry["width"]
+        record.update({"drag_exit": [code, code2, code3], "preview_rect": preview_rect, "window_after": after,
+                       "preview_before": preview_before, "preview_after": preview_after,
+                       "changed_fraction": fraction, "noise_fraction": noise,
+                       "control": str(control), "preview": str(shot), "no_drag": str(nodrag)})
+        if (code, code2, code3) == (0, 0, 0):
+            observations["snap_preview_consumer"] = ss06_snap_preview_observed(
+                preview_before, preview_rect is not None, fraction, noise, narrower, preview_after)
+    finally:
+        if held:
+            send_input(ctx, None, None, release=True)
+        ctx.stop(settings)
+
+
 def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     observations: dict[str, bool | None] = {
         "desktop_values_snapshot": None, "settings_persisted_after_wm_restart": None,
@@ -2746,9 +2901,10 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
     }
     details: dict = {"observations": observations,
                      "paths_exercised": ["Settings.Apply(stickyNotesEnabled, DesktopSelectionFillOpacity, WindowSnapPreviewFillOpacity)",
-                                         "flamewm-desktop sticky-note visibility and selection fill pixels (real captures)"],
-                     "paths_not_exercised": ["WM snap preview fill: flamewm_xtest.py has no button-hold/drag primitive, "
-                                             "so no real window drag to a snap edge can be produced"],
+                                         "flamewm-desktop sticky-note visibility and selection fill pixels (real captures)",
+                                         "XTEST drag of a real Settings title to the left snap edge: preview surface and pixels vs control"],
+                     "paths_not_exercised": ["WindowSnapPreviewFillOpacity effect on preview pixels: the WM preview is "
+                                             "border-only and ignores opacity by design (snap_preview.rs set_live_opacity)"],
                      "commands": []}
     clients: dict[str, Owned] = {}
     initial, command = dbus_settings_snapshot(ctx)
@@ -2846,6 +3002,8 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
                 and abs(red_apply - visual["expected_red_after_apply"]) <= 12
                 and abs(red_high - visual["expected_red_at_50"]) <= 12
                 and red_high - visual["selection_red_before"] >= 40)
+    if values_ok and clients and clients_alive(clients):
+        ss06_snap_preview(ctx, args, details, observations)
     stop_session_clients(ctx, clients)
     if values_ok:
         restarted = restart_owned_wm(ctx, args, "flamewm-ss06-persistence-restart")
@@ -3500,6 +3658,429 @@ def run_ss06(ctx: Ctx, args: argparse.Namespace) -> dict:
                           f"({error_bar['fraction']:.4%} changed); threshold {min_fraction:.2%}")
 
 
+# ---- SS09: 15s display-mode rollback -------------------------------------------------------------
+SS09_SOURCE_TESTS: dict[str, tuple[str, ...]] = {
+    "source_no_revert_at_14999ms": (
+        "services::display::tests::fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_snapshot",
+        "host::tests::unconfirmed_display_mode_reverts_only_after_deadline_tick"),
+    "source_single_revert_at_15000ms": (
+        "services::display::tests::fake_clock_15000ms_auto_revert_reverts_once_on_pending_output_and_changes_snapshot",
+        "host::tests::unconfirmed_display_mode_reverts_only_after_deadline_tick"),
+    "source_keep_prevents_revert": ("services::display::tests::keep_clears_pending_and_never_auto_reverts",),
+}
+SS09_REVERT_WINDOW = (14.5, 17.5)
+
+
+def parse_cargo_test_lines(output: str) -> dict[str, str]:
+    """Map `test NAME ... ok|FAILED|ignored` lines of cargo test output to their result word."""
+    return {name: word for name, word in re.findall(r"^test (\S+) \.\.\. (\w+)", output, re.MULTILINE)}
+
+
+def ss09_source_observations(exit_code: int | None, results: dict[str, str]) -> dict[str, bool | None]:
+    """True only when cargo exited 0 and every required named test reported ok; a missing name is False."""
+    if exit_code is None:
+        return {key: None for key in SS09_SOURCE_TESTS}
+    return {key: exit_code == 0 and all(results.get(name) == "ok" for name in names)
+            for key, names in SS09_SOURCE_TESTS.items()}
+
+
+def ss09_native_observed(applied: bool, pending_seen: bool, revert_elapsed: float | None,
+                         reverted_mode_matches: bool) -> bool:
+    """The deadline revert is real only when the mode change applied, stayed pending, and returned to the
+    original mode with pending cleared inside the measured window (an early revert falls outside it)."""
+    return bool(applied and pending_seen and reverted_mode_matches
+                and revert_elapsed is not None and SS09_REVERT_WINDOW[0] <= revert_elapsed <= SS09_REVERT_WINDOW[1])
+
+
+def assess_ss09(observations: dict[str, bool | None]) -> tuple[str, str]:
+    required = tuple(SS09_SOURCE_TESTS)
+    failed = [key for key in required if observations.get(key) is False]
+    native = observations.get("native_timeout_revert")
+    keep = observations.get("native_keep_control")
+    if native is False:
+        failed.append("native_timeout_revert")
+    if keep is False:
+        failed.append("native_keep_control")
+    if failed:
+        return STATUS_FAIL, "measured display rollback failure: " + ", ".join(failed)
+    missing = [key for key in required if observations.get(key) is not True]
+    if missing:
+        return STATUS_NOT_RUN, "display rollback source tests did not run: " + ", ".join(missing)
+    native_text = ("; native owned-session proof: BeginModeChange on a real RandR mode reverted at the 15 s deadline"
+                   " with Keep control holding the mode" if native is True and keep is True
+                   else "; native owned-session proof not completed")
+    return STATUS_PASS, ("SOURCE-TEST evidence (fake-clock cargo tests in flamewm-platform, not a live-session "
+                         "observation): 14999 ms no revert, 15000 ms single revert, Keep prevents revert" + native_text)
+
+
+def xrandr_current_size(ctx: Ctx) -> tuple[int, int] | None:
+    result = subprocess.run(["xrandr", "--query"], env=dict(ctx.host_env, DISPLAY=ctx.display),
+                            capture_output=True, text=True, timeout=15, check=False)
+    match = re.search(r"^\s+(\d+)x(\d+)\s.*\*", result.stdout, re.MULTILINE)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def display_modes(snapshot: str) -> list[tuple[int, int, int]]:
+    """(id, width, height) of every mode of the first output in a Displays snapshot."""
+    match = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*?)\]>", snapshot, re.DOTALL)
+    modes = []
+    for block in top_level_blocks(match.group(1)) if match else []:
+        mode_id, width, height = (gvariant_field_u64(block, "id"), gvariant_field_int(block, "width"),
+                                  gvariant_field_int(block, "height"))
+        if None not in (mode_id, width, height):
+            modes.append((mode_id, width, height))
+    return modes
+
+
+def ss09_native(ctx: Ctx, args: argparse.Namespace, details: dict) -> dict[str, bool | None]:
+    """Real owned-session proof: BeginModeChange over D-Bus, observe the 15 s revert and a Keep control."""
+    out: dict[str, bool | None] = {"native_timeout_revert": None, "native_keep_control": None,
+                                   "native_rollback_signal": None}
+    record: dict = {}
+    details["native"] = record
+    if shutil.which("gdbus") is None or shutil.which("xrandr") is None:
+        record["reason"] = "gdbus or xrandr unavailable"
+        return out
+    text, command = dbus_displays_snapshot(ctx)
+    details["commands"].append(command)
+    scales = display_output_scales(text or "")
+    generation, current = gvariant_field_u64(text or "", "generation"), gvariant_field_u64(text or "", "mode")
+    modes = display_modes(text or "")
+    if scales is None or len(scales) != 1 or generation is None or current is None:
+        record["reason"] = "single-output authoritative Displays snapshot unavailable"
+        return out
+    output_id = next(iter(scales))
+    start_size = xrandr_current_size(ctx)
+    alternatives = sorted((m for m in modes if m[0] != current and (m[1], m[2]) != start_size),
+                          key=lambda m: m[1] * m[2])
+    if start_size is None or not alternatives:
+        record["reason"] = f"RandR exposes no alternative mode (modes={len(modes)}); nothing to change"
+        return out
+    mode_id, width, height = alternatives[-1] if len(alternatives) < 4 else alternatives[len(alternatives) // 2]
+    record.update({"output": output_id, "from_mode": current, "to_mode": mode_id, "to_size": [width, height],
+                   "from_size": list(start_size)})
+
+    def begin(target: int) -> tuple[int | None, float]:
+        snapshot, _ = dbus_displays_snapshot(ctx)
+        gen = gvariant_field_u64(snapshot or "", "generation")
+        started = time.monotonic()
+        code, reply = gdbus_call(ctx, "Displays.BeginModeChange",
+                                 [output_id, f"uint64 {target}", f"uint64 {gen}"], details)
+        match = re.search(r"uint64 (\d+)", reply)
+        return (int(match.group(1)) if code == 0 and match else None), started
+
+    def pending() -> bool | None:
+        snapshot, _ = dbus_displays_snapshot(ctx)
+        return gvariant_field_bool(snapshot or "", "hasPending") if snapshot else None
+
+    monitor = ctx.spawn("ss09-displays-monitor", ["dbus-monitor", "--session",
+                                                  "type='signal',interface='com.arkflame.FlameWM1.Displays'"],
+                        ctx.app_env)
+    time.sleep(0.5)
+    transaction, started = begin(mode_id)
+    record["transaction"] = transaction
+    if transaction is None:
+        stop_dbus_monitor(ctx, monitor)
+        record["reason"] = "BeginModeChange was refused"
+        return out
+    applied = pending_seen = False
+    revert_elapsed = None
+    samples = []
+    while time.monotonic() - started < 25.0:
+        size, flag = xrandr_current_size(ctx), pending()
+        elapsed = round(time.monotonic() - started, 2)
+        samples.append((elapsed, size, flag))
+        if size == (width, height):
+            applied = True
+        if flag:
+            pending_seen = True
+        if applied and size == start_size and not flag:
+            revert_elapsed = elapsed
+            break
+        time.sleep(0.25)
+    final_size = xrandr_current_size(ctx)
+    stop_dbus_monitor(ctx, monitor)
+    log = ctx.run / "logs" / "ss09-displays-monitor.log"
+    signals = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    record["revert_signals"] = {name: signals.count(f"member={name}")
+                                for name in ("DisplayTransactionChanged", "DisplaysSnapshotChanged")}
+    out["native_rollback_signal"] = (None if not log.exists() else
+                                     bool(applied and revert_elapsed is not None
+                                          and any(record["revert_signals"].values())))
+    record.update({"applied": applied, "pending_seen": pending_seen, "revert_elapsed_s": revert_elapsed,
+                   "samples_first_last": [samples[0], samples[-1]] if samples else []})
+    out["native_timeout_revert"] = ss09_native_observed(applied, pending_seen, revert_elapsed,
+                                                       final_size == start_size)
+
+    # Keep control: confirm the same change; the mode must stay past the 15 s deadline.
+    if out["native_timeout_revert"] is True:
+        transaction, started = begin(mode_id)
+        code, reply = (gdbus_call(ctx, "Displays.Keep", [f"uint64 {transaction}"], details)
+                       if transaction is not None else (1, "begin refused"))
+        time.sleep(16.5)
+        kept_size, flag = xrandr_current_size(ctx), pending()
+        record["keep"] = {"exit": code, "size_after_deadline": kept_size, "pending": flag}
+        out["native_keep_control"] = bool(code == 0 and kept_size == (width, height) and flag is False)
+        restore, _ = begin(current)
+        if restore is not None:
+            gdbus_call(ctx, "Displays.Keep", [f"uint64 {restore}"], details)
+        time.sleep(1.0)
+        record["restored_size"] = xrandr_current_size(ctx)
+    return out
+
+
+def run_ss09(ctx: Ctx, args: argparse.Namespace) -> dict:
+    observations: dict[str, bool | None] = {key: None for key in SS09_SOURCE_TESTS}
+    observations.update({"native_timeout_revert": None, "native_keep_control": None,
+                         "native_rollback_signal": None})
+    details: dict = {"observations": observations, "commands": [],
+                     "paths_exercised": ["cargo test -p flamewm-platform display (fake clock)",
+                                         "Displays.BeginModeChange/Keep over D-Bus with real RandR modes"]}
+    argv = ["cargo", "test", "-p", "flamewm-platform", "display"]
+    details["commands"].append(shell(argv))
+    exit_code: int | None = None
+    results: dict[str, str] = {}
+    if shutil.which("cargo") is None:
+        details["source_reason"] = "cargo not on PATH"
+    else:
+        try:
+            done = subprocess.run(argv, cwd=ROOT, env={**os.environ, "CARGO_BUILD_JOBS": "2"},
+                                  capture_output=True, text=True, timeout=1800, check=False)
+            exit_code, results = done.returncode, parse_cargo_test_lines(done.stdout + done.stderr)
+        except subprocess.TimeoutExpired:
+            details["source_reason"] = "cargo test timed out"
+    details["source_exit_code"] = exit_code
+    details["source_tests"] = {name: results.get(name) for names in SS09_SOURCE_TESTS.values() for name in names}
+    observations.update(ss09_source_observations(exit_code, results))
+    if ctx.display is not None and not ctx.wm_dead():
+        observations.update(ss09_native(ctx, args, details))
+    status, reason = assess_ss09(observations)
+    entry = result_entry("SS09", status, reason, commands=details["commands"])
+    entry["details"] = details
+    return entry
+
+
+# ---- SS08: displays 1/2/4/5+ outputs --------------------------------------------------------------
+def count_connected(xrandr_text: str) -> int:
+    return sum(1 for line in xrandr_text.splitlines() if re.search(r"\sconnected\b", line)
+               and "disconnected" not in line)
+
+
+def assess_ss08(one_output_status: str, outputs_by_provider: dict[str, int | None], dummy_driver: bool,
+                modes_listed: int | None) -> tuple[str, str]:
+    """One output never counts as 1/2/4/5+: PASS needs a provider with >=5 connected outputs (no runner yet)."""
+    summary = ", ".join(f"{name}={count if count is not None else 'unprobed'}" for name, count in outputs_by_provider.items())
+    if one_output_status == STATUS_FAIL:
+        return STATUS_FAIL, "the single-output Displays page failed"
+    base = (f"1-output Displays case {one_output_status} with {modes_listed} listed modes; connected RandR outputs "
+            f"measured per provider: {summary}")
+    if any(count is not None and count >= 2 for count in outputs_by_provider.values()) or dummy_driver:
+        return STATUS_NOT_RUN, base + "; a multi-output provider exists but this runner has no 2/4/5+ output fixture driver"
+    return STATUS_ENV_BLOCKED, (base + "; no private X server on this host exposes >=2 RandR outputs (Xephyr -output only "
+                                "restricts fullscreen to a host output, xrandr --setmonitor adds monitors not outputs, "
+                                "no Xdummy/Xvnc/xf86-video-dummy); 2/4/5+ output cases cannot be produced")
+
+
+def probe_provider_outputs(ctx: Ctx, argv_for: dict[str, list[str]]) -> dict[str, int | None]:
+    """Start each private X provider on a free :9x display and count connected RandR outputs; None when unusable."""
+    counts: dict[str, int | None] = {}
+    for name, argv in argv_for.items():
+        if shutil.which(argv[0]) is None:
+            counts[name] = None
+            continue
+        display = pick_display(None)
+        if display is None:
+            counts[name] = None
+            continue
+        owned = ctx.spawn(f"probe-{name}", [argv[0], display, *argv[1:]], ctx.host_env)
+        try:
+            socket = X11_SOCKET_DIR / f"X{display[1:]}"
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline and not socket.exists() and owned.proc.poll() is None:
+                time.sleep(0.2)
+            time.sleep(0.5)
+            result = subprocess.run(["xrandr", "--query"], env=dict(ctx.host_env, DISPLAY=display),
+                                    capture_output=True, text=True, timeout=15, check=False)
+            counts[name] = count_connected(result.stdout) if result.returncode == 0 else None
+        finally:
+            ctx.stop(owned)
+    return counts
+
+
+def run_ss08(ctx: Ctx, args: argparse.Namespace, one_output: dict | None) -> dict:
+    ours = subprocess.run(["xrandr", "--query"], env=dict(ctx.host_env, DISPLAY=ctx.display),
+                          capture_output=True, text=True, timeout=30, check=False)
+    counts: dict[str, int | None] = {"Xephyr(owned)": count_connected(ours.stdout) if ours.returncode == 0 else None}
+    counts.update(probe_provider_outputs(ctx, {"Xvfb": ["Xvfb", "-screen", "0", "1280x800x24"]}))
+    counts.update({name: None for name in ("Xvnc", "Xdummy")})  # not installed on this host: unprobed
+    dummy = any(Path(root, "xorg/modules/drivers/dummy_drv.so").is_file() for root in ("/usr/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu"))
+    snapshot, _ = dbus_displays_snapshot(ctx)
+    modes = len(display_modes(snapshot or "")) if snapshot else None
+    status, reason = assess_ss08((one_output or {}).get("status", STATUS_NOT_RUN), counts, dummy, modes)
+    entry = result_entry("SS08", status, reason, evidence=(one_output or {}).get("evidence", []),
+                         commands=["xrandr --query (owned Xephyr)", "Xvfb probe on a free :9x display"])
+    entry["details"] = {"connected_outputs": counts, "xf86_video_dummy_present": dummy, "listed_modes": modes,
+                        "source_fixtures": "flamewm-platform display tests cover 2- and 5-output fixtures "
+                                           "(two_output_fixture_*, five_output_*); not native evidence"}
+    return entry
+
+
+# ---- SS17: private XTEST + screenshot matrix ------------------------------------------------------
+SS17_J07_ROWS: tuple[tuple[str, str, str], ...] = (
+    ("j07_popup", "popup", "t03-popup-lifecycle"),
+    ("j07_chrome", "chrome", "t09-t10-chrome-client"),
+    ("j07_max_snap", "max-snap", "t11-max-snap-fullscreen"),
+    ("j07_move", "move", "t06-real-move"),
+    ("j07_resize", "resize", "t07-real-resize-8"),
+)
+SS17_REQUIRED = ("x11_acceptance_all",) + tuple(row for row, _, _ in SS17_J07_ROWS) + (
+    "close_hover_pixel_difference", "scale_scroll_ss10")
+SS17_HOVER_MIN_FRACTION = 0.01
+
+
+def canary_check_passed(output: str, check: str) -> bool:
+    """The canary prints a JSON document; the named check must be present and pass (never inferred from exit)."""
+    for line in reversed(output.strip().splitlines()):
+        try:
+            document = json.loads(line)
+        except ValueError:
+            continue
+        return bool(document.get("pass") is True and any(
+            item.get("name") == check and item.get("pass") is True for item in document.get("checks", [])))
+    return False
+
+
+def ss17_hover_observed(away_a_vs_b: float | None, hover_vs_away: float | None) -> bool | None:
+    """Close hover is real only when the button rect changes under the pointer and two away captures agree."""
+    if away_a_vs_b is None or hover_vs_away is None:
+        return None
+    return away_a_vs_b == 0.0 and hover_vs_away >= SS17_HOVER_MIN_FRACTION
+
+
+def ss17_scale_scroll_observed(ss10: dict | None) -> bool | None:
+    if not ss10:
+        return None
+    details = ss10.get("details", {})
+    scroll = details.get("scroll")
+    if not scroll:
+        return None
+    return bool(ss10.get("status") == STATUS_PASS and scroll.get("exit_code") == 0)
+
+
+def assess_ss17(observations: dict[str, bool | None]) -> tuple[str, str]:
+    failed = [key for key in SS17_REQUIRED if observations.get(key) is False]
+    if failed:
+        return STATUS_FAIL, "measured private-matrix failure: " + ", ".join(failed)
+    missing = [key for key in SS17_REQUIRED if observations.get(key) is not True]
+    if missing:
+        return STATUS_NOT_RUN, "required matrix rows not executed: " + ", ".join(missing)
+    return STATUS_PASS, "whole required matrix executed: " + ", ".join(SS17_REQUIRED)
+
+
+def run_ss17(ctx: Ctx, args: argparse.Namespace, ss10: dict | None) -> dict:
+    observations: dict[str, bool | None] = {key: None for key in SS17_REQUIRED}
+    details: dict = {"observations": observations, "commands": [], "rows": {}}
+    observations["scale_scroll_ss10"] = ss17_scale_scroll_observed(ss10)
+
+    # Row 1: existing four-scenario Xephyr canary harness in its own isolated Xephyr + private D-Bus.
+    harness = ROOT / "tools" / "flamewm_x11_acceptance.py"
+    argv = [sys.executable, str(harness), "--scenario", "all", "--timeout", "240",
+            "--evidence-dir", str(ctx.run / "x11-acceptance")]
+    details["commands"].append(shell(argv))
+    env = dict(ctx.host_env, FLAMEWM_XEPHYR_BUILD="0", FLAMEWM_XEPHYR_WM_BIN=args.wm_bin,
+               FLAMEWM_XEPHYR_DESKTOP_BIN=args.desktop_bin, FLAMEWM_XEPHYR_SHELL_BIN=args.shell_bin,
+               FLAMEWM_XEPHYR_CANARY_BIN=args.canary_bin)
+    env.pop("FLAMEWM_SS_INNER", None)
+    child = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, start_new_session=True)
+    try:
+        output, _ = child.communicate(timeout=420)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, 15)
+        output, _ = child.communicate()
+        output += "\nTIMEOUT"
+    observations["x11_acceptance_all"] = child.returncode == 0 and "FLAMEWM_XEPHYR_CANARY_PASS" in output
+    details["rows"]["x11_acceptance_all"] = {"exit": child.returncode, "tail": output[-400:]}
+
+    # Rows 2..: j07 canaries against the owned session with desktop, shell and the xterm fixture.
+    if (ctx.display in (f":{n}" for n in XTEST_DISPLAY_RANGE) and os.access(args.canary_bin, os.X_OK)
+            and shutil.which("xterm") and not ctx.wm_dead()):
+        clients = start_session_clients(ctx, args, ("desktop", "shell"), "ss17")
+        xterm = ctx.spawn("xterm-ss17", ["xterm", "-T", "FlameWM-T06-Canary", "-n", "FlameWM-T06-Canary",
+                                         "-geometry", "80x24+90+90"], ctx.app_env)
+        time.sleep(min(args.settle_seconds, 2.0))
+        try:
+            for row, scenario, check in SS17_J07_ROWS:
+                cmd = [args.canary_bin, "j07", "--scenario", scenario, "--name", "FlameWM-T06-Canary",
+                       "--timeout-secs", "5", "--json"]
+                details["commands"].append(shell(cmd))
+                try:
+                    done = subprocess.run(cmd, env=dict(ctx.app_env, DISPLAY=ctx.display), capture_output=True,
+                                          text=True, timeout=90, check=False)
+                    observations[row] = canary_check_passed(done.stdout, check)
+                    details["rows"][row] = {"exit": done.returncode, "tail": done.stdout[-300:]}
+                except subprocess.TimeoutExpired:
+                    observations[row] = False
+                    details["rows"][row] = {"reason": "canary timed out"}
+        finally:
+            ctx.stop(xterm)
+            stop_session_clients(ctx, clients)
+    else:
+        details["j07_reason"] = "owned XTEST display, canary binary, xterm or live WM unavailable"
+
+    # Close-hover pixel difference on the Settings title bar close button (real XTEST pointer motion).
+    if Image is not None and ctx.display in (f":{n}" for n in XTEST_DISPLAY_RANGE) and not ctx.wm_dead():
+        settings = ctx.spawn("settings-ss17-hover", [args.settings_bin, "--page", "appearance"], ctx.app_env)
+        try:
+            time.sleep(args.settle_seconds)
+            geometry = wait_for_settings_window(ctx, ctx.run / "logs" / "ss17-window-tree.txt")
+            if geometry is not None:
+                rect = (geometry["x"] + geometry["width"] - 38, geometry["y"] - 25, 38, 25)
+                center = f"{rect[0] + 19},{rect[1] + 12}"
+                away = f"{geometry['x'] + 300},{geometry['y'] - 12}"  # inside the title bar, clear of buttons
+                shots = {}
+                for name, point in (("away-a0", away), ("away-a", away), ("hover", center),
+                                    ("left-frame", "1000,700")):
+                    send_input(ctx, None, None, move=point)
+                    time.sleep(0.6)
+                    shots[name] = ss06_capture(ctx, f"ss17-close-{name}")
+                if None not in shots.values():
+                    fractions = {name: pixel_change(str(shots["away-a"]), str(shots[name]), rect).get("fraction")
+                                 for name in ("away-a0", "hover", "left-frame")}
+                    observations["close_hover_pixel_difference"] = ss17_hover_observed(
+                        fractions["away-a0"], fractions["hover"])
+                    details["rows"]["close_hover_pixel_difference"] = {
+                        "rect": list(rect), "noise": fractions["away-a0"], "hover": fractions["hover"],
+                        "after_leaving_frame": fractions["left-frame"],
+                        "hover_cleared_on_leave": fractions["left-frame"] == 0.0}
+        finally:
+            send_input(ctx, None, None, move="640,600")
+            ctx.stop(settings)
+    status, reason = assess_ss17(observations)
+    if details["rows"].get("close_hover_pixel_difference", {}).get("hover_cleared_on_leave") is False:
+        reason += " (not gated: Close hover highlight stayed painted after the pointer left the frame)"
+    entry = result_entry("SS17", status, reason, commands=details["commands"])
+    entry["details"] = details
+    return entry
+
+
+def ss18_result(args: argparse.Namespace, run: Path) -> dict:
+    """SS18 from an explicit installed-result.json, else by invoking the installed gate on --ss18-prefix."""
+    if args.ss18_installed_result or not args.ss18_prefix:
+        return map_ss18(args.ss18_installed_result)
+    target = run / "ss18-installed"
+    argv = [str(ROOT / "scripts" / "settings-installed-acceptance"), "--prefix", str(args.ss18_prefix),
+            "--run-dir", str(target)]
+    env = {key: value for key, value in os.environ.items() if key != "FLAMEWM_SS_INNER"}
+    try:
+        subprocess.run(argv, env=env, capture_output=True, text=True, timeout=2400, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        return result_entry("SS18", STATUS_NOT_RUN, f"installed acceptance did not run: {error}", commands=[shell(argv)])
+    entry = map_ss18(str(target / "installed-result.json"))
+    entry["command"] = shell(argv)
+    return entry
+
+
 def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) -> None:
     ctx.display = pick_display(args.display)
     if ctx.display is None:
@@ -3607,6 +4188,17 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
     ss14_observations = results["SS14"].get("details", {}).get("observations", {})
     external_update = ss14_observations.get("settings_visible_without_input")
     results["SS19"] = run_ss19(ctx, args, external_update)
+    results["SS17"] = run_ss17(ctx, args, results.get("SS10"))
+    results["SS08"] = run_ss08(ctx, args, results.get("NATIVE_ONE_OUTPUT"))
+    # SS09 changes the owned screen size (and restores it): keep it after every pixel scenario.
+    results["SS09"] = run_ss09(ctx, args)
+    # SS14 display_rollback_signal: the unattended revert must have emitted a Displays signal (no client input).
+    rollback_signal = results["SS09"]["details"]["observations"].get("native_rollback_signal")
+    ss14 = results["SS14"]
+    ss14_observations = ss14.get("details", {}).get("observations")
+    if ss14_observations is not None and rollback_signal is not None:
+        ss14_observations["display_rollback_signal"] = rollback_signal
+        ss14["status"], ss14["reason"] = assess_ss14(ss14_observations)
 
     # NATIVE_PERSISTENCE_RESTART (legacy, was labelled SS08): persistence and restart under private XDG.
     persisted = sorted(
@@ -3641,7 +4233,7 @@ def inner(args: argparse.Namespace, run: Path) -> int:
     teardown: dict = {"owned_pids": [], "remaining": [], "ok": True}
     try:
         results["SS16"] = run_ss16()
-        results["SS18"] = map_ss18(args.ss18_installed_result)
+        results["SS18"] = ss18_result(args, run)
         reasons = host_blockers(args)
         if reasons:
             block_runner_ids(results, "; ".join(reasons))

@@ -1186,5 +1186,169 @@ class AboutVersionTestRunnerTests(unittest.TestCase):
         self.assertEqual(record["reason"], "cargo test timed out")
 
 
+class WindowTreeScreenCoordinateTests(unittest.TestCase):
+    TREE = ('''xwininfo: Window id: 0x230 (the root window) (has no name)
+     3 children:
+     0x400001 (has no name): ()  820x571+%d+%d  +0+0
+        13 children:
+        0x40000d (has no name): ()  38x25+782+6  +783+7
+        0x800001 "System Settings": ("flamewm-settings" "FlameWM Settings")  820x540+0+31  +1+32
+''')
+
+    def test_client_position_includes_moved_frame(self) -> None:
+        before = acc.parse_window_tree(self.TREE % (0, 0))
+        after = acc.parse_window_tree(self.TREE % (1, 66))
+        self.assertEqual((before["x"], before["y"]), (0, 31))
+        self.assertEqual((after["x"], after["y"]), (1, 97))  # negative control: relative 0,31 would be stale
+
+    def test_unnamed_windows_are_never_selected(self) -> None:
+        self.assertIsNone(acc.parse_window_tree(self.TREE.replace("System Settings", "Terminal")))
+
+
+class Ss09SourceAndNativeTests(unittest.TestCase):
+    OK = {name: "ok" for names in acc.SS09_SOURCE_TESTS.values() for name in names}
+
+    def test_all_named_tests_ok_is_true(self) -> None:
+        observed = acc.ss09_source_observations(0, self.OK)
+        self.assertTrue(all(value is True for value in observed.values()))
+
+    def test_missing_failed_or_nonzero_is_false_and_not_run_is_none(self) -> None:
+        keep = "services::display::tests::keep_clears_pending_and_never_auto_reverts"
+        without = {name: word for name, word in self.OK.items() if name != keep}
+        self.assertFalse(acc.ss09_source_observations(0, without)["source_keep_prevents_revert"])
+        failed = dict(self.OK, **{keep: "FAILED"})
+        self.assertFalse(acc.ss09_source_observations(101, failed)["source_keep_prevents_revert"])
+        self.assertTrue(all(value is None for value in acc.ss09_source_observations(None, {}).values()))
+
+    def test_cargo_line_parser(self) -> None:
+        text = "test a::b ... ok\ntest c::d ... FAILED\nrandom\n"
+        self.assertEqual(acc.parse_cargo_test_lines(text), {"a::b": "ok", "c::d": "FAILED"})
+
+    def test_assess_pass_labels_source_evidence_and_fails_on_native_false(self) -> None:
+        observations = {key: True for key in acc.SS09_SOURCE_TESTS}
+        status, reason = acc.assess_ss09(observations)
+        self.assertEqual(status, "PASS")
+        self.assertIn("SOURCE-TEST", reason)
+        observations["native_timeout_revert"] = False
+        self.assertEqual(acc.assess_ss09(observations)[0], "FAIL")
+        observations = dict.fromkeys(acc.SS09_SOURCE_TESTS)
+        self.assertEqual(acc.assess_ss09(observations)[0], "NOT_RUN")
+
+    def test_native_window_rejects_early_late_and_unchanged(self) -> None:
+        self.assertTrue(acc.ss09_native_observed(True, True, 15.2, True))
+        self.assertFalse(acc.ss09_native_observed(True, True, 3.0, True))
+        self.assertFalse(acc.ss09_native_observed(True, True, 30.0, True))
+        self.assertFalse(acc.ss09_native_observed(False, True, 15.2, True))
+        self.assertFalse(acc.ss09_native_observed(True, True, None, True))
+        self.assertFalse(acc.ss09_native_observed(True, True, 15.2, False))
+
+
+class Ss08Tests(unittest.TestCase):
+    def test_one_output_is_never_pass(self) -> None:
+        status, reason = acc.assess_ss08("PASS", {"Xephyr(owned)": 1, "Xvfb": 1}, False, 16)
+        self.assertEqual(status, "ENVIRONMENT_BLOCKED")
+        self.assertIn("Xephyr(owned)=1", reason)
+
+    def test_provider_with_outputs_is_not_run_not_blocked(self) -> None:
+        self.assertEqual(acc.assess_ss08("PASS", {"X": 2}, False, 3)[0], "NOT_RUN")
+
+    def test_failed_one_output_fails(self) -> None:
+        self.assertEqual(acc.assess_ss08("FAIL", {"X": 1}, False, 3)[0], "FAIL")
+
+    def test_connected_counter_ignores_disconnected(self) -> None:
+        text = "a connected 1x1\nb disconnected\nc connected primary\n"
+        self.assertEqual(acc.count_connected(text), 2)
+
+
+class Ss17Tests(unittest.TestCase):
+    def test_canary_check_needs_named_passing_check(self) -> None:
+        good = '{"scenario":"J07","pass":true,"checks":[{"name":"t06-real-move","pass":true}]}'
+        self.assertTrue(acc.canary_check_passed("noise\n" + good, "t06-real-move"))
+        self.assertFalse(acc.canary_check_passed(good, "t07-real-resize-8"))
+        bad = good.replace('"pass":true}]', '"pass":false}]')
+        self.assertFalse(acc.canary_check_passed(bad, "t06-real-move"))
+        self.assertFalse(acc.canary_check_passed("not json", "t06-real-move"))
+
+    def test_hover_needs_difference_and_stable_control(self) -> None:
+        self.assertTrue(acc.ss17_hover_observed(0.0, 0.2))
+        self.assertFalse(acc.ss17_hover_observed(0.0, 0.0))
+        self.assertFalse(acc.ss17_hover_observed(0.05, 0.2))
+        self.assertIsNone(acc.ss17_hover_observed(None, 0.2))
+
+    def test_scale_scroll_needs_pass_and_wheel_exit_zero(self) -> None:
+        ok = {"status": "PASS", "details": {"scroll": {"exit_code": 0}}}
+        self.assertTrue(acc.ss17_scale_scroll_observed(ok))
+        self.assertFalse(acc.ss17_scale_scroll_observed({"status": "FAIL", "details": ok["details"]}))
+        self.assertIsNone(acc.ss17_scale_scroll_observed({"status": "PASS", "details": {}}))
+
+    def test_matrix_pass_only_when_every_row_true(self) -> None:
+        rows = {key: True for key in acc.SS17_REQUIRED}
+        self.assertEqual(acc.assess_ss17(rows)[0], "PASS")
+        rows["j07_move"] = None
+        status, reason = acc.assess_ss17(rows)
+        self.assertEqual(status, "NOT_RUN")
+        self.assertIn("j07_move", reason)
+        rows["j07_move"] = False
+        self.assertEqual(acc.assess_ss17(rows)[0], "FAIL")
+
+
+class Ss06SnapPreviewTests(unittest.TestCase):
+    def test_real_difference_passes(self) -> None:
+        self.assertTrue(acc.ss06_snap_preview_observed(False, True, 0.9, 0.0, True, False))
+
+    def test_negative_controls(self) -> None:
+        cases = {"preview in control": (True, True, 0.9, 0.0, True, False),
+                 "no preview at edge": (False, False, 0.9, 0.0, True, False),
+                 "no pixel change": (False, True, 0.0, 0.0, True, False),
+                 "noisy control": (False, True, 0.9, 0.5, True, False),
+                 "not committed": (False, True, 0.9, 0.0, False, False),
+                 "preview left behind": (False, True, 0.9, 0.0, True, True)}
+        for name, case in cases.items():
+            with self.subTest(name):
+                self.assertFalse(acc.ss06_snap_preview_observed(*case))
+        self.assertIsNone(acc.ss06_snap_preview_observed(False, True, None, 0.0, True, False))
+
+
+class Ss18IngestTests(unittest.TestCase):
+    def _args(self, **kw) -> SimpleNamespace:
+        base = {"ss18_installed_result": None, "ss18_prefix": None}
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    def test_no_inputs_is_not_run(self) -> None:
+        self.assertEqual(acc.ss18_result(self._args(), Path("/nonexistent"))["status"], "NOT_RUN")
+
+    def test_prefix_invokes_installed_gate_and_ingests_its_json(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="ss18-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        document = {"schema": "flamewm-settings-installed-acceptance-v1", "ss18_status": "PASS",
+                    "behavioral_scenarios": {"SS01": "PASS", "SS03": "PASS"}, "command": ["x"], "prefix": "p"}
+
+        def fake_run(argv, **kwargs):
+            run_dir = Path(argv[argv.index("--run-dir") + 1])
+            run_dir.mkdir(parents=True)
+            (run_dir / "installed-result.json").write_text(__import__("json").dumps(document))
+            return SimpleNamespace(returncode=0)
+
+        with patch("flamewm_settings_acceptance.subprocess.run", side_effect=fake_run) as run:
+            entry = acc.ss18_result(self._args(ss18_prefix="/staged"), tmp)
+        self.assertEqual(entry["status"], "PASS")
+        self.assertIn("settings-installed-acceptance", run.call_args.args[0][0])
+        self.assertNotIn("FLAMEWM_SS_INNER", run.call_args.kwargs["env"])
+
+    def test_explicit_result_overrides_prefix(self) -> None:
+        with patch("flamewm_settings_acceptance.subprocess.run") as run:
+            entry = acc.ss18_result(self._args(ss18_prefix="/staged", ss18_installed_result="/nope.json"), Path("/x"))
+        run.assert_not_called()
+        self.assertEqual(entry["status"], "NOT_RUN")
+
+    def test_prefix_failure_negative_control(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="ss18-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with patch("flamewm_settings_acceptance.subprocess.run", return_value=SimpleNamespace(returncode=3)):
+            entry = acc.ss18_result(self._args(ss18_prefix="/staged"), tmp)
+        self.assertEqual(entry["status"], "NOT_RUN")
+
+
 if __name__ == "__main__":
     unittest.main()

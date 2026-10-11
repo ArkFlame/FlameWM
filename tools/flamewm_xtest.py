@@ -89,6 +89,9 @@ class X11Backend:
     def fake_button(self, button: int, down: bool) -> bool:
         return bool(self._xtst.XTestFakeButtonEvent(self._display, button, 1 if down else 0, 0))
 
+    def fake_motion(self, x: int, y: int) -> bool:
+        return bool(self._xtst.XTestFakeMotionEvent(self._display, -1, x, y, 0))
+
 
 def press_key(backend, keysym: str, down: bool) -> None:
     """Send exactly one key press (down=True) or release (down=False) for KEYSYM."""
@@ -145,6 +148,54 @@ def wheel_clicks(backend, button: int, steps: int) -> None:
             raise RuntimeError(f"XTEST wheel release rejected for button {button}")
 
 
+MAX_DRAG_STEPS = 200
+DEFAULT_DRAG_STEPS = 10
+DEFAULT_DRAG_HOLD_MS = 300
+
+
+def parse_drag(text: str) -> tuple[tuple[int, int], tuple[int, int], int, int]:
+    """Split 'X1,Y1,X2,Y2[:STEPS[:HOLD_MS]]' into start, end, move steps and final hold in ms.
+
+    STEPS is 1..MAX_DRAG_STEPS (default 10); HOLD_MS is 0..MAX_HOLD_MS (default 300). Raises ValueError
+    otherwise. Performs no X11 access.
+    """
+    head, *rest = text.split(":")
+    match = re.fullmatch(r"(\d+),(\d+),(\d+),(\d+)", head)
+    if not match or len(rest) > 2 or any(not re.fullmatch(r"\d+", part) for part in rest):
+        raise ValueError(f"expected X1,Y1,X2,Y2[:STEPS[:HOLD_MS]], got {text!r}")
+    x1, y1, x2, y2 = (int(part) for part in match.groups())
+    steps = int(rest[0]) if rest else DEFAULT_DRAG_STEPS
+    hold_ms = int(rest[1]) if len(rest) == 2 else DEFAULT_DRAG_HOLD_MS
+    if not 1 <= steps <= MAX_DRAG_STEPS:
+        raise ValueError(f"drag steps must be 1..{MAX_DRAG_STEPS}, got {steps}")
+    if hold_ms > MAX_HOLD_MS:
+        raise ValueError(f"drag hold must be 0..{MAX_HOLD_MS} ms, got {hold_ms}")
+    return (x1, y1), (x2, y2), steps, hold_ms
+
+
+def drag_events(backend, start, end, steps: int, hold_ms: int, release: bool = True, sleep=time.sleep) -> None:
+    """Move to START, press button 1, move to END in STEPS equal increments, hold, then optionally release.
+
+    A rejected event aborts the sequence. Once the press succeeded and release is requested, the release
+    is attempted even when a later motion is rejected or the hold is interrupted.
+    """
+    if not backend.fake_motion(*start):
+        raise RuntimeError("XTEST drag start motion rejected")
+    if not backend.fake_button(1, True):
+        raise RuntimeError("XTEST drag press rejected")
+    try:
+        for index in range(1, steps + 1):
+            x = start[0] + (end[0] - start[0]) * index // steps
+            y = start[1] + (end[1] - start[1]) * index // steps
+            if not backend.fake_motion(x, y):
+                raise RuntimeError(f"XTEST drag motion {index}/{steps} rejected")
+            sleep(0.02)
+        sleep(hold_ms / 1000.0)
+    finally:
+        if release and not backend.fake_button(1, False):
+            raise RuntimeError("XTEST drag release rejected")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--display", required=True, help="nested display in :97..:119 only")
@@ -162,13 +213,26 @@ def parse_args() -> argparse.Namespace:
         help="hold modifiers (ctrl, shift, alt, super/meta/win), press and release KEY, then release modifiers",
     )
     parser.add_argument("--wheel", metavar="up|down[:N]", help="scroll wheel up (button 4) or down (button 5), N steps (default 1)")
+    parser.add_argument("--drag", metavar="X1,Y1,X2,Y2[:STEPS[:HOLD_MS]]",
+                        help="press button 1 at X1,Y1, move to X2,Y2 in STEPS increments, hold HOLD_MS, then release")
+    parser.add_argument("--drag-keep", action="store_true", help="with --drag: leave button 1 down (end with --release)")
+    parser.add_argument("--release", action="store_true", help="release button 1 left down by --drag --drag-keep")
     args = parser.parse_args()
     if not DISPLAY_RE.fullmatch(args.display):
         parser.error("--display must be a nested display in :97..:119")
     if not re.fullmatch(r"[0-9a-f]{64}", args.owner_token):
         parser.error("--owner-token must be a 256-bit hexadecimal token")
-    if not (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold or args.wheel):
-        parser.error("request at least one of --click, --move, --key, --chord, --key-down, --key-up, --hold or --wheel")
+    if not (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold or args.wheel
+            or args.drag or args.release):
+        parser.error("request at least one of --click, --move, --key, --chord, --key-down, --key-up, --hold, "
+                     "--wheel, --drag or --release")
+    if args.drag_keep and not args.drag:
+        parser.error("--drag-keep needs --drag")
+    if args.drag:
+        try:
+            args.drag_spec = parse_drag(args.drag)
+        except ValueError as error:
+            parser.error(f"--drag: {error}")
     if args.hold:
         try:
             args.hold_spec = parse_hold(args.hold)
@@ -273,13 +337,17 @@ def main() -> int:
             held_key_events(backend, *args.hold_spec)
         if args.wheel:
             wheel_clicks(backend, *args.wheel_spec)
+        if args.drag:
+            drag_events(backend, *args.drag_spec, release=not args.drag_keep)
+        if args.release and not backend.fake_button(1, False):
+            raise RuntimeError("XTEST button release rejected")
         x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
         x11.XSync(display, 0)
         print(
             f"INPUT_SENT_UNVERIFIED: display={args.display} click={args.click or 'none'} "
             f"key={args.key or 'none'} chord={args.chord or 'none'} "
             f"key_down={args.key_down or 'none'} key_up={args.key_up or 'none'} hold={args.hold or 'none'} "
-            f"wheel={args.wheel or 'none'}"
+            f"wheel={args.wheel or 'none'} drag={args.drag or 'none'}"
         )
         return 0
     except UnmappedKeysym as error:
