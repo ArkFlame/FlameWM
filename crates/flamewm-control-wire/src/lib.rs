@@ -2302,7 +2302,11 @@ fn setting_value(value: &WireValue) -> Result<SettingValue, ControlError> {
 
 fn setting_value_for_key(key: &str, value: &WireValue) -> Result<SettingValue, ControlError> {
     match key {
-        "DesktopSelectionFillOpacity" | "WindowSnapPreviewFillOpacity" | "taskbarOpacity" => {
+        "DesktopSelectionFillOpacity"
+        | "WindowSnapPreviewFillOpacity"
+        | "taskbarOpacity"
+        | "startMenuOpacity"
+        | "accentOpacity" => {
             let percent = required_u32(value, key)?;
             Ok(SettingValue::Percent(
                 u8::try_from(percent).map_err(|_| invalid("percentage exceeds u8"))?,

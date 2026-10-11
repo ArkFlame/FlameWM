@@ -210,6 +210,106 @@ pub fn to_api_snapshot(settings: &ProductSettings) -> SettingsSnapshot {
             "stickyNotesEnabled".to_owned(),
             SettingValue::Boolean(settings.sticky_notes_enabled),
         ),
+        (
+            "startMenuColor".to_owned(),
+            SettingValue::Text(settings.start_menu_color.clone()),
+        ),
+        (
+            "startMenuOpacity".to_owned(),
+            SettingValue::Percent(settings.start_menu_opacity),
+        ),
+        (
+            "accentOpacity".to_owned(),
+            SettingValue::Percent(settings.accent_opacity),
+        ),
+        (
+            "decoration".to_owned(),
+            SettingValue::Text(settings.decoration.clone()),
+        ),
+        (
+            "titlebarColor".to_owned(),
+            SettingValue::Text(settings.titlebar_color.clone()),
+        ),
+        (
+            "titlebarMinimizeStyle".to_owned(),
+            SettingValue::Text(settings.titlebar_minimize_style.clone()),
+        ),
+        (
+            "titlebarMaximizeStyle".to_owned(),
+            SettingValue::Text(settings.titlebar_maximize_style.clone()),
+        ),
+        (
+            "titlebarCloseStyle".to_owned(),
+            SettingValue::Text(settings.titlebar_close_style.clone()),
+        ),
+        (
+            "titlebarMinimizeColor".to_owned(),
+            SettingValue::Text(settings.titlebar_minimize_color.clone()),
+        ),
+        (
+            "titlebarMinimizeHoverColor".to_owned(),
+            SettingValue::Text(settings.titlebar_minimize_hover_color.clone()),
+        ),
+        (
+            "titlebarMinimizePressedColor".to_owned(),
+            SettingValue::Text(settings.titlebar_minimize_pressed_color.clone()),
+        ),
+        (
+            "titlebarMaximizeColor".to_owned(),
+            SettingValue::Text(settings.titlebar_maximize_color.clone()),
+        ),
+        (
+            "titlebarMaximizeHoverColor".to_owned(),
+            SettingValue::Text(settings.titlebar_maximize_hover_color.clone()),
+        ),
+        (
+            "titlebarMaximizePressedColor".to_owned(),
+            SettingValue::Text(settings.titlebar_maximize_pressed_color.clone()),
+        ),
+        (
+            "titlebarCloseColor".to_owned(),
+            SettingValue::Text(settings.titlebar_close_color.clone()),
+        ),
+        (
+            "titlebarCloseHoverColor".to_owned(),
+            SettingValue::Text(settings.titlebar_close_hover_color.clone()),
+        ),
+        (
+            "titlebarClosePressedColor".to_owned(),
+            SettingValue::Text(settings.titlebar_close_pressed_color.clone()),
+        ),
+        (
+            "cursorTheme".to_owned(),
+            SettingValue::Text(settings.cursor_theme.clone()),
+        ),
+        (
+            "animationsEnabled".to_owned(),
+            SettingValue::Boolean(settings.animations_enabled),
+        ),
+        (
+            "animationSpeed".to_owned(),
+            SettingValue::Integer(i64::from(settings.animation_speed)),
+        ),
+        (
+            "startAnimation".to_owned(),
+            SettingValue::Text(settings.start_animation.clone()),
+        ),
+        (
+            "startAnimationEnabled".to_owned(),
+            SettingValue::Boolean(settings.start_animation_enabled),
+        ),
+        (
+            "windowOpenAnimationEnabled".to_owned(),
+            SettingValue::Boolean(settings.window_open_animation_enabled),
+        ),
+        (
+            "minimizeAnimationEnabled".to_owned(),
+            SettingValue::Boolean(settings.minimize_animation_enabled),
+        ),
+        (
+            "maximizeAnimationEnabled".to_owned(),
+            SettingValue::Boolean(settings.maximize_animation_enabled),
+        ),
     ]);
     values.extend(settings.per_output_scale.iter().map(|(output, scale)| {
         (
@@ -275,6 +375,80 @@ fn apply_change(
         "stickyNotesEnabled" => {
             settings.sticky_notes_enabled = bool_or(value, defaults.sticky_notes_enabled)?;
         }
+        "startMenuColor" => settings.start_menu_color = text_or(value, defaults.start_menu_color)?,
+        "startMenuOpacity" => {
+            settings.start_menu_opacity = percent_or(value, defaults.start_menu_opacity)?;
+        }
+        "accentOpacity" => settings.accent_opacity = percent_or(value, defaults.accent_opacity)?,
+        "decoration" => settings.decoration = text_or(value, defaults.decoration)?,
+        "titlebarColor" => settings.titlebar_color = text_or(value, defaults.titlebar_color)?,
+        "titlebarMinimizeStyle" => {
+            settings.titlebar_minimize_style = text_or(value, defaults.titlebar_minimize_style)?;
+        }
+        "titlebarMaximizeStyle" => {
+            settings.titlebar_maximize_style = text_or(value, defaults.titlebar_maximize_style)?;
+        }
+        "titlebarCloseStyle" => {
+            settings.titlebar_close_style = text_or(value, defaults.titlebar_close_style)?;
+        }
+        "titlebarMinimizeColor" => {
+            settings.titlebar_minimize_color = text_or(value, defaults.titlebar_minimize_color)?;
+        }
+        "titlebarMinimizeHoverColor" => {
+            settings.titlebar_minimize_hover_color =
+                text_or(value, defaults.titlebar_minimize_hover_color)?;
+        }
+        "titlebarMinimizePressedColor" => {
+            settings.titlebar_minimize_pressed_color =
+                text_or(value, defaults.titlebar_minimize_pressed_color)?;
+        }
+        "titlebarMaximizeColor" => {
+            settings.titlebar_maximize_color = text_or(value, defaults.titlebar_maximize_color)?;
+        }
+        "titlebarMaximizeHoverColor" => {
+            settings.titlebar_maximize_hover_color =
+                text_or(value, defaults.titlebar_maximize_hover_color)?;
+        }
+        "titlebarMaximizePressedColor" => {
+            settings.titlebar_maximize_pressed_color =
+                text_or(value, defaults.titlebar_maximize_pressed_color)?;
+        }
+        "titlebarCloseColor" => {
+            settings.titlebar_close_color = text_or(value, defaults.titlebar_close_color)?;
+        }
+        "titlebarCloseHoverColor" => {
+            settings.titlebar_close_hover_color =
+                text_or(value, defaults.titlebar_close_hover_color)?;
+        }
+        "titlebarClosePressedColor" => {
+            settings.titlebar_close_pressed_color =
+                text_or(value, defaults.titlebar_close_pressed_color)?;
+        }
+        "cursorTheme" => settings.cursor_theme = text_or(value, defaults.cursor_theme)?,
+        "animationsEnabled" => {
+            settings.animations_enabled = bool_or(value, defaults.animations_enabled)?;
+        }
+        "animationSpeed" => {
+            settings.animation_speed = integer_or(value, i64::from(defaults.animation_speed))?
+                .try_into()
+                .map_err(|_| FlameError::invalid("animationSpeed is out of range"))?;
+        }
+        "startAnimation" => settings.start_animation = text_or(value, defaults.start_animation)?,
+        "startAnimationEnabled" => {
+            settings.start_animation_enabled = bool_or(value, defaults.start_animation_enabled)?;
+        }
+        "windowOpenAnimationEnabled" => {
+            settings.window_open_animation_enabled =
+                bool_or(value, defaults.window_open_animation_enabled)?;
+        }
+        "minimizeAnimationEnabled" => {
+            settings.minimize_animation_enabled =
+                bool_or(value, defaults.minimize_animation_enabled)?;
+        }
+        "maximizeAnimationEnabled" => {
+            settings.maximize_animation_enabled =
+                bool_or(value, defaults.maximize_animation_enabled)?;
+        }
         _ if key.starts_with("scale.") => {
             let output = key.trim_start_matches("scale.");
             if output.is_empty() {
@@ -320,8 +494,11 @@ fn reset_section(settings: &mut ProductSettings, section: &str) -> FlameResult<(
     match section.to_ascii_lowercase().as_str() {
         "appearance" => {
             settings.accent = defaults.accent;
+            settings.accent_opacity = defaults.accent_opacity;
             settings.icon_theme = defaults.icon_theme;
             settings.appearance = defaults.appearance;
+            settings.decoration = defaults.decoration;
+            settings.cursor_theme = defaults.cursor_theme;
         }
         "desktop" => {
             settings.wallpaper = defaults.wallpaper;
@@ -330,6 +507,26 @@ fn reset_section(settings: &mut ProductSettings, section: &str) -> FlameResult<(
         }
         "windows" => {
             settings.window_snap_preview_fill_opacity = defaults.window_snap_preview_fill_opacity;
+            settings.titlebar_color = defaults.titlebar_color;
+            settings.titlebar_minimize_style = defaults.titlebar_minimize_style;
+            settings.titlebar_maximize_style = defaults.titlebar_maximize_style;
+            settings.titlebar_close_style = defaults.titlebar_close_style;
+            settings.titlebar_minimize_color = defaults.titlebar_minimize_color;
+            settings.titlebar_minimize_hover_color = defaults.titlebar_minimize_hover_color;
+            settings.titlebar_minimize_pressed_color = defaults.titlebar_minimize_pressed_color;
+            settings.titlebar_maximize_color = defaults.titlebar_maximize_color;
+            settings.titlebar_maximize_hover_color = defaults.titlebar_maximize_hover_color;
+            settings.titlebar_maximize_pressed_color = defaults.titlebar_maximize_pressed_color;
+            settings.titlebar_close_color = defaults.titlebar_close_color;
+            settings.titlebar_close_hover_color = defaults.titlebar_close_hover_color;
+            settings.titlebar_close_pressed_color = defaults.titlebar_close_pressed_color;
+            settings.animations_enabled = defaults.animations_enabled;
+            settings.animation_speed = defaults.animation_speed;
+            settings.start_animation = defaults.start_animation;
+            settings.start_animation_enabled = defaults.start_animation_enabled;
+            settings.window_open_animation_enabled = defaults.window_open_animation_enabled;
+            settings.minimize_animation_enabled = defaults.minimize_animation_enabled;
+            settings.maximize_animation_enabled = defaults.maximize_animation_enabled;
         }
         "fonts" => {
             settings.font_family = defaults.font_family;
@@ -342,6 +539,8 @@ fn reset_section(settings: &mut ProductSettings, section: &str) -> FlameResult<(
             settings.taskbar_height = defaults.taskbar_height;
             settings.start_button_text = defaults.start_button_text;
             settings.custom_start_icon = defaults.custom_start_icon;
+            settings.start_menu_color = defaults.start_menu_color;
+            settings.start_menu_opacity = defaults.start_menu_opacity;
         }
         "displays" => settings.per_output_scale.clear(),
         "hotkeys" => settings.hotkeys.clear(),
@@ -487,6 +686,82 @@ mod tests {
             assert!(persisted.contains(&format!("wallpaper={wallpaper}\n")));
             std::fs::remove_file(path).expect("remove test settings");
         }
+    }
+
+    #[test]
+    fn invalid_new_key_apply_is_rejected_before_revision_or_disk_change() {
+        let path = std::env::temp_dir().join(format!(
+            "flamewm-settings-invalid-new-key-{}.conf",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut service = SettingsService::new(path.clone());
+        let mut shortcut_port = UnsupportedShortcutPort;
+        let transaction = SettingsTransaction {
+            expected_revision: service.snapshot().revision,
+            changes: vec![flamewm_api::settings::SettingsChange {
+                key: "animationSpeed".to_owned(),
+                value: Some(SettingValue::Integer(300)),
+            }],
+            reset_section: None,
+        };
+
+        let error = service
+            .apply(&mut shortcut_port, &transaction)
+            .expect_err("animationSpeed outside 25..=200 must be rejected");
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert_eq!(service.current().revision, 1);
+        assert_eq!(service.current().animation_speed, 100);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn new_percent_and_text_keys_persist_and_reset_by_section() {
+        let path = std::env::temp_dir().join(format!(
+            "flamewm-settings-new-keys-{}.conf",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut service = SettingsService::new(path.clone());
+        let mut shortcut_port = UnsupportedShortcutPort;
+        let transaction = SettingsTransaction {
+            expected_revision: service.snapshot().revision,
+            changes: vec![
+                flamewm_api::settings::SettingsChange {
+                    key: "accentOpacity".to_owned(),
+                    value: Some(SettingValue::Percent(40)),
+                },
+                flamewm_api::settings::SettingsChange {
+                    key: "titlebarCloseColor".to_owned(),
+                    value: Some(SettingValue::Text("#FF0000".to_owned())),
+                },
+            ],
+            reset_section: None,
+        };
+        let snapshot = service
+            .apply(&mut shortcut_port, &transaction)
+            .expect("valid new keys apply");
+        assert_eq!(snapshot.revision, 2);
+        assert_eq!(
+            snapshot.values.get("accentOpacity"),
+            Some(&SettingValue::Percent(40))
+        );
+        let persisted = std::fs::read_to_string(&path).expect("persisted");
+        assert!(persisted.contains("accentOpacity=40\n"));
+        assert!(persisted.contains("titlebarCloseColor=#FF0000\n"));
+
+        let reset = SettingsTransaction {
+            expected_revision: 2,
+            changes: Vec::new(),
+            reset_section: Some("windows".to_owned()),
+        };
+        service
+            .apply(&mut shortcut_port, &reset)
+            .expect("windows reset applies");
+        assert!(service.current().titlebar_close_color.is_empty());
+        assert_eq!(service.current().accent_opacity, 40);
+        std::fs::remove_file(path).expect("remove test settings");
     }
 
     #[test]

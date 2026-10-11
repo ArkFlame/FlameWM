@@ -41,6 +41,31 @@ pub struct ProductSettings {
     pub start_button_text: String,
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
+    pub start_menu_color: String,
+    pub start_menu_opacity: u8,
+    pub accent_opacity: u8,
+    pub decoration: String,
+    pub titlebar_color: String,
+    pub titlebar_minimize_style: String,
+    pub titlebar_maximize_style: String,
+    pub titlebar_close_style: String,
+    pub titlebar_minimize_color: String,
+    pub titlebar_minimize_hover_color: String,
+    pub titlebar_minimize_pressed_color: String,
+    pub titlebar_maximize_color: String,
+    pub titlebar_maximize_hover_color: String,
+    pub titlebar_maximize_pressed_color: String,
+    pub titlebar_close_color: String,
+    pub titlebar_close_hover_color: String,
+    pub titlebar_close_pressed_color: String,
+    pub cursor_theme: String,
+    pub animations_enabled: bool,
+    pub animation_speed: u16,
+    pub start_animation: String,
+    pub start_animation_enabled: bool,
+    pub window_open_animation_enabled: bool,
+    pub minimize_animation_enabled: bool,
+    pub maximize_animation_enabled: bool,
     pub per_output_scale: BTreeMap<String, u16>,
     pub panel_edges: BTreeMap<String, PanelEdge>,
     pub hotkeys: BTreeMap<String, String>,
@@ -66,6 +91,31 @@ impl Default for ProductSettings {
             start_button_text: String::new(),
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
+            start_menu_color: "#191b1d".to_owned(),
+            start_menu_opacity: 99,
+            accent_opacity: 100,
+            decoration: "rounded".to_owned(),
+            titlebar_color: "#1b1e20".to_owned(),
+            titlebar_minimize_style: "default".to_owned(),
+            titlebar_maximize_style: "default".to_owned(),
+            titlebar_close_style: "default".to_owned(),
+            titlebar_minimize_color: String::new(),
+            titlebar_minimize_hover_color: String::new(),
+            titlebar_minimize_pressed_color: String::new(),
+            titlebar_maximize_color: String::new(),
+            titlebar_maximize_hover_color: String::new(),
+            titlebar_maximize_pressed_color: String::new(),
+            titlebar_close_color: String::new(),
+            titlebar_close_hover_color: String::new(),
+            titlebar_close_pressed_color: String::new(),
+            cursor_theme: String::new(),
+            animations_enabled: true,
+            animation_speed: 100,
+            start_animation: "slide-up".to_owned(),
+            start_animation_enabled: true,
+            window_open_animation_enabled: true,
+            minimize_animation_enabled: true,
+            maximize_animation_enabled: true,
             per_output_scale: BTreeMap::new(),
             panel_edges: BTreeMap::new(),
             hotkeys: BTreeMap::new(),
@@ -99,6 +149,68 @@ impl ProductSettings {
         }
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
+        }
+        validate_color(&self.start_menu_color, false, "startMenuColor")?;
+        validate_color(&self.titlebar_color, false, "titlebarColor")?;
+        for (value, name) in [
+            (&self.titlebar_minimize_color, "titlebarMinimizeColor"),
+            (
+                &self.titlebar_minimize_hover_color,
+                "titlebarMinimizeHoverColor",
+            ),
+            (
+                &self.titlebar_minimize_pressed_color,
+                "titlebarMinimizePressedColor",
+            ),
+            (&self.titlebar_maximize_color, "titlebarMaximizeColor"),
+            (
+                &self.titlebar_maximize_hover_color,
+                "titlebarMaximizeHoverColor",
+            ),
+            (
+                &self.titlebar_maximize_pressed_color,
+                "titlebarMaximizePressedColor",
+            ),
+            (&self.titlebar_close_color, "titlebarCloseColor"),
+            (&self.titlebar_close_hover_color, "titlebarCloseHoverColor"),
+            (
+                &self.titlebar_close_pressed_color,
+                "titlebarClosePressedColor",
+            ),
+        ] {
+            validate_color(value, true, name)?;
+        }
+        if self.start_menu_opacity > 100 {
+            return invalid("startMenuOpacity must be 0..100");
+        }
+        if self.accent_opacity > 100 {
+            return invalid("accentOpacity must be 0..100");
+        }
+        if !matches!(self.decoration.as_str(), "rounded" | "ios") {
+            return invalid("decoration must be rounded or ios");
+        }
+        for style in [
+            &self.titlebar_minimize_style,
+            &self.titlebar_maximize_style,
+            &self.titlebar_close_style,
+        ] {
+            if !matches!(style.as_str(), "default" | "flat" | "circle" | "square") {
+                return invalid("titlebar button style must be default/flat/circle/square");
+            }
+        }
+        if self.cursor_theme.len() > 64
+            || self
+                .cursor_theme
+                .chars()
+                .any(|c| c == '/' || c == '\\' || c.is_control())
+        {
+            return invalid("cursorTheme must be at most 64 characters without path separators");
+        }
+        if !(25..=200).contains(&self.animation_speed) {
+            return invalid("animationSpeed must be 25..200");
+        }
+        if self.start_animation != "slide-up" {
+            return invalid("startAnimation must be slide-up");
         }
         for output in self.panel_edges.keys() {
             if output.is_empty()
@@ -190,6 +302,51 @@ impl ConfigStore {
                 "startButtonText" => snapshot.start_button_text = value.to_owned(),
                 "customStartIcon" => snapshot.custom_start_icon = value.to_owned(),
                 "stickyNotesEnabled" => snapshot.sticky_notes_enabled = parse_bool(value, key)?,
+                "startMenuColor" => snapshot.start_menu_color = value.to_owned(),
+                "startMenuOpacity" => snapshot.start_menu_opacity = parse(value, key)?,
+                "accentOpacity" => snapshot.accent_opacity = parse(value, key)?,
+                "decoration" => snapshot.decoration = value.to_owned(),
+                "titlebarColor" => snapshot.titlebar_color = value.to_owned(),
+                "titlebarMinimizeStyle" => snapshot.titlebar_minimize_style = value.to_owned(),
+                "titlebarMaximizeStyle" => snapshot.titlebar_maximize_style = value.to_owned(),
+                "titlebarCloseStyle" => snapshot.titlebar_close_style = value.to_owned(),
+                "titlebarMinimizeColor" => snapshot.titlebar_minimize_color = value.to_owned(),
+                "titlebarMinimizeHoverColor" => {
+                    snapshot.titlebar_minimize_hover_color = value.to_owned();
+                }
+                "titlebarMinimizePressedColor" => {
+                    snapshot.titlebar_minimize_pressed_color = value.to_owned();
+                }
+                "titlebarMaximizeColor" => snapshot.titlebar_maximize_color = value.to_owned(),
+                "titlebarMaximizeHoverColor" => {
+                    snapshot.titlebar_maximize_hover_color = value.to_owned();
+                }
+                "titlebarMaximizePressedColor" => {
+                    snapshot.titlebar_maximize_pressed_color = value.to_owned();
+                }
+                "titlebarCloseColor" => snapshot.titlebar_close_color = value.to_owned(),
+                "titlebarCloseHoverColor" => {
+                    snapshot.titlebar_close_hover_color = value.to_owned();
+                }
+                "titlebarClosePressedColor" => {
+                    snapshot.titlebar_close_pressed_color = value.to_owned();
+                }
+                "cursorTheme" => snapshot.cursor_theme = value.to_owned(),
+                "animationsEnabled" => snapshot.animations_enabled = parse_bool(value, key)?,
+                "animationSpeed" => snapshot.animation_speed = parse(value, key)?,
+                "startAnimation" => snapshot.start_animation = value.to_owned(),
+                "startAnimationEnabled" => {
+                    snapshot.start_animation_enabled = parse_bool(value, key)?;
+                }
+                "windowOpenAnimationEnabled" => {
+                    snapshot.window_open_animation_enabled = parse_bool(value, key)?;
+                }
+                "minimizeAnimationEnabled" => {
+                    snapshot.minimize_animation_enabled = parse_bool(value, key)?;
+                }
+                "maximizeAnimationEnabled" => {
+                    snapshot.maximize_animation_enabled = parse_bool(value, key)?;
+                }
                 _ if key.starts_with("scale.") => {
                     let output = key.trim_start_matches("scale.");
                     snapshot
@@ -271,6 +428,159 @@ impl ConfigStore {
                 if snapshot.sticky_notes_enabled { 1 } else { 0 }
             ),
         ];
+        // Keys added after the base contract are written only when they differ from defaults,
+        // so settings files that never set them keep their existing byte-for-byte shape.
+        let defaults = ProductSettings::default();
+        push_if_changed(
+            &mut lines,
+            "startMenuColor",
+            &snapshot.start_menu_color,
+            &defaults.start_menu_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "startMenuOpacity",
+            &snapshot.start_menu_opacity,
+            &defaults.start_menu_opacity,
+        );
+        push_if_changed(
+            &mut lines,
+            "accentOpacity",
+            &snapshot.accent_opacity,
+            &defaults.accent_opacity,
+        );
+        push_if_changed(
+            &mut lines,
+            "decoration",
+            &snapshot.decoration,
+            &defaults.decoration,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarColor",
+            &snapshot.titlebar_color,
+            &defaults.titlebar_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMinimizeStyle",
+            &snapshot.titlebar_minimize_style,
+            &defaults.titlebar_minimize_style,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMaximizeStyle",
+            &snapshot.titlebar_maximize_style,
+            &defaults.titlebar_maximize_style,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarCloseStyle",
+            &snapshot.titlebar_close_style,
+            &defaults.titlebar_close_style,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMinimizeColor",
+            &snapshot.titlebar_minimize_color,
+            &defaults.titlebar_minimize_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMinimizeHoverColor",
+            &snapshot.titlebar_minimize_hover_color,
+            &defaults.titlebar_minimize_hover_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMinimizePressedColor",
+            &snapshot.titlebar_minimize_pressed_color,
+            &defaults.titlebar_minimize_pressed_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMaximizeColor",
+            &snapshot.titlebar_maximize_color,
+            &defaults.titlebar_maximize_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMaximizeHoverColor",
+            &snapshot.titlebar_maximize_hover_color,
+            &defaults.titlebar_maximize_hover_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarMaximizePressedColor",
+            &snapshot.titlebar_maximize_pressed_color,
+            &defaults.titlebar_maximize_pressed_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarCloseColor",
+            &snapshot.titlebar_close_color,
+            &defaults.titlebar_close_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarCloseHoverColor",
+            &snapshot.titlebar_close_hover_color,
+            &defaults.titlebar_close_hover_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "titlebarClosePressedColor",
+            &snapshot.titlebar_close_pressed_color,
+            &defaults.titlebar_close_pressed_color,
+        );
+        push_if_changed(
+            &mut lines,
+            "cursorTheme",
+            &snapshot.cursor_theme,
+            &defaults.cursor_theme,
+        );
+        push_if_changed(
+            &mut lines,
+            "animationsEnabled",
+            &snapshot.animations_enabled,
+            &defaults.animations_enabled,
+        );
+        push_if_changed(
+            &mut lines,
+            "animationSpeed",
+            &snapshot.animation_speed,
+            &defaults.animation_speed,
+        );
+        push_if_changed(
+            &mut lines,
+            "startAnimation",
+            &snapshot.start_animation,
+            &defaults.start_animation,
+        );
+        push_if_changed(
+            &mut lines,
+            "startAnimationEnabled",
+            &snapshot.start_animation_enabled,
+            &defaults.start_animation_enabled,
+        );
+        push_if_changed(
+            &mut lines,
+            "windowOpenAnimationEnabled",
+            &snapshot.window_open_animation_enabled,
+            &defaults.window_open_animation_enabled,
+        );
+        push_if_changed(
+            &mut lines,
+            "minimizeAnimationEnabled",
+            &snapshot.minimize_animation_enabled,
+            &defaults.minimize_animation_enabled,
+        );
+        push_if_changed(
+            &mut lines,
+            "maximizeAnimationEnabled",
+            &snapshot.maximize_animation_enabled,
+            &defaults.maximize_animation_enabled,
+        );
         lines.extend(
             snapshot
                 .per_output_scale
@@ -366,6 +676,17 @@ fn parse_panel_edge(value: &str) -> Option<PanelEdge> {
     }
 }
 
+fn push_if_changed<T: PartialEq + std::fmt::Display>(
+    lines: &mut Vec<String>,
+    key: &str,
+    value: &T,
+    default: &T,
+) {
+    if value != default {
+        lines.push(format!("{key}={value}"));
+    }
+}
+
 fn parse_bool(value: &str, name: &str) -> FlameResult<bool> {
     match value {
         "1" | "true" | "yes" => Ok(true),
@@ -409,6 +730,31 @@ fn is_stable_key(key: &str) -> bool {
             | "startButtonText"
             | "customStartIcon"
             | "stickyNotesEnabled"
+            | "startMenuColor"
+            | "startMenuOpacity"
+            | "accentOpacity"
+            | "decoration"
+            | "titlebarColor"
+            | "titlebarMinimizeStyle"
+            | "titlebarMaximizeStyle"
+            | "titlebarCloseStyle"
+            | "titlebarMinimizeColor"
+            | "titlebarMinimizeHoverColor"
+            | "titlebarMinimizePressedColor"
+            | "titlebarMaximizeColor"
+            | "titlebarMaximizeHoverColor"
+            | "titlebarMaximizePressedColor"
+            | "titlebarCloseColor"
+            | "titlebarCloseHoverColor"
+            | "titlebarClosePressedColor"
+            | "cursorTheme"
+            | "animationsEnabled"
+            | "animationSpeed"
+            | "startAnimation"
+            | "startAnimationEnabled"
+            | "windowOpenAnimationEnabled"
+            | "minimizeAnimationEnabled"
+            | "maximizeAnimationEnabled"
     ) || key.starts_with("scale.")
         || key.starts_with("panel.edge.")
         || key.starts_with("hotkey.")
@@ -514,6 +860,101 @@ mod tests {
                 .code,
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.start_menu_color, "#191b1d");
+        assert_eq!(defaults.start_menu_opacity, 99);
+        assert_eq!(defaults.accent_opacity, 100);
+        assert_eq!(defaults.decoration, "rounded");
+        assert_eq!(defaults.titlebar_color, "#1b1e20");
+        assert_eq!(defaults.titlebar_close_style, "default");
+        assert!(defaults.titlebar_close_color.is_empty());
+        assert!(defaults.cursor_theme.is_empty());
+        assert_eq!(defaults.animation_speed, 100);
+        assert_eq!(defaults.start_animation, "slide-up");
+        assert!(defaults.maximize_animation_enabled);
+
+        let text = ConfigStore::serialize(&defaults);
+        assert!(!text.contains("startMenuColor"));
+        assert!(!text.contains("titlebar"));
+        assert!(!text.contains("animation"));
+    }
+
+    #[test]
+    fn old_settings_file_parses_to_defaults_and_serializes_unchanged() {
+        let store = ConfigStore::default();
+        let old = "revision=3\naccent=#EF4048\ntaskbarColor=#191b1d\nfutureFeature=kept\n";
+        let parsed = store.parse_snapshot(old).expect("old file");
+        assert_eq!(parsed.animation_speed, 100);
+        assert_eq!(parsed.titlebar_color, "#1b1e20");
+        let text = ConfigStore::serialize(&parsed);
+        assert!(!text.contains("titlebar"));
+        assert!(text.contains("futureFeature=kept\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn new_appearance_keys_round_trip_when_set() {
+        let store = ConfigStore::default();
+        let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\naccentOpacity=40\n\
+            decoration=ios\ntitlebarColor=#A0B0C0\ntitlebarCloseStyle=circle\n\
+            titlebarMinimizeHoverColor=#FFFFFF\ncursorTheme=Adwaita\nanimationsEnabled=false\n\
+            animationSpeed=150\nstartAnimationEnabled=0\nfutureFeature=kept\n";
+        let parsed = store.parse_snapshot(text).expect("valid new keys");
+        assert_eq!(parsed.start_menu_color, "#112233");
+        assert_eq!(parsed.start_menu_opacity, 80);
+        assert_eq!(parsed.accent_opacity, 40);
+        assert_eq!(parsed.decoration, "ios");
+        assert_eq!(parsed.titlebar_close_style, "circle");
+        assert_eq!(parsed.titlebar_minimize_hover_color, "#FFFFFF");
+        assert_eq!(parsed.cursor_theme, "Adwaita");
+        assert!(!parsed.animations_enabled);
+        assert_eq!(parsed.animation_speed, 150);
+        assert!(!parsed.start_animation_enabled);
+        assert_eq!(
+            parsed.unknown_keys.get("futureFeature"),
+            Some(&"kept".to_owned())
+        );
+
+        let serialized = ConfigStore::serialize(&parsed);
+        assert!(serialized.contains("animationsEnabled=false\n"));
+        assert!(serialized.contains("futureFeature=kept\n"));
+        assert_eq!(
+            store.parse_snapshot(&serialized).expect("round trip"),
+            parsed
+        );
+    }
+
+    #[test]
+    fn invalid_new_appearance_values_are_rejected() {
+        let store = ConfigStore::default();
+        for line in [
+            "startMenuColor=red",
+            "titlebarColor=#12345",
+            "titlebarCloseColor=#GGGGGG",
+            "startMenuOpacity=101",
+            "accentOpacity=101",
+            "decoration=neon",
+            "titlebarMinimizeStyle=round",
+            "cursorTheme=../evil",
+            "cursorTheme=a\\b",
+            "animationSpeed=24",
+            "animationSpeed=201",
+            "startAnimation=bounce",
+            "animationsEnabled=maybe",
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err(line)
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
     }
 
     #[test]
