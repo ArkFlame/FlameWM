@@ -479,7 +479,8 @@ impl<T: ControlTransport> SettingsClient<T> {
             }
         };
         expect_unit(self.transport.call(request)?)?;
-        self.refresh_shortcuts()
+        self.refresh_shortcuts()?;
+        self.refresh_settings()
     }
 
     pub fn reset_hotkey(&mut self, action: impl Into<String>) -> Result<(), ControlError> {
@@ -498,7 +499,8 @@ impl<T: ControlTransport> SettingsClient<T> {
             action: action.into(),
             expected_revision,
         })?)?;
-        self.refresh_shortcuts()
+        self.refresh_shortcuts()?;
+        self.refresh_settings()
     }
 
     pub fn begin_display_mode(
@@ -831,6 +833,9 @@ mod tests {
                 revision: 2,
                 bindings: Default::default(),
             })));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut client = SettingsClient::new(transport);
         client.refresh_shortcuts().expect("initial shortcut snapshot");
         client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
@@ -849,8 +854,117 @@ mod tests {
                 ControlRequest::EndHotkeyCapture { lease: 9 },
                 ControlRequest::ClearShortcut { action: clear_action, expected_revision: 1 },
                 ControlRequest::GetShortcuts,
+                ControlRequest::GetSettings,
             ] if action == "ToggleStartMenu" && clear_action == action
         ));
+    }
+
+    /// Stateful stand-in for the WM: every hotkey write bumps the settings revision as well as the
+    /// shortcut revision, and ApplySettings refuses any expected revision that is not current.
+    #[derive(Default)]
+    struct RevisionServer {
+        settings_revision: u64,
+        shortcut_revision: u64,
+        bindings: std::collections::BTreeMap<String, flamewm_api::shortcuts::KeyBinding>,
+        applied_expected_revisions: Vec<u64>,
+    }
+
+    impl RevisionServer {
+        fn stale(message: &str) -> ControlError {
+            ControlError {
+                name: "com.arkflame.FlameWM1.Error.StaleRevision",
+                code: flamewm_api::ErrorCode::StaleRevision,
+                message: message.to_owned(),
+            }
+        }
+
+        fn check_shortcut_revision(&self, expected_revision: u64) -> Result<(), ControlError> {
+            if expected_revision == self.shortcut_revision {
+                Ok(())
+            } else {
+                Err(Self::stale("shortcut revision is stale"))
+            }
+        }
+
+        fn bump_hotkey_revisions(&mut self) {
+            self.shortcut_revision += 1;
+            self.settings_revision += 1;
+        }
+    }
+
+    impl ControlTransport for RevisionServer {
+        fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
+            match request {
+                ControlRequest::GetSettings => {
+                    Ok(ControlResponse::Settings(SettingsSnapshot::new(self.settings_revision)))
+                }
+                ControlRequest::GetShortcuts => Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                    revision: self.shortcut_revision,
+                    bindings: self.bindings.clone(),
+                })),
+                ControlRequest::BeginHotkeyCapture { .. } => Ok(ControlResponse::CaptureLease(1)),
+                ControlRequest::EndHotkeyCapture { .. } => Ok(ControlResponse::Unit),
+                ControlRequest::SetShortcut { action, binding, expected_revision } => {
+                    self.check_shortcut_revision(expected_revision)?;
+                    self.bindings.insert(action, flamewm_api::shortcuts::KeyBinding(Some(binding)));
+                    self.bump_hotkey_revisions();
+                    Ok(ControlResponse::Unit)
+                }
+                ControlRequest::ClearShortcut { action, expected_revision } => {
+                    self.check_shortcut_revision(expected_revision)?;
+                    self.bindings.insert(action, flamewm_api::shortcuts::KeyBinding(None));
+                    self.bump_hotkey_revisions();
+                    Ok(ControlResponse::Unit)
+                }
+                ControlRequest::ResetShortcut { action, expected_revision } => {
+                    self.check_shortcut_revision(expected_revision)?;
+                    self.bindings.remove(&action);
+                    self.bump_hotkey_revisions();
+                    Ok(ControlResponse::Unit)
+                }
+                ControlRequest::ApplySettings(transaction) => {
+                    if transaction.expected_revision != self.settings_revision {
+                        return Err(Self::stale("settings revision is stale"));
+                    }
+                    self.applied_expected_revisions.push(transaction.expected_revision);
+                    self.settings_revision += 1;
+                    Ok(ControlResponse::Settings(SettingsSnapshot::new(self.settings_revision)))
+                }
+                _ => panic!("unexpected request in hotkey revision test"),
+            }
+        }
+    }
+
+    #[test]
+    fn hotkey_mutations_refresh_settings_revision_for_next_apply() {
+        let mut client = SettingsClient::new(RevisionServer {
+            settings_revision: 4,
+            shortcut_revision: 1,
+            ..RevisionServer::default()
+        });
+        client.refresh_settings().expect("initial settings snapshot");
+        client.refresh_shortcuts().expect("initial shortcut snapshot");
+
+        client.begin_hotkey_capture("ToggleStartMenu").expect("begin set lease");
+        assert!(client.capture_hotkey("Super"));
+        client.commit_hotkey_capture().expect("set binding");
+        client
+            .apply_setting("wallpaper", SettingValue::Text("a.png".to_owned()))
+            .expect("apply after set");
+
+        client.begin_hotkey_capture("ToggleStartMenu").expect("begin clear lease");
+        assert!(client.capture_hotkey("Escape"));
+        client.commit_hotkey_capture().expect("clear binding");
+        client
+            .apply_setting("wallpaper", SettingValue::Text("b.png".to_owned()))
+            .expect("apply after clear");
+
+        client.reset_hotkey("ToggleStartMenu").expect("reset binding");
+        client
+            .apply_setting("wallpaper", SettingValue::Text("c.png".to_owned()))
+            .expect("apply after reset");
+
+        assert_eq!(client.transport.applied_expected_revisions, vec![5, 7, 9]);
     }
 
     #[test]

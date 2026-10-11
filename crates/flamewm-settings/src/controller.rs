@@ -379,6 +379,7 @@ mod tests {
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut application = SettingsApplication::new(transport);
         application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
@@ -404,7 +405,7 @@ mod tests {
             text: None,
         };
         application.handle_key_event(&stray, &mut document).expect("stray key ignored");
-        assert_eq!(requests.borrow().len(), 5, "stray key must not reach the service");
+        assert_eq!(requests.borrow().len(), 6, "stray key must not reach the service");
     }
 
     #[test]
@@ -416,6 +417,7 @@ mod tests {
         };
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut application = SettingsApplication::new(transport);
         application
             .handle_action(&release("settings.hotkey.left.reset"), &mut ProbeDocument::default())
@@ -550,6 +552,7 @@ mod tests {
         transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
             ("ToggleStartMenu", "Super"),
         ]))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut application = SettingsApplication::new(transport);
         application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
@@ -898,6 +901,9 @@ mod tests {
                 revision: 2,
                 bindings: BTreeMap::new(),
             })));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut client = SettingsClient::new(transport);
         client.refresh_shortcuts().expect("initial shortcut snapshot");
         client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
