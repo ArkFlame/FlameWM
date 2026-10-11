@@ -4,6 +4,10 @@
 //! pixels, and apply the authoritative WM operation when [`Tick::Complete`] arrives.
 //! Time advances through the shared [`flamewm_reactor::Timeline`], so there is one
 //! timeline owner and no second animation loop.
+//!
+//! The WM event loop owns the frame timer: it wakes every [`flamewm_reactor::timeline::FRAME_INTERVAL`]
+//! while a transition is active and samples the timeline from there. The reactor no longer
+//! carries a self-arming driver, so nothing in this module registers a calloop source.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;

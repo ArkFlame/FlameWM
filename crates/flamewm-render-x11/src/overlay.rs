@@ -17,7 +17,7 @@ use std::mem::MaybeUninit;
 use std::os::raw::c_ulong;
 
 use crate::backdrop::capture_drawable_rect;
-use crate::warp::{self, WarpRect};
+use crate::warp::{self, WarpRect, WarpSource};
 use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb, upload_argb_pixmap};
 use crate::xlib::{
     CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
@@ -108,6 +108,8 @@ pub struct WarpOverlay {
     fade_pixmap: Pixmap,
     fade_source: c_ulong,
     fade_clear: c_ulong,
+    /// Warp capture uploaded once on the first warp frame and reused until Drop.
+    warp_source: Option<WarpSource>,
     /// Source and target in overlay-local coordinates.
     source: WarpRect,
     target: WarpRect,
@@ -147,6 +149,7 @@ impl WarpOverlay {
             fade_clear: 0,
             source,
             target,
+            warp_source: None,
             mapped: false,
         }
     }
@@ -261,8 +264,16 @@ impl WarpOverlay {
                     .composite_src(self.display, backdrop.picture, self.picture, (0, 0, w, h));
             }
         }
-        // SAFETY: `display` and `picture` are live until Drop; capture is owned here.
-        unsafe { warp::paint_warped(self.display, &self.api, &self.capture, &mesh, self.picture) }
+        if self.warp_source.is_none() {
+            // SAFETY: `display` is live until Drop; the capture never changes after `begin`, so
+            // one upload serves every frame of this warp.
+            self.warp_source = Some(unsafe { warp::upload_warp_source(self.display, &self.api, &self.capture) }?);
+        }
+        let Some(source) = self.warp_source.as_ref() else {
+            return Err("overlay: warp source missing after upload".to_string());
+        };
+        // SAFETY: `display` and `picture` are live until Drop; `source` was uploaded on `display`.
+        unsafe { warp::paint_warped(self.display, &self.api, source, &mesh, self.picture) }
     }
 
     fn paint_fade(&mut self, progress: f64) -> Result<(), String> {
@@ -315,6 +326,9 @@ impl Drop for WarpOverlay {
         // SAFETY: every id below was created by `begin`/`begin_fade` on `display` and is
         // released once; a zero id was never created and is skipped.
         unsafe {
+            if let Some(source) = self.warp_source.take() {
+                warp::free_warp_source(self.display, &self.api, source);
+            }
             if self.fade {
                 if self.fade_source != 0 {
                     self.api.free_picture(self.display, self.fade_source);

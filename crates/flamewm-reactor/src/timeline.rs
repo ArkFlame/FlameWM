@@ -1,21 +1,17 @@
 //! One canonical, event-driven animation timeline.
 //!
 //! [`Timeline`] is pure data: every method takes an injected `now`, so no hidden clock is read.
-//! [`AnimationDriver`] is the only place that touches the reactor; it arms a single calloop timer
-//! while at least one transition is active and drops it when the timeline empties.
+//! It never touches the reactor. The owning event loop decides when to sample it; the WM loop
+//! wakes every [`FRAME_INTERVAL`] while a transition is active.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
-
-use crate::Reactor;
 
 /// Caller-chosen key for a transition.
 pub type TransitionId = u64;
 
 /// Maximum number of concurrently active transitions.
 pub const MAX_ACTIVE: usize = 16;
-/// Default frame interval (60 Hz) used by [`AnimationDriver`].
+/// Frame interval (60 Hz) for the owning loop while transitions are active.
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// Lowest accepted animation speed, in hundredths (0.25x).
 pub const MIN_SPEED: u16 = 25;
@@ -45,7 +41,7 @@ pub enum Start {
     /// No entry was created (animations disabled or capacity full); the caller applies the end
     /// state immediately.
     Immediate,
-    /// A transition is active and will be reported by [`AnimationDriver`] frames.
+    /// A transition is active; the owning loop samples it with [`Timeline::progress`].
     Started,
 }
 
@@ -130,6 +126,20 @@ impl<K: Copy> Timeline<K> {
         base_ms: u32,
         easing: Easing,
     ) -> Start {
+        self.start_towards(id, kind, now, base_ms, easing, (0.0, 1.0))
+    }
+
+    /// Starts a transition toward `span.1`. A new `id` begins at `span.0`; an active `id`
+    /// restarts from its current progress, so a retarget never jumps.
+    pub fn start_towards(
+        &mut self,
+        id: TransitionId,
+        kind: K,
+        now: Instant,
+        base_ms: u32,
+        easing: Easing,
+        span: (f32, f32),
+    ) -> Start {
         if !self.enabled {
             return Start::Immediate;
         }
@@ -137,14 +147,14 @@ impl<K: Copy> Timeline<K> {
         if index.is_none() && self.transitions.len() >= MAX_ACTIVE {
             return Start::Immediate;
         }
-        let from = index.map_or(0.0, |i| self.transitions[i].1.value(now));
+        let from = index.map_or(span.0, |i| self.transitions[i].1.value(now));
         let transition = Transition {
             kind,
             start: now,
             duration: self.duration_for(base_ms),
             easing,
             from,
-            to: 1.0,
+            to: span.1,
         };
         match index {
             Some(i) => self.transitions[i].1 = transition,
@@ -193,6 +203,13 @@ impl<K: Copy> Timeline<K> {
             .map(|i| self.transitions.swap_remove(i).1.to)
     }
 
+    /// Whether `id` has reached its end at `now`; `None` when `id` is not active.
+    #[must_use]
+    pub fn finished(&self, id: TransitionId, now: Instant) -> Option<bool> {
+        self.index_of(id)
+            .map(|i| self.transitions[i].1.remaining(now).is_zero())
+    }
+
     /// Drops transitions that have reached their end at `now`.
     pub fn prune(&mut self, now: Instant) {
         self.transitions
@@ -225,88 +242,8 @@ impl<K: Copy> Timeline<K> {
     }
 }
 
-type FrameCallback<K> = Box<dyn FnMut(&mut Timeline<K>, Instant)>;
-
-struct DriverState<K> {
-    timeline: Timeline<K>,
-    frame: Duration,
-    on_frame: FrameCallback<K>,
-    armed: bool,
-}
-
-/// Owns a [`Timeline`] and drives it from one calloop timer that exists only while active.
-pub struct AnimationDriver<K> {
-    state: Rc<RefCell<DriverState<K>>>,
-}
-
-impl<K: Copy + 'static> AnimationDriver<K> {
-    /// Creates a driver at [`FRAME_INTERVAL`] that calls `on_frame` on every tick.
-    pub fn new(on_frame: impl FnMut(&mut Timeline<K>, Instant) + 'static) -> Self {
-        Self {
-            state: Rc::new(RefCell::new(DriverState {
-                timeline: Timeline::new(),
-                frame: FRAME_INTERVAL,
-                on_frame: Box::new(on_frame),
-                armed: false,
-            })),
-        }
-    }
-
-    /// Overrides the frame interval.
-    #[must_use]
-    pub fn with_frame_interval(self, frame: Duration) -> Self {
-        self.state.borrow_mut().frame = frame;
-        self
-    }
-
-    /// Mutable access to the owned timeline. Call [`AnimationDriver::ensure_armed`] after starting
-    /// transitions so the frame timer is armed.
-    pub fn timeline(&self) -> std::cell::RefMut<'_, Timeline<K>> {
-        std::cell::RefMut::map(self.state.borrow_mut(), |s| &mut s.timeline)
-    }
-
-    /// Arms the single frame timer if transitions are active and it is not already armed.
-    pub fn ensure_armed(&self, reactor: &mut Reactor, now: Instant) -> calloop::Result<()> {
-        let delay = {
-            let mut state = self.state.borrow_mut();
-            if state.armed || state.timeline.is_empty() {
-                return Ok(());
-            }
-            state.armed = true;
-            let frame = state.frame;
-            state
-                .timeline
-                .next_deadline(now)
-                .map_or(frame, |d| d.min(frame))
-        };
-        let state = Rc::clone(&self.state);
-        let result = reactor.register_timer_rescheduling(delay, move || tick(&state));
-        if result.is_err() {
-            self.state.borrow_mut().armed = false;
-        }
-        result.map(|_| ())
-    }
-}
-
-fn tick<K: Copy>(state: &Rc<RefCell<DriverState<K>>>) -> Option<Duration> {
-    let now = Instant::now();
-    let mut guard = state.borrow_mut();
-    let state = &mut *guard;
-    (state.on_frame)(&mut state.timeline, now);
-    state.timeline.prune(now);
-    match state.timeline.next_deadline(now) {
-        Some(deadline) => Some(deadline.min(state.frame)),
-        None => {
-            state.armed = false;
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use super::*;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -460,45 +397,49 @@ mod tests {
     }
 
     #[test]
-    fn driver_arms_only_while_active_and_stops_when_empty() {
-        let ticks = std::rc::Rc::new(Cell::new(0_u32));
-        let ticks_for_frame = std::rc::Rc::clone(&ticks);
-        let driver = AnimationDriver::new(move |_: &mut Timeline<Kind>, _| {
-            ticks_for_frame.set(ticks_for_frame.get() + 1);
-        })
-        .with_frame_interval(Duration::from_millis(1));
-        let mut reactor = Reactor::new().expect("reactor");
+    fn start_towards_reverses_from_current_progress_without_jump() {
+        let t0 = base();
+        let mut tl = Timeline::new();
+        tl.start_towards(7, Kind::Open, t0, 200, Easing::EaseOutCubic, (0.0, 1.0));
+        let mid = t0 + Duration::from_millis(100);
+        let before = tl.progress(7, mid).unwrap();
+        assert_eq!(
+            tl.start_towards(7, Kind::Close, mid, 120, Easing::EaseOutCubic, (1.0, 0.0)),
+            Start::Started
+        );
+        assert!((tl.progress(7, mid).unwrap() - before).abs() < 1e-6, "no jump");
+        assert_eq!(tl.kind(7), Some(Kind::Close));
+        assert_eq!(tl.progress(7, mid + Duration::from_millis(120)), Some(0.0));
+    }
 
-        // Idle: arming with an empty timeline registers nothing.
-        driver
-            .ensure_armed(&mut reactor, Instant::now())
-            .expect("arm idle");
-        reactor
-            .dispatch(Some(Duration::from_millis(20)))
-            .expect("idle dispatch");
-        assert_eq!(ticks.get(), 0, "idle timeline must not tick");
+    #[test]
+    fn new_start_towards_begins_at_absent_from_value() {
+        let t0 = base();
+        let mut tl = Timeline::new();
+        tl.start_towards(3, Kind::Close, t0, 120, Easing::EaseOutCubic, (1.0, 0.0));
+        assert_eq!(tl.progress(3, t0), Some(1.0));
+        assert_eq!(tl.progress(3, t0 + Duration::from_millis(120)), Some(0.0));
+    }
 
-        driver
-            .timeline()
-            .start(1, Kind::Open, Instant::now(), 5, Easing::EaseOutCubic);
-        driver
-            .ensure_armed(&mut reactor, Instant::now())
-            .expect("arm active");
-        for _ in 0..200 {
-            if driver.timeline().is_empty() {
-                break;
-            }
-            reactor
-                .dispatch(Some(Duration::from_millis(5)))
-                .expect("active dispatch");
-        }
-        assert!(driver.timeline().is_empty(), "transition must complete");
-        let settled = ticks.get();
-        assert!(settled >= 1, "at least one frame must be delivered");
+    #[test]
+    fn finished_reports_end_only_after_duration() {
+        let t0 = base();
+        let mut tl = Timeline::new();
+        assert_eq!(tl.finished(1, t0), None);
+        tl.start(1, Kind::Open, t0, 180, Easing::EaseOutCubic);
+        assert_eq!(tl.finished(1, t0 + Duration::from_millis(179)), Some(false));
+        assert_eq!(tl.finished(1, t0 + Duration::from_millis(180)), Some(true));
+    }
 
-        reactor
-            .dispatch(Some(Duration::from_millis(30)))
-            .expect("post-completion dispatch");
-        assert_eq!(ticks.get(), settled, "timer must be dropped when empty");
+    #[test]
+    fn disabled_or_full_start_towards_is_immediate() {
+        let t0 = base();
+        let mut tl = Timeline::<Kind>::new();
+        tl.set_enabled(false);
+        assert_eq!(
+            tl.start_towards(1, Kind::Open, t0, 180, Easing::EaseOutCubic, (0.0, 1.0)),
+            Start::Immediate
+        );
+        assert!(tl.is_empty());
     }
 }

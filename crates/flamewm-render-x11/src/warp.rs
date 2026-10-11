@@ -9,7 +9,7 @@
 use std::os::raw::c_ulong;
 
 use crate::xcomposite::{CapturedImage, check_capture_size, upload_argb_pixmap};
-use crate::xlib::{Display, XFreePixmap};
+use crate::xlib::{Display, Pixmap, XFreePixmap};
 use crate::xrender_transform::XRenderTransformApi;
 
 pub const MAX_WARP_STRIPS: usize = 64;
@@ -132,51 +132,91 @@ pub fn strip_transform(
     ))
 }
 
-/// Paints `capture` through `mesh` onto `dest`: one transformed XRenderComposite
-/// per strip, with a bilinear filter when the library provides it.
+/// Capture uploaded once as a pixmap and picture. A warp reuses it for every frame and the
+/// owner frees it exactly once with [`free_warp_source`].
+#[derive(Debug)]
+pub struct WarpSource {
+    pixmap: Pixmap,
+    picture: c_ulong,
+    width: u32,
+    height: u32,
+}
+
+/// Uploads `capture` once for later [`paint_warped`] calls.
 ///
-/// Fails without touching `dest` when the transform extension is missing or
-/// when the capture does not match `mesh.source`.
+/// Fails without leaving resources behind when the transform extension is missing or the
+/// capture is oversized.
 ///
 /// # Safety
 ///
-/// `display` must be a live Xlib display and `dest` a live XRender picture on it.
-pub unsafe fn paint_warped(
+/// `display` must be a live Xlib display.
+pub unsafe fn upload_warp_source(
     display: *mut Display,
     api: &XRenderTransformApi,
     capture: &CapturedImage,
-    mesh: &WarpMesh,
-    dest: c_ulong,
-) -> Result<(), String> {
+) -> Result<WarpSource, String> {
     if display.is_null() {
-        return Err("paint_warped: null display".to_string());
+        return Err("upload_warp_source: null display".to_string());
     }
     if !api.capabilities().picture_transform {
-        return Err("paint_warped: XRenderSetPictureTransform unavailable".to_string());
+        return Err("upload_warp_source: XRenderSetPictureTransform unavailable".to_string());
     }
     check_capture_size(capture.width, capture.height)?;
-    if f64::from(capture.width) != mesh.source.width || f64::from(capture.height) != mesh.source.height {
-        return Err("paint_warped: capture size does not match mesh source".to_string());
-    }
-    // SAFETY: `display` is live per contract; the pixmap is freed below on every path.
+    // SAFETY: `display` is live per contract; the pixmap is freed on every failure path below.
     let pixmap = unsafe { upload_argb_pixmap(display, capture) }?;
-    // SAFETY: `display` and `pixmap` are live; the picture is freed below.
-    let source = match unsafe { api.create_argb_picture(display, pixmap) } {
-        Ok(picture) => picture,
+    // SAFETY: `display` and `pixmap` are live; the picture is owned by the returned source.
+    match unsafe { api.create_argb_picture(display, pixmap) } {
+        Ok(picture) => Ok(WarpSource {
+            pixmap,
+            picture,
+            width: capture.width,
+            height: capture.height,
+        }),
         Err(error) => {
             // SAFETY: `pixmap` was created above and is not used again.
             unsafe { XFreePixmap(display, pixmap) };
-            return Err(error);
+            Err(error)
         }
-    };
-    // SAFETY: `source` and `dest` are live pictures on `display` per contract.
-    let result = unsafe { paint_strips(display, api, source, dest, mesh) };
-    // SAFETY: both resources were created above and are released exactly once.
-    unsafe {
-        api.free_picture(display, source);
-        XFreePixmap(display, pixmap);
     }
-    result
+}
+
+/// Releases the picture and pixmap created by [`upload_warp_source`].
+///
+/// # Safety
+///
+/// `display` must be the live display `source` was uploaded on; `source` is consumed.
+pub unsafe fn free_warp_source(display: *mut Display, api: &XRenderTransformApi, source: WarpSource) {
+    // SAFETY: both ids were created by `upload_warp_source` on `display` and are released once.
+    unsafe {
+        api.free_picture(display, source.picture);
+        XFreePixmap(display, source.pixmap);
+    }
+}
+
+/// Paints the uploaded `source` through `mesh` onto `dest`: one transformed XRenderComposite
+/// per strip, with a bilinear filter when the library provides it.
+///
+/// Fails without touching `dest` when the capture does not match `mesh.source`.
+///
+/// # Safety
+///
+/// `display` must be a live Xlib display, `source` uploaded on it, and `dest` a live XRender
+/// picture on it.
+pub unsafe fn paint_warped(
+    display: *mut Display,
+    api: &XRenderTransformApi,
+    source: &WarpSource,
+    mesh: &WarpMesh,
+    dest: c_ulong,
+) -> Result<(), String> {
+    if f64::from(source.width) != mesh.source.width || f64::from(source.height) != mesh.source.height {
+        return Err("paint_warped: capture size does not match mesh source".to_string());
+    }
+    if display.is_null() {
+        return Err("paint_warped: null display".to_string());
+    }
+    // SAFETY: `source.picture` and `dest` are live pictures on `display` per contract.
+    unsafe { paint_strips(display, api, source.picture, dest, mesh) }
 }
 
 unsafe fn paint_strips(
@@ -311,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn paint_warped_fails_closed_without_x() {
+    fn upload_and_paint_fail_closed_without_x() {
         let Ok(api) = XRenderTransformApi::load() else {
             return;
         };
@@ -320,9 +360,25 @@ mod tests {
             height: 300,
             argb: vec![0; 400 * 300 * 4],
         };
-        let mesh = magic_lamp_mesh(SOURCE, TARGET, 0.5, 8).unwrap();
         // SAFETY: a null display is rejected before any Xlib call.
-        let result = unsafe { paint_warped(std::ptr::null_mut(), &api, &capture, &mesh, 0) };
-        assert!(result.is_err());
+        let upload = unsafe { upload_warp_source(std::ptr::null_mut(), &api, &capture) };
+        assert!(upload.is_err());
+    }
+
+    #[test]
+    fn paint_rejects_size_mismatch_before_any_x_call() {
+        let source = WarpSource {
+            pixmap: 0,
+            picture: 0,
+            width: 200,
+            height: 300,
+        };
+        let Ok(api) = XRenderTransformApi::load() else {
+            return;
+        };
+        let mesh = magic_lamp_mesh(SOURCE, TARGET, 0.5, 8).unwrap();
+        // SAFETY: the size check fails before any Xlib call uses the null display.
+        let result = unsafe { paint_warped(std::ptr::null_mut(), &api, &source, &mesh, 0) };
+        assert!(result.unwrap_err().contains("size"));
     }
 }
