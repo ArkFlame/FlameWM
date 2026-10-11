@@ -53,7 +53,7 @@ install -m 0644 "$ROOT/docs/INSTALL.md" "$STAGE/usr/share/doc/flamewm/INSTALL.md
 install -m 0644 "$ROOT/docs/PACKAGING.md" "$STAGE/usr/share/doc/flamewm/PACKAGING.md"
 cp -a "$ROOT/assets" "$STAGE/usr/share/flamewm/assets"
 # Theme packs install under usr/share/icons below; do not ship them twice.
-rm -rf "$STAGE/usr/share/flamewm/assets/themes"
+rm -rf "$STAGE/usr/share/flamewm/assets/themes" "$STAGE/usr/share/flamewm/assets/theme-sources"
 # Bundled cursor authority: FlameWM-Breeze-Dark (Breeze Dark Xcursor bytes
 # under a FlameWM-owned theme id). Binary cursor files copied byte-for-byte;
 # index.theme renamed below so the installed Name is FlameWM-owned.

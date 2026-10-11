@@ -1,6 +1,6 @@
 # Bundled icon and cursor themes
 
-Source packs live in `.vendor/cursors-icons-themes-kdestore/` (read-only reference).
+Source packs live in `assets/theme-sources/` (local provenance only: git-ignored, excluded from the source archive and from every installed package; `assets/theme-sources/SHA256SUMS` is tracked). Only the normalized runtime payloads under `assets/themes/` are distributed.
 Only the packs listed as BUNDLED are copied into `assets/themes/`.
 
 | Pack | Installed as | Upstream | License | Payload evidence | Source archive sha256 | Bundled |

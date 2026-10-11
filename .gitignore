@@ -18,3 +18,7 @@
 .vscode/
 __pycache__/
 *.py[cod]
+
+# Local theme source archives (provenance only; see assets/theme-sources/SHA256SUMS)
+/assets/theme-sources/*
+!/assets/theme-sources/SHA256SUMS

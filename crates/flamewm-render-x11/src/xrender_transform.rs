@@ -228,4 +228,3 @@ fn to_fixed(value: f64) -> Result<c_int, String> {
     }
     Ok((value * 65536.0).round() as c_int)
 }
-
