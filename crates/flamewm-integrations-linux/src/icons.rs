@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1294,31 +1295,57 @@ fn xdg_config_home() -> Option<PathBuf> {
 }
 
 fn xdg_data_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    let home = env::var_os("HOME").map(PathBuf::from);
-    let data_home = env::var_os("XDG_DATA_HOME")
+    xdg_data_search_dirs(
+        env::var_os("HOME").as_deref(),
+        env::var_os("XDG_DATA_HOME").as_deref(),
+        env::var("XDG_DATA_DIRS").ok().as_deref(),
+    )
+}
+
+/// `$XDG_DATA_HOME`, or `$HOME/.local/share`. Empty values are unset.
+pub fn user_data_home(home: Option<&OsStr>, xdg_data_home: Option<&OsStr>) -> Option<PathBuf> {
+    xdg_data_home
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| home.map(|path| path.join(".local/share")));
-    if let Some(path) = data_home {
-        dirs.push(path);
-    }
-    let data_dirs = env::var_os("XDG_DATA_DIRS")
-        .map(|value| value.to_string_lossy().into_owned())
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".local/share"))
+        })
+}
+
+/// User data home first, then `XDG_DATA_DIRS` (default `/usr/local/share:/usr/share`).
+pub fn xdg_data_search_dirs(
+    home: Option<&OsStr>,
+    xdg_data_home: Option<&OsStr>,
+    xdg_data_dirs: Option<&str>,
+) -> Vec<PathBuf> {
+    let system = xdg_data_dirs
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
-    dirs.extend(
-        data_dirs
-            .split(':')
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from),
-    );
+        .unwrap_or("/usr/local/share:/usr/share");
+    let dirs = user_data_home(home, xdg_data_home)
+        .into_iter()
+        .chain(system.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from))
+        .collect();
     unique_paths(dirs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xdg_data_search_dirs_never_yields_relative_home_paths() {
+        let empty = OsStr::new("");
+        assert_eq!(user_data_home(Some(empty), None), None);
+        assert_eq!(
+            xdg_data_search_dirs(Some(empty), Some(empty), Some("")),
+            vec![PathBuf::from("/usr/local/share"), PathBuf::from("/usr/share")]
+        );
+        assert_eq!(
+            xdg_data_search_dirs(Some(OsStr::new("/home/u")), None, Some("/opt/share:")),
+            vec![PathBuf::from("/home/u/.local/share"), PathBuf::from("/opt/share")]
+        );
+    }
 
     #[test]
     fn p6_is_scaled_to_requested_physical_size() {

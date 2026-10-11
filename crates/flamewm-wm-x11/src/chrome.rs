@@ -598,17 +598,22 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
 
 /// `#rrggbb` to skin color; empty or malformed input is `None`.
 fn parse_settings_color(value: &str) -> Option<Rgb> {
-    let hex = value.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    u32::from_str_radix(hex, 16).ok().map(Rgb)
+    let (r, g, b) = flamewm_platform::chrome::parse_hex_rgb(value)?;
+    Some(Rgb(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use flamewm_skin::recipes::decoration::corner_radius;
+
+    #[test]
+    fn settings_color_rejects_sign_and_prefix_forms() {
+        assert_eq!(parse_settings_color("#+12345"), None);
+        assert_eq!(parse_settings_color("#-12345"), None);
+        assert_eq!(parse_settings_color("#0x1234"), None);
+        assert_eq!(parse_settings_color("#123456"), Some(Rgb(0x12_3456)));
+    }
 
     #[test]
     fn center_formula_matches_flame_contract() {

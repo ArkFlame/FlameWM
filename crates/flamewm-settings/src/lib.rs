@@ -1566,7 +1566,7 @@ fn accent_for_swatch(name: &str) -> Option<&'static str> {
 fn accent_color(value: &str) -> Result<UiColor, String> {
     let digits = value
         .strip_prefix('#')
-        .filter(|digits| digits.len() == 6)
+        .filter(|digits| digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .ok_or_else(|| format!("accent is not a #RRGGBB value: '{value}'"))?;
     let channel = |range: std::ops::Range<usize>, name: &str| {
         digits
@@ -2039,6 +2039,8 @@ mod value_text_tests {
         assert!(accent_color("#EF4048").is_ok());
         assert!(accent_color("#é1234").is_err());
         assert!(accent_color("EF4048").is_err());
+        assert!(accent_color("#+F4048").is_err());
+        assert!(accent_color("#EF+048").is_err());
     }
 }
 

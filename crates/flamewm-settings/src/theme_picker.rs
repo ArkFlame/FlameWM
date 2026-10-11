@@ -2,6 +2,7 @@
 //! install jobs. Filesystem scans and previews never run on the UI thread.
 
 use std::env;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver};
@@ -9,7 +10,7 @@ use std::thread;
 
 use flamewm_integrations_linux::IconLookupIndex;
 use flamewm_integrations_linux::PortalFileChooser;
-use flamewm_integrations_linux::icons::{IconSize, Rgba8Raster, rasterize_path};
+use flamewm_integrations_linux::icons::{self, IconSize, Rgba8Raster, rasterize_path};
 use flamewm_integrations_linux::themes::cursor::{self, CursorPreview};
 use flamewm_integrations_linux::themes::import::{
     ImportError, InstallOptions, InstalledTheme, install_theme,
@@ -23,7 +24,6 @@ use crate::file_chooser::publish_background_completion;
 pub const PICKER_SLOTS: usize = 6;
 const ICON_PREVIEW_NAME: &str = "folder";
 const ICON_PREVIEW_PX: u32 = 24;
-const SYSTEM_DATA_DIRS: &str = "/usr/local/share:/usr/share";
 
 /// Pre-registry icon values, kept so stored settings keep their label.
 pub const LEGACY_ICON_THEMES: [(&str, &str); 3] = [
@@ -172,9 +172,7 @@ fn cursor_image(preview: CursorPreview) -> RuntimeImage {
 
 /// `$XDG_DATA_HOME`, or `$HOME/.local/share`. Installs go here, never to a system prefix.
 pub fn user_data_home(home: Option<&str>, xdg_data_home: Option<&str>) -> Option<PathBuf> {
-    non_empty(xdg_data_home)
-        .map(PathBuf::from)
-        .or_else(|| non_empty(home).map(|home| PathBuf::from(home).join(".local/share")))
+    icons::user_data_home(home.map(OsStr::new), xdg_data_home.map(OsStr::new))
 }
 
 /// Search order for the catalog: the user data home first, then `XDG_DATA_DIRS`.
@@ -183,15 +181,7 @@ pub fn theme_data_dirs(
     xdg_data_home: Option<&str>,
     xdg_data_dirs: Option<&str>,
 ) -> Vec<PathBuf> {
-    let system = non_empty(xdg_data_dirs).unwrap_or(SYSTEM_DATA_DIRS);
-    user_data_home(home, xdg_data_home)
-        .into_iter()
-        .chain(system.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from))
-        .collect()
-}
-
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.filter(|value| !value.is_empty())
+    icons::xdg_data_search_dirs(home.map(OsStr::new), xdg_data_home.map(OsStr::new), xdg_data_dirs)
 }
 
 fn env_var(name: &str) -> Option<String> {

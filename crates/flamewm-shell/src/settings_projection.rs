@@ -1,5 +1,6 @@
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::PanelEdge;
+use flamewm_platform::chrome::{parse_hex_rgb, ACCENT_SOFT_ALPHA};
 use flamewm_ui_x11::{SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
 const DEFAULT_ACCENT: u32 = 0xef4048;
@@ -44,7 +45,7 @@ pub(crate) fn project(
     document.font_weight(root, if font_bold { 700 } else { 400 })?;
     // Accent tokens drive CSS var(--accent*) consumers in ui/shell/flamewm.css.
     document.color_variable("--accent", accent)?;
-    document.color_variable("--accent-soft", accent_tint(snapshot, 0x38))?;
+    document.color_variable("--accent-soft", accent_tint(snapshot, ACCENT_SOFT_ALPHA))?;
     document.color_variable("--accent-strong", accent_tint(snapshot, 0xdd))?;
 
     match surface {
@@ -174,14 +175,16 @@ fn color_setting(snapshot: &SettingsSnapshot, key: &str, default: u32) -> UiColo
         Some(SettingValue::Text(value)) => value,
         _ => return rgb(default, 255),
     };
-    let digits = value.strip_prefix('#').unwrap_or(value);
-    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return rgb(default, 255);
-    }
-    let Ok(value) = u32::from_str_radix(digits, 16) else {
-        return rgb(default, 255);
+    // Stored values carry `#`; the bare six-digit form is accepted too.
+    let parsed = if value.starts_with('#') {
+        parse_hex_rgb(value)
+    } else {
+        parse_hex_rgb(&format!("#{value}"))
     };
-    rgb(value, 255)
+    match parsed {
+        Some((r, g, b)) => UiColor { r, g, b, a: 255 },
+        None => rgb(default, 255),
+    }
 }
 
 fn rgb(value: u32, alpha: u8) -> UiColor {
@@ -370,6 +373,8 @@ mod tests {
         assert_eq!((red.r, red.g, red.b, red.a), (255, 0, 0, 255));
         let green = color_setting(&snapshot_with("accent", "00ff00"), "accent", 0);
         assert_eq!((green.r, green.g, green.b), (0, 255, 0));
+        let signed = color_setting(&snapshot_with("accent", "#+12345"), "accent", DEFAULT_ACCENT);
+        assert_eq!(signed, rgb(DEFAULT_ACCENT, 255));
         let bad = color_setting(&snapshot_with("accent", "#GG0000"), "accent", DEFAULT_ACCENT);
         assert_eq!(
             (bad.r, bad.g, bad.b),

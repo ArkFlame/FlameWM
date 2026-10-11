@@ -11,6 +11,8 @@ use flamewm_api::shortcuts::{
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+use crate::chrome::parse_hex_rgb;
+
 const KNOWN_HOTKEYS: [&str; 8] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_WORKSPACE_LEFT,
@@ -652,10 +654,7 @@ fn validate_color(value: &str, allow_empty: bool, name: &str) -> FlameResult<()>
     if allow_empty && value.is_empty() {
         return Ok(());
     }
-    if value.len() == 7
-        && value.starts_with('#')
-        && value.chars().skip(1).all(|c| c.is_ascii_hexdigit())
-    {
+    if parse_hex_rgb(value).is_some() {
         return Ok(());
     }
     invalid_owned(format!(
