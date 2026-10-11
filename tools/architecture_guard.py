@@ -88,10 +88,11 @@ def responsibility(crate_name):
 
 
 def source_loc(paths):
+    # Production responsibility size: #[cfg(test)] items are not counted.
     return sum(
         1
         for path in paths
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in _j11_strip_cfgs(path.read_text(encoding="utf-8")).splitlines()
         if line.strip() and not line.lstrip().startswith("//")
     )
 
