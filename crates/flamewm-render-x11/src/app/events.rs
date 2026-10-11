@@ -1,3 +1,4 @@
+use super::input::apply_wheel_scroll;
 use super::*;
 use crate::WindowGeometrySlot;
 
@@ -431,6 +432,16 @@ impl X11App {
                     // (semantic "scroll" action, Motion phase), no press state.
                     if let Some((dx, dy)) = wheel_scroll_delta(raw) {
                         let scale = document.ui_scale();
+                        if let Some(layout) = self.layout.as_ref() {
+                            apply_wheel_scroll(
+                                layout,
+                                document,
+                                self.interaction,
+                                button.x as f32 / scale,
+                                button.y as f32 / scale,
+                                (dx, dy),
+                            );
+                        }
                         on_action(
                             &ActionEvent {
                                 action: "scroll".to_string(),
