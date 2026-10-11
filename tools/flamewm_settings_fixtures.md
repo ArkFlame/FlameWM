@@ -35,7 +35,7 @@ Schema: `flamewm-settings-acceptance/2` (`schema_version` 2). Each run writes `<
 | SS10 | scale | native runner (`run_ss10`); needs `--ss10-scale-click`, plus `--ss10-wheel-steps` and `--ss10-scrolled-click` when the output lists modes. PASS only when the Displays 125 click changes the output `scale` to 125, the mode list is unchanged, and the value persists after an owned WM restart; otherwise NOT_RUN |
 | SS11 | fonts | native runner (`run_ss11`); needs `--ss11-family-click` and `--ss11-size-click`. PASS only when both clicks change `fontFamily` / `fontSizeOffset` in the Settings snapshot and both persist after an owned WM restart; otherwise NOT_RUN |
 | SS12 | hotkeys | native runner; PASS only when lease, stored binding, action, grab restoration, owner loss, Escape clear (empty binding, persisted after restart) and Reset (`Super_L`, persisted after restart) all pass; Start is observed as the `StartMenuToggleRequested` D-Bus signal (no Start window exists in the session); clicks default to measured screen points 593,180 / 733,180, valid only for the 820x540 client at (0,31) (otherwise refused NOT_RUN); `--ss12-click` and `--ss12-reset-click` override |
-| SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 and the Rust test `about_version_text_is_exact_flamewm_version` passes via `cargo test`; NOT_RUN when cargo is not on PATH |
+| SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 a live tesseract OCR read of the about-version region (`Version <FLAMEWM_VERSION>`, with negative controls) succeeds at all three sizes, and the Rust test `about_version_text_is_exact_flamewm_version` passes via `cargo test`; NOT_RUN when cargo or tesseract is not on PATH |
 | SS14 | external signal + auto-revert | Settings accent, `Panels.SetEdge` on the open Taskbar page, `Shortcuts.SetBinding` on the open Hotkeys page (each with unchanged-capture and unrelated-setting controls, no input), and an owned WM restart under an open Settings client followed by an external accent Apply. Display rollback stays NOT_RUN: Xephyr exposes no alternative modes, so no revert transaction can start |
 | SS15 | traversal/disabled states | NOT_RUN (no runner) |
 | SS16 | cargo/CSS/architecture gates | runner executes `static_audit`, `architecture_guard`, `verify_rwr_promotion`, `test_j18_frame_guard.py`; PASS only when all exit 0 on one source (cargo gates are not run here) |
@@ -122,7 +122,14 @@ are relabeled.
   root with `CARGO_BUILD_JOBS=2`, only when `cargo` is on PATH. PASS needs exit 0 and the line
   `test result: ok. 1 passed`; any other outcome is a measured FAIL. Without cargo the check is unobserved
   (NOT_RUN, never PASS), with the three renders recorded as evidence. The command, exit code and result
-  line are in `details.version_test`. The runner reads no Settings snapshot version key. No OCR is used.
+  line are in `details.version_test`. The runner reads no Settings snapshot version key.
+  Live read: the about-version text is cropped from each real screenshot (client-relative rect
+  `x = 104 + W/2 - 60`, `y = 213`, `120x22`, measured at client origin (0,31) and refused unless the
+  measured client size equals the requested size), upscaled 4x and OCR'd with `tesseract --psm 7`.
+  The matcher needs the token `version` (o/a/0 confusion tolerated) and the exact dotted `FLAMEWM_VERSION`
+  with no extra digits/dots; the expected `0.0.8` must not match, and a tagline-region crop (`A lightweight
+  desktop by ArkFlame Studios`) must not match. PASS needs the live read at all three sizes AND the source
+  test; tesseract absent leaves the live observation unverified (NOT_RUN, never PASS-by-live).
 - SS14 `--ss14-accent-pixel X,Y` samples a pixel inside the Appearance page's `nav-selection-accent`
   bar. It sends one `Settings.Apply(accent)` from a separate `gdbus` client, records the Apply call
   and both Settings change signals, reads the authoritative revision/value, then samples the same

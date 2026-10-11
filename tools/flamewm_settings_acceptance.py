@@ -848,14 +848,14 @@ def assess_ss11(observations: dict[str, bool | None]) -> tuple[str, str]:
 
 def assess_ss13(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("about_render_760x500", "about_render_820x540", "about_render_960x640",
-                "version_matches_flamewm_version")
+                "version_matches_flamewm_version", "version_live_ocr_matches")
     failed = [key for key in required if observations.get(key) is False]
     if failed:
         return STATUS_FAIL, "measured About page failure: " + ", ".join(failed)
     missing = [key for key in required if observations.get(key) is not True]
     if missing:
         return STATUS_NOT_RUN, "partial About page evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "About rendered non-blank at 760x500, 820x540 and 960x640 and the source test about_version_text_is_exact_flamewm_version passed for FLAMEWM_VERSION (not a live-page observation)"
+    return STATUS_PASS, "About rendered non-blank at 760x500, 820x540 and 960x640, the live about-version text was OCR-read as 'Version FLAMEWM_VERSION' at all three sizes (negative controls rejected) and the source test about_version_text_is_exact_flamewm_version passed"
 
 
 def gvariant_field_string(output: str, key: str) -> str | None:
@@ -3359,13 +3359,80 @@ def run_ss11(ctx: Ctx, args: argparse.Namespace) -> dict:
     return finish()
 
 
+ABOUT_VERSION_CROP_W, ABOUT_VERSION_CROP_H, ABOUT_VERSION_CROP_Y = 120, 22, 213
+ABOUT_TAGLINE_CROP = (-180, 180, 360, 28)  # relative to content centre / client y; control region
+
+
+def about_content_centre(width: int) -> int:
+    """Client-relative x centre of the About content column, measured natively (104 + W/2)."""
+    return 104 + width // 2
+
+
+def ss13_version_ocr_matches(text: str, version: str) -> bool:
+    """Token 'version' (tolerating o/a/0 confusion only) followed by the exact dotted number."""
+    normalized = re.sub(r"[^a-z0-9.]+", " ", text.lower()).strip()
+    pattern = r"(?<![a-z0-9])versi[oa0]n\s+" + re.escape(version) + r"(?![0-9.])"
+    return re.search(pattern, normalized) is not None
+
+
+def ocr_text(tesseract: str, image: Path) -> tuple[str | None, list[str]]:
+    """Upscale 4x (small grey UI text) and OCR one line; None when a tool fails."""
+    big = image.with_name(image.stem + "-x4.png")
+    resize = ["convert", str(image), "-resize", "400%", str(big)]
+    ocr = [tesseract, str(big), "stdout", "--psm", "7"]
+    commands = [shell(resize), shell(ocr)]
+    if subprocess.run(resize, capture_output=True, timeout=60, check=False).returncode != 0:
+        return None, commands
+    result = subprocess.run(ocr, capture_output=True, text=True, timeout=30, check=False)
+    return (result.stdout.strip() if result.returncode == 0 else None), commands
+
+
+def ss13_live_version(shot: dict, size: tuple[int, int], tesseract: str, version: str,
+                      out_dir: Path) -> dict:
+    """OCR the about-version region and a tagline control region from the real native screenshot."""
+    width, height = size
+    window = shot.get("window") or {}
+    record: dict = {"size": f"{width}x{height}", "observed": None}
+    if (window.get("width"), window.get("height")) != size or not shot.get("captured"):
+        record["refused"] = "measured client geometry differs from the calibrated size"
+        return record
+    x0, y0 = window["x"], window["y"]
+    centre = about_content_centre(width)
+    regions = {
+        "version": (x0 + centre - ABOUT_VERSION_CROP_W // 2, y0 + ABOUT_VERSION_CROP_Y,
+                    ABOUT_VERSION_CROP_W, ABOUT_VERSION_CROP_H),
+        "tagline_control": (x0 + centre + ABOUT_TAGLINE_CROP[0], y0 + ABOUT_TAGLINE_CROP[1],
+                            ABOUT_TAGLINE_CROP[2], ABOUT_TAGLINE_CROP[3]),
+    }
+    texts: dict[str, str | None] = {}
+    record["commands"] = []
+    for name, rect in regions.items():
+        crop_path = out_dir / f"ss13-{width}x{height}-{name}.png"
+        ok, command = crop(Path(shot["shot"]), rect, crop_path)
+        record["commands"].append(command)
+        if not ok:
+            return record
+        texts[name], commands = ocr_text(tesseract, crop_path)
+        record["commands"].extend(commands)
+        record[f"{name}_crop"] = str(crop_path)
+    record["version_text"], record["control_text"] = texts["version"], texts["tagline_control"]
+    if texts["version"] is None or texts["tagline_control"] is None:
+        return record
+    record["observed"] = (ss13_version_ocr_matches(texts["version"], version)
+                          and not ss13_version_ocr_matches(texts["tagline_control"], version)
+                          and not ss13_version_ocr_matches(texts["version"], "0.0.8"))
+    return record
+
+
 def run_ss13(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Open About at each matrix size; PASS needs live nonblank renders and the Rust exact-version test."""
     observations: dict[str, bool | None] = {f"about_render_{width}x{height}": None for width, height in SIZES}
     observations["version_matches_flamewm_version"] = None
-    details: dict = {"observations": observations, "commands": [], "renders": [],
+    observations["version_live_ocr_matches"] = None
+    details: dict = {"observations": observations, "commands": [], "renders": [], "live_ocr": [],
                      "paths_exercised": ["flamewm-settings --page about at 760x500, 820x540, 960x640",
                                          "xwininfo client geometry",
+                                         "tesseract OCR of the about-version region of the native screenshot",
                                          f"cargo test -p flamewm-settings {ABOUT_VERSION_TEST}"]}
     shots = []
     for width, height in SIZES:
@@ -3376,11 +3443,27 @@ def run_ss13(ctx: Ctx, args: argparse.Namespace) -> dict:
                                    "nonblank": shot["nonblank"], "window": shot["window"]})
         observations[f"about_render_{width}x{height}"] = exact_window_size(shot, (width, height))
 
+    tesseract = shutil.which("tesseract")
+    if tesseract is None:
+        details["live_ocr_reason"] = "tesseract not on PATH; live About version read not performed"
+    else:
+        version = (ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
+        reads = [ss13_live_version(shot, size, tesseract, version, ctx.run / "shots")
+                 for shot, size in zip(shots, SIZES)]
+        details["live_ocr"] = reads
+        for read in reads:
+            details["commands"].extend(read.get("commands", []))
+        if any(read["observed"] is False for read in reads):
+            observations["version_live_ocr_matches"] = False
+        elif all(read["observed"] is True for read in reads):
+            observations["version_live_ocr_matches"] = True
+
     version_matches, version_record = run_about_version_test()
     observations["version_matches_flamewm_version"] = version_matches
     details["version_test"] = version_record
     status, reason = assess_ss13(observations)
-    entry = result_entry("SS13", status, reason, [shot["shot"] for shot in shots], details["commands"])
+    crops = [read["version_crop"] for read in details["live_ocr"] if "version_crop" in read]
+    entry = result_entry("SS13", status, reason, [shot["shot"] for shot in shots] + crops, details["commands"])
     entry["details"] = details
     return entry
 
@@ -3808,7 +3891,8 @@ def ss09_native(ctx: Ctx, args: argparse.Namespace, details: dict) -> dict[str, 
                                      bool(applied and revert_elapsed is not None
                                           and any(record["revert_signals"].values())))
     record.update({"applied": applied, "pending_seen": pending_seen, "revert_elapsed_s": revert_elapsed,
-                   "samples_first_last": [samples[0], samples[-1]] if samples else []})
+                   "samples_first_last": [samples[0], samples[-1]] if samples else [],
+                   "last_sample_at_or_before_14s": next((sample for sample in reversed(samples) if sample[0] <= 14.0), None)})
     out["native_timeout_revert"] = ss09_native_observed(applied, pending_seen, revert_elapsed,
                                                        final_size == start_size)
 

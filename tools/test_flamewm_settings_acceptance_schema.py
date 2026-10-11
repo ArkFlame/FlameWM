@@ -774,10 +774,29 @@ class ScaleFontsAboutDecisionTests(unittest.TestCase):
         self.assertFalse(acc.ss13_version_test_observed(0, "test result: ok. 0 passed; 0 failed"))
         self.assertFalse(acc.ss13_version_test_observed(1, "error[E0432]: unresolved import"))
 
+    def test_ss13_ocr_matcher_exact_digits_and_negative_controls(self) -> None:
+        match = acc.ss13_version_ocr_matches
+        self.assertTrue(match("Version 0.0.9", "0.0.9"))
+        self.assertTrue(match("Versi0n 0.0.9\n", "0.0.9"))
+        self.assertTrue(match("Versian 0.0.9", "0.0.9"))
+        self.assertFalse(match("Version 0.0.9", "0.0.8"))
+        self.assertFalse(match("Version 0.0.90", "0.0.9"))
+        self.assertFalse(match("Version 0.0.9.1", "0.0.9"))
+        self.assertFalse(match("0.0.9", "0.0.9"))
+        self.assertFalse(match("Native desktop settings for FlameWM", "0.0.9"))
+        self.assertFalse(match("A lightweight desktop by ArkFlame Studios", "0.0.9"))
+        self.assertFalse(match("Version 0.0.8", "0.0.9"))
+
     def test_ss13_needs_three_renders_and_version(self) -> None:
         observations = {"about_render_760x500": True, "about_render_820x540": True,
-                        "about_render_960x640": True, "version_matches_flamewm_version": True}
+                        "about_render_960x640": True, "version_matches_flamewm_version": True,
+                        "version_live_ocr_matches": True}
         self.assertEqual(acc.assess_ss13(observations)[0], "PASS")
+        observations["version_live_ocr_matches"] = None
+        self.assertEqual(acc.assess_ss13(observations)[0], "NOT_RUN")
+        observations["version_live_ocr_matches"] = False
+        self.assertEqual(acc.assess_ss13(observations)[0], "FAIL")
+        observations["version_live_ocr_matches"] = True
         observations["version_matches_flamewm_version"] = None
         status, reason = acc.assess_ss13(observations)
         self.assertEqual(status, "NOT_RUN")
@@ -844,6 +863,8 @@ class FakeNativeRunnerTests(unittest.TestCase):
                                     return_value={"x": 0, "y": 0, "width": 820, "height": 540})
         self.send_input = self._patch("flamewm_settings_acceptance.send_input", return_value=(0, "xtest"))
         self.restart = self._patch("flamewm_settings_acceptance.restart_owned_wm", return_value=True)
+        self.live = self._patch("flamewm_settings_acceptance.ss13_live_version",
+                                side_effect=lambda shot, size, *a: {"size": "x", "observed": True})
         # Never let a unit test shell out to cargo; SS13 tests set the verdict they need.
         self.version_test = self._patch("flamewm_settings_acceptance.run_about_version_test",
                                         return_value=(True, {"command": "cargo test", "exit_code": 0,
@@ -1010,6 +1031,20 @@ class FakeNativeRunnerTests(unittest.TestCase):
         self.assertIn("version_matches_flamewm_version", entry["reason"])
         self.assertIsNone(entry["details"]["observations"]["version_matches_flamewm_version"])
         self.assertEqual(len(entry["details"]["renders"]), 3)
+
+    def test_ss13_live_ocr_failure_fails_and_missing_tesseract_is_not_run(self) -> None:
+        self._patch("flamewm_settings_acceptance.page_shot",
+                    side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
+        self.live.side_effect = lambda shot, size, *a: {"size": "x", "observed": False}
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "FAIL")
+        self.assertIn("version_live_ocr_matches", entry["reason"])
+        self.live.side_effect = lambda shot, size, *a: {"size": "x", "observed": None, "refused": "geometry"}
+        self.assertEqual(acc.run_ss13(self.ctx, self._args())["status"], "NOT_RUN")
+        self._patch("flamewm_settings_acceptance.shutil.which", return_value=None)
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertIn("tesseract", entry["details"]["live_ocr_reason"])
 
     def test_ss13_does_not_read_a_settings_snapshot_version_key(self) -> None:
         self._patch("flamewm_settings_acceptance.page_shot",
