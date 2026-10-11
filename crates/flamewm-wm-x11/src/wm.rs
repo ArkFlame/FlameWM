@@ -987,6 +987,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
+    /// Live skin chrome tokens (settings-derived); changes repaint all frames.
+    decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens,
     changes: WmChangeSet,
     /// Bare-Super tap state; see `SuperTap`. Start toggles only through it.
     super_tap: SuperTap,
@@ -1091,6 +1093,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             dock_struts: HashMap::new(),
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),
+            decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens::default(),
             changes: WmChangeSet::default(),
             super_tap: SuperTap::default(),
             pointer_ingress_probe: PointerIngressProbe::default(),
@@ -1561,17 +1564,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                         self.paint_chrome(client)?;
                     }
                     FrameEffect::ApplyShape => {
-                        let (frame, maximized, fullscreen, outer) = match self.clients.get(&client)
-                        {
-                            Some(state) => (
-                                state.frame,
-                                state.is_maximized(),
-                                state.is_fullscreen(),
-                                state.outer,
-                            ),
+                        let (frame, floating, outer) = match self.clients.get(&client) {
+                            Some(state) => (state.frame, state.is_floating(), state.outer),
                             None => continue,
                         };
-                        self.clear_frame_shape(frame, outer, maximized, fullscreen)?;
+                        self.clear_frame_shape(frame, outer, floating)?;
                     }
                     FrameEffect::NotifyClientRoot { x, y, w, h } => {
                         let _guard = flamewm_profiler::start("wm.move.notify");
@@ -1873,6 +1870,34 @@ impl<'a, C: Connection> Wm<'a, C> {
         result
     }
 
+    /// Apply live chrome tokens from the settings sync point. A change
+    /// repaints every frame and reapplies its shape (radius/glass).
+    pub(crate) fn apply_decoration_tokens(
+        &mut self,
+        tokens: flamewm_skin::recipes::decoration::ChromeTokens,
+    ) -> Result<(), ReplyError> {
+        if tokens == self.decoration_tokens {
+            return Ok(());
+        }
+        self.decoration_tokens = tokens;
+        let clients: Vec<Window> = self.clients.keys().copied().collect();
+        for client in clients {
+            let Some((frame, outer, floating)) = self
+                .clients
+                .get(&client)
+                .map(|state| (state.frame, state.outer, state.is_floating()))
+            else {
+                continue;
+            };
+            self.clear_frame_shape(frame, outer, floating)?;
+            self.paint_chrome(client)?;
+        }
+        if let Some(renderer) = self.renderer.as_ref() {
+            renderer.flush();
+        }
+        Ok(())
+    }
+
     fn paint_chrome(&mut self, client: Window) -> Result<(), ReplyError> {
         // Single chrome paint path: delegate scene build to chrome_runtime
         // (J08 paint_plan seam); this owner only bridges cached rasters.
@@ -1886,6 +1911,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                     pressed: self.pressed_control(client),
                     maximized: state.is_maximized(),
                     fullscreen: state.is_fullscreen(),
+                    floating: state.is_floating(),
+                    tokens: self.decoration_tokens,
                 },
                 chrome_runtime::ChromeIdentity {
                     title: state.title.clone(),
@@ -2516,15 +2543,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         // Retarget + paint chrome + shape + cursors.
         self.paint_chrome(window)?;
         let _ = self.renderer.as_ref().map(|renderer| renderer.flush());
-        let maximized = self
+        let floating = self
             .clients
             .get(&window)
-            .map_or(false, |state| state.is_maximized());
-        let fullscreen = self
-            .clients
-            .get(&window)
-            .map_or(false, |state| state.is_fullscreen());
-        self.clear_frame_shape(frame, outer, maximized, fullscreen)?;
+            .is_some_and(|state| state.is_floating());
+        self.clear_frame_shape(frame, outer, floating)?;
         self.bind_child_cursors(window);
 
         // Map client + input children + frame (renderer flush above).
@@ -3831,18 +3854,13 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn apply_frame_geometry(&mut self, client: Window) -> Result<(), ReplyError> {
-        let (frame, outer, maximized, fullscreen) = match self.clients.get(&client) {
-            Some(state) => (
-                state.frame,
-                state.outer,
-                state.is_maximized(),
-                state.is_fullscreen(),
-            ),
+        let (frame, outer, floating) = match self.clients.get(&client) {
+            Some(state) => (state.frame, state.outer, state.is_floating()),
             None => return Ok(()),
         };
         {
             let _guard = flamewm_profiler::start("wm.resize.shape");
-            self.clear_frame_shape(frame, outer, maximized, fullscreen)?;
+            self.clear_frame_shape(frame, outer, floating)?;
         }
         {
             let _guard = flamewm_profiler::start("wm.resize.frame_configure");
@@ -4132,20 +4150,14 @@ impl<'a, C: Connection> Wm<'a, C> {
         &self,
         frame: Window,
         outer: crate::geometry::Rect,
-        maximized: bool,
-        fullscreen: bool,
+        floating: bool,
     ) -> Result<(), ReplyError> {
         use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
-        let rects = if maximized || fullscreen {
-            vec![x11rb::protocol::xproto::Rectangle {
-                x: 0,
-                y: 0,
-                width: outer.width.min(u32::from(u16::MAX)) as u16,
-                height: outer.height.min(u32::from(u16::MAX)) as u16,
-            }]
-        } else {
-            crate::frame::geometry_shape::bounding_rectangles(outer)
-        };
+        let rects = crate::frame::geometry_shape::bounding_rectangles(
+            outer,
+            floating,
+            self.decoration_tokens.style,
+        );
         self.conn.shape_rectangles(
             ShapeOp::SET,
             ShapeSk::BOUNDING,

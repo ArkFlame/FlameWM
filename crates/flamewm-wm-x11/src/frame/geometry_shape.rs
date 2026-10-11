@@ -2,22 +2,17 @@
 //!
 //! Single formula owner is render-x11 (`external_rounded_row_inset`, float
 //! rounded `floor(r - dx)` at pixel-row centers): full-width rows when the
-//! radius is 0/1, when maximized/fullscreen, or mid-span; corner insets
-//! otherwise. Bounding-region assembly lives here over safe `x11rb`
-//! rectangles; the live mask apply lives in `render-x11`'s XShape bridge.
+//! radius is 0/1, or mid-span; corner insets otherwise. The radius policy
+//! is owned by skin (`corner_radius`). Bounding-region assembly lives here
+//! over safe `x11rb` rectangles; the live mask apply lives in `render-x11`'s
+//! XShape bridge.
 
 use flamewm_render_x11::external_rounded_row_inset;
+use flamewm_skin::recipes::decoration::{DecorationStyle, corner_radius};
 
 use x11rb::protocol::xproto::Rectangle;
 
-use crate::chrome;
 use crate::geometry::Rect;
-
-/// Rounded radius normally, rectangular when maximized or fullscreen.
-#[must_use]
-pub fn effective_radius(maximized: bool, fullscreen: bool) -> u16 {
-    chrome::effective_radius(maximized, fullscreen)
-}
 
 /// Canonical row spans (y, x_start, x_end_exclusive) for a rounded rect:
 /// float rounded mask, single full-width rows when rectangular.
@@ -40,23 +35,30 @@ pub fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32
     spans
 }
 
-/// Bounding rectangles for a frame outer: canonical row spans (float
-/// rounded normally, single rect when maximized/fullscreen).
+/// Bounding rectangles for a frame outer: a single rect unless `floating`
+/// (skin radius), otherwise the canonical rounded row spans.
 #[must_use]
-pub fn bounding_rectangles(outer: Rect) -> Vec<Rectangle> {
-    rounded_mask_spans(
-        outer.width.min(u32::from(u16::MAX)),
-        outer.height.min(u32::from(u16::MAX)),
-        u32::from(effective_radius(false, false)),
-    )
-    .into_iter()
-    .map(|(y, start, end)| Rectangle {
-        x: i16::try_from(start.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
-        y: i16::try_from(y.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
-        width: end.saturating_sub(start).min(u32::from(u16::MAX)) as u16,
-        height: 1,
-    })
-    .collect()
+pub fn bounding_rectangles(outer: Rect, floating: bool, style: DecorationStyle) -> Vec<Rectangle> {
+    let width = outer.width.min(u32::from(u16::MAX));
+    let height = outer.height.min(u32::from(u16::MAX));
+    let radius = corner_radius(floating, style);
+    if radius == 0 {
+        return vec![Rectangle {
+            x: 0,
+            y: 0,
+            width: width as u16,
+            height: height as u16,
+        }];
+    }
+    rounded_mask_spans(width, height, u32::from(radius))
+        .into_iter()
+        .map(|(y, start, end)| Rectangle {
+            x: i16::try_from(start.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+            y: i16::try_from(y.min(u32::from(u16::MAX))).unwrap_or(i16::MAX),
+            width: end.saturating_sub(start).min(u32::from(u16::MAX)) as u16,
+            height: 1,
+        })
+        .collect()
 }
 
 #[cfg(test)]

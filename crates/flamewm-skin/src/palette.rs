@@ -1,6 +1,6 @@
 //! Exact colors from `examples/flamewm-v8/flamewm.css`, line 1 and component rules.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

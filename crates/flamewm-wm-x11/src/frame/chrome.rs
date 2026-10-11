@@ -5,7 +5,8 @@
 //! `flamewm-render-x11`'s [`ExternalDecorationRenderer`]; this module only
 //! plans skin-exact values (J06 freeze) and describes effects.
 
-use flamewm_skin::palette::{PANEL, TEXT};
+use flamewm_skin::palette::{Rgb, TEXT};
+use flamewm_skin::recipes::decoration::{ChromeTokens, corner_radius, glass_enabled, glass_tints};
 use flamewm_skin::recipes::window_chrome::WINDOW_CHROME;
 use flamewm_skin::typography::{FontWeight, Typography};
 
@@ -46,10 +47,14 @@ pub struct ChromeScene {
     pub active: bool,
     pub maximized: bool,
     pub fullscreen: bool,
+    pub floating: bool,
     pub radius: u16,
+    pub glass: bool,
+    pub tokens: ChromeTokens,
 }
 
-/// Plan a chrome scene from frame inputs using SKIN values exactly.
+/// Plan a chrome scene from frame inputs using SKIN values and style tokens.
+/// Only a `floating` window gets the rounded mask (and iOS glass).
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn plan_scene(
@@ -61,11 +66,13 @@ pub fn plan_scene(
     pressed: Option<FrameControl>,
     maximized: bool,
     fullscreen: bool,
+    floating: bool,
+    tokens: &ChromeTokens,
 ) -> ChromeScene {
     let title_style = Typography::RWR_0_0_9.title;
-    let bg = PANEL;
+    let bg = tokens.titlebar_bg;
     let text = TEXT;
-    let radius = WINDOW_CHROME.metrics.radius;
+    let radius = corner_radius(floating, tokens.style);
     let title_width = crate::chrome::title_text_width(title);
     let title_x = crate::chrome::live_title_x(frame_w, title_width);
     ChromeScene {
@@ -80,11 +87,7 @@ pub fn plan_scene(
             ((text.0 >> 8) & 0xff) as u8,
             (text.0 & 0xff) as u8,
         ),
-        bg: (
-            ((bg.0 >> 16) & 0xff) as u8,
-            ((bg.0 >> 8) & 0xff) as u8,
-            (bg.0 & 0xff) as u8,
-        ),
+        bg: rgb_channels(bg),
         title_width,
         title_x,
         icon_present: false,
@@ -99,8 +102,19 @@ pub fn plan_scene(
         active,
         maximized,
         fullscreen,
-        radius: if maximized || fullscreen { 0 } else { radius },
+        floating,
+        radius,
+        glass: glass_enabled(floating, tokens.style),
+        tokens: *tokens,
     }
+}
+
+fn rgb_channels(color: Rgb) -> (u8, u8, u8) {
+    (
+        ((color.0 >> 16) & 0xff) as u8,
+        ((color.0 >> 8) & 0xff) as u8,
+        (color.0 & 0xff) as u8,
+    )
 }
 
 /// Attach the resolved native `_NET_WM_ICON` selection to a planned scene.
@@ -219,6 +233,50 @@ pub fn render(
             a: 255,
         },
     );
+    // iOS glass: opaque 1px top highlight and inner side edges, confined to
+    // the titlebar strip (the client surface covers the rest of the frame).
+    let glass_result = if scene.glass && scene.frame_w >= 2 {
+        let (top, edge) = glass_tints(scene.tokens.titlebar_bg);
+        let mut fill = |rect: Rect, color: Rgb| {
+            let (r, g, b) = rgb_channels(color);
+            renderer.fill_rect(rect, Color { r, g, b, a: 255 })
+        };
+        let w = scene.frame_w as f32;
+        let bar_h = titlebar_h;
+        fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: w,
+                height: 1.0,
+            },
+            top,
+        )
+        .and_then(|()| {
+            fill(
+                Rect {
+                    x: 0.0,
+                    y: 1.0,
+                    width: 1.0,
+                    height: bar_h - 1.0,
+                },
+                edge,
+            )
+        })
+        .and_then(|()| {
+            fill(
+                Rect {
+                    x: w - 1.0,
+                    y: 1.0,
+                    width: 1.0,
+                    height: bar_h - 1.0,
+                },
+                edge,
+            )
+        })
+    } else {
+        Ok(())
+    };
     let icon_result = match (&scene.icon, scene.icon_dest) {
         (Some(icon), Some((dest_x, dest_y, dest_edge))) => {
             match crate::chrome::native_icon_rgba(icon, u32::from(scene.icon_edge)) {
@@ -263,6 +321,7 @@ pub fn render(
         scene.fullscreen,
         scene.hover,
         scene.pressed,
+        &scene.tokens,
     ) {
         let step = renderer.blit_rgba(
             &blit.raster.pixels,
@@ -284,6 +343,7 @@ pub fn render(
     renderer.flush();
     retarget_result?;
     fill_result?;
+    glass_result?;
     icon_result?;
     draw_result?;
     controls_result?;
@@ -294,10 +354,22 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_skin::palette::PANEL;
 
     #[test]
     fn plan_uses_skin_values_exactly() {
-        let scene = plan_scene(400, 300, "app", true, None, None, false, false);
+        let scene = plan_scene(
+            400,
+            300,
+            "app",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         assert_eq!(scene.bg, (0x1b, 0x1e, 0x20));
         assert_eq!(scene.bg, (0x1b, 0x1e, 0x20));
         assert_eq!(PANEL.0, 0x1b1e20);
@@ -318,7 +390,18 @@ mod tests {
 
     #[test]
     fn nonempty_title_requires_draw_title_effect() {
-        let scene = plan_scene(400, 300, "hello", true, None, None, false, false);
+        let scene = plan_scene(
+            400,
+            300,
+            "hello",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         let effects = effects_for(7, &scene);
         let draw = effects.iter().find_map(|effect| match effect {
             ChromeEffect::DrawTitle {
@@ -334,7 +417,18 @@ mod tests {
 
     #[test]
     fn empty_title_may_skip_draw_title() {
-        let scene = plan_scene(400, 300, "", true, None, None, false, false);
+        let scene = plan_scene(
+            400,
+            300,
+            "",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         let effects = effects_for(7, &scene);
         assert!(
             !effects
@@ -345,17 +439,61 @@ mod tests {
 
     #[test]
     fn maximized_and_fullscreen_radius_zero() {
-        let maximized = plan_scene(400, 300, "a", true, None, None, true, false);
+        let maximized = plan_scene(
+            400,
+            300,
+            "a",
+            true,
+            None,
+            None,
+            true,
+            false,
+            false,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         assert_eq!(maximized.radius, 0);
-        let fullscreen = plan_scene(400, 300, "a", true, None, None, false, true);
+        let fullscreen = plan_scene(
+            400,
+            300,
+            "a",
+            true,
+            None,
+            None,
+            false,
+            true,
+            false,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         assert_eq!(fullscreen.radius, 0);
-        let floating = plan_scene(400, 300, "a", true, None, None, false, false);
+        let floating = plan_scene(
+            400,
+            300,
+            "a",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         assert_eq!(floating.radius, 6);
     }
 
     #[test]
     fn hover_role_only_changes_correct_control() {
-        let base = plan_scene(400, 300, "a", true, None, None, false, false);
+        let base = plan_scene(
+            400,
+            300,
+            "a",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         let close = plan_scene(
             400,
             300,
@@ -365,6 +503,8 @@ mod tests {
             None,
             false,
             false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
         let close_effects = effects_for(1, &close);
         let base_effects = effects_for(1, &base);
@@ -388,7 +528,18 @@ mod tests {
     fn render_passes_title_style_through_contract() {
         let mut renderer =
             flamewm_render_x11::ExternalDecorationRenderer::unavailable("no DISPLAY in test");
-        let scene = plan_scene(400, 300, "title", true, None, None, false, false);
+        let scene = plan_scene(
+            400,
+            300,
+            "title",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         let result = render(&mut renderer, 42, &scene);
         assert!(result.is_err());
         // Style params reached the draw-target contract before display touch.

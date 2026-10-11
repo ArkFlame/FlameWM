@@ -324,6 +324,7 @@ fn run_session(
         if let Some(error) = control_error_for_hook.borrow_mut().take() {
             return Err(error);
         }
+        wm.apply_decoration_tokens(crate::chrome::live_chrome_tokens())?;
         refresh_control(
             &reactor_for_hook,
             &mut control_registration,
@@ -479,9 +480,14 @@ where
 /// notifies the optional observer with the same snapshot.
 fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &SettingsSnapshot) {
     sync_snap_preview_opacity(snapshot);
+    sync_window_decoration(snapshot);
     if let Some(observer) = observer.borrow_mut().as_mut() {
         observer(snapshot);
     }
+}
+
+fn sync_window_decoration(snapshot: &SettingsSnapshot) {
+    crate::chrome::set_live_chrome_tokens(crate::chrome::chrome_tokens_from_settings(snapshot));
 }
 
 fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {

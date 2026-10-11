@@ -907,7 +907,7 @@ mod tests {
         assert_eq!(&children[9..12], &[72, 73, 74]);
         assert_eq!(RESIZE_ORDER.len(), 8);
         assert_eq!(CONTROL_ORDER.len(), 3);
-        let scene = plan_scene(400, 300, "app", true, None, None, false, false);
+        let scene = plan_scene(400, 300, "app", true, None, None, false, false, true, &flamewm_skin::recipes::decoration::ChromeTokens::default());
         let fx = effects_for(70, &scene);
         let kind = |e: &super::super::chrome::ChromeEffect| match e {
             super::super::chrome::ChromeEffect::Retarget { .. } => 0,

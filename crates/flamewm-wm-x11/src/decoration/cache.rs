@@ -108,7 +108,12 @@ impl DecorationCache {
             touch(&mut self.control_glyph_order, &key);
             return Some(cached);
         }
-        let raster = crate::chrome::control_glyph_raster(role, edge, material)?;
+        let raster = crate::chrome::control_glyph_raster(
+            role,
+            edge,
+            material,
+            crate::chrome::ControlLook::default(),
+        )?;
         if self.control_glyphs.contains_key(&key) {
             self.control_glyphs.insert(key, raster.clone());
             touch(&mut self.control_glyph_order, &key);

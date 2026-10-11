@@ -6,6 +6,7 @@
 use crate::chrome::IconImage;
 use crate::frame::chrome::{ChromeScene, plan_scene, render, with_icon};
 use crate::frame::model::FrameControl;
+use flamewm_skin::recipes::decoration::ChromeTokens;
 
 /// Cached identity inputs owned outside paint (manage/property paths).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub struct ChromeState {
     pub pressed: Option<FrameControl>,
     pub maximized: bool,
     pub fullscreen: bool,
+    pub floating: bool,
+    pub tokens: ChromeTokens,
 }
 
 /// Decide whether state inputs differ enough to invalidate the scene.
@@ -75,6 +78,8 @@ impl ChromeRuntime {
                 state.pressed,
                 state.maximized,
                 state.fullscreen,
+                state.floating,
+                &state.tokens,
             );
             self.scene = Some(with_icon(planned, icon));
             self.identity = Some(identity.clone());
@@ -120,6 +125,8 @@ mod tests {
             pressed: None,
             maximized: false,
             fullscreen: false,
+            floating: true,
+            tokens: ChromeTokens::default(),
         }
     }
 

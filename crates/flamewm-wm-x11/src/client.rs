@@ -79,6 +79,12 @@ impl ManagedClient {
         !self.minimized && (self.sticky || self.workspace == workspace)
     }
 
+    /// Only a floating window keeps the rounded frame mask and glass.
+    #[must_use]
+    pub fn is_floating(&self) -> bool {
+        self.placement.mode == PlacementMode::Floating
+    }
+
     #[must_use]
     pub fn is_maximized(&self) -> bool {
         self.placement.mode == PlacementMode::Maximized

@@ -77,12 +77,6 @@ impl WindowChromeScene {
         }
     }
 
-    /// Effective corner radius: rectangular when maximized or fullscreen.
-    #[must_use]
-    pub fn effective_radius(&self) -> u16 {
-        effective_radius(self.maximized, self.fullscreen)
-    }
-
     /// Titlebar strip at the top of `bounds`.
     #[must_use]
     pub fn titlebar_rect(&self) -> SceneRect {
@@ -156,16 +150,6 @@ pub const fn icon_slot_edge() -> u16 {
     }
 }
 
-/// Rectangular when maximized or fullscreen, rounded radius otherwise.
-#[must_use]
-pub const fn effective_radius(maximized: bool, fullscreen: bool) -> u16 {
-    if maximized || fullscreen {
-        0
-    } else {
-        crate::DEFAULT.chrome.radius
-    }
-}
-
 /// X offsets of the control buttons from the right frame edge (index 0 = leftmost).
 #[must_use]
 pub fn control_button_geometries(titlebar: SceneRect) -> [ControlGeometry; 3] {
@@ -212,18 +196,6 @@ mod tests {
         assert_eq!(center_title_x(400, 360, 22, 304, TITLE_PAD), 20);
         // Title wider than the free region: sorted clamp keeps desired (10).
         assert_eq!(center_title_x(200, 180, 22, 104, TITLE_PAD), 10);
-    }
-
-    #[test]
-    fn maximized_and_fullscreen_are_rectangular() {
-        let floating = WindowChromeScene::new(SceneRect::new(0, 0, 400, 300), "app");
-        assert_eq!(floating.effective_radius(), crate::DEFAULT.chrome.radius);
-        let mut maximized = floating.clone();
-        maximized.maximized = true;
-        assert_eq!(maximized.effective_radius(), 0);
-        let mut fullscreen = floating;
-        fullscreen.fullscreen = true;
-        assert_eq!(fullscreen.effective_radius(), 0);
     }
 
     #[test]
