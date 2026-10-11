@@ -87,6 +87,42 @@ class InstalledVerdictComposeTests(unittest.TestCase):
         self.assertEqual(code, 3)
 
 
+class InstalledNativeCommandTests(InstalledVerdictComposeTests):
+    def captured_command(self) -> list[str]:
+        native = self.native_document("INCOMPLETE", passing={"SS01"})
+        seen: list[list[str]] = []
+
+        def fake_native_runner(command, **_kwargs):
+            seen.append(list(command))
+            acceptance_dir = Path(command[command.index("--run-dir") + 1])
+            acceptance_dir.mkdir(parents=True, exist_ok=True)
+            (acceptance_dir / "result.json").write_text(json.dumps(native), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        args = inst.parse_args(["--prefix", str(self.prefix), "--run-dir", str(self.run_dir)])
+        with patch.object(inst, "validate_prefix", return_value=(self.prefix, self.hashes, "0.0.0-test")), \
+                patch.object(inst.subprocess, "run", side_effect=fake_native_runner):
+            inst.run(args)
+        return seen[0]
+
+    def value_of(self, command: list[str], flag: str) -> str:
+        return command[command.index(flag) + 1]
+
+    def test_native_runner_uses_staged_desktop_and_shell_not_dev_target(self) -> None:
+        command = self.captured_command()
+        usr_bin = self.prefix / "usr/bin"
+        self.assertEqual(self.value_of(command, "--desktop-bin"), str(usr_bin / "flamewm-desktop"))
+        self.assertEqual(self.value_of(command, "--shell-bin"), str(usr_bin / "flamewm-shell"))
+        for flag in ("--wm-bin", "--settings-bin", "--desktop-bin", "--shell-bin", "--canary-bin"):
+            self.assertNotIn(".target", self.value_of(command, flag))
+
+    def test_canary_is_absent_from_installed_prefix_so_j07_rows_do_not_run_dev_binary(self) -> None:
+        command = self.captured_command()
+        canary = self.value_of(command, "--canary-bin")
+        self.assertEqual(canary, str(self.prefix / "usr/bin/flamewm-x11-canary"))
+        self.assertFalse(Path(canary).exists())
+
+
 class InstalledBehavioralMappingTests(unittest.TestCase):
     def _native(self, **over) -> dict:
         statuses = {sid: "PASS" for sid in inst.BEHAVIORAL_SCENARIOS}

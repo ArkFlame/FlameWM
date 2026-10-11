@@ -412,6 +412,14 @@ session_appearance_env(){
   # Search root is the parent of the bundled theme dir (<root>/icons);
   # dev staging symlink under .target must exist before launch.
   : "${FLAMEWM_CURSOR_PATH:=$ROOT/.target/stage-icons}"
+  # Fresh checkouts have no staged tree: create the dev staging link to the bundled theme source inside
+  # .target only. Existing entries (dir, file, or link) are never replaced.
+  if [[ "$FLAMEWM_CURSOR_PATH" == "$ROOT/.target/stage-icons" && "$FLAMEWM_CURSOR_THEME" == "FlameWM-Breeze-Dark" \
+        && -d "$ROOT/assets/cursors" && ! -e "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" \
+        && ! -L "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" ]]; then
+    mkdir -p "$FLAMEWM_CURSOR_PATH"
+    ln -s "$ROOT/assets/cursors" "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME"
+  fi
   if [[ ! -d "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" ]]; then
     echo "FLAMEWM_XEPHYR_FAIL: cursor theme missing: $FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" >&2
     echo "  expected dev staging symlink: $ROOT/.target/stage-icons -> <staged usr/share/icons>" >&2

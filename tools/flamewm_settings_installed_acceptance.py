@@ -126,6 +126,11 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         sys.executable, str(RUNNER), "--run-dir", str(acceptance_dir),
         "--wm-bin", str(prefix / "usr/bin/flamewm"),
         "--settings-bin", str(prefix / "usr/bin/flamewm-settings"),
+        "--desktop-bin", str(prefix / "usr/bin/flamewm-desktop"),
+        "--shell-bin", str(prefix / "usr/bin/flamewm-shell"),
+        # flamewm-x11-canary is not in packaging/install-manifest.txt; the path is deliberately absent
+        # so the runner's j07 canary rows report NOT_RUN instead of reaching for a dev .target binary.
+        "--canary-bin", str(prefix / "usr/bin/flamewm-x11-canary"),
         "--geometry", args.geometry,
     ]
     for flag, value in (

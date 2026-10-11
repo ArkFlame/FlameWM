@@ -11,6 +11,11 @@ Usage: scripts/settings-acceptance --run-dir DIR [--geometry WxH] [--display :N]
        [--hotkey-click X,Y] [--hotkey-key KEYSYM]
        [--ss12-click X,Y] [--ss12-chord MOD+...+KEY]
        [--ss14-accent-pixel X,Y]
+       [--ss10-scale-click X,Y] [--ss10-wheel-steps N] [--ss10-scrolled-click X,Y]
+
+SS10 needs --ss10-wheel-steps N and --ss10-scrolled-click X,Y when the first
+authoritative output lists modes; no measured values exist in the repo, so
+they are never defaulted (without them SS10 is NOT_RUN).
 
 Runs the isolated native System Settings acceptance matrix in a private
 Xephyr, private D-Bus session and private XDG directories under DIR.
