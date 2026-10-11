@@ -94,6 +94,8 @@ DESKTOP_OPACITY_MAX = 60
 SS10_TARGET_SCALE = 125
 # At 820x540 the scale row is below the fold, so SS10 uses a client that shows it. When the output lists
 # modes, SS10 wheel-scrolls the page with the pointer at the client centre before the scrolled click.
+# Rightmost client columns hold the scrollbar track; keep it out of OCR crops.
+SCROLLBAR_COLUMN_PX = 8
 SS10_CLIENT = (960, 640)
 SS10_WHEEL_POINTER = (SS10_CLIENT[0] // 2, SS10_CLIENT[1] // 2)
 # Platform default binding for ToggleStartMenu (crates/flamewm-platform/src/shortcuts.rs).
@@ -2186,7 +2188,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                     crop_ok, crop_command = crop(
                         after_error,
                         (geometry["x"] + 208, geometry["y"] + geometry["height"] - 28,
-                         geometry["width"] - 208, 28),
+                         geometry["width"] - 208 - SCROLLBAR_COLUMN_PX, 28),
                         error_crop,
                     )
                     case["commands"].append(crop_command)
@@ -2201,7 +2203,9 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                         normalize_ocr = lambda value: re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
                         expected_tokens = normalize_ocr(expected_error)
                         observed_tokens = normalize_ocr(ocr.stdout)
-                        expected_error_seen = (ocr.returncode == 0 and expected_tokens in observed_tokens)
+                        # tesseract confuses o/a in small text; tolerate only that one glyph.
+                        tolerant = re.escape(expected_tokens).replace("code", "c[oa]de")
+                        expected_error_seen = (ocr.returncode == 0 and re.search(tolerant, observed_tokens) is not None)
                     case["error_message_crop"] = str(error_crop)
                 else:
                     case["ocr_capability"] = {"tesseract": bool(tesseract), "captured_after": captured_after}
