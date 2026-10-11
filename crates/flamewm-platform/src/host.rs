@@ -91,11 +91,33 @@ impl<E: EnginePorts> PlatformHost<E> {
             FlameError::new(ErrorCode::InternalFailure, "display snapshot missing")
         })?;
         self.panels.sync_outputs(&displays);
+        self.seed_persisted_panel_edges();
         self.panels
             .reconcile_taskbar_height(self.settings.current().taskbar_height);
         self.started = true;
         self.generation = self.generation.saturating_add(1).max(1);
         Ok(())
+    }
+
+    /// Re-applies persisted panel edges after panels exist for the connected outputs. An entry for a
+    /// disconnected output is skipped with a stderr diagnostic so it cannot block startup.
+    fn seed_persisted_panel_edges(&mut self) {
+        let entries: Vec<(String, PanelEdge)> = self
+            .settings
+            .current()
+            .panel_edges
+            .iter()
+            .map(|(output, edge)| (output.clone(), *edge))
+            .collect();
+        for (output, edge) in entries {
+            let revision = self.panels.revision();
+            if let Err(error) = self
+                .panels
+                .set_edge(&OutputId::new(output.clone()), edge, revision)
+            {
+                eprintln!("flamewm: persisted panel edge for {output} not applied: {error}");
+            }
+        }
     }
 
     /// Applies persisted per-output shell scales to the display snapshot at startup.
@@ -569,7 +591,21 @@ impl<E: EnginePorts> PlatformHost<E> {
         edge: PanelEdge,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.panels.set_edge(output, edge, expected_revision)
+        let previous = self.panels.manager().panel(output).map(|panel| panel.edge);
+        self.panels.set_edge(output, edge, expected_revision)?;
+        let Err(error) = self.settings.persist_panel_edge(output.as_str(), edge) else {
+            return Ok(());
+        };
+        // Roll the panel back so the live edge and the settings file never diverge.
+        if let Some(previous) = previous {
+            let revision = self.panels.revision();
+            if let Err(restore_error) = self.panels.set_edge(output, previous, revision) {
+                eprintln!(
+                    "flamewm: panel edge rollback failed after persistence error: {restore_error}"
+                );
+            }
+        }
+        Err(error)
     }
 
     pub fn set_panel_size(
@@ -1204,6 +1240,39 @@ mod tests {
         host.start().expect("host starts");
         host.commit_startup_shortcuts().expect("startup grabs");
         host
+    }
+
+    // CONTRACT-REGRESSION: a Panels.SetEdge value persists across a WM restart (docs/TODO.md taskbar
+    // edge persistence) without moving the settings revision, so open Settings clients stay current.
+    // TRIGGER: set the top edge, drop the host, start a fresh host from the same settings file.
+    // OBSERVABLE: the reloaded panel reports Top and the settings file holds panel.edge.default=top.
+    // MUTATION: skip persist_panel_edge or the startup seed and the reloaded panel reports Bottom.
+    #[test]
+    fn set_panel_edge_persists_edge_across_restart_without_settings_revision_bump() {
+        let path = std::env::temp_dir().join(format!(
+            "flamewm-host-panel-edge-persist-test-{}.conf",
+            std::process::id()
+        ));
+        std::fs::write(&path, "").expect("write settings fixture");
+        let engine = || FakeEngine {
+            display: fake_display(100),
+            reverted: Vec::new(),
+        };
+        let mut host = PlatformHost::new(engine(), path.clone());
+        host.start().expect("host starts");
+        let settings_revision = host.settings_snapshot().revision;
+        let panels_revision = host.panels_snapshot().revision;
+        host.set_panel_edge(&OutputId::new("default"), PanelEdge::Top, panels_revision)
+            .expect("edge applies");
+        assert_eq!(host.settings_snapshot().revision, settings_revision);
+        drop(host);
+
+        let persisted = std::fs::read_to_string(&path).expect("edge is persisted");
+        assert!(persisted.contains("panel.edge.default=top\n"), "{persisted}");
+        let mut restarted = PlatformHost::new(engine(), path.clone());
+        restarted.start().expect("restart starts");
+        assert_eq!(restarted.panels_snapshot().panels[0].edge, PanelEdge::Top);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

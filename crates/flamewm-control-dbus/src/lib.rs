@@ -140,6 +140,7 @@ fn handle_call<E: EnginePorts>(
         ),
         _ => None,
     };
+    let shortcut_request = request.clone();
     let response = dispatcher.dispatch(host, request).map_err(to_flame_error)?;
     if let ControlResponse::CaptureLease(lease) = &response {
         capture_owner.borrow_mut().record_begin(&sender, *lease);
@@ -162,7 +163,7 @@ fn handle_call<E: EnginePorts>(
         );
         Some(output)
     };
-    let signals = match (settings_keys, response) {
+    let mut signals = match (settings_keys, response) {
         (Some(keys), ControlResponse::Settings(snapshot)) => {
             let revision = snapshot.revision;
             vec![
@@ -172,7 +173,27 @@ fn handle_call<E: EnginePorts>(
         }
         _ => Vec::new(),
     };
+    signals.extend(shortcut_change_signal(&shortcut_request, || {
+        host.shortcut_snapshot().revision
+    }));
     Ok((output, signals))
+}
+
+/// The `ShortcutsChanged` signal a committed shortcut mutation publishes so open Settings clients
+/// refresh. `revision` is read only for mutations; reads and capture leases publish nothing.
+fn shortcut_change_signal(
+    request: &ControlRequest,
+    revision: impl FnOnce() -> u64,
+) -> Option<ControlSignal> {
+    match request {
+        ControlRequest::SetShortcut { .. }
+        | ControlRequest::ClearShortcut { .. }
+        | ControlRequest::ResetShortcut { .. }
+        | ControlRequest::ApplyShortcuts { .. } => {
+            Some(ControlSignal::ShortcutsChanged { revision: revision() })
+        }
+        _ => None,
+    }
 }
 
 /// Restores the grab set when the bus client that owns a hotkey capture lease disconnects.
@@ -735,6 +756,52 @@ mod tests {
             Err(_) => Vec::<WireSignal>::new(),
         };
         assert!(signals.is_empty());
+    }
+
+    // CONTRACT-REGRESSION: every committed shortcut mutation publishes ShortcutsChanged with the
+    // new revision so open Settings clients refresh; reads and capture leases publish nothing.
+    // TRIGGER: derive the post-dispatch signal for each shortcut request kind.
+    // OBSERVABLE: exactly one ShortcutsChanged carrying the supplied revision for mutations only.
+    // MUTATION: drop the signal for SetShortcut (or emit for GetShortcuts) and this test fails.
+    #[test]
+    fn shortcut_mutations_emit_shortcuts_changed_with_new_revision() {
+        use flamewm_control_core::ControlRequest;
+        let mutations = [
+            ControlRequest::SetShortcut {
+                action: "window.close".to_owned(),
+                binding: "Super+F8".to_owned(),
+                expected_revision: 8,
+            },
+            ControlRequest::ClearShortcut {
+                action: "window.close".to_owned(),
+                expected_revision: 8,
+            },
+            ControlRequest::ResetShortcut {
+                action: "window.close".to_owned(),
+                expected_revision: 8,
+            },
+            ControlRequest::ApplyShortcuts {
+                bindings: std::collections::BTreeMap::new(),
+                expected_revision: 8,
+            },
+        ];
+        for request in &mutations {
+            let signal = shortcut_change_signal(request, || 9);
+            assert_eq!(signal, Some(ControlSignal::ShortcutsChanged { revision: 9 }));
+            let wire = encode_signal(signal.as_ref().expect("signal"));
+            assert_eq!(wire.interface, flamewm_control_core::IFACE_SHORTCUTS);
+            assert_eq!(wire.member, "ShortcutsChanged");
+        }
+        let reads = [
+            ControlRequest::GetShortcuts,
+            ControlRequest::BeginHotkeyCapture {
+                action: "window.close".to_owned(),
+                expected_revision: 8,
+            },
+        ];
+        for request in &reads {
+            assert_eq!(shortcut_change_signal(request, || unreachable!()), None);
+        }
     }
 
     #[test]

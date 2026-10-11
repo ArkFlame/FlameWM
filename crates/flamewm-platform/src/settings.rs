@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use flamewm_api::panels::PanelEdge;
 use flamewm_api::settings::AppearanceMode;
 use flamewm_api::shortcuts::{
     ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
@@ -41,6 +42,7 @@ pub struct ProductSettings {
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
     pub per_output_scale: BTreeMap<String, u16>,
+    pub panel_edges: BTreeMap<String, PanelEdge>,
     pub hotkeys: BTreeMap<String, String>,
     pub unknown_keys: BTreeMap<String, String>,
 }
@@ -65,6 +67,7 @@ impl Default for ProductSettings {
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
             per_output_scale: BTreeMap::new(),
+            panel_edges: BTreeMap::new(),
             hotkeys: BTreeMap::new(),
             unknown_keys: BTreeMap::new(),
         }
@@ -96,6 +99,15 @@ impl ProductSettings {
         }
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
+        }
+        for output in self.panel_edges.keys() {
+            if output.is_empty()
+                || output
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control() || c == '=')
+            {
+                return invalid("panel.edge output id is invalid");
+            }
         }
         for (output, scale) in &self.per_output_scale {
             if output.is_empty()
@@ -184,6 +196,13 @@ impl ConfigStore {
                         .per_output_scale
                         .insert(output.to_owned(), parse(value, key)?);
                 }
+                _ if key.starts_with("panel.edge.") => {
+                    let output = key.trim_start_matches("panel.edge.");
+                    match parse_panel_edge(value) {
+                        Some(edge) => snapshot.panel_edges.insert(output.to_owned(), edge),
+                        None => return invalid("panel.edge must be bottom/top/left/right"),
+                    };
+                }
                 _ if key.starts_with("hotkey.") => {
                     let action = key.trim_start_matches("hotkey.");
                     snapshot.hotkeys.insert(action.to_owned(), value.to_owned());
@@ -216,6 +235,11 @@ impl ConfigStore {
         self.current
             .per_output_scale
             .clone_from(&snapshot.per_output_scale);
+    }
+
+    /// Adopts persisted panel edges without moving the settings revision.
+    pub fn adopt_panel_edges(&mut self, snapshot: &ProductSettings) {
+        self.current.panel_edges.clone_from(&snapshot.panel_edges);
     }
 
     #[must_use]
@@ -252,6 +276,12 @@ impl ConfigStore {
                 .per_output_scale
                 .iter()
                 .map(|(output, scale)| format!("scale.{output}={scale}")),
+        );
+        lines.extend(
+            snapshot
+                .panel_edges
+                .iter()
+                .map(|(output, edge)| format!("panel.edge.{output}={}", panel_edge_name(*edge))),
         );
         lines.extend(
             snapshot
@@ -316,6 +346,26 @@ fn parse<T: std::str::FromStr>(value: &str, name: &str) -> FlameResult<T> {
         .map_err(|_| FlameError::new(ErrorCode::InvalidArgument, format!("bad {name}")))
 }
 
+#[must_use]
+pub const fn panel_edge_name(edge: PanelEdge) -> &'static str {
+    match edge {
+        PanelEdge::Bottom => "bottom",
+        PanelEdge::Top => "top",
+        PanelEdge::Left => "left",
+        PanelEdge::Right => "right",
+    }
+}
+
+fn parse_panel_edge(value: &str) -> Option<PanelEdge> {
+    match value {
+        "bottom" => Some(PanelEdge::Bottom),
+        "top" => Some(PanelEdge::Top),
+        "left" => Some(PanelEdge::Left),
+        "right" => Some(PanelEdge::Right),
+        _ => None,
+    }
+}
+
 fn parse_bool(value: &str, name: &str) -> FlameResult<bool> {
     match value {
         "1" | "true" | "yes" => Ok(true),
@@ -360,6 +410,7 @@ fn is_stable_key(key: &str) -> bool {
             | "customStartIcon"
             | "stickyNotesEnabled"
     ) || key.starts_with("scale.")
+        || key.starts_with("panel.edge.")
         || key.starts_with("hotkey.")
 }
 

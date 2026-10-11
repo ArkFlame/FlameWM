@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use flamewm_api::panels::PanelEdge;
 use flamewm_api::ports::ShortcutPort;
 use flamewm_api::settings::AppearanceMode;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot, SettingsTransaction};
@@ -124,6 +125,19 @@ impl SettingsService {
         // Settings clients holding it are not made stale by an unannounced bump.
         ConfigStore::persist(&self.path, &candidate)?;
         self.store.adopt_scales(&candidate);
+        Ok(())
+    }
+
+    /// Persists one panel edge for an output. Like `persist_scale`, the settings revision stays put
+    /// because panel edge is Panels-domain state. An unchanged edge writes nothing.
+    pub fn persist_panel_edge(&mut self, output: &str, edge: PanelEdge) -> FlameResult<()> {
+        if self.store.current().panel_edges.get(output) == Some(&edge) {
+            return Ok(());
+        }
+        let mut candidate = self.store.current().clone();
+        candidate.panel_edges.insert(output.to_owned(), edge);
+        ConfigStore::persist(&self.path, &candidate)?;
+        self.store.adopt_panel_edges(&candidate);
         Ok(())
     }
 
