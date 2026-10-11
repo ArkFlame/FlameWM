@@ -3,12 +3,11 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::panels::PanelEdge;
 use flamewm_api::ports::ShortcutPort;
-use flamewm_api::settings::AppearanceMode;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
-use crate::settings::{ConfigStore, ProductSettings};
+use crate::settings::{ConfigStore, ProductSettings, STABLE_SETTINGS, stable_setting};
 use crate::shortcuts::ShortcutRegistry;
 
 #[derive(Debug, Clone)]
@@ -149,168 +148,10 @@ impl SettingsService {
 
 #[must_use]
 pub fn to_api_snapshot(settings: &ProductSettings) -> SettingsSnapshot {
-    let mut values = BTreeMap::from([
-        (
-            "accent".to_owned(),
-            SettingValue::Text(settings.accent.clone()),
-        ),
-        (
-            "iconTheme".to_owned(),
-            SettingValue::Text(settings.icon_theme.clone()),
-        ),
-        (
-            "appearance".to_owned(),
-            SettingValue::Text(settings.appearance.as_str().to_owned()),
-        ),
-        (
-            "wallpaper".to_owned(),
-            SettingValue::Text(settings.wallpaper.clone()),
-        ),
-        (
-            "DesktopSelectionFillOpacity".to_owned(),
-            SettingValue::Percent(settings.desktop_selection_fill_opacity),
-        ),
-        (
-            "WindowSnapPreviewFillOpacity".to_owned(),
-            SettingValue::Percent(settings.window_snap_preview_fill_opacity),
-        ),
-        (
-            "fontFamily".to_owned(),
-            SettingValue::Text(settings.font_family.clone()),
-        ),
-        (
-            "fontBold".to_owned(),
-            SettingValue::Boolean(settings.font_bold),
-        ),
-        (
-            "fontSizeOffset".to_owned(),
-            SettingValue::Integer(i64::from(settings.font_size_offset)),
-        ),
-        (
-            "taskbarColor".to_owned(),
-            SettingValue::Text(settings.taskbar_color.clone()),
-        ),
-        (
-            "taskbarOpacity".to_owned(),
-            SettingValue::Percent(settings.taskbar_opacity),
-        ),
-        (
-            "taskbarHeight".to_owned(),
-            SettingValue::Integer(i64::from(settings.taskbar_height)),
-        ),
-        (
-            "startButtonText".to_owned(),
-            SettingValue::Text(settings.start_button_text.clone()),
-        ),
-        (
-            "customStartIcon".to_owned(),
-            SettingValue::Text(settings.custom_start_icon.clone()),
-        ),
-        (
-            "stickyNotesEnabled".to_owned(),
-            SettingValue::Boolean(settings.sticky_notes_enabled),
-        ),
-        (
-            "startMenuColor".to_owned(),
-            SettingValue::Text(settings.start_menu_color.clone()),
-        ),
-        (
-            "startMenuOpacity".to_owned(),
-            SettingValue::Percent(settings.start_menu_opacity),
-        ),
-        (
-            "accentOpacity".to_owned(),
-            SettingValue::Percent(settings.accent_opacity),
-        ),
-        (
-            "decoration".to_owned(),
-            SettingValue::Text(settings.decoration.clone()),
-        ),
-        (
-            "titlebarColor".to_owned(),
-            SettingValue::Text(settings.titlebar_color.clone()),
-        ),
-        (
-            "titlebarMinimizeStyle".to_owned(),
-            SettingValue::Text(settings.titlebar_minimize_style.clone()),
-        ),
-        (
-            "titlebarMaximizeStyle".to_owned(),
-            SettingValue::Text(settings.titlebar_maximize_style.clone()),
-        ),
-        (
-            "titlebarCloseStyle".to_owned(),
-            SettingValue::Text(settings.titlebar_close_style.clone()),
-        ),
-        (
-            "titlebarMinimizeColor".to_owned(),
-            SettingValue::Text(settings.titlebar_minimize_color.clone()),
-        ),
-        (
-            "titlebarMinimizeHoverColor".to_owned(),
-            SettingValue::Text(settings.titlebar_minimize_hover_color.clone()),
-        ),
-        (
-            "titlebarMinimizePressedColor".to_owned(),
-            SettingValue::Text(settings.titlebar_minimize_pressed_color.clone()),
-        ),
-        (
-            "titlebarMaximizeColor".to_owned(),
-            SettingValue::Text(settings.titlebar_maximize_color.clone()),
-        ),
-        (
-            "titlebarMaximizeHoverColor".to_owned(),
-            SettingValue::Text(settings.titlebar_maximize_hover_color.clone()),
-        ),
-        (
-            "titlebarMaximizePressedColor".to_owned(),
-            SettingValue::Text(settings.titlebar_maximize_pressed_color.clone()),
-        ),
-        (
-            "titlebarCloseColor".to_owned(),
-            SettingValue::Text(settings.titlebar_close_color.clone()),
-        ),
-        (
-            "titlebarCloseHoverColor".to_owned(),
-            SettingValue::Text(settings.titlebar_close_hover_color.clone()),
-        ),
-        (
-            "titlebarClosePressedColor".to_owned(),
-            SettingValue::Text(settings.titlebar_close_pressed_color.clone()),
-        ),
-        (
-            "cursorTheme".to_owned(),
-            SettingValue::Text(settings.cursor_theme.clone()),
-        ),
-        (
-            "animationsEnabled".to_owned(),
-            SettingValue::Boolean(settings.animations_enabled),
-        ),
-        (
-            "animationSpeed".to_owned(),
-            SettingValue::Integer(i64::from(settings.animation_speed)),
-        ),
-        (
-            "startAnimation".to_owned(),
-            SettingValue::Text(settings.start_animation.clone()),
-        ),
-        (
-            "startAnimationEnabled".to_owned(),
-            SettingValue::Boolean(settings.start_animation_enabled),
-        ),
-        (
-            "windowOpenAnimationEnabled".to_owned(),
-            SettingValue::Boolean(settings.window_open_animation_enabled),
-        ),
-        (
-            "minimizeAnimationEnabled".to_owned(),
-            SettingValue::Boolean(settings.minimize_animation_enabled),
-        ),
-        (
-            "maximizeAnimationEnabled".to_owned(),
-            SettingValue::Boolean(settings.maximize_animation_enabled),
-        ),
-    ]);
+    let mut values: BTreeMap<String, SettingValue> = STABLE_SETTINGS
+        .iter()
+        .map(|row| (row.key.to_owned(), (row.get)(settings)))
+        .collect();
     values.extend(settings.per_output_scale.iter().map(|(output, scale)| {
         (
             format!("scale.{output}"),
@@ -334,216 +175,57 @@ fn apply_change(
     key: &str,
     value: Option<&SettingValue>,
 ) -> FlameResult<()> {
-    let defaults = ProductSettings::default();
-    match key {
-        "accent" => settings.accent = text_or(value, defaults.accent)?,
-        "iconTheme" => settings.icon_theme = text_or(value, defaults.icon_theme)?,
-        "appearance" => {
-            let raw = text_or(value, defaults.appearance.as_str().to_owned())?;
-            settings.appearance =
-                AppearanceMode::parse(&raw).ok_or_else(|| FlameError::invalid("bad appearance"))?;
+    if let Some(row) = stable_setting(key) {
+        return (row.set)(settings, &ProductSettings::default(), value, key);
+    }
+    if key.starts_with("scale.") {
+        let output = key.trim_start_matches("scale.");
+        if output.is_empty() {
+            return Err(FlameError::invalid("scale output id is empty"));
         }
-        "wallpaper" => settings.wallpaper = text_or(value, defaults.wallpaper)?,
-        "DesktopSelectionFillOpacity" => {
-            settings.desktop_selection_fill_opacity =
-                percent_or(value, defaults.desktop_selection_fill_opacity)?;
-        }
-        "WindowSnapPreviewFillOpacity" => {
-            settings.window_snap_preview_fill_opacity =
-                percent_or(value, defaults.window_snap_preview_fill_opacity)?;
-        }
-        "fontFamily" => settings.font_family = text_or(value, defaults.font_family)?,
-        "fontBold" => settings.font_bold = bool_or(value, defaults.font_bold)?,
-        "fontSizeOffset" => {
-            settings.font_size_offset = integer_or(value, i64::from(defaults.font_size_offset))?
-                .try_into()
-                .map_err(|_| FlameError::invalid("fontSizeOffset is out of range"))?;
-        }
-        "taskbarColor" => settings.taskbar_color = text_or(value, defaults.taskbar_color)?,
-        "taskbarOpacity" => settings.taskbar_opacity = percent_or(value, defaults.taskbar_opacity)?,
-        "taskbarHeight" => {
-            settings.taskbar_height = integer_or(value, i64::from(defaults.taskbar_height))?
-                .try_into()
-                .map_err(|_| FlameError::invalid("taskbarHeight is out of range"))?;
-        }
-        "startButtonText" => {
-            settings.start_button_text = text_or(value, defaults.start_button_text)?
-        }
-        "customStartIcon" => {
-            settings.custom_start_icon = text_or(value, defaults.custom_start_icon)?
-        }
-        "stickyNotesEnabled" => {
-            settings.sticky_notes_enabled = bool_or(value, defaults.sticky_notes_enabled)?;
-        }
-        "startMenuColor" => settings.start_menu_color = text_or(value, defaults.start_menu_color)?,
-        "startMenuOpacity" => {
-            settings.start_menu_opacity = percent_or(value, defaults.start_menu_opacity)?;
-        }
-        "accentOpacity" => settings.accent_opacity = percent_or(value, defaults.accent_opacity)?,
-        "decoration" => settings.decoration = text_or(value, defaults.decoration)?,
-        "titlebarColor" => settings.titlebar_color = text_or(value, defaults.titlebar_color)?,
-        "titlebarMinimizeStyle" => {
-            settings.titlebar_minimize_style = text_or(value, defaults.titlebar_minimize_style)?;
-        }
-        "titlebarMaximizeStyle" => {
-            settings.titlebar_maximize_style = text_or(value, defaults.titlebar_maximize_style)?;
-        }
-        "titlebarCloseStyle" => {
-            settings.titlebar_close_style = text_or(value, defaults.titlebar_close_style)?;
-        }
-        "titlebarMinimizeColor" => {
-            settings.titlebar_minimize_color = text_or(value, defaults.titlebar_minimize_color)?;
-        }
-        "titlebarMinimizeHoverColor" => {
-            settings.titlebar_minimize_hover_color =
-                text_or(value, defaults.titlebar_minimize_hover_color)?;
-        }
-        "titlebarMinimizePressedColor" => {
-            settings.titlebar_minimize_pressed_color =
-                text_or(value, defaults.titlebar_minimize_pressed_color)?;
-        }
-        "titlebarMaximizeColor" => {
-            settings.titlebar_maximize_color = text_or(value, defaults.titlebar_maximize_color)?;
-        }
-        "titlebarMaximizeHoverColor" => {
-            settings.titlebar_maximize_hover_color =
-                text_or(value, defaults.titlebar_maximize_hover_color)?;
-        }
-        "titlebarMaximizePressedColor" => {
-            settings.titlebar_maximize_pressed_color =
-                text_or(value, defaults.titlebar_maximize_pressed_color)?;
-        }
-        "titlebarCloseColor" => {
-            settings.titlebar_close_color = text_or(value, defaults.titlebar_close_color)?;
-        }
-        "titlebarCloseHoverColor" => {
-            settings.titlebar_close_hover_color =
-                text_or(value, defaults.titlebar_close_hover_color)?;
-        }
-        "titlebarClosePressedColor" => {
-            settings.titlebar_close_pressed_color =
-                text_or(value, defaults.titlebar_close_pressed_color)?;
-        }
-        "cursorTheme" => settings.cursor_theme = text_or(value, defaults.cursor_theme)?,
-        "animationsEnabled" => {
-            settings.animations_enabled = bool_or(value, defaults.animations_enabled)?;
-        }
-        "animationSpeed" => {
-            settings.animation_speed = integer_or(value, i64::from(defaults.animation_speed))?
-                .try_into()
-                .map_err(|_| FlameError::invalid("animationSpeed is out of range"))?;
-        }
-        "startAnimation" => settings.start_animation = text_or(value, defaults.start_animation)?,
-        "startAnimationEnabled" => {
-            settings.start_animation_enabled = bool_or(value, defaults.start_animation_enabled)?;
-        }
-        "windowOpenAnimationEnabled" => {
-            settings.window_open_animation_enabled =
-                bool_or(value, defaults.window_open_animation_enabled)?;
-        }
-        "minimizeAnimationEnabled" => {
-            settings.minimize_animation_enabled =
-                bool_or(value, defaults.minimize_animation_enabled)?;
-        }
-        "maximizeAnimationEnabled" => {
-            settings.maximize_animation_enabled =
-                bool_or(value, defaults.maximize_animation_enabled)?;
-        }
-        _ if key.starts_with("scale.") => {
-            let output = key.trim_start_matches("scale.");
-            if output.is_empty() {
-                return Err(FlameError::invalid("scale output id is empty"));
+        match value {
+            Some(SettingValue::Integer(scale)) => {
+                let scale: u16 = (*scale)
+                    .try_into()
+                    .map_err(|_| FlameError::invalid("scale is out of range"))?;
+                settings.per_output_scale.insert(output.to_owned(), scale);
             }
-            match value {
-                Some(SettingValue::Integer(scale)) => {
-                    let scale: u16 = (*scale)
-                        .try_into()
-                        .map_err(|_| FlameError::invalid("scale is out of range"))?;
-                    settings.per_output_scale.insert(output.to_owned(), scale);
-                }
-                None => {
-                    settings.per_output_scale.remove(output);
-                }
-                Some(_) => return Err(FlameError::invalid("scale setting requires integer")),
+            None => {
+                settings.per_output_scale.remove(output);
             }
+            Some(_) => return Err(FlameError::invalid("scale setting requires integer")),
         }
-        _ if key.starts_with("hotkey.") => {
-            let action = key.trim_start_matches("hotkey.");
-            match value {
-                Some(SettingValue::Text(binding)) => {
-                    settings.hotkeys.insert(action.to_owned(), binding.clone());
-                }
-                None => {
-                    settings.hotkeys.remove(action);
-                }
-                Some(_) => return Err(FlameError::invalid("hotkey setting requires text")),
+    } else if key.starts_with("hotkey.") {
+        let action = key.trim_start_matches("hotkey.");
+        match value {
+            Some(SettingValue::Text(binding)) => {
+                settings.hotkeys.insert(action.to_owned(), binding.clone());
             }
+            None => {
+                settings.hotkeys.remove(action);
+            }
+            Some(_) => return Err(FlameError::invalid("hotkey setting requires text")),
         }
-        _ => {
-            return Err(FlameError::new(
-                ErrorCode::NotFound,
-                format!("unknown setting: {key}"),
-            ));
-        }
+    } else {
+        return Err(FlameError::new(
+            ErrorCode::NotFound,
+            format!("unknown setting: {key}"),
+        ));
     }
     Ok(())
 }
 
 fn reset_section(settings: &mut ProductSettings, section: &str) -> FlameResult<()> {
+    let section = section.to_ascii_lowercase();
     let defaults = ProductSettings::default();
-    match section.to_ascii_lowercase().as_str() {
-        "appearance" => {
-            settings.accent = defaults.accent;
-            settings.accent_opacity = defaults.accent_opacity;
-            settings.icon_theme = defaults.icon_theme;
-            settings.appearance = defaults.appearance;
-            settings.decoration = defaults.decoration;
-            settings.cursor_theme = defaults.cursor_theme;
-        }
-        "desktop" => {
-            settings.wallpaper = defaults.wallpaper;
-            settings.desktop_selection_fill_opacity = defaults.desktop_selection_fill_opacity;
-            settings.sticky_notes_enabled = defaults.sticky_notes_enabled;
-        }
-        "windows" => {
-            settings.window_snap_preview_fill_opacity = defaults.window_snap_preview_fill_opacity;
-            settings.titlebar_color = defaults.titlebar_color;
-            settings.titlebar_minimize_style = defaults.titlebar_minimize_style;
-            settings.titlebar_maximize_style = defaults.titlebar_maximize_style;
-            settings.titlebar_close_style = defaults.titlebar_close_style;
-            settings.titlebar_minimize_color = defaults.titlebar_minimize_color;
-            settings.titlebar_minimize_hover_color = defaults.titlebar_minimize_hover_color;
-            settings.titlebar_minimize_pressed_color = defaults.titlebar_minimize_pressed_color;
-            settings.titlebar_maximize_color = defaults.titlebar_maximize_color;
-            settings.titlebar_maximize_hover_color = defaults.titlebar_maximize_hover_color;
-            settings.titlebar_maximize_pressed_color = defaults.titlebar_maximize_pressed_color;
-            settings.titlebar_close_color = defaults.titlebar_close_color;
-            settings.titlebar_close_hover_color = defaults.titlebar_close_hover_color;
-            settings.titlebar_close_pressed_color = defaults.titlebar_close_pressed_color;
-            settings.animations_enabled = defaults.animations_enabled;
-            settings.animation_speed = defaults.animation_speed;
-            settings.start_animation = defaults.start_animation;
-            settings.start_animation_enabled = defaults.start_animation_enabled;
-            settings.window_open_animation_enabled = defaults.window_open_animation_enabled;
-            settings.minimize_animation_enabled = defaults.minimize_animation_enabled;
-            settings.maximize_animation_enabled = defaults.maximize_animation_enabled;
-        }
-        "fonts" => {
-            settings.font_family = defaults.font_family;
-            settings.font_bold = defaults.font_bold;
-            settings.font_size_offset = defaults.font_size_offset;
-        }
-        "taskbar" => {
-            settings.taskbar_color = defaults.taskbar_color;
-            settings.taskbar_opacity = defaults.taskbar_opacity;
-            settings.taskbar_height = defaults.taskbar_height;
-            settings.start_button_text = defaults.start_button_text;
-            settings.custom_start_icon = defaults.custom_start_icon;
-            settings.start_menu_color = defaults.start_menu_color;
-            settings.start_menu_opacity = defaults.start_menu_opacity;
-        }
+    match section.as_str() {
         "displays" => settings.per_output_scale.clear(),
         "hotkeys" => settings.hotkeys.clear(),
+        _ if STABLE_SETTINGS.iter().any(|row| row.section == section) => {
+            for row in STABLE_SETTINGS.iter().filter(|row| row.section == section) {
+                (row.set)(settings, &defaults, None, row.key)?;
+            }
+        }
         _ => {
             return Err(FlameError::new(
                 ErrorCode::NotFound,
@@ -571,38 +253,6 @@ fn transaction_changes_shortcuts(transaction: &SettingsTransaction) -> bool {
             .changes
             .iter()
             .any(|change| change.key.starts_with("hotkey."))
-}
-
-fn text_or(value: Option<&SettingValue>, default: String) -> FlameResult<String> {
-    match value {
-        Some(SettingValue::Text(value)) => Ok(value.clone()),
-        None => Ok(default),
-        Some(_) => Err(FlameError::invalid("setting requires text")),
-    }
-}
-
-fn bool_or(value: Option<&SettingValue>, default: bool) -> FlameResult<bool> {
-    match value {
-        Some(SettingValue::Boolean(value)) => Ok(*value),
-        None => Ok(default),
-        Some(_) => Err(FlameError::invalid("setting requires boolean")),
-    }
-}
-
-fn percent_or(value: Option<&SettingValue>, default: u8) -> FlameResult<u8> {
-    match value {
-        Some(SettingValue::Percent(value)) => Ok(*value),
-        None => Ok(default),
-        Some(_) => Err(FlameError::invalid("setting requires percent")),
-    }
-}
-
-fn integer_or(value: Option<&SettingValue>, default: i64) -> FlameResult<i64> {
-    match value {
-        Some(SettingValue::Integer(value)) => Ok(*value),
-        None => Ok(default),
-        Some(_) => Err(FlameError::invalid("setting requires integer")),
-    }
 }
 
 #[cfg(test)]

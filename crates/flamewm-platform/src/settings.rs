@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use flamewm_api::panels::PanelEdge;
-use flamewm_api::settings::AppearanceMode;
+use flamewm_api::settings::{AppearanceMode, SettingValue};
 use flamewm_api::shortcuts::{
     ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
     ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
@@ -278,75 +278,12 @@ impl ConfigStore {
             };
             let key = key.trim();
             let value = value.trim();
+            if let Some(row) = stable_setting(key) {
+                (row.parse)(&mut snapshot, value, key)?;
+                continue;
+            }
             match key {
                 "revision" => snapshot.revision = parse(value, "revision")?,
-                "accent" => snapshot.accent = value.to_owned(),
-                "iconTheme" => snapshot.icon_theme = value.to_owned(),
-                "appearance" => {
-                    snapshot.appearance = AppearanceMode::parse(value)
-                        .ok_or_else(|| FlameError::invalid("bad appearance"))?;
-                }
-                "wallpaper" => snapshot.wallpaper = value.to_owned(),
-                "DesktopSelectionFillOpacity" => {
-                    snapshot.desktop_selection_fill_opacity = parse(value, key)?;
-                }
-                "WindowSnapPreviewFillOpacity" => {
-                    snapshot.window_snap_preview_fill_opacity = parse(value, key)?;
-                }
-                "fontFamily" => snapshot.font_family = value.to_owned(),
-                "fontBold" => snapshot.font_bold = parse_bool(value, key)?,
-                "fontSizeOffset" => snapshot.font_size_offset = parse(value, key)?,
-                "taskbarColor" => snapshot.taskbar_color = value.to_owned(),
-                "taskbarOpacity" => snapshot.taskbar_opacity = parse(value, key)?,
-                "taskbarHeight" => snapshot.taskbar_height = parse(value, key)?,
-                "startButtonText" => snapshot.start_button_text = value.to_owned(),
-                "customStartIcon" => snapshot.custom_start_icon = value.to_owned(),
-                "stickyNotesEnabled" => snapshot.sticky_notes_enabled = parse_bool(value, key)?,
-                "startMenuColor" => snapshot.start_menu_color = value.to_owned(),
-                "startMenuOpacity" => snapshot.start_menu_opacity = parse(value, key)?,
-                "accentOpacity" => snapshot.accent_opacity = parse(value, key)?,
-                "decoration" => snapshot.decoration = value.to_owned(),
-                "titlebarColor" => snapshot.titlebar_color = value.to_owned(),
-                "titlebarMinimizeStyle" => snapshot.titlebar_minimize_style = value.to_owned(),
-                "titlebarMaximizeStyle" => snapshot.titlebar_maximize_style = value.to_owned(),
-                "titlebarCloseStyle" => snapshot.titlebar_close_style = value.to_owned(),
-                "titlebarMinimizeColor" => snapshot.titlebar_minimize_color = value.to_owned(),
-                "titlebarMinimizeHoverColor" => {
-                    snapshot.titlebar_minimize_hover_color = value.to_owned();
-                }
-                "titlebarMinimizePressedColor" => {
-                    snapshot.titlebar_minimize_pressed_color = value.to_owned();
-                }
-                "titlebarMaximizeColor" => snapshot.titlebar_maximize_color = value.to_owned(),
-                "titlebarMaximizeHoverColor" => {
-                    snapshot.titlebar_maximize_hover_color = value.to_owned();
-                }
-                "titlebarMaximizePressedColor" => {
-                    snapshot.titlebar_maximize_pressed_color = value.to_owned();
-                }
-                "titlebarCloseColor" => snapshot.titlebar_close_color = value.to_owned(),
-                "titlebarCloseHoverColor" => {
-                    snapshot.titlebar_close_hover_color = value.to_owned();
-                }
-                "titlebarClosePressedColor" => {
-                    snapshot.titlebar_close_pressed_color = value.to_owned();
-                }
-                "cursorTheme" => snapshot.cursor_theme = value.to_owned(),
-                "animationsEnabled" => snapshot.animations_enabled = parse_bool(value, key)?,
-                "animationSpeed" => snapshot.animation_speed = parse(value, key)?,
-                "startAnimation" => snapshot.start_animation = value.to_owned(),
-                "startAnimationEnabled" => {
-                    snapshot.start_animation_enabled = parse_bool(value, key)?;
-                }
-                "windowOpenAnimationEnabled" => {
-                    snapshot.window_open_animation_enabled = parse_bool(value, key)?;
-                }
-                "minimizeAnimationEnabled" => {
-                    snapshot.minimize_animation_enabled = parse_bool(value, key)?;
-                }
-                "maximizeAnimationEnabled" => {
-                    snapshot.maximize_animation_enabled = parse_bool(value, key)?;
-                }
                 _ if key.starts_with("scale.") => {
                     let output = key.trim_start_matches("scale.");
                     snapshot
@@ -401,192 +338,16 @@ impl ConfigStore {
 
     #[must_use]
     pub fn serialize(snapshot: &ProductSettings) -> String {
-        let mut lines = vec![
-            format!("revision={}", snapshot.revision),
-            format!("accent={}", snapshot.accent),
-            format!("appearance={}", snapshot.appearance.as_str()),
-            format!("wallpaper={}", snapshot.wallpaper),
-            format!(
-                "DesktopSelectionFillOpacity={}",
-                snapshot.desktop_selection_fill_opacity
-            ),
-            format!(
-                "WindowSnapPreviewFillOpacity={}",
-                snapshot.window_snap_preview_fill_opacity
-            ),
-            format!("fontFamily={}", snapshot.font_family),
-            format!("fontBold={}", if snapshot.font_bold { 1 } else { 0 }),
-            format!("fontSizeOffset={}", snapshot.font_size_offset),
-            format!("taskbarColor={}", snapshot.taskbar_color),
-            format!("taskbarOpacity={}", snapshot.taskbar_opacity),
-            format!("taskbarHeight={}", snapshot.taskbar_height),
-            format!("startButtonText={}", snapshot.start_button_text),
-            format!("customStartIcon={}", snapshot.custom_start_icon),
-            format!(
-                "stickyNotesEnabled={}",
-                if snapshot.sticky_notes_enabled { 1 } else { 0 }
-            ),
-        ];
-        // Keys added after the base contract are written only when they differ from defaults,
-        // so settings files that never set them keep their existing byte-for-byte shape.
         let defaults = ProductSettings::default();
-        // Unset icon theme keeps the default and writes nothing; an explicit value persists.
-        push_if_changed(
-            &mut lines,
-            "iconTheme",
-            &snapshot.icon_theme,
-            &defaults.icon_theme,
-        );
-        push_if_changed(
-            &mut lines,
-            "startMenuColor",
-            &snapshot.start_menu_color,
-            &defaults.start_menu_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "startMenuOpacity",
-            &snapshot.start_menu_opacity,
-            &defaults.start_menu_opacity,
-        );
-        push_if_changed(
-            &mut lines,
-            "accentOpacity",
-            &snapshot.accent_opacity,
-            &defaults.accent_opacity,
-        );
-        push_if_changed(
-            &mut lines,
-            "decoration",
-            &snapshot.decoration,
-            &defaults.decoration,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarColor",
-            &snapshot.titlebar_color,
-            &defaults.titlebar_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMinimizeStyle",
-            &snapshot.titlebar_minimize_style,
-            &defaults.titlebar_minimize_style,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMaximizeStyle",
-            &snapshot.titlebar_maximize_style,
-            &defaults.titlebar_maximize_style,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarCloseStyle",
-            &snapshot.titlebar_close_style,
-            &defaults.titlebar_close_style,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMinimizeColor",
-            &snapshot.titlebar_minimize_color,
-            &defaults.titlebar_minimize_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMinimizeHoverColor",
-            &snapshot.titlebar_minimize_hover_color,
-            &defaults.titlebar_minimize_hover_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMinimizePressedColor",
-            &snapshot.titlebar_minimize_pressed_color,
-            &defaults.titlebar_minimize_pressed_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMaximizeColor",
-            &snapshot.titlebar_maximize_color,
-            &defaults.titlebar_maximize_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMaximizeHoverColor",
-            &snapshot.titlebar_maximize_hover_color,
-            &defaults.titlebar_maximize_hover_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarMaximizePressedColor",
-            &snapshot.titlebar_maximize_pressed_color,
-            &defaults.titlebar_maximize_pressed_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarCloseColor",
-            &snapshot.titlebar_close_color,
-            &defaults.titlebar_close_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarCloseHoverColor",
-            &snapshot.titlebar_close_hover_color,
-            &defaults.titlebar_close_hover_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "titlebarClosePressedColor",
-            &snapshot.titlebar_close_pressed_color,
-            &defaults.titlebar_close_pressed_color,
-        );
-        push_if_changed(
-            &mut lines,
-            "cursorTheme",
-            &snapshot.cursor_theme,
-            &defaults.cursor_theme,
-        );
-        push_if_changed(
-            &mut lines,
-            "animationsEnabled",
-            &snapshot.animations_enabled,
-            &defaults.animations_enabled,
-        );
-        push_if_changed(
-            &mut lines,
-            "animationSpeed",
-            &snapshot.animation_speed,
-            &defaults.animation_speed,
-        );
-        push_if_changed(
-            &mut lines,
-            "startAnimation",
-            &snapshot.start_animation,
-            &defaults.start_animation,
-        );
-        push_if_changed(
-            &mut lines,
-            "startAnimationEnabled",
-            &snapshot.start_animation_enabled,
-            &defaults.start_animation_enabled,
-        );
-        push_if_changed(
-            &mut lines,
-            "windowOpenAnimationEnabled",
-            &snapshot.window_open_animation_enabled,
-            &defaults.window_open_animation_enabled,
-        );
-        push_if_changed(
-            &mut lines,
-            "minimizeAnimationEnabled",
-            &snapshot.minimize_animation_enabled,
-            &defaults.minimize_animation_enabled,
-        );
-        push_if_changed(
-            &mut lines,
-            "maximizeAnimationEnabled",
-            &snapshot.maximize_animation_enabled,
-            &defaults.maximize_animation_enabled,
-        );
+        let mut lines = vec![format!("revision={}", snapshot.revision)];
+        // Base rows are always written. Optional rows are written only when they differ from
+        // defaults, so settings files that never set them keep their existing byte-for-byte shape.
+        for row in STABLE_SETTINGS {
+            let value = (row.get)(snapshot);
+            if row.base || value != (row.get)(&defaults) {
+                lines.push(format!("{}={}", row.key, wire_text(&value, row.base)));
+            }
+        }
         lines.extend(
             snapshot
                 .per_output_scale
@@ -656,6 +417,203 @@ impl ConfigStore {
     }
 }
 
+/// Typed bridge between one `ProductSettings` field and its file text, API value, and apply input.
+trait Slot: Sized + Clone {
+    fn to_value(&self) -> SettingValue;
+    fn from_text(text: &str, key: &str) -> FlameResult<Self>;
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self>;
+}
+
+impl Slot for String {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.clone())
+    }
+
+    fn from_text(text: &str, _key: &str) -> FlameResult<Self> {
+        Ok(text.to_owned())
+    }
+
+    fn from_value(value: &SettingValue, _key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Ok(text.clone()),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
+impl Slot for bool {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Boolean(*self)
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        parse_bool(text, key)
+    }
+
+    fn from_value(value: &SettingValue, _key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Boolean(on) => Ok(*on),
+            _ => invalid("setting requires boolean"),
+        }
+    }
+}
+
+impl Slot for u8 {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Percent(*self)
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        parse(text, key)
+    }
+
+    fn from_value(value: &SettingValue, _key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Percent(percent) => Ok(*percent),
+            _ => invalid("setting requires percent"),
+        }
+    }
+}
+
+macro_rules! integer_slot {
+    ($($ty:ty),*) => {$(
+        impl Slot for $ty {
+            fn to_value(&self) -> SettingValue {
+                SettingValue::Integer(i64::from(*self))
+            }
+
+            fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+                parse(text, key)
+            }
+
+            fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+                match value {
+                    SettingValue::Integer(number) => (*number).try_into().map_err(|_| {
+                        FlameError::new(ErrorCode::InvalidArgument, format!("{key} is out of range"))
+                    }),
+                    _ => invalid("setting requires integer"),
+                }
+            }
+        }
+    )*};
+}
+
+integer_slot!(i8, u16);
+
+impl Slot for AppearanceMode {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, _key: &str) -> FlameResult<Self> {
+        AppearanceMode::parse(text).ok_or_else(|| FlameError::invalid("bad appearance"))
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
+/// One typed key. The table below is the single source for file parse, serialize, API snapshot,
+/// apply, and section reset. `base` keys are always written (bools as 1/0); other keys are written
+/// only when they differ from defaults (bools as true/false).
+pub(crate) struct StableSetting {
+    pub(crate) key: &'static str,
+    pub(crate) section: &'static str,
+    pub(crate) base: bool,
+    pub(crate) get: fn(&ProductSettings) -> SettingValue,
+    pub(crate) set:
+        fn(&mut ProductSettings, &ProductSettings, Option<&SettingValue>, &str) -> FlameResult<()>,
+    pub(crate) parse: fn(&mut ProductSettings, &str, &str) -> FlameResult<()>,
+}
+
+macro_rules! stable_settings {
+    ($(($base:literal, $section:ident, $key:literal, $field:ident)),* $(,)?) => {
+        pub(crate) static STABLE_SETTINGS: &[StableSetting] = &[$(
+            StableSetting {
+                key: $key,
+                section: stringify!($section),
+                base: $base,
+                get: |settings| Slot::to_value(&settings.$field),
+                set: |settings, defaults, value, key| {
+                    settings.$field = resolve(value, &defaults.$field, key)?;
+                    Ok(())
+                },
+                parse: |settings, text, key| {
+                    settings.$field = Slot::from_text(text, key)?;
+                    Ok(())
+                },
+            },
+        )*];
+    };
+}
+
+stable_settings! {
+    (true, appearance, "accent", accent),
+    (true, appearance, "appearance", appearance),
+    (true, desktop, "wallpaper", wallpaper),
+    (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
+    (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),
+    (true, fonts, "fontFamily", font_family),
+    (true, fonts, "fontBold", font_bold),
+    (true, fonts, "fontSizeOffset", font_size_offset),
+    (true, taskbar, "taskbarColor", taskbar_color),
+    (true, taskbar, "taskbarOpacity", taskbar_opacity),
+    (true, taskbar, "taskbarHeight", taskbar_height),
+    (true, taskbar, "startButtonText", start_button_text),
+    (true, taskbar, "customStartIcon", custom_start_icon),
+    (true, desktop, "stickyNotesEnabled", sticky_notes_enabled),
+    (false, appearance, "iconTheme", icon_theme),
+    (false, taskbar, "startMenuColor", start_menu_color),
+    (false, taskbar, "startMenuOpacity", start_menu_opacity),
+    (false, appearance, "accentOpacity", accent_opacity),
+    (false, appearance, "decoration", decoration),
+    (false, windows, "titlebarColor", titlebar_color),
+    (false, windows, "titlebarMinimizeStyle", titlebar_minimize_style),
+    (false, windows, "titlebarMaximizeStyle", titlebar_maximize_style),
+    (false, windows, "titlebarCloseStyle", titlebar_close_style),
+    (false, windows, "titlebarMinimizeColor", titlebar_minimize_color),
+    (false, windows, "titlebarMinimizeHoverColor", titlebar_minimize_hover_color),
+    (false, windows, "titlebarMinimizePressedColor", titlebar_minimize_pressed_color),
+    (false, windows, "titlebarMaximizeColor", titlebar_maximize_color),
+    (false, windows, "titlebarMaximizeHoverColor", titlebar_maximize_hover_color),
+    (false, windows, "titlebarMaximizePressedColor", titlebar_maximize_pressed_color),
+    (false, windows, "titlebarCloseColor", titlebar_close_color),
+    (false, windows, "titlebarCloseHoverColor", titlebar_close_hover_color),
+    (false, windows, "titlebarClosePressedColor", titlebar_close_pressed_color),
+    (false, appearance, "cursorTheme", cursor_theme),
+    (false, windows, "animationsEnabled", animations_enabled),
+    (false, windows, "animationSpeed", animation_speed),
+    (false, windows, "startAnimation", start_animation),
+    (false, windows, "startAnimationEnabled", start_animation_enabled),
+    (false, windows, "windowOpenAnimationEnabled", window_open_animation_enabled),
+    (false, windows, "minimizeAnimationEnabled", minimize_animation_enabled),
+    (false, windows, "maximizeAnimationEnabled", maximize_animation_enabled),
+}
+
+#[must_use]
+pub(crate) fn stable_setting(key: &str) -> Option<&'static StableSetting> {
+    STABLE_SETTINGS.iter().find(|row| row.key == key)
+}
+
+fn resolve<T: Slot>(value: Option<&SettingValue>, default: &T, key: &str) -> FlameResult<T> {
+    value.map_or_else(|| Ok(default.clone()), |value| T::from_value(value, key))
+}
+
+fn wire_text(value: &SettingValue, flag: bool) -> String {
+    match value {
+        SettingValue::Text(text) => text.clone(),
+        SettingValue::Boolean(on) if flag => u8::from(*on).to_string(),
+        SettingValue::Boolean(on) => on.to_string(),
+        SettingValue::Percent(percent) => percent.to_string(),
+        SettingValue::Integer(number) => number.to_string(),
+        SettingValue::Rgb(rgb) => rgb.to_string(),
+    }
+}
+
 fn parse<T: std::str::FromStr>(value: &str, name: &str) -> FlameResult<T> {
     value
         .parse::<T>()
@@ -679,17 +637,6 @@ fn parse_panel_edge(value: &str) -> Option<PanelEdge> {
         "left" => Some(PanelEdge::Left),
         "right" => Some(PanelEdge::Right),
         _ => None,
-    }
-}
-
-fn push_if_changed<T: PartialEq + std::fmt::Display>(
-    lines: &mut Vec<String>,
-    key: &str,
-    value: &T,
-    default: &T,
-) {
-    if value != default {
-        lines.push(format!("{key}={value}"));
     }
 }
 
@@ -718,50 +665,9 @@ fn validate_color(value: &str, allow_empty: bool, name: &str) -> FlameResult<()>
 }
 
 fn is_stable_key(key: &str) -> bool {
-    matches!(
-        key,
-        "revision"
-            | "accent"
-            | "iconTheme"
-            | "appearance"
-            | "wallpaper"
-            | "DesktopSelectionFillOpacity"
-            | "WindowSnapPreviewFillOpacity"
-            | "fontFamily"
-            | "fontBold"
-            | "fontSizeOffset"
-            | "taskbarColor"
-            | "taskbarOpacity"
-            | "taskbarHeight"
-            | "startButtonText"
-            | "customStartIcon"
-            | "stickyNotesEnabled"
-            | "startMenuColor"
-            | "startMenuOpacity"
-            | "accentOpacity"
-            | "decoration"
-            | "titlebarColor"
-            | "titlebarMinimizeStyle"
-            | "titlebarMaximizeStyle"
-            | "titlebarCloseStyle"
-            | "titlebarMinimizeColor"
-            | "titlebarMinimizeHoverColor"
-            | "titlebarMinimizePressedColor"
-            | "titlebarMaximizeColor"
-            | "titlebarMaximizeHoverColor"
-            | "titlebarMaximizePressedColor"
-            | "titlebarCloseColor"
-            | "titlebarCloseHoverColor"
-            | "titlebarClosePressedColor"
-            | "cursorTheme"
-            | "animationsEnabled"
-            | "animationSpeed"
-            | "startAnimation"
-            | "startAnimationEnabled"
-            | "windowOpenAnimationEnabled"
-            | "minimizeAnimationEnabled"
-            | "maximizeAnimationEnabled"
-    ) || key.starts_with("scale.")
+    key == "revision"
+        || stable_setting(key).is_some()
+        || key.starts_with("scale.")
         || key.starts_with("panel.edge.")
         || key.starts_with("hotkey.")
 }
@@ -991,5 +897,20 @@ mod tests {
             settings.validate().expect_err("control character").code,
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn base_flags_write_digits_and_optional_flags_write_words() {
+        let mut settings = ProductSettings::default();
+        settings.font_bold = true;
+        settings.sticky_notes_enabled = false;
+        settings.animations_enabled = false;
+        let text = ConfigStore::serialize(&settings);
+        assert!(text.contains("fontBold=1\n"));
+        assert!(text.contains("stickyNotesEnabled=0\n"));
+        assert!(text.contains("animationsEnabled=false\n"));
+        assert!(text.find("fontBold=") < text.find("animationsEnabled="));
+        let reparsed = ConfigStore::default().parse_snapshot(&text).expect("round trip");
+        assert_eq!(reparsed, settings);
     }
 }
