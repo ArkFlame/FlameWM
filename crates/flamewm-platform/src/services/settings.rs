@@ -93,6 +93,21 @@ impl SettingsService {
         Ok(self.snapshot())
     }
 
+    /// Persists one hotkey entry through the same candidate, persist, and commit steps as `apply`.
+    /// `Some(text)` stores the binding text (empty means unassigned); `None` removes the override so the
+    /// action falls back to its default. The caller owns the shortcut grabs. An unchanged entry writes nothing.
+    pub fn persist_hotkey(&mut self, action: &str, binding: Option<&str>) -> FlameResult<()> {
+        let value = binding.map(|text| SettingValue::Text(text.to_owned()));
+        let mut candidate = self.store.current().clone();
+        apply_change(&mut candidate, &format!("hotkey.{action}"), value.as_ref())?;
+        if candidate.hotkeys == self.store.current().hotkeys {
+            return Ok(());
+        }
+        candidate.revision = self.store.current().revision.saturating_add(1);
+        ConfigStore::persist(&self.path, &candidate)?;
+        self.store.apply_snapshot(candidate)
+    }
+
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path

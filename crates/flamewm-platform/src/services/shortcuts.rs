@@ -191,6 +191,25 @@ impl ShortcutService {
         self.capture.is_some()
     }
 
+    /// Registry and revision before a mutation, used by `restore` when the mutation's persistence fails.
+    #[must_use]
+    pub fn checkpoint(&self) -> (ShortcutRegistry, u64) {
+        (self.registry.clone(), self.revision)
+    }
+
+    /// Re-grabs a `checkpoint` set and restores its registry and revision. Refused without state change
+    /// if the port cannot commit the checkpoint's grabs.
+    pub fn restore<P: ShortcutPort>(
+        &mut self,
+        port: &mut P,
+        checkpoint: (ShortcutRegistry, u64),
+    ) -> FlameResult<()> {
+        Self::stage_and_commit(port, checkpoint.0.bindings())?;
+        self.registry = checkpoint.0;
+        self.revision = checkpoint.1;
+        Ok(())
+    }
+
     fn restore_grabs<P: ShortcutPort>(&self, port: &mut P) -> FlameResult<()> {
         Self::stage_and_commit(port, self.registry.bindings())
     }

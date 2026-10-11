@@ -443,18 +443,48 @@ impl<E: EnginePorts> PlatformHost<E> {
         binding: &str,
         expected_revision: u64,
     ) -> FlameResult<()> {
+        let checkpoint = self.shortcuts.checkpoint();
         self.shortcuts
-            .set_binding(&mut self.engine, action, binding, expected_revision)
+            .set_binding(&mut self.engine, action, binding, expected_revision)?;
+        let persisted = self
+            .shortcuts
+            .snapshot()
+            .bindings
+            .get(action)
+            .and_then(|entry| entry.0.clone())
+            .unwrap_or_default();
+        self.persist_shortcut(checkpoint, action, Some(&persisted))
     }
 
     pub fn clear_shortcut(&mut self, action: &str, expected_revision: u64) -> FlameResult<()> {
+        let checkpoint = self.shortcuts.checkpoint();
         self.shortcuts
-            .clear_binding(&mut self.engine, action, expected_revision)
+            .clear_binding(&mut self.engine, action, expected_revision)?;
+        self.persist_shortcut(checkpoint, action, Some(""))
     }
 
     pub fn reset_shortcut(&mut self, action: &str, expected_revision: u64) -> FlameResult<()> {
+        let checkpoint = self.shortcuts.checkpoint();
         self.shortcuts
-            .reset_binding(&mut self.engine, action, expected_revision)
+            .reset_binding(&mut self.engine, action, expected_revision)?;
+        self.persist_shortcut(checkpoint, action, None)
+    }
+
+    /// Persists one hotkey entry after its grabs committed. If persistence fails, the checkpoint
+    /// registry and grabs are restored so the WM and the settings file never diverge.
+    fn persist_shortcut(
+        &mut self,
+        checkpoint: (ShortcutRegistry, u64),
+        action: &str,
+        binding: Option<&str>,
+    ) -> FlameResult<()> {
+        let Err(error) = self.settings.persist_hotkey(action, binding) else {
+            return Ok(());
+        };
+        if let Err(restore_error) = self.shortcuts.restore(&mut self.engine, checkpoint) {
+            eprintln!("flamewm: hotkey rollback failed after persistence error: {restore_error}");
+        }
+        Err(error)
     }
 
     pub fn apply_shortcuts(
@@ -1034,5 +1064,148 @@ mod tests {
         let panels = host.panels.snapshot();
         assert_eq!(panels.panels[0].logical_size, 44);
         assert_eq!(panels.panels[0].geometry.height, 55);
+    }
+
+    fn hotkey_fixture(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "flamewm-host-hotkey-{name}-{}.conf",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// Starts a host on `path` and grabs its effective shortcut set, as a WM restart would.
+    fn started_hotkey_host(path: &std::path::Path) -> PlatformHost<FakeEngine> {
+        let mut host = PlatformHost::new(
+            FakeEngine {
+                display: fake_display(100),
+                reverted: Vec::new(),
+            },
+            path.to_path_buf(),
+        );
+        host.start().expect("host starts");
+        host.commit_startup_shortcuts().expect("startup grabs");
+        host
+    }
+
+    #[test]
+    fn cleared_hotkey_persists_and_stays_unassigned_after_restart() {
+        use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
+
+        let path = hotkey_fixture("clear");
+        let mut host = started_hotkey_host(&path);
+        let revision = host.shortcut_snapshot().revision;
+        host.clear_shortcut(ACTION_TOGGLE_START_MENU, revision)
+            .expect("clear applies");
+        // Idempotent: clearing an already-unassigned action succeeds without a new revision.
+        host.clear_shortcut(ACTION_TOGGLE_START_MENU, revision + 1)
+            .expect("repeated clear applies");
+        let persisted = std::fs::read_to_string(&path).expect("clear is persisted");
+        assert!(
+            persisted.contains("hotkey.ToggleStartMenu=\n"),
+            "{persisted}"
+        );
+
+        let reloaded = started_hotkey_host(&path);
+        assert_eq!(
+            reloaded
+                .shortcut_snapshot()
+                .bindings
+                .get(ACTION_TOGGLE_START_MENU),
+            Some(&KeyBinding::unassigned())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_shortcut_persists_binding_across_restart() {
+        use flamewm_api::shortcuts::ACTION_WINDOW_CLOSE;
+
+        let path = hotkey_fixture("set");
+        let mut host = started_hotkey_host(&path);
+        let revision = host.shortcut_snapshot().revision;
+        host.set_shortcut(ACTION_WINDOW_CLOSE, "Super+F8", revision)
+            .expect("set applies");
+        let persisted = std::fs::read_to_string(&path).expect("set is persisted");
+        assert!(
+            persisted.contains("hotkey.WindowClose=Super+F8\n"),
+            "{persisted}"
+        );
+
+        let reloaded = started_hotkey_host(&path);
+        assert_eq!(
+            reloaded
+                .shortcut_snapshot()
+                .bindings
+                .get(ACTION_WINDOW_CLOSE),
+            Some(&KeyBinding::assigned("Super+F8"))
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reset_shortcut_removes_persisted_override_and_restores_default() {
+        use flamewm_api::shortcuts::ACTION_WINDOW_CLOSE;
+
+        let path = hotkey_fixture("reset");
+        std::fs::write(&path, "hotkey.WindowClose=Super+F8\n").expect("write override fixture");
+        let mut host = started_hotkey_host(&path);
+        assert_eq!(
+            host.shortcut_snapshot().bindings.get(ACTION_WINDOW_CLOSE),
+            Some(&KeyBinding::assigned("Super+F8"))
+        );
+        let revision = host.shortcut_snapshot().revision;
+        host.reset_shortcut(ACTION_WINDOW_CLOSE, revision)
+            .expect("reset applies");
+        let persisted = std::fs::read_to_string(&path).expect("reset is persisted");
+        assert!(!persisted.contains("hotkey.WindowClose="), "{persisted}");
+
+        let reloaded = started_hotkey_host(&path);
+        let defaults = ShortcutRegistry::default();
+        assert_eq!(
+            reloaded
+                .shortcut_snapshot()
+                .bindings
+                .get(ACTION_WINDOW_CLOSE),
+            defaults.binding(ACTION_WINDOW_CLOSE)
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stale_hotkey_revision_is_refused_without_persisting() {
+        use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
+
+        let path = hotkey_fixture("stale");
+        let mut host = started_hotkey_host(&path);
+        let stale = host.shortcut_snapshot().revision + 1;
+        let error = host
+            .clear_shortcut(ACTION_TOGGLE_START_MENU, stale)
+            .expect_err("stale revision is refused");
+        assert_eq!(error.code, ErrorCode::StaleRevision);
+        assert!(!path.exists());
+        assert!(host.shortcut_snapshot().bindings[ACTION_TOGGLE_START_MENU].is_assigned());
+    }
+
+    #[test]
+    fn failed_hotkey_persistence_rolls_back_the_shortcut_mutation() {
+        use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
+
+        // The settings parent becomes a regular file after start, so persistence cannot create it.
+        let dir = hotkey_fixture("rollback-dir");
+        std::fs::create_dir_all(&dir).expect("create settings dir");
+        let path = dir.join("settings.conf");
+        let mut host = started_hotkey_host(&path);
+        let before = host.shortcut_snapshot();
+        std::fs::remove_dir_all(&dir).expect("remove settings dir");
+        std::fs::write(&dir, "").expect("replace settings dir with a file");
+
+        let error = host
+            .clear_shortcut(ACTION_TOGGLE_START_MENU, before.revision)
+            .expect_err("persistence failure is surfaced");
+        assert_ne!(error.code, ErrorCode::StaleRevision);
+        assert_eq!(host.shortcut_snapshot(), before);
+        let _ = std::fs::remove_file(&dir);
     }
 }
