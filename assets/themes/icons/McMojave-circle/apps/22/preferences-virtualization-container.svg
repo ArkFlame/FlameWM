@@ -1,0 +1,18 @@
+<svg width="22" height="22" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <linearGradient id="b" x1="7.937" x2="7.937" y1="15.081" y2="1.852" gradientTransform="translate(0 .016)scale(1.88973)" gradientUnits="userSpaceOnUse">
+   <stop stop-color="#3377f4" offset="0"/>
+   <stop stop-color="#5194f5" offset="1"/>
+  </linearGradient>
+ </defs>
+ <rect width="22" height="22" rx="11" ry="11" fill="url(#b)" stroke-width=".49998"/>
+ <path d="m12.833 13.75h7.3333v1.8333h-7.3333z" fill="#fff" opacity=".35" stroke-width=".91667"/>
+ <path d="m1.8333 13.75h7.3333v1.8333h-7.3333z" fill="#fff" opacity=".35" stroke-width=".91667"/>
+ <path d="m1.8333 6.4167h7.3333v1.8333h-7.3333z" fill="#fff" opacity=".35" stroke-width=".91667"/>
+ <path d="m12.833 6.4167h7.3333v1.8333h-7.3333z" fill="#fff" opacity=".35" stroke-width=".91667"/>
+ <path d="m12.833 10.083h7.3333v1.8333h-7.3333z" fill="#fff" opacity=".35" stroke-width=".91667"/>
+ <path d="m1.8333 10.083h7.3333v1.8333h-7.3333z" fill="#fff" opacity=".35" stroke-width=".91667"/>
+ <rect x="10" y="2" width="2" height="18" opacity=".5" stroke-linecap="round" stroke-linejoin="round" stroke-width=".90453"/>
+ <path d="m11 0c-6.094 0-11 4.906-11 11s4.906 11 11 11 11-4.906 11-11-4.906-11-11-11zm0 2c4.986 0 9 4.014 9 9s-4.014 9-9 9-9-4.014-9-9 4.014-9 9-9z" opacity=".5" stroke-width=".49998"/>
+ <path d="m8.2363 0.34766c-0.30645 0.078737-0.60699 0.16968-0.90234 0.27344v20.758c0.29536 0.10375 0.5959 0.1947 0.90234 0.27344a0.45833 0.45833 0 0 0 0.013672-0.11133v-21.082a0.45833 0.45833 0 0 0-0.013672-0.11133zm5.5273 0a0.45833 0.45833 0 0 0-0.013672 0.11133v21.082a0.45833 0.45833 0 0 0 0.013672 0.11133c0.30645-0.078737 0.60699-0.16968 0.90234-0.27344v-20.758c-0.29536-0.10375-0.5959-0.1947-0.90234-0.27344zm-8.2637 1.1152c-0.31587 0.18194-0.62111 0.3784-0.91602 0.58984v17.895c0.29491 0.21144 0.60014 0.4079 0.91602 0.58984v-19.074zm11 0v19.074c0.31587-0.18194 0.62111-0.3784 0.91602-0.58984v-17.895c-0.29491-0.21144-0.60014-0.4079-0.91602-0.58984z" fill="#fff" stroke-width=".91667"/>
+</svg>

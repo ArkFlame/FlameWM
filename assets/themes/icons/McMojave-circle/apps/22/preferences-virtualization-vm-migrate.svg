@@ -1,0 +1,31 @@
+<svg width="22" height="22" version="1.1" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="a" x1="7.937" x2="7.937" y1="15.081" y2="1.852" gradientTransform="translate(.001 .015)scale(1.88973)" gradientUnits="userSpaceOnUse">
+   <stop stop-color="#8e8d92" offset="0"/>
+   <stop stop-color="#b3b2b6" offset="1"/>
+  </linearGradient>
+ </defs>
+ <linearGradient id="f" x1="358.57" x2="358.57" y1="519.8" y2="505.8" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#4d4d4d" offset="0"/>
+  <stop stop-color="#585858" offset="1"/>
+ </linearGradient>
+ <linearGradient id="c" x1="353.57" x2="353.57" y1="505.8" y2="519.8" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#31363b" offset="0"/>
+  <stop stop-color="#4d4d4d" offset="1"/>
+ </linearGradient>
+ <linearGradient id="b" x1="428.37" x2="428.37" y1="530.8" y2="525.8" gradientTransform="matrix(2.8571 0 0 2.8 -885.35 -966.43)" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#da4453" offset="0"/>
+  <stop stop-color="#fa4e5f" offset="1"/>
+ </linearGradient>
+ <rect width="22" height="22" rx="11" ry="11" fill="url(#a)" stroke-width=".49998"/>
+ <path d="m1.0527 6.2832c1.7595-3.722 5.5426-6.2852 9.9473-6.2852 4.4046 0 8.1878 2.5631 9.9473 6.2852z" fill="#fff" opacity=".35" style="paint-order:stroke fill markers"/>
+ <circle cx="5" cy="4" r="1" fill="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width=".83157"/>
+ <path transform="matrix(.58824 0 0 .57143 -194.04 -279.03)" d="m331.57 505.8h3l3.5 10 3.5-10h3l-5 14h-3z" fill="url(#b)"/>
+ <path transform="matrix(.58824 0 0 .57143 -194.04 -279.03)" d="m342.57 519.8 5-14h3l-5 14zm10 0 5-14h3l-5 14z" fill="url(#c)"/>
+ <path transform="matrix(.58824 0 0 .57143 -194.04 -279.03)" d="m339.57 519.8 5-14h3l-5 14zm10 0 5-14h3l-5 14z" fill="#fff"/>
+ <path transform="matrix(.58824 0 0 .57143 -194.04 -279.03)" d="m352.57 519.8h-3l-5-14h3zm10 0h-3l-5-14h3z" fill="#fff"/>
+ <path transform="matrix(.58824 0 0 .57143 -194.04 -279.03)" d="m347.57 505.8 5 14h3l-5-14zm10 0 5 14h3l-5-14z" fill="url(#f)"/>
+ <path d="m0.7168 7.0683c0.10161-0.2672 0.21462-0.52851 0.33594-0.78516h19.895c0.12132 0.25664 0.23433 0.51795 0.33594 0.78516z" opacity=".15" style="paint-order:stroke fill markers"/>
+ <circle cx="11" cy="11" r="8" fill="#f2f2f2" fill-rule="evenodd" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.1429" style="paint-order:stroke fill markers"/>
+ <path d="m7 11.5h6.086l-2.293 2.293 0.707 0.707 3.5-3.5-3.5-3.5-0.707 0.707 2.293 2.293h-6.086z" fill="#232629"/>
+</svg>

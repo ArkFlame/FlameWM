@@ -11,6 +11,8 @@ FLAMEWM_VERSION                          usr/share/flamewm/VERSION
 assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme
 assets/cursors/cursors                   usr/share/icons/FlameWM-Breeze-Dark/cursors
+assets/themes/icons/McMojave-circle      usr/share/icons/McMojave-circle/
+assets/themes/cursors/McMojave-cursors   usr/share/icons/McMojave-cursors/
 packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
 LICENSE                                  usr/share/doc/flamewm/LICENSE

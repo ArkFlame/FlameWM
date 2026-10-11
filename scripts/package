@@ -52,6 +52,8 @@ install -m 0644 "$ROOT/README.md" "$STAGE/usr/share/doc/flamewm/README.md"
 install -m 0644 "$ROOT/docs/INSTALL.md" "$STAGE/usr/share/doc/flamewm/INSTALL.md"
 install -m 0644 "$ROOT/docs/PACKAGING.md" "$STAGE/usr/share/doc/flamewm/PACKAGING.md"
 cp -a "$ROOT/assets" "$STAGE/usr/share/flamewm/assets"
+# Theme packs install under usr/share/icons below; do not ship them twice.
+rm -rf "$STAGE/usr/share/flamewm/assets/themes"
 # Bundled cursor authority: FlameWM-Breeze-Dark (Breeze Dark Xcursor bytes
 # under a FlameWM-owned theme id). Binary cursor files copied byte-for-byte;
 # index.theme renamed below so the installed Name is FlameWM-owned.
@@ -60,6 +62,10 @@ cp -a "$ROOT/assets/cursors/cursors" "$STAGE/usr/share/icons/FlameWM-Breeze-Dark
 sed -e 's/^Name=Breeze Dark/Name=FlameWM-Breeze-Dark/' \
     "$ROOT/assets/cursors/index.theme" > "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
 chmod 0644 "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
+# Bundled McMojave icon (light) and cursor themes; installed under their upstream ids.
+mkdir -p "$STAGE/usr/share/icons"
+cp -a "$ROOT/assets/themes/icons/McMojave-circle" "$STAGE/usr/share/icons/McMojave-circle"
+cp -a "$ROOT/assets/themes/cursors/McMojave-cursors" "$STAGE/usr/share/icons/McMojave-cursors"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
     sed -e "s/@VERSION@/$VERSION/g" "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
