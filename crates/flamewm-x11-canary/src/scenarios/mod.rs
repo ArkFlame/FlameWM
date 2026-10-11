@@ -20,7 +20,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, CreateWindowAux, EventMask,
-    MOTION_NOTIFY_EVENT, WindowClass,
+    KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, WindowClass,
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 
@@ -179,11 +179,33 @@ pub fn xtest_self_check(canary: &crate::Canary) -> (bool, String) {
     )
 }
 
-/// Real Escape is not yet part of the canonical input helper surface; report
-/// false so callers fall back to outside-click coverage.
+/// Real Escape keypress through XTEST. The keycode is resolved from the server
+/// keyboard mapping for keysym XK_Escape (0xff1b); false if unmapped or not
+/// delivered.
 pub fn real_escape(canary: &crate::Canary) -> bool {
-    let _ = canary;
-    false
+    const XK_ESCAPE: u32 = 0xff1b;
+    let setup = canary.conn.setup();
+    let (min, max) = (setup.min_keycode, setup.max_keycode);
+    let Ok(cookie) = canary.conn.get_keyboard_mapping(min, max - min + 1) else {
+        return false;
+    };
+    let Ok(mapping) = cookie.reply() else {
+        return false;
+    };
+    let per_code = usize::from(mapping.keysyms_per_keycode.max(1));
+    let Some(index) = mapping
+        .keysyms
+        .chunks(per_code)
+        .position(|syms| syms.contains(&XK_ESCAPE))
+    else {
+        return false;
+    };
+    let Ok(offset) = u8::try_from(index) else {
+        return false;
+    };
+    let keycode = min + offset;
+    xtest_input(canary, KEY_PRESS_EVENT, keycode, 0, 0)
+        && xtest_input(canary, KEY_RELEASE_EVENT, keycode, 0, 0)
 }
 
 /// Root-coordinate center of a window info record.
