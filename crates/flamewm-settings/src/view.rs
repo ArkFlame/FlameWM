@@ -149,7 +149,9 @@ mod tests {
             );
             assert!(
                 css_value(page, "width") == Some("100%")
-                    && css_value(page, "height") == Some("100%")
+                    && css_value(page, "top") == Some("0")
+                    && css_value(page, "bottom") == Some("0"),
+                "page must fill main via top/bottom, not percent height: {page}"
             );
         }
     }
@@ -355,6 +357,21 @@ mod tests {
                 "settings CSS must not use {unsupported}; the render compiler does not support it"
             );
         }
+    }
+
+    #[test]
+    fn scroll_pages_have_auto_height_so_content_extent_is_measured() {
+        // Render-core measures scroll extent from auto-height content; a
+        // percent height resolves against an unbounded probe (~3e35 px) and
+        // wheel scrolling never reaches a clamp.
+        let css = include_str!("../../../ui/settings.css");
+        let page = css_rule(css, ".settings-page");
+        assert_eq!(
+            css_value(page, "height"),
+            None,
+            "page must not declare height"
+        );
+        assert_eq!(css_value(page, "bottom"), Some("0"));
     }
 
     #[test]

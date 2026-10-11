@@ -36,6 +36,7 @@ mod input;
 mod layout_helpers;
 mod primitives;
 mod render;
+mod scroll;
 
 pub(crate) use input::{pointer_button_from_raw, slider_value_from_pointer, wheel_scroll_delta};
 

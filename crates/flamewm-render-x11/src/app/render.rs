@@ -108,6 +108,9 @@ impl X11App {
                 self.interaction,
             );
             self.layout = Some(layout);
+            if let Some(layout) = self.layout.as_mut() {
+                super::scroll::translate_scrolled_content(layout, document, self.interaction);
+            }
             self.cached_viewport = viewport;
         }
         drop(layout_guard);
@@ -120,11 +123,8 @@ impl X11App {
                 && reuse_layout
         });
         if !cache_valid {
-            let layout = self.layout.as_ref().expect("layout retained above");
-            let fresh =
-                build_paint_commands_with_scroll(document, layout, self.interaction, &|index| {
-                    document.scroll_offset(index)
-                });
+            let layout = self.layout.as_mut().expect("layout retained above");
+            let fresh = super::scroll::build_scrolled_paint(document, layout, self.interaction);
             self.cached_paint = Some(CachedPaint {
                 commands: fresh,
                 revision: document.revision(),
