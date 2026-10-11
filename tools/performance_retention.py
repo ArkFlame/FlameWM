@@ -44,10 +44,6 @@ def _env_int(name: str, default: int) -> int:
     return retention_core.env_int(name, default)
 
 
-def _latest_target(perf: Path) -> str:
-    return retention_core.latest_target(perf)
-
-
 def retain(perf: Path, current: str = "", keep_runs: int = 12,
            max_age_days: int = 7) -> tuple[list[str], list[str], list[str]]:
     return retention_core.retain(perf, current, keep_runs, max_age_days)

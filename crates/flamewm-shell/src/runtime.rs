@@ -1138,13 +1138,6 @@ impl ShellSurfaces {
         )
     }
 
-    /// F10: native panel surface handle for geometry updates.
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn panel_handle(&self) -> SurfaceHandle {
-        self.primary().panel
-    }
-
     /// F10: last-synced panel snapshot geometry.
     #[must_use]
     pub fn panel_geometry(&self) -> flamewm_api::Rect {
@@ -1348,23 +1341,6 @@ impl ShellSurfaces {
         self.prepare_traced(runtime, surface, rect, trace)?;
         runtime.show(surface).map_err(ui_error)
     }
-
-    /// Retained-device anchor for a status source id. Reads the live panel
-    /// node rect from retained layout (`node_device_rect_by_id`, root-space
-    /// device rect, no recompute). `None` when no retained layout exists.
-    /// Legacy helper retained until the helper role fully owns status
-    /// popups; J07 parent delegates quick-control opens to the supervisor.
-    #[allow(dead_code)]
-    fn retained_source_by_id(
-        runtime: &SurfaceRuntime,
-        panel: SurfaceHandle,
-        source_id: &str,
-    ) -> Option<flamewm_api::Rect> {
-        runtime
-            .node_device_rect_by_id(panel, source_id)
-            .map(|rect| to_api_rect(rect.x, rect.y, rect.width, rect.height))
-            .filter(|rect| rect.width > 0 && rect.height > 0)
-    }
 }
 
 /// Retained-device node rect by id (root-space device rect, no
@@ -1431,7 +1407,6 @@ fn panel_ui_scale(scale_percent: u16) -> f32 {
 
 /// Retained-device anchor: live panel node rect (`node_device_rect_by_id`,
 /// root-space device rect, no recompute) when retained layout exists.
-#[allow(dead_code)]
 fn retained_source_by_id(
     runtime: &SurfaceRuntime,
     panel: SurfaceHandle,
@@ -1463,7 +1438,6 @@ fn ui_error(error: UiBackendError) -> String {
 /// shell.quick_control.open_request, shell.quick_control.restart,
 /// shell.signal_to_visual.windows, shell.signal_to_visual.workspaces,
 /// shell.signal_to_visual.system.
-#[allow(dead_code)]
 pub fn shell_span(label: &'static str) -> flamewm_profiler::ProfilePoint {
     debug_assert!(
         matches!(
@@ -1543,7 +1517,6 @@ pub enum ProjectionKind {
     Popup,
 }
 
-#[allow(dead_code)]
 pub fn projection_counter(kind: ProjectionKind) -> &'static flamewm_profiler::CounterPoint {
     use std::sync::OnceLock;
     match kind {
