@@ -1,10 +1,5 @@
 use super::*;
 impl X11App {
-    #[allow(dead_code)]
-    pub(crate) fn current_cursor(&self) -> Option<CursorKind> {
-        self.current_cursor
-    }
-
     pub(crate) fn update_cursor(&mut self, document: &RuntimeDocument, hover: Option<u32>) {
         let kind = hover
             .and_then(|index| {

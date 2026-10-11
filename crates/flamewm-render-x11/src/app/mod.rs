@@ -560,11 +560,6 @@ impl X11App {
         self.allocator.ledger()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn backbuffer_bytes(&self) -> usize {
-        self.backbuffer_bytes
-    }
-
     /// Transfer all dynamically loaded backend handles to the display owner.
     /// Backend X resources are released while the display is live; the typed
     /// owner must be retained until after `XCloseDisplay`.

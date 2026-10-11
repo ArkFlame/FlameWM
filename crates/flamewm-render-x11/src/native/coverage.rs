@@ -16,7 +16,6 @@ pub type CoverageSpan = (u32, u32, u32);
 /// `scale` is the same ui_scale the paint path uses: rect, radius, stroke
 /// width, and clip rects are scaled before rasterization so paint and mask
 /// agree. Pass 1.0 for unscaled (layout == device) command streams.
-#[allow(dead_code)]
 pub fn build_coverage(
     commands: &[PaintCommand],
     width: u32,

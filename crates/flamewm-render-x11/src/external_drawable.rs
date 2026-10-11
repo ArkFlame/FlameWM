@@ -650,12 +650,10 @@ impl ExternalDrawableTarget {
 
 /// Safe painter over an X11App drawable. Exposes text measure/draw via
 /// Xft, RGBA blit via ARGB32/XRender, shape apply, and skin color fill.
-#[allow(dead_code)]
 pub struct NativeDrawableRenderer<'a> {
     app: &'a mut super::app::X11App,
 }
 
-#[allow(dead_code)]
 impl<'a> NativeDrawableRenderer<'a> {
     #[allow(dead_code)]
     pub(crate) fn new(app: &'a mut super::app::X11App) -> Self {
@@ -889,7 +887,7 @@ fn alloc_pixel(display: *mut Display, colormap: Colormap, color: Color) -> Resul
     Ok(xcolor.pixel as u64)
 }
 
-fn match_argb32_visual(display: *mut Display, screen: i32) -> Option<*mut Visual> {
+pub(crate) fn match_argb32_visual(display: *mut Display, screen: i32) -> Option<*mut Visual> {
     let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
     let matched = unsafe { XMatchVisualInfo(display, screen, 32, TRUE_COLOR_CLASS, &mut vinfo) };
     if matched != 0 && !vinfo.visual.is_null() {

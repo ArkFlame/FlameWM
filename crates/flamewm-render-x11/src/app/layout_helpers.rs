@@ -35,7 +35,6 @@ impl X11App {
     }
 
     /// Intrinsic content size of the document root in device pixels.
-    #[allow(dead_code)]
     pub(crate) fn document_intrinsic_size(&self, document: &RuntimeDocument) -> Option<(f32, f32)> {
         let scale = document.ui_scale();
         let layout = self.layout.as_ref()?;

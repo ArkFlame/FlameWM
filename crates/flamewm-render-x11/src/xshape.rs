@@ -154,7 +154,6 @@ impl XShapeBridge {
 /// with corner radius `radius` (already clamped to half the min side).
 /// Coverage spans from `native::coverage` reuse this rasterization so the
 /// Shape bounding mask and the painted pixels agree.
-#[allow(dead_code)]
 pub(crate) fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32, u32)> {
     if width == 0 || height == 0 {
         return Vec::new();

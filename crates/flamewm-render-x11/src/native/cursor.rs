@@ -34,18 +34,10 @@ pub struct XcursorBackend {
     load: Option<LibraryLoadCursorFn>,
     _library: Option<DynamicLibrary>,
     cache: std::collections::HashMap<CursorKind, Cursor>,
-    #[allow(dead_code)]
     xcursor: bool,
 }
 
 impl XcursorBackend {
-    /// # Safety
-    /// `display` must be a live Xlib display outliving the backend.
-    #[allow(dead_code)]
-    pub unsafe fn new(display: *mut Display) -> Self {
-        unsafe { Self::with_theme(display, None, None) }
-    }
-
     /// # Safety
     /// `display` must be a live Xlib display outliving the backend.
     /// Applies `XcursorSetTheme`/`XcursorSetSize` explicitly when available
@@ -91,7 +83,6 @@ impl XcursorBackend {
         }
     }
 
-    #[allow(dead_code)]
     pub fn uses_xcursor(&self) -> bool {
         self.xcursor
     }
@@ -181,26 +172,15 @@ fn cursor_names(kind: CursorKind) -> &'static [&'static str] {
     }
 }
 
-/// Thin session facade over [`XcursorBackend`]: owns the backend lifetime and
-/// tracks the last successfully defined cursor.
+/// Thin session facade over [`XcursorBackend`]: owns the backend lifetime.
 pub struct NativeCursorSession {
     backend: XcursorBackend,
-    current: Option<CursorKind>,
 }
 
 impl NativeCursorSession {
     #[must_use]
     pub fn wrap(backend: XcursorBackend) -> Self {
-        Self {
-            backend,
-            current: None,
-        }
-    }
-
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn current(&self) -> Option<CursorKind> {
-        self.current
+        Self { backend }
     }
 
     /// Define the cursor for `kind` on `window`.
@@ -208,9 +188,7 @@ impl NativeCursorSession {
     /// # Safety
     /// `window` must be live on this session's display.
     pub unsafe fn define(&mut self, window: Window, kind: CursorKind) -> Option<Cursor> {
-        let cursor = unsafe { self.backend.define(window, kind) }?;
-        self.current = Some(kind);
-        Some(cursor)
+        unsafe { self.backend.define(window, kind) }
     }
 
     pub unsafe fn free_all(&mut self) {

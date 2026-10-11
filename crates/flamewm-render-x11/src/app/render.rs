@@ -1,5 +1,6 @@
 use super::primitives::scale_rect;
 use super::*;
+use crate::external_drawable::match_argb32_visual;
 use crate::native::coverage::{build_coverage, build_coverage_scaled};
 
 /// Fingerprint of retained scroll state for the paint cache key.
@@ -60,29 +61,14 @@ impl X11App {
         unsafe { XSetClipRectangles(self.display, self.gc, 0, 0, &rect, 1, 0) };
     }
 
-    #[allow(dead_code)]
     pub(crate) unsafe fn font_for_size_pub(&self, size: f32) -> Option<Font> {
         unsafe { self.font_for_size(size) }
     }
 
-    #[allow(dead_code)]
     pub(crate) unsafe fn pixel_pub(&mut self, color: Color) -> Result<u64, String> {
         unsafe { self.pixel(color) }
     }
-    #[allow(dead_code)]
-    pub(crate) unsafe fn match_argb32_visual(&mut self) -> Option<*mut Visual> {
-        let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
-        let matched = unsafe {
-            XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo)
-        };
-        if matched != 0 && !vinfo.visual.is_null() {
-            Some(vinfo.visual)
-        } else {
-            None
-        }
-    }
 
-    #[allow(dead_code)]
     pub(crate) unsafe fn upload_argb32_pub(
         &mut self,
         pixmap: Pixmap,
@@ -90,7 +76,7 @@ impl X11App {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let Some(visual) = (unsafe { self.match_argb32_visual() }) else {
+        let Some(visual) = match_argb32_visual(self.display, self.screen) else {
             return Err("no 32-bit TrueColor visual for ARGB32 upload".to_string());
         };
         unsafe { self.upload_argb32_words(pixmap, visual, argb, width, height) }

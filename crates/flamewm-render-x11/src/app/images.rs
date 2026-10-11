@@ -15,11 +15,6 @@ static MASK_LOG_ONCE: Once = Once::new();
 const MAX_IMAGE_CACHE_ENTRIES: usize = 64;
 const MAX_IMAGE_CACHE_BYTES: usize = 16 * 1024 * 1024;
 
-#[allow(dead_code)]
-fn pixmap_bytes(width: u32, height: u32, depth: u32) -> usize {
-    super::native::xresource::pixmap_byte_estimate(width, height, depth)
-}
-
 fn log_degraded_mask_once(asset_id: u16) {
     MASK_LOG_ONCE.call_once(|| {
         eprintln!(
