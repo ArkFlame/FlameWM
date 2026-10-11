@@ -1,7 +1,10 @@
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-use flamewm_ui_x11::{UiColor, UiDocumentAccess};
+use flamewm_api::PanelEdge;
+use flamewm_ui_x11::{SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
 const DEFAULT_ACCENT: u32 = 0xef4048;
+const DEFAULT_ANIMATION_SPEED: i64 = 100;
+const DEFAULT_START_ANIMATION: &str = "slide-up";
 const DEFAULT_TASKBAR_COLOR: u32 = 0x191b1d;
 const DEFAULT_TASKBAR_OPACITY: u8 = 99;
 const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
@@ -80,6 +83,27 @@ pub(crate) fn project(
     Ok(())
 }
 
+/// Start slide for the panel edge hosting Start. `None` keeps the immediate show.
+pub(crate) fn start_slide(snapshot: &SettingsSnapshot, edge: PanelEdge) -> Option<SlideConfig> {
+    if !bool_setting(snapshot, "animationsEnabled", true)
+        || !bool_setting(snapshot, "startAnimationEnabled", true)
+        || text_setting(snapshot, "startAnimation", DEFAULT_START_ANIMATION) != "slide-up"
+    {
+        return None;
+    }
+    let speed = integer_setting(snapshot, "animationSpeed", DEFAULT_ANIMATION_SPEED).clamp(25, 200);
+    let edge = match edge {
+        PanelEdge::Bottom => SlideEdge::Bottom,
+        PanelEdge::Top => SlideEdge::Top,
+        PanelEdge::Left => SlideEdge::Left,
+        PanelEdge::Right => SlideEdge::Right,
+    };
+    Some(SlideConfig {
+        edge,
+        speed: speed as u16,
+    })
+}
+
 /// Accent carries `accentOpacity` as alpha for every accent consumer.
 fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
     let accent = color_setting(snapshot, "accent", DEFAULT_ACCENT);
@@ -106,6 +130,15 @@ fn opacity_alpha(percent: u8) -> u8 {
 fn font_size_px(snapshot: &SettingsSnapshot) -> f32 {
     let font_size_offset = integer_setting(snapshot, "fontSizeOffset", 0) as f32;
     (DEFAULT_FONT_SIZE + font_size_offset).max(6.0)
+}
+
+/// Flame-owned icon theme (`iconTheme`); unset resolves to the product default.
+pub fn icon_theme_name(snapshot: Option<&SettingsSnapshot>) -> String {
+    let default = flamewm_platform::settings::ProductSettings::default().icon_theme;
+    snapshot.map_or_else(
+        || default.clone(),
+        |snapshot| text_setting(snapshot, "iconTheme", &default),
+    )
 }
 
 fn text_setting(snapshot: &SettingsSnapshot, key: &str, default: &str) -> String {
@@ -344,5 +377,62 @@ mod tests {
         );
         let missing = color_setting(&SettingsSnapshot::new(1), "taskbarColor", DEFAULT_TASKBAR_COLOR);
         assert_eq!(missing.r, 0x19);
+    }
+
+    fn slide_snapshot(pairs: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in pairs {
+            snapshot.values.insert((*key).to_owned(), value.clone());
+        }
+        snapshot
+    }
+
+    #[test]
+    fn start_slide_maps_each_panel_edge() {
+        let snapshot = SettingsSnapshot::new(1);
+        let edge_of = |edge| start_slide(&snapshot, edge).map(|slide| slide.edge);
+        assert_eq!(edge_of(PanelEdge::Bottom), Some(SlideEdge::Bottom));
+        assert_eq!(edge_of(PanelEdge::Top), Some(SlideEdge::Top));
+        assert_eq!(edge_of(PanelEdge::Left), Some(SlideEdge::Left));
+        assert_eq!(edge_of(PanelEdge::Right), Some(SlideEdge::Right));
+    }
+
+    #[test]
+    fn start_slide_missing_keys_default_enabled_at_base_speed() {
+        let slide = start_slide(&SettingsSnapshot::new(1), PanelEdge::Bottom).expect("slide");
+        assert_eq!(slide.speed, 100);
+    }
+
+    #[test]
+    fn start_slide_disabled_by_each_flag_or_other_animation() {
+        let off = SettingValue::Boolean(false);
+        let cases = [
+            slide_snapshot(&[("animationsEnabled", off.clone())]),
+            slide_snapshot(&[("startAnimationEnabled", off)]),
+            slide_snapshot(&[("startAnimation", SettingValue::Text("fade".to_owned()))]),
+        ];
+        for snapshot in &cases {
+            assert_eq!(start_slide(snapshot, PanelEdge::Bottom), None);
+        }
+    }
+
+    #[test]
+    fn start_slide_clamps_speed_to_supported_range() {
+        let speed = |value| {
+            let snapshot = slide_snapshot(&[("animationSpeed", SettingValue::Integer(value))]);
+            start_slide(&snapshot, PanelEdge::Top).expect("slide").speed
+        };
+        assert_eq!(speed(10), 25);
+        assert_eq!(speed(25), 25);
+        assert_eq!(speed(150), 150);
+        assert_eq!(speed(999), 200);
+    }
+
+    #[test]
+    fn icon_theme_name_prefers_snapshot_then_product_default() {
+        let set = snapshot_with("iconTheme", "ThemeX");
+        assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
+        assert_eq!(icon_theme_name(None), "McMojave-circle");
+        assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "McMojave-circle");
     }
 }

@@ -1,5 +1,6 @@
 //! X11 desktop ports backed by the live X server and EWMH/RandR.
 
+mod animation;
 mod atoms;
 mod chrome;
 mod classifier;
@@ -13,7 +14,10 @@ mod size_hints;
 pub(crate) mod snap_preview;
 mod wm;
 
-pub use runtime::{SettingsObserver, SettingsWake, run, run_with_settings_observer};
+pub use flamewm_render_x11::apply_cursor_theme;
+pub use runtime::{
+    SettingsObserver, SettingsWake, persisted_cursor_theme, run, run_with_settings_observer,
+};
 pub use wm::WmConfig;
 
 use std::cell::{Cell, RefCell};

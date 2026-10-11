@@ -62,8 +62,16 @@ pub struct IconResult {
     pub raster: Option<Rgb8Raster>,
 }
 
+/// Work items for the loader worker. Theme changes ride the same bounded
+/// queue so they apply in order with the requests that follow them.
+#[derive(Debug, Clone)]
+pub enum WorkerMsg {
+    Icon(IconRequest),
+    Theme(String),
+}
+
 pub struct IconLoader {
-    req_tx: SyncSender<IconRequest>,
+    req_tx: SyncSender<WorkerMsg>,
     res_rx: Receiver<IconResult>,
     wake_reader: UnixStream,
     generation: u64,
@@ -78,6 +86,10 @@ pub struct IconLoader {
     /// Visible requests refused by a full worker queue; their keys stay
     /// pending and are re-issued by `flush_retries` on the next drain.
     retry: Vec<IconRequest>,
+    /// Current Flame `iconTheme` preference; `set_theme` no-ops when unchanged.
+    theme: String,
+    /// Theme change refused by a full queue; re-sent by `flush_retries`.
+    theme_outbox: Option<String>,
 }
 
 impl IconLoader {
@@ -86,8 +98,9 @@ impl IconLoader {
         self.generation
     }
 
-    pub fn spawn(packaged_root: std::path::PathBuf) -> Self {
-        let (req_tx, req_rx) = sync_channel::<IconRequest>(16);
+    pub fn spawn(packaged_root: std::path::PathBuf, theme: String) -> Self {
+        let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);
+        let initial_theme = theme.clone();
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
         let (wake_reader, mut wake_writer) = UnixStream::pair().expect("icon loader wake pair");
         wake_reader
@@ -96,9 +109,21 @@ impl IconLoader {
         std::thread::Builder::new()
             .name("shell-icon-loader".to_owned())
             .spawn(move || {
-                let mut resolver = IconResolver::from_environment(packaged_root, 0);
+                let mut resolver = IconResolver::from_environment_with_theme(
+                    packaged_root,
+                    0,
+                    Some(&initial_theme),
+                );
                 let rebuilder = ThemeRebuilder::new();
-                while let Ok(req) = req_rx.recv() {
+                while let Ok(msg) = req_rx.recv() {
+                    let req = match msg {
+                        WorkerMsg::Icon(req) => req,
+                        // Off the UI thread: the index scan runs here.
+                        WorkerMsg::Theme(name) => {
+                            resolver.set_preferred_theme(Some(&name));
+                            continue;
+                        }
+                    };
                     // Throttled (5s) mtime check runs off this thread; a finished
                     // rebuilt index is applied here and advances the resolver's
                     // theme generation when themes change.
@@ -153,6 +178,37 @@ impl IconLoader {
             coalesced: 0,
             dropped_low: 0,
             retry: Vec::new(),
+            theme,
+            theme_outbox: None,
+        }
+    }
+
+    /// Live `iconTheme` change. Starts a new icon generation (old results
+    /// are dropped as stale, in-flight keys are forgotten so Start/taskbar
+    /// re-request under the new theme). The worker rebuilds its index in
+    /// queue order. No-op when the preference is unchanged.
+    /// Returns `true` when the preference changed.
+    pub fn set_theme(&mut self, theme: &str) -> bool {
+        if theme == self.theme {
+            return false;
+        }
+        self.theme = theme.to_owned();
+        self.bump_generation();
+        self.pending.clear();
+        self.retry.clear();
+        self.theme_outbox = Some(theme.to_owned());
+        self.flush_theme();
+        true
+    }
+
+    fn flush_theme(&mut self) {
+        let Some(theme) = self.theme_outbox.take() else {
+            return;
+        };
+        match self.req_tx.try_send(WorkerMsg::Theme(theme)) {
+            Ok(()) => {}
+            Err(TrySendError::Full(WorkerMsg::Theme(theme))) => self.theme_outbox = Some(theme),
+            Err(_) => {}
         }
     }
 
@@ -183,9 +239,9 @@ impl IconLoader {
     }
 
     fn submit(&mut self, req: IconRequest) {
-        match self.req_tx.try_send(req) {
+        match self.req_tx.try_send(WorkerMsg::Icon(req)) {
             Ok(()) => {}
-            Err(TrySendError::Full(returned)) => {
+            Err(TrySendError::Full(WorkerMsg::Icon(returned))) => {
                 self.queue_full_drops += 1;
                 if self.retry.len() < RETRY_CAP {
                     // Key stays pending so duplicate requests coalesce.
@@ -194,28 +250,31 @@ impl IconLoader {
                     self.pending.remove(&pending_key(&returned));
                 }
             }
-            Err(TrySendError::Disconnected(returned)) => {
+            Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
                 // Worker is gone: clear the key so it is never stranded.
                 self.queue_full_drops += 1;
                 self.pending.remove(&pending_key(&returned));
             }
+            Err(_) => {}
         }
     }
 
     /// Re-issues refused requests. Stale-generation entries are discarded
     /// and their keys released.
     fn flush_retries(&mut self) {
+        self.flush_theme();
         for req in std::mem::take(&mut self.retry) {
             if req.generation != self.generation {
                 self.pending.remove(&pending_key(&req));
                 continue;
             }
-            match self.req_tx.try_send(req) {
+            match self.req_tx.try_send(WorkerMsg::Icon(req)) {
                 Ok(()) => {}
-                Err(TrySendError::Full(returned)) => self.retry.push(returned),
-                Err(TrySendError::Disconnected(returned)) => {
+                Err(TrySendError::Full(WorkerMsg::Icon(returned))) => self.retry.push(returned),
+                Err(TrySendError::Disconnected(WorkerMsg::Icon(returned))) => {
                     self.pending.remove(&pending_key(&returned));
                 }
+                Err(_) => {}
             }
         }
     }
@@ -340,29 +399,29 @@ mod tests {
 
     #[test]
     fn request_channel_is_nonblocking_when_full() {
-        let (tx, _rx) = sync_channel::<IconRequest>(1);
-        tx.try_send(IconRequest {
+        let (tx, _rx) = sync_channel::<WorkerMsg>(1);
+        tx.try_send(WorkerMsg::Icon(IconRequest {
             target: IconTarget::StartSlot(0),
             generation: 1,
             name: "a".to_owned(),
             width: 20,
             height: 20,
-        })
+        }))
         .expect("first send fits");
         assert!(tx
-            .try_send(IconRequest {
+            .try_send(WorkerMsg::Icon(IconRequest {
                 target: IconTarget::StartSlot(1),
                 generation: 1,
                 name: "b".to_owned(),
                 width: 20,
                 height: 20,
-            })
+            }))
             .is_err());
     }
 
     #[test]
     fn stale_generations_are_dropped() {
-        let (req_tx, req_rx) = sync_channel::<IconRequest>(16);
+        let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
         let (wake_reader, _wake_writer) = UnixStream::pair().expect("wake pair");
         let mut loader = IconLoader {
@@ -379,6 +438,8 @@ mod tests {
             coalesced: 0,
             dropped_low: 0,
             retry: Vec::new(),
+            theme: String::new(),
+            theme_outbox: None,
         };
         let _ = req_rx;
         res_tx
@@ -409,7 +470,7 @@ mod tests {
 
     #[test]
     fn queue_full_drop_counts_without_blocking() {
-        let (tx, rx) = sync_channel::<IconRequest>(1);
+        let (tx, rx) = sync_channel::<WorkerMsg>(1);
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
         let (wake_reader, _w) = UnixStream::pair().expect("wake pair");
         let _ = rx;
@@ -428,14 +489,16 @@ mod tests {
             coalesced: 0,
             dropped_low: 0,
             retry: Vec::new(),
+            theme: String::new(),
+            theme_outbox: None,
         };
-        tx.try_send(IconRequest {
+        tx.try_send(WorkerMsg::Icon(IconRequest {
             target: IconTarget::StartSlot(0),
             generation: 1,
             name: "fill".to_owned(),
             width: 20,
             height: 20,
-        })
+        }))
         .expect("fill");
         loader.request(IconTarget::StartSlot(1), "y", 20, 20);
         assert_eq!(loader.queue_full_drops, 1);
@@ -468,7 +531,7 @@ mod tests {
     }
 
     fn loader_with_channels(
-        req_tx: SyncSender<IconRequest>,
+        req_tx: SyncSender<WorkerMsg>,
         res_rx: Receiver<IconResult>,
     ) -> IconLoader {
         let (wake_reader, _w) = UnixStream::pair().expect("wake pair");
@@ -486,12 +549,14 @@ mod tests {
             coalesced: 0,
             dropped_low: 0,
             retry: Vec::new(),
+            theme: String::new(),
+            theme_outbox: None,
         }
     }
 
     #[test]
     fn undeliverable_request_clears_its_pending_key() {
-        let (tx, rx) = sync_channel::<IconRequest>(4);
+        let (tx, rx) = sync_channel::<WorkerMsg>(4);
         drop(rx);
         let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
         let mut loader = loader_with_channels(tx, res_rx);
@@ -502,7 +567,7 @@ mod tests {
 
     #[test]
     fn drained_result_clears_pending_key() {
-        let (tx, _rx) = sync_channel::<IconRequest>(4);
+        let (tx, _rx) = sync_channel::<WorkerMsg>(4);
         let (res_tx, res_rx) = sync_channel::<IconResult>(4);
         let mut loader = loader_with_channels(tx, res_rx);
         loader.request(IconTarget::TaskSlot(0), "firefox", 24, 24);
@@ -523,16 +588,16 @@ mod tests {
 
     #[test]
     fn refused_visible_request_is_retried_after_capacity_frees() {
-        let (tx, rx) = sync_channel::<IconRequest>(1);
+        let (tx, rx) = sync_channel::<WorkerMsg>(1);
         let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
         let mut loader = loader_with_channels(tx.clone(), res_rx);
-        tx.try_send(IconRequest {
+        tx.try_send(WorkerMsg::Icon(IconRequest {
             target: IconTarget::StartSlot(0),
             generation: 1,
             name: "fill".to_owned(),
             width: 20,
             height: 20,
-        })
+        }))
         .expect("fill");
         loader.request(IconTarget::StartSlot(1), "retry-me", 20, 20);
         assert_eq!(loader.retry.len(), 1);
@@ -540,22 +605,24 @@ mod tests {
         assert!(rx.try_recv().is_ok());
         let _ = loader.drain_ready();
         assert!(loader.retry.is_empty());
-        let reissued = rx.try_recv().expect("retried request queued");
+        let WorkerMsg::Icon(reissued) = rx.try_recv().expect("retried request queued") else {
+            panic!("expected icon request");
+        };
         assert_eq!(reissued.name, "retry-me");
     }
 
     #[test]
     fn stale_retry_is_discarded_and_key_released() {
-        let (tx, rx) = sync_channel::<IconRequest>(1);
+        let (tx, rx) = sync_channel::<WorkerMsg>(1);
         let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
         let mut loader = loader_with_channels(tx.clone(), res_rx);
-        tx.try_send(IconRequest {
+        tx.try_send(WorkerMsg::Icon(IconRequest {
             target: IconTarget::StartSlot(0),
             generation: 1,
             name: "fill".to_owned(),
             width: 20,
             height: 20,
-        })
+        }))
         .expect("fill");
         loader.request(IconTarget::StartSlot(1), "old", 20, 20);
         loader.bump_generation();
@@ -576,5 +643,30 @@ mod tests {
             origin: flamewm_integrations_linux::icons::IconOrigin::PackagedBreeze,
             fallback_reason: None,
         }));
+    }
+
+    #[test]
+    fn set_theme_is_noop_when_unchanged_and_sends_one_change_per_switch() {
+        let (tx, rx) = sync_channel::<WorkerMsg>(4);
+        let (_res_tx, res_rx) = sync_channel::<IconResult>(4);
+        let mut loader = loader_with_channels(tx, res_rx);
+        loader.theme = "ThemeA".to_owned();
+        let generation = loader.generation();
+        assert!(!loader.set_theme("ThemeA"));
+        assert!(rx.try_recv().is_err(), "unchanged theme must not reach worker");
+        assert_eq!(loader.generation(), generation);
+
+        loader.request(IconTarget::StartSlot(0), "old", 20, 20);
+        assert!(loader.set_theme("ThemeB"));
+        assert_eq!(loader.generation(), generation.wrapping_add(1).max(1));
+        assert!(loader.pending.is_empty(), "in-flight keys are forgotten");
+        let WorkerMsg::Icon(_) = rx.try_recv().expect("old request queued first") else {
+            panic!("expected icon request first");
+        };
+        let WorkerMsg::Theme(name) = rx.try_recv().expect("theme change queued") else {
+            panic!("expected theme message");
+        };
+        assert_eq!(name, "ThemeB");
+        assert!(rx.try_recv().is_err(), "exactly one theme message per switch");
     }
 }

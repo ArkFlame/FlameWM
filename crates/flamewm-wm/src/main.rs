@@ -5,8 +5,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
-use flamewm_session_core::{build_launch_plan_with_appearance, default_paths_from_home};
-use flamewm_wm::{SettingsObserver, SettingsWake, WmConfig, run, run_with_settings_observer};
+use flamewm_session_core::{
+    build_launch_plan_with_appearance, default_paths_from_home, resolve_cursor_theme,
+};
+use flamewm_wm::{
+    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_cursor_theme, run,
+    run_with_settings_observer,
+};
 use flamewm_xsettings::{XSettingsInput, X11XSettingsManager, claim_x11_manager, published_settings};
 
 fn main() {
@@ -47,6 +52,9 @@ fn apply_session_environment() {
     // session-core contributes cursor, identity, and appearance-marker
     // state only. No generic toolkit default injection: explicit inherited
     // GTK_THEME/QT_STYLE_OVERRIDE pass through untouched, never synthesized.
+    let search_path = existing.get("XCURSOR_PATH").cloned().unwrap_or_default();
+    let persisted = persisted_cursor_theme().unwrap_or_default();
+    let cursor_theme = resolve_cursor_theme(&persisted, &search_path);
     let plan = build_launch_plan_with_appearance(&paths, &[], &existing, None, appearance);
     if let Some(process) = plan.processes.first() {
         for (key, value) in &process.environment {
@@ -63,6 +71,7 @@ fn apply_session_environment() {
             pending.insert("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned());
         }
     }
+    pending.insert("XCURSOR_THEME".to_owned(), cursor_theme);
     flamewm_session_core::apply_current_process_env(&pending);
 }
 
@@ -106,7 +115,22 @@ fn startup_settings_snapshot() -> SettingsSnapshot {
 /// updates follow the same rule.
 #[must_use]
 pub fn xsettings_input_from_snapshot(snapshot: &SettingsSnapshot) -> XSettingsInput {
+    let session_theme = env::var("XCURSOR_THEME").unwrap_or_default();
+    let search_path = env::var("XCURSOR_PATH").unwrap_or_default();
+    xsettings_input_with_cursor_env(snapshot, &session_theme, &search_path)
+}
+
+/// Pure core of [`xsettings_input_from_snapshot`]: the published cursor theme is
+/// the session resolution applied to the `cursorTheme` setting, so XSETTINGS and
+/// the WM session env cannot disagree. An unset setting uses the session theme.
+fn xsettings_input_with_cursor_env(
+    snapshot: &SettingsSnapshot,
+    session_theme: &str,
+    search_path: &str,
+) -> XSettingsInput {
     let mut input = XSettingsInput::default();
+    let requested = text_value(snapshot, "cursorTheme").unwrap_or(session_theme);
+    input.cursor_theme = resolve_cursor_theme(requested, search_path);
     if let Some(appearance) = text_value(snapshot, "appearance").and_then(AppearanceMode::parse) {
         input.appearance = appearance;
     }
@@ -164,6 +188,9 @@ fn xsettings_owner(manager: X11XSettingsManager) -> (SettingsObserver, Option<Se
     let mut reported = false;
     let observer: SettingsObserver = Box::new(move |snapshot: &SettingsSnapshot| {
         let input = xsettings_input_from_snapshot(snapshot);
+        for error in apply_cursor_theme(&input.cursor_theme) {
+            eprintln!("flamewm: cursor theme reload failed: {error}");
+        }
         let outcome = {
             let mut manager = observer_manager.borrow_mut();
             manager
@@ -209,7 +236,7 @@ mod tests {
     #[test]
     fn empty_snapshot_maps_to_default_input() {
         assert_eq!(
-            xsettings_input_from_snapshot(&SettingsSnapshot::new(0)),
+            xsettings_input_with_cursor_env(&SettingsSnapshot::new(0), "", ""),
             XSettingsInput::default()
         );
     }
@@ -284,5 +311,31 @@ mod tests {
             xsettings_input_from_snapshot(&wrong_type).font_bold,
             XSettingsInput::default().font_bold
         );
+    }
+
+    #[test]
+    fn cursor_theme_setting_resolves_for_xsettings_like_session_env() {
+        let root = env::temp_dir().join(format!("flamewm-wm-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Custom").join("cursors")).expect("theme");
+        let search = root.display().to_string();
+        let custom = snapshot_with(&[("cursorTheme", text("Custom"))]);
+        assert_eq!(
+            xsettings_input_with_cursor_env(&custom, "", &search).cursor_theme,
+            "Custom"
+        );
+        // Missing explicit theme falls back to the bundled default, never a bare "Breeze".
+        let missing = snapshot_with(&[("cursorTheme", text("Missing"))]);
+        assert_eq!(
+            xsettings_input_with_cursor_env(&missing, "", &search).cursor_theme,
+            flamewm_session_core::CURSOR_THEME_ID
+        );
+        // Unset setting follows the session-resolved XCURSOR_THEME.
+        let unset = SettingsSnapshot::new(0);
+        assert_eq!(
+            xsettings_input_with_cursor_env(&unset, "Custom", &search).cursor_theme,
+            "Custom"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

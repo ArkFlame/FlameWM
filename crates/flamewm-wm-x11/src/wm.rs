@@ -4,6 +4,36 @@ use std::env;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+use crate::animation::{self, Animator, Begin, Effect, Settings, Tick};
+use flamewm_render_x11::{CapturedImage, WarpOverlay, WarpRect};
+
+/// Frame cadence while a transition is in flight (60 Hz).
+const TRANSITION_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// A live transition window; `mirrored` plays the warp from target back to source (restore).
+struct TransitionOverlay {
+    overlay: WarpOverlay,
+    mirrored: bool,
+}
+
+fn anim_rect(rect: Rect) -> animation::Rect {
+    animation::Rect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width as i32,
+        height: rect.height as i32,
+    }
+}
+
+fn warp_rect(rect: animation::Rect) -> WarpRect {
+    WarpRect {
+        x: f64::from(rect.x),
+        y: f64::from(rect.y),
+        width: f64::from(rect.width),
+        height: f64::from(rect.height),
+    }
+}
+
 use flamewm_api::shortcuts::{
     ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
     ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
@@ -841,7 +871,9 @@ where
         // Drain once per reactor turn: semantic owners marked facets above;
         // the hook flushes them to snapshots/signals exactly once.
         let changes = wm.take_changes();
+        wm.pump_transitions(std::time::Instant::now())?;
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
+        let wait = wm.transition_wait(wait);
         drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         wm.commit_super_tap();
         emit_resize_summary();
@@ -976,7 +1008,13 @@ pub(crate) struct Wm<'a, C: Connection> {
     frame_to_client: HashMap<Window, Window>,
     registry: FrameRegistry,
     sessions: HashMap<Window, ControllerState>,
-    renderer: Option<flamewm_render_x11::ExternalDecorationRenderer>,
+    // Declared before `renderer`: overlays must drop while the renderer's display is open.
+    /// Timing owner for minimize/restore/maximize flights.
+    animator: Animator,
+    overlays: HashMap<Window, TransitionOverlay>,
+    /// Capture kept from a completed minimize so the matching restore can reuse it.
+    minimized_captures: HashMap<Window, CapturedImage>,
+    renderer: Option<Rc<RefCell<flamewm_render_x11::ExternalDecorationRenderer>>>,
     current_workspace: usize,
     workspace_count: usize,
     active: Option<Window>,
@@ -1062,6 +1100,13 @@ impl<'a, C: Connection> Wm<'a, C> {
         )?;
 
         let workspace_count = config.workspaces.max(1);
+        let renderer = flamewm_render_x11::ExternalDecorationRenderer::open("IBM Plex Sans")
+            .ok()
+            .map(flamewm_render_x11::ExternalDecorationRenderer::into_cursor_shared);
+        let animator = Animator::new(
+            renderer.as_ref().is_some_and(|r| r.borrow().is_available()),
+            Settings::DEFAULT,
+        );
         Ok(Self {
             conn,
             screen_num,
@@ -1078,7 +1123,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             frame_to_client: HashMap::new(),
             registry: FrameRegistry::new(),
             sessions: HashMap::new(),
-            renderer: flamewm_render_x11::ExternalDecorationRenderer::open("IBM Plex Sans").ok(),
+            renderer,
+            animator,
+            overlays: HashMap::new(),
+            minimized_captures: HashMap::new(),
             current_workspace: 0,
             workspace_count,
             active: None,
@@ -1332,6 +1380,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     ) -> Result<(), ReplyError> {
         let next = areas.into_iter().map(OutputWorkArea::from_host).collect::<Vec<_>>();
         if self.output_work_areas != next {
+            self.finish_all_transitions()?;
             self.output_work_areas = next;
             self.reconcile_work_area()?;
         }
@@ -1703,8 +1752,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                 id
             }
         };
-        if let Some(renderer) = self.renderer.as_mut() {
-            let _ = renderer.define_cursor(u64::from(capture), cursor);
+        if let Some(renderer) = self.renderer.as_ref() {
+            let _ = renderer.borrow_mut().define_cursor(u64::from(capture), cursor);
         }
         let _ = self.conn.map_window(capture);
         let result = self.conn.configure_window(
@@ -1893,7 +1942,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.paint_chrome(client)?;
         }
         if let Some(renderer) = self.renderer.as_ref() {
-            renderer.flush();
+            renderer.borrow().flush();
         }
         Ok(())
     }
@@ -1927,8 +1976,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         };
         let runtime = self.chrome_runtimes.entry(client).or_default();
         runtime.scene_for(&identity, chrome_state, icon);
-        if let Some(renderer) = self.renderer.as_mut() {
-            let _ = runtime.paint_cached(renderer, u64::from(frame));
+        if let Some(renderer) = self.renderer.as_ref() {
+            let mut renderer = renderer.borrow_mut();
+            let _ = runtime.paint_cached(&mut renderer, u64::from(frame));
         }
         Ok(())
     }
@@ -1988,8 +2038,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             let region = self.registry.lookup_by_xid(xid).map(|target| target.region);
             if let Some(region) = region {
                 let kind = cursor_for_region(region);
-                if let Some(renderer) = self.renderer.as_mut() {
-                    let _ = renderer.define_cursor(u64::from(xid), kind);
+                if let Some(renderer) = self.renderer.as_ref() {
+                    let _ = renderer.borrow_mut().define_cursor(u64::from(xid), kind);
                 }
             }
         }
@@ -2542,7 +2592,7 @@ impl<'a, C: Connection> Wm<'a, C> {
 
         // Retarget + paint chrome + shape + cursors.
         self.paint_chrome(window)?;
-        let _ = self.renderer.as_ref().map(|renderer| renderer.flush());
+        let _ = self.renderer.as_ref().map(|renderer| renderer.borrow().flush());
         let floating = self
             .clients
             .get(&window)
@@ -2564,6 +2614,10 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     fn unmanage(&mut self, window: Window, restore_to_root: bool) -> Result<(), ReplyError> {
         self.snap_preview.hide();
+        // The client is leaving: drop its flight and overlay without applying an end state.
+        self.animator.cancel(window);
+        self.overlays.remove(&window);
+        self.minimized_captures.remove(&window);
         // Abort any in-progress interaction through the reducer so session
         // teardown, ungrab, and snap-preview hide stay in one owner. Runs
         // before `clients.remove` because `controller_for` reads it.
@@ -3729,6 +3783,21 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn minimize(&mut self, client: Window) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get(&client) else {
+            return Ok(());
+        };
+        if state.minimized && self.animator.running(client).is_none() {
+            return Ok(());
+        }
+        if self.begin_transition(client, Effect::Minimize)? {
+            return Ok(());
+        }
+        self.commit_minimize(client, false)
+    }
+
+    /// Applies the minimize end state. `hidden` means the frame was already unmapped
+    /// when the transition began, so no second unmap (and no second ignore count) occurs.
+    fn commit_minimize(&mut self, client: Window, hidden: bool) -> Result<(), ReplyError> {
         let frame = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());
@@ -3737,10 +3806,14 @@ impl<'a, C: Connection> Wm<'a, C> {
                 return Ok(());
             }
             state.minimized = true;
-            state.ignore_unmap = state.ignore_unmap.saturating_add(1);
+            if !hidden {
+                state.ignore_unmap = state.ignore_unmap.saturating_add(1);
+            }
             state.frame
         };
-        self.conn.unmap_window(frame)?;
+        if !hidden {
+            self.conn.unmap_window(frame)?;
+        }
         self.set_wm_state(client, WM_STATE_ICONIC)?;
         self.mark_windows();
         self.publish_window_state(client)?;
@@ -3752,13 +3825,23 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn restore_minimized(&mut self, client: Window) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get(&client) else {
+            return Ok(());
+        };
+        if !state.minimized && self.animator.running(client).is_none() {
+            return Ok(());
+        }
+        if self.begin_transition(client, Effect::Restore)? {
+            return Ok(());
+        }
+        self.commit_restore(client)
+    }
+
+    fn commit_restore(&mut self, client: Window) -> Result<(), ReplyError> {
         let frame = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());
             };
-            if !state.minimized {
-                return Ok(());
-            }
             state.minimized = false;
             state.ignore_unmap = state.ignore_unmap.saturating_add(1);
             state.frame
@@ -3776,7 +3859,192 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    /// Starts `effect` with an overlay unless it is disabled or unavailable. Returns `true`
+    /// when a flight owns the end state (the caller must not apply it now). A rapid repeat
+    /// or an opposite minimize/restore is absorbed; any other running flight finishes first.
+    fn begin_transition(&mut self, client: Window, effect: Effect) -> Result<bool, ReplyError> {
+        let now = std::time::Instant::now();
+        if let Some(current) = self.animator.running(client) {
+            if current == effect {
+                return Ok(true);
+            }
+            if matches!(
+                (current, effect),
+                (Effect::Minimize, Effect::Restore) | (Effect::Restore, Effect::Minimize)
+            ) {
+                self.animator.start(client, effect, now);
+                return Ok(true);
+            }
+            if let Some(running) = self.animator.cancel(client) {
+                self.finish_transition(client, running)?;
+            }
+        }
+        if self.animator.start(client, effect, now) != Begin::Started {
+            return Ok(false);
+        }
+        if self.open_overlay(client, effect).is_err() {
+            self.animator.cancel(client);
+            return Ok(false);
+        }
+        if effect == Effect::Minimize {
+            // The overlay now shows the window; hide the real frame (counted like minimize does).
+            if let Some(state) = self.clients.get_mut(&client) {
+                state.ignore_unmap = state.ignore_unmap.saturating_add(1);
+                let frame = state.frame;
+                self.conn.unmap_window(frame)?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// Captures the frame (or reuses the minimize capture for restore) and opens its overlay.
+    fn open_overlay(&mut self, client: Window, effect: Effect) -> Result<(), String> {
+        let (frame, outer) = self
+            .clients
+            .get(&client)
+            .map(|state| (state.frame, state.outer))
+            .ok_or("transition: unknown client")?;
+        let renderer = self.renderer.clone().ok_or("transition: no renderer")?;
+        let (capture, mirrored, target) = match effect {
+            Effect::Restore => {
+                let capture = self
+                    .minimized_captures
+                    .remove(&client)
+                    .ok_or("transition: no minimize capture")?;
+                (capture, true, self.minimize_target_for(client, outer))
+            }
+            Effect::Maximize => {
+                let capture = renderer.borrow().capture_window(u64::from(frame))?;
+                (capture, false, anim_rect(self.work_area_for_rect(outer)))
+            }
+            _ => {
+                let capture = renderer.borrow().capture_window(u64::from(frame))?;
+                (capture, false, self.minimize_target_for(client, outer))
+            }
+        };
+        let overlay = renderer.borrow().open_warp_overlay(
+            capture,
+            warp_rect(anim_rect(outer)),
+            warp_rect(target),
+        )?;
+        self.overlays.insert(client, TransitionOverlay { overlay, mirrored });
+        Ok(())
+    }
+
+    fn minimize_target_for(&self, client: Window, outer: Rect) -> animation::Rect {
+        let output = self
+            .output_for_rect(outer)
+            .map_or(self.screen_rect, |output| output.geometry);
+        animation::minimize_target(self.read_icon_geometry(client), anim_rect(output))
+    }
+
+    /// `_NET_WM_ICON_GEOMETRY` as set by the client's taskbar entry, when present.
+    fn read_icon_geometry(&self, client: Window) -> Option<animation::Rect> {
+        let reply = self
+            .conn
+            .get_property(false, client, self.atoms.net_wm_icon_geometry, AtomEnum::CARDINAL, 0, 4)
+            .ok()?
+            .reply()
+            .ok()?;
+        let values: Vec<u32> = reply.value32()?.collect();
+        if values.len() != 4 {
+            return None;
+        }
+        Some(animation::Rect {
+            x: values[0] as i32,
+            y: values[1] as i32,
+            width: values[2] as i32,
+            height: values[3] as i32,
+        })
+    }
+
+    /// Advances flights once per loop turn: paints frames and applies each completed end state.
+    pub(crate) fn pump_transitions(&mut self, now: std::time::Instant) -> Result<(), ReplyError> {
+        for tick in self.animator.tick(now) {
+            match tick {
+                Tick::Frame { client, progress } => {
+                    let failed = self.overlays.get_mut(&client).is_some_and(|flight| {
+                        flight
+                            .overlay
+                            .paint(animation::overlay_t(progress, flight.mirrored))
+                            .is_err()
+                    });
+                    if failed {
+                        if let Some(effect) = self.animator.cancel(client) {
+                            self.finish_transition(client, effect)?;
+                        }
+                    }
+                }
+                Tick::Complete { client, effect } => self.finish_transition(client, effect)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases the overlay and applies `effect`'s end state exactly once.
+    fn finish_transition(&mut self, client: Window, effect: Effect) -> Result<(), ReplyError> {
+        let flight = self.overlays.remove(&client);
+        match effect {
+            Effect::Minimize => {
+                if let Some(flight) = flight {
+                    self.minimized_captures.insert(client, flight.overlay.finish());
+                }
+                self.commit_minimize(client, true)
+            }
+            Effect::Restore => {
+                drop(flight);
+                self.commit_restore(client)
+            }
+            Effect::Maximize => {
+                drop(flight);
+                self.commit_maximize(client)
+            }
+            Effect::Open => {
+                drop(flight);
+                Ok(())
+            }
+        }
+    }
+
+    /// Ends every flight at its final state (output change).
+    fn finish_all_transitions(&mut self) -> Result<(), ReplyError> {
+        for (client, effect) in self.animator.cancel_all() {
+            self.finish_transition(client, effect)?;
+        }
+        Ok(())
+    }
+
+    /// Applies the settings sync point's animation values; disabling ends running flights.
+    pub(crate) fn apply_transition_settings(&mut self, settings: Settings) -> Result<(), ReplyError> {
+        if let Some(line) = self.animator.take_capability_log() {
+            eprintln!("flamewm: {line}");
+        }
+        for (client, effect) in self.animator.apply_settings(settings) {
+            self.finish_transition(client, effect)?;
+        }
+        Ok(())
+    }
+
+    /// Caps the loop's wait at one frame while a flight runs, so frames are painted on time.
+    pub(crate) fn transition_wait(&self, wait: Option<std::time::Duration>) -> Option<std::time::Duration> {
+        if self.animator.is_active() {
+            Some(wait.map_or(TRANSITION_FRAME, |wait| wait.min(TRANSITION_FRAME)))
+        } else {
+            wait
+        }
+    }
+
     fn toggle_maximize(&mut self, client: Window) -> Result<(), ReplyError> {
+        let animate = self.clients.get(&client).is_some_and(|state| {
+            !state.is_maximized() && !state.is_fullscreen() && state.is_floating()
+        });
+        if animate && self.begin_transition(client, Effect::Maximize)? {
+            return Ok(());
+        }
+        self.commit_maximize(client)
+    }
+
+    fn commit_maximize(&mut self, client: Window) -> Result<(), ReplyError> {
         self.reduce_and_execute(client, FrameEvent::ToggleMax)?;
         self.mark_windows();
         self.publish_window_state(client)?;

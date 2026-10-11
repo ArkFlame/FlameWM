@@ -20,7 +20,8 @@ pub use input::{
 pub use popup::PopupState;
 pub use reconcile::{reconcile, update};
 pub use surface_runtime::{
-    SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError,
+    SlideConfig, SlideEdge, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
+    SurfaceRuntime, UiBackendError,
 };
 pub use template::{
     RuntimeImage, UiColor, UiDocument, UiDocumentAccess, UiDocumentView, UiTemplate,

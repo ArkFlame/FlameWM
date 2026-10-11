@@ -6,6 +6,7 @@ use flamewm_render_core::RuntimeDocument;
 use flamewm_render_x11::{
     GeometryTrace, SurfaceConfig as RenderSurfaceConfig, SurfaceController, SurfaceId,
 };
+pub use flamewm_render_x11::{SlideConfig, SlideEdge};
 
 use crate::{UiDocumentView, UiTemplate};
 
@@ -170,6 +171,15 @@ impl SurfaceRuntime {
 
     pub fn hide(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
         self.controller.hide(surface.0).map_err(Into::into)
+    }
+
+    /// Opt-in slide presentation for the next show/hide; `None` keeps the immediate path.
+    pub fn set_slide(
+        &mut self,
+        surface: SurfaceHandle,
+        slide: Option<SlideConfig>,
+    ) -> Result<(), UiBackendError> {
+        self.controller.set_slide(surface.0, slide).map_err(Into::into)
     }
 
     pub fn raise(&self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
@@ -549,6 +559,24 @@ impl SurfaceRuntime {
     ) -> Result<(), UiBackendError> {
         self.controller
             .set_pager_cells(surface.0, cells)
+            .map_err(UiBackendError::Renderer)
+    }
+
+    /// Sets `_NET_WM_ICON_GEOMETRY` on a client window (root-space rect).
+    pub fn set_window_icon_geometry(
+        &mut self,
+        window: u64,
+        rect: [u32; 4],
+    ) -> Result<(), UiBackendError> {
+        self.controller
+            .set_window_icon_geometry(window, rect)
+            .map_err(UiBackendError::Renderer)
+    }
+
+    /// Deletes `_NET_WM_ICON_GEOMETRY` from a client window.
+    pub fn clear_window_icon_geometry(&mut self, window: u64) -> Result<(), UiBackendError> {
+        self.controller
+            .clear_window_icon_geometry(window)
             .map_err(UiBackendError::Renderer)
     }
 

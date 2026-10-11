@@ -718,6 +718,38 @@ pub(crate) fn apply_pager_cells(display: *mut Display, window: Window, cells: &[
     }
 }
 
+/// Writes (`Some`) or deletes (`None`) `_NET_WM_ICON_GEOMETRY` on a client
+/// window. `rect` is root-space `[x, y, width, height]` as 4 CARDINAL values.
+/// A vanished client raises BadWindow, which the process protocol handler
+/// ignores, so this never aborts the shell.
+pub(crate) fn apply_window_icon_geometry(
+    display: *mut Display,
+    window: Window,
+    property: Atom,
+    rect: Option<[u64; 4]>,
+) {
+    if property == 0 {
+        return;
+    }
+    match rect {
+        Some(values) => unsafe {
+            XChangeProperty(
+                display,
+                window,
+                property,
+                XA_CARDINAL,
+                32,
+                PROP_MODE_REPLACE,
+                values.as_ptr() as *const u8,
+                values.len() as c_int,
+            );
+        },
+        None => {
+            unsafe { XDeleteProperty(display, window, property) };
+        }
+    }
+}
+
 /// ICCCM WM_CLASS (instance\0class\0, STRING) and EWMH `_NET_WM_NAME`
 /// (UTF8_STRING). WM_CLASS is written only when an identity is configured.
 fn set_window_identity(

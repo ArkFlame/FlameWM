@@ -164,19 +164,29 @@ pub fn capture_root_rect(
     root: u64,
     rect: (i32, i32, u32, u32),
 ) -> Result<BackdropCapture, String> {
-    use std::os::raw::{c_int, c_ulong};
     let _guard = flamewm_profiler::start("render.overlay.capture");
+    capture_drawable_rect(display, root, rect)
+}
+
+/// XGetImage of any window or pixmap drawable (`rect` is drawable-local),
+/// decoded to straight RGBA8 with the live server masks.
+pub fn capture_drawable_rect(
+    display: *mut Display,
+    drawable: u64,
+    rect: (i32, i32, u32, u32),
+) -> Result<BackdropCapture, String> {
+    use std::os::raw::{c_int, c_ulong};
     let (x, y, width, height) = rect;
     if width == 0 || height == 0 {
         return Err("backdrop capture: empty rect".to_string());
     }
-    if display.is_null() || root == 0 {
+    if display.is_null() || drawable == 0 {
         return Err("backdrop capture: no display/root".to_string());
     }
     let image = unsafe {
         XGetImage(
             display,
-            root as c_ulong,
+            drawable as c_ulong,
             x as c_int,
             y as c_int,
             width,

@@ -1,3 +1,5 @@
+pub mod icon_geometry;
+
 use super::intent::TaskbarIntent;
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;

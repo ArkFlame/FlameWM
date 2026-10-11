@@ -325,6 +325,7 @@ fn run_session(
             return Err(error);
         }
         wm.apply_decoration_tokens(crate::chrome::live_chrome_tokens())?;
+        wm.apply_transition_settings(crate::animation::live_settings())?;
         refresh_control(
             &reactor_for_hook,
             &mut control_registration,
@@ -476,6 +477,17 @@ where
     Ok(())
 }
 
+/// Persisted `cursorTheme` from the settings file at startup, before the session
+/// environment is applied. `None` when the file is missing or unparsable.
+pub fn persisted_cursor_theme() -> Option<String> {
+    let (path, _) = settings_path();
+    let text = std::fs::read_to_string(path).ok()?;
+    let settings = flamewm_platform::settings::ConfigStore::default()
+        .parse_snapshot(&text)
+        .ok()?;
+    Some(settings.cursor_theme)
+}
+
 /// Single settings sync point: applies the WM-owned snapshot effects, then
 /// notifies the optional observer with the same snapshot.
 fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &SettingsSnapshot) {
@@ -488,6 +500,7 @@ fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &Setti
 
 fn sync_window_decoration(snapshot: &SettingsSnapshot) {
     crate::chrome::set_live_chrome_tokens(crate::chrome::chrome_tokens_from_settings(snapshot));
+    crate::animation::set_live_settings(crate::animation::settings_from_snapshot(snapshot));
 }
 
 fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {

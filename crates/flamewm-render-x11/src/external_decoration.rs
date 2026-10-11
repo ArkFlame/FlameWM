@@ -6,10 +6,16 @@
 //! unsafety. When no display is reachable the renderer reports explicit
 //! errors for live paint paths and layout-compatible estimates for measure.
 
+use std::cell::RefCell;
+use std::env;
 use std::ptr;
+use std::rc::{Rc, Weak};
 
 use flamewm_render_core::{Color, CursorKind, Rect};
 
+use super::overlay::WarpOverlay;
+use super::warp::WarpRect;
+use super::xcomposite::{CapturedImage, capture_window};
 use super::external_drawable::{
     ExternalDrawableSession, ExternalDrawableTarget, external_text_measure, use_cstring_title,
 };
@@ -268,6 +274,27 @@ impl ExternalDecorationRenderer {
         unsafe { XFlush(self.display) };
     }
 
+    /// Captures `window` once as premultiplied ARGB32 for a transition. Errors when unavailable.
+    pub fn capture_window(&self, window: u64) -> Result<CapturedImage, String> {
+        if self.display.is_null() {
+            return Err("capture: renderer has no display".to_string());
+        }
+        capture_window(self.display, window)
+    }
+
+    /// Opens a Magic Lamp overlay on this renderer's display. Errors when unavailable.
+    pub fn open_warp_overlay(
+        &self,
+        capture: CapturedImage,
+        source: WarpRect,
+        target: WarpRect,
+    ) -> Result<WarpOverlay, String> {
+        if self.display.is_null() {
+            return Err("overlay: renderer has no display".to_string());
+        }
+        WarpOverlay::begin(self.display, capture, source, target)
+    }
+
     /// Native image-cache stats: (entries, bytes). (0, 0) when no target.
     pub fn cache_stats(&self) -> (usize, usize) {
         match self.target.as_ref() {
@@ -282,9 +309,181 @@ impl ExternalDecorationRenderer {
     }
 }
 
+/// A renderer whose Xcursor theme can be swapped in place by the registry.
+pub trait CursorThemeOwner {
+    fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String>;
+}
+
+impl CursorThemeOwner for ExternalDecorationRenderer {
+    /// Replaces the cursor set. Cursors already defined on frames keep their
+    /// server reference until the WM redefines them. On error the old theme stays.
+    fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
+        let cursor = self
+            .cursor
+            .as_mut()
+            .ok_or_else(|| "external decoration has no cursor backend".to_string())?;
+        unsafe { cursor.reload_theme(theme) }
+    }
+}
+
+impl ExternalDecorationRenderer {
+    /// Shares the renderer and registers it for live cursor-theme reloads.
+    pub fn into_cursor_shared(self) -> Rc<RefCell<Self>> {
+        let shared = Rc::new(RefCell::new(self));
+        let owner: Rc<RefCell<dyn CursorThemeOwner>> = shared.clone();
+        let in_use = env::var("XCURSOR_THEME").ok();
+        CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().register(&owner, in_use));
+        shared
+    }
+}
+
+/// Process-local owners of Xcursor state. The WM is single-threaded; weak
+/// handles let a dropped owner disappear without an unregister call.
+#[derive(Default)]
+struct CursorThemeRegistry {
+    owners: Vec<Weak<RefCell<dyn CursorThemeOwner>>>,
+    /// Theme the registered owners currently hold. `None` until the first owner
+    /// registers, so an unset session theme still reloads on the first change.
+    applied: Option<String>,
+}
+
+impl CursorThemeRegistry {
+    /// `in_use` is the theme the owner was opened with, seeding `applied` so an
+    /// unchanged theme never triggers a reload.
+    fn register(&mut self, owner: &Rc<RefCell<dyn CursorThemeOwner>>, in_use: Option<String>) {
+        if self.applied.is_none() {
+            self.applied = in_use;
+        }
+        self.owners.push(Rc::downgrade(owner));
+    }
+
+    /// Reloads every live owner once when `resolved` differs from the last applied
+    /// theme. Returns per-owner failures; `applied` advances even on failure so
+    /// settings publishes do not retry an unchanged theme.
+    fn apply(&mut self, resolved: &str) -> Vec<String> {
+        if self.applied.as_deref() == Some(resolved) {
+            return Vec::new();
+        }
+        self.applied = Some(resolved.to_owned());
+        self.owners.retain(|owner| owner.strong_count() > 0);
+        let mut errors = Vec::new();
+        for owner in self.owners.iter().filter_map(Weak::upgrade) {
+            let result = owner.borrow_mut().reload_cursor_theme(resolved);
+            if let Err(error) = result {
+                errors.push(error);
+            }
+        }
+        errors
+    }
+}
+
+thread_local! {
+    static CURSOR_THEME_REGISTRY: RefCell<CursorThemeRegistry> =
+        RefCell::new(CursorThemeRegistry::default());
+}
+
+/// Applies a session-resolved cursor theme to every registered owner. Returns
+/// one message per failed owner; empty when nothing changed or all succeeded.
+pub fn apply_cursor_theme(resolved: &str) -> Vec<String> {
+    CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply(resolved))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct FakeOwner {
+        reloads: Vec<String>,
+        fail: bool,
+    }
+
+    impl CursorThemeOwner for FakeOwner {
+        fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
+            self.reloads.push(theme.to_owned());
+            if self.fail {
+                Err(format!("reload {theme} failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn fake(fail: bool) -> Rc<RefCell<FakeOwner>> {
+        Rc::new(RefCell::new(FakeOwner {
+            fail,
+            ..FakeOwner::default()
+        }))
+    }
+
+    fn as_owner(fake: &Rc<RefCell<FakeOwner>>) -> Rc<RefCell<dyn CursorThemeOwner>> {
+        fake.clone()
+    }
+
+    #[test]
+    fn theme_change_reloads_each_owner_exactly_once() {
+        let mut registry = CursorThemeRegistry::default();
+        let (first, second) = (fake(false), fake(false));
+        registry.register(&as_owner(&first), None);
+        registry.register(&as_owner(&second), None);
+
+        assert!(registry.apply("Breeze").is_empty());
+        assert_eq!(first.borrow().reloads, ["Breeze"]);
+        assert_eq!(second.borrow().reloads, ["Breeze"]);
+
+        assert!(registry.apply("Breeze").is_empty());
+        assert_eq!(first.borrow().reloads.len(), 1);
+        assert_eq!(second.borrow().reloads.len(), 1);
+
+        assert!(registry.apply("Adwaita").is_empty());
+        assert_eq!(first.borrow().reloads, ["Breeze", "Adwaita"]);
+        assert_eq!(second.borrow().reloads, ["Breeze", "Adwaita"]);
+    }
+
+    #[test]
+    fn theme_in_use_at_registration_triggers_no_startup_reload() {
+        let mut registry = CursorThemeRegistry::default();
+        let owner = fake(false);
+        registry.register(&as_owner(&owner), Some("McMojave-cursors".to_owned()));
+
+        assert!(registry.apply("McMojave-cursors").is_empty());
+        assert!(owner.borrow().reloads.is_empty());
+    }
+
+    #[test]
+    fn failed_owner_is_reported_without_blocking_other_owners() {
+        let mut registry = CursorThemeRegistry::default();
+        let (broken, healthy) = (fake(true), fake(false));
+        registry.register(&as_owner(&broken), None);
+        registry.register(&as_owner(&healthy), None);
+
+        let errors = registry.apply("Missing-theme");
+        assert_eq!(errors, ["reload Missing-theme failed"]);
+        assert_eq!(healthy.borrow().reloads, ["Missing-theme"]);
+        // The failed theme is not retried on an unchanged publish.
+        assert!(registry.apply("Missing-theme").is_empty());
+        assert_eq!(broken.borrow().reloads.len(), 1);
+    }
+
+    #[test]
+    fn dropped_owner_is_skipped_and_pruned() {
+        let mut registry = CursorThemeRegistry::default();
+        let (gone, kept) = (fake(false), fake(false));
+        registry.register(&as_owner(&gone), None);
+        registry.register(&as_owner(&kept), None);
+        drop(gone);
+
+        assert!(registry.apply("Breeze").is_empty());
+        assert_eq!(kept.borrow().reloads, ["Breeze"]);
+        assert_eq!(registry.owners.len(), 1);
+    }
+
+    #[test]
+    fn unavailable_renderer_reports_no_cursor_backend() {
+        let mut renderer = ExternalDecorationRenderer::unavailable("no DISPLAY in test");
+        let error = renderer.reload_cursor_theme("Breeze").unwrap_err();
+        assert!(error.contains("no cursor backend"));
+    }
 
     #[test]
     fn unavailable_reports_explicit_errors() {

@@ -7,6 +7,9 @@ use flamewm_control_core::ControlRequest;
 use flamewm_shell::async_projection::{self, StartViewNote};
 use flamewm_shell::icon_loader::{DependentSurface, IconLoader, IconTarget};
 use flamewm_shell::start::StartCategory;
+use flamewm_shell::taskbar::tasks::icon_geometry::{
+    self, IconGeometrySink, IconGeometryTracker, IconRect,
+};
 use flamewm_shell::{projection, start, ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces};
 use flamewm_shell_core::clock::ClockDateTracker;
 use flamewm_shell_core::popup::PopupRefusal;
@@ -104,6 +107,9 @@ pub(crate) struct ShellLoop {
     pub(crate) quick_audio_open: bool,
     /// One-shot: task-slot icons re-requested once the loader exists.
     pub(crate) task_icon_prime_armed: bool,
+    /// Last `_NET_WM_ICON_GEOMETRY` written per task client window. Per shell
+    /// run: a restart starts empty.
+    pub(crate) icon_geometry: IconGeometryTracker,
 }
 
 impl ShellLoop {
@@ -144,6 +150,7 @@ impl ShellLoop {
             start_view: StartViewNote::default(),
             quick_control,
             task_icon_prime_armed: true,
+            icon_geometry: IconGeometryTracker::default(),
         }
     }
 
@@ -171,6 +178,13 @@ impl ShellLoop {
             return;
         }
         self.settings_revision = snapshot.revision;
+        let theme = crate::settings_projection::icon_theme_name(Some(&snapshot));
+        if let Some(loader) = self.icon_loader.as_mut() {
+            if loader.set_theme(&theme) {
+                // Re-prime task slots so they re-request under the new theme.
+                self.task_icon_prime_armed = true;
+            }
+        }
         if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY)
         {
             self.audio_settings.raise_maximum = *raise;
@@ -228,6 +242,7 @@ impl ShellLoop {
                         let _measure = shell_stage!("shell.start.open.measure");
                         let _place = shell_stage!("shell.start.open.place");
                         let _prepare = shell_stage!("shell.start.open.prepare");
+                        self.apply_start_slide(runtime);
                         let opened = self.surfaces.toggle_start(runtime);
                         let _present = shell_stage!("shell.start.open.present");
                         shell_slow_note("start", started);
@@ -268,6 +283,7 @@ impl ShellLoop {
                     let _measure = shell_stage!("shell.start.open.measure");
                     let _place = shell_stage!("shell.start.open.place");
                     let _prepare = shell_stage!("shell.start.open.prepare");
+                    self.apply_start_slide(runtime);
                     let opened = self.surfaces.open_start_group(runtime);
                     let _present = shell_stage!("shell.start.open.present");
                     shell_slow_note("start", started);
@@ -650,7 +666,8 @@ impl ShellLoop {
 
     pub(crate) fn ensure_loader(&mut self) {
         if self.icon_loader.is_none() {
-            self.icon_loader = Some(IconLoader::spawn(self.loader_root.clone()));
+            let theme = crate::settings_projection::icon_theme_name(self.settings_cache.as_ref());
+            self.icon_loader = Some(IconLoader::spawn(self.loader_root.clone(), theme));
         }
     }
 
@@ -993,6 +1010,42 @@ impl ShellLoop {
                 let _ = runtime.redraw(self.surfaces.start);
             }
         }
+        if changed.windows || changed.workspaces || changed.panels || resynced {
+            self.sync_icon_geometry(runtime, &snapshot);
+        }
+    }
+
+    /// Publishes `_NET_WM_ICON_GEOMETRY` on each task slot's client window
+    /// from the slot's retained root-space rect. Called only after a layout
+    /// or task change; the tracker writes and clears just the deltas.
+    pub(crate) fn sync_icon_geometry(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        snapshot: &ShellSnapshot,
+    ) {
+        let slots: Vec<Option<u64>> = flamewm_shell_core::task_visual_states(
+            &snapshot.panels,
+            &snapshot.windows,
+            &snapshot.applications,
+        )
+        .iter()
+        .map(|state| state.window.map(|window| window.id))
+        .collect();
+        let panels: Vec<_> = self
+            .surfaces
+            .panel_outputs()
+            .into_iter()
+            .map(|(handle, _)| handle)
+            .collect();
+        let desired = icon_geometry::desired_slot_geometry(&slots, |index| {
+            let node = format!("task-slot-{}", index + 1);
+            panels
+                .iter()
+                .find_map(|&panel| runtime.node_device_rect_by_id(panel, &node))
+                .map(|rect| (rect.x, rect.y, rect.width, rect.height))
+        });
+        let mut sink = RuntimeIconGeometrySink { runtime };
+        self.icon_geometry.sync(&desired, &mut sink);
     }
 
     /// F10: panel/display geometry resync. Close popup/quick helper,
@@ -1216,6 +1269,20 @@ impl ShellLoop {
         Ok(())
     }
 
+    /// Applies the Start slide for the next show/hide. Derived from the cached
+    /// settings and the current panel edge, so it runs before each open and
+    /// after each settings projection. A rejected slide is nonfatal and
+    /// falls back to the immediate show path.
+    fn apply_start_slide(&self, runtime: &mut SurfaceRuntime) {
+        let slide = self.settings_cache.as_ref().and_then(|snapshot| {
+            crate::settings_projection::start_slide(snapshot, self.surfaces.panel_edge())
+        });
+        if let Err(error) = runtime.set_slide(self.surfaces.start, slide) {
+            eprintln!("flamewm-shell: start slide setup failed (nonfatal): {error:?}");
+            let _ = runtime.set_slide(self.surfaces.start, None);
+        }
+    }
+
     fn project_settings(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), UiBackendError> {
         if !self.settings_projection_pending {
             return Ok(());
@@ -1250,6 +1317,7 @@ impl ShellLoop {
                 crate::settings_projection::project(document, &snapshot, kind)
             })?;
         }
+        self.apply_start_slide(runtime);
         let _ = runtime.redraw(self.surfaces.panel());
         if self.surfaces.is_start_group_open() {
             let _ = runtime.redraw(self.surfaces.start);
@@ -1271,6 +1339,26 @@ fn clear_transient_state_fields(
 ) {
     *start_open = false;
     *context_menu = None;
+}
+
+/// `IconGeometrySink` over the `SurfaceRuntime` facade. Write failures are
+/// nonfatal diagnostics; a vanished client window is not an error.
+struct RuntimeIconGeometrySink<'a> {
+    runtime: &'a mut SurfaceRuntime,
+}
+
+impl IconGeometrySink for RuntimeIconGeometrySink<'_> {
+    fn set(&mut self, window: u64, rect: IconRect) {
+        if let Err(error) = self.runtime.set_window_icon_geometry(window, rect) {
+            eprintln!("flamewm-shell: icon geometry write failed (stage=x11-property): {error:?}");
+        }
+    }
+
+    fn clear(&mut self, window: u64) {
+        if let Err(error) = self.runtime.clear_window_icon_geometry(window) {
+            eprintln!("flamewm-shell: icon geometry clear failed (stage=x11-property): {error:?}");
+        }
+    }
 }
 
 /// Pure mapping for one pager cell: root-space node rect `(x, y, w, h)`

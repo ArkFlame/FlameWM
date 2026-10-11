@@ -54,7 +54,8 @@ impl Default for XSettingsInput {
         Self {
             appearance: AppearanceMode::Dark,
             icon_theme: "breeze-dark".to_owned(),
-            cursor_theme: "Breeze".to_owned(),
+            // Must match the session env default (FlameWM-Breeze-Dark); "Breeze" is not bundled.
+            cursor_theme: "FlameWM-Breeze-Dark".to_owned(),
             cursor_size: 24,
             font_family: "IBM Plex Sans".to_owned(),
             font_bold: false,
@@ -264,7 +265,7 @@ mod tests {
         );
         assert_eq!(
             settings.get("Gtk/CursorThemeName"),
-            Some(&XSettingsValue::Text("Breeze".to_owned()))
+            Some(&XSettingsValue::Text("FlameWM-Breeze-Dark".to_owned()))
         );
         assert_eq!(
             settings.get("Gtk/CursorThemeSize"),

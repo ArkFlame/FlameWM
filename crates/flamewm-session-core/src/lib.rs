@@ -11,7 +11,35 @@ use flamewm_api::settings::AppearanceMode;
 /// Bundled cursor authority: FlameWM-Breeze-Dark (Breeze Dark Xcursor files
 /// under a FlameWM-owned theme id), size 24. Never claims KDE identity.
 pub const CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark";
+/// Second bundled cursor theme, preferred over the FlameWM-owned default when installed.
+pub const MCMOJAVE_CURSOR_THEME_ID: &str = "McMojave-cursors";
 pub const CURSOR_SIZE: &str = "24";
+
+/// Resolve the cursor theme name shared by the WM session env and XSETTINGS.
+///
+/// Order: `requested` if installed under a root of `search_path`, then
+/// `McMojave-cursors` if installed, then `FlameWM-Breeze-Dark`. `search_path`
+/// is the colon-separated XCURSOR_PATH value. A theme is installed when
+/// `<root>/<name>/cursors` is a directory; names with path separators never match.
+#[must_use]
+pub fn resolve_cursor_theme(requested: &str, search_path: &str) -> String {
+    let roots: Vec<&str> = search_path.split(':').filter(|root| !root.is_empty()).collect();
+    let installed = |name: &str| {
+        !name.is_empty()
+            && !name.contains(['/', '\\'])
+            && roots
+                .iter()
+                .any(|root| Path::new(root).join(name).join("cursors").is_dir())
+    };
+    let requested = requested.trim();
+    if installed(requested) {
+        requested.to_owned()
+    } else if installed(MCMOJAVE_CURSOR_THEME_ID) {
+        MCMOJAVE_CURSOR_THEME_ID.to_owned()
+    } else {
+        CURSOR_THEME_ID.to_owned()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPaths {
@@ -154,20 +182,15 @@ fn flame_environment(
     let mut environment = BTreeMap::new();
     // Bundled authority first: explicit FLAMEWM_CURSOR_* wins, then existing
     // XCURSOR_*, then the bundled theme/size defaults.
-    environment.insert(
-        "XCURSOR_THEME".to_owned(),
-        existing_env
-            .get("FLAMEWM_CURSOR_THEME")
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .or_else(|| {
-                existing_env
-                    .get("XCURSOR_THEME")
-                    .filter(|value| !value.is_empty())
-                    .cloned()
-            })
-            .unwrap_or_else(|| CURSOR_THEME_ID.to_owned()),
-    );
+    let requested_theme = existing_env
+        .get("FLAMEWM_CURSOR_THEME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            existing_env
+                .get("XCURSOR_THEME")
+                .filter(|value| !value.is_empty())
+        })
+        .map_or("", String::as_str);
     environment.insert(
         "XCURSOR_SIZE".to_owned(),
         existing_env
@@ -221,6 +244,10 @@ fn flame_environment(
         .map_or(search_root.clone(), |existing| {
             format!("{search_root}:{existing}")
         });
+    environment.insert(
+        "XCURSOR_THEME".to_owned(),
+        resolve_cursor_theme(requested_theme, &combined_cursor_path),
+    );
     environment.insert("XCURSOR_PATH".to_owned(), combined_cursor_path);
     environment
 }
@@ -442,9 +469,10 @@ mod tests {
         );
         let plan = build_launch_plan(&paths, &[], &existing);
         let environment = &plan.processes[0].environment;
+        // "Custom" is not installed under the stage root: falls back to the bundled theme.
         assert_eq!(
             environment.get("XCURSOR_THEME").map(String::as_str),
-            Some("Custom")
+            Some(CURSOR_THEME_ID)
         );
         assert_eq!(
             environment.get("XCURSOR_SIZE").map(String::as_str),
@@ -508,6 +536,73 @@ mod tests {
         );
         assert!(!environment.contains_key("GTK_THEME"));
         assert!(!environment.contains_key("QT_STYLE_OVERRIDE"));
+    }
+
+    fn install_cursor_theme(root: &std::path::Path, name: &str) {
+        std::fs::create_dir_all(root.join(name).join("cursors")).expect("theme dir");
+    }
+
+    fn cursor_test_root(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-cursor-resolve-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("test root");
+        root
+    }
+
+    #[test]
+    fn cursor_theme_resolution_order_and_fallback_chain() {
+        let root = cursor_test_root("chain");
+        let search = root.display().to_string();
+        // Nothing installed: bundled FlameWM theme.
+        assert_eq!(resolve_cursor_theme("", &search), CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("Missing", &search), CURSOR_THEME_ID);
+        // Bundled McMojave wins over the FlameWM default when present.
+        install_cursor_theme(&root, MCMOJAVE_CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("", &search), MCMOJAVE_CURSOR_THEME_ID);
+        assert_eq!(resolve_cursor_theme("Missing", &search), MCMOJAVE_CURSOR_THEME_ID);
+        // Explicit installed theme wins over both.
+        install_cursor_theme(&root, "Custom");
+        assert_eq!(resolve_cursor_theme("Custom", &search), "Custom");
+        // A directory without a cursors/ subdir is a broken theme and never selected.
+        std::fs::create_dir_all(root.join("Broken")).expect("broken theme");
+        assert_eq!(resolve_cursor_theme("Broken", &search), MCMOJAVE_CURSOR_THEME_ID);
+        // Path-like names never resolve outside the search roots.
+        assert_eq!(resolve_cursor_theme("../Custom", &search), MCMOJAVE_CURSOR_THEME_ID);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cursor_theme_search_path_accepts_multiple_roots() {
+        let first = cursor_test_root("multi-a");
+        let second = cursor_test_root("multi-b");
+        install_cursor_theme(&second, "Custom");
+        let search = format!("{}:{}", first.display(), second.display());
+        assert_eq!(resolve_cursor_theme("Custom", &search), "Custom");
+        assert_eq!(resolve_cursor_theme("Custom", &first.display().to_string()), CURSOR_THEME_ID);
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
+    }
+
+    #[test]
+    fn session_env_and_resolver_agree_on_installed_bundled_theme() {
+        let root = cursor_test_root("env");
+        // Session search root is <data_root>/icons.
+        install_cursor_theme(&root.join("icons"), MCMOJAVE_CURSOR_THEME_ID);
+        let paths = SessionPaths {
+            bindir: "/usr/bin".into(),
+            config_home: "/home/test/.config".into(),
+            data_root: root.clone(),
+        };
+        let plan = build_launch_plan(&paths, &[], &BTreeMap::new());
+        let environment = &plan.processes[0].environment;
+        assert_eq!(
+            environment.get("XCURSOR_THEME").map(String::as_str),
+            Some(MCMOJAVE_CURSOR_THEME_ID)
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

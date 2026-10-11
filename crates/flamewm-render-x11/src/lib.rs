@@ -1,7 +1,16 @@
 mod xft;
 mod xlib;
+mod xlib_ext;
 mod xrender;
+mod xrender_transform;
 mod xshape;
+mod overlay;
+mod warp;
+mod xcomposite;
+
+pub use overlay::WarpOverlay;
+pub use warp::WarpRect;
+pub use xcomposite::CapturedImage;
 
 pub mod backdrop;
 
@@ -24,7 +33,7 @@ mod surface_controller;
 
 use app::X11App;
 pub use config::*;
-pub use external_decoration::ExternalDecorationRenderer;
+pub use external_decoration::{ExternalDecorationRenderer, apply_cursor_theme};
 pub use external_drawable::{
     ExternalDrawableSession, ExternalDrawableTarget, NativeDrawableRenderer,
     external_font_pattern_order, external_pixmap_byte_estimate, external_release_order,

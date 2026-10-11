@@ -1,10 +1,11 @@
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::native::cursor::DeferredNativeLibraryHandles;
 use crate::xlib::*;
-use flamewm_reactor::Reactor;
+use flamewm_reactor::{Reactor, Timeline};
 use flamewm_render_core::{Rect, SurfaceDamage};
 
 // Input-focus FFI is not in the pinned xlib.rs surface. It is declared here
@@ -163,6 +164,101 @@ struct SurfaceInstance {
     /// Retained native window origin (root-space device pixels). Set at
     /// create, updated by move_resize; never recomputed from layout.
     origin: (i32, i32),
+    /// Opt-in slide presentation for the next show/hide; `None` is the immediate path.
+    slide: Option<SlideConfig>,
+    /// Whether the window is mapped from the controller's point of view (slide bookkeeping).
+    shown: bool,
+    /// Active slide-in/slide-out motion; `None` when idle (no frame wakeups).
+    motion: Option<Motion>,
+}
+
+/// Panel edge a popup slides out of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlideEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+/// Slide presentation for a popup anchored to a panel edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlideConfig {
+    pub edge: SlideEdge,
+    /// Animation speed in hundredths (`100` = 1.0x).
+    pub speed: u16,
+}
+
+const SLIDE_OPEN_BASE_MS: u32 = 180;
+const SLIDE_CLOSE_BASE_MS: u32 = 120;
+/// Frame interval used only while a slide is active.
+const SLIDE_FRAME: Duration = Duration::from_millis(16);
+
+/// One slide transition. `progress` 0.0 is the off-edge start, 1.0 the exact anchored origin.
+#[derive(Clone, Copy, Debug)]
+struct Motion {
+    edge: SlideEdge,
+    opening: bool,
+    start: Instant,
+    duration: Duration,
+    from: f32,
+}
+
+impl Motion {
+    fn target(self) -> f32 {
+        if self.opening { 1.0 } else { 0.0 }
+    }
+
+    fn progress(self, now: Instant) -> f32 {
+        let t = if self.duration.is_zero() {
+            1.0
+        } else {
+            let elapsed = now.saturating_duration_since(self.start).as_secs_f32();
+            (elapsed / self.duration.as_secs_f32()).clamp(0.0, 1.0)
+        };
+        let eased = 1.0 - (1.0 - t).powi(3);
+        self.from + (self.target() - self.from) * eased
+    }
+
+    fn finished(self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start) >= self.duration
+    }
+
+    /// Reverses or restarts from the current progress so the window never jumps.
+    fn retarget(&mut self, now: Instant, opening: bool, duration: Duration) {
+        self.from = self.progress(now);
+        self.opening = opening;
+        self.start = now;
+        self.duration = duration;
+    }
+}
+
+/// Effective duration of a slide, scaled by the reactor timeline speed rules.
+fn slide_duration(speed: u16, base_ms: u32) -> Duration {
+    let mut timeline = Timeline::<()>::new();
+    timeline.set_speed(speed);
+    timeline.duration_for(base_ms)
+}
+
+/// Native window origin at `progress`: displaced from the final origin toward the panel edge.
+fn slide_origin(final_origin: (i32, i32), size: (u32, u32), edge: SlideEdge, progress: f32) -> (i32, i32) {
+    let remaining = 1.0 - progress.clamp(0.0, 1.0);
+    let (width, height) = (size.0 as f32, size.1 as f32);
+    let (dx, dy) = match edge {
+        SlideEdge::Bottom => (0.0, height),
+        SlideEdge::Top => (0.0, -height),
+        SlideEdge::Left => (-width, 0.0),
+        SlideEdge::Right => (width, 0.0),
+    };
+    (
+        final_origin.0 + (dx * remaining).round() as i32,
+        final_origin.1 + (dy * remaining).round() as i32,
+    )
+}
+
+/// Frame wait while any slide is active; `None` keeps the reactor fully idle.
+fn motion_frame_wait(active: bool) -> Option<Duration> {
+    active.then_some(SLIDE_FRAME)
 }
 
 /// Headless/test fallback extent (device pixels at scale 1.0). Used only
@@ -455,6 +551,8 @@ pub struct SurfaceController {
     /// XCloseDisplay. Backend X resources are drained before this owner closes
     /// the display; the handles are dropped only afterwards.
     deferred_native_libraries: Vec<DeferredNativeLibraryHandles>,
+    /// Interned `_NET_WM_ICON_GEOMETRY` atom; 0 until first use.
+    icon_geometry_atom: Atom,
 }
 
 impl SurfaceController {
@@ -473,6 +571,7 @@ impl SurfaceController {
                 surfaces: HashMap::new(),
                 windows: HashMap::new(),
                 deferred_native_libraries: Vec::new(),
+                icon_geometry_atom: 0,
             })
         }
     }
@@ -508,6 +607,9 @@ impl SurfaceController {
             role,
             input,
             origin: (config.x, config.y),
+            slide: None,
+            shown: config.initially_visible,
+            motion: None,
         };
         // Overlay/passthrough surfaces are excluded from WM client
         // management: override-redirect + empty input region + no grab/focus.
@@ -635,6 +737,12 @@ impl SurfaceController {
         Ok(())
     }
 
+    /// Sets (or clears with `None`) the slide presentation used by later `show`/`hide` calls.
+    pub fn set_slide(&mut self, id: SurfaceId, slide: Option<SlideConfig>) -> Result<(), String> {
+        self.instance_mut(id)?.slide = slide;
+        Ok(())
+    }
+
     pub fn show(&mut self, id: SurfaceId) -> Result<(), String> {
         // First-show single present: project->measure->anchor->prepare->
         // paint->shape->commit->map+raise->present->grab->flush in one
@@ -642,6 +750,35 @@ impl SurfaceController {
         // and maps/presents without repainting.
         let role = self.surface_role(id)?;
         let display = self.display;
+        let now = Instant::now();
+        let mut slide_open = None;
+        let instance = self.instance_mut(id)?;
+        if let Some(config) = instance.slide {
+            if instance.shown {
+                match instance.motion.as_mut() {
+                    // Double open while opening: already converging on the final frame.
+                    Some(motion) if motion.opening => return Ok(()),
+                    // Reverse from the current progress; the window is still mapped.
+                    Some(motion) => {
+                        motion.retarget(now, true, slide_duration(config.speed, SLIDE_OPEN_BASE_MS));
+                        return Ok(());
+                    }
+                    None => {}
+                }
+            } else {
+                let size = (instance.app.width, instance.app.height);
+                let (x, y) = slide_origin(instance.origin, size, config.edge, 0.0);
+                // Place off-edge before mapping so the first visible frame is the start frame.
+                unsafe { XMoveResizeWindow(display, instance.app.window, x, y, size.0, size.1) };
+                slide_open = Some(Motion {
+                    edge: config.edge,
+                    opening: true,
+                    start: now,
+                    duration: slide_duration(config.speed, SLIDE_OPEN_BASE_MS),
+                    from: 0.0,
+                });
+            }
+        }
         let instance = self.instance_mut(id)?;
         let mut cycle = PresentCycle::new();
         cycle.advance("project")?;
@@ -683,10 +820,17 @@ impl SurfaceController {
         cycle.advance("present")?;
         cycle.advance("grab_flush")?;
         debug_assert!(cycle.is_complete());
+        let instance = self.instance_mut(id)?;
+        instance.shown = true;
+        if slide_open.is_some() {
+            instance.motion = slide_open;
+        }
         Ok(())
     }
+
     pub fn hide(&mut self, id: SurfaceId) -> Result<(), String> {
         let display = self.display;
+        let now = Instant::now();
         let instance = self.instance_mut(id)?;
         if instance.app.pointer_grabbed {
             unsafe {
@@ -695,11 +839,66 @@ impl SurfaceController {
             }
             instance.app.pointer_grabbed = false;
         }
+        if let (Some(config), true) = (instance.slide, instance.shown) {
+            let duration = slide_duration(config.speed, SLIDE_CLOSE_BASE_MS);
+            match instance.motion.as_mut() {
+                // Already closing: keep the running transition.
+                Some(motion) if !motion.opening => {}
+                Some(motion) => motion.retarget(now, false, duration),
+                None => {
+                    instance.motion = Some(Motion {
+                        edge: config.edge,
+                        opening: false,
+                        start: now,
+                        duration,
+                        from: 1.0,
+                    });
+                }
+            }
+            unsafe { XFlush(display) };
+            return Ok(());
+        }
         unsafe {
             XUnmapWindow(display, instance.app.window);
             XFlush(display);
         }
+        instance.shown = false;
+        instance.motion = None;
         Ok(())
+    }
+
+    /// Moves every active slide to `now`: one native move per frame, the exact anchored
+    /// origin on the last frame, and unmap when a slide-out completes. Content is never
+    /// repainted here.
+    fn advance_motion(&mut self, now: Instant) {
+        let display = self.display;
+        for instance in self.surfaces.values_mut() {
+            let Some(motion) = instance.motion else {
+                continue;
+            };
+            let window = instance.app.window;
+            let size = (instance.app.width, instance.app.height);
+            let finished = motion.finished(now);
+            let (x, y) = if finished {
+                instance.origin
+            } else {
+                slide_origin(instance.origin, size, motion.edge, motion.progress(now))
+            };
+            unsafe { XMoveResizeWindow(display, window, x, y, size.0, size.1) };
+            if !finished {
+                continue;
+            }
+            instance.motion = None;
+            if !motion.opening {
+                unsafe { XUnmapWindow(display, window) };
+                instance.shown = false;
+            }
+        }
+        unsafe { XFlush(display) };
+    }
+
+    fn motion_frame_timeout(&self) -> Option<Duration> {
+        motion_frame_wait(self.surfaces.values().any(|instance| instance.motion.is_some()))
     }
     pub fn raise(&self, id: SurfaceId) -> Result<(), String> {
         self.with_window(id, |display, window| unsafe {
@@ -850,6 +1049,38 @@ impl SurfaceController {
         crate::app::apply_pager_cells(instance.app.display, instance.app.window, cells);
         unsafe { XFlush(display) };
         Ok(())
+    }
+
+    /// Sets `_NET_WM_ICON_GEOMETRY` on a client window (not a surface this
+    /// controller owns) to a root-space rect. Errors from a vanished client
+    /// are ignored by the protocol handler; the caller never aborts.
+    pub fn set_window_icon_geometry(&mut self, window: u64, rect: [u32; 4]) -> Result<(), String> {
+        let property = self.icon_geometry_atom();
+        crate::app::apply_window_icon_geometry(
+            self.display,
+            window as Window,
+            property,
+            Some(rect.map(u64::from)),
+        );
+        unsafe { XFlush(self.display) };
+        Ok(())
+    }
+
+    /// Deletes `_NET_WM_ICON_GEOMETRY` from a client window.
+    pub fn clear_window_icon_geometry(&mut self, window: u64) -> Result<(), String> {
+        let property = self.icon_geometry_atom();
+        crate::app::apply_window_icon_geometry(self.display, window as Window, property, None);
+        unsafe { XFlush(self.display) };
+        Ok(())
+    }
+
+    fn icon_geometry_atom(&mut self) -> Atom {
+        if self.icon_geometry_atom == 0 {
+            let name = std::ffi::CString::new("_NET_WM_ICON_GEOMETRY")
+                .expect("static atom contains no NUL");
+            self.icon_geometry_atom = unsafe { XInternAtom(self.display, name.as_ptr(), 0) };
+        }
+        self.icon_geometry_atom
     }
 
     /// Debug/roundtrip-only observed-rect probe for one surface. Off the
@@ -1047,6 +1278,12 @@ impl SurfaceController {
                 continue;
             };
             let event_type = unsafe { event.type_ };
+            // Pointer input is ignored while the popup is moving: the menu is not hit-testable
+            // until its final frame. Keyboard input still reaches the final layout.
+            let moving = self.surfaces.get(&id).is_some_and(|instance| instance.motion.is_some());
+            if moving && matches!(event_type, BUTTON_PRESS | BUTTON_RELEASE | MOTION_NOTIFY) {
+                continue;
+            }
             let outside_release = if event_type == BUTTON_RELEASE {
                 let button = unsafe { event.xbutton };
                 self.surfaces
@@ -1251,8 +1488,11 @@ impl SurfaceController {
             )
             .map_err(|error| error.to_string())?;
         loop {
-            reactor.dispatch(None).map_err(|error| error.to_string())?;
+            reactor
+                .dispatch(self.motion_frame_timeout())
+                .map_err(|error| error.to_string())?;
             let drained = self.pump_events(&mut on_action)?;
+            self.advance_motion(Instant::now());
             if self.surfaces.is_empty() {
                 break;
             }
@@ -1286,11 +1526,14 @@ impl SurfaceController {
             .map_err(|error| error.to_string())?;
         let mut events = Vec::new();
         let result: Result<usize, String> = (|| {
-            reactor.dispatch(None).map_err(|error| error.to_string())?;
+            reactor
+                .dispatch(self.motion_frame_timeout())
+                .map_err(|error| error.to_string())?;
             let drained = self.pump_events(|event, _document| {
                 events.push(event.clone());
                 Ok(())
             })?;
+            self.advance_motion(Instant::now());
             Ok(drained)
         })();
         reactor.remove(token).map_err(|error| error.to_string())?;
@@ -1640,4 +1883,83 @@ fn display_fd_alive(display: *mut Display) -> bool {
         return false;
     }
     std::path::Path::new(&format!("/proc/self/fd/{fd}")).exists()
+}
+
+#[cfg(test)]
+mod slide_motion_tests {
+    use super::*;
+
+    const FINAL: (i32, i32) = (100, 500);
+    const SIZE: (u32, u32) = (300, 400);
+
+    #[test]
+    fn slide_origin_starts_off_the_panel_edge_per_edge() {
+        assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Bottom, 0.0), (100, 900));
+        assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Top, 0.0), (100, 100));
+        assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Left, 0.0), (-200, 500));
+        assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Right, 0.0), (400, 500));
+    }
+
+    #[test]
+    fn final_frame_is_exact_anchored_origin_for_every_edge() {
+        for edge in [SlideEdge::Top, SlideEdge::Bottom, SlideEdge::Left, SlideEdge::Right] {
+            assert_eq!(slide_origin(FINAL, SIZE, edge, 1.0), FINAL, "{edge:?}");
+            assert_eq!(slide_origin(FINAL, SIZE, edge, 1.5), FINAL, "{edge:?} clamped");
+        }
+    }
+
+    #[test]
+    fn progress_endpoints_and_ease_out_midpoint() {
+        let t0 = Instant::now();
+        let motion = Motion {
+            edge: SlideEdge::Bottom,
+            opening: true,
+            start: t0,
+            duration: Duration::from_millis(180),
+            from: 0.0,
+        };
+        assert_eq!(motion.progress(t0), 0.0);
+        assert_eq!(motion.progress(t0 + Duration::from_millis(180)), 1.0);
+        assert_eq!(motion.progress(t0 + Duration::from_secs(10)), 1.0);
+        assert!(!motion.finished(t0 + Duration::from_millis(179)));
+        assert!(motion.finished(t0 + Duration::from_millis(180)));
+        // Ease-out cubic: halfway in time is already past half the travel.
+        assert!(motion.progress(t0 + Duration::from_millis(90)) > 0.5);
+    }
+
+    #[test]
+    fn reverse_mid_flight_continues_from_current_progress() {
+        let t0 = Instant::now();
+        let mut motion = Motion {
+            edge: SlideEdge::Top,
+            opening: true,
+            start: t0,
+            duration: Duration::from_millis(180),
+            from: 0.0,
+        };
+        let now = t0 + Duration::from_millis(60);
+        let before = motion.progress(now);
+        motion.retarget(now, false, Duration::from_millis(120));
+        assert!((motion.progress(now) - before).abs() < 1e-6, "no jump on reverse");
+        assert_eq!(motion.progress(now + Duration::from_millis(120)), 0.0);
+        // Reversing back to open from the midpoint is also jump-free.
+        let mid = now + Duration::from_millis(40);
+        let mid_value = motion.progress(mid);
+        motion.retarget(mid, true, Duration::from_millis(180));
+        assert!((motion.progress(mid) - mid_value).abs() < 1e-6);
+        assert_eq!(motion.progress(mid + Duration::from_millis(180)), 1.0);
+    }
+
+    #[test]
+    fn disabled_or_idle_state_arms_no_frame_wait() {
+        assert_eq!(motion_frame_wait(false), None);
+        assert_eq!(motion_frame_wait(true), Some(SLIDE_FRAME));
+    }
+
+    #[test]
+    fn durations_scale_with_speed() {
+        assert_eq!(slide_duration(100, SLIDE_OPEN_BASE_MS), Duration::from_millis(180));
+        assert_eq!(slide_duration(200, SLIDE_OPEN_BASE_MS), Duration::from_millis(90));
+        assert_eq!(slide_duration(25, SLIDE_OPEN_BASE_MS), Duration::from_millis(720));
+    }
 }
