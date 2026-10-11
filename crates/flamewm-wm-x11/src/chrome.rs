@@ -239,8 +239,11 @@ pub fn control_glyph_raster(
         .join("../../")
         .join(role.asset_path());
     let bytes = std::fs::read(path).ok()?;
-    let raster =
+    let mut raster =
         flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok()?;
+    if role == ControlRole::Close && material != ControlMaterial::Rest {
+        paint_disk_behind(&mut raster, scheme.background);
+    }
     if let Ok(mut cache) = control_glyph_cache().lock() {
         if cache.len() >= CONTROL_GLYPH_CACHE_CAPACITY {
             cache.clear();
@@ -248,6 +251,37 @@ pub fn control_glyph_raster(
         cache.insert(key, raster.clone());
     }
     Some(raster)
+}
+
+/// Fills the glyph-edge disk with `disk` (opaque) and composites the
+/// straight-alpha glyph over it. Pixels outside the disk are left untouched.
+fn paint_disk_behind(raster: &mut flamewm_image_core::RgbaImage, disk: [u8; 4]) {
+    let radius = raster.width as f32 / 2.0;
+    for y in 0..raster.height {
+        for x in 0..raster.width {
+            let dx = x as f32 + 0.5 - radius;
+            let dy = y as f32 + 0.5 - radius;
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
+            let offset = ((y * raster.width + x) * 4) as usize;
+            let pixel = &mut raster.pixels[offset..offset + 4];
+            let glyph_alpha = u16::from(pixel[3]);
+            let disk_alpha = 255 - glyph_alpha;
+            for channel in 0..3 {
+                pixel[channel] = ((u16::from(pixel[channel]) * glyph_alpha
+                    + u16::from(disk[channel]) * disk_alpha
+                    + 127)
+                    / 255) as u8;
+            }
+            pixel[3] = 255;
+        }
+    }
+}
+
+/// Opaque RGBA from a skin `0xRRGGBB` token.
+const fn skin_rgba(rgb: u32) -> [u8; 4] {
+    [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 255]
 }
 
 /// Semantic per-material color scheme for control glyphs.
@@ -261,7 +295,7 @@ fn control_glyph_scheme(
         (_, ControlMaterial::Rest) => base,
         (ControlRole::Close, _) => flamewm_image_core::SvgColorScheme {
             text: [0xf1, 0xf2, 0xf3, 255],
-            background: [0xe8, 0x11, 0x23, 255],
+            background: skin_rgba(WINDOW_CHROME.close_hover.0),
             highlight: base.highlight,
             negative_text: base.negative_text,
         },
@@ -592,5 +626,55 @@ mod tests {
             assert_eq!(blit.raster, raster, "no hover must select Rest material for every control");
             assert_eq!(blit.control, hovered[index].control);
         }
+    }
+
+    #[test]
+    fn close_hover_and_pressed_rasters_differ_from_rest() {
+        let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
+        let rest = control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Rest)
+            .expect("close rest raster");
+        for material in [ControlMaterial::Hover, ControlMaterial::Pressed] {
+            let raster = control_glyph_raster(ControlRole::Close, edge, material)
+                .expect("close material raster");
+            assert_ne!(
+                raster.pixels, rest.pixels,
+                "close {material:?} must not be byte-identical to rest"
+            );
+        }
+    }
+
+    #[test]
+    fn close_hover_paints_skin_red_disk_behind_glyph() {
+        let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
+        let raster = control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Hover)
+            .expect("close hover raster");
+        // (1, 8) is inside the edge disk and clear of the glyph strokes.
+        let offset = ((8 * edge + 1) * 4) as usize;
+        let red = WINDOW_CHROME.close_hover.0;
+        assert_eq!(
+            &raster.pixels[offset..offset + 4],
+            &[(red >> 16) as u8, (red >> 8) as u8, red as u8, 255]
+        );
+    }
+
+    #[test]
+    fn minimize_rest_raster_keeps_flame_default_scheme() {
+        let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
+        let raster = control_glyph_raster(ControlRole::Minimize, edge, ControlMaterial::Rest)
+            .expect("minimize rest raster");
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../")
+                .join(ControlRole::Minimize.asset_path()),
+        )
+        .expect("minimize asset");
+        let expected = flamewm_image_core::svg::render_with_color_scheme(
+            &bytes,
+            edge,
+            edge,
+            &flamewm_image_core::SvgColorScheme::flame_default(),
+        )
+        .expect("minimize expected");
+        assert_eq!(raster.pixels, expected.pixels);
     }
 }
