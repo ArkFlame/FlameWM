@@ -77,7 +77,7 @@ impl Default for ProductSettings {
         Self {
             revision: 1,
             accent: "#EF4048".to_owned(),
-            icon_theme: "*:-HighContrast".to_owned(),
+            icon_theme: "McMojave-circle".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
             desktop_selection_fill_opacity: 20,
@@ -404,7 +404,6 @@ impl ConfigStore {
         let mut lines = vec![
             format!("revision={}", snapshot.revision),
             format!("accent={}", snapshot.accent),
-            format!("iconTheme={}", snapshot.icon_theme),
             format!("appearance={}", snapshot.appearance.as_str()),
             format!("wallpaper={}", snapshot.wallpaper),
             format!(
@@ -431,6 +430,13 @@ impl ConfigStore {
         // Keys added after the base contract are written only when they differ from defaults,
         // so settings files that never set them keep their existing byte-for-byte shape.
         let defaults = ProductSettings::default();
+        // Unset icon theme keeps the default and writes nothing; an explicit value persists.
+        push_if_changed(
+            &mut lines,
+            "iconTheme",
+            &snapshot.icon_theme,
+            &defaults.icon_theme,
+        );
         push_if_changed(
             &mut lines,
             "startMenuColor",
@@ -789,6 +795,26 @@ mod tests {
         assert_eq!(settings.desktop_selection_fill_opacity, 20);
         assert_eq!(settings.window_snap_preview_fill_opacity, 20);
         assert_eq!(settings.appearance, AppearanceMode::Dark);
+    }
+
+    #[test]
+    fn unset_icon_theme_defaults_to_mcmojave_and_writes_nothing() {
+        let store = ConfigStore::default();
+        let parsed = store.parse_snapshot("revision=2\n").expect("valid snapshot");
+        assert_eq!(parsed.icon_theme, "McMojave-circle");
+        assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
+    }
+
+    #[test]
+    fn explicit_icon_theme_is_kept_and_written() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\niconTheme=*:-HighContrast\n")
+            .expect("explicit icon theme");
+        assert_eq!(parsed.icon_theme, "*:-HighContrast");
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("iconTheme=*:-HighContrast\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
     }
 
     #[test]

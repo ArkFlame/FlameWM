@@ -745,27 +745,16 @@ impl IconLookupIndex {
                 }
             }
         }
+        // Chain order is selected theme -> its Inherits -> Breeze -> hicolor.
+        // A selected theme that is not installed keeps its slot but has no
+        // files, so lookups fall through to Breeze instead of blank icons.
         ordered.retain(|name| name != "hicolor");
-        if seeds.iter().all(|seed| seed != "Breeze") && !ordered.contains(&"Breeze".to_owned()) {
-            let mut seeded: Vec<String> =
-                seeds.iter().filter(|s| *s != "hicolor").cloned().collect();
-            let mut rest = Vec::new();
-            for name in ordered {
-                if !seeded.contains(&name) && name != "Breeze" {
-                    rest.push(name);
-                }
-            }
-            seeded.push("Breeze".to_owned());
-            seeded.extend(rest);
-            seeded.push("hicolor".to_owned());
-            ordered = seeded;
-            for theme in ordered.clone() {
-                let _ = load(&theme);
-            }
+        if !ordered.contains(&"Breeze".to_owned()) {
+            ordered.push("Breeze".to_owned());
         }
-        if !ordered.contains(&"hicolor".to_owned()) {
-            ordered.push("hicolor".to_owned());
-            let _ = load("hicolor");
+        ordered.push("hicolor".to_owned());
+        for theme in &ordered {
+            let _ = load(theme);
         }
         let mut theme_roots: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for theme in &ordered {
@@ -1196,5 +1185,58 @@ mod tests {
         let next = next.expect("stale watch mtime must produce a rebuilt snapshot");
         assert_eq!(next.generation, 4);
         assert!(throttled.is_none(), "second check inside 5s must be throttled");
+    }
+
+    fn theme_fixture(data: &Path, name: &str, index: &str, icon: Option<&str>) {
+        let base = data.join("icons").join(name);
+        fs::create_dir_all(base.join("16x16/apps")).expect("theme fixture dirs");
+        fs::write(base.join("index.theme"), index).expect("index.theme fixture");
+        if let Some(icon) = icon {
+            fs::write(base.join("16x16/apps").join(icon), b"").expect("icon fixture");
+        }
+    }
+
+    const FIXED_16: &str = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+
+    #[test]
+    fn selected_theme_inherits_before_breeze_then_hicolor() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-chain-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let mcmojave = "[Icon Theme]\nName=McMojave\nDirectories=16x16/apps\nInherits=Numix-Circle-Light,hicolor,breeze\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+        theme_fixture(&data, "McMojave-circle", mcmojave, None);
+        theme_fixture(&data, "Numix-Circle-Light", FIXED_16, Some("chain-app.png"));
+        theme_fixture(&data, "Breeze", FIXED_16, Some("chain-app.png"));
+        theme_fixture(&data, "hicolor", FIXED_16, Some("chain-app.png"));
+        let names = vec!["McMojave-circle".to_owned(), "Breeze".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let _ = fs::remove_dir_all(&data);
+        let (paths, hit) = index.lookup("chain-app", 16);
+        assert!(hit);
+        assert_eq!(index.ordered_themes.first().map(String::as_str), Some("McMojave-circle"));
+        // Inherited Numix must outrank Breeze, which the old ordering put first.
+        assert!(paths[0].ends_with("Numix-Circle-Light/16x16/apps/chain-app.png"));
+    }
+
+    #[test]
+    fn missing_selected_theme_falls_back_to_breeze_not_blank() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-missing-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        theme_fixture(&data, "Breeze", FIXED_16, Some("fallback-app.png"));
+        let names = vec!["McMojave-circle".to_owned(), "Breeze".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let (paths, hit) = index.lookup("fallback-app", 16);
+        let (missing, missing_hit) = index.lookup("never-installed-icon", 16);
+        let _ = fs::remove_dir_all(&data);
+        assert!(hit, "Breeze must serve when the selected theme is absent");
+        assert!(paths[0].ends_with("Breeze/16x16/apps/fallback-app.png"));
+        assert!(missing.is_empty() && !missing_hit, "intentionally missing icon stays empty");
     }
 }

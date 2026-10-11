@@ -163,13 +163,45 @@ fn hardlink_inside_theme_is_accepted_and_copies_content() {
 }
 
 #[test]
-fn xz_archive_is_typed_unsupported_format() {
+fn xz_archive_with_bad_stream_header_is_rejected_without_writing() {
     let base = scratch("xz");
     let src = base.join("demo.tar.xz");
     fs::write(&src, b"\xFD7zXZ\0not really xz").unwrap();
     let err = run(&src, &base.join("icons"), &InstallOptions::default()).unwrap_err();
-    assert!(matches!(err, ImportError::UnsupportedFormat(_)), "{err:?}");
+    assert!(matches!(err, ImportError::Corrupt(_)), "{err:?}");
     assert!(!base.join("icons").exists(), "nothing may be created for xz");
+    fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
+fn xz_tar_installs_through_the_shared_tar_path() {
+    let base = scratch("xz-valid");
+    let icons = base.join("icons");
+    let tar_bytes = tar(&demo_members(b"cursor"));
+    let src = base.join("demo.tar.xz");
+    let mut child = match std::process::Command::new("xz")
+        .args(["-c", "-q"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => {
+            eprintln!("SKIP: xz CLI unavailable");
+            return;
+        }
+    };
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || stdin.write_all(&tar_bytes));
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap().unwrap();
+    assert!(out.status.success());
+    fs::write(&src, out.stdout).unwrap();
+    let installed = run(&src, &icons, &InstallOptions::default()).expect("xz install");
+    assert_eq!(installed.id, "Demo");
+    assert_eq!(fs::read(icons.join("Demo/16x16/apps/app.png")).unwrap(), b"png-bytes");
+    assert_eq!(fs::read_link(icons.join("Demo/cursors/default")).unwrap(), Path::new("left_ptr"));
+    assert_no_staging(&icons);
     fs::remove_dir_all(&base).unwrap();
 }
 

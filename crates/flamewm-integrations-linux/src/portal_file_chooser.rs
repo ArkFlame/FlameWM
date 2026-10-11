@@ -4,7 +4,7 @@
 //! existing libdbus pump and does not create a second async runtime or shell
 //! fallback.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +23,7 @@ pub const REQUEST_INTERFACE: &str = "org.freedesktop.portal.Request";
 pub const OPEN_FILE: &str = "OpenFile";
 pub const RESPONSE: &str = "Response";
 pub const WALLPAPER_TITLE: &str = "Choose Wallpaper";
+pub const THEME_SOURCE_TITLE: &str = "Choose Theme";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 static NEXT_HANDLE_TOKEN: AtomicU64 = AtomicU64::new(1);
@@ -55,14 +56,51 @@ impl PortalFileChooser {
 
     /// Performs one blocking `org.freedesktop.portal.FileChooser.OpenFile` call.
     pub fn open_file(&self, parent_window: &str) -> FlameResult<Option<PathBuf>> {
+        self.open_request(
+            parent_window,
+            WALLPAPER_TITLE,
+            "flamewm_wallpaper",
+            wallpaper_options,
+            file_uri_to_path,
+        )
+    }
+
+    /// Opens the theme source chooser: one archive file, or one folder when `folder` is set.
+    /// `Ok(None)` means the user cancelled.
+    pub fn choose_theme_source(
+        &self,
+        parent_window: &str,
+        folder: bool,
+    ) -> FlameResult<Option<PathBuf>> {
+        self.open_request(
+            parent_window,
+            THEME_SOURCE_TITLE,
+            "flamewm_theme",
+            |handle_token| theme_source_options(handle_token, folder),
+            |uri| theme_source_uri_to_path(uri, folder),
+        )
+    }
+
+    fn open_request<O, A>(
+        &self,
+        parent_window: &str,
+        title: &str,
+        token_prefix: &str,
+        options: O,
+        accept: A,
+    ) -> FlameResult<Option<PathBuf>>
+    where
+        O: FnOnce(&str) -> FlameResult<MessageItem>,
+        A: Fn(&str) -> FlameResult<PathBuf>,
+    {
         validate_parent_window(parent_window)?;
         let handle_token = format!(
-            "flamewm_wallpaper_{}",
+            "{token_prefix}_{}",
             NEXT_HANDLE_TOKEN.fetch_add(1, Ordering::Relaxed)
         );
         let expected_request_path = self.expected_request_path(&handle_token)?;
         self.add_response_match(&expected_request_path)?;
-        let options = wallpaper_options(&handle_token)?;
+        let options = options(&handle_token)?;
         let call = Message::new_method_call(
             PORTAL_SERVICE,
             PORTAL_PATH,
@@ -70,18 +108,14 @@ impl PortalFileChooser {
             OPEN_FILE,
         )
         .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-        .append3(
-            parent_window.to_owned(),
-            WALLPAPER_TITLE.to_owned(),
-            options,
-        );
+        .append3(parent_window.to_owned(), title.to_owned(), options);
         let reply = self.pump.send_with_reply(call, self.timeout)?;
         let request_path = one_object_path(&reply.get_items(), "portal OpenFile handle")?;
         if request_path != expected_request_path {
             self.add_response_match(&request_path)?;
         }
 
-        self.wait_for_response(&request_path)
+        self.wait_for_response(&request_path, &accept)
     }
 
     fn expected_request_path(&self, handle_token: &str) -> FlameResult<String> {
@@ -109,13 +143,16 @@ impl PortalFileChooser {
         Ok(())
     }
 
-    fn wait_for_response(&self, request_path: &str) -> FlameResult<Option<PathBuf>> {
+    fn wait_for_response<A>(&self, request_path: &str, accept: &A) -> FlameResult<Option<PathBuf>>
+    where
+        A: Fn(&str) -> FlameResult<PathBuf>,
+    {
         let deadline = Instant::now() + self.timeout;
         loop {
             let mut result = None;
             self.pump.on_ready(|message| {
                 if is_response_signal(message, request_path) {
-                    result = Some(parse_response(message.get_items()));
+                    result = Some(parse_response(message.get_items(), accept));
                     MessageDisposition::Handled
                 } else {
                     MessageDisposition::Unhandled
@@ -135,38 +172,69 @@ impl PortalFileChooser {
     }
 }
 
+/// One portal filter: a display name and its glob patterns.
+type Filter = (&'static str, &'static [&'static str]);
+
+const WALLPAPER_FILTERS: &[Filter] = &[
+    ("PNG", &["*.png"]),
+    ("SVG", &["*.svg"]),
+    ("PPM", &["*.ppm"]),
+];
+const THEME_ARCHIVE_FILTERS: &[Filter] = &[(
+    "Theme archives",
+    &["*.tar.gz", "*.tgz", "*.tar.xz", "*.txz"],
+)];
+const THEME_ARCHIVE_SUFFIXES: [&str; 4] = [".tar.gz", ".tgz", ".tar.xz", ".txz"];
+
 fn wallpaper_options(handle_token: &str) -> FlameResult<MessageItem> {
-    let filters = [("PNG", "*.png"), ("SVG", "*.svg"), ("PPM", "*.ppm")]
-        .into_iter()
-        .map(|(name, pattern)| {
-            let patterns = MessageItem::Array(
-                MessageItemArray::new(
-                    vec![MessageItem::Struct(vec![
+    file_chooser_options(handle_token, false, WALLPAPER_FILTERS)
+}
+
+fn theme_source_options(handle_token: &str, folder: bool) -> FlameResult<MessageItem> {
+    if folder {
+        file_chooser_options(handle_token, true, &[])
+    } else {
+        file_chooser_options(handle_token, false, THEME_ARCHIVE_FILTERS)
+    }
+}
+
+fn file_chooser_options(
+    handle_token: &str,
+    directory: bool,
+    filters: &[Filter],
+) -> FlameResult<MessageItem> {
+    let filters = filters
+        .iter()
+        .map(|(name, patterns)| {
+            let patterns = patterns
+                .iter()
+                .map(|pattern| {
+                    MessageItem::Struct(vec![
                         MessageItem::UInt32(0),
-                        MessageItem::Str(pattern.to_owned()),
-                    ])],
-                    signature("a(us)")?,
-                )
-                .map_err(|error| {
+                        MessageItem::Str((*pattern).to_owned()),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let patterns = MessageItem::Array(
+                MessageItemArray::new(patterns, signature("a(us)")?).map_err(|error| {
                     FlameError::invalid(format!("portal filter patterns are invalid: {error:?}"))
                 })?,
             );
             Ok(MessageItem::Struct(vec![
-                MessageItem::Str(name.to_owned()),
+                MessageItem::Str((*name).to_owned()),
                 patterns,
             ]))
         })
         .collect::<FlameResult<Vec<_>>>()?;
     let filters = MessageItem::Array(
-        MessageItemArray::new(filters, signature("a(sa(us))")?)
-            .map_err(|error| {
-                FlameError::invalid(format!("portal filters are invalid: {error:?}"))
-            })?,
+        MessageItemArray::new(filters, signature("a(sa(us))")?).map_err(|error| {
+            FlameError::invalid(format!("portal filters are invalid: {error:?}"))
+        })?,
     );
     MessageItem::from_dict(
         vec![
             ("multiple".to_owned(), MessageItem::Bool(false)),
-            ("directory".to_owned(), MessageItem::Bool(false)),
+            ("directory".to_owned(), MessageItem::Bool(directory)),
             ("modal".to_owned(), MessageItem::Bool(true)),
             (
                 "handle_token".to_owned(),
@@ -200,7 +268,10 @@ fn is_response_signal(message: &Message, request_path: &str) -> bool {
         && message.member().is_some_and(|value| value == RESPONSE)
 }
 
-fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
+fn parse_response<A>(items: Vec<MessageItem>, accept: &A) -> FlameResult<Option<PathBuf>>
+where
+    A: Fn(&str) -> FlameResult<PathBuf>,
+{
     if items.len() != 2 {
         return Err(FlameError::invalid("portal FileChooser response has invalid arguments"));
     }
@@ -230,14 +301,44 @@ fn parse_response(items: Vec<MessageItem>) -> FlameResult<Option<PathBuf>> {
         uris.ok_or_else(|| FlameError::invalid("portal FileChooser response has no URI list"))?;
     if uris.len() != 1 {
         return Err(FlameError::invalid(
-            "portal FileChooser returned a non-single wallpaper selection",
+            "portal FileChooser returned a non-single selection",
         ));
     }
-    file_uri_to_path(&uris[0]).map(Some)
+    accept(&uris[0]).map(Some)
 }
 
 /// Converts one local `file://` URI into a validated supported wallpaper path.
 pub fn file_uri_to_path(uri: &str) -> FlameResult<PathBuf> {
+    let path = local_file_uri_to_path(uri)?;
+    if ImageSourceFormat::from_extension(&path).is_none() {
+        return Err(FlameError::invalid(
+            "portal file URI does not name a supported wallpaper format",
+        ));
+    }
+    Ok(path)
+}
+
+/// Converts one local `file://` URI into a theme source path: a theme archive file,
+/// or any absolute local directory when `folder` is set.
+pub fn theme_source_uri_to_path(uri: &str, folder: bool) -> FlameResult<PathBuf> {
+    let path = local_file_uri_to_path(uri)?;
+    if !folder && !is_theme_archive(&path) {
+        return Err(FlameError::invalid(
+            "portal file URI does not name a supported theme archive",
+        ));
+    }
+    Ok(path)
+}
+
+fn is_theme_archive(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|name| THEME_ARCHIVE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
+}
+
+/// Parses a local `file://` URI (optionally `localhost`) into an absolute path.
+fn local_file_uri_to_path(uri: &str) -> FlameResult<PathBuf> {
     let rest = uri
         .strip_prefix("file://")
         .ok_or_else(|| FlameError::invalid("portal FileChooser returned a non-file URI"))?;
@@ -255,11 +356,6 @@ pub fn file_uri_to_path(uri: &str) -> FlameResult<PathBuf> {
     let path = PathBuf::from(decoded);
     if !path.is_absolute() {
         return Err(FlameError::invalid("portal file URI path is not absolute"));
-    }
-    if ImageSourceFormat::from_extension(&path).is_none() {
-        return Err(FlameError::invalid(
-            "portal file URI does not name a supported wallpaper format",
-        ));
     }
     Ok(path)
 }
@@ -385,6 +481,10 @@ mod tests {
             matches!(key, MessageItem::Str(name) if name == "multiple")
                 && matches!(value.peel(), MessageItem::Bool(false))
         }));
+        assert!(values.iter().any(|(key, value)| {
+            matches!(key, MessageItem::Str(name) if name == "directory")
+                && matches!(value.peel(), MessageItem::Bool(false))
+        }));
         let serialized = format!("{values:?}");
         assert!(serialized.contains("*.png"));
         assert!(serialized.contains("*.svg"));
@@ -400,9 +500,82 @@ mod tests {
             MessageItem::from_dict(std::iter::empty::<Result<(String, MessageItem), FlameError>>())
                 .expect("empty results");
         assert_eq!(
-            parse_response(vec![MessageItem::UInt32(1), results]),
+            parse_response(vec![MessageItem::UInt32(1), results], &file_uri_to_path),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn cancelled_theme_source_response_is_none_without_error() {
+        for folder in [false, true] {
+            let results = MessageItem::from_dict(
+                std::iter::empty::<Result<(String, MessageItem), FlameError>>(),
+            )
+            .expect("empty results");
+            let accept = |uri: &str| theme_source_uri_to_path(uri, folder);
+            assert_eq!(
+                parse_response(vec![MessageItem::UInt32(1), results], &accept),
+                Ok(None),
+                "folder={folder}"
+            );
+        }
+    }
+
+    #[test]
+    fn theme_source_uri_maps_archives_and_folders_to_local_paths() {
+        assert_eq!(
+            theme_source_uri_to_path("file:///home/u/My%20Theme.tar.gz", false)
+                .expect("gz archive")
+                .as_path(),
+            Path::new("/home/u/My Theme.tar.gz")
+        );
+        for name in ["t.tgz", "t.tar.xz", "t.txz", "T.TAR.XZ"] {
+            assert!(
+                theme_source_uri_to_path(&format!("file:///x/{name}"), false).is_ok(),
+                "archive must be accepted: {name}"
+            );
+        }
+        assert_eq!(
+            theme_source_uri_to_path("file://localhost/home/u/Papirus%20Dark", true)
+                .expect("folder")
+                .as_path(),
+            Path::new("/home/u/Papirus Dark")
+        );
+        for (uri, folder) in [
+            ("file:///x/theme.zip", false),
+            ("file:///x/theme.tar", false),
+            ("file:///x/theme.png", false),
+            ("https://example.test/t.tgz", false),
+            ("https://example.test/dir", true),
+            ("file://remote/home/u/dir", true),
+            ("file:///x/bad%ZZ.tgz", false),
+        ] {
+            assert!(
+                theme_source_uri_to_path(uri, folder).is_err(),
+                "URI must be rejected: {uri} folder={folder}"
+            );
+        }
+    }
+
+    #[test]
+    fn theme_source_options_select_archive_filters_or_directory_mode() {
+        let MessageItem::Dict(archive) = theme_source_options("tok", false).expect("archive options")
+        else {
+            panic!("archive options must be a dictionary");
+        };
+        let archive = format!("{:?}", archive.into_vec());
+        assert!(archive.contains("*.tar.gz") && archive.contains("*.txz"));
+        assert!(!archive.contains("*.png"));
+
+        let MessageItem::Dict(folder) = theme_source_options("tok", true).expect("folder options")
+        else {
+            panic!("folder options must be a dictionary");
+        };
+        let folder = folder.into_vec();
+        assert!(folder.iter().any(|(key, value)| {
+            matches!(key, MessageItem::Str(name) if name == "directory")
+                && matches!(value.peel(), MessageItem::Bool(true))
+        }));
     }
 
     #[test]

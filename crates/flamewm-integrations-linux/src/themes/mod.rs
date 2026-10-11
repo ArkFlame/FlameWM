@@ -3,6 +3,7 @@
 
 mod archive;
 pub mod cursor;
+mod xz;
 pub mod import;
 
 use std::collections::HashSet;

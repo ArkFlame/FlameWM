@@ -1,10 +1,27 @@
 //! Bounded in-memory tar reader (ustar, pax `x`/`g`, GNU `L`/`K`). Parses only.
 
+use std::fs::File;
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::import::{ImportError, MAX_TOTAL_BYTES};
+use super::import::{ImportError, MAX_ENTRIES, MAX_TOTAL_BYTES};
+use super::xz::XzReader;
 
 const BLOCK: usize = 512;
+
+/// Decode a `.tar.xz` file (magic checked by `XzReader`) and parse it with the
+/// same bounded tar path as `.tar.gz`. Output is capped by `take`.
+pub(crate) fn parse_xz(file: File, cancel: &AtomicBool) -> Result<Vec<RawEntry>, ImportError> {
+    let mut archive_bytes = Vec::new();
+    XzReader::new(file)
+        .take(MAX_TOTAL_BYTES + 1)
+        .read_to_end(&mut archive_bytes)
+        .map_err(|err| ImportError::Corrupt(format!("xz stream: {err}")))?;
+    if archive_bytes.len() as u64 > MAX_TOTAL_BYTES {
+        return Err(ImportError::TooLarge);
+    }
+    parse(&archive_bytes, MAX_ENTRIES, cancel)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RawKind {

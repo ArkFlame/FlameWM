@@ -7,6 +7,7 @@ use std::time::Instant;
 pub mod control;
 pub mod file_chooser;
 pub mod runtime;
+pub mod theme_picker;
 pub mod view;
 
 #[cfg(test)]
@@ -96,6 +97,29 @@ const MODE_PAGER: PagerNodes = PagerNodes {
     next_off: "display-mode-next-off",
     label: "display-mode-page-label",
 };
+
+const ICON_THEME_PAGER: PagerNodes = PagerNodes {
+    prev: "theme-icon-prev",
+    prev_off: "theme-icon-prev-off",
+    next: "theme-icon-next",
+    next_off: "theme-icon-next-off",
+    label: "theme-icon-page-label",
+};
+
+const CURSOR_THEME_PAGER: PagerNodes = PagerNodes {
+    prev: "theme-cursor-prev",
+    prev_off: "theme-cursor-prev-off",
+    next: "theme-cursor-next",
+    next_off: "theme-cursor-next-off",
+    label: "theme-cursor-page-label",
+};
+
+fn theme_pager(kind: theme_picker::PickerKind) -> &'static PagerNodes {
+    match kind {
+        theme_picker::PickerKind::Icon => &ICON_THEME_PAGER,
+        theme_picker::PickerKind::Cursor => &CURSOR_THEME_PAGER,
+    }
+}
 
 fn page_count(len: usize, page_size: usize) -> usize {
     len.div_ceil(page_size)
@@ -239,7 +263,14 @@ enum SettingsAction {
     Page(SettingsPage),
     AccentSwatch(&'static str),
     AccentReset,
-    IconThemeNext,
+    /// Opens the icon or cursor theme picker on its first page.
+    ThemePickerOpen(theme_picker::PickerKind),
+    ThemePickerClose,
+    ThemePickerPage(theme_picker::PickerKind, PageStep),
+    /// Row `slot` on the open picker's current page.
+    ThemePickerSelect(theme_picker::PickerKind, usize),
+    /// Opens the portal chooser for one archive, or one folder when `folder` is set.
+    ThemeInstallChoose { folder: bool },
     WallpaperChoose,
     WallpaperReset,
     Toggle(&'static str),
@@ -270,6 +301,11 @@ enum SettingsAction {
         channel: usize,
         delta: i16,
     },
+    /// Sets a `#RRGGBB` setting to one fixed palette value in one transaction.
+    ColorSwatch {
+        key: &'static str,
+        value: &'static str,
+    },
     /// Steps a percent setting by 5 within 0..=100.
     PercentStep(&'static str, i8),
     /// Steps `animationSpeed` (hundredths) by 25 within 25..=200.
@@ -293,6 +329,12 @@ pub struct SettingsApplication<T: ControlTransport> {
     hotkey_armed: bool,
     error: Option<String>,
     pages: DisplayPages,
+    themes: theme_picker::ThemeRegistry,
+    /// The open theme picker and its current page.
+    theme_picker: Option<(theme_picker::PickerKind, usize)>,
+    theme_scan: Option<Receiver<theme_picker::ThemeRegistry>>,
+    theme_install: Option<Receiver<theme_picker::InstallOutcome>>,
+    theme_status: Option<String>,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -304,6 +346,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             hotkey_armed: false,
             error: None,
             pages: DisplayPages::default(),
+            themes: theme_picker::ThemeRegistry::default(),
+            theme_picker: None,
+            theme_scan: None,
+            theme_install: None,
+            theme_status: None,
         }
     }
 
@@ -368,6 +415,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     pub fn poll_background(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let mut completion_errors: Vec<String> = self.poll_open_uri().err().into_iter().collect();
+        if self.poll_theme_jobs() {
+            if let Err(error) = self.sync(document) {
+                completion_errors.push(error);
+            }
+        }
         let result = self
             .wallpaper_chooser
             .as_mut()
@@ -448,18 +500,25 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::AccentReset => {
                 self.apply_text("accent", DEFAULT_ACCENT.to_owned())?;
             }
-            SettingsAction::IconThemeNext => {
-                let current = self
-                    .client
-                    .settings()
-                    .and_then(|snapshot| snapshot.values.get("iconTheme"))
-                    .and_then(|value| match value {
-                        SettingValue::Text(value) => Some(value.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                self.apply_text("iconTheme", next_icon_theme(&current).to_owned())?;
+            SettingsAction::ThemePickerOpen(kind) => self.theme_picker = Some((kind, 0)),
+            SettingsAction::ThemePickerClose => self.theme_picker = None,
+            SettingsAction::ThemePickerPage(kind, step) => {
+                let page = self.open_theme_page(kind)?;
+                let pages = page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
+                self.theme_picker = Some((kind, step_page(page, step, pages)));
             }
+            SettingsAction::ThemePickerSelect(kind, slot) => {
+                let index = self.open_theme_page(kind)? * theme_picker::PICKER_SLOTS + slot;
+                let id = self
+                    .themes
+                    .items(kind)
+                    .get(index)
+                    .map(|item| item.id.clone())
+                    .ok_or_else(|| format!("no theme at index {index}; rescan the themes"))?;
+                self.apply_text(kind.setting_key(), id)?;
+                self.theme_picker = None;
+            }
+            SettingsAction::ThemeInstallChoose { folder } => self.start_theme_install(folder)?,
             SettingsAction::WallpaperChoose => {
                 if self.wallpaper_chooser.is_some() {
                     return Err("wallpaper chooser is already open".to_owned());
@@ -502,6 +561,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 let [r, g, b] = channels;
                 self.apply_text(key, format!("#{r:02X}{g:02X}{b:02X}"))?;
             }
+            SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::PercentStep(key, direction) => self.step_percent(key, direction, 100)?,
             SettingsAction::AnimationSpeed(direction) => {
                 self.step_integer("animationSpeed", i64::from(direction) * 25, 25, 200)?;
@@ -581,6 +641,121 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.client.revert_display_mode().map_err(control_error)?;
             }
             SettingsAction::OpenUri(uri) => self.start_open_uri(uri)?,
+        }
+        Ok(())
+    }
+
+    /// Starts a catalog scan unless one is already in flight. Runs off the UI thread.
+    pub fn start_theme_scan(&mut self) {
+        if self.theme_scan.is_some() {
+            return;
+        }
+        match theme_picker::start_scan(theme_picker::theme_data_dirs_from_env()) {
+            Ok(receiver) => self.theme_scan = Some(receiver),
+            Err(error) => self.theme_status = Some(error),
+        }
+    }
+
+    /// Applies finished scan and install results. Returns true when the view must be projected.
+    fn poll_theme_jobs(&mut self) -> bool {
+        let mut changed = false;
+        match self.theme_scan.as_ref().map(Receiver::try_recv) {
+            Some(Ok(registry)) => {
+                self.theme_scan = None;
+                self.themes = registry;
+                if let Some((kind, page)) = self.theme_picker {
+                    let pages = page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
+                    self.theme_picker = Some((kind, page.min(pages.saturating_sub(1))));
+                }
+                changed = true;
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.theme_scan = None;
+                self.theme_status = Some("theme scan ended without a result".to_owned());
+                changed = true;
+            }
+            Some(Err(TryRecvError::Empty)) | None => {}
+        }
+        match self.theme_install.as_ref().map(Receiver::try_recv) {
+            Some(Ok(outcome)) => {
+                self.theme_install = None;
+                self.theme_status = Some(match outcome {
+                    Ok(Some(installed)) => {
+                        // Rescan so the installed theme appears in the picker.
+                        self.theme_scan = None;
+                        self.start_theme_scan();
+                        format!("Installed {}", installed.id)
+                    }
+                    Ok(None) => "Install cancelled".to_owned(),
+                    Err(error) => error,
+                });
+                changed = true;
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.theme_install = None;
+                self.theme_status = Some("theme install ended without a result".to_owned());
+                changed = true;
+            }
+            Some(Err(TryRecvError::Empty)) | None => {}
+        }
+        changed
+    }
+
+    fn start_theme_install(&mut self, folder: bool) -> Result<(), String> {
+        if self.theme_install.is_some() {
+            return Err("a theme install is already running".to_owned());
+        }
+        let icons_dir = theme_picker::user_icons_dir_from_env()
+            .ok_or_else(|| "no user data home: set XDG_DATA_HOME or HOME".to_owned())?;
+        self.theme_install = Some(theme_picker::start_install(icons_dir, folder)?);
+        self.theme_status = Some("Choose a theme archive or folder".to_owned());
+        Ok(())
+    }
+
+    /// Current page of the open picker; an action for a closed picker is rejected.
+    fn open_theme_page(&self, kind: theme_picker::PickerKind) -> Result<usize, String> {
+        match self.theme_picker {
+            Some((open, page)) if open == kind => Ok(page),
+            _ => Err(format!("the {} theme picker is not open", kind.word())),
+        }
+    }
+
+    fn sync_theme_pickers(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        for kind in [theme_picker::PickerKind::Icon, theme_picker::PickerKind::Cursor] {
+            let open = self
+                .theme_picker
+                .filter(|(open, _)| *open == kind)
+                .map(|(_, page)| page);
+            let node = kind.node();
+            document.visible(&format!("{node}-picker"), open.is_some())?;
+            let items = self.themes.items(kind);
+            let page = open.unwrap_or(0);
+            project_pager(
+                document,
+                theme_pager(kind),
+                page,
+                page_count(items.len(), theme_picker::PICKER_SLOTS),
+                page_label(page, theme_picker::PICKER_SLOTS, items.len()),
+            )?;
+            for slot in 0..theme_picker::PICKER_SLOTS {
+                let row = format!("{node}-row-{slot}");
+                let preview = format!("{node}-preview-{slot}");
+                let Some(item) =
+                    open.and_then(|page| items.get(page * theme_picker::PICKER_SLOTS + slot))
+                else {
+                    document.visible(&row, false)?;
+                    continue;
+                };
+                document.visible(&row, true)?;
+                document.text(&format!("{node}-name-{slot}"), item.name.clone())?;
+                match &item.preview {
+                    Some(image) => {
+                        document.visible(&preview, true)?;
+                        document.image_rgba8(&preview, image.clone())?;
+                    }
+                    None => document.visible(&preview, false)?,
+                }
+            }
         }
         Ok(())
     }
@@ -964,6 +1139,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.font_family(family.clone())?;
         }
         self.sync_value_text(document)?;
+        self.sync_theme_pickers(document)?;
+        if let Some(status) = &self.theme_status {
+            optional_text(document, "theme-install-status", status.clone());
+        }
         self.sync_appearance(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
@@ -1001,7 +1180,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("startAnimation", "start-animation-value"),
         ] {
             if let Ok(value) = self.text_setting(key) {
-                document.text(id, value)?;
+                let label = if key == "startAnimation" { start_animation_label(&value) } else { value };
+                document.text(id, label)?;
             }
         }
         Ok(())
@@ -1145,8 +1325,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = percent("WindowSnapPreviewFillOpacity") {
             document.text("snap-opacity-value", format!("{value}%"))?;
         }
-        if let Some(value) = text("iconTheme") {
-            document.text("icon-theme-value", icon_theme_label(&value).to_owned())?;
+        for kind in [theme_picker::PickerKind::Icon, theme_picker::PickerKind::Cursor] {
+            if let Some(value) = text(kind.setting_key()) {
+                document.text(kind.select_box(), self.themes.label(kind, &value))?;
+            }
         }
         if let Some(value) = percent("taskbarOpacity") {
             document.text("taskbar-opacity-value", format!("{value}%"))?;
@@ -1247,13 +1429,42 @@ const COLOR_TARGETS: [(&str, &str); 4] = [
     ("titlebar", "titlebarColor"),
 ];
 
+/// Fixed swatch values offered beside each color row; `swatch.<index>` selects one.
+const COLOR_PALETTE: [&str; 8] = [
+    "#000000", "#FFFFFF", "#1E1E1E", "#2D2D2D", "#3DAEE9", "#9B59B6", "#1ABC9C", "#EF4048",
+];
+
+/// Display label for a stored text value, when it differs from the value.
+const START_ANIMATION_LABELS: [(&str, &str); 1] = [("slide-up", "Slide Up")];
+
+fn start_animation_label(value: &str) -> String {
+    START_ANIMATION_LABELS
+        .iter()
+        .find(|(id, _)| *id == value)
+        .map_or_else(|| value.to_owned(), |(_, label)| (*label).to_owned())
+}
+
 const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
 
-/// Parses `<target>.<r|g|b>.step.<+-1|+-16>`, the rest after `settings.color.`.
+/// Parses `<target>.<r|g|b>.step.<+-1|+-16|+-64>` or `<target>.swatch.<0..8>`,
+/// the rest after `settings.color.`.
 fn parse_color_step(rest: &str) -> Result<SettingsAction, String> {
     let (target, rest) = rest
         .split_once('.')
         .ok_or_else(|| format!("invalid color action '{rest}'"))?;
+    if let Some(index) = rest.strip_prefix("swatch.") {
+        let key = COLOR_TARGETS
+            .iter()
+            .find(|(name, _)| *name == target)
+            .map(|(_, key)| *key)
+            .ok_or_else(|| format!("unknown color target '{target}'"))?;
+        let value = index
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| COLOR_PALETTE.get(index))
+            .ok_or_else(|| format!("unknown color swatch '{index}'"))?;
+        return Ok(SettingsAction::ColorSwatch { key, value });
+    }
     let (channel, delta) = rest
         .split_once(".step.")
         .ok_or_else(|| format!("invalid color step '{rest}'"))?;
@@ -1273,6 +1484,8 @@ fn parse_color_step(rest: &str) -> Result<SettingsAction, String> {
         "-1" => -1,
         "16" => 16,
         "-16" => -16,
+        "64" => 64,
+        "-64" => -64,
         _ => return Err(format!("unknown color step '{delta}'")),
     };
     Ok(SettingsAction::ColorStep { key, channel, delta })
@@ -1395,6 +1608,35 @@ fn about_uri(action: &str) -> Option<&'static str> {
     }
 }
 
+/// Parses the rest after `settings.theme.`: `close`, `install`, or `<icon|cursor>.<op>`
+/// where `<op>` is `open`, `prev`, `next` or `select.<slot>`.
+fn parse_theme_action(rest: &str) -> Result<SettingsAction, String> {
+    match rest {
+        "close" => return Ok(SettingsAction::ThemePickerClose),
+        "install" => return Ok(SettingsAction::ThemeInstallChoose { folder: false }),
+        "install-folder" => return Ok(SettingsAction::ThemeInstallChoose { folder: true }),
+        _ => {}
+    }
+    let (target, operation) = rest
+        .split_once('.')
+        .ok_or_else(|| format!("unknown theme action '{rest}'"))?;
+    let kind = theme_picker::PickerKind::parse(target)
+        .ok_or_else(|| format!("unknown theme target '{target}'"))?;
+    match operation {
+        "open" => Ok(SettingsAction::ThemePickerOpen(kind)),
+        "prev" => Ok(SettingsAction::ThemePickerPage(kind, PageStep::Prev)),
+        "next" => Ok(SettingsAction::ThemePickerPage(kind, PageStep::Next)),
+        _ => {
+            let slot = operation
+                .strip_prefix("select.")
+                .and_then(|slot| slot.parse::<usize>().ok())
+                .filter(|slot| *slot < theme_picker::PICKER_SLOTS)
+                .ok_or_else(|| format!("unknown theme operation '{operation}'"))?;
+            Ok(SettingsAction::ThemePickerSelect(kind, slot))
+        }
+    }
+}
+
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
 fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if action.starts_with("keyboard.") {
@@ -1503,8 +1745,10 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(uri) = about_uri(action) {
         return Ok(SettingsAction::OpenUri(uri));
     }
+    if let Some(rest) = action.strip_prefix("settings.theme.") {
+        return parse_theme_action(rest);
+    }
     match action {
-        "settings.icon-theme.next" => Ok(SettingsAction::IconThemeNext),
         "settings.wallpaper.choose" => Ok(SettingsAction::WallpaperChoose),
         "settings.wallpaper.reset" => Ok(SettingsAction::WallpaperReset),
         "settings.taskbar.position" => Ok(SettingsAction::TaskbarEdgeCycle),
@@ -1540,33 +1784,6 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.display.modes.next" => Ok(SettingsAction::ModePage(PageStep::Next)),
         _ => Err(format!("unknown settings action '{action}'")),
     }
-}
-
-/// Installed icon themes offered by the Appearance cycle, as (value, label).
-const ICON_THEMES: [(&str, &str); 3] = [
-    ("*:-HighContrast", "FlameWM Breeze"),
-    ("breeze-dark", "Breeze Dark"),
-    ("HighContrast", "High Contrast"),
-];
-
-/// Next icon theme value in [`ICON_THEMES`] order, wrapping. An unknown
-/// current value starts the cycle at the first entry.
-#[must_use]
-pub fn next_icon_theme(current: &str) -> &'static str {
-    let index = ICON_THEMES
-        .iter()
-        .position(|(value, _)| *value == current)
-        .unwrap_or(0);
-    ICON_THEMES[(index + 1) % ICON_THEMES.len()].0
-}
-
-/// Display label for an icon theme value; unknown values are shown verbatim.
-#[must_use]
-pub fn icon_theme_label(value: &str) -> &str {
-    ICON_THEMES
-        .iter()
-        .find(|(theme, _)| *theme == value)
-        .map_or(value, |(_, label)| label)
 }
 
 #[must_use]
@@ -1619,13 +1836,104 @@ mod value_text_tests {
     use super::*;
 
     #[test]
-    fn icon_theme_cycle_visits_every_entry_in_order_and_wraps() {
-        assert_eq!(next_icon_theme("*:-HighContrast"), "breeze-dark");
-        assert_eq!(next_icon_theme("breeze-dark"), "HighContrast");
-        assert_eq!(next_icon_theme("HighContrast"), "*:-HighContrast");
-        assert_eq!(next_icon_theme("unknown-theme"), "breeze-dark");
-        assert_eq!(icon_theme_label("*:-HighContrast"), "FlameWM Breeze");
-        assert_eq!(icon_theme_label("custom"), "custom");
+    fn theme_picker_actions_parse_to_typed_targets() {
+        use theme_picker::PickerKind;
+        assert!(matches!(
+            parse_action("settings.theme.icon.open"),
+            Ok(SettingsAction::ThemePickerOpen(PickerKind::Icon))
+        ));
+        assert!(matches!(
+            parse_action("settings.theme.cursor.next"),
+            Ok(SettingsAction::ThemePickerPage(PickerKind::Cursor, PageStep::Next))
+        ));
+        assert!(matches!(
+            parse_action("settings.theme.icon.select.5"),
+            Ok(SettingsAction::ThemePickerSelect(PickerKind::Icon, 5))
+        ));
+        assert!(matches!(parse_action("settings.theme.close"), Ok(SettingsAction::ThemePickerClose)));
+        assert!(matches!(
+            parse_action("settings.theme.install"),
+            Ok(SettingsAction::ThemeInstallChoose { folder: false })
+        ));
+        assert!(matches!(
+            parse_action("settings.theme.install-folder"),
+            Ok(SettingsAction::ThemeInstallChoose { folder: true })
+        ));
+    }
+
+    #[test]
+    fn theme_picker_actions_reject_out_of_range_and_retired_cycle() {
+        for action in [
+            "settings.theme.icon.select.6",
+            "settings.theme.icon.select.x",
+            "settings.theme.font.open",
+            "settings.theme.icon.sideways",
+            "settings.icon-theme.next",
+        ] {
+            assert!(parse_action(action).is_err(), "{action} must be rejected");
+        }
+    }
+
+    #[test]
+    fn selecting_a_theme_writes_its_stable_id_and_closes_the_picker() {
+        use std::cell::RefCell;
+        use std::collections::VecDeque;
+        use std::rc::Rc;
+
+        use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot};
+        use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
+        use flamewm_settings_core::ControlTransport;
+        use theme_picker::{PickerKind, ThemeItem, ThemeRegistry};
+
+        struct Recorder {
+            requests: Rc<RefCell<Vec<ControlRequest>>>,
+            responses: VecDeque<ControlResponse>,
+        }
+        impl ControlTransport for Recorder {
+            fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
+                self.requests.borrow_mut().push(request);
+                Ok(self.responses.pop_front().unwrap_or(ControlResponse::Settings(SettingsSnapshot::new(1))))
+            }
+        }
+
+        let item = |n: usize| ThemeItem {
+            id: format!("theme-{n}"),
+            name: format!("Theme {n}"),
+            preview: None,
+        };
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let transport = Recorder {
+            requests: requests.clone(),
+            responses: VecDeque::new(),
+        };
+        let mut app = SettingsApplication::new(transport);
+        app.themes = ThemeRegistry {
+            icon: (0..8).map(item).collect(),
+            cursor: Vec::new(),
+        };
+
+        // Selecting without an open picker is rejected before any request.
+        assert!(app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 0)).is_err());
+        assert!(requests.borrow().is_empty());
+
+        app.execute(SettingsAction::ThemePickerOpen(PickerKind::Icon)).expect("open");
+        app.execute(SettingsAction::ThemePickerPage(PickerKind::Icon, PageStep::Next))
+            .expect("page");
+        app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 1)).expect("select");
+
+        let requests = requests.borrow();
+        let transaction = match requests.last() {
+            Some(ControlRequest::ApplySettings(transaction)) => transaction,
+            other => panic!("expected one ApplySettings, got {other:?}"),
+        };
+        assert_eq!(
+            transaction.changes,
+            vec![SettingsChange {
+                key: "iconTheme".to_owned(),
+                value: Some(SettingValue::Text("theme-7".to_owned())),
+            }]
+        );
+        assert!(app.theme_picker.is_none(), "selection closes the picker");
     }
 
     #[test]
@@ -1644,6 +1952,36 @@ mod value_text_tests {
         assert_eq!(cycle_value(&sizes, 72, 1), 34);
         assert_eq!(cycle_value(&sizes, 34, -1), 72);
         assert_eq!(cycle_value(&sizes, 44, 1), 52);
+    }
+
+    #[test]
+    fn color_swatches_and_coarse_steps_parse_to_fixed_typed_targets() {
+        assert!(matches!(
+            parse_action("settings.color.taskbar.swatch.0"),
+            Ok(SettingsAction::ColorSwatch { key: "taskbarColor", value: "#000000" })
+        ));
+        assert!(matches!(
+            parse_action("settings.color.accent.swatch.7"),
+            Ok(SettingsAction::ColorSwatch { key: "accent", value: "#EF4048" })
+        ));
+        assert!(matches!(
+            parse_action("settings.color.titlebar.g.step.64"),
+            Ok(SettingsAction::ColorStep { key: "titlebarColor", channel: 1, delta: 64 })
+        ));
+        assert!(matches!(
+            parse_action("settings.color.startmenu.b.step.-64"),
+            Ok(SettingsAction::ColorStep { key: "startMenuColor", channel: 2, delta: -64 })
+        ));
+        for action in [
+            "settings.color.taskbar.swatch.8",
+            "settings.color.taskbar.swatch.x",
+            "settings.color.desktop.swatch.0",
+            "settings.color.accent.r.step.32",
+        ] {
+            assert!(parse_action(action).is_err(), "{action} must be rejected");
+        }
+        assert_eq!(start_animation_label("slide-up"), "Slide Up");
+        assert_eq!(start_animation_label("other"), "other");
     }
 
     #[test]

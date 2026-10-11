@@ -50,6 +50,8 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
         }
     };
 
+    // Started after the completion wake is registered, so a fast scan result is never missed.
+    application.start_theme_scan();
     let application = Rc::new(RefCell::new(application));
     let event_application = Rc::clone(&application);
     let wake_application = Rc::clone(&application);

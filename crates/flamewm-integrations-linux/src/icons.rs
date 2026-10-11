@@ -480,32 +480,47 @@ impl IconResolver {
     }
 
     /// Reads XDG paths once. Theme selection remains explicit when callers use `new`.
-    /// Default search order after packaged assets is Breeze then hicolor; a
-    /// configured `FLAMEWM_ICON_THEME` is always searched first.
+    /// Default search order after packaged assets is Breeze then hicolor.
     #[must_use]
     pub fn from_environment(packaged_root: impl Into<PathBuf>, theme_generation: u64) -> Self {
-        // Order: FLAMEWM_ICON_THEME, then the desktop's configured theme,
-        // then Breeze. hicolor is appended by the inheritance chain.
-        let mut theme_names: Vec<String> = Vec::new();
-        if let Some(value) = env::var_os("FLAMEWM_ICON_THEME")
-            .map(|value| value.to_string_lossy().into_owned())
-            .filter(|value| !value.is_empty())
-        {
-            theme_names.push(value);
-        }
-        if let Some(config_home) = xdg_config_home() {
-            if let Some(configured) = configured_icon_theme(&config_home) {
-                theme_names.push(configured);
-            }
-        }
-        theme_names.push("Breeze".to_owned());
-        let theme_names = unique_strings(theme_names);
+        Self::from_environment_with_theme(packaged_root, theme_generation, None)
+    }
+
+    /// Startup entry for the Flame `iconTheme` preference (`None` = unset).
+    #[must_use]
+    pub fn from_environment_with_theme(
+        packaged_root: impl Into<PathBuf>,
+        theme_generation: u64,
+        preferred: Option<&str>,
+    ) -> Self {
         Self::new(
             packaged_root,
-            theme_names,
+            theme_chain(preferred),
             xdg_data_dirs(),
             theme_generation,
         )
+    }
+
+    /// Canonical live theme entry (startup uses the same chain via
+    /// `from_environment_with_theme`). Rebuilds the shared lookup index only
+    /// when the effective chain changes, then installs it with
+    /// `set_shared_index` and bumps the theme generation. The index build is a
+    /// directory scan: call it off the UI thread. Returns `true` on rebuild.
+    pub fn set_preferred_theme(&mut self, preferred: Option<&str>) -> bool {
+        let theme_names = theme_chain(preferred);
+        if theme_names == self.theme_names {
+            return false;
+        }
+        let generation = self.theme_generation.saturating_add(1);
+        let index = std::sync::Arc::new(IconLookupIndex::build(
+            &theme_names,
+            &self.data_dirs,
+            generation,
+        ));
+        self.theme_names = theme_names;
+        self.set_shared_index(index);
+        self.notify_theme_changed(generation);
+        true
     }
 
     pub fn notify_theme_changed(&mut self, theme_generation: u64) {
@@ -1234,6 +1249,29 @@ fn valid_icon_name(name: &str) -> bool {
     !name.is_empty() && !name.bytes().any(|byte| matches!(byte, b'/' | b'\\' | 0))
 }
 
+/// Theme search chain: `FLAMEWM_ICON_THEME`, the Flame `iconTheme`
+/// preference, the desktop's configured theme (kdeglobals, then GTK), then
+/// Breeze. hicolor is appended by the inheritance chain.
+fn theme_chain(preferred: Option<&str>) -> Vec<String> {
+    let mut theme_names: Vec<String> = Vec::new();
+    if let Some(value) = env::var_os("FLAMEWM_ICON_THEME")
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+    {
+        theme_names.push(value);
+    }
+    if let Some(value) = preferred.filter(|value| !value.is_empty()) {
+        theme_names.push(value.to_owned());
+    }
+    if let Some(config_home) = xdg_config_home() {
+        if let Some(configured) = configured_icon_theme(&config_home) {
+            theme_names.push(configured);
+        }
+    }
+    theme_names.push("Breeze".to_owned());
+    unique_strings(theme_names)
+}
+
 fn unique_strings(values: Vec<String>) -> Vec<String> {
     let mut unique = Vec::new();
     for value in values {
@@ -1741,6 +1779,41 @@ mod tests {
     }
 
     #[test]
+    fn live_theme_switch_a_b_a_never_serves_stale_image() {
+        let dir = test_dir("c3-switch");
+        let index_text = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+        write_theme(&dir, "ThemeA", index_text);
+        write_theme(&dir, "ThemeB", index_text);
+        write_ppm(&dir.join("icons/ThemeA/16x16/apps/c3-switch.ppm"), [200, 10, 10]);
+        write_ppm(&dir.join("icons/ThemeB/16x16/apps/c3-switch.ppm"), [10, 200, 10]);
+        let size = IconSize::new(16, 16);
+        let data = vec![dir.clone()];
+        let mut resolver = IconResolver::new(dir.clone(), vec!["ThemeA".to_owned()], data.clone(), 1);
+        let first = resolver
+            .prepare_application("c3-switch", size)
+            .expect("theme A");
+        assert!(first.source.contains("ThemeA"));
+        for (generation, theme) in [(2, "ThemeB"), (3, "ThemeA")] {
+            let next = std::sync::Arc::new(crate::icon_theme::IconLookupIndex::build(
+                &[theme.to_owned()],
+                &data,
+                generation,
+            ));
+            resolver.set_shared_index(next);
+            resolver.notify_theme_changed(generation);
+            let raster = resolver
+                .prepare_application("c3-switch", size)
+                .expect("switched theme");
+            assert!(
+                raster.source.contains(theme),
+                "switch to {theme} must not serve the previous theme's image: {}",
+                raster.source
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn cache_invalidates_on_theme_generation() {
         let dir = test_dir("j2-cache");
         write_theme(
@@ -1839,5 +1912,57 @@ mod tests {
                 message: "only binary PPM (P6) is supported".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn set_preferred_theme_rebuilds_once_per_change_and_skips_no_op() {
+        let mut resolver = IconResolver::new(
+            std::env::temp_dir(),
+            vec!["Breeze".to_owned()],
+            Vec::new(),
+            4,
+        );
+        let before = std::sync::Arc::clone(resolver.shared_index());
+        assert!(resolver.set_preferred_theme(Some("ThemeA")));
+        let first = std::sync::Arc::clone(resolver.shared_index());
+        assert!(!std::sync::Arc::ptr_eq(&before, &first));
+        assert_eq!(resolver.theme_generation(), 5);
+        assert_eq!(first.generation, 5);
+        assert!(!resolver.set_preferred_theme(Some("ThemeA")));
+        assert!(std::sync::Arc::ptr_eq(&first, resolver.shared_index()));
+        assert_eq!(resolver.theme_generation(), 5);
+        assert!(resolver.set_preferred_theme(Some("ThemeB")));
+        assert_eq!(resolver.theme_generation(), 6);
+        assert_eq!(resolver.shared_index().generation, 6);
+    }
+
+    #[test]
+    fn unknown_preferred_theme_falls_back_to_breeze() {
+        let mut resolver = IconResolver::new(
+            std::env::temp_dir(),
+            vec!["Breeze".to_owned()],
+            Vec::new(),
+            1,
+        );
+        assert!(resolver.set_preferred_theme(Some("NoSuchTheme-flame-test")));
+        let chain = &resolver.shared_index().ordered_themes;
+        let breeze = chain.iter().position(|name| name == "Breeze");
+        let hicolor = chain.iter().position(|name| name == "hicolor");
+        assert!(breeze.is_some(), "Breeze must stay in the chain: {chain:?}");
+        assert!(breeze < hicolor, "Breeze precedes hicolor: {chain:?}");
+    }
+
+    #[test]
+    fn startup_preference_precedes_breeze_in_theme_chain() {
+        let resolver = IconResolver::from_environment_with_theme(
+            std::env::temp_dir(),
+            0,
+            Some("McMojave-circle"),
+        );
+        let names = &resolver.shared_index().theme_names;
+        let preferred = names.iter().position(|name| name == "McMojave-circle");
+        let breeze = names.iter().position(|name| name == "Breeze");
+        assert!(preferred.is_some(), "startup preference missing: {names:?}");
+        assert!(preferred < breeze, "preference must win over Breeze: {names:?}");
     }
 }

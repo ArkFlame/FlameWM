@@ -37,6 +37,22 @@ mod tests {
         "selection-opacity-value",
         "snap-opacity-value",
         "icon-theme-value",
+        "cursor-theme-value",
+        "theme-install-status",
+        "theme-icon-page-label",
+        "theme-cursor-page-label",
+        "theme-icon-name-0",
+        "theme-icon-name-1",
+        "theme-icon-name-2",
+        "theme-icon-name-3",
+        "theme-icon-name-4",
+        "theme-icon-name-5",
+        "theme-cursor-name-0",
+        "theme-cursor-name-1",
+        "theme-cursor-name-2",
+        "theme-cursor-name-3",
+        "theme-cursor-name-4",
+        "theme-cursor-name-5",
         "color-value-taskbar",
         "color-value-startmenu",
         "color-value-accent",
@@ -165,6 +181,32 @@ mod tests {
                     && css_value(page, "bottom") == Some("0"),
                 "page must fill main via top/bottom, not percent height: {page}"
             );
+        }
+    }
+
+    #[test]
+    fn theme_picker_preview_and_row_targets_are_compiled() {
+        let mut document = document().expect("settings artifact must decode");
+        for node in ["theme-icon", "theme-cursor"] {
+            for slot in 0..6 {
+                document
+                    .image_rgba8(
+                        &format!("{node}-preview-{slot}"),
+                        flamewm_ui_x11::RuntimeImage {
+                            source: "fixture".to_owned(),
+                            width: 1,
+                            height: 1,
+                            pixels: vec![0, 0, 0, 255],
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("compiled {node} preview {slot}: {error}"));
+                document
+                    .visible(&format!("{node}-row-{slot}"), true)
+                    .unwrap_or_else(|error| panic!("compiled {node} row {slot}: {error}"));
+            }
+            document
+                .visible(&format!("{node}-picker"), true)
+                .unwrap_or_else(|error| panic!("compiled {node} picker: {error}"));
         }
     }
 

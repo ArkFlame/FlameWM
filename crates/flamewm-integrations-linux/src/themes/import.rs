@@ -215,9 +215,7 @@ fn load_source(source: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, Impo
         return archive::parse(&archive_bytes, MAX_ENTRIES, cancel);
     }
     if name.ends_with(".tar.xz") || name.ends_with(".txz") {
-        return Err(ImportError::UnsupportedFormat(
-            "xz: no offline pure-Rust decoder is available".into(),
-        ));
+        return archive::parse_xz(File::open(source)?, cancel);
     }
     Err(ImportError::UnsupportedFormat(name.to_owned()))
 }
