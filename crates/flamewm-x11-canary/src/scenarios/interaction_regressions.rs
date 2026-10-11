@@ -34,8 +34,10 @@ fn left(w: &crate::WinInfo) -> (i16, i16) {
     )
 }
 
+/// The frame has a 1px X border and a rounded bounding shape (radius 4, row
+/// insets 3/2/1); +2 is clipped by the shape, +4 is inside it and the 6x6 corner handle.
 fn top_left(w: &crate::WinInfo) -> (i16, i16) {
-    (w.x.saturating_add(2), w.y.saturating_add(2))
+    (w.x.saturating_add(4), w.y.saturating_add(4))
 }
 
 fn bottom_left(w: &crate::WinInfo) -> (i16, i16) {
@@ -126,6 +128,34 @@ where
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+}
+
+/// Poll `read` until it returns the same value `STABLE` times in a row (the WM
+/// applies XTEST-driven moves asynchronously), or the deadline; returns the last read.
+fn settled<T: PartialEq>(timeout_ms: u64, mut read: impl FnMut() -> T) -> T {
+    const STABLE: u32 = 6;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let mut last = read();
+    let mut same = 1;
+    while same < STABLE && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let now = read();
+        same = if now == last { same + 1 } else { 1 };
+        last = now;
+    }
+    last
+}
+
+fn settle_frame(canary: &crate::Canary, frame: u32) {
+    // The frame and its decoration/handle children are re-laid out one after another.
+    settled(1000, || {
+        canary
+            .all()
+            .into_iter()
+            .filter(|w| w.id == frame || w.parent == frame)
+            .map(|w| (w.id, w.x, w.y, w.width, w.height))
+            .collect::<Vec<_>>()
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -242,9 +272,19 @@ fn x03_observe(
     root: (i16, i16),
     logs: &mut Vec<String>,
 ) -> Result<(), X03ProbeError> {
+    let (root_width, root_height) = canary.root_geometry();
+    if !event.starts_with("before-") {
+        // The WM tears down its capture overlay asynchronously after a release; let it settle.
+        wait_until(500, || {
+            x03_native_route(canary).map_or(true, |window| {
+                window == pinned.client
+                    || window == pinned.frame
+                    || x03_interaction_capture_route(canary, window, (root_width, root_height))
+            })
+        });
+    }
     let (client, frame) = x03_identity(canary, pinned)?;
     let active = canary.active_window();
-    let (root_width, root_height) = canary.root_geometry();
     let native_route = x03_native_route(canary);
     let capture_route = native_route.is_some_and(|window| {
         x03_interaction_capture_route(canary, window, (root_width, root_height))
@@ -360,6 +400,7 @@ fn x03_maximize(
     pinned: PinnedX03,
     logs: &mut Vec<String>,
 ) -> Result<(), X03ProbeError> {
+    settle_frame(canary, pinned.frame);
     let (_, frame) = x03_identity(canary, pinned)?;
     let start = title(&frame);
     let (screen_w, _) = canary.root_geometry();
@@ -656,7 +697,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         frame: target.parent,
     };
     let mut logs = Vec::with_capacity(48);
-    let Ok((initial_floating, initial_surface)) = x03_identity(canary, pinned) else {
+    let Ok((_, initial_surface)) = x03_identity(canary, pinned) else {
         return x03_failure(
             pinned,
             X03ProbeError::IdentityChange("target_not_ready_after_pin".to_owned()),
@@ -685,6 +726,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     } else {
         true
     };
+    settle_frame(canary, pinned.frame);
     let Some(floating) = canary
         .by_id(pinned.client)
         .filter(|window| window.parent == pinned.frame)
@@ -714,6 +756,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             Err(error) => return x03_failure(pinned, error, &logs),
         }
     };
+    settle_frame(canary, pinned.frame);
     let Some(max_surface) = canary
         .by_id(pinned.frame)
         .filter(|window| window.parent == canary.root)
@@ -773,7 +816,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let position_changed =
         after_surface.x != initial_surface.x || after_surface.y != initial_surface.y;
     let size_restored =
-        after.width == initial_floating.width && after.height == initial_floating.height;
+        after.width == floating.width && after.height == floating.height;
     let native = native_configures(canary, &after, 250);
     let pass = selected_before
         && selected_after
@@ -1981,6 +2024,7 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         },
     ];
     for case in cases {
+        settle_frame(canary, target.parent);
         let Some(before) = canary.by_id(target.id) else {
             all_pass = false;
             details.push(format!(
@@ -2010,15 +2054,16 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         let _ = native_configures(canary, &before, 0);
         let dragged = xtest_motion(canary, session_start.0, session_start.1)
             && xtest_drag_path(canary, session_start, end, 1, 8);
+        // Move/resize act on the frame; the client's geometry is frame-relative and constant.
         let _ = wait_until(500, || {
             canary
-                .by_id(target.id)
-                .is_some_and(|after| expected(&case, &before, &after))
+                .by_id(surface.id)
+                .is_some_and(|after| expected(&case, &surface, &after))
         });
-        let after = canary.by_id(target.id);
+        let after = canary.by_id(surface.id);
         let after_max = maximized(canary, target.id);
         let after_state = wm_state(canary, target.id);
-        let geometry_ok = after.as_ref().is_some_and(|w| expected(&case, &before, w));
+        let geometry_ok = after.as_ref().is_some_and(|w| expected(&case, &surface, w));
         let resize_no_snap = before_max == after_max;
         let native = native_configures(canary, &before, 250);
         let ewmh = ewmh_available(canary) && before_state == after_state;
@@ -2075,4 +2120,38 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             details.join("; ")
         ),
     )
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::{settled, top_left};
+
+    #[test]
+    fn top_left_point_is_inside_rounded_shape_and_corner_handle() {
+        // Frame: 1px X border, radius-4 bounding shape (row insets 3/2/1), 6x6 handle,
+        // both in interior coordinates (border offset 1).
+        let frame = crate::WinInfo {
+            x: 100,
+            y: 50,
+            width: 300,
+            height: 200,
+            id: 0,
+            parent: 0,
+            map_state: 2,
+            name: String::new(),
+            class: String::new(),
+        };
+        let (px, py) = top_left(&frame);
+        let (col, row) = (i32::from(px - frame.x) - 1, i32::from(py - frame.y) - 1);
+        assert!((0..6).contains(&col) && (0..6).contains(&row));
+        assert!(col >= [3, 2, 1][row.min(2) as usize] * i32::from(row < 3));
+    }
+
+    #[test]
+    fn settled_returns_final_value_not_first_stale_read() {
+        let mut reads = [(441, 6)]
+            .into_iter()
+            .chain(std::iter::repeat((497, 48)));
+        assert_eq!(settled(1000, || reads.next().unwrap()), (497, 48));
+    }
 }
