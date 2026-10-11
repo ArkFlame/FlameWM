@@ -32,10 +32,10 @@ Schema: `flamewm-settings-acceptance/2` (`schema_version` 2). Each run writes `<
 | SS07 | taskbar | partial Settings and private Panels snapshot mutation; canonical NOT_RUN without Shell taskbar rendering and restart equivalence |
 | SS08 | displays 1/2/4/5+ outputs and modes | NOT_RUN; partial: `LEGACY_HARNESS_NATIVE_ONE_OUTPUT` covers only the 1-output case |
 | SS09 | 15s rollback | NOT_RUN (a real 15 s revert cannot run in Xephyr; needs a fake-clock test) |
-| SS10 | scale | native runner (`run_ss10`); needs `--ss10-scale-click`. PASS only when the Displays 125 click changes the output `scale` in the Displays snapshot and it persists after an owned WM restart; otherwise NOT_RUN |
+| SS10 | scale | native runner (`run_ss10`); needs `--ss10-scale-click`, plus `--ss10-wheel-steps` and `--ss10-scrolled-click` when the output lists modes. PASS only when the Displays 125 click changes the output `scale` to 125, the mode list is unchanged, and the value persists after an owned WM restart; otherwise NOT_RUN |
 | SS11 | fonts | native runner (`run_ss11`); needs `--ss11-family-click` and `--ss11-size-click`. PASS only when both clicks change `fontFamily` / `fontSizeOffset` in the Settings snapshot and both persist after an owned WM restart; otherwise NOT_RUN |
 | SS12 | hotkeys | native runner; PASS only when lease, stored binding, action, grab restoration, owner loss, Escape clear (empty binding, persisted after restart) and Reset (`Super_L`, persisted after restart) all pass; native driver accepts `--ss12-click` and `--ss12-reset-click` |
-| SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 and a Settings snapshot `version` equals `FLAMEWM_VERSION`. The product publishes no such field, so the version check stays unobserved and SS13 is NOT_RUN |
+| SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 and the Rust test `about_version_text_is_exact_flamewm_version` passes via `cargo test`; NOT_RUN when cargo is not on PATH |
 | SS14 | external signal + auto-revert | partial Settings accent driver; canonical NOT_RUN until panel, shortcut, display rollback and signal-loss paths are also exercised |
 | SS15 | traversal/disabled states | NOT_RUN (no runner) |
 | SS16 | cargo/CSS/architecture gates | NOT_RUN (no runner in this harness) |
@@ -89,6 +89,8 @@ are relabeled.
 - `--key-down KEYSYM` and `--key-up KEYSYM`: press and leave held, then release in a later call.
   The XTEST key state lives in the nested server, so the pair can span two invocations.
 - `--hold KEYSYM:MS`: press, hold for MS milliseconds (1..60000), then release in one call.
+- `--wheel up|down[:N]`: N (1..100, default 1) wheel button 4 or 5 press/release pairs at the current pointer
+  position; combine with `--move X,Y` in the same call to scroll over a point.
 - Each call needs the owner token and marker from the owning Xephyr. Unit tests use a fake backend
   (no X): `tools/test_flamewm_settings_acceptance_schema.py`.
 - SS12 `--ss12-click X,Y` targets the `ToggleStartMenu` hotkey row; `--ss12-chord` defaults to
@@ -99,20 +101,28 @@ are relabeled.
   `Super_L` (the platform default). Start behavior is observed by native window title; when no Start-like
   window exists in any observation (WM only, no shell process) those two observations are unobserved (NOT_RUN), not failed.
 - SS10 `--ss10-scale-click X,Y` is a client-relative click on the 125 scale button of the Displays page
-  in a 960x640 client (default `751,553`; at 820x540 the scale row is below the fold and XTEST has no
-  wheel). The click is made only when the output lists zero modes: each listed mode pushes the scale row
-  below the fold, so the measured point would hit a mode button; otherwise SS10 is NOT_RUN. The runner reads the first authoritative output's `scale`, requires a
-  different starting value, clicks, then requires exactly 125 in the Displays snapshot. It then
-  restarts the owned WM and requires 125 again. A click with a non-zero exit or any other value fails.
+  in a 960x640 client (default `751,553`; at 820x540 the scale row is below the fold). With zero listed
+  modes it is clicked directly. Each listed mode pushes the scale row below the fold, so when the first
+  authoritative output lists modes the runner wheel-scrolls first: `--ss10-wheel-steps N` (1..100, wheel
+  down, pointer at the client centre `480,320`, sent as `flamewm_xtest.py --move ... --wheel down:N`), then
+  clicks `--ss10-scrolled-click X,Y`. Both are required on that path; without them, or when the wheel
+  input exits non-zero, SS10 is NOT_RUN and nothing is clicked. No scrolled click point is measured or
+  defaulted. The wire key is `scale` (Rust field `shell_scale_percent`). The runner requires a different
+  starting value, clicks, then requires exactly 125 and an unchanged mode count in the Displays snapshot.
+  It then restarts the owned WM and requires 125 again. A click with a non-zero exit, any other value,
+  or a changed mode list fails.
 - SS11 `--ss11-family-click X,Y` and `--ss11-size-click X,Y` are client-relative clicks on the Fonts
   page in an 820x540 client. The family click must change `fontFamily`; the size + click must raise
   `fontSizeOffset` by exactly one with the family unchanged. Both values must persist after an owned
   WM restart. Defaults `697,150` and `760,254` were measured from pixels at 820x540.
 - SS13 opens `flamewm-settings --page about` at each matrix size and requires an exact measured client
-  size and a non-blank capture. The version is read from a `version` string in the Settings snapshot
-  and must equal the trimmed `FLAMEWM_VERSION` file. No OCR is used. The current product exposes no
-  such field, so `version_published=false` is recorded and SS13 is NOT_RUN (never PASS) with the three
-  renders recorded as evidence.
+  size and a non-blank capture. The exact About text (`Version <FLAMEWM_VERSION>`) is verified by the Rust
+  test `about_version_text_is_exact_flamewm_version` in `crates/flamewm-settings/src/controller.rs`. The
+  runner executes `cargo test -p flamewm-settings about_version_text_is_exact_flamewm_version` from the repo
+  root with `CARGO_BUILD_JOBS=2`, only when `cargo` is on PATH. PASS needs exit 0 and the line
+  `test result: ok. 1 passed`; any other outcome is a measured FAIL. Without cargo the check is unobserved
+  (NOT_RUN, never PASS), with the three renders recorded as evidence. The command, exit code and result
+  line are in `details.version_test`. The runner reads no Settings snapshot version key. No OCR is used.
 - SS14 `--ss14-accent-pixel X,Y` samples a pixel inside the Appearance page's `nav-selection-accent`
   bar. It sends one `Settings.Apply(accent)` from a separate `gdbus` client, records the Apply call
   and both Settings change signals, reads the authoritative revision/value, then samples the same

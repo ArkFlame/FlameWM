@@ -309,6 +309,31 @@ mod tests {
     }
 
     #[test]
+    fn about_version_text_is_exact_flamewm_version() {
+        let version = include_str!("../../../FLAMEWM_VERSION").trim();
+        let mut transport = RecordingTransport::default();
+        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(2))));
+        transport.responses.push_back(Ok(ControlResponse::Displays(display_snapshot())));
+        transport.responses.push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+            revision: 1,
+            bindings: BTreeMap::new(),
+        })));
+        transport.responses.push_back(Ok(ControlResponse::Panels(flamewm_api::panels::PanelsSnapshot {
+            revision: 1,
+            panels: Vec::new(),
+            tasks: Vec::new(),
+            pinned_apps: Vec::new(),
+        })));
+        let mut application = SettingsApplication::new(transport);
+        let mut document = ProbeDocument::default();
+        assert!(!document.texts.contains_key("about-version"), "no runtime about version before refresh");
+        application.refresh(&mut document).expect("refresh");
+        assert_eq!(document.texts["about-version"], format!("Version {version}"));
+        assert_ne!(document.texts["about-version"], version, "bare version must not match");
+        assert_ne!(document.texts["about-version"], "Version 0.0.0-wrong");
+    }
+
+    #[test]
     fn about_links_map_to_the_fixed_product_uris_only() {
         assert!(matches!(
             crate::parse_action("about.source"),

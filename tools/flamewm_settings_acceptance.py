@@ -92,8 +92,10 @@ TREE_WINDOW_RE = re.compile(
 DESKTOP_OPACITY_MAX = 60
 # SS10 target: the 125 percent Displays scale button (ui/settings.html display-scale-125).
 SS10_TARGET_SCALE = 125
-# At 820x540 the scale row is below the fold and XTEST has no wheel, so SS10 uses a client that shows it.
+# At 820x540 the scale row is below the fold, so SS10 uses a client that shows it. When the output lists
+# modes, SS10 wheel-scrolls the page with the pointer at the client centre before the scrolled click.
 SS10_CLIENT = (960, 640)
+SS10_WHEEL_POINTER = (SS10_CLIENT[0] // 2, SS10_CLIENT[1] // 2)
 # Platform default binding for ToggleStartMenu (crates/flamewm-platform/src/shortcuts.rs).
 SHORTCUT_DEFAULT_BINDING = "Super_L"
 
@@ -187,6 +189,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="SS05 client-relative wallpaper Choose center measured at 960x640 (default: 755,195)")
     parser.add_argument("--ss10-scale-click", metavar="X,Y", default="751,553",
                         help="SS10 client-relative click on the 125 scale button of the Displays page (960x640 client, scale row visible); default measured")
+    parser.add_argument("--ss10-wheel-steps", metavar="N", type=int, default=None,
+                        help="SS10 wheel-down steps over the Displays page; required when the output lists modes")
+    parser.add_argument("--ss10-scrolled-click", metavar="X,Y", default=None,
+                        help="SS10 client-relative click on the 125 scale button after the wheel scroll (960x640 client); "
+                             "required when the output lists modes")
     parser.add_argument("--ss11-family-click", metavar="X,Y", default="697,150",
                         help="SS11 client-relative click on the Font family control of the Fonts page (820x540 client); default measured")
     parser.add_argument("--ss11-size-click", metavar="X,Y", default="760,254",
@@ -241,6 +248,7 @@ def validate(args: argparse.Namespace) -> Path:
         raise SystemExit("error: --ss05-click must lie inside the 960x640 Settings client")
     for flag, value, (limit_x, limit_y) in (
             ("--ss10-scale-click", args.ss10_scale_click, SS10_CLIENT),
+            ("--ss10-scrolled-click", args.ss10_scrolled_click, SS10_CLIENT),
             ("--ss11-family-click", args.ss11_family_click, (820, 540)),
             ("--ss11-size-click", args.ss11_size_click, (820, 540))):
         if value is None:
@@ -250,6 +258,10 @@ def validate(args: argparse.Namespace) -> Path:
         point_x, point_y = (int(part) for part in value.split(","))
         if point_x >= limit_x or point_y >= limit_y:
             raise SystemExit(f"error: {flag} must lie inside the {limit_x}x{limit_y} Settings client")
+    if args.ss10_wheel_steps is not None:
+        import flamewm_xtest
+        if not 1 <= args.ss10_wheel_steps <= flamewm_xtest.MAX_WHEEL_STEPS:
+            raise SystemExit(f"error: --ss10-wheel-steps must be 1..{flamewm_xtest.MAX_WHEEL_STEPS}")
     if args.ss14_accent_pixel is not None:
         if not re.fullmatch(r"\d+,\d+", args.ss14_accent_pixel):
             raise SystemExit("error: --ss14-accent-pixel must be X,Y")
@@ -770,14 +782,14 @@ def assess_ss07(observations: dict[str, bool | None]) -> tuple[str, str]:
 
 
 def assess_ss10(observations: dict[str, bool | None]) -> tuple[str, str]:
-    required = ("scale_changed_snapshot", "scale_persisted_after_restart")
+    required = ("scale_changed_snapshot", "mode_list_unchanged", "scale_persisted_after_restart")
     failed = [key for key in required if observations.get(key) is False]
     if failed:
         return STATUS_FAIL, "measured display scale failure: " + ", ".join(failed)
     missing = [key for key in required if observations.get(key) is not True]
     if missing:
         return STATUS_NOT_RUN, "partial display scale evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "Displays click set the output scale to 125 and the value persisted after an owned WM restart"
+    return STATUS_PASS, "Displays click set the output scale to 125 with the mode list unchanged and the value persisted after an owned WM restart"
 
 
 def assess_ss11(observations: dict[str, bool | None]) -> tuple[str, str]:
@@ -798,13 +810,9 @@ def assess_ss13(observations: dict[str, bool | None]) -> tuple[str, str]:
     if failed:
         return STATUS_FAIL, "measured About page failure: " + ", ".join(failed)
     missing = [key for key in required if observations.get(key) is not True]
-    if observations.get("version_published") is False:
-        renders = [key for key in missing if key.startswith("about_render_")]
-        return STATUS_NOT_RUN, ("version_published=false: Settings snapshot has no version key, so the version "
-                                "assertion cannot be made; renders unverified: " + (", ".join(renders) or "none (all 3 sizes rendered non-blank)"))
     if missing:
         return STATUS_NOT_RUN, "partial About page evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "About rendered non-blank at 760x500, 820x540 and 960x640 and its version matched FLAMEWM_VERSION"
+    return STATUS_PASS, "About rendered non-blank at 760x500, 820x540 and 960x640 and the source test about_version_text_is_exact_flamewm_version passed for FLAMEWM_VERSION (not a live-page observation)"
 
 
 def gvariant_field_string(output: str, key: str) -> str | None:
@@ -898,7 +906,7 @@ def stop_dbus_monitor(ctx: Ctx, monitor: Owned | None) -> None:
 
 
 def send_input(ctx: Ctx, click: str | None, key: str | None, chord: str | None = None,
-               move: str | None = None) -> tuple[int, str]:
+               move: str | None = None, wheel: str | None = None) -> tuple[int, str]:
     """Delegate XTEST input to tools/flamewm_xtest.py; token is redacted in the recorded command."""
     script = ROOT / "tools" / "flamewm_xtest.py"
     base = [sys.executable, str(script), "--display", ctx.display,
@@ -916,6 +924,9 @@ def send_input(ctx: Ctx, click: str | None, key: str | None, chord: str | None =
     if move:
         base += ["--move", move]
         recorded += ["--move", move]
+    if wheel:
+        base += ["--wheel", wheel]
+        recorded += ["--wheel", wheel]
     result = subprocess.run(base, env=ctx.host_env, capture_output=True, text=True, timeout=60, check=False)
     return result.returncode, shell(recorded)
 
@@ -1054,12 +1065,32 @@ def ss12_reset_restored(exit_code: int, binding: str | None) -> bool:
     return exit_code == 0 and binding == SHORTCUT_DEFAULT_BINDING
 
 
-def ss13_version_observed(settings_text: str | None, expected: str | None) -> bool | None:
-    """None until the authoritative Settings snapshot publishes a version; then exact equality."""
-    observed = gvariant_field_string(settings_text or "", "version")
-    if observed is None or expected is None:
-        return None
-    return observed == expected
+ABOUT_VERSION_TEST = "about_version_text_is_exact_flamewm_version"
+ABOUT_VERSION_PASSED = "test result: ok. 1 passed"
+
+
+def ss13_version_test_observed(exit_code: int, output: str) -> bool:
+    """Exact pass of the single About-version Rust test; any other cargo outcome is a measured False."""
+    return exit_code == 0 and ABOUT_VERSION_PASSED in output
+
+
+def run_about_version_test() -> tuple[bool | None, dict]:
+    """Run the Rust test that pins About's version text to FLAMEWM_VERSION; None when cargo is not on PATH."""
+    argv = ["cargo", "test", "-p", "flamewm-settings", ABOUT_VERSION_TEST]
+    record: dict = {"command": shell(argv)}
+    if shutil.which("cargo") is None:
+        record["reason"] = "cargo not on PATH; About version test not run"
+        return None, record
+    env = {**os.environ, "CARGO_BUILD_JOBS": "2"}
+    try:
+        result = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True, timeout=1800, check=False)
+    except subprocess.TimeoutExpired:
+        record["reason"] = "cargo test timed out"
+        return None, record
+    output = result.stdout + result.stderr
+    record["exit_code"] = result.returncode
+    record["result_line"] = ABOUT_VERSION_PASSED if ABOUT_VERSION_PASSED in output else None
+    return ss13_version_test_observed(result.returncode, output), record
 
 
 def native_window_titles(ctx: Ctx) -> tuple[set[str] | None, str]:
@@ -1224,6 +1255,8 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
                      "observations": observations, "commands": []}
     def finish() -> dict:
         status, reason = assess_ss12(observations)
+        if not args.ss12_click:
+            status, reason = STATUS_NOT_RUN, details["reason"]
         entry = result_entry("SS12", status, reason, commands=details["commands"])
         entry["details"] = details
         return entry
@@ -2346,9 +2379,11 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
 
 def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Click the 125 Displays scale button; PASS needs the snapshot change and the value after a WM restart."""
-    observations: dict[str, bool | None] = {"scale_changed_snapshot": None, "scale_persisted_after_restart": None}
+    observations: dict[str, bool | None] = {"scale_changed_snapshot": None, "mode_list_unchanged": None,
+                                           "scale_persisted_after_restart": None}
     details: dict = {"observations": observations, "commands": [], "target_scale": SS10_TARGET_SCALE,
-                     "paths_exercised": ["Displays page scale button click", "Displays.GetSnapshot output scale",
+                     "paths_exercised": ["Displays page wheel scroll (only when modes are listed)",
+                                         "Displays page scale button click", "Displays.GetSnapshot output scale",
                                          "owned WM restart"]}
 
     def finish() -> dict:
@@ -2386,17 +2421,33 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["reason"] = "initial output scale is already 125; no change to observe"
         return finish()
 
-    # The measured click coordinate assumes an empty mode list. Each listed mode adds rows that push the
-    # scale row below the fold, and XTEST here has no wheel, so a click would hit a mode button instead.
+    # Each listed mode pushes the scale row below the fold, so an unscrolled click would hit a mode button.
+    # With modes listed, the page is wheel-scrolled first and the caller supplies the scrolled click point.
     mode_count = display_output_mode_count(before_text or "", output_id)
     details["before"]["mode_count"] = mode_count
-    if mode_count != 0:
+    if mode_count is None or (mode_count and not (args.ss10_wheel_steps and args.ss10_scrolled_click)):
         ctx.stop(settings)
-        details["reason"] = (f"output lists {mode_count} modes; the scale row is below the fold at 960x640 and "
-                             "no wheel input exists, so the measured click would hit a mode button; not clicked")
+        if mode_count is None:
+            details["reason"] = "output mode list is unparsable; not clicked"
+        else:
+            details["reason"] = (f"output lists {mode_count} modes; the scale row is below the fold at 960x640 and "
+                                 "needs --ss10-wheel-steps and --ss10-scrolled-click after scrolling; not clicked")
         return finish()
 
-    point = tuple(int(part) for part in args.ss10_scale_click.split(","))
+    if mode_count:
+        pointer = settings_relative_point(ctx, geometry, SS10_WHEEL_POINTER)
+        scroll_code, scroll_command = send_input(ctx, None, None, move=pointer, wheel=f"down:{args.ss10_wheel_steps}")
+        details["commands"].append(scroll_command)
+        details["scroll"] = {"direction": "down", "steps": args.ss10_wheel_steps, "pointer": pointer,
+                             "exit_code": scroll_code}
+        if scroll_code != 0:
+            ctx.stop(settings)
+            details["reason"] = f"wheel scroll input failed with exit {scroll_code}; not clicked"
+            return finish()
+        time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+        point = tuple(int(part) for part in args.ss10_scrolled_click.split(","))
+    else:
+        point = tuple(int(part) for part in args.ss10_scale_click.split(","))
     click = settings_relative_point(ctx, geometry, point)
     code, click_command = send_input(ctx, click, None)
     details["commands"].append(click_command)
@@ -2404,9 +2455,12 @@ def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
     after_text, after_command = dbus_displays_snapshot(ctx)
     details["commands"].append(after_command)
     after_scales = display_output_scales(after_text or "")
-    details["after"] = {"output": output_id, "scale": (after_scales or {}).get(output_id), "click": click}
+    after_mode_count = display_output_mode_count(after_text or "", output_id)
+    details["after"] = {"output": output_id, "scale": (after_scales or {}).get(output_id), "mode_count": after_mode_count,
+                        "click": click}
     if after_text is not None:
         observations["scale_changed_snapshot"] = ss10_scale_applied(code, after_scales, output_id)
+        observations["mode_list_unchanged"] = after_mode_count == mode_count
     ctx.stop(settings)
 
     if observations["scale_changed_snapshot"] is True and restart_owned_wm(ctx, args, "wm-ss10-restart"):
@@ -2498,12 +2552,13 @@ def run_ss11(ctx: Ctx, args: argparse.Namespace) -> dict:
 
 
 def run_ss13(ctx: Ctx, args: argparse.Namespace) -> dict:
-    """Open About at each matrix size; PASS needs live nonblank renders and the exact FLAMEWM_VERSION string."""
+    """Open About at each matrix size; PASS needs live nonblank renders and the Rust exact-version test."""
     observations: dict[str, bool | None] = {f"about_render_{width}x{height}": None for width, height in SIZES}
     observations["version_matches_flamewm_version"] = None
     details: dict = {"observations": observations, "commands": [], "renders": [],
                      "paths_exercised": ["flamewm-settings --page about at 760x500, 820x540, 960x640",
-                                         "xwininfo client geometry", "Settings.GetSnapshot version"]}
+                                         "xwininfo client geometry",
+                                         f"cargo test -p flamewm-settings {ABOUT_VERSION_TEST}"]}
     shots = []
     for width, height in SIZES:
         shot = page_shot(ctx, args, "about", f"ss13-{width}x{height}", (width, height))
@@ -2513,16 +2568,9 @@ def run_ss13(ctx: Ctx, args: argparse.Namespace) -> dict:
                                    "nonblank": shot["nonblank"], "window": shot["window"]})
         observations[f"about_render_{width}x{height}"] = exact_window_size(shot, (width, height))
 
-    try:
-        expected_version = (ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip() or None
-    except OSError:
-        expected_version = None
-    settings_text, settings_command = dbus_settings_snapshot(ctx)
-    details["commands"].append(settings_command)
-    observations["version_matches_flamewm_version"] = ss13_version_observed(settings_text, expected_version)
-    observations["version_published"] = gvariant_field_string(settings_text or "", "version") is not None
-    details["expected_version"] = expected_version
-    details["version_source"] = "Settings snapshot 'version' key; not published by the current product, so unobserved"
+    version_matches, version_record = run_about_version_test()
+    observations["version_matches_flamewm_version"] = version_matches
+    details["version_test"] = version_record
     status, reason = assess_ss13(observations)
     entry = result_entry("SS13", status, reason, [shot["shot"] for shot in shots], details["commands"])
     entry["details"] = details

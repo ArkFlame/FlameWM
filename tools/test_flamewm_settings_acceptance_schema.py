@@ -6,6 +6,7 @@ No X server, Xephyr, or display is touched. Run with:
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import shutil
 import tempfile
@@ -602,7 +603,8 @@ class XtestHeldKeyTests(unittest.TestCase):
 
 class ScaleFontsAboutDecisionTests(unittest.TestCase):
     def test_ss10_needs_snapshot_change_and_restart_persistence(self) -> None:
-        observations = {"scale_changed_snapshot": True, "scale_persisted_after_restart": True}
+        observations = {"scale_changed_snapshot": True, "mode_list_unchanged": True,
+                        "scale_persisted_after_restart": True}
         self.assertEqual(acc.assess_ss10(observations)[0], "PASS")
         observations["scale_persisted_after_restart"] = None
         status, reason = acc.assess_ss10(observations)
@@ -610,6 +612,17 @@ class ScaleFontsAboutDecisionTests(unittest.TestCase):
         self.assertIn("scale_persisted_after_restart", reason)
         observations["scale_changed_snapshot"] = False
         self.assertEqual(acc.assess_ss10(observations)[0], "FAIL")
+
+    def test_ss10_mode_change_after_click_fails_and_unmeasured_mode_list_stays_not_run(self) -> None:
+        observations = {"scale_changed_snapshot": True, "mode_list_unchanged": False,
+                        "scale_persisted_after_restart": True}
+        status, reason = acc.assess_ss10(observations)
+        self.assertEqual(status, "FAIL")
+        self.assertIn("mode_list_unchanged", reason)
+        observations["mode_list_unchanged"] = None
+        status, reason = acc.assess_ss10(observations)
+        self.assertEqual(status, "NOT_RUN")
+        self.assertIn("mode_list_unchanged", reason)
 
     def test_ss10_scale_applied_rejects_wrong_value_and_failed_click(self) -> None:
         self.assertTrue(acc.ss10_scale_applied(0, {"Xephyr-0": 125}, "Xephyr-0"))
@@ -664,11 +677,13 @@ class ScaleFontsAboutDecisionTests(unittest.TestCase):
         self.assertFalse(acc.ss12_reset_restored(0, "Super"))
         self.assertFalse(acc.ss12_reset_restored(1, "Super_L"))
 
-    def test_ss13_version_is_exact_or_unobserved(self) -> None:
-        self.assertTrue(acc.ss13_version_observed("({'version': <'0.0.9'>},)", "0.0.9"))
-        self.assertFalse(acc.ss13_version_observed("({'version': <'0.0.8'>},)", "0.0.9"))
-        self.assertIsNone(acc.ss13_version_observed("({'revision': <uint64 1>},)", "0.0.9"))
-        self.assertIsNone(acc.ss13_version_observed(None, "0.0.9"))
+    def test_ss13_version_needs_cargo_exit_zero_and_the_single_test_result_line(self) -> None:
+        passed = "running 1 test\ntest controller::tests::about_version_text_is_exact_flamewm_version ... ok\n" \
+                 "test result: ok. 1 passed; 0 failed; 0 ignored\n"
+        self.assertTrue(acc.ss13_version_test_observed(0, passed))
+        self.assertFalse(acc.ss13_version_test_observed(101, passed))
+        self.assertFalse(acc.ss13_version_test_observed(0, "test result: ok. 0 passed; 0 failed"))
+        self.assertFalse(acc.ss13_version_test_observed(1, "error[E0432]: unresolved import"))
 
     def test_ss13_needs_three_renders_and_version(self) -> None:
         observations = {"about_render_760x500": True, "about_render_820x540": True,
@@ -692,11 +707,19 @@ class ScaleFontsAboutDecisionTests(unittest.TestCase):
         run = Path(tempfile.mkdtemp(prefix="flamewm-ss-args-")) / "run"
         self.addCleanup(shutil.rmtree, run.parent, True)
         for flag, value in (("--ss10-scale-click", "960,10"), ("--ss11-family-click", "10,600"),
-                            ("--ss11-size-click", "820,20"), ("--ss10-scale-click", "10")):
+                            ("--ss11-size-click", "820,20"), ("--ss10-scale-click", "10"),
+                            ("--ss10-scrolled-click", "960,10"), ("--ss10-scrolled-click", "10")):
             with self.subTest(flag=flag, value=value):
                 args = acc.parse_args(["--run-dir", str(run), flag, value])
                 with self.assertRaises(SystemExit):
                     acc.validate(args)
+        for steps in ("0", "101"):
+            with self.subTest(wheel_steps=steps):
+                args = acc.parse_args(["--run-dir", str(run), "--ss10-wheel-steps", steps])
+                with self.assertRaises(SystemExit):
+                    acc.validate(args)
+        scrolled = acc.parse_args(["--run-dir", str(run), "--ss10-wheel-steps", "5", "--ss10-scrolled-click", "600,300"])
+        self.assertEqual(acc.validate(scrolled), run.resolve())
         valid = acc.parse_args(["--run-dir", str(run), "--ss10-scale-click", "600,300",
                                 "--ss11-family-click", "100,200", "--ss11-size-click", "300,200"])
         self.assertEqual(acc.validate(valid), run.resolve())
@@ -708,6 +731,11 @@ class FakeNativeRunnerTests(unittest.TestCase):
     BEFORE_DISPLAYS = "({'outputCount': <uint32 1>, 'outputs': <[{'id': <'Xephyr-0'>, 'modes': <[]>, 'scale': <uint32 100>}]>},)"
     CHANGED_DISPLAYS = BEFORE_DISPLAYS.replace("uint32 100", "uint32 125")
     STUCK_DISPLAYS = BEFORE_DISPLAYS
+    MODE_LIST_ONE = "'modes': <[{'id': <'1'>, 'width': <uint32 1280>}]>"
+    MODE_LIST_TWO = "'modes': <[{'id': <'1'>, 'width': <uint32 1280>}, {'id': <'2'>, 'width': <uint32 1024>}]>"
+    MODED_DISPLAYS = BEFORE_DISPLAYS.replace("'modes': <[]>", MODE_LIST_ONE)
+    MODED_CHANGED = MODED_DISPLAYS.replace("uint32 100", "uint32 125")
+    MODED_TWO_MODES_AT_125 = MODED_CHANGED.replace(MODE_LIST_ONE, MODE_LIST_TWO)
     BEFORE_FONTS = "({'fontFamily': <'IBM Plex Sans'>, 'fontSizeOffset': <int64 0>, 'revision': <uint64 3>},)"
     FAMILY_FONTS = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 0>, 'revision': <uint64 4>},)"
     SIZED_FONTS = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 1>, 'revision': <uint64 5>},)"
@@ -727,6 +755,10 @@ class FakeNativeRunnerTests(unittest.TestCase):
                                     return_value={"x": 0, "y": 0, "width": 820, "height": 540})
         self.send_input = self._patch("flamewm_settings_acceptance.send_input", return_value=(0, "xtest"))
         self.restart = self._patch("flamewm_settings_acceptance.restart_owned_wm", return_value=True)
+        # Never let a unit test shell out to cargo; SS13 tests set the verdict they need.
+        self.version_test = self._patch("flamewm_settings_acceptance.run_about_version_test",
+                                        return_value=(True, {"command": "cargo test", "exit_code": 0,
+                                                             "result_line": acc.ABOUT_VERSION_PASSED}))
 
     def _patch(self, target: str, **kwargs):
         patcher = patch(target, **kwargs)
@@ -755,6 +787,56 @@ class FakeNativeRunnerTests(unittest.TestCase):
         self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
         self.assertIn("below the fold", entry["details"]["reason"])
         self.send_input.assert_not_called()
+
+    def test_ss10_listed_modes_scrolled_then_125_with_unchanged_modes_passes(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
+                    side_effect=[(self.MODED_DISPLAYS, "q"), (self.MODED_CHANGED, "q"), (self.MODED_CHANGED, "q")])
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-wheel-steps", "3", "--ss10-scrolled-click", "600,300"))
+        self.assertEqual(entry["status"], "PASS", entry["reason"])
+        scroll, click = self.send_input.call_args_list
+        self.assertEqual(scroll.kwargs, {"move": "480,320", "wheel": "down:3"})
+        self.assertEqual(click.args[1], "600,300")
+        self.assertEqual(entry["details"]["scroll"], {"direction": "down", "steps": 3, "pointer": "480,320", "exit_code": 0})
+        self.assertEqual(entry["details"]["after"]["click"], "600,300")
+        self.restart.assert_called_once()
+
+    def test_ss10_listed_modes_without_wheel_steps_is_not_run_and_never_scrolls_or_clicks(self) -> None:
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot", return_value=(self.MODED_DISPLAYS, "q"))
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-scrolled-click", "600,300"))
+        self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
+        self.assertIn("--ss10-wheel-steps", entry["details"]["reason"])
+        self.send_input.assert_not_called()
+
+    def test_ss10_listed_modes_without_scrolled_click_is_not_run_and_never_scrolls_or_clicks(self) -> None:
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot", return_value=(self.MODED_DISPLAYS, "q"))
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-wheel-steps", "3"))
+        self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
+        self.assertIn("--ss10-scrolled-click", entry["details"]["reason"])
+        self.send_input.assert_not_called()
+
+    def test_ss10_failed_wheel_input_is_not_run_and_skips_the_click(self) -> None:
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot", return_value=(self.MODED_DISPLAYS, "q"))
+        self.send_input.return_value = (1, "xtest")
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-wheel-steps", "3", "--ss10-scrolled-click", "600,300"))
+        self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
+        self.assertEqual(entry["details"]["scroll"]["exit_code"], 1)
+        self.assertEqual(self.send_input.call_count, 1)
+        self.assertEqual(self.send_input.call_args.kwargs.get("wheel"), "down:3")
+        self.assertIsNone(self.send_input.call_args.args[1])
+        self.restart.assert_not_called()
+
+    def test_ss10_listed_modes_change_after_scrolled_click_fails(self) -> None:
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
+                    side_effect=[(self.MODED_DISPLAYS, "q"), (self.MODED_TWO_MODES_AT_125, "q"),
+                                 (self.MODED_TWO_MODES_AT_125, "q")])
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-wheel-steps", "3", "--ss10-scrolled-click", "600,300"))
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+        self.assertIn("mode_list_unchanged", entry["reason"])
 
     def test_ss10_wrong_scale_after_click_fails_and_skips_restart(self) -> None:
         self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
@@ -813,41 +895,41 @@ class FakeNativeRunnerTests(unittest.TestCase):
         return {"page": "about", "alive": True, "captured": True, "nonblank": nonblank, "shot": f"{width}x{height}.png",
                 "window": {"width": measured[0], "height": measured[1]}, "commands": ["import"]}
 
-    def _version_text(self, version: str | None) -> str:
-        return "({'revision': <uint64 1>},)" if version is None else f"({{'version': <'{version}'>}},)"
-
-    def test_ss13_passes_with_three_renders_and_exact_flamewm_version(self) -> None:
-        expected = (acc.ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
+    def test_ss13_passes_with_three_renders_and_passing_about_version_test(self) -> None:
         self._patch("flamewm_settings_acceptance.page_shot",
                     side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
-        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
-                    return_value=(self._version_text(expected), "q"))
         entry = acc.run_ss13(self.ctx, self._args())
         self.assertEqual(entry["status"], "PASS", entry["reason"])
+        self.assertIs(entry["details"]["observations"]["version_matches_flamewm_version"], True)
+        self.assertIn(acc.ABOUT_VERSION_TEST, entry["details"]["paths_exercised"][-1])
 
-    def test_ss13_wrong_version_fails(self) -> None:
+    def test_ss13_failing_about_version_test_fails(self) -> None:
         self._patch("flamewm_settings_acceptance.page_shot",
                     side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
-        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
-                    return_value=(self._version_text("0.0.0-wrong"), "q"))
+        self.version_test.return_value = (False, {"command": "cargo test", "exit_code": 101, "result_line": None})
         entry = acc.run_ss13(self.ctx, self._args())
         self.assertEqual(entry["status"], "FAIL", entry["reason"])
         self.assertIn("version_matches_flamewm_version", entry["reason"])
+        self.assertEqual(entry["details"]["version_test"]["exit_code"], 101)
 
-    def test_ss13_unpublished_version_is_not_run_not_pass(self) -> None:
+    def test_ss13_cargo_absent_is_not_run_not_pass(self) -> None:
         self._patch("flamewm_settings_acceptance.page_shot",
                     side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
-        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
-                    return_value=(self._version_text(None), "q"))
+        self.version_test.return_value = (None, {"command": "cargo test", "reason": "cargo not on PATH"})
         entry = acc.run_ss13(self.ctx, self._args())
         self.assertEqual(entry["status"], "NOT_RUN")
-        self.assertIn("version_published=false", entry["reason"])
-        self.assertIs(entry["details"]["observations"]["version_published"], False)
+        self.assertIn("version_matches_flamewm_version", entry["reason"])
+        self.assertIsNone(entry["details"]["observations"]["version_matches_flamewm_version"])
+        self.assertEqual(len(entry["details"]["renders"]), 3)
+
+    def test_ss13_does_not_read_a_settings_snapshot_version_key(self) -> None:
+        self._patch("flamewm_settings_acceptance.page_shot",
+                    side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
+        snapshot = self._patch("flamewm_settings_acceptance.dbus_settings_snapshot")
+        acc.run_ss13(self.ctx, self._args())
+        snapshot.assert_not_called()
 
     def test_ss13_blank_or_mismatched_render_fails(self) -> None:
-        expected = (acc.ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
-        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
-                    return_value=(self._version_text(expected), "q"))
         renders = {(760, 500): self._shot(760, 500, nonblank=False),
                    (820, 540): self._shot(820, 540),
                    (960, 640): self._shot(960, 640)}
@@ -861,6 +943,63 @@ class FakeNativeRunnerTests(unittest.TestCase):
         entry = acc.run_ss13(self.ctx, self._args())
         self.assertEqual(entry["status"], "FAIL", entry["reason"])
         self.assertIn("about_render_960x640", entry["reason"])
+
+
+class NoClickSurfacesReasonTests(unittest.TestCase):
+    def test_ss12_without_click_is_not_run_with_the_click_reason_at_top_level(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="flamewm-ss12-noclick-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with patch("flamewm_settings_acceptance.Ctx.spawn") as spawn:
+            entry = acc.run_ss12(acc.Ctx(tmp), acc.parse_args(["--run-dir", str(tmp / "run")]))
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertEqual(entry["reason"], "SS12 needs --ss12-click on the ToggleStartMenu capture row")
+        self.assertEqual(entry["reason"], entry["details"]["reason"])
+        spawn.assert_not_called()
+
+
+class AboutVersionTestRunnerTests(unittest.TestCase):
+    """run_about_version_test shells out only to cargo; subprocess and PATH lookup are faked here."""
+
+    def test_cargo_absent_is_not_run_and_never_invokes_cargo(self) -> None:
+        with patch("flamewm_settings_acceptance.shutil.which", return_value=None), \
+                patch("flamewm_settings_acceptance.subprocess.run") as run:
+            observed, record = acc.run_about_version_test()
+        self.assertIsNone(observed)
+        run.assert_not_called()
+        self.assertIn(f"cargo test -p flamewm-settings {acc.ABOUT_VERSION_TEST}", record["command"])
+        self.assertIn("cargo not on PATH", record["reason"])
+
+    def test_passing_exact_test_runs_in_root_with_two_jobs(self) -> None:
+        completed = SimpleNamespace(returncode=0, stdout="test result: ok. 1 passed; 0 failed\n", stderr="")
+        with patch("flamewm_settings_acceptance.shutil.which", return_value="/usr/bin/cargo"), \
+                patch("flamewm_settings_acceptance.subprocess.run", return_value=completed) as run:
+            observed, record = acc.run_about_version_test()
+        self.assertIs(observed, True)
+        self.assertEqual(run.call_args.args[0], ["cargo", "test", "-p", "flamewm-settings", acc.ABOUT_VERSION_TEST])
+        self.assertEqual(run.call_args.kwargs["cwd"], acc.ROOT)
+        self.assertEqual(run.call_args.kwargs["env"]["CARGO_BUILD_JOBS"], "2")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["result_line"], "test result: ok. 1 passed")
+
+    def test_failed_or_unmatched_test_is_measured_false(self) -> None:
+        cases = ((101, "test result: FAILED. 0 passed; 1 failed\n"), (0, "test result: ok. 0 passed; 0 failed\n"))
+        for returncode, stdout in cases:
+            with self.subTest(returncode=returncode, stdout=stdout), \
+                    patch("flamewm_settings_acceptance.shutil.which", return_value="/usr/bin/cargo"), \
+                    patch("flamewm_settings_acceptance.subprocess.run",
+                          return_value=SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")):
+                observed, record = acc.run_about_version_test()
+                self.assertIs(observed, False)
+                self.assertEqual(record["exit_code"], returncode)
+                self.assertIsNone(record["result_line"])
+
+    def test_timeout_is_not_run_not_false(self) -> None:
+        with patch("flamewm_settings_acceptance.shutil.which", return_value="/usr/bin/cargo"), \
+                patch("flamewm_settings_acceptance.subprocess.run",
+                      side_effect=subprocess.TimeoutExpired(cmd="cargo", timeout=1800)):
+            observed, record = acc.run_about_version_test()
+        self.assertIsNone(observed)
+        self.assertEqual(record["reason"], "cargo test timed out")
 
 
 if __name__ == "__main__":
