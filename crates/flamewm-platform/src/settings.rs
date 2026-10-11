@@ -211,6 +211,13 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Adopts persisted per-output scales without moving the settings revision.
+    pub fn adopt_scales(&mut self, snapshot: &ProductSettings) {
+        self.current
+            .per_output_scale
+            .clone_from(&snapshot.per_output_scale);
+    }
+
     #[must_use]
     pub fn serialize(snapshot: &ProductSettings) -> String {
         let mut lines = vec![

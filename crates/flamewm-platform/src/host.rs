@@ -381,10 +381,38 @@ impl<E: EnginePorts> PlatformHost<E> {
         percent: u16,
         expected_generation: u64,
     ) -> FlameResult<bool> {
+        let previous = self
+            .displays
+            .cached()
+            .and_then(|snapshot| {
+                snapshot
+                    .outputs
+                    .iter()
+                    .find(|candidate| candidate.connected && candidate.id == *output)
+            })
+            .map(|candidate| candidate.shell_scale_percent);
         let changed = self
             .displays
             .set_shell_scale(output, percent, expected_generation)?;
         if changed {
+            // Persist before the panel resync so a failed write leaves no runtime-only scale behind.
+            if let Err(error) = self.settings.persist_scale(output.as_str(), percent) {
+                if let Some(previous) = previous {
+                    let generation = self
+                        .displays
+                        .cached()
+                        .map_or(0, |snapshot| snapshot.generation);
+                    if let Err(restore_error) =
+                        self.displays.set_shell_scale(output, previous, generation)
+                    {
+                        eprintln!(
+                            "flamewm: shell scale rollback failed after persistence error: {}",
+                            restore_error.message
+                        );
+                    }
+                }
+                return Err(error);
+            }
             // Panel thickness is derived from the output scale; resync it the same way
             // apply_settings does so the panel geometry follows the new display scale.
             if let Some(displays) = self.displays.cached().cloned() {
@@ -1048,7 +1076,6 @@ mod tests {
             path.clone(),
         );
         host.start().expect("host starts");
-        let _ = std::fs::remove_file(&path);
         assert_eq!(host.panels.snapshot().panels[0].geometry.height, 44);
 
         let generation = host
@@ -1058,12 +1085,102 @@ mod tests {
         let changed = host
             .set_shell_scale(&OutputId::new("default"), 125, generation)
             .expect("shell scale applies");
+        let _ = std::fs::remove_file(&path);
         assert!(changed);
 
         // 44 logical px at 125% rounds to 55 physical px via logical_to_physical.
         let panels = host.panels.snapshot();
         assert_eq!(panels.panels[0].logical_size, 44);
         assert_eq!(panels.panels[0].geometry.height, 55);
+    }
+
+    #[test]
+    fn set_shell_scale_persists_scale_across_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "flamewm-host-set-shell-scale-persist-test-{}.conf",
+            std::process::id()
+        ));
+        std::fs::write(&path, "").expect("write settings fixture");
+        let mut host = PlatformHost::new(
+            FakeEngine {
+                display: fake_display(100),
+                reverted: Vec::new(),
+            },
+            path.clone(),
+        );
+        host.start().expect("host starts");
+        let revision_before = host.settings_snapshot().revision;
+        let generation = host
+            .display_snapshot()
+            .expect("display snapshot")
+            .generation;
+        let changed = host
+            .set_shell_scale(&OutputId::new("default"), 125, generation)
+            .expect("shell scale applies");
+        assert!(changed);
+        assert_eq!(
+            host.settings_snapshot().revision,
+            revision_before,
+            "scale persistence must not make Settings clients stale"
+        );
+        drop(host);
+
+        // A WM restart re-seeds the display snapshot from the settings file, as at first start.
+        let mut restarted = PlatformHost::new(
+            FakeEngine {
+                display: fake_display(100),
+                reverted: Vec::new(),
+            },
+            path.clone(),
+        );
+        let started = restarted.start();
+        let persisted = std::fs::read_to_string(&path);
+        let _ = std::fs::remove_file(&path);
+        started.expect("host restarts");
+        let scale = restarted.cached_display_snapshot().and_then(|snapshot| {
+            snapshot
+                .outputs
+                .first()
+                .map(|output| output.shell_scale_percent)
+        });
+        assert_eq!(scale, Some(125));
+        let persisted = persisted.expect("settings file is written");
+        assert!(persisted.contains("scale.default=125\n"), "{persisted}");
+    }
+
+    #[test]
+    fn failed_shell_scale_persistence_restores_display_scale() {
+        // The settings parent becomes a regular file after start, so persistence cannot create it.
+        let dir = hotkey_fixture("scale-rollback-dir");
+        std::fs::create_dir_all(&dir).expect("create settings dir");
+        let path = dir.join("settings.conf");
+        let mut host = PlatformHost::new(
+            FakeEngine {
+                display: fake_display(100),
+                reverted: Vec::new(),
+            },
+            path.clone(),
+        );
+        host.start().expect("host starts");
+        std::fs::remove_dir_all(&dir).expect("remove settings dir");
+        std::fs::write(&dir, "").expect("replace settings dir with a file");
+
+        let generation = host
+            .display_snapshot()
+            .expect("display snapshot")
+            .generation;
+        let error = host
+            .set_shell_scale(&OutputId::new("default"), 125, generation)
+            .expect_err("persistence failure is surfaced");
+        assert_ne!(error.code, ErrorCode::StaleRevision);
+        let scale = host.cached_display_snapshot().and_then(|snapshot| {
+            snapshot
+                .outputs
+                .first()
+                .map(|output| output.shell_scale_percent)
+        });
+        assert_eq!(scale, Some(100));
+        let _ = std::fs::remove_file(&dir);
     }
 
     fn hotkey_fixture(name: &str) -> PathBuf {
