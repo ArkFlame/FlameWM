@@ -89,6 +89,12 @@ impl ManagedClient {
         self.placement.mode == PlacementMode::Fullscreen
     }
 
+    /// Pointer left the frame: drop the control hover highlight.
+    /// Returns whether the painted state changed.
+    pub fn clear_hover(&mut self) -> bool {
+        self.hover_control.take().is_some()
+    }
+
     /// Set the authoritative frame rect (floating-restore follows when
     /// floating; resume snapshot is left for explicit transitions).
     pub fn set_outer(&mut self, outer: Rect) {
@@ -151,6 +157,10 @@ mod tests {
         };
         assert!(!client.is_maximized());
         assert!(!client.is_fullscreen());
+        client.hover_control = Some(FrameControl::Close);
+        assert!(client.clear_hover());
+        assert_eq!(client.hover_control, None);
+        assert!(!client.clear_hover());
         client.set_outer(root_to_rect(max_rect));
         assert_eq!(client.placement.current, max_rect);
         assert_eq!(client.outer, root_to_rect(max_rect));

@@ -2188,7 +2188,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                     }
                     WindowKind::Desktop => self.map_unframed(window, StackMode::BELOW)?,
                     WindowKind::Dock => self.map_dock(window)?,
-                    WindowKind::Normal | WindowKind::Utility => self.manage(window, &geometry)?,
+                    WindowKind::Normal | WindowKind::Utility => {
+                        self.manage(window, &geometry, true)?;
+                    }
                 }
             }
         }
@@ -2290,6 +2292,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         &mut self,
         window: Window,
         geometry: &GetGeometryReply,
+        adopt: bool,
     ) -> Result<(), ReplyOrIdError> {
         let kind = self.window_kind(window, false)?;
         if self.clients.contains_key(&window) {
@@ -2345,7 +2348,19 @@ impl<'a, C: Connection> Wm<'a, C> {
                 u32::from(geometry.height).max(1),
             ),
         );
-        let outer = crate::client::root_to_rect(initial_plan.frame);
+        let frame_rect = if adopt {
+            crate::frame::geometry::plan_adopt(
+                RootPoint::new(i32::from(geometry.x), i32::from(geometry.y)),
+                (
+                    u32::from(geometry.width).max(1),
+                    u32::from(geometry.height).max(1),
+                ),
+                extents,
+            )
+        } else {
+            initial_plan.frame
+        };
+        let outer = crate::client::root_to_rect(frame_rect);
 
         // Create frame UNMAPPED with panel bg #1b1e20 (not black).
         self.conn.create_window(
@@ -2859,7 +2874,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             WindowKind::Normal | WindowKind::Utility => {}
         }
         let geometry = self.conn.get_geometry(event.window)?.reply()?;
-        self.manage(event.window, &geometry)
+        self.manage(event.window, &geometry, false)
     }
 
     fn handle_configure_request(&mut self, event: ConfigureRequestEvent) -> Result<(), ReplyError> {
@@ -3038,7 +3053,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         match self.window_kind(window, false)? {
             WindowKind::Normal | WindowKind::Utility => {
                 let geometry = self.conn.get_geometry(window)?.reply()?;
-                return self.manage(window, &geometry);
+                return self.manage(window, &geometry, false);
             }
             _ => {}
         }
@@ -3170,6 +3185,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         let _ = self.reduce_and_execute(client_id, FrameEvent::Leave);
+        if let Some(state) = self.clients.get_mut(&client_id) {
+            state.clear_hover();
+        }
         self.paint_chrome(client_id)?;
         Ok(())
     }

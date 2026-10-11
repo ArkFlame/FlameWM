@@ -345,6 +345,25 @@ pub fn plan_initial_map(
     GeometryPlan::of(req, RootRect::new(x, y, frame.w, frame.h))
 }
 
+/// Re-adopt after a WM restart: the client sits at its root position inside
+/// the previous frame (frame origin + border + titlebar), so the frame is
+/// the exact inverse. No gravity, snapping or work-area clamp: existing
+/// geometry is preserved.
+#[must_use]
+pub fn plan_adopt(
+    client_origin: RootPoint,
+    client_size: (u32, u32),
+    extents: FrameExtents,
+) -> RootRect {
+    let frame = client_rect_to_frame(client_origin, client_size, extents);
+    RootRect::new(
+        frame.x.saturating_sub(extents.border),
+        frame.y.saturating_sub(extents.border),
+        frame.w,
+        frame.h,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +402,16 @@ mod tests {
             resizable: min != max,
             ..ClientSizeHints::default()
         }
+    }
+
+    #[test]
+    fn adopt_is_inverse_of_frame_reparent_without_clamp_or_drift() {
+        // Frame at (0,0) outside a top panel work area: client abs is
+        // (border, border + titlebar). Adopt must return (0,0) again.
+        let frame = plan_adopt(RootPoint::new(1, 32), (400, 300), EXT);
+        assert_eq!(frame, RootRect::new(0, 0, 400, 331));
+        let again = plan_adopt(RootPoint::new(1, 32), (400, 300), EXT);
+        assert_eq!(again, frame);
     }
 
     #[test]
