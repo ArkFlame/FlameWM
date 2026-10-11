@@ -5,9 +5,7 @@
 
 use flamewm_api::display::{DisplayMode, DisplaySnapshot};
 use flamewm_api::panels::PanelsSnapshot;
-use flamewm_api::settings::{
-    AppearanceMode, SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction,
-};
+use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::ShortcutSnapshot;
 use flamewm_api::{ModeId, OutputId, PanelEdge, TransactionId};
 use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
@@ -320,7 +318,7 @@ impl<T: ControlTransport> SettingsClient<T> {
 
     /// Apply one native Settings-page transaction and replace the cached snapshot only after the
     /// authoritative WM process accepts it. This is the common immediate-apply path.
-    pub fn apply_changes(&mut self, changes: Vec<SettingsChange>) -> Result<(), ControlError> {
+    fn apply_changes(&mut self, changes: Vec<SettingsChange>) -> Result<(), ControlError> {
         let expected_revision = self
             .settings
             .as_ref()
@@ -355,48 +353,8 @@ impl<T: ControlTransport> SettingsClient<T> {
         Ok(())
     }
 
-    pub fn set_appearance(
-        &mut self,
-        accent: impl Into<String>,
-        icon_theme: impl Into<String>,
-        appearance: AppearanceMode,
-    ) -> Result<(), ControlError> {
-        self.apply_changes(vec![
-            SettingsChange {
-                key: "accent".to_owned(),
-                value: Some(SettingValue::Text(accent.into())),
-            },
-            SettingsChange {
-                key: "iconTheme".to_owned(),
-                value: Some(SettingValue::Text(icon_theme.into())),
-            },
-            SettingsChange {
-                key: "appearance".to_owned(),
-                value: Some(SettingValue::Text(appearance.as_str().to_owned())),
-            },
-        ])
-    }
-
     pub fn set_wallpaper(&mut self, path: impl Into<String>) -> Result<(), ControlError> {
         self.apply_setting("wallpaper", SettingValue::Text(path.into()))
-    }
-
-    pub fn set_desktop_selection_opacity(&mut self, percent: u8) -> Result<(), ControlError> {
-        self.apply_setting(
-            "DesktopSelectionFillOpacity",
-            SettingValue::Percent(percent),
-        )
-    }
-
-    pub fn set_snap_preview_opacity(&mut self, percent: u8) -> Result<(), ControlError> {
-        self.apply_setting(
-            "WindowSnapPreviewFillOpacity",
-            SettingValue::Percent(percent),
-        )
-    }
-
-    pub fn set_sticky_notes_enabled(&mut self, enabled: bool) -> Result<(), ControlError> {
-        self.apply_setting("stickyNotesEnabled", SettingValue::Boolean(enabled))
     }
 
     pub fn set_taskbar_appearance(
@@ -417,23 +375,6 @@ impl<T: ControlTransport> SettingsClient<T> {
             SettingsChange {
                 key: "taskbarHeight".to_owned(),
                 value: Some(SettingValue::Integer(i64::from(height))),
-            },
-        ])
-    }
-
-    pub fn set_start_branding(
-        &mut self,
-        text: impl Into<String>,
-        icon_path: impl Into<String>,
-    ) -> Result<(), ControlError> {
-        self.apply_changes(vec![
-            SettingsChange {
-                key: "startButtonText".to_owned(),
-                value: Some(SettingValue::Text(text.into())),
-            },
-            SettingsChange {
-                key: "customStartIcon".to_owned(),
-                value: Some(SettingValue::Text(icon_path.into())),
             },
         ])
     }

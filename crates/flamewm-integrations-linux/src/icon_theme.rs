@@ -237,25 +237,6 @@ impl IconThemeIndex {
         let text = fs::read_to_string(theme_dir.join("index.theme")).ok()?;
         Some(Self::parse(&name, &text))
     }
-
-    /// Directories ordered by proximity to `requested` (exact first).
-    #[must_use]
-    pub fn ordered_dirs(&self, requested: u32) -> Vec<(String, u64)> {
-        let mut ordered: Vec<(String, u64)> = self
-            .directories
-            .iter()
-            .map(|dir| {
-                let distance = self
-                    .dirs
-                    .get(dir)
-                    .map(|entry| entry.distance(requested))
-                    .unwrap_or(u64::MAX / 2);
-                (dir.clone(), distance)
-            })
-            .collect();
-        ordered.sort_by_key(|(_, distance)| *distance);
-        ordered
-    }
 }
 
 fn parse_dir(section: &HashMap<String, String>) -> IconDir {
@@ -599,18 +580,6 @@ pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     // Roots are always non-empty (`join` appends a component), so the
     // empty-path filter in `unique_paths` never drops anything here.
     unique_paths(roots)
-}
-
-/// Locate `index.theme` for `theme` under `data_dirs`.
-#[must_use]
-pub fn theme_dir(theme: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
-    for root in search_roots(data_dirs) {
-        let dir = root.join(theme);
-        if dir.join("index.theme").is_file() {
-            return Some(dir);
-        }
-    }
-    None
 }
 
 /// Generation-scoped shared lookup snapshot.
