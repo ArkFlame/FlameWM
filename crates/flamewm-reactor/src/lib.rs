@@ -10,6 +10,9 @@ use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, Mode, PostAction, Readiness, RegistrationToken};
 
+pub mod timeline;
+pub use timeline::{AnimationDriver, Easing, Start, Timeline, TransitionId};
+
 /// Readiness flags exposed by the reactor without leaking calloop's source types.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FdReadiness {
@@ -183,6 +186,30 @@ impl Reactor {
                     TimeoutAction::ToDuration(delay)
                 } else {
                     TimeoutAction::Drop
+                }
+            })
+            .map_err(Into::into)
+    }
+}
+
+impl Reactor {
+    /// Registers a timer that reschedules itself while its callback returns `Some(next_delay)`
+    /// and is dropped when the callback returns `None`.
+    pub fn register_timer_rescheduling<C>(
+        &mut self,
+        delay: Duration,
+        callback: C,
+    ) -> calloop::Result<RegistrationToken>
+    where
+        C: FnMut() -> Option<Duration> + 'static,
+    {
+        let mut callback = callback;
+        self.event_loop
+            .handle()
+            .insert_source(Timer::from_duration(delay), move |_, _, _| {
+                match callback() {
+                    Some(next) => TimeoutAction::ToDuration(next),
+                    None => TimeoutAction::Drop,
                 }
             })
             .map_err(Into::into)
