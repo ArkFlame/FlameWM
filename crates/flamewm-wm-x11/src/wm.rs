@@ -62,6 +62,10 @@ fn log_unhandled_shortcut_once(action: &str) {
 
 /// Neighbour workspace index for a relative step without wrap-around.
 /// Returns `None` when the step would leave `[0, count)`.
+/// Focus revert target when the focused client is destroyed or unmapped. `NONE` would make the X
+/// server discard key events and skip passive root grabs, silently killing every WM shortcut.
+const FOCUS_REVERT_TO: InputFocus = InputFocus::POINTER_ROOT;
+
 /// Gated key diagnostics: `FLAMEWM_KEY_DIAG=1` enables stderr key logging.
 /// Read once per process; normal runs print nothing.
 pub(crate) fn key_diag_enabled() -> bool {
@@ -3612,7 +3616,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         self.conn
-            .set_input_focus(InputFocus::NONE, client, CURRENT_TIME)?;
+            .set_input_focus(FOCUS_REVERT_TO, client, CURRENT_TIME)?;
         if state.kind != WindowKind::Utility || state.transient_for.is_some() {
             self.conn.configure_window(
                 state.frame,
@@ -4367,6 +4371,11 @@ mod tests {
     use super::*;
     use crate::frame::model::ResizeEdges;
     use crate::frame::session::{MoveAnchor, MoveSession};
+
+    #[test]
+    fn focus_reverts_to_pointer_root_so_root_shortcut_grabs_survive_focus_loss() {
+        assert_eq!(FOCUS_REVERT_TO, InputFocus::POINTER_ROOT);
+    }
 
     #[test]
     fn wm_class_parse_characterization_trims_and_keeps_empty_tokens() {
