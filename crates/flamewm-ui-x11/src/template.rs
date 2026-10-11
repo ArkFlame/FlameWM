@@ -54,6 +54,10 @@ pub trait UiDocumentAccess {
         let _ = family;
         Err("font family projection is unsupported by this document access".to_string())
     }
+    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
+        let _ = (name, color);
+        Err("color variable projection is unsupported by this document access".to_string())
+    }
     fn overflow(
         &mut self,
         id: &str,
@@ -248,6 +252,10 @@ impl UiDocumentAccess for UiDocument {
         self.font_family(family)
     }
 
+    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
+        self.document.set_color_variable(name, color.into())
+    }
+
     fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
         self.layer(id, layer)
     }
@@ -348,6 +356,10 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
 
     fn font_family(&mut self, family: String) -> Result<(), String> {
         self.document.set_ui_font_family(family)
+    }
+
+    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
+        self.document.set_color_variable(name, color.into())
     }
 
     fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
@@ -874,5 +886,31 @@ mod tests {
             .expect("font family projection");
         assert_eq!(doc.document.ui_font_family(), "Noto Sans");
         assert!(doc.font_family(String::new()).is_err());
+    }
+
+    #[test]
+    fn color_variable_projection_reaches_runtime_document() {
+        let default = flamewm_render_core::Color::rgb(0xef, 0x40, 0x48);
+        let mut doc = UiDocument {
+            document: RuntimeDocument::new(flamewm_render_core::CompiledDocument {
+                source_fingerprint: 0,
+                root: 0,
+                variables: vec![flamewm_render_core::ColorVariable {
+                    name: "--accent".to_string(),
+                    default,
+                }],
+                assets: Vec::new(),
+                nodes: vec![el_color("root", None, default)],
+            })
+            .expect("fixture validates"),
+        };
+        UiDocumentAccess::color_variable(
+            &mut doc,
+            "--accent",
+            UiColor { r: 1, g: 2, b: 3, a: 77 },
+        )
+        .expect("variable projection");
+        assert_eq!(doc.document.variable_values[0], flamewm_render_core::Color { r: 1, g: 2, b: 3, a: 77 });
+        assert!(UiDocumentAccess::color_variable(&mut doc, "--missing", UiColor { r: 0, g: 0, b: 0, a: 0 }).is_err());
     }
 }

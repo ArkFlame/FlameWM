@@ -822,7 +822,10 @@ impl RuntimeDocument {
             .get(name)
             .copied()
             .ok_or_else(|| format!("no color variable named '{name}'"))?;
-        self.variable_values[index as usize] = color;
+        if self.variable_values[index as usize] != color {
+            self.variable_values[index as usize] = color;
+            self.touch();
+        }
         Ok(())
     }
 
