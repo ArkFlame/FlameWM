@@ -7,6 +7,68 @@ use crate::xlib::*;
 use flamewm_reactor::Reactor;
 use flamewm_render_core::{Rect, SurfaceDamage};
 
+// Input-focus FFI is not in the pinned xlib.rs surface. It is declared here
+// beside its only callers, the popup grab lifecycle that also owns XGrabPointer.
+unsafe extern "C" {
+    pub(crate) fn XGetInputFocus(
+        display: *mut Display,
+        focus_return: *mut Window,
+        revert_to_return: *mut std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+    pub(crate) fn XSetInputFocus(
+        display: *mut Display,
+        focus: Window,
+        revert_to: std::os::raw::c_int,
+        time: Time,
+    ) -> std::os::raw::c_int;
+}
+
+const REVERT_TO_POINTER_ROOT: std::os::raw::c_int = 1;
+
+/// Popup focus handoff, called where the popup takes its pointer grab. Focus
+/// moves to the popup so Escape reaches it from any pointer position, and the
+/// displaced focus is kept on the app. Passive WM key grabs (Super) keep firing
+/// because the popup sits under the root; no active keyboard grab is taken.
+/// X errors (e.g. BadMatch) are non-fatal: the process error handler ignores
+/// protocol errors.
+pub(crate) unsafe fn popup_take_focus(display: *mut Display, app: &mut X11App) {
+    if x_io_broken() {
+        return;
+    }
+    // SAFETY: display is the live controller connection; out-pointers are locals.
+    unsafe {
+        if app.saved_input_focus.is_none() {
+            let mut focus: Window = 0;
+            let mut revert: std::os::raw::c_int = 0;
+            XGetInputFocus(display, &mut focus, &mut revert);
+            app.saved_input_focus = Some((focus, revert));
+        }
+        XSetInputFocus(display, app.window, REVERT_TO_POINTER_ROOT, CURRENT_TIME);
+    }
+}
+
+/// Restore the focus displaced by `popup_take_focus`, only while the popup
+/// still holds focus, so WM focus changes made during the popup are kept. A
+/// stale saved window fails with BadWindow (ignored); the X server then leaves
+/// focus on PointerRoot once the popup is unmapped.
+pub(crate) unsafe fn popup_restore_focus(display: *mut Display, app: &mut X11App) {
+    let Some((previous, revert)) = app.saved_input_focus.take() else {
+        return;
+    };
+    if x_io_broken() {
+        return;
+    }
+    // SAFETY: display is the live controller connection; out-pointers are locals.
+    unsafe {
+        let mut current: Window = 0;
+        let mut current_revert: std::os::raw::c_int = 0;
+        XGetInputFocus(display, &mut current, &mut current_revert);
+        if current == app.window {
+            XSetInputFocus(display, previous, revert, CURRENT_TIME);
+        }
+    }
+}
+
 /// Stable role label for geometry traces (one id/role per placement).
 pub fn surface_role_label(role: SurfaceRole) -> &'static str {
     match role {
@@ -530,6 +592,7 @@ impl SurfaceController {
             if instance.app.pointer_grabbed {
                 unsafe {
                     XUngrabPointer(self.display, CURRENT_TIME);
+                    popup_restore_focus(self.display, &mut instance.app);
                 }
                 instance.app.pointer_grabbed = false;
             }
@@ -557,6 +620,7 @@ impl SurfaceController {
         if instance.app.pointer_grabbed {
             unsafe {
                 XUngrabPointer(display, CURRENT_TIME);
+                popup_restore_focus(display, &mut instance.app);
             }
             instance.app.pointer_grabbed = false;
         }
@@ -627,6 +691,7 @@ impl SurfaceController {
         if instance.app.pointer_grabbed {
             unsafe {
                 XUngrabPointer(display, CURRENT_TIME);
+                popup_restore_focus(display, &mut instance.app);
             }
             instance.app.pointer_grabbed = false;
         }
@@ -885,6 +950,7 @@ impl SurfaceController {
         }
         instance.app.pointer_grabbed = true;
         unsafe {
+            popup_take_focus(display, &mut instance.app);
             XFlush(display);
         }
         Ok(())
@@ -895,6 +961,7 @@ impl SurfaceController {
         let instance = self.instance_mut(id)?;
         unsafe {
             XUngrabPointer(display, CURRENT_TIME);
+            popup_restore_focus(display, &mut instance.app);
         }
         instance.app.pointer_grabbed = false;
         unsafe {

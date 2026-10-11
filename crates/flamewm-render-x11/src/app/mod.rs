@@ -165,6 +165,8 @@ pub(crate) struct X11App {
     pub(crate) retired_backbuffer: Option<(Pixmap, usize)>,
     pub(crate) pointer_button: Option<u32>,
     pub(crate) pointer_grabbed: bool,
+    /// Input focus displaced when this popup took it (window, revert_to).
+    pub(crate) saved_input_focus: Option<(Window, c_int)>,
     pub(crate) super_chord_used: bool,
     pub(crate) last_title_press: Option<(u32, u64)>,
     pub(crate) single_event: bool,
@@ -539,6 +541,7 @@ impl X11App {
             retired_backbuffer: None,
             pointer_button: None,
             pointer_grabbed: false,
+            saved_input_focus: None,
             super_chord_used: false,
             last_title_press: None,
             single_event: false,
@@ -820,6 +823,7 @@ impl Drop for X11App {
         unsafe {
             if self.pointer_grabbed {
                 XUngrabPointer(self.display, CURRENT_TIME);
+                crate::surface_controller::popup_restore_focus(self.display, self);
                 self.pointer_grabbed = false;
             }
             for image in self.images.values().copied() {
