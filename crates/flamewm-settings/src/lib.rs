@@ -264,6 +264,21 @@ enum SettingsAction {
     DisplayKeep,
     DisplayRevert,
     OpenUri(&'static str),
+    /// Adds `delta` to one channel (0 = R, 1 = G, 2 = B) of a `#RRGGBB` setting.
+    ColorStep {
+        key: &'static str,
+        channel: usize,
+        delta: i16,
+    },
+    /// Steps a percent setting by 5 within 0..=100.
+    PercentStep(&'static str, i8),
+    /// Steps `animationSpeed` (hundredths) by 25 within 25..=200.
+    AnimationSpeed(i8),
+    /// Advances a text setting through `values`, wrapping.
+    TextCycle {
+        key: &'static str,
+        values: &'static [&'static str],
+    },
     /// A native `keyboard.*` id from the X11 key source. It is not markup, so
     /// it never edits a row; hotkey capture is driven by the key-event path.
     NativeKeyEvent,
@@ -478,7 +493,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.set_taskbar_value("opacity", direction)?;
             }
             SettingsAction::FontSize(direction) => {
-                self.step_integer("fontSizeOffset", direction, -2, 4)?;
+                self.step_integer("fontSizeOffset", i64::from(direction), -2, 4)?;
+            }
+            SettingsAction::ColorStep { key, channel, delta } => {
+                let color = accent_color(&self.text_setting(key)?)?;
+                let mut channels = [color.r, color.g, color.b];
+                channels[channel] = (i16::from(channels[channel]) + delta).clamp(0, 255) as u8;
+                let [r, g, b] = channels;
+                self.apply_text(key, format!("#{r:02X}{g:02X}{b:02X}"))?;
+            }
+            SettingsAction::PercentStep(key, direction) => self.step_percent(key, direction, 100)?,
+            SettingsAction::AnimationSpeed(direction) => {
+                self.step_integer("animationSpeed", i64::from(direction) * 25, 25, 200)?;
+            }
+            SettingsAction::TextCycle { key, values } => {
+                let current = self.text_setting(key)?;
+                self.apply_text(key, cycle_text(values, &current).to_owned())?;
             }
             SettingsAction::TaskbarEdgeCycle => self.cycle_panel_edge()?,
             SettingsAction::TaskbarEdge(edge) => {
@@ -699,12 +729,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
     fn step_integer(
         &mut self,
         key: &str,
-        direction: i8,
+        delta: i64,
         minimum: i64,
         maximum: i64,
     ) -> Result<(), String> {
         let current = self.integer_setting(key)?;
-        let next = (current + i64::from(direction)).clamp(minimum, maximum);
+        let next = (current + delta).clamp(minimum, maximum);
         self.client
             .apply_setting(key, SettingValue::Integer(next))
             .map_err(control_error)
@@ -909,6 +939,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "sticky-toggle-off",
             ),
             ("fontBold", "font-toggle-on", "font-toggle-off"),
+            ("animationsEnabled", "anim-global-on", "anim-global-off"),
+            ("startAnimationEnabled", "anim-start-on", "anim-start-off"),
+            ("windowOpenAnimationEnabled", "anim-window-on", "anim-window-off"),
+            ("minimizeAnimationEnabled", "anim-minimize-on", "anim-minimize-off"),
+            ("maximizeAnimationEnabled", "anim-maximize-on", "anim-maximize-off"),
         ] {
             let enabled = self
                 .client
@@ -929,6 +964,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.font_family(family.clone())?;
         }
         self.sync_value_text(document)?;
+        self.sync_appearance(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
         optional_text(
@@ -937,6 +973,37 @@ impl<T: ControlTransport> SettingsApplication<T> {
             format!("Version {APP_VERSION}"),
         );
         self.sync_error(document);
+        Ok(())
+    }
+
+    fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        for (target, key) in COLOR_TARGETS {
+            if let Ok(color) = self.text_setting(key) {
+                document.text(&format!("color-value-{target}"), color.to_ascii_uppercase())?;
+            }
+        }
+        for (key, id) in [
+            ("startMenuOpacity", "start-menu-opacity-value"),
+            ("accentOpacity", "accent-opacity-value"),
+        ] {
+            if let Ok(value) = self.percent_setting(key) {
+                document.text(id, format!("{value}%"))?;
+            }
+        }
+        if let Ok(speed) = self.integer_setting("animationSpeed") {
+            document.text("animation-speed-value", format!("{:.2}x", speed as f64 / 100.0))?;
+        }
+        for (key, id) in [
+            ("decoration", "decoration-value"),
+            ("titlebarMinimizeStyle", "titlebar-minimize-style-value"),
+            ("titlebarMaximizeStyle", "titlebar-maximize-style-value"),
+            ("titlebarCloseStyle", "titlebar-close-style-value"),
+            ("startAnimation", "start-animation-value"),
+        ] {
+            if let Ok(value) = self.text_setting(key) {
+                document.text(id, value)?;
+            }
+        }
         Ok(())
     }
 
@@ -1172,6 +1239,45 @@ fn step(value: &str) -> Option<i8> {
     }
 }
 
+/// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
+const COLOR_TARGETS: [(&str, &str); 4] = [
+    ("taskbar", "taskbarColor"),
+    ("startmenu", "startMenuColor"),
+    ("accent", "accent"),
+    ("titlebar", "titlebarColor"),
+];
+
+const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
+
+/// Parses `<target>.<r|g|b>.step.<+-1|+-16>`, the rest after `settings.color.`.
+fn parse_color_step(rest: &str) -> Result<SettingsAction, String> {
+    let (target, rest) = rest
+        .split_once('.')
+        .ok_or_else(|| format!("invalid color action '{rest}'"))?;
+    let (channel, delta) = rest
+        .split_once(".step.")
+        .ok_or_else(|| format!("invalid color step '{rest}'"))?;
+    let key = COLOR_TARGETS
+        .iter()
+        .find(|(name, _)| *name == target)
+        .map(|(_, key)| *key)
+        .ok_or_else(|| format!("unknown color target '{target}'"))?;
+    let channel = match channel {
+        "r" => 0,
+        "g" => 1,
+        "b" => 2,
+        _ => return Err(format!("unknown color channel '{channel}'")),
+    };
+    let delta = match delta {
+        "1" => 1,
+        "-1" => -1,
+        "16" => 16,
+        "-16" => -16,
+        _ => return Err(format!("unknown color step '{delta}'")),
+    };
+    Ok(SettingsAction::ColorStep { key, channel, delta })
+}
+
 /// Next value in `values`, wrapping at both ends. An unknown current value
 /// starts from the first entry.
 fn cycle_value(values: &[i64], current: i64, direction: i8) -> i64 {
@@ -1319,8 +1425,25 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         return match key {
             "stickyNotesEnabled" => Ok(SettingsAction::Toggle("stickyNotesEnabled")),
             "fontBold" => Ok(SettingsAction::Toggle("fontBold")),
+            "animationsEnabled" => Ok(SettingsAction::Toggle("animationsEnabled")),
+            "startAnimationEnabled" => Ok(SettingsAction::Toggle("startAnimationEnabled")),
+            "windowOpenAnimationEnabled" => Ok(SettingsAction::Toggle("windowOpenAnimationEnabled")),
+            "minimizeAnimationEnabled" => Ok(SettingsAction::Toggle("minimizeAnimationEnabled")),
+            "maximizeAnimationEnabled" => Ok(SettingsAction::Toggle("maximizeAnimationEnabled")),
             _ => Err(format!("unknown toggle '{key}'")),
         };
+    }
+    if let Some(rest) = action.strip_prefix("settings.color.") {
+        return parse_color_step(rest);
+    }
+    if let Some(direction) = action.strip_prefix("settings.start-menu-opacity.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("startMenuOpacity", direction));
+    }
+    if let Some(direction) = action.strip_prefix("settings.accent-opacity.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("accentOpacity", direction));
+    }
+    if let Some(direction) = action.strip_prefix("settings.animation-speed.").and_then(step) {
+        return Ok(SettingsAction::AnimationSpeed(direction));
     }
     if let Some(direction) = action
         .strip_prefix("settings.selection-opacity.")
@@ -1388,6 +1511,26 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.taskbar.color" => Ok(SettingsAction::TaskbarColorCycle),
         "settings.taskbar.size" => Ok(SettingsAction::TaskbarSizeCycle),
         "settings.font.family" => Ok(SettingsAction::FontFamilyCycle),
+        "settings.decoration.cycle" => Ok(SettingsAction::TextCycle {
+            key: "decoration",
+            values: &["rounded", "ios"],
+        }),
+        "settings.titlebar.minimize.style" => Ok(SettingsAction::TextCycle {
+            key: "titlebarMinimizeStyle",
+            values: &TITLEBAR_STYLES,
+        }),
+        "settings.titlebar.maximize.style" => Ok(SettingsAction::TextCycle {
+            key: "titlebarMaximizeStyle",
+            values: &TITLEBAR_STYLES,
+        }),
+        "settings.titlebar.close.style" => Ok(SettingsAction::TextCycle {
+            key: "titlebarCloseStyle",
+            values: &TITLEBAR_STYLES,
+        }),
+        "settings.start-animation.cycle" => Ok(SettingsAction::TextCycle {
+            key: "startAnimation",
+            values: &["slide-up"],
+        }),
         "settings.display.keep" => Ok(SettingsAction::DisplayKeep),
         "settings.display.revert" => Ok(SettingsAction::DisplayRevert),
         // The Taskbar output pager shares the Displays output cursor.
@@ -1501,6 +1644,56 @@ mod value_text_tests {
         assert_eq!(cycle_value(&sizes, 72, 1), 34);
         assert_eq!(cycle_value(&sizes, 34, -1), 72);
         assert_eq!(cycle_value(&sizes, 44, 1), 52);
+    }
+
+    #[test]
+    fn appearance_actions_parse_to_their_exact_typed_targets() {
+        assert!(matches!(
+            parse_action("settings.color.startmenu.r.step.-16"),
+            Ok(SettingsAction::ColorStep { key: "startMenuColor", channel: 0, delta: -16 })
+        ));
+        assert!(matches!(
+            parse_action("settings.color.titlebar.b.step.1"),
+            Ok(SettingsAction::ColorStep { key: "titlebarColor", channel: 2, delta: 1 })
+        ));
+        assert!(matches!(
+            parse_action("settings.start-menu-opacity.up"),
+            Ok(SettingsAction::PercentStep("startMenuOpacity", 1))
+        ));
+        assert!(matches!(
+            parse_action("settings.accent-opacity.down"),
+            Ok(SettingsAction::PercentStep("accentOpacity", -1))
+        ));
+        assert!(matches!(
+            parse_action("settings.animation-speed.up"),
+            Ok(SettingsAction::AnimationSpeed(1))
+        ));
+        assert!(matches!(
+            parse_action("settings.toggle.maximizeAnimationEnabled"),
+            Ok(SettingsAction::Toggle("maximizeAnimationEnabled"))
+        ));
+        assert!(matches!(
+            parse_action("settings.titlebar.close.style"),
+            Ok(SettingsAction::TextCycle { key: "titlebarCloseStyle", .. })
+        ));
+        assert!(matches!(
+            parse_action("settings.decoration.cycle"),
+            Ok(SettingsAction::TextCycle { key: "decoration", .. })
+        ));
+    }
+
+    #[test]
+    fn appearance_actions_reject_unknown_targets_channels_and_steps() {
+        for action in [
+            "settings.color.desktop.r.step.1",
+            "settings.color.accent.x.step.1",
+            "settings.color.accent.r.step.2",
+            "settings.color.accent.r.step.0",
+            "settings.color.accent.r",
+            "settings.animation-speed.sideways",
+        ] {
+            assert!(parse_action(action).is_err(), "{action} must be rejected");
+        }
     }
 
     #[test]

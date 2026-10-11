@@ -827,6 +827,65 @@ mod tests {
         assert_eq!(application.client().settings(), Some(&reset));
     }
 
+    fn color_step_application(initial_value: &str, action: &str) -> Vec<ControlRequest> {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut initial = SettingsSnapshot::new(7);
+        initial.values.insert(
+            "startMenuColor".to_owned(),
+            SettingValue::Text(initial_value.to_owned()),
+        );
+        initial.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text(initial_value.to_owned()),
+        );
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(initial.clone())));
+        transport.responses.push_back(Ok(ControlResponse::Settings(initial)));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .handle_action(&release(action), &mut ProbeDocument::default())
+            .expect("color step release");
+        let recorded = requests.borrow().clone();
+        recorded
+    }
+
+    #[test]
+    fn start_menu_color_step_sends_exact_hex_channel_change_in_one_transaction() {
+        let requests = color_step_application("#191B1D", "settings.color.startmenu.r.step.16");
+        assert_eq!(
+            requests.last(),
+            Some(&ControlRequest::ApplySettings(SettingsTransaction {
+                expected_revision: 7,
+                changes: vec![SettingsChange {
+                    key: "startMenuColor".to_owned(),
+                    value: Some(SettingValue::Text("#291B1D".to_owned())),
+                }],
+                reset_section: None,
+            })),
+        );
+        assert_eq!(requests.len(), 2, "one GetSettings and one ApplySettings only");
+    }
+
+    #[test]
+    fn accent_color_step_clamps_channels_at_255_instead_of_wrapping() {
+        let requests = color_step_application("#FFFFFF", "settings.color.accent.g.step.16");
+        assert_eq!(
+            requests.last(),
+            Some(&ControlRequest::ApplySettings(SettingsTransaction {
+                expected_revision: 7,
+                changes: vec![SettingsChange {
+                    key: "accent".to_owned(),
+                    value: Some(SettingValue::Text("#FFFFFF".to_owned())),
+                }],
+                reset_section: None,
+            })),
+        );
+    }
+
     #[test]
     fn accent_swatches_dispatch_only_release_inside_events_and_apply_selected_value() {
         let requests = Rc::new(RefCell::new(Vec::new()));
