@@ -34,13 +34,13 @@ Schema: `flamewm-settings-acceptance/2` (`schema_version` 2). Each run writes `<
 | SS09 | 15s rollback | NOT_RUN (a real 15 s revert cannot run in Xephyr; needs a fake-clock test) |
 | SS10 | scale | native runner (`run_ss10`); needs `--ss10-scale-click`, plus `--ss10-wheel-steps` and `--ss10-scrolled-click` when the output lists modes. PASS only when the Displays 125 click changes the output `scale` to 125, the mode list is unchanged, and the value persists after an owned WM restart; otherwise NOT_RUN |
 | SS11 | fonts | native runner (`run_ss11`); needs `--ss11-family-click` and `--ss11-size-click`. PASS only when both clicks change `fontFamily` / `fontSizeOffset` in the Settings snapshot and both persist after an owned WM restart; otherwise NOT_RUN |
-| SS12 | hotkeys | native runner; PASS only when lease, stored binding, action, grab restoration, owner loss, Escape clear (empty binding, persisted after restart) and Reset (`Super_L`, persisted after restart) all pass; native driver accepts `--ss12-click` and `--ss12-reset-click` |
+| SS12 | hotkeys | native runner; PASS only when lease, stored binding, action, grab restoration, owner loss, Escape clear (empty binding, persisted after restart) and Reset (`Super_L`, persisted after restart) all pass; Start is observed as the `StartMenuToggleRequested` D-Bus signal (no Start window exists in the session); clicks default to measured screen points 593,180 / 733,180, valid only for the 820x540 client at (0,31) (otherwise refused NOT_RUN); `--ss12-click` and `--ss12-reset-click` override |
 | SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 and the Rust test `about_version_text_is_exact_flamewm_version` passes via `cargo test`; NOT_RUN when cargo is not on PATH |
 | SS14 | external signal + auto-revert | partial Settings accent driver; canonical NOT_RUN until panel, shortcut, display rollback and signal-loss paths are also exercised |
 | SS15 | traversal/disabled states | NOT_RUN (no runner) |
-| SS16 | cargo/CSS/architecture gates | NOT_RUN (no runner in this harness) |
+| SS16 | cargo/CSS/architecture gates | runner executes `static_audit`, `architecture_guard`, `verify_rwr_promotion`, `test_j18_frame_guard.py`; PASS only when all exit 0 on one source (cargo gates are not run here) |
 | SS17 | private XTEST+screenshot matrix | NOT_RUN (no runner) |
-| SS18 | installed-prefix release | NOT_RUN (outside the isolated runner) |
+| SS18 | installed-prefix release | maps `--ss18-installed-result installed-result.json`; PASS only when the staged-binary run reports launch PASS plus SS03/SS05/SS11/SS12 PASS; launch smoke alone stays NOT_RUN |
 | SS19 | stability/perf/PID cleanup | NOT_RUN; partial: `LEGACY_HARNESS_NATIVE_PID_CLEANUP` |
 
 ## Legacy sub-scenarios (report labels)

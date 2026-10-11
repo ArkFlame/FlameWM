@@ -37,6 +37,26 @@ REQUIRED_DIRS = (
     "usr/share/flamewm/assets/branding",
     "usr/share/icons/FlameWM-Breeze-Dark/cursors",
 )
+# Canonical SS18 needs executed installed behaviour, not just page launch: these native scenarios,
+# run against the staged binaries, must all PASS (SS01 is the page-launch smoke).
+BEHAVIORAL_SCENARIOS = ("SS01", "SS03", "SS05", "SS11", "SS12")
+
+
+def installed_ss18(identity_ok: bool, native: dict | None) -> tuple[str, str, dict[str, str | None]]:
+    """Map staged-binary identity and native scenarios to the canonical SS18 status."""
+    scenarios = {item.get("id"): item.get("status") for item in (native or {}).get("scenarios", [])}
+    behavioral = {sid: scenarios.get(sid) for sid in BEHAVIORAL_SCENARIOS}
+    failed = [sid for sid, status in behavioral.items() if status == "FAIL"]
+    if native is not None and not identity_ok:
+        return "FAIL", "native result did not identify unchanged staged binaries", behavioral
+    if failed:
+        return "FAIL", "installed behavioral scenarios failed: " + ", ".join(failed), behavioral
+    missing = [f"{sid}={behavioral[sid]}" for sid, status in behavioral.items() if status != "PASS"]
+    if missing:
+        return "NOT_RUN", "installed behavioral proof incomplete: " + ", ".join(missing), behavioral
+    return "PASS", "staged binaries passed installed scenarios " + ", ".join(BEHAVIORAL_SCENARIOS), behavioral
+
+
 def inside(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -147,6 +167,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     # The overall verdict is the native verdict once the installed launch gate passes; any
     # non-PASS gate (FAIL, NOT_RUN, ENVIRONMENT_BLOCKED) stays the overall verdict.
     verdict = native.get("verdict", "INCOMPLETE") if status == "PASS" else status
+    ss18_status, ss18_reason, behavioral = installed_ss18(identity_ok if native is not None else False, native)
     document = {
         "schema": "flamewm-settings-installed-acceptance-v1",
         "verdict": verdict,
@@ -161,6 +182,9 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "isolated_working_directory": str(acceptance_dir),
         "native_result": str(native_file) if native_file.exists() else None,
         "native_verdict": native.get("verdict") if native else None,
+        "behavioral_scenarios": behavioral,
+        "ss18_status": ss18_status,
+        "ss18_reason": ss18_reason,
         "reason": reason,
         "command": command,
         "runner_exit_code": completed.returncode,

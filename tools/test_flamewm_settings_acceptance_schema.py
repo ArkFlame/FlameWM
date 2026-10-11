@@ -945,16 +945,111 @@ class FakeNativeRunnerTests(unittest.TestCase):
         self.assertIn("about_render_960x640", entry["reason"])
 
 
-class NoClickSurfacesReasonTests(unittest.TestCase):
-    def test_ss12_without_click_is_not_run_with_the_click_reason_at_top_level(self) -> None:
-        tmp = Path(tempfile.mkdtemp(prefix="flamewm-ss12-noclick-"))
+class Ss12DefaultClickGeometryTests(unittest.TestCase):
+    def _run(self, geometry: dict | None, extra: list[str] | None = None):
+        tmp = Path(tempfile.mkdtemp(prefix="flamewm-ss12-geom-"))
         self.addCleanup(shutil.rmtree, tmp, True)
-        with patch("flamewm_settings_acceptance.Ctx.spawn") as spawn:
-            entry = acc.run_ss12(acc.Ctx(tmp), acc.parse_args(["--run-dir", str(tmp / "run")]))
+        ctx = acc.Ctx(tmp)
+        ctx.display = ":97"
+        proc = SimpleNamespace(poll=lambda: None)
+        owned = SimpleNamespace(proc=proc, pid=1, name="x")
+        sent: list = []
+        snapshot = "({'ToggleStartMenu': <'Super_L'>},)"
+        with patch("flamewm_settings_acceptance.shutil.which", return_value="/usr/bin/x"), \
+                patch("flamewm_settings_acceptance.dbus_shortcuts_snapshot", return_value=(snapshot, "gdbus")), \
+                patch("flamewm_settings_acceptance.Ctx.spawn", return_value=owned), \
+                patch("flamewm_settings_acceptance.Ctx.stop"), \
+                patch("flamewm_settings_acceptance.stop_dbus_monitor"), \
+                patch("flamewm_settings_acceptance.time.sleep"), \
+                patch("flamewm_settings_acceptance.wait_for_settings_window", return_value=geometry), \
+                patch("flamewm_settings_acceptance.send_input",
+                      side_effect=lambda *a, **k: sent.append(a) or (0, "x")):
+            entry = acc.run_ss12(ctx, acc.parse_args(["--run-dir", str(tmp / "run"), *(extra or [])]))
+        return entry, sent
+
+    def test_default_click_refused_when_client_is_not_the_measured_fixture(self) -> None:
+        entry, sent = self._run({"name": "System Settings", "width": 960, "height": 640, "x": 0, "y": 31})
         self.assertEqual(entry["status"], "NOT_RUN")
-        self.assertEqual(entry["reason"], "SS12 needs --ss12-click on the ToggleStartMenu capture row")
-        self.assertEqual(entry["reason"], entry["details"]["reason"])
-        spawn.assert_not_called()
+        self.assertIn("default clicks refused", entry["reason"])
+        self.assertEqual(sent, [])
+
+    def test_default_click_refused_without_a_measured_window(self) -> None:
+        entry, sent = self._run(None)
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertEqual(sent, [])
+
+    def test_measured_constants_resolve_to_screen_points_for_the_fixture(self) -> None:
+        geometry = {"name": "System Settings", "width": 820, "height": 540, "x": 0, "y": 31}
+        ctx = SimpleNamespace()
+        self.assertEqual(acc.settings_relative_point(ctx, geometry, acc.SS12_CAPTURE_CLIENT), "593,180")
+        self.assertEqual(acc.settings_relative_point(ctx, geometry, acc.SS12_RESET_CLIENT), "733,180")
+
+
+class Ss16StaticGateTests(unittest.TestCase):
+    def test_all_zero_passes(self) -> None:
+        status, _ = acc.assess_ss16({name: 0 for name, _ in acc.STATIC_GATES})
+        self.assertEqual(status, "PASS")
+
+    def test_one_gate_exiting_one_fails_and_names_it(self) -> None:
+        codes = {name: 0 for name, _ in acc.STATIC_GATES}
+        codes["architecture_guard"] = 1
+        status, reason = acc.assess_ss16(codes)
+        self.assertEqual(status, "FAIL")
+        self.assertIn("architecture_guard=1", reason)
+
+    def test_unrun_gate_is_not_run_never_pass(self) -> None:
+        codes = {name: 0 for name, _ in acc.STATIC_GATES}
+        codes["static_audit"] = None
+        self.assertEqual(acc.assess_ss16(codes)[0], "NOT_RUN")
+        self.assertEqual(acc.assess_ss16({})[0], "NOT_RUN")
+
+    def test_runner_maps_real_exit_codes(self) -> None:
+        results = iter([0, 1, 0, 0])
+        with patch("flamewm_settings_acceptance.subprocess.run",
+                   side_effect=lambda *a, **k: SimpleNamespace(returncode=next(results))), \
+                patch("flamewm_settings_acceptance.git_snapshot", return_value="same"):
+            entry = acc.run_ss16()
+        self.assertEqual(entry["status"], "FAIL")
+        self.assertEqual(entry["details"]["exit_codes"]["architecture_guard"], 1)
+
+
+class Ss18InstalledMappingTests(unittest.TestCase):
+    def _map(self, document: dict | None) -> dict:
+        tmp = Path(tempfile.mkdtemp(prefix="flamewm-ss18-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = tmp / "installed-result.json"
+        if document is not None:
+            import json
+            path.write_text(json.dumps(document), encoding="utf-8")
+        return acc.map_ss18(str(path))
+
+    def _doc(self, **over) -> dict:
+        doc = {"schema": "flamewm-settings-installed-acceptance-v1", "ss18_status": "PASS",
+               "behavioral_scenarios": {"SS03": "PASS", "SS12": "PASS"}, "command": ["x"]}
+        doc.update(over)
+        return doc
+
+    def test_absent_path_is_not_run(self) -> None:
+        self.assertEqual(acc.map_ss18(None)["status"], "NOT_RUN")
+
+    def test_launch_smoke_only_is_never_pass(self) -> None:
+        doc = self._doc()
+        del doc["behavioral_scenarios"]
+        self.assertEqual(self._map(doc)["status"], "NOT_RUN")
+
+    def test_behavioral_pass_maps_to_pass(self) -> None:
+        self.assertEqual(self._map(self._doc())["status"], "PASS")
+
+    def test_behavioral_fail_maps_to_fail(self) -> None:
+        doc = self._doc(behavioral_scenarios={"SS03": "PASS", "SS12": "FAIL"}, ss18_status="FAIL")
+        self.assertEqual(self._map(doc)["status"], "FAIL")
+
+    def test_missing_behavioral_pass_is_not_run(self) -> None:
+        doc = self._doc(behavioral_scenarios={"SS03": "PASS", "SS12": "NOT_RUN"}, ss18_status="NOT_RUN")
+        self.assertEqual(self._map(doc)["status"], "NOT_RUN")
+
+    def test_unknown_schema_is_not_run(self) -> None:
+        self.assertEqual(self._map(self._doc(schema="x"))["status"], "NOT_RUN")
 
 
 class AboutVersionTestRunnerTests(unittest.TestCase):

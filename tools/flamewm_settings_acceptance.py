@@ -98,6 +98,13 @@ SS10_TARGET_SCALE = 125
 SCROLLBAR_COLUMN_PX = 8
 SS10_CLIENT = (960, 640)
 SS10_WHEEL_POINTER = (SS10_CLIENT[0] // 2, SS10_CLIENT[1] // 2)
+# SS12 fixture constants measured natively on a private Xephyr (Settings --page hotkeys, default 820x540
+# client at screen origin (0,31)): Toggle Start menu capture field centre and its Reset button centre.
+# They are only used after the live client geometry equals SS12_CLIENT; any other size is refused.
+SS12_CLIENT = (820, 540)
+SS12_CAPTURE_CLIENT = (593, 149)
+SS12_RESET_CLIENT = (733, 149)
+START_TOGGLE_MATCH = "type='signal',interface='com.arkflame.FlameWM1',member='StartMenuToggleRequested'"
 # Platform default binding for ToggleStartMenu (crates/flamewm-platform/src/shortcuts.rs).
 SHORTCUT_DEFAULT_BINDING = "Super_L"
 
@@ -180,11 +187,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--hotkey-error-rect", metavar="X,Y,W,H", default=None,
                         help="NATIVE_HOTKEY_INPUT crop of the error bar (default: full-width bottom 80px band of the screen)")
     parser.add_argument("--ss12-click", metavar="X,Y", default=None,
-                        help="SS12 click on the ToggleStartMenu capture row")
+                        help="SS12 screen click on the ToggleStartMenu capture row (default: measured 820x540 fixture constant)")
     parser.add_argument("--ss12-reset-click", metavar="X,Y", default=None,
-                        help="SS12 click on the ToggleStartMenu Reset button (required for clear/reset persistence proof)")
+                        help="SS12 screen click on the ToggleStartMenu Reset button (default: measured 820x540 fixture constant)")
     parser.add_argument("--ss12-chord", metavar="MOD+...+KEY", default="Super+F8",
                         help="SS12 binding to capture and replay after lease end (default Super+F8)")
+    parser.add_argument("--ss18-installed-result", metavar="PATH", default=None,
+                        help="installed-result.json from tools/flamewm_settings_installed_acceptance.py to map into SS18")
     parser.add_argument("--ss14-accent-pixel", metavar="X,Y", default="100,92",
                         help="SS14 client-relative point inside the selected nav-row background (default: 100,92)")
     parser.add_argument("--ss05-click", metavar="X,Y", default="755,195",
@@ -1117,6 +1126,91 @@ def active_window_title(ctx: Ctx) -> tuple[str | None, str]:
     return (name.group(1) if info.returncode == 0 and name else None), "xprop _NET_ACTIVE_WINDOW + xwininfo -id"
 
 
+def start_toggle_count(ctx: Ctx, name: str, action, settle: float) -> tuple[int | None, object]:
+    """Run action() under an owned dbus-monitor and count StartMenuToggleRequested signals.
+
+    The Xephyr session has no shell process, so the Start popup has no X window; the WM's
+    StartMenuToggleRequested signal is the observable. None means the monitor was unavailable.
+    """
+    log = ctx.run / "logs" / f"{name}.log"
+    monitor = ctx.spawn(name, ["dbus-monitor", "--session", START_TOGGLE_MATCH], ctx.app_env)
+    time.sleep(1.0)
+    if monitor.proc.poll() is not None:
+        return None, action()
+    result = action()
+    time.sleep(settle)
+    stop_dbus_monitor(ctx, monitor)
+    if not log.exists():
+        return None, result
+    return log.read_text(encoding="utf-8", errors="replace").count("member=StartMenuToggleRequested"), result
+
+
+# SS16 static gates (scripts/check-equivalent, no cargo): each must exit 0 on the same source.
+STATIC_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("static_audit", ("tools/static_audit.py",)),
+    ("architecture_guard", ("tools/architecture_guard.py",)),
+    ("verify_rwr_promotion", ("tools/verify_rwr_promotion.py",)),
+    ("j18_frame_guard", ("tools/test_j18_frame_guard.py",)),
+)
+
+
+def assess_ss16(exit_codes: dict[str, int | None]) -> tuple[str, str]:
+    """PASS only when every static gate exited 0; any nonzero exit FAILs, a missing exit is NOT_RUN."""
+    failed = [f"{name}={code}" for name, code in exit_codes.items() if code not in (0, None)]
+    if failed:
+        return STATUS_FAIL, "static gate failed: " + ", ".join(failed)
+    unrun = [name for name, code in exit_codes.items() if code is None]
+    if unrun or not exit_codes:
+        return STATUS_NOT_RUN, "static gate did not run: " + ", ".join(unrun)
+    return STATUS_PASS, "static gates exited 0 on one source: " + ", ".join(exit_codes) \
+        + " (cargo check/test/build are not part of this runner)"
+
+
+def run_ss16() -> dict:
+    snapshot = git_snapshot()
+    codes: dict[str, int | None] = {}
+    commands = []
+    for name, argv in STATIC_GATES:
+        command = [sys.executable, *argv]
+        commands.append(shell(["python3", *argv]))
+        try:
+            codes[name] = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
+                                         timeout=900, check=False).returncode
+        except (OSError, subprocess.SubprocessError):
+            codes[name] = None
+    status, reason = assess_ss16(codes)
+    if status == STATUS_PASS and git_snapshot() != snapshot:
+        status, reason = STATUS_NOT_RUN, "source changed while the static gates ran"
+    entry = result_entry("SS16", status, reason, commands=commands)
+    entry["details"] = {"exit_codes": codes}
+    return entry
+
+
+def map_ss18(path: str | None) -> dict:
+    """Map an installed-result.json into SS18; PASS only when installed behavioral scenarios were executed."""
+    if not path:
+        return result_entry("SS18", STATUS_NOT_RUN,
+                            "no --ss18-installed-result; run scripts/settings-installed-acceptance on a staged prefix")
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return result_entry("SS18", STATUS_NOT_RUN, f"installed result unreadable: {error}")
+    if document.get("schema") != "flamewm-settings-installed-acceptance-v1":
+        return result_entry("SS18", STATUS_NOT_RUN, "installed result has an unknown schema")
+    behavioral = document.get("behavioral_scenarios")
+    if not isinstance(behavioral, dict) or not behavioral:
+        return result_entry("SS18", STATUS_NOT_RUN, "installed result carries no executed behavioral scenarios (launch smoke only)")
+    if document.get("ss18_status") == STATUS_FAIL or STATUS_FAIL in behavioral.values():
+        status, reason = STATUS_FAIL, "installed gate failed: " + document.get("ss18_reason", "")
+    elif document.get("ss18_status") != STATUS_PASS or any(value != STATUS_PASS for value in behavioral.values()):
+        status, reason = STATUS_NOT_RUN, "installed behavioral proof incomplete: " + document.get("ss18_reason", "")
+    else:
+        status, reason = STATUS_PASS, "installed staged binaries passed behavioral scenarios " + ", ".join(behavioral)
+    entry = result_entry("SS18", status, reason, evidence=[str(path)], commands=[shell(document.get("command", []))])
+    entry["details"] = {"behavioral_scenarios": behavioral, "ss18_status": document.get("ss18_status"), "prefix": document.get("prefix")}
+    return entry
+
+
 def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Exercise palette clicks, reset, selected visuals and private-state restart."""
     choices = (("blue", "#3DAEE9", (685, 151)), ("teal", "#1ABC9C", (762, 151)))
@@ -1245,8 +1339,11 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
 def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Drive the real Settings capture row; verify binding, Start replay, owner loss, Escape clear and Reset.
 
-    Clear and Reset are each checked in the authoritative shortcut snapshot and again after an
-    owned WM restart. Reset must return ToggleStartMenu to the platform default binding.
+    Start behaviour is the WM's StartMenuToggleRequested signal (the session has no shell process, so
+    no Start window exists). Clear and Reset are each checked in the authoritative shortcut snapshot
+    and again after an owned WM restart; after Clear the old chord must not fire Start and after
+    Reset the platform default must. Click points default to measured fixture constants that are
+    used only when the live Settings client is exactly SS12_CLIENT.
     """
     observations: dict[str, bool | None] = {
         "lease_begin_end_same_owner": None, "binding_stored": None,
@@ -1254,48 +1351,37 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         "owner_loss_restored": None, "clear_reset_persisted": None,
     }
     details: dict = {"action": "ToggleStartMenu", "requested_chord": args.ss12_chord,
+                     "start_observable": "StartMenuToggleRequested signal (no Start window exists)",
                      "observations": observations, "commands": []}
+    settle = min(max(args.settle_seconds, 0.25), 1.0)
+
     def finish() -> dict:
         status, reason = assess_ss12(observations)
-        if not args.ss12_click:
-            status, reason = STATUS_NOT_RUN, details["reason"]
         entry = result_entry("SS12", status, reason, commands=details["commands"])
         entry["details"] = details
         return entry
 
-    if not args.ss12_click:
-        details["reason"] = "SS12 needs --ss12-click on the ToggleStartMenu capture row"
-        return finish()
+    def not_run(reason: str) -> dict:
+        details["reason"] = reason
+        return result_entry("SS12", STATUS_NOT_RUN, reason, commands=details["commands"])
+
     if ctx.display not in (f":{n}" for n in XTEST_DISPLAY_RANGE):
-        details["reason"] = "SS12 XTEST requires an owned display in :97..:119"
-        return result_entry("SS12", STATUS_NOT_RUN, details["reason"])
+        return not_run("SS12 XTEST requires an owned display in :97..:119")
     if shutil.which("gdbus") is None or shutil.which("dbus-monitor") is None:
-        details["reason"] = "SS12 lease and authoritative snapshot observation tools unavailable"
-        return result_entry("SS12", STATUS_NOT_RUN, details["reason"])
+        return not_run("SS12 lease and authoritative snapshot observation tools unavailable")
 
     before_output, before_command = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(before_command)
     before_binding = gvariant_field_string(before_output or "", "ToggleStartMenu")
     details["before_binding"] = before_binding
     if before_output is None or before_binding is None:
-        details["reason"] = "cannot read authoritative ToggleStartMenu binding before capture"
-        return result_entry("SS12", STATUS_NOT_RUN, details["reason"], commands=details["commands"])
-
-    before_titles, titles_command = native_window_titles(ctx)
-    details["commands"].append(titles_command)
-    if before_titles is None:
-        details["reason"] = "cannot inspect native window titles for Start behavior"
-        return result_entry("SS12", STATUS_NOT_RUN, details["reason"], commands=details["commands"])
+        return not_run("cannot read authoritative ToggleStartMenu binding before capture")
 
     monitor_path = ctx.run / "logs" / "ss12-dbus-monitor.log"
     monitor_argv = ["dbus-monitor", "--session",
                     "type='method_call',interface='com.arkflame.FlameWM1.Shortcuts',member='BeginCapture'",
                     "type='method_call',interface='com.arkflame.FlameWM1.Shortcuts',member='EndCapture'"]
-    monitor_log = open(monitor_path, "ab")
-    try:
-        monitor = ctx.spawn("ss12-dbus-monitor", monitor_argv, ctx.app_env)
-    finally:
-        monitor_log.close()
+    monitor = ctx.spawn("ss12-dbus-monitor", monitor_argv, ctx.app_env)
     settings = ctx.spawn("settings-ss12-hotkeys", [args.settings_bin, "--page", "hotkeys"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "hotkeys"]))
     time.sleep(args.settle_seconds)
@@ -1304,7 +1390,21 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["reason"] = "Settings exited before SS12 capture interaction"
         return result_entry("SS12", STATUS_FAIL, details["reason"], commands=details["commands"])
 
-    code, click_cmd = send_input(ctx, args.ss12_click, None)
+    geometry = wait_for_settings_window(ctx, ctx.run / "logs" / "ss12-window-tree.txt")
+    details["window"] = geometry
+    capture_click, reset_click = args.ss12_click, args.ss12_reset_click
+    if capture_click is None or reset_click is None:
+        if geometry is None or (geometry["width"], geometry["height"]) != SS12_CLIENT:
+            ctx.stop(settings); stop_dbus_monitor(ctx, monitor)
+            return not_run(f"Settings client is not the measured {SS12_CLIENT[0]}x{SS12_CLIENT[1]} fixture "
+                           f"({geometry and (geometry['width'], geometry['height'])}); default clicks refused")
+        if capture_click is None:
+            capture_click = settings_relative_point(ctx, geometry, SS12_CAPTURE_CLIENT)
+        if reset_click is None:
+            reset_click = settings_relative_point(ctx, geometry, SS12_RESET_CLIENT)
+    details["capture_click"], details["reset_click"] = capture_click, reset_click
+
+    code, click_cmd = send_input(ctx, capture_click, None)
     details["commands"].append(click_cmd)
     if code:
         ctx.stop(settings); stop_dbus_monitor(ctx, monitor)
@@ -1316,15 +1416,16 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     details["focused_window"] = focused_title
     if focused_title is None or "settings" not in focused_title.lower():
         ctx.stop(settings); stop_dbus_monitor(ctx, monitor)
-        details["reason"] = "Settings focus was not confirmed after capture-row click"
-        return result_entry("SS12", STATUS_NOT_RUN, details["reason"], commands=details["commands"])
-    code, chord_cmd = send_input(ctx, None, None, args.ss12_chord)
+        return not_run("Settings focus was not confirmed after capture-row click")
+    # The chord is pressed while the capture lease is held: Start must not fire.
+    during_count, (code, chord_cmd) = start_toggle_count(
+        ctx, "ss12-start-during-capture", lambda: send_input(ctx, None, None, args.ss12_chord), args.settle_seconds)
     details["commands"].append(chord_cmd)
+    details["start_signals_during_capture"] = during_count
     if code:
-        ctx.stop(settings); ctx.stop(monitor)
+        ctx.stop(settings); stop_dbus_monitor(ctx, monitor)
         details["reason"] = f"capture chord input failed with exit {code}"
         return result_entry("SS12", STATUS_FAIL, details["reason"], commands=details["commands"])
-    time.sleep(args.settle_seconds)
     after_output, after_command = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(after_command)
     stored = gvariant_field_string(after_output or "", "ToggleStartMenu")
@@ -1337,33 +1438,21 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     begin = next((sender for name, sender in calls if name == "BeginCapture"), None)
     end = next((sender for name, sender in calls if name == "EndCapture"), None)
     observations["lease_begin_end_same_owner"] = bool(begin and end and begin == end)
+    observations["action_effect"] = None if during_count is None else during_count == 0
 
-    captured_titles, _ = native_window_titles(ctx)
-    details["titles_during_after_capture"] = sorted(captured_titles or [])
-    start_re = re.compile(r"(?i)(start|launcher|menu)")
-    baseline_start = {title for title in before_titles if start_re.search(title)}
-    capture_start = {title for title in (captured_titles or set()) if start_re.search(title)}
-    observations["action_effect"] = not (capture_start - baseline_start)
-    code, replay_cmd = send_input(ctx, None, None, args.ss12_chord)
+    # After the lease ended the committed chord must drive Start.
+    replay_count, (code, replay_cmd) = start_toggle_count(
+        ctx, "ss12-start-after-commit", lambda: send_input(ctx, None, None, args.ss12_chord), args.settle_seconds)
     details["commands"].append(replay_cmd)
-    time.sleep(args.settle_seconds)
-    replay_titles, _ = native_window_titles(ctx)
-    details["titles_after_replay"] = sorted(replay_titles or [])
-    replay_start = {title for title in (replay_titles or set()) if start_re.search(title)}
-    observations["grab_restored_start_behavior"] = bool(
-        code == 0 and replay_start - capture_start
-    ) if replay_titles is not None and captured_titles is not None else None
-    # Exercise owner loss with a second capture lease. The settings process is deliberately
-    # stopped only inside this private owned session; the persisted binding must still execute.
-    if replay_start - capture_start:
-        code, close_menu_cmd = send_input(ctx, None, None, args.ss12_chord)
-        details["commands"].append(close_menu_cmd)
-        time.sleep(args.settle_seconds)
+    details["start_signals_after_commit"] = replay_count
+    observations["grab_restored_start_behavior"] = None if replay_count is None else bool(code == 0 and replay_count >= 1)
+
+    # Owner loss: Settings exits mid-capture; the persisted chord must still drive Start.
     owner_monitor_path = ctx.run / "logs" / "ss12-owner-loss-monitor.log"
     owner_monitor = ctx.spawn("ss12-owner-loss-monitor", monitor_argv, ctx.app_env)
     owner_settings = ctx.spawn("settings-ss12-owner-loss", [args.settings_bin, "--page", "hotkeys"], ctx.app_env)
     time.sleep(args.settle_seconds)
-    owner_click_code, owner_click_cmd = send_input(ctx, args.ss12_click, None)
+    owner_click_code, owner_click_cmd = send_input(ctx, capture_click, None)
     details["commands"].extend([shell([args.settings_bin, "--page", "hotkeys"]), owner_click_cmd])
     time.sleep(args.settle_seconds)
     ctx.stop(owner_settings)
@@ -1374,41 +1463,22 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
     details["owner_loss_begin_calls"] = owner_calls
     owner_begin = next((sender for name, sender in owner_calls if name == "BeginCapture"), None)
     owner_end = next((sender for name, sender in owner_calls if name == "EndCapture"), None)
-    owner_titles_before, _ = native_window_titles(ctx)
-    owner_replay_code, owner_replay_cmd = send_input(ctx, None, None, args.ss12_chord)
+    owner_count, (owner_replay_code, owner_replay_cmd) = start_toggle_count(
+        ctx, "ss12-start-after-owner-loss", lambda: send_input(ctx, None, None, args.ss12_chord), args.settle_seconds)
     details["commands"].append(owner_replay_cmd)
-    time.sleep(args.settle_seconds)
-    owner_titles_after, _ = native_window_titles(ctx)
-    owner_replay_start = {title for title in (owner_titles_after or set()) if start_re.search(title)}
-    owner_before_start = {title for title in (owner_titles_before or set()) if start_re.search(title)}
-    observations["owner_loss_restored"] = bool(
-        owner_click_code == 0 and owner_begin and not owner_end and owner_replay_code == 0
-        and owner_titles_before is not None and owner_titles_after is not None
-        and owner_replay_start - owner_before_start
-    ) if owner_titles_before is not None and owner_titles_after is not None else None
+    details["start_signals_after_owner_loss"] = owner_count
     details["owner_loss_case"] = "Settings exited during active capture; subsequent stored Start chord observed"
-    # Start is judged by a Start-like top-level window title. Without any such window in any observation the
-    # harness has no Start surface (WM only, no shell process), so absence of the menu proves nothing.
-    seen_titles = set(before_titles or ()) | set(captured_titles or ()) | set(replay_titles or ()) \
-        | set(owner_titles_before or ()) | set(owner_titles_after or ())
-    details["start_surface_observable"] = any(start_re.search(title) for title in seen_titles)
-    if not details["start_surface_observable"]:
-        observations["grab_restored_start_behavior"] = None
-        observations["owner_loss_restored"] = None
-    # Close Start again when the owner-loss proof opened it, then exercise Escape clear and
-    # Reset through their actual Settings controls. Both values must survive an owned WM restart.
-    if owner_replay_start - owner_before_start:
-        code, close_owner_menu = send_input(ctx, None, None, args.ss12_chord)
-        details["commands"].append(close_owner_menu)
-        time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
-        details["owner_menu_closed"] = code == 0
+    observations["owner_loss_restored"] = None if owner_count is None else bool(
+        owner_click_code == 0 and owner_begin and not owner_end and owner_replay_code == 0 and owner_count >= 1)
+
+    # Escape clear through the real control, then persistence across an owned WM restart.
     clear_settings = ctx.spawn("settings-ss12-clear", [args.settings_bin, "--page", "hotkeys"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "hotkeys"]))
-    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
-    clear_click, clear_command = send_input(ctx, args.ss12_click, None)
+    time.sleep(settle)
+    clear_click, clear_command = send_input(ctx, capture_click, None)
     clear_escape, escape_command = send_input(ctx, None, "Escape")
     details["commands"].extend([clear_command, escape_command])
-    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+    time.sleep(settle)
     clear_text, clear_query = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(clear_query)
     cleared = gvariant_field_string(clear_text or "", "ToggleStartMenu")
@@ -1421,40 +1491,43 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["commands"].extend(["restart owned WM after Escape clear", clear_restart_query])
         after_clear = gvariant_field_string(after_clear_text or "", "ToggleStartMenu")
         details["binding_after_clear_restart"] = after_clear
-        clear_restart_ok = after_clear_text is not None and after_clear == ""
+        # The cleared binding must leave Start with no chord: the old chord fires nothing.
+        cleared_count, (_, cleared_cmd) = start_toggle_count(
+            ctx, "ss12-start-after-clear", lambda: send_input(ctx, None, None, args.ss12_chord), args.settle_seconds)
+        details["commands"].append(cleared_cmd)
+        details["start_signals_after_clear"] = cleared_count
+        clear_restart_ok = after_clear_text is not None and after_clear == "" and cleared_count == 0
     details["clear_persisted"] = clear_restart_ok
 
     reset_settings = ctx.spawn("settings-ss12-reset", [args.settings_bin, "--page", "hotkeys"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "hotkeys"]))
-    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
-    reset_click = args.ss12_reset_click
-    if reset_click is None:
-        reset_geometry = window_geometry(ctx, ctx.run / "logs" / "ss12-reset-window-tree.txt")
-        reset_click = settings_relative_point(ctx, reset_geometry, (732, 149)) if reset_geometry else None
-    if reset_click is not None:
-        reset_code, reset_command = send_input(ctx, reset_click, None)
-        details["commands"].append(reset_command)
-        time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
-        reset_text, reset_query = dbus_shortcuts_snapshot(ctx)
-        details["commands"].append(reset_query)
-        reset_binding = gvariant_field_string(reset_text or "", "ToggleStartMenu")
-        details["reset_binding"] = reset_binding
-        reset_ok = ss12_reset_restored(reset_code, reset_binding) and restart_owned_wm(
-            ctx, args, "wm-ss12-reset-restart")
-        if reset_ok:
-            after_reset_text, reset_restart_query = dbus_shortcuts_snapshot(ctx)
-            details["commands"].extend(["restart owned WM after reset", reset_restart_query])
-            after_reset = gvariant_field_string(after_reset_text or "", "ToggleStartMenu")
-            details["binding_after_reset_restart"] = after_reset
-            reset_ok = after_reset_text is not None and after_reset == SHORTCUT_DEFAULT_BINDING
-        observations["clear_reset_persisted"] = bool(clear_restart_ok and reset_ok)
-    else:
-        details["clear_reset_persistence_case"] = "reset button coordinate unavailable"
-        observations["clear_reset_persisted"] = None
+    time.sleep(settle)
+    reset_code, reset_command = send_input(ctx, reset_click, None)
+    details["commands"].append(reset_command)
+    time.sleep(settle)
+    reset_text, reset_query = dbus_shortcuts_snapshot(ctx)
+    details["commands"].append(reset_query)
+    reset_binding = gvariant_field_string(reset_text or "", "ToggleStartMenu")
+    details["reset_binding"] = reset_binding
+    reset_ok = ss12_reset_restored(reset_code, reset_binding) and restart_owned_wm(
+        ctx, args, "wm-ss12-reset-restart")
+    if reset_ok:
+        after_reset_text, reset_restart_query = dbus_shortcuts_snapshot(ctx)
+        details["commands"].extend(["restart owned WM after reset", reset_restart_query])
+        after_reset = gvariant_field_string(after_reset_text or "", "ToggleStartMenu")
+        details["binding_after_reset_restart"] = after_reset
+        # After Reset the platform default (Super_L) must drive Start again.
+        reset_count, (_, reset_start_cmd) = start_toggle_count(
+            ctx, "ss12-start-after-reset", lambda: send_input(ctx, None, SHORTCUT_DEFAULT_BINDING), args.settle_seconds)
+        details["commands"].append(reset_start_cmd)
+        details["start_signals_after_reset"] = reset_count
+        reset_ok = after_reset_text is not None and after_reset == SHORTCUT_DEFAULT_BINDING \
+            and bool(reset_count and reset_count >= 1)
     ctx.stop(reset_settings)
+    observations["clear_reset_persisted"] = bool(clear_restart_ok and reset_ok)
     details["clear_reset_persistence_case"] = {
         "escape_clear_and_restart": clear_restart_ok,
-        "reset_to_initial_binding_and_restart": observations["clear_reset_persisted"] is True,
+        "reset_to_default_start_and_restart": reset_ok,
         "initial_binding": before_binding,
     }
     ctx.stop(settings)
@@ -2994,6 +3067,8 @@ def inner(args: argparse.Namespace, run: Path) -> int:
     git_before = git_snapshot()
     teardown: dict = {"owned_pids": [], "remaining": [], "ok": True}
     try:
+        results["SS16"] = run_ss16()
+        results["SS18"] = map_ss18(args.ss18_installed_result)
         reasons = host_blockers(args)
         if reasons:
             block_runner_ids(results, "; ".join(reasons))

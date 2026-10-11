@@ -87,5 +87,31 @@ class InstalledVerdictComposeTests(unittest.TestCase):
         self.assertEqual(code, 3)
 
 
+class InstalledBehavioralMappingTests(unittest.TestCase):
+    def _native(self, **over) -> dict:
+        statuses = {sid: "PASS" for sid in inst.BEHAVIORAL_SCENARIOS}
+        statuses.update(over)
+        return {"scenarios": [{"id": sid, "status": status} for sid, status in statuses.items()]}
+
+    def test_launch_only_pass_is_not_ss18_pass(self) -> None:
+        status, reason, _ = inst.installed_ss18(True, {"scenarios": [{"id": "SS01", "status": "PASS"}]})
+        self.assertEqual(status, "NOT_RUN")
+        self.assertIn("SS12=None", reason)
+
+    def test_all_behavioral_pass_is_pass(self) -> None:
+        self.assertEqual(inst.installed_ss18(True, self._native())[0], "PASS")
+
+    def test_one_behavioral_fail_is_fail(self) -> None:
+        status, reason, _ = inst.installed_ss18(True, self._native(SS12="FAIL"))
+        self.assertEqual(status, "FAIL")
+        self.assertIn("SS12", reason)
+
+    def test_changed_binaries_fail_even_when_scenarios_pass(self) -> None:
+        self.assertEqual(inst.installed_ss18(False, self._native())[0], "FAIL")
+
+    def test_missing_native_result_is_not_run(self) -> None:
+        self.assertEqual(inst.installed_ss18(False, None)[0], "NOT_RUN")
+
+
 if __name__ == "__main__":
     unittest.main()
