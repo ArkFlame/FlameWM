@@ -9,6 +9,7 @@ Usage:
       [--ss12-click X,Y] [--ss12-reset-click X,Y] [--ss12-chord MOD+...+KEY]
       [--ss14-accent-pixel X,Y]
       [--ss05-click X,Y]
+      [--ss10-scale-click X,Y] [--ss11-family-click X,Y] [--ss11-size-click X,Y]
 
 For SS02, each launched settings page receives `--window-size WxH` and its
 client geometry is measured independently from the Xephyr screen geometry.
@@ -89,6 +90,12 @@ TREE_WINDOW_RE = re.compile(
     r'(?:\s+\+-?\d+\+-?\d+)?\s*$', re.MULTILINE
 )
 DESKTOP_OPACITY_MAX = 60
+# SS10 target: the 125 percent Displays scale button (ui/settings.html display-scale-125).
+SS10_TARGET_SCALE = 125
+# At 820x540 the scale row is below the fold and XTEST has no wheel, so SS10 uses a client that shows it.
+SS10_CLIENT = (960, 640)
+# Platform default binding for ToggleStartMenu (crates/flamewm-platform/src/shortcuts.rs).
+SHORTCUT_DEFAULT_BINDING = "Super_L"
 
 STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"
@@ -132,7 +139,7 @@ LEGACY_SUBSCENARIOS: tuple[tuple[str, str, str | None], ...] = (
 )
 LEGACY_IDS = tuple(lid for lid, _, _ in LEGACY_SUBSCENARIOS)
 # Sub-scenarios this runner executes (SS00 and NATIVE_PID_CLEANUP are always set by inner()).
-RUNNER_IDS = ("SS01", "SS02", "SS03", "SS05", "SS12", "SS15", "SS19",
+RUNNER_IDS = ("SS01", "SS02", "SS03", "SS05", "SS10", "SS11", "SS12", "SS13", "SS15", "SS19",
               "NATIVE_ONE_OUTPUT", "NATIVE_HOTKEY_INPUT", "NATIVE_PERSISTENCE_RESTART")
 
 TITLES: dict[str, str] = dict(CANONICAL_MATRIX)
@@ -178,6 +185,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="SS14 client-relative point inside the selected nav-row background (default: 100,92)")
     parser.add_argument("--ss05-click", metavar="X,Y", default="755,195",
                         help="SS05 client-relative wallpaper Choose center measured at 960x640 (default: 755,195)")
+    parser.add_argument("--ss10-scale-click", metavar="X,Y", default="751,553",
+                        help="SS10 client-relative click on the 125 scale button of the Displays page (960x640 client, scale row visible); default measured")
+    parser.add_argument("--ss11-family-click", metavar="X,Y", default="697,150",
+                        help="SS11 client-relative click on the Font family control of the Fonts page (820x540 client); default measured")
+    parser.add_argument("--ss11-size-click", metavar="X,Y", default="760,254",
+                        help="SS11 client-relative click on the Text size + control of the Fonts page (820x540 client); default measured")
     args = parser.parse_args(argv)
     # Children start with cwd set to the run directory, so relative binary paths must be resolved first.
     args.wm_bin = str(Path(args.wm_bin).resolve())
@@ -226,6 +239,17 @@ def validate(args: argparse.Namespace) -> Path:
     ss05_x, ss05_y = (int(part) for part in args.ss05_click.split(","))
     if ss05_x >= 960 or ss05_y >= 640:
         raise SystemExit("error: --ss05-click must lie inside the 960x640 Settings client")
+    for flag, value, (limit_x, limit_y) in (
+            ("--ss10-scale-click", args.ss10_scale_click, SS10_CLIENT),
+            ("--ss11-family-click", args.ss11_family_click, (820, 540)),
+            ("--ss11-size-click", args.ss11_size_click, (820, 540))):
+        if value is None:
+            continue
+        if not re.fullmatch(r"\d+,\d+", value):
+            raise SystemExit(f"error: {flag} must be X,Y")
+        point_x, point_y = (int(part) for part in value.split(","))
+        if point_x >= limit_x or point_y >= limit_y:
+            raise SystemExit(f"error: {flag} must lie inside the {limit_x}x{limit_y} Settings client")
     if args.ss14_accent_pixel is not None:
         if not re.fullmatch(r"\d+,\d+", args.ss14_accent_pixel):
             raise SystemExit("error: --ss14-accent-pixel must be X,Y")
@@ -745,6 +769,44 @@ def assess_ss07(observations: dict[str, bool | None]) -> tuple[str, str]:
     return STATUS_PASS, "Taskbar values, panel geometry, visual consumer and persistence verified"
 
 
+def assess_ss10(observations: dict[str, bool | None]) -> tuple[str, str]:
+    required = ("scale_changed_snapshot", "scale_persisted_after_restart")
+    failed = [key for key in required if observations.get(key) is False]
+    if failed:
+        return STATUS_FAIL, "measured display scale failure: " + ", ".join(failed)
+    missing = [key for key in required if observations.get(key) is not True]
+    if missing:
+        return STATUS_NOT_RUN, "partial display scale evidence; unverified: " + ", ".join(missing)
+    return STATUS_PASS, "Displays click set the output scale to 125 and the value persisted after an owned WM restart"
+
+
+def assess_ss11(observations: dict[str, bool | None]) -> tuple[str, str]:
+    required = ("family_changed_snapshot", "size_changed_snapshot", "fonts_persisted_after_restart")
+    failed = [key for key in required if observations.get(key) is False]
+    if failed:
+        return STATUS_FAIL, "measured font settings failure: " + ", ".join(failed)
+    missing = [key for key in required if observations.get(key) is not True]
+    if missing:
+        return STATUS_NOT_RUN, "partial font evidence; unverified: " + ", ".join(missing)
+    return STATUS_PASS, "Fonts family and size clicks changed the authoritative snapshot and both persisted after an owned WM restart"
+
+
+def assess_ss13(observations: dict[str, bool | None]) -> tuple[str, str]:
+    required = ("about_render_760x500", "about_render_820x540", "about_render_960x640",
+                "version_matches_flamewm_version")
+    failed = [key for key in required if observations.get(key) is False]
+    if failed:
+        return STATUS_FAIL, "measured About page failure: " + ", ".join(failed)
+    missing = [key for key in required if observations.get(key) is not True]
+    if observations.get("version_published") is False:
+        renders = [key for key in missing if key.startswith("about_render_")]
+        return STATUS_NOT_RUN, ("version_published=false: Settings snapshot has no version key, so the version "
+                                "assertion cannot be made; renders unverified: " + (", ".join(renders) or "none (all 3 sizes rendered non-blank)"))
+    if missing:
+        return STATUS_NOT_RUN, "partial About page evidence; unverified: " + ", ".join(missing)
+    return STATUS_PASS, "About rendered non-blank at 760x500, 820x540 and 960x640 and its version matched FLAMEWM_VERSION"
+
+
 def gvariant_field_string(output: str, key: str) -> str | None:
     """Read one string field from gdbus's printed a{sv} snapshot without eval."""
     match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*['\"]([^'\"]*)['\"]\s*>", output)
@@ -758,6 +820,11 @@ def gvariant_field_u64(output: str, key: str) -> int | None:
 
 def gvariant_field_uint(output: str, key: str) -> int | None:
     match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*(?:u?int\d+\s+)?(\d+)\s*>", output)
+    return int(match.group(1)) if match else None
+
+
+def gvariant_field_int(output: str, key: str) -> int | None:
+    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*(?:u?int\d+\s+)?(-?\d+)\s*>", output)
     return int(match.group(1)) if match else None
 
 
@@ -882,12 +949,8 @@ def dbus_panels_snapshot(ctx: Ctx) -> tuple[str | None, str]:
     return dbus_get_snapshot(ctx, "Panels")
 
 
-def parse_panels_snapshot(output: str) -> dict | None:
-    revision = gvariant_field_u64(output, "revision")
-    match = re.search(r"['\"]panels['\"]\s*:\s*<\[(.*?)\]>", output)
-    if revision is None or match is None:
-        return None
-    body = match.group(1)
+def top_level_blocks(body: str) -> list[str]:
+    """Split a gdbus dictionary array body into its top-level {...} blocks, skipping quoted text."""
     blocks = []
     depth = 0
     start = None
@@ -913,8 +976,16 @@ def parse_panels_snapshot(output: str) -> dict | None:
             if depth == 0 and start is not None:
                 blocks.append(body[start:index + 1])
                 start = None
+    return blocks
+
+
+def parse_panels_snapshot(output: str) -> dict | None:
+    revision = gvariant_field_u64(output, "revision")
+    match = re.search(r"['\"]panels['\"]\s*:\s*<\[(.*?)\]>", output)
+    if revision is None or match is None:
+        return None
     panels = []
-    for block in blocks:
+    for block in top_level_blocks(match.group(1)):
         output_key = gvariant_field_string(block, "output")
         edge = gvariant_field_string(block, "edge")
         size = gvariant_field_uint(block, "size")
@@ -927,6 +998,68 @@ def parse_panels_snapshot(output: str) -> dict | None:
                        "width": gvariant_field_uint(block, "width"),
                        "height": gvariant_field_uint(block, "height")})
     return {"revision": revision, "panels": panels}
+
+
+def display_output_scales(snapshot: str) -> dict[str, int] | None:
+    """Map each authoritative Displays output id to its scale percent; None when any output is malformed."""
+    outputs = re.search(r"['\"]outputs['\"]\s*:\s*<\[(.*)\]>\s*[,}]", snapshot, re.DOTALL)
+    if outputs is None:
+        return None
+    scales: dict[str, int] = {}
+    for block in top_level_blocks(outputs.group(1)):
+        output_id = gvariant_field_string(block, "id")
+        scale = gvariant_field_uint(block, "scale")
+        if output_id is None or scale is None:
+            return None
+        scales[output_id] = scale
+    return scales or None
+
+
+def display_output_mode_count(snapshot: str, output_id: str) -> int | None:
+    """Number of selectable modes the snapshot lists for one output; None when unparsable."""
+    outputs = re.search(r"['\"]outputs['\"]\s*:\s*<\[(.*)\]>\s*[,}]", snapshot, re.DOTALL)
+    if outputs is None:
+        return None
+    for block in top_level_blocks(outputs.group(1)):
+        if gvariant_field_string(block, "id") != output_id:
+            continue
+        modes = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*)\]>", block, re.DOTALL)
+        return None if modes is None else len(top_level_blocks(modes.group(1)))
+    return None
+
+
+def ss10_scale_applied(exit_code: int, scales: dict[str, int] | None, output_id: str) -> bool:
+    """A click counts only when XTEST succeeded and the authoritative output reports the target scale."""
+    return exit_code == 0 and scales is not None and scales.get(output_id) == SS10_TARGET_SCALE
+
+
+def ss11_family_applied(exit_code: int, before: str, after: str | None) -> bool:
+    return exit_code == 0 and after is not None and after != before
+
+
+def ss11_size_applied(exit_code: int, before_size: int, after_size: int | None,
+                      family_before: str | None, family_after: str | None) -> bool:
+    """The + control steps the offset by exactly one and leaves the family untouched."""
+    return (exit_code == 0 and after_size == before_size + 1
+            and family_before is not None and family_after == family_before)
+
+
+def ss11_fonts_persisted(persisted_text: str, family: str | None, size: int | None) -> bool:
+    return (family is not None and size is not None
+            and gvariant_field_string(persisted_text, "fontFamily") == family
+            and gvariant_field_int(persisted_text, "fontSizeOffset") == size)
+
+
+def ss12_reset_restored(exit_code: int, binding: str | None) -> bool:
+    return exit_code == 0 and binding == SHORTCUT_DEFAULT_BINDING
+
+
+def ss13_version_observed(settings_text: str | None, expected: str | None) -> bool | None:
+    """None until the authoritative Settings snapshot publishes a version; then exact equality."""
+    observed = gvariant_field_string(settings_text or "", "version")
+    if observed is None or expected is None:
+        return None
+    return observed == expected
 
 
 def native_window_titles(ctx: Ctx) -> tuple[set[str] | None, str]:
@@ -946,7 +1079,8 @@ def active_window_title(ctx: Ctx) -> tuple[str | None, str]:
         return None, "xprop could not identify _NET_ACTIVE_WINDOW"
     info = subprocess.run(["xwininfo", "-display", ctx.display, "-id", match.group(1)],
                           env=ctx.host_env, capture_output=True, text=True, timeout=15, check=False)
-    name = re.search(r'Window name: "([^"]*)"', info.stdout)
+    # xwininfo prints the name on its first line: `xwininfo: Window id: 0x... "Title"`.
+    name = re.search(r'Window id: 0x[0-9a-fA-F]+ "([^"]*)"', info.stdout)
     return (name.group(1) if info.returncode == 0 and name else None), "xprop _NET_ACTIVE_WINDOW + xwininfo -id"
 
 
@@ -1076,10 +1210,10 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
 
 
 def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
-    """Drive the real Settings capture row and verify stored binding plus Start replay.
+    """Drive the real Settings capture row; verify binding, Start replay, owner loss, Escape clear and Reset.
 
-    Overall SS12 stays NOT_RUN until clear/reset persistence and owner-loss restoration
-    also have native scenarios; the measured core sequence is preserved in details.
+    Clear and Reset are each checked in the authoritative shortcut snapshot and again after an
+    owned WM restart. Reset must return ToggleStartMenu to the platform default binding.
     """
     observations: dict[str, bool | None] = {
         "lease_begin_end_same_owner": None, "binding_stored": None,
@@ -1218,6 +1352,14 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         and owner_replay_start - owner_before_start
     ) if owner_titles_before is not None and owner_titles_after is not None else None
     details["owner_loss_case"] = "Settings exited during active capture; subsequent stored Start chord observed"
+    # Start is judged by a Start-like top-level window title. Without any such window in any observation the
+    # harness has no Start surface (WM only, no shell process), so absence of the menu proves nothing.
+    seen_titles = set(before_titles or ()) | set(captured_titles or ()) | set(replay_titles or ()) \
+        | set(owner_titles_before or ()) | set(owner_titles_after or ())
+    details["start_surface_observable"] = any(start_re.search(title) for title in seen_titles)
+    if not details["start_surface_observable"]:
+        observations["grab_restored_start_behavior"] = None
+        observations["owner_loss_restored"] = None
     # Close Start again when the owner-loss proof opened it, then exercise Escape clear and
     # Reset through their actual Settings controls. Both values must survive an owned WM restart.
     if owner_replay_start - owner_before_start:
@@ -1262,14 +1404,14 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["commands"].append(reset_query)
         reset_binding = gvariant_field_string(reset_text or "", "ToggleStartMenu")
         details["reset_binding"] = reset_binding
-        reset_ok = reset_code == 0 and reset_binding == before_binding and restart_owned_wm(
+        reset_ok = ss12_reset_restored(reset_code, reset_binding) and restart_owned_wm(
             ctx, args, "wm-ss12-reset-restart")
         if reset_ok:
             after_reset_text, reset_restart_query = dbus_shortcuts_snapshot(ctx)
             details["commands"].extend(["restart owned WM after reset", reset_restart_query])
             after_reset = gvariant_field_string(after_reset_text or "", "ToggleStartMenu")
             details["binding_after_reset_restart"] = after_reset
-            reset_ok = after_reset_text is not None and after_reset == before_binding
+            reset_ok = after_reset_text is not None and after_reset == SHORTCUT_DEFAULT_BINDING
         observations["clear_reset_persisted"] = bool(clear_restart_ok and reset_ok)
     else:
         details["clear_reset_persistence_case"] = "reset button coordinate unavailable"
@@ -2202,6 +2344,191 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     return entry
 
 
+def run_ss10(ctx: Ctx, args: argparse.Namespace) -> dict:
+    """Click the 125 Displays scale button; PASS needs the snapshot change and the value after a WM restart."""
+    observations: dict[str, bool | None] = {"scale_changed_snapshot": None, "scale_persisted_after_restart": None}
+    details: dict = {"observations": observations, "commands": [], "target_scale": SS10_TARGET_SCALE,
+                     "paths_exercised": ["Displays page scale button click", "Displays.GetSnapshot output scale",
+                                         "owned WM restart"]}
+
+    def finish() -> dict:
+        status, reason = assess_ss10(observations)
+        entry = result_entry("SS10", status, reason, commands=details["commands"])
+        entry["details"] = details
+        return entry
+
+    if not args.ss10_scale_click:
+        return result_entry("SS10", STATUS_NOT_RUN,
+                            "SS10 needs --ss10-scale-click X,Y on the 125 scale button of the Displays page (960x640 client)")
+    if ctx.display not in (f":{n}" for n in XTEST_DISPLAY_RANGE):
+        return result_entry("SS10", STATUS_NOT_RUN, "SS10 XTEST requires an owned display in :97..:119")
+    if shutil.which("gdbus") is None:
+        return result_entry("SS10", STATUS_NOT_RUN, "SS10 needs gdbus for the authoritative Displays snapshot")
+
+    settings = ctx.spawn("settings-ss10-displays", [args.settings_bin, "--page", "displays", "--window-size", f"{SS10_CLIENT[0]}x{SS10_CLIENT[1]}"], ctx.app_env)
+    details["commands"].append(shell([args.settings_bin, "--page", "displays", "--window-size", f"{SS10_CLIENT[0]}x{SS10_CLIENT[1]}"]))
+    time.sleep(args.settle_seconds)
+    geometry = wait_for_settings_window(ctx, ctx.run / "logs" / "ss10-window-tree.txt")
+    details["window"] = geometry
+    before_text, before_command = dbus_displays_snapshot(ctx)
+    details["commands"].append(before_command)
+    before_scales = display_output_scales(before_text or "")
+    if (settings.proc.poll() is not None or geometry is None
+            or (geometry["width"], geometry["height"]) != SS10_CLIENT or before_scales is None):
+        ctx.stop(settings)
+        details["reason"] = "Displays client 960x640 or authoritative output scale snapshot unavailable"
+        return finish()
+    output_id = next(iter(before_scales))
+    before_scale = before_scales[output_id]
+    details["before"] = {"output": output_id, "scale": before_scale}
+    if before_scale == SS10_TARGET_SCALE:
+        ctx.stop(settings)
+        details["reason"] = "initial output scale is already 125; no change to observe"
+        return finish()
+
+    # The measured click coordinate assumes an empty mode list. Each listed mode adds rows that push the
+    # scale row below the fold, and XTEST here has no wheel, so a click would hit a mode button instead.
+    mode_count = display_output_mode_count(before_text or "", output_id)
+    details["before"]["mode_count"] = mode_count
+    if mode_count != 0:
+        ctx.stop(settings)
+        details["reason"] = (f"output lists {mode_count} modes; the scale row is below the fold at 960x640 and "
+                             "no wheel input exists, so the measured click would hit a mode button; not clicked")
+        return finish()
+
+    point = tuple(int(part) for part in args.ss10_scale_click.split(","))
+    click = settings_relative_point(ctx, geometry, point)
+    code, click_command = send_input(ctx, click, None)
+    details["commands"].append(click_command)
+    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+    after_text, after_command = dbus_displays_snapshot(ctx)
+    details["commands"].append(after_command)
+    after_scales = display_output_scales(after_text or "")
+    details["after"] = {"output": output_id, "scale": (after_scales or {}).get(output_id), "click": click}
+    if after_text is not None:
+        observations["scale_changed_snapshot"] = ss10_scale_applied(code, after_scales, output_id)
+    ctx.stop(settings)
+
+    if observations["scale_changed_snapshot"] is True and restart_owned_wm(ctx, args, "wm-ss10-restart"):
+        persisted_text, persisted_command = dbus_displays_snapshot(ctx)
+        details["commands"].extend(["restart owned WM", persisted_command])
+        if persisted_text is not None:
+            persisted_scales = display_output_scales(persisted_text) or {}
+            observations["scale_persisted_after_restart"] = persisted_scales.get(output_id) == SS10_TARGET_SCALE
+    elif observations["scale_changed_snapshot"] is True:
+        details["reason"] = "owned WM could not be restarted to verify persistence"
+    return finish()
+
+
+def run_ss11(ctx: Ctx, args: argparse.Namespace) -> dict:
+    """Click the Fonts family and size controls; PASS needs both snapshot changes and persistence after a restart."""
+    observations: dict[str, bool | None] = {"family_changed_snapshot": None, "size_changed_snapshot": None,
+                                           "fonts_persisted_after_restart": None}
+    details: dict = {"observations": observations, "commands": [],
+                     "paths_exercised": ["Fonts page family cycle click", "Fonts page text size + click",
+                                         "Settings.GetSnapshot fontFamily/fontSizeOffset", "owned WM restart"]}
+
+    def finish() -> dict:
+        status, reason = assess_ss11(observations)
+        entry = result_entry("SS11", status, reason, commands=details["commands"])
+        entry["details"] = details
+        return entry
+
+    if not (args.ss11_family_click and args.ss11_size_click):
+        return result_entry("SS11", STATUS_NOT_RUN,
+                            "SS11 needs --ss11-family-click X,Y and --ss11-size-click X,Y on the Fonts page (820x540 client)")
+    if ctx.display not in (f":{n}" for n in XTEST_DISPLAY_RANGE):
+        return result_entry("SS11", STATUS_NOT_RUN, "SS11 XTEST requires an owned display in :97..:119")
+    if shutil.which("gdbus") is None:
+        return result_entry("SS11", STATUS_NOT_RUN, "SS11 needs gdbus for the authoritative Settings snapshot")
+
+    settings = ctx.spawn("settings-ss11-fonts", [args.settings_bin, "--page", "fonts", "--window-size", "820x540"], ctx.app_env)
+    details["commands"].append(shell([args.settings_bin, "--page", "fonts", "--window-size", "820x540"]))
+    time.sleep(args.settle_seconds)
+    geometry = wait_for_settings_window(ctx, ctx.run / "logs" / "ss11-window-tree.txt")
+    details["window"] = geometry
+    before_text, before_command = dbus_settings_snapshot(ctx)
+    details["commands"].append(before_command)
+    before_family = gvariant_field_string(before_text or "", "fontFamily")
+    before_size = gvariant_field_int(before_text or "", "fontSizeOffset")
+    details["before"] = {"fontFamily": before_family, "fontSizeOffset": before_size}
+    if (settings.proc.poll() is not None or geometry is None
+            or (geometry["width"], geometry["height"]) != (820, 540)
+            or before_family is None or before_size is None):
+        ctx.stop(settings)
+        details["reason"] = "Fonts client 820x540 or authoritative fonts snapshot unavailable"
+        return finish()
+    if before_size >= 4:
+        ctx.stop(settings)
+        details["reason"] = "text size offset is already at its maximum (4); no size step to observe"
+        return finish()
+
+    family_point = tuple(int(part) for part in args.ss11_family_click.split(","))
+    family_code, family_command = send_input(ctx, settings_relative_point(ctx, geometry, family_point), None)
+    details["commands"].append(family_command)
+    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+    mid_text, mid_command = dbus_settings_snapshot(ctx)
+    details["commands"].append(mid_command)
+    mid_family = gvariant_field_string(mid_text or "", "fontFamily")
+    if mid_text is not None:
+        observations["family_changed_snapshot"] = ss11_family_applied(family_code, before_family, mid_family)
+
+    size_point = tuple(int(part) for part in args.ss11_size_click.split(","))
+    size_code, size_command = send_input(ctx, settings_relative_point(ctx, geometry, size_point), None)
+    details["commands"].append(size_command)
+    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
+    after_text, after_command = dbus_settings_snapshot(ctx)
+    details["commands"].append(after_command)
+    after_family = gvariant_field_string(after_text or "", "fontFamily")
+    after_size = gvariant_field_int(after_text or "", "fontSizeOffset")
+    details["after"] = {"fontFamily": after_family, "fontSizeOffset": after_size}
+    if after_text is not None:
+        observations["size_changed_snapshot"] = ss11_size_applied(
+            size_code, before_size, after_size, mid_family, after_family)
+    ctx.stop(settings)
+
+    if (observations["family_changed_snapshot"] is True and observations["size_changed_snapshot"] is True
+            and restart_owned_wm(ctx, args, "wm-ss11-restart")):
+        persisted_text, persisted_command = dbus_settings_snapshot(ctx)
+        details["commands"].extend(["restart owned WM", persisted_command])
+        if persisted_text is not None:
+            observations["fonts_persisted_after_restart"] = ss11_fonts_persisted(
+                persisted_text, after_family, after_size)
+    return finish()
+
+
+def run_ss13(ctx: Ctx, args: argparse.Namespace) -> dict:
+    """Open About at each matrix size; PASS needs live nonblank renders and the exact FLAMEWM_VERSION string."""
+    observations: dict[str, bool | None] = {f"about_render_{width}x{height}": None for width, height in SIZES}
+    observations["version_matches_flamewm_version"] = None
+    details: dict = {"observations": observations, "commands": [], "renders": [],
+                     "paths_exercised": ["flamewm-settings --page about at 760x500, 820x540, 960x640",
+                                         "xwininfo client geometry", "Settings.GetSnapshot version"]}
+    shots = []
+    for width, height in SIZES:
+        shot = page_shot(ctx, args, "about", f"ss13-{width}x{height}", (width, height))
+        shots.append(shot)
+        details["commands"].extend(shot["commands"])
+        details["renders"].append({"size": f"{width}x{height}", "alive": shot["alive"], "captured": shot["captured"],
+                                   "nonblank": shot["nonblank"], "window": shot["window"]})
+        observations[f"about_render_{width}x{height}"] = exact_window_size(shot, (width, height))
+
+    try:
+        expected_version = (ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        expected_version = None
+    settings_text, settings_command = dbus_settings_snapshot(ctx)
+    details["commands"].append(settings_command)
+    observations["version_matches_flamewm_version"] = ss13_version_observed(settings_text, expected_version)
+    observations["version_published"] = gvariant_field_string(settings_text or "", "version") is not None
+    details["expected_version"] = expected_version
+    details["version_source"] = "Settings snapshot 'version' key; not published by the current product, so unobserved"
+    status, reason = assess_ss13(observations)
+    entry = result_entry("SS13", status, reason, [shot["shot"] for shot in shots], details["commands"])
+    entry["details"] = details
+    return entry
+
+
 def result_entry(sid: str, status: str, reason: str = "", evidence: list | None = None, commands: list | None = None) -> dict:
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}")
@@ -2568,9 +2895,13 @@ def run_scenarios(ctx: Ctx, args: argparse.Namespace, results: dict[str, dict]) 
     results["SS05"] = run_ss05(ctx, args)
     results["SS06"] = run_ss06_desktop(ctx, args)
     results["SS07"] = run_ss07(ctx, args)
+    results["SS10"] = run_ss10(ctx, args)
+    results["SS11"] = run_ss11(ctx, args)
     # SS12 is stricter than pixel-based capture smoke: verify lease method ownership,
-    # authoritative shortcut state, normal Start replay, and owner-loss restoration.
+    # authoritative shortcut state, normal Start replay, owner-loss restoration, and
+    # Escape clear / Reset persistence.
     results["SS12"] = run_ss12(ctx, args)
+    results["SS13"] = run_ss13(ctx, args)
     results["SS15"] = run_ss15(ctx, args)
     # SS14 currently exercises only Settings.accent: full status remains NOT_RUN until
     # independent panels, shortcuts, display rollback and signal-loss scenarios exist.

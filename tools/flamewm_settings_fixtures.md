@@ -32,10 +32,10 @@ Schema: `flamewm-settings-acceptance/2` (`schema_version` 2). Each run writes `<
 | SS07 | taskbar | partial Settings and private Panels snapshot mutation; canonical NOT_RUN without Shell taskbar rendering and restart equivalence |
 | SS08 | displays 1/2/4/5+ outputs and modes | NOT_RUN; partial: `LEGACY_HARNESS_NATIVE_ONE_OUTPUT` covers only the 1-output case |
 | SS09 | 15s rollback | NOT_RUN (a real 15 s revert cannot run in Xephyr; needs a fake-clock test) |
-| SS10 | scale | NOT_RUN (no runner) |
-| SS11 | fonts | NOT_RUN (no runner) |
-| SS12 | hotkeys | NOT_RUN until lease + stored binding + action/regrab + owner-loss + clear/reset persistence all pass; native driver accepts `--ss12-click` |
-| SS13 | about | NOT_RUN (no runner) |
+| SS10 | scale | native runner (`run_ss10`); needs `--ss10-scale-click`. PASS only when the Displays 125 click changes the output `scale` in the Displays snapshot and it persists after an owned WM restart; otherwise NOT_RUN |
+| SS11 | fonts | native runner (`run_ss11`); needs `--ss11-family-click` and `--ss11-size-click`. PASS only when both clicks change `fontFamily` / `fontSizeOffset` in the Settings snapshot and both persist after an owned WM restart; otherwise NOT_RUN |
+| SS12 | hotkeys | native runner; PASS only when lease, stored binding, action, grab restoration, owner loss, Escape clear (empty binding, persisted after restart) and Reset (`Super_L`, persisted after restart) all pass; native driver accepts `--ss12-click` and `--ss12-reset-click` |
+| SS13 | about | native runner (`run_ss13`); PASS only when About renders non-blank at 760x500, 820x540 and 960x640 and a Settings snapshot `version` equals `FLAMEWM_VERSION`. The product publishes no such field, so the version check stays unobserved and SS13 is NOT_RUN |
 | SS14 | external signal + auto-revert | partial Settings accent driver; canonical NOT_RUN until panel, shortcut, display rollback and signal-loss paths are also exercised |
 | SS15 | traversal/disabled states | NOT_RUN (no runner) |
 | SS16 | cargo/CSS/architecture gates | NOT_RUN (no runner in this harness) |
@@ -94,9 +94,25 @@ are relabeled.
 - SS12 `--ss12-click X,Y` targets the `ToggleStartMenu` hotkey row; `--ss12-chord` defaults to
   `Super+F8`. The runner records Begin/End D-Bus call senders, checks the authoritative shortcut
   snapshot, injects the chord using one XTEST connection, replays it after capture, and tests owner
-  loss by exiting Settings during a second active capture. The canonical SS12 status remains
-  `NOT_RUN` while clear/reset persistence is not covered. Start behavior is observed by native
-  window title and can fail if the menu does not appear.
+  loss by exiting Settings during a second active capture. Escape clear and Reset are checked in the
+  Shortcuts snapshot and again after an owned WM restart; Reset must return `ToggleStartMenu` to
+  `Super_L` (the platform default). Start behavior is observed by native window title; when no Start-like
+  window exists in any observation (WM only, no shell process) those two observations are unobserved (NOT_RUN), not failed.
+- SS10 `--ss10-scale-click X,Y` is a client-relative click on the 125 scale button of the Displays page
+  in a 960x640 client (default `751,553`; at 820x540 the scale row is below the fold and XTEST has no
+  wheel). The click is made only when the output lists zero modes: each listed mode pushes the scale row
+  below the fold, so the measured point would hit a mode button; otherwise SS10 is NOT_RUN. The runner reads the first authoritative output's `scale`, requires a
+  different starting value, clicks, then requires exactly 125 in the Displays snapshot. It then
+  restarts the owned WM and requires 125 again. A click with a non-zero exit or any other value fails.
+- SS11 `--ss11-family-click X,Y` and `--ss11-size-click X,Y` are client-relative clicks on the Fonts
+  page in an 820x540 client. The family click must change `fontFamily`; the size + click must raise
+  `fontSizeOffset` by exactly one with the family unchanged. Both values must persist after an owned
+  WM restart. Defaults `697,150` and `760,254` were measured from pixels at 820x540.
+- SS13 opens `flamewm-settings --page about` at each matrix size and requires an exact measured client
+  size and a non-blank capture. The version is read from a `version` string in the Settings snapshot
+  and must equal the trimmed `FLAMEWM_VERSION` file. No OCR is used. The current product exposes no
+  such field, so `version_published=false` is recorded and SS13 is NOT_RUN (never PASS) with the three
+  renders recorded as evidence.
 - SS14 `--ss14-accent-pixel X,Y` samples a pixel inside the Appearance page's `nav-selection-accent`
   bar. It sends one `Settings.Apply(accent)` from a separate `gdbus` client, records the Apply call
   and both Settings change signals, reads the authoritative revision/value, then samples the same

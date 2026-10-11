@@ -10,8 +10,9 @@ import sys
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
@@ -597,6 +598,269 @@ class XtestHeldKeyTests(unittest.TestCase):
         xt.press_key(backend, "F2", down=True)
         xt.press_key(backend, "F2", down=False)
         self.assertEqual(backend.events, [("down", 11), ("up", 11)])
+
+
+class ScaleFontsAboutDecisionTests(unittest.TestCase):
+    def test_ss10_needs_snapshot_change_and_restart_persistence(self) -> None:
+        observations = {"scale_changed_snapshot": True, "scale_persisted_after_restart": True}
+        self.assertEqual(acc.assess_ss10(observations)[0], "PASS")
+        observations["scale_persisted_after_restart"] = None
+        status, reason = acc.assess_ss10(observations)
+        self.assertEqual(status, "NOT_RUN")
+        self.assertIn("scale_persisted_after_restart", reason)
+        observations["scale_changed_snapshot"] = False
+        self.assertEqual(acc.assess_ss10(observations)[0], "FAIL")
+
+    def test_ss10_scale_applied_rejects_wrong_value_and_failed_click(self) -> None:
+        self.assertTrue(acc.ss10_scale_applied(0, {"Xephyr-0": 125}, "Xephyr-0"))
+        self.assertFalse(acc.ss10_scale_applied(0, {"Xephyr-0": 100}, "Xephyr-0"))
+        self.assertFalse(acc.ss10_scale_applied(0, {"Xephyr-0": 150}, "Xephyr-0"))
+        self.assertFalse(acc.ss10_scale_applied(1, {"Xephyr-0": 125}, "Xephyr-0"))
+        self.assertFalse(acc.ss10_scale_applied(0, None, "Xephyr-0"))
+
+    def test_display_output_scales_maps_each_output_id(self) -> None:
+        snapshot = ("({'outputCount': <uint32 2>, 'outputs': <["
+                    "{'id': <'Xephyr-0'>, 'modes': <[{'id': <uint64 3>, 'width': <int32 1>}]>, 'scale': <uint32 100>}, "
+                    "{'id': <'Xephyr-1'>, 'modes': <[]>, 'scale': <uint32 125>}]>},)")
+        self.assertEqual(acc.display_output_scales(snapshot), {"Xephyr-0": 100, "Xephyr-1": 125})
+
+    def test_display_output_scales_rejects_malformed_snapshots(self) -> None:
+        self.assertIsNone(acc.display_output_scales("not a snapshot"))
+        self.assertIsNone(acc.display_output_scales("({'outputs': <[]>},)"))
+        self.assertIsNone(acc.display_output_scales("({'outputs': <[{'id': <'x'>, 'modes': <[]>}]>},)"))
+
+    def test_top_level_blocks_skips_braces_inside_quoted_text(self) -> None:
+        self.assertEqual(acc.top_level_blocks("{'a': <'}'>}, {'b': <1>}"), ["{'a': <'}'>}", "{'b': <1>}"])
+
+    def test_ss11_family_and_size_are_measured_against_the_previous_snapshot(self) -> None:
+        self.assertTrue(acc.ss11_family_applied(0, "IBM Plex Sans", "Noto Sans"))
+        self.assertFalse(acc.ss11_family_applied(0, "IBM Plex Sans", "IBM Plex Sans"))
+        self.assertFalse(acc.ss11_family_applied(1, "IBM Plex Sans", "Noto Sans"))
+        self.assertTrue(acc.ss11_size_applied(0, 0, 1, "Noto Sans", "Noto Sans"))
+        self.assertFalse(acc.ss11_size_applied(0, 0, 2, "Noto Sans", "Noto Sans"))
+        self.assertFalse(acc.ss11_size_applied(0, 0, 1, "Noto Sans", "DejaVu Sans"))
+        self.assertFalse(acc.ss11_size_applied(0, 0, 0, "Noto Sans", "Noto Sans"))
+
+    def test_ss11_persistence_requires_family_and_size(self) -> None:
+        persisted = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 1>},)"
+        self.assertTrue(acc.ss11_fonts_persisted(persisted, "Noto Sans", 1))
+        self.assertFalse(acc.ss11_fonts_persisted(persisted, "Noto Sans", 0))
+        self.assertFalse(acc.ss11_fonts_persisted(persisted, "IBM Plex Sans", 1))
+        self.assertEqual(acc.gvariant_field_int("{'fontSizeOffset': <int64 -2>}", "fontSizeOffset"), -2)
+        self.assertIsNone(acc.gvariant_field_uint("{'fontSizeOffset': <int64 -2>}", "fontSizeOffset"))
+
+    def test_ss11_needs_both_controls_and_persistence(self) -> None:
+        observations = {"family_changed_snapshot": True, "size_changed_snapshot": True,
+                        "fonts_persisted_after_restart": True}
+        self.assertEqual(acc.assess_ss11(observations)[0], "PASS")
+        observations["size_changed_snapshot"] = None
+        self.assertEqual(acc.assess_ss11(observations)[0], "NOT_RUN")
+        observations["size_changed_snapshot"] = False
+        self.assertEqual(acc.assess_ss11(observations)[0], "FAIL")
+
+    def test_ss12_reset_must_return_platform_default(self) -> None:
+        self.assertTrue(acc.ss12_reset_restored(0, "Super_L"))
+        self.assertFalse(acc.ss12_reset_restored(0, ""))
+        self.assertFalse(acc.ss12_reset_restored(0, "Super"))
+        self.assertFalse(acc.ss12_reset_restored(1, "Super_L"))
+
+    def test_ss13_version_is_exact_or_unobserved(self) -> None:
+        self.assertTrue(acc.ss13_version_observed("({'version': <'0.0.9'>},)", "0.0.9"))
+        self.assertFalse(acc.ss13_version_observed("({'version': <'0.0.8'>},)", "0.0.9"))
+        self.assertIsNone(acc.ss13_version_observed("({'revision': <uint64 1>},)", "0.0.9"))
+        self.assertIsNone(acc.ss13_version_observed(None, "0.0.9"))
+
+    def test_ss13_needs_three_renders_and_version(self) -> None:
+        observations = {"about_render_760x500": True, "about_render_820x540": True,
+                        "about_render_960x640": True, "version_matches_flamewm_version": True}
+        self.assertEqual(acc.assess_ss13(observations)[0], "PASS")
+        observations["version_matches_flamewm_version"] = None
+        status, reason = acc.assess_ss13(observations)
+        self.assertEqual(status, "NOT_RUN")
+        self.assertIn("version_matches_flamewm_version", reason)
+        observations["about_render_960x640"] = False
+        self.assertEqual(acc.assess_ss13(observations)[0], "FAIL")
+
+    def test_new_scenarios_are_runner_ids_so_blocked_runs_report_them(self) -> None:
+        results: dict[str, dict] = {}
+        acc.block_runner_ids(results, "no free display in :90..:99")
+        for sid in ("SS10", "SS11", "SS13"):
+            with self.subTest(sid=sid):
+                self.assertEqual(results[sid]["status"], "ENVIRONMENT_BLOCKED")
+
+    def test_client_points_for_new_controls_are_bounded_to_the_settings_client(self) -> None:
+        run = Path(tempfile.mkdtemp(prefix="flamewm-ss-args-")) / "run"
+        self.addCleanup(shutil.rmtree, run.parent, True)
+        for flag, value in (("--ss10-scale-click", "960,10"), ("--ss11-family-click", "10,600"),
+                            ("--ss11-size-click", "820,20"), ("--ss10-scale-click", "10")):
+            with self.subTest(flag=flag, value=value):
+                args = acc.parse_args(["--run-dir", str(run), flag, value])
+                with self.assertRaises(SystemExit):
+                    acc.validate(args)
+        valid = acc.parse_args(["--run-dir", str(run), "--ss10-scale-click", "600,300",
+                                "--ss11-family-click", "100,200", "--ss11-size-click", "300,200"])
+        self.assertEqual(acc.validate(valid), run.resolve())
+
+
+class FakeNativeRunnerTests(unittest.TestCase):
+    """Drive run_ss10/run_ss11/run_ss13 with a faked display, D-Bus and screenshot layer."""
+
+    BEFORE_DISPLAYS = "({'outputCount': <uint32 1>, 'outputs': <[{'id': <'Xephyr-0'>, 'modes': <[]>, 'scale': <uint32 100>}]>},)"
+    CHANGED_DISPLAYS = BEFORE_DISPLAYS.replace("uint32 100", "uint32 125")
+    STUCK_DISPLAYS = BEFORE_DISPLAYS
+    BEFORE_FONTS = "({'fontFamily': <'IBM Plex Sans'>, 'fontSizeOffset': <int64 0>, 'revision': <uint64 3>},)"
+    FAMILY_FONTS = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 0>, 'revision': <uint64 4>},)"
+    SIZED_FONTS = "({'fontFamily': <'Noto Sans'>, 'fontSizeOffset': <int64 1>, 'revision': <uint64 5>},)"
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="flamewm-ss-fake-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.ctx = acc.Ctx(self.tmp)
+        self.ctx.display = ":97"
+        self.ctx.app_env = {}
+        self.fake_owned = acc.Owned("fake", SimpleNamespace(poll=lambda: None, pid=4242))
+        self.spawn = self._patch("flamewm_settings_acceptance.Ctx.spawn", return_value=self.fake_owned)
+        self._patch("flamewm_settings_acceptance.Ctx.stop")
+        self._patch("flamewm_settings_acceptance.time.sleep")
+        self._patch("flamewm_settings_acceptance.shutil.which", return_value="/usr/bin/gdbus")
+        self.geometry = self._patch("flamewm_settings_acceptance.wait_for_settings_window",
+                                    return_value={"x": 0, "y": 0, "width": 820, "height": 540})
+        self.send_input = self._patch("flamewm_settings_acceptance.send_input", return_value=(0, "xtest"))
+        self.restart = self._patch("flamewm_settings_acceptance.restart_owned_wm", return_value=True)
+
+    def _patch(self, target: str, **kwargs):
+        patcher = patch(target, **kwargs)
+        mock = patcher.start()
+        self.addCleanup(patcher.stop)
+        return mock
+
+    def _args(self, *extra: str):
+        return acc.parse_args(["--run-dir", str(self.tmp / "run"), *extra])
+
+    def test_ss10_passes_only_with_click_snapshot_change_and_restart_persistence(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
+                    side_effect=[(self.BEFORE_DISPLAYS, "q"), (self.CHANGED_DISPLAYS, "q"), (self.CHANGED_DISPLAYS, "q")])
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
+        self.assertEqual(entry["status"], "PASS", entry["reason"])
+        self.restart.assert_called_once()
+        # Geometry is faked at origin (0,0), so the client-relative click maps to the same screen point.
+        self.assertEqual(self.send_input.call_args.args[1], "600,300")
+
+    def test_ss10_with_listed_modes_is_not_run_and_never_clicks(self) -> None:
+        modes = self.BEFORE_DISPLAYS.replace("'modes': <[]>", "'modes': <[{'id': <'1'>, 'width': <uint32 1280>}]>")
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot", return_value=(modes, "q"))
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
+        self.assertEqual(entry["status"], "NOT_RUN", entry["reason"])
+        self.assertIn("below the fold", entry["details"]["reason"])
+        self.send_input.assert_not_called()
+
+    def test_ss10_wrong_scale_after_click_fails_and_skips_restart(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
+                    side_effect=[(self.BEFORE_DISPLAYS, "q"), (self.STUCK_DISPLAYS, "q")])
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+        self.restart.assert_not_called()
+
+    def test_ss10_wrong_scale_after_restart_fails(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_displays_snapshot",
+                    side_effect=[(self.BEFORE_DISPLAYS, "q"), (self.CHANGED_DISPLAYS, "q"), (self.STUCK_DISPLAYS, "q")])
+        self.geometry.return_value = {"x": 0, "y": 0, "width": 960, "height": 640}
+        entry = acc.run_ss10(self.ctx, self._args("--ss10-scale-click", "600,300"))
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+
+    def test_ss10_without_click_coordinate_is_not_run_and_spawns_nothing(self) -> None:
+        args = self._args()
+        args.ss10_scale_click = None
+        entry = acc.run_ss10(self.ctx, args)
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertIn("--ss10-scale-click", entry["reason"])
+        self.spawn.assert_not_called()
+
+    def test_ss11_passes_only_when_both_controls_and_restart_persist(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    side_effect=[(self.BEFORE_FONTS, "q"), (self.FAMILY_FONTS, "q"),
+                                 (self.SIZED_FONTS, "q"), (self.SIZED_FONTS, "q")])
+        entry = acc.run_ss11(self.ctx, self._args("--ss11-family-click", "100,200", "--ss11-size-click", "300,200"))
+        self.assertEqual(entry["status"], "PASS", entry["reason"])
+        self.assertEqual(self.send_input.call_count, 2)
+
+    def test_ss11_size_click_without_effect_fails(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    side_effect=[(self.BEFORE_FONTS, "q"), (self.FAMILY_FONTS, "q"), (self.FAMILY_FONTS, "q")])
+        entry = acc.run_ss11(self.ctx, self._args("--ss11-family-click", "100,200", "--ss11-size-click", "300,200"))
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+        self.restart.assert_not_called()
+
+    def test_ss11_persisted_family_mismatch_after_restart_fails(self) -> None:
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    side_effect=[(self.BEFORE_FONTS, "q"), (self.FAMILY_FONTS, "q"),
+                                 (self.SIZED_FONTS, "q"), (self.BEFORE_FONTS, "q")])
+        entry = acc.run_ss11(self.ctx, self._args("--ss11-family-click", "100,200", "--ss11-size-click", "300,200"))
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+
+    def test_ss11_without_both_coordinates_is_not_run(self) -> None:
+        args = self._args("--ss11-family-click", "100,200")
+        args.ss11_size_click = None
+        entry = acc.run_ss11(self.ctx, args)
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.spawn.assert_not_called()
+
+    def _shot(self, width: int, height: int, nonblank: bool = True, window: tuple[int, int] | None = None) -> dict:
+        measured = window or (width, height)
+        return {"page": "about", "alive": True, "captured": True, "nonblank": nonblank, "shot": f"{width}x{height}.png",
+                "window": {"width": measured[0], "height": measured[1]}, "commands": ["import"]}
+
+    def _version_text(self, version: str | None) -> str:
+        return "({'revision': <uint64 1>},)" if version is None else f"({{'version': <'{version}'>}},)"
+
+    def test_ss13_passes_with_three_renders_and_exact_flamewm_version(self) -> None:
+        expected = (acc.ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
+        self._patch("flamewm_settings_acceptance.page_shot",
+                    side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    return_value=(self._version_text(expected), "q"))
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "PASS", entry["reason"])
+
+    def test_ss13_wrong_version_fails(self) -> None:
+        self._patch("flamewm_settings_acceptance.page_shot",
+                    side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    return_value=(self._version_text("0.0.0-wrong"), "q"))
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+        self.assertIn("version_matches_flamewm_version", entry["reason"])
+
+    def test_ss13_unpublished_version_is_not_run_not_pass(self) -> None:
+        self._patch("flamewm_settings_acceptance.page_shot",
+                    side_effect=lambda ctx, args, page, label, window_size=None: self._shot(*window_size))
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    return_value=(self._version_text(None), "q"))
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertIn("version_published=false", entry["reason"])
+        self.assertIs(entry["details"]["observations"]["version_published"], False)
+
+    def test_ss13_blank_or_mismatched_render_fails(self) -> None:
+        expected = (acc.ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
+        self._patch("flamewm_settings_acceptance.dbus_settings_snapshot",
+                    return_value=(self._version_text(expected), "q"))
+        renders = {(760, 500): self._shot(760, 500, nonblank=False),
+                   (820, 540): self._shot(820, 540),
+                   (960, 640): self._shot(960, 640)}
+        self._patch("flamewm_settings_acceptance.page_shot",
+                    side_effect=lambda ctx, args, page, label, window_size=None: renders[window_size])
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+        self.assertIn("about_render_760x500", entry["reason"])
+        renders[(760, 500)] = self._shot(760, 500)
+        renders[(960, 640)] = self._shot(960, 640, window=(820, 540))
+        entry = acc.run_ss13(self.ctx, self._args())
+        self.assertEqual(entry["status"], "FAIL", entry["reason"])
+        self.assertIn("about_render_960x640", entry["reason"])
 
 
 if __name__ == "__main__":
