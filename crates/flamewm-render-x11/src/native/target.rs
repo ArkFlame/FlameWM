@@ -135,72 +135,9 @@ impl NativeSurfaceTarget {
         Ok(())
     }
 
-    /// Release plan: drop picture first, then pixmap/gc, then colormap.
-    /// Pure ordering record; `app/` performs the X calls.
-    #[allow(dead_code)]
-    pub fn drop_order(&self) -> [&'static str; 4] {
-        ["picture", "pixmap", "gc", "colormap"]
-    }
-
-    /// Resize plan: returns the new commit when the size actually changes.
-    #[allow(dead_code)]
-    pub fn resize_plan(
-        &mut self,
-        width: u32,
-        height: u32,
-    ) -> Result<Option<GeometryCommit>, String> {
-        let commit = GeometryCommit::new(width, height)?;
-        if commit.width == self.width && commit.height == self.height {
-            return Ok(None);
-        }
-        // Invalidate pixmap/picture; window resize happens only after the
-        // replacement backbuffer is live (caller enforces ordering).
-        self.pixmap = 0;
-        self.picture = 0;
-        self.width = commit.width;
-        self.height = commit.height;
-        Ok(Some(commit))
-    }
-
     #[allow(dead_code)]
     pub fn is_live(&self) -> bool {
         self.pixmap != 0 && self.gc != 0 && self.colormap != 0
-    }
-}
-
-/// Cached native Picture lifecycle: create once per (drawable, format),
-/// reuse while the drawable is live, drop exactly once.
-/// Pure bookkeeping; X calls stay in the backend.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
-pub struct CachedPicture {
-    pub picture: u64,
-    pub drawable: u64,
-}
-
-#[allow(dead_code)]
-impl CachedPicture {
-    pub fn acquire(&mut self, drawable: u64, created: u64) -> Result<u64, String> {
-        if drawable == 0 || created == 0 {
-            return Err(presenter_error("picture acquire requires non-zero handles"));
-        }
-        if self.picture != 0 && self.drawable == drawable {
-            return Ok(self.picture);
-        }
-        self.release_plan();
-        self.drawable = drawable;
-        self.picture = created;
-        Ok(self.picture)
-    }
-
-    pub fn release_plan(&mut self) -> Option<u64> {
-        if self.picture == 0 {
-            return None;
-        }
-        let old = self.picture;
-        self.picture = 0;
-        self.drawable = 0;
-        Some(old)
     }
 }
 
@@ -249,20 +186,5 @@ mod tests {
         assert!(t.bind_handles(0, 2, 3, 4).is_err());
         t.bind_handles(1, 2, 3, 4).unwrap();
         assert!(t.is_live());
-        assert_eq!(t.drop_order(), ["picture", "pixmap", "gc", "colormap"]);
-        assert!(t.resize_plan(8, 8).unwrap().is_none());
-        let plan = t.resize_plan(16, 8).unwrap().unwrap();
-        assert_eq!((plan.width, plan.height), (16, 8));
-        assert!(!t.is_live());
-    }
-
-    #[test]
-    fn cached_picture_reuses_and_releases_once() {
-        let mut c = CachedPicture::default();
-        assert_eq!(c.release_plan(), None);
-        assert_eq!(c.acquire(7, 9).unwrap(), 9);
-        assert_eq!(c.acquire(7, 42).unwrap(), 9);
-        assert_eq!(c.release_plan(), Some(9));
-        assert_eq!(c.release_plan(), None);
     }
 }

@@ -100,6 +100,7 @@ impl X11ResourceAllocator {
         }
     }
 
+    #[cfg(test)]
     pub fn ledger(&self) -> ResourceLedger {
         self.ledger
     }

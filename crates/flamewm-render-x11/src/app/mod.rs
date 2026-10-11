@@ -559,11 +559,6 @@ impl X11App {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn resource_ledger(&self) -> super::native::xresource::ResourceLedger {
-        self.allocator.ledger()
-    }
-
     /// Transfer all dynamically loaded backend handles to the display owner.
     /// Backend X resources are released while the display is live; the typed
     /// owner must be retained until after `XCloseDisplay`.

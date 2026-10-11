@@ -15,17 +15,6 @@ pub(crate) fn scaled_box_rect(layout: &LayoutResult, scale: f32, index: u32) -> 
     })
 }
 
-/// Pure root-space projection: native origin + device-local rect.
-#[allow(dead_code)]
-pub(crate) fn root_space_rect(origin: (i32, i32), local: Rect) -> Rect {
-    Rect {
-        x: local.x + origin.0 as f32,
-        y: local.y + origin.1 as f32,
-        width: local.width,
-        height: local.height,
-    }
-}
-
 impl X11App {
     /// Window-pixel rect of a node from retained layout (scaled by document ui_scale).
     pub(crate) fn node_global_rect(&self, document: &RuntimeDocument, index: u32) -> Option<Rect> {
@@ -88,24 +77,5 @@ mod tests {
             })
         );
         assert_eq!(scaled_box_rect(&layout, 1.0, 7), None);
-    }
-
-    #[test]
-    fn root_space_rect_adds_native_origin() {
-        let local = Rect {
-            x: 15.0,
-            y: 30.0,
-            width: 150.0,
-            height: 75.0,
-        };
-        assert_eq!(
-            root_space_rect((40, 60), local),
-            Rect {
-                x: 55.0,
-                y: 90.0,
-                width: 150.0,
-                height: 75.0,
-            }
-        );
     }
 }

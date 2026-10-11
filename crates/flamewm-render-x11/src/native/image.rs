@@ -1,26 +1,6 @@
 //! Pure ARGB32 helpers: straight RGBA8 -> premultiplied ARGB32.
-//! The X11 upload path in `app/images.rs` uses [`premultiply_rgba8`] so the
+//! The X11 upload path in `app/images.rs` uses [`scale_and_premultiply`] so the
 //! cached depth-32 pixmap holds premultiplied content for PictOpOver.
-
-/// Premultiply straight RGBA8 pixels into packed ARGB32 words.
-/// Word layout is `(a << 24) | (r << 16) | (g << 8) | b` with `r/g/b`
-/// already multiplied by alpha (`r * a / 255`, rounded).
-#[allow(dead_code)]
-pub fn premultiply_rgba8(pixels: &[u8]) -> Vec<u32> {
-    pixels
-        .chunks_exact(4)
-        .map(|p| {
-            let (r, g, b, a) = (
-                u32::from(p[0]),
-                u32::from(p[1]),
-                u32::from(p[2]),
-                u32::from(p[3]),
-            );
-            let prem = |c: u32| ((c * a + 127) / 255) as u32;
-            (a << 24) | (prem(r) << 16) | (prem(g) << 8) | prem(b)
-        })
-        .collect()
-}
 
 /// Nearest-neighbor scale of straight RGBA8, then premultiply to ARGB32.
 pub fn scale_and_premultiply(
@@ -54,13 +34,6 @@ pub fn scale_and_premultiply(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn premultiply_scales_channels_by_alpha() {
-        assert_eq!(premultiply_rgba8(&[255, 0, 0, 128]), vec![0x80800000]);
-        assert_eq!(premultiply_rgba8(&[10, 20, 30, 255]), vec![0xFF0A141E]);
-        assert_eq!(premultiply_rgba8(&[200, 100, 50, 0]), vec![0x00000000]);
-    }
 
     #[test]
     fn scale_nearest_neighbor_picks_source_texel() {

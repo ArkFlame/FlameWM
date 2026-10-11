@@ -69,23 +69,6 @@ pub(crate) fn apply_wheel_scroll(
     Some(index)
 }
 
-/// Horizontal slider track/thumb geometry for pointer-drag mapping.
-/// `track` is the full track rect (device px), `value/min/max` the range;
-/// thumb width is 12px clamped to the track.
-#[allow(dead_code)]
-pub(crate) fn slider_thumb_rect(track: Rect, min: f32, max: f32, value: f32) -> Rect {
-    let span = (max - min).max(f32::EPSILON);
-    let ratio = ((value - min) / span).clamp(0.0, 1.0);
-    let thumb_w = 12.0f32.min(track.width.max(1.0));
-    let travel = (track.width - thumb_w).max(0.0);
-    Rect {
-        x: track.x + ratio * travel,
-        y: track.y,
-        width: thumb_w,
-        height: track.height,
-    }
-}
-
 /// Map a pointer x on the track to a snapped value in [min, max].
 /// `step <= 0` means continuous.
 pub(crate) fn slider_value_from_pointer(
@@ -236,9 +219,7 @@ mod tests {
             width: 100.0,
             height: 8.0,
         };
-        let thumb = slider_thumb_rect(track, 0.0, 100.0, 50.0);
-        assert!((thumb.x - (10.0 + 44.0)).abs() < 0.5);
-        let v = slider_value_from_pointer(track, 0.0, 100.0, 0.0, thumb.x + 6.0);
+        let v = slider_value_from_pointer(track, 0.0, 100.0, 0.0, 60.0);
         assert!((v - 50.0).abs() < 1.0);
     }
 }
