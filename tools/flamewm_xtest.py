@@ -86,6 +86,9 @@ class X11Backend:
     def fake_key(self, code: int, down: bool) -> bool:
         return bool(self._xtst.XTestFakeKeyEvent(self._display, code, 1 if down else 0, 0))
 
+    def fake_button(self, button: int, down: bool) -> bool:
+        return bool(self._xtst.XTestFakeButtonEvent(self._display, button, 1 if down else 0, 0))
+
 
 def press_key(backend, keysym: str, down: bool) -> None:
     """Send exactly one key press (down=True) or release (down=False) for KEYSYM."""
@@ -109,6 +112,39 @@ def held_key_events(backend, keysym: str, hold_ms: int, sleep=time.sleep) -> Non
         press_key(backend, keysym, down=False)
 
 
+WHEEL_BUTTONS = {"up": 4, "down": 5}
+MAX_WHEEL_STEPS = 100
+
+
+def parse_wheel(text: str) -> tuple[int, int]:
+    """Split 'up|down[:N]' into the X wheel button (4 up, 5 down) and a repeat count.
+
+    N defaults to 1 and must be an integer in 1..MAX_WHEEL_STEPS. Raises ValueError otherwise.
+    Performs no X11 access.
+    """
+    direction, separator, count = text.partition(":")
+    button = WHEEL_BUTTONS.get(direction)
+    if button is None:
+        raise ValueError(f"expected up|down[:N], got {text!r}")
+    if not separator:
+        return button, 1
+    if not re.fullmatch(r"\d+", count):
+        raise ValueError(f"wheel steps must be a non-negative integer, got {count!r}")
+    steps = int(count)
+    if not 1 <= steps <= MAX_WHEEL_STEPS:
+        raise ValueError(f"wheel steps must be 1..{MAX_WHEEL_STEPS}, got {steps}")
+    return button, steps
+
+
+def wheel_clicks(backend, button: int, steps: int) -> None:
+    """Send STEPS press+release pairs for wheel BUTTON, stopping at the first rejected event."""
+    for _ in range(steps):
+        if not backend.fake_button(button, True):
+            raise RuntimeError(f"XTEST wheel press rejected for button {button}")
+        if not backend.fake_button(button, False):
+            raise RuntimeError(f"XTEST wheel release rejected for button {button}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--display", required=True, help="nested display in :97..:119 only")
@@ -125,18 +161,24 @@ def parse_args() -> argparse.Namespace:
         metavar="MOD+...+KEY",
         help="hold modifiers (ctrl, shift, alt, super/meta/win), press and release KEY, then release modifiers",
     )
+    parser.add_argument("--wheel", metavar="up|down[:N]", help="scroll wheel up (button 4) or down (button 5), N steps (default 1)")
     args = parser.parse_args()
     if not DISPLAY_RE.fullmatch(args.display):
         parser.error("--display must be a nested display in :97..:119")
     if not re.fullmatch(r"[0-9a-f]{64}", args.owner_token):
         parser.error("--owner-token must be a 256-bit hexadecimal token")
-    if not (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold):
-        parser.error("request at least one of --click, --move, --key, --chord, --key-down, --key-up or --hold")
+    if not (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold or args.wheel):
+        parser.error("request at least one of --click, --move, --key, --chord, --key-down, --key-up, --hold or --wheel")
     if args.hold:
         try:
             args.hold_spec = parse_hold(args.hold)
         except ValueError as error:
             parser.error(f"--hold: {error}")
+    if args.wheel:
+        try:
+            args.wheel_spec = parse_wheel(args.wheel)
+        except ValueError as error:
+            parser.error(f"--wheel: {error}")
     if args.click:
         match = re.fullmatch(r"(\d+),(\d+)", args.click)
         if not match:
@@ -229,12 +271,15 @@ def main() -> int:
             press_key(backend, args.key_up, down=False)
         if args.hold:
             held_key_events(backend, *args.hold_spec)
+        if args.wheel:
+            wheel_clicks(backend, *args.wheel_spec)
         x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
         x11.XSync(display, 0)
         print(
             f"INPUT_SENT_UNVERIFIED: display={args.display} click={args.click or 'none'} "
             f"key={args.key or 'none'} chord={args.chord or 'none'} "
-            f"key_down={args.key_down or 'none'} key_up={args.key_up or 'none'} hold={args.hold or 'none'}"
+            f"key_down={args.key_down or 'none'} key_up={args.key_up or 'none'} hold={args.hold or 'none'} "
+            f"wheel={args.wheel or 'none'}"
         )
         return 0
     except UnmappedKeysym as error:
