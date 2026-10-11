@@ -101,27 +101,11 @@ pub fn xtest_drag_path(
     xtest_button_release(canary, to.0, to.1, button)
 }
 
-/// Move the real pointer through XTEST (not synthetic `SendEvent`).
-pub fn real_warp(canary: &crate::Canary, root_x: i16, root_y: i16) -> bool {
-    xtest_motion(canary, root_x, root_y)
-}
-
 /// Real click: move the actual pointer and deliver an XTEST button pair.
 pub fn real_click(canary: &crate::Canary, root_x: i16, root_y: i16, button: u8) -> bool {
     xtest_motion(canary, root_x, root_y)
         && xtest_button_press(canary, root_x, root_y, button)
         && xtest_button_release(canary, root_x, root_y, button)
-}
-
-/// Real drag: use the canonical XTEST drag path.
-pub fn real_drag(
-    canary: &crate::Canary,
-    from: (i16, i16),
-    to: (i16, i16),
-    button: u8,
-    steps: u32,
-) -> bool {
-    xtest_drag_path(canary, from, to, button, steps)
 }
 
 /// Bounded XTEST self-check: a private override-redirect input window must

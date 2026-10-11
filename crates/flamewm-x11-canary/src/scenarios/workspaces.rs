@@ -3,9 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{
-    center, real_click, real_warp, xtest_button_press, xtest_button_release, xtest_motion,
-};
+use super::{center, real_click, xtest_button_press, xtest_button_release, xtest_motion};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
@@ -443,7 +441,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     // Leg 1: real click on title band then _NET_WM_STATE maximize request.
     let (cx, _) = center(&before);
     let title = (cx, before.y.saturating_add(6));
-    let _ = real_warp(canary, title.0, title.1);
+    let _ = xtest_motion(canary, title.0, title.1);
     let clicked = real_click(canary, title.0, title.1, 1);
     std::thread::sleep(std::time::Duration::from_millis(150));
     let max_atom = canary.intern("_NET_WM_STATE_MAXIMIZED_VERT").unwrap_or(0);

@@ -1,6 +1,6 @@
 //! T06 real move (real-pointer drag) and T07 real 8-way resize.
 
-use super::{real_drag, real_warp};
+use super::{xtest_drag_path, xtest_motion};
 use x11rb::connection::Connection as _;
 
 pub(crate) fn resolve_target(canary: &crate::Canary, args: &[String]) -> Option<crate::WinInfo> {
@@ -117,13 +117,13 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             .saturating_add(RESIZE_T + (TITLEBAR_H - RESIZE_T) / 2),
     );
     let to = (from.0.saturating_add(64), from.1.saturating_add(48));
-    if !real_warp(canary, from.0, from.1) {
+    if !xtest_motion(canary, from.0, from.1) {
         return diagnostic(false, format!(
             "observed=false id={} warp failed path=real-pointer",
             target.id
         ));
     }
-    let dragged = real_drag(canary, from, to, 1, 8);
+    let dragged = xtest_drag_path(canary, from, to, 1, 8);
     // The path helper returns only after it has sent the release. Drain events
     // already queued at that boundary, then observe geometry without generating
     // further input so a replayed motion cannot masquerade as the drag result.
@@ -290,7 +290,7 @@ pub fn run_t07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let mut cur = before.clone();
     for (gx, gy, dx, dy) in grips {
         let to = (gx.saturating_add(dx), gy.saturating_add(dy));
-        if real_drag(canary, (gx, gy), to, 1, 6) {
+        if xtest_drag_path(canary, (gx, gy), to, 1, 6) {
             drags += 1;
         }
         std::thread::sleep(std::time::Duration::from_millis(120));

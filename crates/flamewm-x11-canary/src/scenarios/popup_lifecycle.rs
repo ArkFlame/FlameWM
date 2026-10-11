@@ -3,7 +3,7 @@
 
 use x11rb::protocol::xproto::MapState;
 
-use super::{InputPath, center, real_click, real_escape, real_warp};
+use super::{InputPath, center, real_click, real_escape, xtest_motion};
 
 fn popup_candidates(canary: &crate::Canary) -> Vec<crate::WinInfo> {
     canary
@@ -79,7 +79,7 @@ pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let mut escape_available = true;
     for _ in 0..repeats {
         let baseline: Vec<u32> = popup_candidates(canary).iter().map(|w| w.id).collect();
-        if !real_warp(canary, sx, sy) {
+        if !xtest_motion(canary, sx, sy) {
             real_ok = false;
             break;
         }
@@ -110,7 +110,7 @@ pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         std::thread::sleep(std::time::Duration::from_millis(120));
         let mut gone = wait_gone(canary, popup.id, 800);
         if !gone {
-            let _ = real_warp(canary, 4, 4);
+            let _ = xtest_motion(canary, 4, 4);
             let _ = real_click(canary, 4, 4, 1);
             std::thread::sleep(std::time::Duration::from_millis(150));
             gone = wait_gone(canary, popup.id, 800);

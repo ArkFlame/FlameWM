@@ -9,7 +9,10 @@
 
 use std::time::{Duration, Instant};
 
-use super::{real_drag, real_warp, xtest_button_press, xtest_button_release, xtest_motion};
+use super::interaction_regressions::{
+    maximized_both, native_configures, root_point, root_work_area, wait_until,
+};
+use super::{xtest_button_press, xtest_button_release, xtest_drag_path, xtest_motion};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
@@ -20,22 +23,6 @@ const WAIT_MS: u64 = 750;
 const MIXED_MOTIONS: usize = 24;
 const T18_NATIVE_SEMANTIC_OBSERVABLE: bool = false;
 const T18_LIMITATION: &str = "desktop-selection-dom-state-is-inside-the-client-surface-and-has-no-native-x11-child-or-property";
-
-fn wait_until<F>(mut ready: F) -> bool
-where
-    F: FnMut() -> bool,
-{
-    let deadline = Instant::now() + Duration::from_millis(WAIT_MS);
-    loop {
-        if ready() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
 
 fn same_frame_read(left: &crate::WinInfo, right: &crate::WinInfo) -> bool {
     left.id == right.id
@@ -129,35 +116,6 @@ fn maximized(canary: &crate::Canary, window: u32) -> bool {
     horizontal || vertical
 }
 
-fn maximized_both(canary: &crate::Canary, window: u32) -> bool {
-    let values = state(canary, window);
-    let Some(horizontal) = canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ") else {
-        return false;
-    };
-    let Some(vertical) = canary.intern("_NET_WM_STATE_MAXIMIZED_VERT") else {
-        return false;
-    };
-    values.contains(&horizontal) && values.contains(&vertical)
-}
-
-fn work_area(canary: &crate::Canary) -> Option<(i32, i32, u32, u32)> {
-    let desktop = canary
-        .prop_u32(canary.root, "_NET_CURRENT_DESKTOP")
-        .first()
-        .copied()
-        .unwrap_or(0) as usize;
-    let values = canary.prop_u32(canary.root, "_NET_WORKAREA");
-    let start = desktop.checked_mul(4)?;
-    if values.len() < start.saturating_add(4) {
-        return None;
-    }
-    let x = i32::from_ne_bytes(values[start].to_ne_bytes());
-    let y = i32::from_ne_bytes(values[start + 1].to_ne_bytes());
-    let width = values[start + 2];
-    let height = values[start + 3];
-    (width > 0 && height > 0).then_some((x, y, width, height))
-}
-
 fn left_snap_geometry(area: (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
     (area.0, area.1, area.2 / 2, area.3)
 }
@@ -196,7 +154,7 @@ fn t17_atom_values(values: &[u32]) -> String {
 }
 
 fn t17_current_workarea(canary: &crate::Canary) -> String {
-    work_area(canary).map_or_else(
+    root_work_area(canary).map_or_else(
         || "unavailable".to_owned(),
         |area| t17_geometry_values(area),
     )
@@ -293,7 +251,7 @@ fn t17_snapshot(canary: &crate::Canary) -> String {
         .prop_u32(canary.root, "_NET_CURRENT_DESKTOP")
         .first()
         .map_or_else(|| "unavailable".to_owned(), |value| value.to_string());
-    let area = work_area(canary).map_or_else(
+    let area = root_work_area(canary).map_or_else(
         || "unavailable".to_owned(),
         |(x, y, width, height)| format!("x:{} y:{} width:{} height:{}", x, y, width, height),
     );
@@ -467,13 +425,6 @@ fn t17_restore_diagnostic(
     )
 }
 
-fn root_point(x: i32, y: i32) -> (i16, i16) {
-    (
-        x.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-        y.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-    )
-}
-
 fn known_snap_geometries(area: (i32, i32, u32, u32)) -> [(i32, i32, u32, u32); 8] {
     let (x, y, width, height) = area;
     let left_width = width / 2;
@@ -515,10 +466,10 @@ fn establish_known_floating(
     if needs_drag {
         let start = title(&surface);
         let end = root_point(i32::from(start.0) + 64, i32::from(start.1) + 48);
-        if !real_drag(canary, start, end, 1, 8) {
+        if !xtest_drag_path(canary, start, end, 1, 8) {
             return false;
         }
-        if !wait_until(|| {
+        if !wait_until(WAIT_MS, || {
             canary
                 .by_id(target.id)
                 .and_then(|client| input_surface(canary, &client))
@@ -588,7 +539,7 @@ fn establish_t17_baseline(
             .check()
             .ok()?;
         canary.conn.flush().ok()?;
-        if !wait_until(|| {
+        if !wait_until(WAIT_MS, || {
             canary
                 .by_id(client.id)
                 .is_some_and(|current| current.width <= width && current.height <= height)
@@ -605,10 +556,10 @@ fn establish_t17_baseline(
             .saturating_add(work_area.3.saturating_sub(u32::from(frame.height)) as i32 / 2)
             .saturating_add(8),
     );
-    if !real_drag(canary, title(&frame), centered_title, 1, 8) {
+    if !xtest_drag_path(canary, title(&frame), centered_title, 1, 8) {
         return None;
     }
-    let ready = wait_until(|| {
+    let ready = wait_until(WAIT_MS, || {
         canary
             .by_id(target.id)
             .and_then(|current| input_surface(canary, &current))
@@ -658,7 +609,7 @@ fn normalize_t17_baseline(
             .check()
             .ok()?;
         canary.conn.flush().ok()?;
-        if !wait_until(|| {
+        if !wait_until(WAIT_MS, || {
             canary.by_id(client.id).is_some_and(|current| {
                 current.width == baseline.client.width && current.height == baseline.client.height
             })
@@ -677,10 +628,10 @@ fn normalize_t17_baseline(
             u32::from(baseline.frame.height),
         ),
     ) {
-        if !real_drag(canary, title(&frame), title(&baseline.frame), 1, 8) {
+        if !xtest_drag_path(canary, title(&frame), title(&baseline.frame), 1, 8) {
             return None;
         }
-        if !wait_until(|| {
+        if !wait_until(WAIT_MS, || {
             canary
                 .by_id(target.id)
                 .and_then(|current| input_surface(canary, &current))
@@ -724,31 +675,6 @@ fn t17_resize_target(frame: &crate::WinInfo, work_area: (i32, i32, u32, u32)) ->
         (i32::from(from.0) + 24).min(right),
         (i32::from(from.1) + 16).min(bottom),
     )
-}
-
-fn native_configures(canary: &crate::Canary, target: &crate::WinInfo, timeout_ms: u64) -> usize {
-    let mut count = 0;
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        match canary.conn.poll_for_event() {
-            Ok(Some(Event::ConfigureNotify(event)))
-                if event.event == target.id
-                    || event.window == target.id
-                    || event.event == target.parent
-                    || event.window == target.parent =>
-            {
-                count += 1;
-            }
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    return count;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => return count,
-        }
-    }
 }
 
 fn matching_frame_configures(
@@ -798,7 +724,7 @@ fn t17_stage_start(
 }
 
 fn hold_drag(canary: &crate::Canary, from: (i16, i16), to: (i16, i16), steps: usize) -> bool {
-    if !real_warp(canary, from.0, from.1) || !xtest_button_press(canary, from.0, from.1, 1) {
+    if !xtest_motion(canary, from.0, from.1) || !xtest_button_press(canary, from.0, from.1, 1) {
         return false;
     }
     let steps = steps.max(1);
@@ -870,7 +796,7 @@ fn preview_border_only(canary: &crate::Canary, window: &crate::WinInfo) -> (usiz
 /// root-owned, viewable preview with the expected native snap geometry, an
 /// accent border, and no captured pixels in its clear center.
 pub fn run_t15(canary: &crate::Canary, args: &[String]) -> (bool, String) {
-    let Some(area) = work_area(canary) else {
+    let Some(area) = root_work_area(canary) else {
         return (
             false,
             "scenario=T15 work_area_unavailable path=real-pointer".to_owned(),
@@ -897,9 +823,9 @@ pub fn run_t15(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     );
     let start = title(&frame);
     let held = hold_drag(canary, start, destination, 8);
-    let held_preview = held && wait_until(|| preview(canary).is_some());
+    let held_preview = held && wait_until(WAIT_MS, || preview(canary).is_some());
     let border_only_ready = held_preview
-        && wait_until(|| {
+        && wait_until(WAIT_MS, || {
             preview(canary).is_some_and(|window| {
                 let (delivered, accent_border, clear_center) = preview_border_only(canary, &window);
                 delivered == 4 && accent_border && clear_center
@@ -915,13 +841,13 @@ pub fn run_t15(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         });
     let cleaned = release(canary, destination);
     let committed = cleaned
-        && wait_until(|| {
+        && wait_until(WAIT_MS, || {
             canary
                 .by_id(client.id)
                 .and_then(|current| input_surface(canary, &current))
                 .is_some_and(|current| frame_matches(&current, left_snap_geometry(area)))
         });
-    let hidden = wait_until(|| preview(canary).is_none());
+    let hidden = wait_until(WAIT_MS, || preview(canary).is_none());
     let pass = held_preview
         && border_only_ready
         && geometry
@@ -977,7 +903,7 @@ pub fn run_t16(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let started = Instant::now();
     let moved_input = hold_drag(canary, move_from, move_to, MIXED_MOTIONS / 2);
     let move_released = release(canary, move_to);
-    let moved = wait_until(|| {
+    let moved = wait_until(WAIT_MS, || {
         canary
             .by_id(client.id)
             .and_then(|current| input_surface(canary, &current))
@@ -999,7 +925,7 @@ pub fn run_t16(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     );
     let resized_input = hold_drag(canary, resize_from, resize_to, MIXED_MOTIONS / 2);
     let resize_released = release(canary, resize_to);
-    let resized = wait_until(|| {
+    let resized = wait_until(WAIT_MS, || {
         canary
             .by_id(client.id)
             .is_some_and(|current| current.width > client.width || current.height > client.height)
@@ -1036,7 +962,7 @@ pub fn run_t16(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 /// as evidence.
 pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let row = crate::arg(args, "--row").map_or_else(|| "unspecified".to_owned(), t17_bound);
-    let Some(area) = work_area(canary) else {
+    let Some(area) = root_work_area(canary) else {
         return (
             false,
             format!(
@@ -1089,7 +1015,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         move_from.0.saturating_add(48),
         move_from.1.saturating_add(32),
     );
-    let move_sent = real_drag(canary, move_from, move_to, 1, 8);
+    let move_sent = xtest_drag_path(canary, move_from, move_to, 1, 8);
     let moved_frame = wait_stable_frame(WAIT_MS, || {
         canary.by_id(frame_id).filter(|frame| {
             (frame.x != initial_frame.x || frame.y != initial_frame.y)
@@ -1143,7 +1069,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let resize_from = bottom_right(&resize_frame);
     let resize_to = t17_resize_target(&resize_frame, baseline_area);
-    let resize_sent = real_drag(canary, resize_from, resize_to, 1, 8);
+    let resize_sent = xtest_drag_path(canary, resize_from, resize_to, 1, 8);
     let resized_frame = wait_stable_frame(WAIT_MS, || {
         canary.by_id(frame_id).filter(|frame| {
             (frame.width > resize_frame.width || frame.height > resize_frame.height)
@@ -1203,7 +1129,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
     );
     let max_sent = hold_drag(canary, max_from, max_to, 8) && release(canary, max_to);
-    let maximized_seen = max_sent && wait_until(|| maximized_both(canary, client_id));
+    let maximized_seen = max_sent && wait_until(WAIT_MS, || maximized_both(canary, client_id));
     let max_frame = maximized_seen
         .then(|| {
             wait_stable_frame(WAIT_MS, || {
@@ -1275,8 +1201,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         )
         .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
     let _ = native_configures(canary, &max_client, 0);
-    let restore_sent = real_drag(canary, restore_from, restore_to, 1, 8);
-    let restored = restore_sent && wait_until(|| !maximized(canary, client_id));
+    let restore_sent = xtest_drag_path(canary, restore_from, restore_to, 1, 8);
+    let restored = restore_sent && wait_until(WAIT_MS, || !maximized(canary, client_id));
     let restored_frame = restored
         .then(|| {
             wait_stable_frame(WAIT_MS, || {
@@ -1372,7 +1298,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         (baseline_area.1 + (baseline_area.3 / 2) as i32)
             .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
     );
-    let snap_sent = real_drag(canary, snap_from, snap_to, 1, 8);
+    let snap_sent = xtest_drag_path(canary, snap_from, snap_to, 1, 8);
     let expected_snap = left_snap_geometry(baseline_area);
     let snapped_frame = snap_sent
         .then(|| {
@@ -1427,7 +1353,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         title_from.0.saturating_add(80),
         title_from.1.saturating_add(64),
     );
-    let titlebar_sent = real_drag(canary, title_from, title_to, 1, 8);
+    let titlebar_sent = xtest_drag_path(canary, title_from, title_to, 1, 8);
     let titlebar_frame = titlebar_sent
         .then(|| {
             wait_stable_frame(WAIT_MS, || {

@@ -5,9 +5,7 @@
 //! effect/counter stream or query an X pointer grab.  Those assertions remain
 //! explicit blockers rather than being replaced with synthetic evidence.
 
-use super::{
-    InputPath, real_drag, real_warp, xtest_button_press, xtest_button_release, xtest_motion,
-};
+use super::{InputPath, xtest_button_press, xtest_button_release, xtest_drag_path, xtest_motion};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConnectionExt as _, EventMask, WindowClass,
@@ -81,7 +79,11 @@ fn select_structure_notify(canary: &crate::Canary, target: &crate::WinInfo) -> b
         && canary.conn.flush().is_ok()
 }
 
-fn native_configures(canary: &crate::Canary, target: &crate::WinInfo, timeout_ms: u64) -> usize {
+pub(crate) fn native_configures(
+    canary: &crate::Canary,
+    target: &crate::WinInfo,
+    timeout_ms: u64,
+) -> usize {
     let mut count = 0;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
@@ -405,7 +407,7 @@ fn establish_floating(canary: &crate::Canary, target: &crate::WinInfo) -> bool {
     };
     let start = title(&surface);
     let end = (start.0.saturating_add(64), start.1.saturating_add(48));
-    if !real_drag(canary, start, end, 1, 8) {
+    if !xtest_drag_path(canary, start, end, 1, 8) {
         return false;
     }
     wait_until(500, || !maximized(canary, target.id))
@@ -418,7 +420,7 @@ fn maximize_with_xtest(canary: &crate::Canary, target: &crate::WinInfo) -> bool 
     let start = title(&surface);
     let (screen_w, _) = canary.root_geometry();
     let top = ((screen_w as i16 / 2).max(1), 2);
-    real_warp(canary, start.0, start.1)
+    xtest_motion(canary, start.0, start.1)
         && xtest_button_press(canary, start.0, start.1, 1)
         && xtest_motion(canary, top.0, top.1)
         && xtest_button_release(canary, top.0, top.1, 1)
@@ -558,7 +560,7 @@ fn run_x01(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let selected = prepare_native_measurement(canary, &before);
     let start = title(&surface);
     let end = (start.0.saturating_add(48), start.1.saturating_add(32));
-    let dragged = reset && real_drag(canary, start, end, 1, 8);
+    let dragged = reset && xtest_drag_path(canary, start, end, 1, 8);
     let moved = wait_until(500, || {
         canary
             .by_id(before.id)
@@ -621,7 +623,7 @@ fn run_x02(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         jitter_start.0.saturating_add(8),
         jitter_start.1.saturating_add(1),
     );
-    let jittered = real_drag(canary, jitter_start, jitter_end, 1, 4);
+    let jittered = xtest_drag_path(canary, jitter_start, jitter_end, 1, 4);
     let remained_maximized = wait_until(500, || maximized(canary, current.id));
     let native = native_configures(canary, &current, 250);
     let pass = selected && maximized_once && jittered && remained_maximized && native > 0;
@@ -860,7 +862,7 @@ fn work_area_detail(work_area: Option<(i32, i32, u32, u32)>) -> String {
     )
 }
 
-fn maximized_both(canary: &crate::Canary, window: u32) -> bool {
+pub(crate) fn maximized_both(canary: &crate::Canary, window: u32) -> bool {
     let state = wm_state(canary, window);
     let Some(horz) = canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ") else {
         return false;
@@ -891,7 +893,7 @@ fn begin_top_hold(canary: &crate::Canary, args: &[String]) -> Result<TopHoldSetu
     let start = title(&frame);
     let (screen_w, _) = canary.root_geometry();
     let top = ((screen_w as i16 / 2).max(1), 2);
-    if !real_warp(canary, start.0, start.1) {
+    if !xtest_motion(canary, start.0, start.1) {
         return Err(format!("id={} initial_warp_failed", client.id));
     }
     if !xtest_button_press(canary, start.0, start.1, 1) {
@@ -1215,7 +1217,7 @@ const PROBE_SNAP_TARGETS: [ProbeSnapTarget; 8] = [
     ProbeSnapTarget::BottomRightQuarter,
 ];
 
-fn root_point(x: i32, y: i32) -> (i16, i16) {
+pub(crate) fn root_point(x: i32, y: i32) -> (i16, i16) {
     (
         x.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
         y.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
@@ -1382,7 +1384,7 @@ pub(crate) fn establish_known_floating(
     if needs_drag {
         let start = title(&surface);
         let end = root_point(i32::from(start.0) + 64, i32::from(start.1) + 48);
-        if !real_drag(canary, start, end, 1, 8) {
+        if !xtest_drag_path(canary, start, end, 1, 8) {
             return false;
         }
         if !wait_until(750, || {
@@ -1472,7 +1474,7 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             i32::from(destination.1) - i32::from(start.1),
         );
         let (dragged, native_route, capture_route, route_observation) =
-            if !real_warp(canary, start.0, start.1)
+            if !xtest_motion(canary, start.0, start.1)
                 || !xtest_button_press(canary, start.0, start.1, 1)
             {
                 (false, None, false, false)
@@ -1654,8 +1656,8 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let initial_state = wm_state(canary, client_id);
     let snap_start = title(&initial_frame);
     let snap_destination = probe_snap_point(ProbeSnapTarget::LeftHalf, work_area);
-    let snap_dragged = real_warp(canary, snap_start.0, snap_start.1)
-        && real_drag(canary, snap_start, snap_destination, 1, 8);
+    let snap_dragged = xtest_motion(canary, snap_start.0, snap_start.1)
+        && xtest_drag_path(canary, snap_start, snap_destination, 1, 8);
     let snap_committed = wait_until(750, || {
         canary.by_id(frame_id).is_some_and(|frame| {
             frame_matches_probe_target(&frame, ProbeSnapTarget::LeftHalf, work_area)
@@ -1688,7 +1690,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let snap_native = native_configures(canary, &snapped_client, 250);
     let _ = native_configures(canary, &snapped_client, 0);
     let press_point = title(&snapped_frame);
-    let pressed = real_warp(canary, press_point.0, press_point.1)
+    let pressed = xtest_motion(canary, press_point.0, press_point.1)
         && xtest_button_press(canary, press_point.0, press_point.1, 1);
     if !pressed {
         return (
@@ -2006,8 +2008,8 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             session_start.1.saturating_add(case.delta.1),
         );
         let _ = native_configures(canary, &before, 0);
-        let dragged = real_warp(canary, session_start.0, session_start.1)
-            && real_drag(canary, session_start, end, 1, 8);
+        let dragged = xtest_motion(canary, session_start.0, session_start.1)
+            && xtest_drag_path(canary, session_start, end, 1, 8);
         let _ = wait_until(500, || {
             canary
                 .by_id(target.id)
