@@ -2,6 +2,7 @@
 /.target/
 /.agents/runtime/
 /.performance/
+/.debug/
 *.log
 *.core
 
