@@ -325,6 +325,9 @@ fn window_application_id(
         })
 }
 
+/// Split a raw `WM_CLASS` property (two NUL-separated tokens: instance first,
+/// class second) into whitespace-trimmed `(instance, class)`. Missing tokens
+/// map to empty strings; excess trailing bytes are ignored.
 fn parse_wm_class(raw: &[u8]) -> (String, String) {
     let text = String::from_utf8_lossy(raw);
     let mut parts = text.split('\0');

@@ -38,6 +38,7 @@ use crate::frame::resources::{
 };
 use crate::frame::session::{InteractionSession, MoveSession};
 use crate::geometry::Rect;
+use crate::parse_wm_class;
 use crate::size_hints::ClientSizeHints;
 use crate::snap_preview::{self, SnapPreviewSurface};
 
@@ -4354,17 +4355,6 @@ pub(crate) fn flamewm_workspace_root() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-/// Split a raw `WM_CLASS` property (two NUL-separated Latin-1 tokens:
-/// instance first, class second) into `(instance, class)`. Missing tokens
-/// map to empty strings; excess trailing bytes are ignored.
-fn parse_wm_class(raw: &[u8]) -> (String, String) {
-    let text = String::from_utf8_lossy(raw);
-    let mut parts = text.split('\0');
-    let instance = parts.next().unwrap_or("").trim_matches('\0').to_owned();
-    let class = parts.next().unwrap_or("").trim_matches('\0').to_owned();
-    (instance, class)
-}
-
 /// Windows need re-publishing only when a client's visibility flipped across a
 /// workspace switch or the focused window changed; a plain workspace change
 /// emits workspace state only.
@@ -4377,6 +4367,31 @@ mod tests {
     use super::*;
     use crate::frame::model::ResizeEdges;
     use crate::frame::session::{MoveAnchor, MoveSession};
+
+    #[test]
+    fn wm_class_parse_characterization_trims_and_keeps_empty_tokens() {
+        assert_eq!(
+            parse_wm_class(b"firefox\0Firefox\0"),
+            ("firefox".to_owned(), "Firefox".to_owned())
+        );
+        assert_eq!(
+            parse_wm_class(b" app \0class\0"),
+            ("app".to_owned(), "class".to_owned())
+        );
+        assert_eq!(
+            parse_wm_class(b"firefox\0Firefox\0\0\0"),
+            ("firefox".to_owned(), "Firefox".to_owned())
+        );
+        assert_eq!(
+            parse_wm_class(b"firefox"),
+            ("firefox".to_owned(), String::new())
+        );
+        assert_eq!(parse_wm_class(b""), (String::new(), String::new()));
+        assert_eq!(
+            parse_wm_class(b"\xffapp\0Cl\xe9ss\0"),
+            ("\u{FFFD}app".to_owned(), "Cl\u{FFFD}ss".to_owned())
+        );
+    }
 
     fn test_icon_key(name: &str) -> flamewm_integrations_linux::icons::IconKey {
         use flamewm_integrations_linux::icons::{IconKey, IconLookupPurpose, IconRequest, IconSize};

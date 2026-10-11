@@ -687,7 +687,7 @@ mod tests {
         let before = service.cached().cloned().expect("cached before");
 
         // No UI events: only the fake clock advances.
-        for now_ms in [1, 5_000, 14_999] {
+        for now_ms in [0, 1, 5_000, 14_999] {
             assert!(!service.tick(&mut port, now_ms).expect("pre-deadline tick"));
         }
         assert!(port.reverted.is_empty());
