@@ -4,7 +4,7 @@
 //! pad bytes, the manager serial, the setting count, then each setting as a
 //! type byte, pad byte, name length, padded name, last-change serial and a
 //! padded integer or string value. Multi-byte fields use the byte order named
-//! by the first byte; FlameWM always publishes little-endian (`l`).
+//! by the first byte; FlameWM always publishes little-endian (`0`, LSBFirst).
 
 use std::collections::BTreeMap;
 
@@ -12,7 +12,8 @@ use flamewm_api::{FlameError, FlameResult};
 
 use crate::XSettingsValue;
 
-pub const BYTE_ORDER_LITTLE: u8 = b'l';
+/// XSETTINGS byte-order byte for LSBFirst (little-endian) data.
+pub const BYTE_ORDER_LSB_FIRST: u8 = 0;
 pub const SETTING_TYPE_INTEGER: u8 = 0;
 pub const SETTING_TYPE_STRING: u8 = 1;
 
@@ -76,7 +77,7 @@ pub fn encode_blob(state: &PublishedState) -> FlameResult<Vec<u8>> {
     let count = u32::try_from(state.settings.len())
         .map_err(|_| FlameError::unavailable("too many XSettings entries"))?;
     let mut out = Vec::new();
-    out.push(BYTE_ORDER_LITTLE);
+    out.push(BYTE_ORDER_LSB_FIRST);
     out.extend_from_slice(&[0, 0, 0]);
     push_u32(&mut out, state.serial);
     push_u32(&mut out, count);
@@ -140,7 +141,7 @@ mod tests {
             )]),
         };
         let mut expected = vec![
-            b'l', 0, 0, 0, // byte order + pad
+            0, 0, 0, 0, // byte order + pad
             1, 0, 0, 0, // serial
             1, 0, 0, 0, // setting count
             0, 0, // type integer, pad
@@ -166,7 +167,7 @@ mod tests {
             )]),
         };
         let expected: Vec<u8> = vec![
-            b'l', 0, 0, 0, //
+            0, 0, 0, 0, //
             2, 0, 0, 0, // serial
             1, 0, 0, 0, // count
             1, 0, // type string, pad
@@ -244,7 +245,7 @@ mod tests {
             )]),
         };
         let mut expected = vec![
-            b'l', 0, 0, 0, // byte order + pad
+            0, 0, 0, 0, // byte order + pad
             3, 0, 0, 0, // serial
             1, 0, 0, 0, // count
             1, 0, // type string, pad
@@ -271,7 +272,7 @@ mod tests {
             )]),
         };
         let mut expected = vec![
-            b'l', 0, 0, 0, //
+            0, 0, 0, 0, //
             1, 0, 0, 0, // serial
             1, 0, 0, 0, // count
             0, 0, // type integer, pad
@@ -305,7 +306,7 @@ mod tests {
             ]),
         };
         let expected: Vec<u8> = vec![
-            b'l', 0, 0, 0, //
+            0, 0, 0, 0, //
             1, 0, 0, 0, // serial
             2, 0, 0, 0, // count
             0, 0, 1, 0, b'A', 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, // entry "A" = 1
@@ -348,5 +349,89 @@ mod tests {
         )
         .expect("type change");
         assert_eq!(second.serial, 2);
+    }
+
+    /// Independent spec-conformant decoder: byte 0 selects LSBFirst (0) or
+    /// MSBFirst (1); all multi-byte fields use that order.
+    fn parse_blob(bytes: &[u8]) -> (u32, Vec<(String, u32, XSettingsValue)>) {
+        let order = bytes[0];
+        assert!(order == 0 || order == 1, "invalid byte-order byte {order}");
+        let u32_at = |at: usize| {
+            let raw = [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]];
+            if order == 0 {
+                u32::from_le_bytes(raw)
+            } else {
+                u32::from_be_bytes(raw)
+            }
+        };
+        let u16_at = |at: usize| {
+            let raw = [bytes[at], bytes[at + 1]];
+            if order == 0 {
+                u16::from_le_bytes(raw)
+            } else {
+                u16::from_be_bytes(raw)
+            }
+        };
+        let pad = |len: usize| (4 - (len % 4)) % 4;
+        let serial = u32_at(4);
+        let count = u32_at(8);
+        let mut at = 12;
+        let mut settings = Vec::new();
+        for _ in 0..count {
+            let kind = bytes[at];
+            let name_len = usize::from(u16_at(at + 2));
+            at += 4;
+            let name = String::from_utf8(bytes[at..at + name_len].to_vec()).expect("utf8 name");
+            at += name_len + pad(name_len);
+            let last_change = u32_at(at);
+            at += 4;
+            let value = match kind {
+                SETTING_TYPE_INTEGER => {
+                    let raw: [u8; 4] = bytes[at..at + 4].try_into().expect("int");
+                    let value = if order == 0 {
+                        i32::from_le_bytes(raw)
+                    } else {
+                        i32::from_be_bytes(raw)
+                    };
+                    at += 4;
+                    XSettingsValue::Integer(value)
+                }
+                SETTING_TYPE_STRING => {
+                    let text_len = usize::try_from(u32_at(at)).expect("len");
+                    at += 4;
+                    let text =
+                        String::from_utf8(bytes[at..at + text_len].to_vec()).expect("utf8 text");
+                    at += text_len + pad(text_len);
+                    XSettingsValue::Text(text)
+                }
+                other => panic!("unknown setting type {other}"),
+            };
+            settings.push((name, last_change, value));
+        }
+        assert_eq!(at, bytes.len(), "blob has trailing or missing bytes");
+        (serial, settings)
+    }
+
+    #[test]
+    fn blob_declares_lsb_first_and_round_trips_through_spec_parser() {
+        let base = desired(&[
+            ("Net/ThemeName", XSettingsValue::Text("Flame-Dark".to_owned())),
+            ("Xft/DPI", XSettingsValue::Integer(98_304)),
+            ("Gtk/CursorThemeSize", XSettingsValue::Integer(-1)),
+        ]);
+        let state = next_publication(&PublishedState::default(), &base).expect("change");
+        let blob = encode_blob(&state).expect("encode");
+
+        assert_eq!(blob[0], 0, "byte-order byte must be 0 (LSBFirst)");
+        let (serial, settings) = parse_blob(&blob);
+        assert_eq!(serial, 1);
+        assert_eq!(
+            settings,
+            vec![
+                ("Gtk/CursorThemeSize".to_owned(), 1, XSettingsValue::Integer(-1)),
+                ("Net/ThemeName".to_owned(), 1, XSettingsValue::Text("Flame-Dark".to_owned())),
+                ("Xft/DPI".to_owned(), 1, XSettingsValue::Integer(98_304)),
+            ]
+        );
     }
 }
