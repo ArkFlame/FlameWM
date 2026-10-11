@@ -5,6 +5,7 @@
 //! Time advances through the shared [`flamewm_reactor::Timeline`], so there is one
 //! timeline owner and no second animation loop.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -14,7 +15,14 @@ use flamewm_reactor::{Easing, Start, Timeline, TransitionId};
 /// Base durations in milliseconds at 1.0x speed.
 pub const MINIMIZE_MS: u32 = 260;
 pub const MAXIMIZE_MS: u32 = 200;
-pub const OPEN_MS: u32 = 180;
+pub const OPEN_MS: u32 = 160;
+
+/// Capture attempts a window-open effect makes while its window still paints blank.
+pub const OPEN_CAPTURE_ATTEMPTS: u8 = 3;
+
+/// Bounds for cached minimize captures: at most this many entries, and at most this many bytes.
+pub const CAPTURE_CACHE_MAX_ENTRIES: usize = 8;
+pub const CAPTURE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Integer screen rectangle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,13 +33,81 @@ pub struct Rect {
     pub height: i32,
 }
 
-/// Transition kind. `Restore` is the reverse of `Minimize`.
+/// Transition kind. `Restore` is the reverse of `Minimize`; `Unmaximize` is the reverse of
+/// `Maximize` (maximized rect to the restored floating rect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
     Minimize,
     Restore,
     Maximize,
+    Unmaximize,
     Open,
+}
+
+/// Bounded cache of captures keyed by client. Evicts the oldest entry while either the entry
+/// count or the byte total exceeds its cap. An entry larger than the byte cap is not kept.
+#[derive(Debug)]
+pub struct CaptureCache<T> {
+    order: VecDeque<u32>,
+    entries: HashMap<u32, (usize, T)>,
+    bytes: usize,
+}
+
+impl<T> Default for CaptureCache<T> {
+    fn default() -> Self {
+        Self {
+            order: VecDeque::new(),
+            entries: HashMap::new(),
+            bytes: 0,
+        }
+    }
+}
+
+impl<T> CaptureCache<T> {
+    /// Inserts `value` of `size` bytes for `key`, replacing any previous entry for `key`.
+    pub fn insert(&mut self, key: u32, value: T, size: usize) {
+        self.remove(key);
+        if size > CAPTURE_CACHE_MAX_BYTES {
+            return;
+        }
+        self.entries.insert(key, (size, value));
+        self.order.push_back(key);
+        self.bytes += size;
+        while self.order.len() > CAPTURE_CACHE_MAX_ENTRIES || self.bytes > CAPTURE_CACHE_MAX_BYTES {
+            let Some(oldest) = self.order.front().copied() else {
+                break;
+            };
+            self.remove(oldest);
+        }
+    }
+
+    /// Removes and returns the cached value for `key`.
+    pub fn take(&mut self, key: u32) -> Option<T> {
+        let (size, value) = self.entries.remove(&key)?;
+        self.bytes -= size;
+        self.order.retain(|queued| *queued != key);
+        Some(value)
+    }
+
+    /// Drops the entry for `key`, if any (for example on window destroy).
+    pub fn remove(&mut self, key: u32) {
+        let _ = self.take(key);
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
 }
 
 /// User settings snapshot. `minimize` gates both minimize and restore.
@@ -157,6 +233,60 @@ pub fn overlay_t(progress: f32, mirrored: bool) -> f64 {
     if mirrored { 1.0 - p } else { p }
 }
 
+/// True when every pixel of an ARGB32 capture equals the first one. A window that has not
+/// painted yet captures as one solid colour (its frame background), so it is not worth animating.
+#[must_use]
+pub fn is_blank_capture(argb: &[u8]) -> bool {
+    let mut pixels = argb.chunks_exact(4);
+    let Some(first) = pixels.next() else {
+        return true;
+    };
+    pixels.all(|pixel| pixel == first)
+}
+
+/// Pending window-open effects. A managed window arms here when it is mapped; the effect
+/// starts on a later Expose once the capture is non-blank. Arming never delays the map.
+#[derive(Debug, Default)]
+pub struct OpenGate {
+    /// Remaining capture attempts per armed client.
+    armed: HashMap<u32, u8>,
+}
+
+impl OpenGate {
+    pub fn arm(&mut self, client: u32) {
+        self.armed.insert(client, OPEN_CAPTURE_ATTEMPTS);
+    }
+
+    #[must_use]
+    pub fn is_armed(&self, client: u32) -> bool {
+        self.armed.contains_key(&client)
+    }
+
+    /// Records one capture attempt. Returns `true` when the capture is usable; the client is
+    /// then disarmed and the caller starts the effect. A blank capture spends one attempt, and
+    /// the last one disarms without starting, so a window that never paints is not retried.
+    pub fn attempt(&mut self, client: u32, blank: bool) -> bool {
+        let Some(left) = self.armed.get_mut(&client) else {
+            return false;
+        };
+        if !blank {
+            self.armed.remove(&client);
+            return true;
+        }
+        *left -= 1;
+        if *left == 0 {
+            self.armed.remove(&client);
+        }
+        false
+    }
+
+    /// Drops the pending effect for `client` (input to it, unmap, or destroy).
+    pub fn clear(&mut self, client: u32) {
+        self.armed.remove(&client);
+    }
+
+}
+
 /// Owns all in-flight transitions on a single [`Timeline`].
 #[derive(Debug)]
 pub struct Animator {
@@ -216,7 +346,7 @@ impl Animator {
     fn effect_allowed(&self, effect: Effect) -> bool {
         match effect {
             Effect::Minimize | Effect::Restore => self.settings.minimize,
-            Effect::Maximize => self.settings.maximize,
+            Effect::Maximize | Effect::Unmaximize => self.settings.maximize,
             Effect::Open => self.settings.open,
         }
     }
@@ -224,7 +354,7 @@ impl Animator {
     fn base_ms(effect: Effect) -> u32 {
         match effect {
             Effect::Minimize | Effect::Restore => MINIMIZE_MS,
-            Effect::Maximize => MAXIMIZE_MS,
+            Effect::Maximize | Effect::Unmaximize => MAXIMIZE_MS,
             Effect::Open => OPEN_MS,
         }
     }
@@ -324,6 +454,12 @@ impl Animator {
     }
 
     /// True while any flight is active. The shared timer should run only then.
+    /// True when `effect` would run as an animation now (enabled, capable, and its flag is on).
+    #[must_use]
+    pub fn wants(&self, effect: Effect) -> bool {
+        self.timeline_enabled() && self.effect_allowed(effect)
+    }
+
     #[must_use]
     pub fn is_active(&self) -> bool {
         !self.flights.is_empty()
@@ -509,6 +645,125 @@ mod tests {
         assert_eq!(a.running(7), Some(Effect::Minimize));
         a.tick(t0 + Duration::from_secs(5));
         assert_eq!(a.running(7), None);
+    }
+
+    #[test]
+    fn unmaximize_is_gated_by_maximize_flag_and_completes_once() {
+        let t0 = Instant::now();
+        let mut off = Animator::new(true, Settings { maximize: false, ..ON });
+        assert_eq!(off.start(7, Effect::Unmaximize, t0), Begin::Immediate);
+        let mut a = animator();
+        assert_eq!(a.start(7, Effect::Unmaximize, t0), Begin::Started);
+        assert_eq!(a.running(7), Some(Effect::Unmaximize));
+        let late = t0 + Duration::from_secs(5);
+        assert_eq!(completes(&a.tick(late)), vec![(7, Effect::Unmaximize)]);
+        assert!(completes(&a.tick(late)).is_empty(), "no second commit");
+    }
+
+    #[test]
+    fn maximize_and_unmaximize_do_not_reverse_each_other() {
+        let t0 = Instant::now();
+        let mut a = animator();
+        assert_eq!(a.start(7, Effect::Maximize, t0), Begin::Started);
+        assert_eq!(a.start(7, Effect::Unmaximize, t0), Begin::AlreadyInFlight);
+        assert_eq!(a.running(7), Some(Effect::Maximize));
+    }
+
+    #[test]
+    fn capture_cache_evicts_oldest_past_entry_cap() {
+        let mut cache: CaptureCache<u32> = CaptureCache::default();
+        for client in 0..(CAPTURE_CACHE_MAX_ENTRIES as u32 + 2) {
+            cache.insert(client, client, 1024);
+        }
+        assert_eq!(cache.len(), CAPTURE_CACHE_MAX_ENTRIES);
+        assert_eq!(cache.take(0), None, "oldest evicted");
+        assert_eq!(cache.take(1), None, "second oldest evicted");
+        assert_eq!(cache.take(2), Some(2));
+        assert_eq!(cache.bytes(), (CAPTURE_CACHE_MAX_ENTRIES - 1) * 1024);
+    }
+
+    #[test]
+    fn capture_cache_evicts_oldest_past_byte_cap() {
+        let mut cache: CaptureCache<&str> = CaptureCache::default();
+        let half = CAPTURE_CACHE_MAX_BYTES / 2;
+        cache.insert(1, "a", half);
+        cache.insert(2, "b", half);
+        cache.insert(3, "c", half);
+        assert!(cache.bytes() <= CAPTURE_CACHE_MAX_BYTES);
+        assert_eq!(cache.take(1), None);
+        assert_eq!(cache.take(3), Some("c"));
+    }
+
+    #[test]
+    fn capture_cache_rejects_oversize_and_drops_on_remove() {
+        let mut cache: CaptureCache<u8> = CaptureCache::default();
+        cache.insert(1, 1, CAPTURE_CACHE_MAX_BYTES + 1);
+        assert!(cache.is_empty(), "single oversize capture is never kept");
+        cache.insert(2, 2, 100);
+        cache.remove(2);
+        assert!(cache.is_empty());
+        assert_eq!(cache.bytes(), 0);
+    }
+
+    #[test]
+    fn capture_cache_reinsert_replaces_without_double_counting() {
+        let mut cache: CaptureCache<u8> = CaptureCache::default();
+        cache.insert(5, 1, 300);
+        cache.insert(5, 2, 200);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.bytes(), 200);
+        assert_eq!(cache.take(5), Some(2));
+        assert_eq!(cache.bytes(), 0);
+    }
+
+    #[test]
+    fn blank_capture_is_one_solid_colour() {
+        assert!(is_blank_capture(&[]));
+        assert!(is_blank_capture(&[1, 2, 3, 255, 1, 2, 3, 255]));
+        assert!(!is_blank_capture(&[1, 2, 3, 255, 9, 2, 3, 255]));
+    }
+
+    #[test]
+    fn open_gate_arming_starts_nothing_until_a_non_blank_expose() {
+        let t0 = Instant::now();
+        let mut a = animator();
+        let mut gate = OpenGate::default();
+        gate.arm(7);
+        assert!(gate.is_armed(7));
+        assert_eq!(a.running(7), None, "arming must not start a flight or delay the map");
+        // First Expose paints blank: spend an attempt, do not start.
+        assert!(!gate.attempt(7, true));
+        assert!(gate.is_armed(7));
+        // Next Expose is paintable: start exactly once and disarm.
+        assert!(gate.attempt(7, false));
+        assert!(!gate.is_armed(7));
+        assert_eq!(a.start(7, Effect::Open, t0), Begin::Started);
+    }
+
+    #[test]
+    fn open_gate_gives_up_after_blank_attempts_and_clear_cancels_pending() {
+        let mut gate = OpenGate::default();
+        gate.arm(1);
+        for _ in 0..OPEN_CAPTURE_ATTEMPTS {
+            assert!(!gate.attempt(1, true));
+        }
+        assert!(!gate.is_armed(1), "a never-painting window is not retried forever");
+        assert!(!gate.attempt(1, false), "no pending effect after exhaustion");
+        gate.arm(2);
+        gate.clear(2);
+        assert!(!gate.attempt(2, false), "input or unmap before the expose cancels the open");
+    }
+
+    #[test]
+    fn open_wants_requires_enabled_capable_and_flag() {
+        let on = Animator::new(true, Settings::DEFAULT);
+        assert!(on.wants(Effect::Open));
+        let flag_off = Animator::new(true, Settings { open: false, ..Settings::DEFAULT });
+        assert!(!flag_off.wants(Effect::Open));
+        let no_cap = Animator::new(false, Settings::DEFAULT);
+        assert!(!no_cap.wants(Effect::Open));
+        let disabled = Animator::new(true, Settings { enabled: false, ..Settings::DEFAULT });
+        assert!(!disabled.wants(Effect::Open));
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::env;
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use crate::animation::{self, Animator, Begin, Effect, Settings, Tick};
+use crate::animation::{self, Animator, Begin, CaptureCache, Effect, OpenGate, Settings, Tick};
 use flamewm_render_x11::{CapturedImage, WarpOverlay, WarpRect};
 
 /// Frame cadence while a transition is in flight (60 Hz).
@@ -14,6 +14,40 @@ const TRANSITION_FRAME: std::time::Duration = std::time::Duration::from_millis(1
 struct TransitionOverlay {
     overlay: WarpOverlay,
     mirrored: bool,
+    /// The frame was unmapped so the opaque backdrop snapshot shows the area beneath it.
+    frame_hidden: bool,
+}
+
+/// Logs a fallback notice once per process. Animations are skipped silently afterwards.
+fn log_once(once: &std::sync::Once, message: &str) {
+    once.call_once(|| eprintln!("flamewm: {message}"));
+}
+
+static OPEN_SKIP_LOG: std::sync::Once = std::sync::Once::new();
+static TRANSITION_SKIP_LOG: std::sync::Once = std::sync::Once::new();
+
+/// Rect a maximized client returns to on unmaximize, when that is a floating restore.
+/// `None` when the client is not maximized or its saved placement is not floating.
+fn unmaximize_target(placement: &PlacementState) -> Option<RootRect> {
+    if placement.mode != PlacementMode::Maximized {
+        return None;
+    }
+    match placement.resume {
+        Some(snapshot) if snapshot.mode != PlacementMode::Floating => None,
+        Some(snapshot) => Some(snapshot.rect),
+        None => Some(placement.floating_restore),
+    }
+}
+
+/// Consumes one UnmapNotify the WM expects for a frame it hid itself. Returns `true` when the
+/// unmap must be ignored. Each count must be added exactly where the WM unmaps a frame.
+fn consume_expected_unmap(ignore_unmap: &mut u8) -> bool {
+    if *ignore_unmap > 0 {
+        *ignore_unmap -= 1;
+        true
+    } else {
+        false
+    }
 }
 
 fn anim_rect(rect: Rect) -> animation::Rect {
@@ -61,7 +95,7 @@ use crate::frame::geometry::{
     FrameExtents, GeometryReason, GeometryRequest, frame_to_client_root, plan_client_configure,
 };
 use crate::frame::model::{
-    FrameControl, FrameRegion, PlacementMode, PlacementSnapshot, ResizeEdges,
+    FrameControl, FrameRegion, PlacementMode, PlacementSnapshot, PlacementState, ResizeEdges,
 };
 use crate::frame::resources::{
     FrameRegistry, FrameResources, INPUT_CHILD_EVENT_MASK, cursor_for_region,
@@ -1013,7 +1047,9 @@ pub(crate) struct Wm<'a, C: Connection> {
     animator: Animator,
     overlays: HashMap<Window, TransitionOverlay>,
     /// Capture kept from a completed minimize so the matching restore can reuse it.
-    minimized_captures: HashMap<Window, CapturedImage>,
+    minimized_captures: CaptureCache<CapturedImage>,
+    /// Window-open effects armed at first map, waiting for a paintable capture on Expose.
+    open_gate: OpenGate,
     renderer: Option<Rc<RefCell<flamewm_render_x11::ExternalDecorationRenderer>>>,
     current_workspace: usize,
     workspace_count: usize,
@@ -1126,7 +1162,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             renderer,
             animator,
             overlays: HashMap::new(),
-            minimized_captures: HashMap::new(),
+            minimized_captures: CaptureCache::default(),
+            open_gate: OpenGate::default(),
             current_workspace: 0,
             workspace_count,
             active: None,
@@ -2609,6 +2646,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.mark_windows();
         self.publish_client_list()?;
         self.focus(window)?;
+        // Window-open effect: only a new, non-adopted normal top-level. It starts on a later
+        // Expose, so arming never delays the map or the focus above.
+        if !adopt && kind == WindowKind::Normal && self.animator.wants(Effect::Open) {
+            self.open_gate.arm(window);
+        }
         Ok(())
     }
 
@@ -2617,7 +2659,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         // The client is leaving: drop its flight and overlay without applying an end state.
         self.animator.cancel(window);
         self.overlays.remove(&window);
-        self.minimized_captures.remove(&window);
+        self.minimized_captures.remove(window);
+        self.open_gate.clear(window);
         // Abort any in-progress interaction through the reducer so session
         // teardown, ungrab, and snap-preview hide stay in one owner. Runs
         // before `clients.remove` because `controller_for` reads it.
@@ -2691,6 +2734,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 if event.count == 0 {
                     if let Some(client) = self.client_for(event.window) {
                         self.paint_chrome(client)?;
+                        self.try_start_open(client)?;
                     }
                 }
             }
@@ -2712,6 +2756,9 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Dispatches a passive-grab KeyPress to the bound action. Only actions
     /// with an existing WM path are executed; the rest are logged once.
     fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyError> {
+        if let Some(active) = self.active {
+            self.cancel_open_for(active)?;
+        }
         let state = u16::from(event.state);
         let matched = crate::shortcut_action_for_key(event.detail, state);
         if key_diag_enabled() {
@@ -3141,9 +3188,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         let Some(client_id) = self.client_for(window) else {
             return Ok(());
         };
+        self.cancel_open_for(client_id)?;
         if let Some(client) = self.clients.get_mut(&client_id) {
-            if client.ignore_unmap > 0 {
-                client.ignore_unmap -= 1;
+            if consume_expected_unmap(&mut client.ignore_unmap) {
                 return Ok(());
             }
         }
@@ -3270,6 +3317,10 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn handle_button_press(&mut self, event: ButtonPressEvent) -> Result<(), ReplyError> {
+        let target = resolve_frame_event_source(&self.registry, event.event, event.child);
+        if let Some(client) = self.client_for(target) {
+            self.cancel_open_for(client)?;
+        }
         if event.detail != BUTTON_PRIMARY {
             return Ok(());
         }
@@ -3843,9 +3894,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 return Ok(());
             };
             state.minimized = false;
-            state.ignore_unmap = state.ignore_unmap.saturating_add(1);
             state.frame
         };
+        // Mapping the frame produces no UnmapNotify, so no ignore count is added here.
         self.conn.map_window(frame)?;
         self.set_wm_state(client, WM_STATE_NORMAL)?;
         self.mark_windows();
@@ -3882,11 +3933,15 @@ impl<'a, C: Connection> Wm<'a, C> {
         if self.animator.start(client, effect, now) != Begin::Started {
             return Ok(false);
         }
-        if self.open_overlay(client, effect).is_err() {
-            self.animator.cancel(client);
-            return Ok(false);
-        }
-        if effect == Effect::Minimize {
+        let hidden = match self.open_overlay(client, effect) {
+            Ok(hidden) => hidden,
+            Err(error) => {
+                log_once(&TRANSITION_SKIP_LOG, &format!("transition skipped: {error}"));
+                self.animator.cancel(client);
+                return Ok(false);
+            }
+        };
+        if effect == Effect::Minimize && !hidden {
             // The overlay now shows the window; hide the real frame (counted like minimize does).
             if let Some(state) = self.clients.get_mut(&client) {
                 state.ignore_unmap = state.ignore_unmap.saturating_add(1);
@@ -3898,7 +3953,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Captures the frame (or reuses the minimize capture for restore) and opens its overlay.
-    fn open_overlay(&mut self, client: Window, effect: Effect) -> Result<(), String> {
+    /// Returns `true` when the frame was unmapped here for the opaque backdrop snapshot.
+    fn open_overlay(&mut self, client: Window, effect: Effect) -> Result<bool, String> {
         let (frame, outer) = self
             .clients
             .get(&client)
@@ -3909,7 +3965,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             Effect::Restore => {
                 let capture = self
                     .minimized_captures
-                    .remove(&client)
+                    .take(client)
                     .ok_or("transition: no minimize capture")?;
                 (capture, true, self.minimize_target_for(client, outer))
             }
@@ -3917,17 +3973,113 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, false, anim_rect(self.work_area_for_rect(outer)))
             }
+            Effect::Unmaximize => {
+                let capture = renderer.borrow().capture_window(u64::from(frame))?;
+                let restored = self
+                    .clients
+                    .get(&client)
+                    .and_then(|state| unmaximize_target(&state.placement))
+                    .ok_or("transition: no restored rect")?;
+                (capture, false, anim_rect(crate::client::root_to_rect(restored)))
+            }
             _ => {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, false, self.minimize_target_for(client, outer))
             }
         };
-        let overlay = renderer.borrow().open_warp_overlay(
+        // The window pixels are captured above. Without ARGB the overlay is opaque and snapshots
+        // the root under it, so the frame is unmapped first, then synced before the snapshot.
+        // Restore needs no hide: its frame is already unmapped while minimized.
+        let hide = !renderer.borrow().argb_visual_available()
+            && matches!(effect, Effect::Minimize | Effect::Maximize | Effect::Unmaximize);
+        if hide {
+            self.conn.unmap_window(frame).map_err(|e| e.to_string())?;
+            if let Some(state) = self.clients.get_mut(&client) {
+                state.ignore_unmap = state.ignore_unmap.saturating_add(1);
+            }
+            // Round trip on the WM connection: the unmap is processed before the root snapshot.
+            self.conn
+                .get_input_focus()
+                .map_err(|e| e.to_string())?
+                .reply()
+                .map_err(|e| e.to_string())?;
+        }
+        let opened = renderer.borrow().open_warp_overlay(
             capture,
             warp_rect(anim_rect(outer)),
             warp_rect(target),
-        )?;
-        self.overlays.insert(client, TransitionOverlay { overlay, mirrored });
+        );
+        let overlay = match opened {
+            Ok(overlay) => overlay,
+            Err(error) => {
+                if hide {
+                    let _ = self.conn.map_window(frame);
+                }
+                return Err(error);
+            }
+        };
+        self.overlays
+            .insert(client, TransitionOverlay { overlay, mirrored, frame_hidden: hide });
+        Ok(hide)
+    }
+
+    /// Starts the window-open effect for an armed client on an Expose. Starting only here
+    /// means the capture sees painted contents; the map and focus are never waiting on it.
+    fn try_start_open(&mut self, client: Window) -> Result<(), ReplyError> {
+        if !self.open_gate.is_armed(client) {
+            return Ok(());
+        }
+        let eligible = self
+            .clients
+            .get(&client)
+            .filter(|state| {
+                state.is_floating() && !state.minimized && state.kind == WindowKind::Normal
+            })
+            .map(|state| (state.frame, state.outer));
+        let (Some((frame, outer)), Some(renderer)) = (eligible, self.renderer.clone()) else {
+            self.open_gate.clear(client);
+            return Ok(());
+        };
+        if !renderer.borrow().argb_visual_available() {
+            log_once(&OPEN_SKIP_LOG, "window open animation skipped (no 32-bit ARGB visual)");
+            self.open_gate.clear(client);
+            return Ok(());
+        }
+        let Ok(capture) = renderer.borrow().capture_window(u64::from(frame)) else {
+            self.open_gate.clear(client);
+            return Ok(());
+        };
+        // A blank capture is an unpainted window: keep the gate armed for a later Expose.
+        if !self.open_gate.attempt(client, animation::is_blank_capture(&capture.argb)) {
+            return Ok(());
+        }
+        if self.animator.start(client, Effect::Open, std::time::Instant::now()) != Begin::Started {
+            return Ok(());
+        }
+        let opened = renderer.borrow().open_fade_overlay(capture, outer.x, outer.y);
+        match opened {
+            Ok(overlay) => {
+                self.overlays.insert(
+                    client,
+                    TransitionOverlay { overlay, mirrored: false, frame_hidden: false },
+                );
+            }
+            Err(_) => {
+                self.animator.cancel(client);
+            }
+        }
+        Ok(())
+    }
+
+    /// Cancels a pending or running window-open effect for `client` on input to it or its
+    /// unmap. A running open ends without completing and never delays anything.
+    fn cancel_open_for(&mut self, client: Window) -> Result<(), ReplyError> {
+        self.open_gate.clear(client);
+        if self.animator.running(client) == Some(Effect::Open) {
+            if let Some(effect) = self.animator.cancel(client) {
+                self.finish_transition(client, effect)?;
+            }
+        }
         Ok(())
     }
 
@@ -3984,10 +4136,13 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Releases the overlay and applies `effect`'s end state exactly once.
     fn finish_transition(&mut self, client: Window, effect: Effect) -> Result<(), ReplyError> {
         let flight = self.overlays.remove(&client);
+        let hidden = flight.as_ref().is_some_and(|flight| flight.frame_hidden);
         match effect {
             Effect::Minimize => {
                 if let Some(flight) = flight {
-                    self.minimized_captures.insert(client, flight.overlay.finish());
+                    let capture = flight.overlay.finish();
+                    let size = capture.argb.len();
+                    self.minimized_captures.insert(client, capture, size);
                 }
                 self.commit_minimize(client, true)
             }
@@ -3995,7 +4150,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                 drop(flight);
                 self.commit_restore(client)
             }
-            Effect::Maximize => {
+            Effect::Maximize | Effect::Unmaximize => {
+                if hidden {
+                    // The frame was unmapped for the backdrop snapshot; show it again.
+                    if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
+                        self.conn.map_window(frame)?;
+                    }
+                }
                 drop(flight);
                 self.commit_maximize(client)
             }
@@ -4035,11 +4196,19 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn toggle_maximize(&mut self, client: Window) -> Result<(), ReplyError> {
-        let animate = self.clients.get(&client).is_some_and(|state| {
-            !state.is_maximized() && !state.is_fullscreen() && state.is_floating()
+        let effect = self.clients.get(&client).and_then(|state| {
+            if state.is_maximized() {
+                unmaximize_target(&state.placement).map(|_| Effect::Unmaximize)
+            } else if !state.is_fullscreen() && state.is_floating() {
+                Some(Effect::Maximize)
+            } else {
+                None
+            }
         });
-        if animate && self.begin_transition(client, Effect::Maximize)? {
-            return Ok(());
+        if let Some(effect) = effect {
+            if self.begin_transition(client, effect)? {
+                return Ok(());
+            }
         }
         self.commit_maximize(client)
     }
@@ -5278,5 +5447,66 @@ mod tests {
         assert_eq!(next_workspace(2, 3, -1), Some(1));
         assert_eq!(next_workspace(0, 1, 1), None);
         assert_eq!(next_workspace(0, 1, -1), None);
+    }
+}
+
+#[cfg(test)]
+mod transition_fix_tests {
+    use super::*;
+    use crate::frame::coords::RootRect;
+
+    fn maximized(resume: Option<PlacementSnapshot>, restore: RootRect) -> PlacementState {
+        PlacementState {
+            mode: PlacementMode::Maximized,
+            current: RootRect::new(0, 0, 1920, 1080),
+            floating_restore: restore,
+            resume,
+        }
+    }
+
+    #[test]
+    fn unmaximize_target_returns_floating_rect_for_maximized_client() {
+        let floating = RootRect::new(500, 200, 400, 300);
+        let snap = PlacementSnapshot {
+            mode: PlacementMode::Floating,
+            rect: floating,
+        };
+        assert_eq!(unmaximize_target(&maximized(Some(snap), floating)), Some(floating));
+        assert_eq!(unmaximize_target(&maximized(None, floating)), Some(floating));
+    }
+
+    #[test]
+    fn unmaximize_target_is_none_when_not_maximized_or_not_floating_restore() {
+        let floating = RootRect::new(500, 200, 400, 300);
+        let mut floating_state = maximized(None, floating);
+        floating_state.mode = PlacementMode::Floating;
+        assert_eq!(unmaximize_target(&floating_state), None);
+        let fullscreen_snap = PlacementSnapshot {
+            mode: PlacementMode::Fullscreen,
+            rect: floating,
+        };
+        assert_eq!(unmaximize_target(&maximized(Some(fullscreen_snap), floating)), None);
+    }
+
+    #[test]
+    fn expected_unmap_is_consumed_exactly_once() {
+        let mut ignore = 1u8;
+        assert!(consume_expected_unmap(&mut ignore));
+        assert!(!consume_expected_unmap(&mut ignore), "no count left for a real unmap");
+    }
+
+    /// Models the frame's UnmapNotify stream. Minimize hides the frame and counts one expected
+    /// unmap; restore maps the frame (no UnmapNotify). A later client-initiated unmap must
+    /// reach the WM. Before the fix, restore's extra count swallowed that unmap.
+    #[test]
+    fn restore_does_not_leave_an_ignore_count_that_swallows_a_later_unmap() {
+        let mut ignore_unmap = 0u8;
+        // minimize: WM unmaps the frame and expects exactly one UnmapNotify.
+        ignore_unmap = ignore_unmap.saturating_add(1);
+        assert!(consume_expected_unmap(&mut ignore_unmap), "minimize unmap is ours");
+        // restore: WM maps the frame; mapping produces no UnmapNotify, so no count is added.
+        assert_eq!(ignore_unmap, 0);
+        // later: the client withdraws its own window; this unmap must not be swallowed.
+        assert!(!consume_expected_unmap(&mut ignore_unmap), "client unmap is handled");
     }
 }

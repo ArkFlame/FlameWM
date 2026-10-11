@@ -39,6 +39,7 @@ type CompositeFn = unsafe extern "C" fn(
     u32,
 );
 type FreePictureFn = unsafe extern "C" fn(*mut Display, Picture);
+type CreateSolidFillFn = unsafe extern "C" fn(*mut Display, *const XRenderColor) -> Picture;
 
 #[derive(Clone, Copy)]
 struct BaseApi {
@@ -46,6 +47,17 @@ struct BaseApi {
     create_picture: CreatePictureFn,
     composite: CompositeFn,
     free_picture: FreePictureFn,
+    create_solid_fill: CreateSolidFillFn,
+}
+
+/// `XRenderColor`: 16-bit non-premultiplied channels.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct XRenderColor {
+    red: u16,
+    green: u16,
+    blue: u16,
+    alpha: u16,
 }
 
 type SetPictureTransformFn = unsafe extern "C" fn(*mut Display, Picture, *const XTransform);
@@ -61,8 +73,10 @@ struct XTransform {
     matrix: [[c_int; 3]; 3],
 }
 
+pub(crate) const PICT_STANDARD_RGB_24: c_int = 2;
 const PICT_STANDARD_ARGB_32: c_int = 1;
 const PICT_OP_SRC: c_int = 1;
+const PICT_OP_OVER: c_int = 3;
 
 /// Which optional XRender extension entry points the loaded libXrender exports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +106,7 @@ impl XRenderTransformApi {
             create_picture: unsafe { library.symbol(b"XRenderCreatePicture\0") }?,
             composite: unsafe { library.symbol(b"XRenderComposite\0") }?,
             free_picture: unsafe { library.symbol(b"XRenderFreePicture\0") }?,
+            create_solid_fill: unsafe { library.symbol(b"XRenderCreateSolidFill\0") }?,
         };
         // SAFETY: names are static NUL-terminated; a failed lookup is an absent extension.
         let set_picture_transform =
@@ -126,16 +141,55 @@ impl XRenderTransformApi {
         display: *mut Display,
         drawable: Drawable,
     ) -> Result<Picture, String> {
+        // SAFETY: forwarded contract.
+        unsafe { self.create_standard_picture(display, drawable, PICT_STANDARD_ARGB_32) }
+    }
+
+    /// Creates a picture over `drawable` in the standard XRender format `standard`
+    /// (`PICT_STANDARD_*`); the caller frees it.
+    ///
+    /// # Safety
+    ///
+    /// `display` must be live and `drawable` a live pixmap or window on it.
+    pub(crate) unsafe fn create_standard_picture(
+        &self,
+        display: *mut Display,
+        drawable: Drawable,
+        standard: c_int,
+    ) -> Result<Picture, String> {
         // SAFETY: `display` is live per contract; NULL means no such standard format.
-        let format = unsafe { (self.base.find_standard_format)(display, PICT_STANDARD_ARGB_32) };
+        let format = unsafe { (self.base.find_standard_format)(display, standard) };
         if format.is_null() {
-            return Err("XRenderFindStandardFormat(ARGB32) returned NULL".to_string());
+            return Err(format!("XRenderFindStandardFormat({standard}) returned NULL"));
         }
         // SAFETY: live `display`/`drawable`/`format`; NULL attributes select defaults.
         let picture =
             unsafe { (self.base.create_picture)(display, drawable, format, 0, std::ptr::null()) };
         if picture == 0 {
-            return Err("XRenderCreatePicture returned 0 for ARGB32".to_string());
+            return Err(format!("XRenderCreatePicture returned 0 for format {standard}"));
+        }
+        Ok(picture)
+    }
+
+    /// Solid-colour picture that repeats everywhere; with `alpha` it serves as a constant mask.
+    /// Channels are 16-bit. The caller frees it.
+    ///
+    /// # Safety
+    ///
+    /// `display` must be live.
+    pub(crate) unsafe fn create_solid_fill(
+        &self,
+        display: *mut Display,
+        red: u16,
+        green: u16,
+        blue: u16,
+        alpha: u16,
+    ) -> Result<Picture, String> {
+        let color = XRenderColor { red, green, blue, alpha };
+        // SAFETY: live `display` per contract; `color` outlives the call.
+        let picture = unsafe { (self.base.create_solid_fill)(display, &color) };
+        if picture == 0 {
+            return Err("XRenderCreateSolidFill returned 0".to_string());
         }
         Ok(picture)
     }
@@ -210,13 +264,41 @@ impl XRenderTransformApi {
         dst: Picture,
         rect: (i32, i32, u32, u32),
     ) {
+        // SAFETY: forwarded contract; no mask.
+        unsafe { self.composite_op(display, PICT_OP_SRC, src, 0, dst, rect) };
+    }
+
+    /// Source-over copy of `src` into `dst` over `rect`, multiplied by `mask` (0 for none).
+    /// Source offsets are zero because the transform maps destination pixels into source space.
+    ///
+    /// # Safety
+    ///
+    /// `display`, `src`, `mask` (when non-zero) and `dst` must be live on the same display.
+    pub(crate) unsafe fn composite_over_masked(
+        &self,
+        display: *mut Display,
+        src: Picture,
+        mask: Picture,
+        dst: Picture,
+        rect: (i32, i32, u32, u32),
+    ) {
+        // SAFETY: forwarded contract.
+        unsafe { self.composite_op(display, PICT_OP_OVER, src, mask, dst, rect) };
+    }
+
+    unsafe fn composite_op(
+        &self,
+        display: *mut Display,
+        op: c_int,
+        src: Picture,
+        mask: Picture,
+        dst: Picture,
+        rect: (i32, i32, u32, u32),
+    ) {
         let (x, y, width, height) = rect;
-        // SAFETY: caller contract; source offsets are zero because the transform maps
-        // destination pixels into source space.
+        // SAFETY: caller contract on `display`/`src`/`mask`/`dst`; zero offsets as documented.
         unsafe {
-            (self.base.composite)(
-                display, PICT_OP_SRC, src, 0, dst, 0, 0, 0, 0, x, y, width, height,
-            )
+            (self.base.composite)(display, op, src, mask, dst, 0, 0, 0, 0, x, y, width, height)
         };
     }
 }
