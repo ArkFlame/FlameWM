@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native icon-theme install acceptance (TI01..TI06) on a private Xephyr.
+"""Native icon- and cursor-theme install acceptance (TI01..TI10) on a private Xephyr.
 
 Usage:
   tools/flamewm_theme_install_acceptance.py --run-dir DIR [--geometry WxH] [--display :N]
@@ -30,6 +30,7 @@ import os
 import re
 import secrets
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -50,14 +51,18 @@ except ImportError:  # the run is ENVIRONMENT_BLOCKED before OCR when PIL is mis
 ROOT = base.ROOT
 SCHEMA = "flamewm-theme-install-acceptance/1"
 PORTAL_HELPER = TOOLS / "flamewm_settings_fake_portal.py"
-IDS = tuple(f"TI{n:02d}" for n in range(1, 7))
+IDS = tuple(f"TI{n:02d}" for n in range(1, 11))
 TITLES = {
-    "TI01": "theme fixtures: folder, tar.gz, escaping-symlink folder, corrupt archive",
+    "TI01": "theme fixtures: icon/cursor folders and tar.gz, escaping symlinks, corrupt archive and Xcursor",
     "TI02": "Install folder button installs the theme under XDG_DATA_HOME/icons",
     "TI03": "icon theme picker lists the installed theme and selecting it sets iconTheme",
     "TI04": "escaping-symlink folder is rejected with an error and nothing is installed",
     "TI05": "corrupt archive is rejected with an error and nothing is installed",
     "TI06": "Install archive button installs the tar.gz theme; picker selects it",
+    "TI07": "Install folder button installs the cursor theme under XDG_DATA_HOME/icons",
+    "TI08": "cursor theme picker lists the installed theme with a left_ptr preview and selecting it sets cursorTheme",
+    "TI09": "Install archive button installs the cursor tar.gz theme",
+    "TI10": "escaping cursors/left_ptr folder is rejected; corrupt Xcursor installs with its preview omitted",
 }
 PASS, FAIL = base.STATUS_PASS, base.STATUS_FAIL
 NOT_RUN, ENV_BLOCKED = base.STATUS_NOT_RUN, base.STATUS_ENV_BLOCKED
@@ -79,6 +84,22 @@ FOLDER_WORDS = {"folder"}
 ARCHIVE_WORDS = {"archive"}
 ROW_TOLERANCE_PX = 12
 PICKER_ROW_WORDS = {THEME_ID.lower()}
+CURSOR_ID = "AP-Test-Cursors"
+CURSOR_ESCAPE_ID = "AP-Test-Cursor-Escape"
+CURSOR_CORRUPT_ID = "AP-Test-Cursor-Corrupt"
+CURSOR_FILE = "left_ptr"
+CURSOR_ESCAPE_TARGET = "/etc/passwd"  # host file: only ever symlinked, never read by the runner
+XCURSOR_SIZE = 32
+XCURSOR_RGB = (60, 130, 220)  # the left_ptr preview colour the picker row must show
+XCURSOR_MAGIC = b"Xcur"
+XCURSOR_IMAGE_TYPE = 0xFFFD0002
+PREVIEW_MIN_PIXELS = 40  # a 32x32 solid preview has ~1000 matching pixels; the placeholder has none
+PREVIEW_LEFT_PX = 170  # preview crop: this far left of the row name, PREVIEW_HALF_PX above and below it
+PREVIEW_HALF_PX = 22
+PICKER_KINDS = {  # picker -> (OCR title word, settings snapshot key)
+    "icon": ("icon", "iconTheme"),
+    "cursor": ("cursor", "cursorTheme"),
+}
 
 
 # ---------------------------------------------------------------- pure helpers (unit-tested)
@@ -108,6 +129,42 @@ def write_theme_folder(root: Path, name: str, escape_target: Path | None = None)
     return root
 
 
+def cursor_index_text(name: str) -> str:
+    """No Directories= key: the importer classifies a folder with cursors/ and no icon dirs as a cursor theme."""
+    return ("[Icon Theme]\n"
+            f"Name={name}\n"
+            "Comment=FlameWM native cursor theme install acceptance fixture\n")
+
+
+def xcursor_bytes(size: int = XCURSOR_SIZE, rgb: tuple[int, int, int] = XCURSOR_RGB) -> bytes:
+    """One opaque 'size'x'size' image frame: 16-byte file header, one TOC entry, 36-byte chunk header, ARGB pixels."""
+    header = struct.pack("<4sIII", XCURSOR_MAGIC, 16, 0x00010000, 1)
+    toc = struct.pack("<III", XCURSOR_IMAGE_TYPE, size, 16 + 12)
+    chunk = struct.pack("<9I", 36, XCURSOR_IMAGE_TYPE, size, 1, size, size, 0, 0, 0)
+    pixel = bytes((rgb[2], rgb[1], rgb[0], 255))  # little-endian ARGB words are stored as B, G, R, A
+    return header + toc + chunk + pixel * (size * size)
+
+
+def write_cursor_folder(root: Path, name: str, left_ptr: bytes | None = None, escape: bool = False) -> Path:
+    """A minimal cursor theme: index.theme plus cursors/left_ptr and an 'arrow' link.
+
+    `escape` replaces left_ptr with a symlink to an absolute host path, which the importer must refuse."""
+    cursors = root / "cursors"
+    cursors.mkdir(parents=True, exist_ok=True)
+    (root / "index.theme").write_text(cursor_index_text(name), encoding="utf-8")
+    if escape:
+        os.symlink(CURSOR_ESCAPE_TARGET, cursors / CURSOR_FILE)
+    else:
+        (cursors / CURSOR_FILE).write_bytes(xcursor_bytes() if left_ptr is None else left_ptr)
+        os.symlink(CURSOR_FILE, cursors / "arrow")
+    return root
+
+
+def preview_visible(pixel_count: int | None) -> bool:
+    """True when the picker row shows the left_ptr preview colour (None means the crop was off-screen)."""
+    return pixel_count is not None and pixel_count >= PREVIEW_MIN_PIXELS
+
+
 def write_theme_archive(folder: Path, out: Path) -> Path:
     with tarfile.open(out, "w:gz") as archive:
         archive.add(folder, arcname=folder.name)
@@ -135,25 +192,31 @@ def locate_pair(centres: list[tuple[str, int, int]], label_words: set[str],
     return None
 
 
-def icon_title_point(centres: list[tuple[str, int, int]]) -> tuple[int, int] | None:
-    """The 'Icon theme' title: an 'icon' word directly above an 'Installed …' note at the same left edge.
+def icon_title_point(centres: list[tuple[str, int, int]], title_word: str = "icon") -> tuple[int, int] | None:
+    """The 'Icon theme' (or 'Cursor theme') title: its word directly above an 'Installed …' note at the same left edge.
 
     The page subtitle 'Accent, icon theme and live preview' also contains 'icon' but has no note below it.
     """
     installed = [(x, y) for word, x, y in centres if word == "installed"]
     for word, x, y in centres:
-        if word == "icon" and any(abs(nx - x) <= 8 and 8 <= ny - y <= 30 for nx, ny in installed):
+        if word == title_word and any(abs(nx - x) <= 8 and 8 <= ny - y <= 30 for nx, ny in installed):
             return x, y
     return None
 
 
-def picker_row_point(centres: list[tuple[str, int, int]]) -> tuple[int, int] | None:
+def picker_row_point(centres: list[tuple[str, int, int]], theme_id: str = THEME_ID) -> tuple[int, int] | None:
     """A picker row name: the theme name on a row that is not the 'Installed <name>' status line."""
     status_rows = [y for word, _, y in centres if word == "installed"]
     for word, x, y in centres:
-        if word == normalize_word(THEME_ID) and not any(abs(y - row) <= ROW_TOLERANCE_PX for row in status_rows):
+        if word == normalize_word(theme_id) and not any(abs(y - row) <= ROW_TOLERANCE_PX for row in status_rows):
             return x, y
     return None
+
+
+def preview_rect(row: tuple[int, int]) -> tuple[int, int, int, int]:
+    """The crop left of a picker row name, where the row's preview image sits (x, y, w, h)."""
+    x, y = row
+    return x - PREVIEW_LEFT_PX, y - PREVIEW_HALF_PX, PREVIEW_LEFT_PX - 4, 2 * PREVIEW_HALF_PX
 
 
 def pointer_for(geometry: dict) -> str:
@@ -256,29 +319,29 @@ def ocr_words(s: ap.Session, name: str, words: set[str]) -> tuple[list[tuple[str
     return ocr_centres(path, words), path
 
 
-def scroll_to_button(s: ap.Session, geometry: dict, label_words: set[str], label: str,
-                     evidence: list, commands: list) -> tuple[int, int] | None:
-    """Wheel the Appearance page down until the install button row is OCR-located."""
+def scroll_until(s: ap.Session, geometry: dict, words: set[str], locate, label: str, evidence: list,
+                 commands: list, wheel: str = "down") -> tuple[int, int] | None:
+    """Wheel the Appearance page (down for install buttons, up for a title above) until locate(centres) finds a point."""
     for round_index in range(MAX_WHEEL_ROUNDS + 1):
         if round_index:
-            code, command = s.input(move=pointer_for(geometry), wheel=f"down:{WHEEL_STEPS}")
+            code, command = s.input(move=pointer_for(geometry), wheel=f"{wheel}:{WHEEL_STEPS}")
             commands.append(command)
             if code != 0:
                 return None
             time.sleep(0.5)
-        centres, path = ocr_words(s, f"ti-{label}-scroll-{round_index}", INSTALL_WORDS | label_words)
+        centres, path = ocr_words(s, f"ti-{label}-scroll-{round_index}", words)
         if path is not None:
             evidence.append(str(path))
-        point = locate_pair(centres, label_words)
+        point = locate(centres)
         if point is not None:
             return point
     return None
 
 
-def installed_status_seen(centres: list[tuple[str, int, int]]) -> bool:
+def installed_status_seen(centres: list[tuple[str, int, int]], theme_id: str = THEME_ID) -> bool:
     """'Installed <name>' on one row. A bare 'Installed' also appears in the idle 'Installed icon themes' note."""
     installed_rows = [y for word, _, y in centres if word == "installed"]
-    name_rows = [y for word, _, y in centres if word == normalize_word(THEME_ID)]
+    name_rows = [y for word, _, y in centres if word == normalize_word(theme_id)]
     return any(abs(a - b) <= ROW_TOLERANCE_PX for a in installed_rows for b in name_rows)
 
 
@@ -334,7 +397,8 @@ def open_settings(s: ap.Session, flow: str, portal_mode: str, portal_image: Path
 def click_install(s: ap.Session, handles: dict, flow: str, button: str, evidence: list, commands: list) -> dict:
     """Scroll to and click the Install folder/archive button; returns the observation fragment."""
     label_words = FOLDER_WORDS if button == "folder" else ARCHIVE_WORDS
-    point = scroll_to_button(s, handles["geometry"], label_words, button, evidence, commands)
+    point = scroll_until(s, handles["geometry"], INSTALL_WORDS | label_words,
+                         lambda centres: locate_pair(centres, label_words), button, evidence, commands)
     if point is None:
         return {"click_located": False}
     before, _ = s.shot(f"ti-{flow}-before-click")
@@ -382,22 +446,29 @@ def installed_matches(source: Path, installed: Path) -> bool:
     return True
 
 
-def picker_select(s: ap.Session, handles: dict, flow: str, evidence: list, commands: list) -> dict:
-    """Open the icon theme picker, OCR-locate the installed name, select it, read iconTheme."""
+def picker_select(s: ap.Session, handles: dict, flow: str, kind: str, theme_id: str, select: bool,
+                  evidence: list, commands: list) -> dict:
+    """Open the icon or cursor picker, OCR-locate the installed name, check its preview; select it when asked."""
     geometry = handles["geometry"]
-    centres, path = ocr_words(s, f"ti-{flow}-settings", {"icon", "installed"})
-    if path is not None:
-        evidence.append(str(path))
-    title = icon_title_point(centres)
+    word, key = PICKER_KINDS[kind]
+    title = scroll_until(s, geometry, {word, "installed"}, lambda found: icon_title_point(found, word),
+                         f"{flow}-{kind}-title", evidence, commands, wheel="up")
     if title is None:
         return {"picker_opened": False, "picker_listed": False}
     code, command = s.input(click=f"{geometry['x'] + geometry['width'] - 120},{title[1]}")
     commands.append(command)
-    listed, centres = await_status(s, f"ti-{flow}-picker", {normalize_word(THEME_ID), "installed"},
-                                   lambda found: picker_row_point(found) is not None, evidence)
-    row = picker_row_point(centres) if listed else None
+    listed, centres = await_status(s, f"ti-{flow}-{kind}-picker", {normalize_word(theme_id), "installed"},
+                                   lambda found: picker_row_point(found, theme_id) is not None, evidence)
+    row = picker_row_point(centres, theme_id) if listed else None
     observations = {"picker_opened": code == 0 and listed, "picker_listed": row is not None}
-    if row is not None:
+    if row is not None and kind == "cursor":
+        preview_path, _ = s.shot(f"ti-{flow}-{kind}-preview")
+        if preview_path is not None:
+            evidence.append(str(preview_path))
+            observations["preview_pixels"] = base.image_region_color_count(preview_path, preview_rect(row), XCURSOR_RGB)
+            observations["preview_row"] = list(row)
+            observations["preview_visible"] = preview_visible(observations["preview_pixels"])
+    if row is not None and select:
         select_code, command = s.input(click=f"{row[0]},{row[1]}")
         commands.append(command)
         time.sleep(1.5)
@@ -406,15 +477,16 @@ def picker_select(s: ap.Session, handles: dict, flow: str, evidence: list, comma
         snapshot_path = s.ctx.run / "logs" / f"{flow}-settings-snapshot.txt"
         snapshot_path.write_text((text or "") + "\n", encoding="utf-8")
         evidence.append(str(snapshot_path))
-        observations["selected_snapshot_icon_theme"] = base.gvariant_field_string(text or "", "iconTheme")
+        observations["selected_snapshot_value"] = base.gvariant_field_string(text or "", key)
         observations["select_exit"] = select_code
     observations["shell_alive"] = s.shell is not None and s.shell.proc.poll() is None and s.ctx.wm_dead() is False
     return observations
 
 
 def run_install_flow(s: ap.Session, flow: str, button: str, portal_mode: str, source: Path,
-                     evidence: list, commands: list, select: bool = False, reference: Path | None = None) -> dict:
-    """Install one fixture through the real Settings button; then picker + selection when it installed."""
+                     evidence: list, commands: list, select: bool = False, reference: Path | None = None,
+                     kind: str = "icon", picker: bool = False, theme_id: str = THEME_ID) -> dict:
+    """Install one fixture through the real Settings button; then the picker (and selection) when it installed."""
     observations: dict = {}
     handles = open_settings(s, flow, portal_mode, source, evidence, commands)
     if handles is None:
@@ -424,17 +496,19 @@ def run_install_flow(s: ap.Session, flow: str, button: str, portal_mode: str, so
         observations["settings_ready"] = True
         observations.update(click_install(s, handles, flow, button, evidence, commands))
         if observations.get("click_located") and observations.get("portal_called"):
-            status_words = {"installed", "failed", normalize_word(THEME_ID)}
+            status_words = {"installed", "failed", normalize_word(theme_id)}
             observations["status_installed"], _ = await_status(
-                s, f"ti-{flow}-status", status_words, installed_status_seen, evidence)
+                s, f"ti-{flow}-status", status_words, lambda found: installed_status_seen(found, theme_id), evidence)
             observations["status_failed"], _ = await_status(
                 s, f"ti-{flow}-failure", status_words, failed_status_seen, evidence)
-        installed = read_icons_dir(s.ctx) / THEME_ID
+        installed = read_icons_dir(s.ctx) / theme_id
         # An archive is compared with the folder it was built from; a folder is compared with itself.
         reference = reference or source
         observations["installed_tree_matches_source"] = installed_matches(reference, installed) if reference.is_dir() else None
-        if select:
-            observations.update(picker_select(s, handles, flow, evidence, commands))
+        if picker or select:
+            observations.update(picker_select(s, handles, flow, kind, theme_id, select, evidence, commands))
+        (s.ctx.run / "logs" / f"{flow}-observations.json").write_text(
+            json.dumps(observations, indent=2, default=str) + "\n", encoding="utf-8")
     finally:
         s.ctx.stop(handles["settings"])
         s.ctx.stop(handles["portal"])
@@ -452,13 +526,29 @@ def ti01(fixtures: Path, evidence: list) -> dict:
     outside.write_bytes(b"outside the theme tree\n")
     escape = write_theme_folder(fixtures / "src" / ESCAPE_ID, ESCAPE_ID, escape_target=outside)
     corrupt = write_corrupt_archive(fixtures / f"{CORRUPT_ID}.tar.gz")
+    cursor = write_cursor_folder(fixtures / "src" / CURSOR_ID, CURSOR_ID)
+    cursor_archive = write_theme_archive(cursor, fixtures / f"{CURSOR_ID}.tar.gz")
+    cursor_escape = write_cursor_folder(fixtures / "src" / CURSOR_ESCAPE_ID, CURSOR_ESCAPE_ID, escape=True)
+    cursor_corrupt = write_cursor_folder(fixtures / "src" / CURSOR_CORRUPT_ID, CURSOR_CORRUPT_ID,
+                                         left_ptr=xcursor_bytes()[:40])
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getnames()
+    with tarfile.open(cursor_archive, "r:gz") as tar:
+        cursor_members = tar.getnames()
+    cursor_left_ptr = cursor / "cursors" / CURSOR_FILE
     checks = {
         "folder_index": (folder / "index.theme").is_file() and f"Name={THEME_ID}" in (folder / "index.theme").read_text(),
         "archive_members": f"{THEME_ID}/index.theme" in members and f"{THEME_ID}/apps/48/{THEME_FILE}" in members,
         "escape_symlink": (escape / "apps" / "48" / "escape.png").is_symlink(),
         "corrupt_unreadable": True,
+        "cursor_index": f"Name={CURSOR_ID}" in (cursor / "index.theme").read_text() and "Directories=" not in (
+            cursor / "index.theme").read_text(),
+        "cursor_left_ptr_xcursor": cursor_left_ptr.read_bytes()[:4] == XCURSOR_MAGIC,
+        "cursor_archive_members": f"{CURSOR_ID}/index.theme" in cursor_members
+                                  and f"{CURSOR_ID}/cursors/{CURSOR_FILE}" in cursor_members,
+        "cursor_escape_symlink": os.readlink(cursor_escape / "cursors" / CURSOR_FILE) == CURSOR_ESCAPE_TARGET,
+        "cursor_corrupt_xcursor": (cursor_corrupt / "cursors" / CURSOR_FILE).read_bytes()[:4] == XCURSOR_MAGIC
+                                  and len((cursor_corrupt / "cursors" / CURSOR_FILE).read_bytes()) < 64,
     }
     try:
         with tarfile.open(corrupt, "r:gz") as tar:
@@ -466,7 +556,8 @@ def ti01(fixtures: Path, evidence: list) -> dict:
         checks["corrupt_unreadable"] = False
     except (tarfile.TarError, OSError, EOFError):
         pass
-    evidence.extend([str(folder), str(archive), str(escape), str(corrupt)])
+    evidence.extend([str(folder), str(archive), str(escape), str(corrupt), str(cursor_archive),
+                     str(cursor), str(cursor_escape), str(cursor_corrupt)])
     status, reason = expected_entry_status({k: bool(v) for k, v in checks.items()}, tuple(checks))
     return entry("TI01", status, reason if status != PASS else "fixtures built and verified: " + ", ".join(checks),
                  evidence)
@@ -497,8 +588,8 @@ def run_scenarios(s: ap.Session, run: Path, fixtures: Path, results: dict[str, d
         evidence, commands, f"Install folder installed {THEME_ID} and the tree matches the source")
     results["TI03"] = ti_from_observations(
         "TI03", {k: folder_obs.get(k) for k in ("picker_opened", "picker_listed", "shell_alive")}
-        | {"iconTheme_is_installed_theme": None if "selected_snapshot_icon_theme" not in folder_obs
-           else folder_obs["selected_snapshot_icon_theme"] == THEME_ID},
+        | {"iconTheme_is_installed_theme": None if folder_obs.get("selected_snapshot_value") is None
+           else folder_obs["selected_snapshot_value"] == THEME_ID},
         ("picker_opened", "picker_listed", "iconTheme_is_installed_theme", "shell_alive"),
         evidence, commands, "picker listed the theme and selecting it set iconTheme with the shell still running")
 
@@ -535,11 +626,65 @@ def run_scenarios(s: ap.Session, run: Path, fixtures: Path, results: dict[str, d
         "TI06", {k: archive_obs.get(k) for k in ("settings_ready", "click_located", "portal_called", "status_installed",
                                                   "installed_tree_matches_source", "picker_listed",
                                                   "shell_alive")}
-        | {"iconTheme_is_installed_theme": None if "selected_snapshot_icon_theme" not in archive_obs
-           else archive_obs["selected_snapshot_icon_theme"] == THEME_ID},
+        | {"iconTheme_is_installed_theme": None if archive_obs.get("selected_snapshot_value") is None
+           else archive_obs["selected_snapshot_value"] == THEME_ID},
         ("settings_ready", "click_located", "portal_called", "status_installed", "installed_tree_matches_source",
          "picker_listed", "iconTheme_is_installed_theme", "shell_alive"),
         evidence, commands, "Install archive installed the tar.gz theme; picker selected it with the shell running")
+
+    evidence = []
+    commands = []
+    cursor_obs = run_install_flow(s, "cursor", "folder", "folder", fixtures / "src" / CURSOR_ID, evidence, commands,
+                                  select=True, kind="cursor", theme_id=CURSOR_ID)
+    results["TI07"] = ti_from_observations(
+        "TI07", {k: cursor_obs.get(k) for k in ("settings_ready", "click_located", "portal_called", "status_installed",
+                                                 "installed_tree_matches_source")},
+        ("settings_ready", "click_located", "portal_called", "status_installed", "installed_tree_matches_source"),
+        evidence, commands, f"Install folder installed cursor theme {CURSOR_ID} and the tree matches the source")
+    results["TI08"] = ti_from_observations(
+        "TI08", {k: cursor_obs.get(k) for k in ("picker_opened", "picker_listed", "preview_visible", "shell_alive")}
+        | {"cursorTheme_is_installed_theme": None if cursor_obs.get("selected_snapshot_value") is None
+           else cursor_obs["selected_snapshot_value"] == CURSOR_ID},
+        ("picker_opened", "picker_listed", "preview_visible", "cursorTheme_is_installed_theme", "shell_alive"),
+        evidence, commands, "cursor picker listed the theme with its left_ptr preview; selecting it set cursorTheme with the shell running")
+
+    evidence = []
+    commands = []
+    cursor_archive = fixtures / f"{CURSOR_ID}.tar.gz"
+    installed_cursor = icons / CURSOR_ID
+    if installed_cursor.exists():
+        shutil.rmtree(installed_cursor)
+        commands.append(f"rm -rf {installed_cursor}")
+    cursor_archive_obs = run_install_flow(s, "cursor-archive", "archive", "success", cursor_archive, evidence, commands,
+                                          reference=fixtures / "src" / CURSOR_ID, kind="cursor", theme_id=CURSOR_ID)
+    results["TI09"] = ti_from_observations(
+        "TI09", {k: cursor_archive_obs.get(k) for k in ("settings_ready", "click_located", "portal_called",
+                                                         "status_installed", "installed_tree_matches_source")},
+        ("settings_ready", "click_located", "portal_called", "status_installed", "installed_tree_matches_source"),
+        evidence, commands, "Install archive installed the cursor tar.gz theme")
+
+    evidence = []
+    commands = []
+    escape_obs = run_install_flow(s, "cursor-escape", "folder", "folder", fixtures / "src" / CURSOR_ESCAPE_ID,
+                                  evidence, commands, kind="cursor", theme_id=CURSOR_ESCAPE_ID)
+    no_cursor_escape = not (icons / CURSOR_ESCAPE_ID).exists() and not staging_leftovers(icons)
+    corrupt_obs = run_install_flow(s, "cursor-corrupt", "folder", "folder", fixtures / "src" / CURSOR_CORRUPT_ID,
+                                   evidence, commands, kind="cursor", picker=True, theme_id=CURSOR_CORRUPT_ID)
+    results["TI10"] = ti_from_observations(
+        "TI10", {
+            "escape_settings_ready": escape_obs.get("settings_ready"),
+            "escape_click_located": escape_obs.get("click_located"),
+            "escape_status_failed": escape_obs.get("status_failed"),
+            "escape_nothing_installed": no_cursor_escape,
+            "corrupt_status_installed": corrupt_obs.get("status_installed"),
+            "corrupt_picker_listed": corrupt_obs.get("picker_listed"),
+            "corrupt_preview_omitted": None if corrupt_obs.get("preview_visible") is None
+            else not corrupt_obs["preview_visible"],
+        },
+        ("escape_settings_ready", "escape_click_located", "escape_status_failed", "escape_nothing_installed",
+         "corrupt_status_installed", "corrupt_picker_listed", "corrupt_preview_omitted"),
+        evidence, commands,
+        "escaping cursors/left_ptr folder rejected with nothing installed; corrupt Xcursor installed with its preview omitted")
 
 
 def run_inner(args: argparse.Namespace, run: Path) -> int:

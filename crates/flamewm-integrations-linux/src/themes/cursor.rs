@@ -55,7 +55,43 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::symlink;
 
-    use super::{CursorError, load_left_ptr_preview};
+    use super::{CursorError, load_left_ptr_preview, parse_xcursor_preview};
+
+    fn one_pixel_xcursor() -> Vec<u8> {
+        let mut v = b"Xcur".to_vec();
+        for word in [16u32, 0x0001_0000, 1, 0xfffd_0002, 24, 28, 36, 0xfffd_0002, 24, 1, 1, 1, 0, 0, 0] {
+            v.extend_from_slice(&word.to_le_bytes());
+        }
+        v.extend_from_slice(&[0x00, 0x00, 0xff, 0xff]); // B, G, R, A
+        v
+    }
+
+    #[test]
+    fn valid_frame_decodes_to_straight_rgba() {
+        let preview = parse_xcursor_preview(&one_pixel_xcursor()).expect("valid one-pixel Xcursor");
+        assert_eq!((preview.width, preview.height, preview.nominal_size), (1, 1, 24));
+        assert_eq!(preview.rgba, vec![0xff, 0x00, 0x00, 0xff]);
+    }
+
+    #[test]
+    fn corrupt_or_truncated_xcursor_yields_no_preview() {
+        let valid = one_pixel_xcursor();
+        for bytes in [&valid[..40], b"Xcur".as_slice(), b"Xcur\x00\x00\x00\x00".as_slice(), b"nope".as_slice()] {
+            assert!(parse_xcursor_preview(bytes).is_err(), "must not decode {bytes:?}");
+        }
+    }
+
+    #[test]
+    fn oversized_left_ptr_is_refused_before_decoding() {
+        let root = std::env::temp_dir().join(format!("flamewm-cursor-oversize-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+        let file = fs::File::create(root.join("cursors").join("left_ptr")).expect("left_ptr");
+        file.set_len(16 * 1024 * 1024 + 1).expect("sparse oversize");
+        let err = load_left_ptr_preview(&root).unwrap_err();
+        assert!(matches!(err, CursorError::TooLarge), "oversized left_ptr must be refused: {err:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn left_ptr_symlink_is_not_followed() {

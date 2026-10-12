@@ -6,6 +6,8 @@ Run with:
 
 from __future__ import annotations
 
+import os
+import struct
 import sys
 import tarfile
 import tempfile
@@ -145,6 +147,79 @@ class VerdictTests(unittest.TestCase):
     def test_every_theme_id_appears_once_in_order(self) -> None:
         document = ti.compose_document({})
         self.assertEqual([e["id"] for e in document["results"]], list(ti.IDS))
+
+
+class CursorFixtureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_xcursor_bytes_follow_the_xcursor_layout_read_by_cursor_rs(self) -> None:
+        data = ti.xcursor_bytes()
+        magic, header_len, version, ntoc = struct.unpack_from("<4sIII", data, 0)
+        self.assertEqual((magic, header_len, ntoc), (b"Xcur", 16, 1))
+        toc_type, toc_size, toc_pos = struct.unpack_from("<III", data, 16)
+        self.assertEqual((toc_type, toc_size, toc_pos), (0xFFFD0002, 32, 28))
+        chunk = struct.unpack_from("<9I", data, toc_pos)
+        self.assertEqual(chunk[:2], (36, 0xFFFD0002))
+        self.assertEqual(chunk[4:6], (32, 32))  # width, height
+        self.assertEqual(len(data), toc_pos + 36 + 32 * 32 * 4)
+        self.assertEqual(data[toc_pos + 36:toc_pos + 40], bytes((220, 130, 60, 255)))  # B, G, R, A
+
+    def test_cursor_index_is_a_cursor_theme_not_an_icon_theme(self) -> None:
+        text = ti.cursor_index_text(ti.CURSOR_ID)
+        self.assertIn(f"Name={ti.CURSOR_ID}", text)
+        self.assertNotIn("Directories=", text)
+
+    def test_cursor_folder_has_a_left_ptr_xcursor_and_an_arrow_link(self) -> None:
+        folder = ti.write_cursor_folder(self.root / ti.CURSOR_ID, ti.CURSOR_ID)
+        self.assertEqual((folder / "cursors" / ti.CURSOR_FILE).read_bytes()[:4], b"Xcur")
+        self.assertTrue((folder / "cursors" / "arrow").is_symlink())
+        self.assertEqual(os.readlink(folder / "cursors" / "arrow"), ti.CURSOR_FILE)
+
+    def test_escape_cursor_folder_links_left_ptr_to_an_absolute_host_path(self) -> None:
+        folder = ti.write_cursor_folder(self.root / ti.CURSOR_ESCAPE_ID, ti.CURSOR_ESCAPE_ID, escape=True)
+        link = folder / "cursors" / ti.CURSOR_FILE
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), "/etc/passwd")
+
+    def test_corrupt_cursor_fixture_keeps_the_magic_but_is_too_short_to_decode(self) -> None:
+        folder = ti.write_cursor_folder(self.root / ti.CURSOR_CORRUPT_ID, ti.CURSOR_CORRUPT_ID,
+                                        left_ptr=ti.xcursor_bytes()[:40])
+        data = (folder / "cursors" / ti.CURSOR_FILE).read_bytes()
+        self.assertEqual(data[:4], b"Xcur")
+        self.assertLess(len(data), 64)
+
+    def test_preview_counts_must_reach_the_threshold_and_be_on_screen(self) -> None:
+        self.assertFalse(ti.preview_visible(None))
+        self.assertFalse(ti.preview_visible(0))
+        self.assertFalse(ti.preview_visible(ti.PREVIEW_MIN_PIXELS - 1))
+        self.assertTrue(ti.preview_visible(ti.PREVIEW_MIN_PIXELS))
+
+    def test_preview_crop_sits_left_of_the_row_name(self) -> None:
+        x, y, width, height = ti.preview_rect((300, 200))
+        self.assertLess(x + width, 300)
+        self.assertLessEqual(y, 200)
+        self.assertGreaterEqual(y + height, 200)
+
+
+class CursorLocationTests(unittest.TestCase):
+    def test_cursor_title_is_the_word_above_its_installed_note(self) -> None:
+        idle = [("icon", 300, 103), ("icon", 254, 276), ("installed", 254, 294), ("cursor", 253, 324),
+                ("installed", 254, 343), ("cursor", 300, 343)]
+        self.assertEqual(ti.icon_title_point(idle, "cursor"), (253, 324))
+        self.assertIsNone(ti.icon_title_point([("cursor", 253, 343), ("installed", 254, 343)], "cursor"))
+
+    def test_cursor_picker_row_and_status_use_the_cursor_theme_id(self) -> None:
+        status = [("installed", 254, 395), (ti.normalize_word(ti.CURSOR_ID), 299, 395)]
+        self.assertTrue(ti.installed_status_seen(status, ti.CURSOR_ID))
+        self.assertFalse(ti.installed_status_seen(status))  # the icon id does not match the cursor status
+        picker = [("ap-test-cursors", 300, 200), ("installed", 254, 395)]
+        self.assertEqual(ti.picker_row_point(picker, ti.CURSOR_ID), (300, 200))
+        self.assertIsNone(ti.picker_row_point(picker))
 
 
 class ArgumentTests(unittest.TestCase):
