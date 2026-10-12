@@ -75,7 +75,8 @@ pub(crate) fn project(
                     ..color
                 },
             )?;
-            document.border(root, accent)?;
+            // No accent outline: the menu's rounded panes cover the border on three sides, so an
+            // accent-coloured border only ever showed as a red line down the left edge.
         }
         SurfaceKind::TaskMenu | SurfaceKind::Media => {
             document.border(root, accent)?;
