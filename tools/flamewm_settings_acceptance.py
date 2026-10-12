@@ -4127,24 +4127,28 @@ def run_ss17(ctx: Ctx, args: argparse.Namespace, ss10: dict | None) -> dict:
     observations["scale_scroll_ss10"] = ss17_scale_scroll_observed(ss10)
 
     # Row 1: existing four-scenario Xephyr canary harness in its own isolated Xephyr + private D-Bus.
-    harness = ROOT / "tools" / "flamewm_x11_acceptance.py"
-    argv = [sys.executable, str(harness), "--scenario", "all", "--timeout", "240",
-            "--evidence-dir", str(ctx.run / "x11-acceptance")]
-    details["commands"].append(shell(argv))
-    env = dict(ctx.host_env, FLAMEWM_XEPHYR_BUILD="0", FLAMEWM_XEPHYR_WM_BIN=args.wm_bin,
-               FLAMEWM_XEPHYR_DESKTOP_BIN=args.desktop_bin, FLAMEWM_XEPHYR_SHELL_BIN=args.shell_bin,
-               FLAMEWM_XEPHYR_CANARY_BIN=args.canary_bin)
-    env.pop("FLAMEWM_SS_INNER", None)
-    child = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, start_new_session=True)
-    try:
-        output, _ = child.communicate(timeout=420)
-    except subprocess.TimeoutExpired:
-        os.killpg(child.pid, 15)
-        output, _ = child.communicate()
-        output += "\nTIMEOUT"
-    observations["x11_acceptance_all"] = child.returncode == 0 and "FLAMEWM_XEPHYR_CANARY_PASS" in output
-    details["rows"]["x11_acceptance_all"] = {"exit": child.returncode, "tail": output[-400:]}
+    # A package without the canary (installed prefix) cannot run it: that is NOT_RUN, never a product FAIL.
+    if not os.access(args.canary_bin, os.X_OK):
+        details["rows"]["x11_acceptance_all"] = {"skipped": f"canary binary not executable: {args.canary_bin}"}
+    else:
+        harness = ROOT / "tools" / "flamewm_x11_acceptance.py"
+        argv = [sys.executable, str(harness), "--scenario", "all", "--timeout", "240",
+                "--evidence-dir", str(ctx.run / "x11-acceptance")]
+        details["commands"].append(shell(argv))
+        env = dict(ctx.host_env, FLAMEWM_XEPHYR_BUILD="0", FLAMEWM_XEPHYR_WM_BIN=args.wm_bin,
+                   FLAMEWM_XEPHYR_DESKTOP_BIN=args.desktop_bin, FLAMEWM_XEPHYR_SHELL_BIN=args.shell_bin,
+                   FLAMEWM_XEPHYR_CANARY_BIN=args.canary_bin)
+        env.pop("FLAMEWM_SS_INNER", None)
+        child = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, start_new_session=True)
+        try:
+            output, _ = child.communicate(timeout=420)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, 15)
+            output, _ = child.communicate()
+            output += "\nTIMEOUT"
+        observations["x11_acceptance_all"] = child.returncode == 0 and "FLAMEWM_XEPHYR_CANARY_PASS" in output
+        details["rows"]["x11_acceptance_all"] = {"exit": child.returncode, "tail": output[-400:]}
 
     # Rows 2..: j07 canaries against the owned session with desktop, shell and the xterm fixture.
     if (ctx.display in (f":{n}" for n in XTEST_DISPLAY_RANGE) and os.access(args.canary_bin, os.X_OK)
