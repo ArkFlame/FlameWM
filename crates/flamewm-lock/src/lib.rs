@@ -1,11 +1,14 @@
 //! Lock screen: PAM authentication, settings, lock state, and the native
 //! override-redirect surface with keyboard and pointer grabs.
+pub mod background;
 pub mod backoff;
 pub mod clock;
 pub mod document;
 pub mod instance;
+pub mod layout;
 pub mod native_time;
 pub mod pam;
+pub mod power;
 pub mod run;
 pub mod secret;
 pub mod session;

@@ -969,6 +969,17 @@ impl RuntimeDocument {
             .node_by_id(id)
             .ok_or_else(|| format!("no node with id '{id}'"))?;
         self.style_overrides.entry(index).or_default().font_size = Some(size);
+        // Text children are measured with their own compile-time style, so the element override alone
+        // never reaches the glyphs: mirror it onto the element's direct text children.
+        let mut child = self.document.nodes[index as usize].first_child;
+        while let Some(current) = child {
+            let node = &self.document.nodes[current as usize];
+            let next = node.next_sibling;
+            if node.kind == NodeKind::Text {
+                self.style_overrides.entry(current).or_default().font_size = Some(size);
+            }
+            child = next;
+        }
         Ok(())
     }
 
@@ -1167,6 +1178,48 @@ mod ui_scale_tests {
             nodes: vec![root, button],
         })
         .expect("fixture document validates")
+    }
+
+    fn labelled_document() -> RuntimeDocument {
+        let node = |kind, parent: Option<u32>, first_child: Option<u32>, id: &str, text: &str| CompiledNode {
+            kind,
+            parent,
+            first_child,
+            next_sibling: None,
+            id: id.to_string(),
+            action: String::new(),
+            text: text.to_string(),
+            image: None,
+            style: Style::default(),
+            hover_style: None,
+            active_style: None,
+        };
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![
+                node(NodeKind::Element, None, Some(1), "", ""),
+                node(NodeKind::Element, Some(0), Some(2), "label", ""),
+                node(NodeKind::Text, Some(1), None, "", "12:00"),
+            ],
+        })
+        .expect("fixture document validates")
+    }
+
+    #[test]
+    fn runtime_font_size_reaches_the_text_children_of_the_element() {
+        let mut document = labelled_document();
+        document.set_font_size_px("label", 51.0).expect("font size");
+        let element = document.node_by_id("label").expect("label");
+        let text = document.document.nodes[element as usize]
+            .first_child
+            .expect("text child");
+        for index in [element, text] {
+            let style = document.runtime_style(index, InteractionState::default());
+            assert_eq!(style.font_size, 51.0, "node {index} must carry the override");
+        }
     }
 
     #[test]

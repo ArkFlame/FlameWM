@@ -17,6 +17,9 @@ flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 rustix = { workspace = true }
 
+[dev-dependencies]
+flamewm-ui-core = { path = "../flamewm-ui-core" }
+
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 

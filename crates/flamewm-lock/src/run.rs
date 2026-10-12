@@ -65,10 +65,10 @@ fn lock_on(
     let session = Rc::new(RefCell::new(session));
     let keys = Rc::new(RefCell::new(Vec::<Key>::new()));
 
-    let background = document::background_for(settings, width, height);
+    let background = document::background_image(settings, width, height);
     runtime
         .with_document(surface, |view| {
-            document::apply_theme(view, settings, background)
+            document::apply_document(view, settings, width, height, background)
         })
         .map_err(|error| format!("theme lock surface: {error:?}"))?;
 

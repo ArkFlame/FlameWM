@@ -8,6 +8,7 @@ extern crate pulse as libpulse_binding;
 pub mod icon_service;
 pub mod icon_theme;
 pub mod icons;
+pub mod media_store;
 pub mod mpris;
 pub mod network_manager;
 pub mod portal_file_chooser;

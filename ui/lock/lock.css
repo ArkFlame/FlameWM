@@ -3,82 +3,86 @@ body.lock-body {
   width: 100%;
   height: 100%;
   background-color: #232629;
-  color: #eff0f1;
+  color: #FFFFFF;
 }
+/* Geometry, fonts and icon pixels are set at runtime from LockLayout (document.rs). */
 .lock-root {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  background-color: #232629;
-}
-.lock-background {
   position: absolute;
   left: 0;
   top: 0;
   width: 100%;
   height: 100%;
+  background-color: #232629;
 }
-.lock-panel {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 480px;
-  padding: 32px;
-  border-radius: 12px;
-  background-color: #2a2e32;
+.lock-abs {
+  position: absolute;
   box-sizing: border-box;
 }
 .lock-clock {
-  font-size: 80px;
-  color: #eff0f1;
+  color: #FFFFFF;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  white-space: nowrap;
 }
 .lock-date {
-  font-size: 18px;
-  color: #bdc3c7;
-  margin-bottom: 8px;
+  color: #FFFFFF;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  white-space: nowrap;
 }
-.lock-avatar {
+.lock-avatar-initial {
+  color: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 96px;
-  height: 96px;
-  border-radius: 48px;
-  background-color: #3daee9;
-  margin-top: 16px;
-  margin-bottom: 12px;
-}
-.lock-avatar-initial {
-  font-size: 40px;
-  color: #232629;
 }
 .lock-username {
-  font-size: 20px;
-  margin-bottom: 16px;
+  color: #F6F8FF;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  white-space: nowrap;
 }
 .lock-field {
-  display: flex;
-  align-items: center;
-  width: 260px;
-  height: 40px;
-  padding-left: 12px;
-  border-radius: 8px;
-  border: 2px solid #3daee9;
-  background-color: #31363b;
-  box-sizing: border-box;
+  background-color: #F5F7FA;
+  border: 1px solid #CCD6EB;
+  border-radius: 4px;
 }
 .lock-dots {
-  font-size: 20px;
-  color: #eff0f1;
+  color: #232629;
+  display: flex;
+  align-items: center;
   overflow: hidden;
   white-space: nowrap;
 }
-.lock-status {
-  font-size: 14px;
-  color: #bdc3c7;
-  min-height: 18px;
-  margin-top: 12px;
+.lock-caret {
+  background-color: #232629;
+}
+.lock-submit {
+  background-color: #F5F7FA;
+  color: #232629;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+.lock-message {
+  color: #E4E9FC;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  white-space: nowrap;
+}
+.lock-power-label {
+  color: #E4E9FC;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  white-space: nowrap;
+}
+.lock-footer {
+  color: #E4E9FC;
+  white-space: nowrap;
 }

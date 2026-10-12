@@ -253,6 +253,7 @@ dependencies = [
  "flamewm-dbus-reactor",
  "flamewm-debug",
  "flamewm-desktop-core",
+ "flamewm-image-core",
  "flamewm-integrations-linux",
  "flamewm-profiler",
  "flamewm-reactor",
@@ -275,8 +276,10 @@ dependencies = [
 name = "flamewm-image-core"
 version = "0.0.9"
 dependencies = [
+ "gif",
  "image-webp",
  "resvg",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -313,6 +316,7 @@ dependencies = [
  "flamewm-image-core",
  "flamewm-reactor",
  "flamewm-render-compiler",
+ "flamewm-ui-core",
  "flamewm-ui-x11",
  "rustix",
 ]
@@ -359,6 +363,10 @@ dependencies = [
  "flamewm-reactor",
  "flamewm-render-core",
 ]
+
+[[package]]
+name = "flamewm-ribbons"
+version = "0.0.9"
 
 [[package]]
 name = "flamewm-session-core"

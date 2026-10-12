@@ -177,6 +177,9 @@ type Filter = (&'static str, &'static [&'static str]);
 
 const WALLPAPER_FILTERS: &[Filter] = &[
     ("PNG", &["*.png"]),
+    ("WebP", &["*.webp"]),
+    ("JPEG", &["*.jpg", "*.jpeg"]),
+    ("GIF", &["*.gif"]),
     ("SVG", &["*.svg"]),
     ("PPM", &["*.ppm"]),
 ];
@@ -460,7 +463,7 @@ mod tests {
         for uri in [
             "https://example.test/wall.png",
             "file://remote/tmp/wall.png",
-            "file:///tmp/wall.jpg",
+            "file:///tmp/wall.bmp",
             "file:///tmp/wall%ZZ.png",
         ] {
             assert!(
@@ -489,9 +492,10 @@ mod tests {
         assert!(serialized.contains("*.png"));
         assert!(serialized.contains("*.svg"));
         assert!(serialized.contains("*.ppm"));
-        assert!(!serialized.contains("*.jpg"));
-        assert!(!serialized.contains("*.jpeg"));
-        assert!(!serialized.contains("*.webp"));
+        assert!(serialized.contains("*.jpg"));
+        assert!(serialized.contains("*.jpeg"));
+        assert!(serialized.contains("*.webp"));
+        assert!(!serialized.contains("*.bmp"));
     }
 
     #[test]

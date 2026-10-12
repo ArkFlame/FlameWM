@@ -42,6 +42,7 @@ xephyr
 @exec scripts/lamp-acceptance
 @exec scripts/theme-install-acceptance
 @exec scripts/lock-acceptance
+@exec scripts/idle-lock-acceptance
 @exec scripts/lint
 @exec scripts/verify-visual
 @exec scripts/doctor

@@ -1,0 +1,14 @@
+Bundled wallpapers: assets/wallpapers/fitz-roy-dawn.webp and assets/wallpapers/fitz-roy-laguna.webp
+
+Subject: photographs of Fitz Roy (Patagonia)
+Photographers: Andrew Svk (fitz-roy-dawn.webp), Arto Marttinen (fitz-roy-laguna.webp)
+Source: Unsplash (https://unsplash.com)
+License: Unsplash License (https://unsplash.com/license)
+
+Summary of the Unsplash License, as it applies to these files:
+- Free to use, copy, modify and distribute, including commercially, without asking permission.
+- Attribution is not required by the license; it is given here for transparency.
+- Not permitted: selling unaltered copies of the photos, or compiling the photos to
+  replicate a similar photo service or to make them available as a standalone
+  image download service.
+- The photos are provided without warranty.

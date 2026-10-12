@@ -1,11 +1,17 @@
 //! Shared deterministic image decode core (J01).
 //!
-//! Single owner for PPM/SVG/PNG/WebP decoding into straight (non-premultiplied)
-//! RGBA8. PPM inputs are always opaque (alpha=255); SVG/PNG/WebP preserve alpha.
+//! Single owner for PPM/SVG/PNG/WebP/JPEG/GIF decoding into straight (non-premultiplied)
+//! RGBA8. PPM and JPEG inputs are always opaque (alpha=255); SVG/PNG/WebP/GIF preserve alpha.
 //! Size limits: max 4096x4096, max 64 MiB decoded.
 
 use std::path::Path;
 
+pub mod blur;
+pub use blur::{
+    frosted_backdrop, gaussian_blur_rgba, gaussian_blur_rgba_with, BlurError, BlurScratch, Rect,
+};
+pub mod gif_frame;
+pub mod jpeg;
 pub mod png;
 pub mod ppm;
 pub mod scale;
@@ -46,9 +52,27 @@ pub enum ImageSourceFormat {
     Svg,
     Png,
     Webp,
+    Jpeg,
+    Gif,
 }
 
 impl ImageSourceFormat {
+    /// Identifies a supported raster format from its leading magic bytes.
+    #[must_use]
+    pub fn from_magic(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+            Some(Self::Png)
+        } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+            Some(Self::Jpeg)
+        } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            Some(Self::Gif)
+        } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            Some(Self::Webp)
+        } else {
+            None
+        }
+    }
+
     #[must_use]
     pub fn from_extension(path: &Path) -> Option<Self> {
         let extension = path
@@ -61,6 +85,8 @@ impl ImageSourceFormat {
             "svg" => Some(Self::Svg),
             "png" => Some(Self::Png),
             "webp" => Some(Self::Webp),
+            "jpg" | "jpeg" => Some(Self::Jpeg),
+            "gif" => Some(Self::Gif),
             _ => None,
         }
     }
@@ -153,6 +179,8 @@ pub fn decode_bytes(bytes: &[u8], format: ImageSourceFormat) -> Result<RgbaImage
         }
         ImageSourceFormat::Png => png::decode(bytes),
         ImageSourceFormat::Webp => webp::decode(bytes),
+        ImageSourceFormat::Jpeg => jpeg::decode(bytes),
+        ImageSourceFormat::Gif => gif_frame::decode(bytes),
     }
 }
 
@@ -172,16 +200,11 @@ pub fn decode_bytes_at(
                 .ok_or_else(|| "requested dimensions overflow".to_string())
         }
         ImageSourceFormat::Svg => svg::render(bytes, width, height),
-        ImageSourceFormat::Png => {
-            let natural = png::decode(bytes)?;
-            if natural.width == width && natural.height == height {
-                return Ok(natural);
-            }
-            scale::scale_rgba(&natural, width, height, filter)
-                .ok_or_else(|| "requested dimensions overflow".to_string())
-        }
-        ImageSourceFormat::Webp => {
-            let natural = webp::decode(bytes)?;
+        ImageSourceFormat::Png
+        | ImageSourceFormat::Webp
+        | ImageSourceFormat::Jpeg
+        | ImageSourceFormat::Gif => {
+            let natural = decode_bytes(bytes, format)?;
             if natural.width == width && natural.height == height {
                 return Ok(natural);
             }
@@ -245,8 +268,16 @@ mod tests {
     #[test]
     fn unknown_extension_resolves_to_none() {
         assert_eq!(
-            ImageSourceFormat::from_extension(Path::new("icon.jpg")),
+            ImageSourceFormat::from_extension(Path::new("icon.bmp")),
             None
+        );
+        assert_eq!(
+            ImageSourceFormat::from_extension(Path::new("icon.JPG")),
+            Some(ImageSourceFormat::Jpeg)
+        );
+        assert_eq!(
+            ImageSourceFormat::from_extension(Path::new("anim.gif")),
+            Some(ImageSourceFormat::Gif)
         );
         assert_eq!(
             ImageSourceFormat::from_extension(Path::new("icon.SVG")),
@@ -256,6 +287,20 @@ mod tests {
             ImageSourceFormat::from_extension(Path::new("wallpaper.WEBP")),
             Some(ImageSourceFormat::Webp)
         );
+    }
+
+    #[test]
+    fn magic_bytes_select_format_regardless_of_extension() {
+        assert_eq!(
+            ImageSourceFormat::from_magic(&[0xff, 0xd8, 0xff, 0xe0]),
+            Some(ImageSourceFormat::Jpeg)
+        );
+        assert_eq!(
+            ImageSourceFormat::from_magic(b"GIF89a\0\0"),
+            Some(ImageSourceFormat::Gif)
+        );
+        assert_eq!(ImageSourceFormat::from_magic(b"BM\0\0"), None);
+        assert_eq!(ImageSourceFormat::from_magic(b"\xff\xd8"), None);
     }
 
     #[test]

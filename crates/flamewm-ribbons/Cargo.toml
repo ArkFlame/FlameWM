@@ -1,0 +1,16 @@
+[package]
+name = "flamewm-ribbons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Pure deterministic Ribbons screensaver model with a CPU rasterizer"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
