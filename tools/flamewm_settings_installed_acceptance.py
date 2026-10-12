@@ -40,6 +40,8 @@ REQUIRED_DIRS = (
 # Canonical SS18 needs executed installed behaviour, not just page launch: these native scenarios,
 # run against the staged binaries, must all PASS (SS01 is the page-launch smoke).
 BEHAVIORAL_SCENARIOS = ("SS01", "SS03", "SS05", "SS11", "SS12")
+SS17_NOT_RUN_REASON = ("flamewm-x11-canary is not in packaging/install-manifest.txt by design; "
+                       "SS17 j07 rows cannot execute against the staged prefix")
 
 
 def installed_ss18(identity_ok: bool, native: dict | None) -> tuple[str, str, dict[str, str | None]]:
@@ -55,6 +57,12 @@ def installed_ss18(identity_ok: bool, native: dict | None) -> tuple[str, str, di
     if missing:
         return "NOT_RUN", "installed behavioral proof incomplete: " + ", ".join(missing), behavioral
     return "PASS", "staged binaries passed installed scenarios " + ", ".join(BEHAVIORAL_SCENARIOS), behavioral
+
+
+def installed_ss17(native: dict | None) -> dict[str, str | None]:
+    """SS17 needs the canary, which is never installed; report NOT_RUN with that reason, not the native FAIL."""
+    scenarios = {item.get("id"): item.get("status") for item in (native or {}).get("scenarios", [])}
+    return {"status": "NOT_RUN", "reason": SS17_NOT_RUN_REASON, "native_status": scenarios.get("SS17")}
 
 
 def inside(path: Path, root: Path) -> bool:
@@ -84,6 +92,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hotkey-key")
     parser.add_argument("--hotkey-row-rect")
     parser.add_argument("--hotkey-error-rect")
+    parser.add_argument("--ss10-wheel-steps", metavar="N", type=int)
+    parser.add_argument("--ss10-scrolled-click", metavar="X,Y")
     return parser.parse_args(argv)
 
 
@@ -137,6 +147,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         ("--display", args.display), ("--hotkey-click", args.hotkey_click),
         ("--hotkey-key", args.hotkey_key), ("--hotkey-row-rect", args.hotkey_row_rect),
         ("--hotkey-error-rect", args.hotkey_error_rect),
+        ("--ss10-wheel-steps", None if args.ss10_wheel_steps is None else str(args.ss10_wheel_steps)),
+        ("--ss10-scrolled-click", args.ss10_scrolled_click),
     ):
         if value is not None:
             command.extend((flag, value))
@@ -188,6 +200,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "native_result": str(native_file) if native_file.exists() else None,
         "native_verdict": native.get("verdict") if native else None,
         "behavioral_scenarios": behavioral,
+        "ss17": installed_ss17(native),
         "ss18_status": ss18_status,
         "ss18_reason": ss18_reason,
         "reason": reason,

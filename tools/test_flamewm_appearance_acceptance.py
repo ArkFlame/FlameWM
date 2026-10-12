@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -158,6 +159,41 @@ class IdleAndSchemaTests(unittest.TestCase):
     def test_entry_rejects_unknown_status(self) -> None:
         with self.assertRaises(ValueError):
             ap.entry("AP01", "MAYBE")
+
+
+class RunDirGuardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.run = Path(temp.name) / "run"
+
+    def test_outer_refuses_non_empty_run_dir(self) -> None:
+        self.run.mkdir()
+        (self.run / "stale.txt").write_text("x", encoding="ascii")
+        with self.assertRaises(SystemExit):
+            ap.validate_run_dir(self.run)
+
+    def test_outer_accepts_missing_or_empty_run_dir(self) -> None:
+        ap.validate_run_dir(self.run)
+        self.run.mkdir()
+        ap.validate_run_dir(self.run)
+
+    def test_inner_accepts_only_the_outer_owner_marker(self) -> None:
+        self.run.mkdir()
+        (self.run / ap.base.RUN_OWNER_MARKER).write_text("owner-pid=1\n", encoding="ascii")
+        ap.validate_inner_run_dir(self.run)
+
+    def test_inner_refuses_empty_run_dir_so_marker_is_required(self) -> None:
+        self.run.mkdir()
+        with self.assertRaises(SystemExit):
+            ap.validate_inner_run_dir(self.run)
+
+    def test_inner_refuses_extra_content_beside_marker(self) -> None:
+        self.run.mkdir()
+        (self.run / ap.base.RUN_OWNER_MARKER).write_text("owner-pid=1\n", encoding="ascii")
+        (self.run / "stale.txt").write_text("x", encoding="ascii")
+        with self.assertRaises(SystemExit):
+            ap.validate_inner_run_dir(self.run)
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ Schema: `flamewm-settings-acceptance/2` (`schema_version` 2). Each run writes `<
 | SS14 | external signal + auto-revert | Settings accent, `Panels.SetEdge` on the open Taskbar page, `Shortcuts.SetBinding` on the open Hotkeys page (each with unchanged-capture and unrelated-setting controls, no input), and an owned WM restart under an open Settings client followed by an external accent Apply. Display rollback stays NOT_RUN: Xephyr exposes no alternative modes, so no revert transaction can start |
 | SS15 | traversal/disabled states | NOT_RUN (no runner) |
 | SS16 | cargo/CSS/architecture gates | runner executes `static_audit`, `architecture_guard`, `verify_rwr_promotion`, `test_j18_frame_guard.py`; PASS only when all exit 0 on one source (cargo gates are not run here) |
-| SS17 | private XTEST+screenshot matrix | native runner (`run_ss17`): `tools/flamewm_x11_acceptance.py --scenario all`, canary `j07` popup/chrome/max-snap/move/resize against the owned session (shell, desktop, xterm fixture), Close-hover pixel difference on the Settings title bar, scale scroll from the SS10 run. PASS only when every row executed and passed |
+| SS17 | private XTEST+screenshot matrix | installed prefix: always NOT_RUN (`flamewm-x11-canary` is not in `packaging/install-manifest.txt`); native runner (`run_ss17`): `tools/flamewm_x11_acceptance.py --scenario all`, canary `j07` popup/chrome/max-snap/move/resize against the owned session (shell, desktop, xterm fixture), Close-hover pixel difference on the Settings title bar, scale scroll from the SS10 run. PASS only when every row executed and passed |
 | SS18 | installed-prefix release | `--ss18-installed-result installed-result.json` maps an existing result; `--ss18-prefix DIR` makes the runner invoke `scripts/settings-installed-acceptance` on a staged prefix and ingest its `installed-result.json` itself. PASS only when the staged-binary run reports launch PASS plus SS03/SS05/SS11/SS12 PASS; launch smoke alone stays NOT_RUN |
 | SS19 | stability/perf/PID cleanup | NOT_RUN; partial: `LEGACY_HARNESS_NATIVE_PID_CLEANUP` |
 
@@ -106,8 +106,12 @@ are relabeled.
   authoritative output lists modes the runner wheel-scrolls first: `--ss10-wheel-steps N` (1..100, wheel
   down, pointer at the client centre `480,320`, sent as `flamewm_xtest.py --move ... --wheel down:N`), then
   clicks `--ss10-scrolled-click X,Y`. Both are required on that path; without them, or when the wheel
-  input exits non-zero, SS10 is NOT_RUN and nothing is clicked. No scrolled click point is measured or
-  defaulted. The wire key is `scale` (Rust field `shell_scale_percent`). The runner requires a different
+  input exits non-zero, SS10 is NOT_RUN and nothing is clicked. The measured 960x640 pair is
+  `--ss10-wheel-steps 10 --ss10-scrolled-click 751,573` (native verifier N2 evidence:
+  `/tmp/claude-1000/n2-runs/ss10-probe/shots/after-click.png`). `scripts/settings-acceptance` and
+  `scripts/settings-installed-acceptance` pass this pair only when the caller gives neither SS10 scroll
+  option. Wheel 3 is non-deterministic (scroll animation), so re-measure before trusting another step count.
+  The wire key is `scale` (Rust field `shell_scale_percent`). The runner requires a different
   starting value, clicks, then requires exactly 125 and an unchanged mode count in the Displays snapshot.
   It then restarts the owned WM and requires 125 again. A click with a non-zero exit, any other value,
   or a changed mode list fails.

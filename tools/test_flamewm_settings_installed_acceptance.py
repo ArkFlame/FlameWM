@@ -149,5 +149,47 @@ class InstalledBehavioralMappingTests(unittest.TestCase):
         self.assertEqual(inst.installed_ss18(False, None)[0], "NOT_RUN")
 
 
+class InstalledSs17AndSs10ForwardingTests(InstalledNativeCommandTests):
+    def test_ss17_is_not_run_with_canary_reason_even_when_native_ss17_fails(self) -> None:
+        native = self.native_document("FAIL", {"SS01"})
+        native["scenarios"].append({"id": "SS17", "status": "FAIL"})
+        document, _ = self.run_with_native(native)
+        self.assertEqual(document["ss17"]["status"], "NOT_RUN")
+        self.assertEqual(document["ss17"]["native_status"], "FAIL")
+        self.assertIn("flamewm-x11-canary", document["ss17"]["reason"])
+
+    def test_ss17_composition_does_not_change_ss18(self) -> None:
+        native = self.native_document("FAIL", {"SS01"})
+        native["scenarios"].append({"id": "SS17", "status": "PASS"})
+        document, _ = self.run_with_native(native)
+        self.assertEqual(document["ss18_status"], "NOT_RUN")
+
+    def test_ss10_flags_are_forwarded_to_native_runner_when_given(self) -> None:
+        seen = self.captured_command_with(["--ss10-wheel-steps", "10", "--ss10-scrolled-click", "751,573"])
+        self.assertEqual(self.value_of(seen, "--ss10-wheel-steps"), "10")
+        self.assertEqual(self.value_of(seen, "--ss10-scrolled-click"), "751,573")
+
+    def test_ss10_flags_are_not_passed_when_absent(self) -> None:
+        seen = self.captured_command_with([])
+        self.assertNotIn("--ss10-wheel-steps", seen)
+        self.assertNotIn("--ss10-scrolled-click", seen)
+
+    def captured_command_with(self, extra: list[str]) -> list[str]:
+        seen: list[list[str]] = []
+
+        def fake_native_runner(command, **_kwargs):
+            seen.append(list(command))
+            acceptance_dir = Path(command[command.index("--run-dir") + 1])
+            acceptance_dir.mkdir(parents=True, exist_ok=True)
+            (acceptance_dir / "result.json").write_text(json.dumps(self.native_document("FAIL", set())), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        args = inst.parse_args(["--prefix", str(self.prefix), "--run-dir", str(self.run_dir), *extra])
+        with patch.object(inst, "validate_prefix", return_value=(self.prefix, self.hashes, "0.0.0-test")), \
+                patch.object(inst.subprocess, "run", side_effect=fake_native_runner):
+            inst.run(args)
+        return seen[0]
+
+
 if __name__ == "__main__":
     unittest.main()

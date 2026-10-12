@@ -230,9 +230,11 @@ class Session:
 
     def restart(self, values: dict[str, str]) -> bool:
         self.seed(values)
-        self.ctx.stop(self.ctx.wm)
         self.ctx.stop(self.shell)
-        self.ctx.wm = self.ctx.spawn("flamewm", [self.args.wm_bin], self.ctx.app_env)
+        # The WM must own com.arkflame.FlameWM1 (readiness proven by base.restart_owned_wm) before the
+        # Shell starts; a Shell started alongside the WM fails GetShellBootstrap and exits.
+        if not base.restart_owned_wm(self.ctx, self.args, "flamewm-restart"):
+            return False
         self.shell = self.ctx.spawn("flamewm-shell", [self.args.shell_bin], dict(self.ctx.app_env, XDG_SESSION_TYPE="x11"))
         time.sleep(self.args.settle_seconds)
         return self.ctx.wm.proc.poll() is None and self.shell.proc.poll() is None
@@ -677,6 +679,12 @@ def validate_run_dir(run: Path) -> None:
         raise SystemExit(f"error: run dir {run} must not exist or must be empty")
 
 
+def validate_inner_run_dir(run: Path) -> None:
+    """The re-exec child sees only the owner marker written by the outer invocation, nothing else."""
+    if not run.is_dir() or [item.name for item in run.iterdir()] != [base.RUN_OWNER_MARKER]:
+        raise SystemExit(f"error: inner run dir {run} must contain only the outer {base.RUN_OWNER_MARKER} marker")
+
+
 def run_inner(args: argparse.Namespace, run: Path) -> int:
     ctx = base.Ctx(run)
     results: dict[str, dict] = {}
@@ -726,8 +734,12 @@ def main(argv: list[str] | None = None) -> int:
     raw = sys.argv[1:] if argv is None else list(argv)
     args = parse_args(raw)
     run = Path(args.run_dir).expanduser().absolute()
-    validate_run_dir(run)
-    missing = [name for name in ("Xephyr", "xwininfo", "xprop", "import", "identify", "xdpyinfo")
+    inner = os.environ.get("FLAMEWM_AP_INNER") == "1"
+    if inner:
+        validate_inner_run_dir(run)
+    else:
+        validate_run_dir(run)
+    missing = [name for name in ("Xephyr", "xwininfo", "xprop", "import", "identify", "xdpyinfo", "gdbus")
                if shutil.which(name) is None]
     if missing or not os.environ.get("DISPLAY") or base.Image is None:
         run.mkdir(parents=True, exist_ok=True)
@@ -746,9 +758,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     run.mkdir(parents=True, exist_ok=True)
     os.chmod(run, 0o700)
-    (run / base.RUN_OWNER_MARKER).write_text(f"owner-pid={os.getpid()}\ncreated={utc_now()}\n", encoding="ascii")
-    if os.environ.get("FLAMEWM_AP_INNER") == "1":
+    if inner:
         return run_inner(args, run)
+    (run / base.RUN_OWNER_MARKER).write_text(f"owner-pid={os.getpid()}\ncreated={utc_now()}\n", encoding="ascii")
     if shutil.which("dbus-run-session") is None:
         print("error: dbus-run-session not found on PATH", file=sys.stderr)
         return 3

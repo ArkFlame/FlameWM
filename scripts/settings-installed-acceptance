@@ -6,4 +6,15 @@ if [[ ! -f "$ROOT/Cargo.toml" ]]; then
   echo "error: $ROOT does not contain Cargo.toml; refusing to run" >&2
   exit 2
 fi
+# Measured SS10 defaults (960x640 client, see tools/flamewm_settings_fixtures.md). Applied only when the
+# caller gives neither SS10 scroll option; an explicit caller choice always wins.
+has_ss10_scroll=0
+for arg in "$@"; do
+  case "$arg" in
+    --ss10-wheel-steps|--ss10-wheel-steps=*|--ss10-scrolled-click|--ss10-scrolled-click=*) has_ss10_scroll=1 ;;
+  esac
+done
+if [[ "$has_ss10_scroll" -eq 0 ]]; then
+  set -- "$@" --ss10-wheel-steps 10 --ss10-scrolled-click 751,573
+fi
 exec python3 "$ROOT/tools/flamewm_settings_installed_acceptance.py" "$@"

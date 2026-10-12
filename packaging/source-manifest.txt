@@ -38,6 +38,7 @@ xephyr
 @exec assets/web/paypal.svg
 @exec scripts/prepare-ibm-plex
 @exec scripts/settings-installed-acceptance
+@exec scripts/appearance-acceptance
 @exec scripts/lint
 @exec scripts/verify-visual
 @exec scripts/doctor
