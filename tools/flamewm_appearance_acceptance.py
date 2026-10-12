@@ -349,6 +349,117 @@ def ap03(s: Session) -> dict:
                  ["import -window root", "XTEST none; settings seeded accentOpacity=40"])
 
 
+class _XClientMessage(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+
+
+def request_fullscreen(s: Session, window_id: str, enable: bool) -> bool:
+    """EWMH _NET_WM_STATE client message (add/remove _NET_WM_STATE_FULLSCREEN) sent to the root window."""
+    x11_path = ctypes.util.find_library("X11")
+    if not x11_path:
+        return False
+    x11 = ctypes.cdll.LoadLibrary(x11_path)
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XInternAtom.restype = ctypes.c_ulong
+    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    dpy = x11.XOpenDisplay(s.ctx.display.encode("ascii"))
+    if not dpy:
+        return False
+    try:
+        root = x11.XDefaultRootWindow(dpy)
+        event = _XClientMessage()
+        event.type = 33  # ClientMessage
+        event.send_event = 1
+        event.display = dpy
+        event.window = int(window_id, 16)
+        event.message_type = x11.XInternAtom(dpy, b"_NET_WM_STATE", 0)
+        event.format = 32
+        event.data[0] = 1 if enable else 0
+        event.data[1] = x11.XInternAtom(dpy, b"_NET_WM_STATE_FULLSCREEN", 0)
+        buffer = ctypes.create_string_buffer(192)
+        ctypes.memmove(buffer, ctypes.byref(event), ctypes.sizeof(event))
+        mask = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
+        ok = x11.XSendEvent(dpy, root, 0, mask, buffer)
+        x11.XFlush(dpy)
+        return bool(ok)
+    finally:
+        x11.XCloseDisplay(dpy)
+
+
+def ocr_word_centres(png: Path, words: set[str]) -> list[tuple[str, int, int]]:
+    """(word, x, y) centres of OCR'd words (lower-cased) found in a screenshot, at 1x coordinates."""
+    tesseract = shutil.which("tesseract")
+    if not tesseract or base.Image is None:
+        return []
+    scale = 3
+    big = png.with_name(png.stem + "-ocr.png")
+    with base.Image.open(png) as image:
+        image.convert("L").resize((image.width * scale, image.height * scale)).save(big)
+    result = subprocess.run([tesseract, str(big), "stdout", "--psm", "11", "tsv"], capture_output=True,
+                            text=True, timeout=120, check=False)
+    found = []
+    for line in result.stdout.splitlines()[1:]:
+        cols = line.split("\t")
+        if len(cols) < 12 or cols[11].strip().lower() not in words:
+            continue
+        left, top, width, height = (int(v) for v in cols[6:10])
+        found.append((cols[11].strip().lower(), (left + width // 2) // scale, (top + height // 2) // scale))
+    return found
+
+
+def decoration_selector_check(s: Session, ev: list, fails: list) -> None:
+    """Click the real Settings Appearance selector and read the authoritative snapshot back."""
+    if not s.restart({"decoration": "rounded", "taskbarOpacity": "100"}):
+        fails.append("WM or shell exited before the selector check")
+        return
+    settings = s.ctx.spawn("settings-ap04", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
+    try:
+        time.sleep(s.args.settle_seconds)
+        before, _ = base.dbus_settings_snapshot(s.ctx)
+        words: list = []
+        for round_index in range(8):
+            path, _ = s.shot(f"AP04-selector-{round_index}")
+            if path is None or before is None:
+                fails.append("selector check could not capture the Settings page or the snapshot")
+                return
+            words = ocr_word_centres(path, {"ios", "i0s", "10s", "rounded"})
+            if any(w[0] != "rounded" for w in words) or sum(1 for w in words if w[0] == "rounded") >= 1:
+                break
+            s.input(move="500,300")
+            s.input(wheel="down:4")
+            time.sleep(0.6)
+        ios = [w for w in words if w[0] != "rounded"]
+        target = None
+        if ios:
+            target = (ios[0][1], ios[0][2])
+        else:
+            rounded = [w for w in words if w[0] == "rounded"]
+            if rounded:
+                target = (rounded[-1][1] + 84, rounded[-1][2])  # iOS segment: 80px + 4px gap to the right
+        if target is None:
+            fails.append("decoration selector text not found on the Appearance page")
+            return
+        s.input(click=f"{target[0]},{target[1]}")
+        time.sleep(1.5)
+        after, _ = base.dbus_settings_snapshot(s.ctx)
+        ev += [f"selector_click={target}", f"decoration_before_rounded={'<\'rounded\'>' in (before or '')}",
+               f"decoration_after_ios={'<\'ios\'>' in (after or '')}"]
+        if "'decoration': <'rounded'>" not in (before or ""):
+            fails.append("selector negative control: decoration was not rounded before the click")
+        if "'decoration': <'ios'>" not in (after or ""):
+            fails.append("clicking the iOS segment did not set decoration=ios")
+    finally:
+        s.ctx.stop(settings)
+
+
 def ap04(s: Session) -> dict:
     ev: list = []
     fails: list[str] = []
@@ -406,7 +517,26 @@ def ap04(s: Session) -> dict:
     else:
         fails.append("snap-left frame not observed")
 
-    ev.append("fullscreen: no harness-driven fullscreen trigger; NOT measured")
+    # Fullscreen: the frame must go rectangular and cover the whole screen.
+    s.input(click=f"{frame_snap['x'] + frame_snap['w'] // 2},{frame_snap['y'] + 100}" if frame_snap else "0,0")
+    client = find_named(s.tree("AP04-fs-client"), "xclock")
+    fullscreen_measured = False
+    if client is not None and request_fullscreen(s, client["id"], True):
+        time.sleep(s.args.settle_seconds)
+        _, frame_fs = s.client_frame(s.tree("AP04-fullscreen"))
+        _, pfs = s.shot("AP04-fullscreen")
+        if frame_fs and pfs:
+            fullscreen_measured = True
+            fc = s.pixel(pfs, frame_fs["x"] + 2, frame_fs["y"] + 2)
+            covers = frame_fs["w"] >= s.args.screen_w and frame_fs["h"] >= s.args.screen_h
+            ev.append(f"fullscreen_frame={frame_fs} corner={fc} covers_screen={covers}")
+            if not covers:
+                fails.append(f"fullscreen frame does not cover the screen: {frame_fs}")
+            if fc == (0, 0, 0) and covers:
+                fails.append("fullscreen corner is cut (expected rectangular)")
+        request_fullscreen(s, client["id"], False)
+    if not fullscreen_measured:
+        ev.append("fullscreen: _NET_WM_STATE request not observed; NOT measured")
     ios_ok = s.restart({"decoration": "ios", "taskbarOpacity": "100"})
     if ios_ok:
         _, frame_ios = s.client_frame(s.tree("AP04-ios"))
@@ -421,10 +551,14 @@ def ap04(s: Session) -> dict:
             fails.append("iOS frame not observed")
     else:
         fails.append("WM or shell exited during iOS restart")
+    decoration_selector_check(s, ev, fails)
     if fails:
         return entry("AP04", FAIL, "; ".join(fails), ev, ["xwininfo -tree", "import -window root", "XTEST click/drag"])
-    return entry("AP04", NOT_RUN, "rounded/ios/maximize/snap/restore measured; fullscreen not driven by harness",
-                 ev, ["xwininfo -tree", "import -window root", "XTEST click/drag"])
+    if not fullscreen_measured:
+        return entry("AP04", NOT_RUN, "rounded/ios/maximize/snap/restore/selector measured; fullscreen not observed",
+                     ev, ["xwininfo -tree", "import -window root", "XTEST click/drag"])
+    return entry("AP04", PASS, "", ev, ["xwininfo -tree", "import -window root", "XTEST click/drag",
+                                        "EWMH _NET_WM_STATE_FULLSCREEN"])
 
 
 def ap05(s: Session) -> dict:
