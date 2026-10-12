@@ -793,6 +793,87 @@ mod tests {
         assert!(!document.highlighted[&crate::animation_style_node("startAnimation", "none")]);
     }
 
+    fn lock_snapshot(revision: u64, key: &str, value: SettingValue) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(revision);
+        snapshot.values.insert(key.to_owned(), value);
+        snapshot
+    }
+
+    #[test]
+    fn lock_timeout_segments_write_exact_minutes_and_highlight_the_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(1))));
+        let minutes_options = [0_i64, 5, 10, 15, 30];
+        for (index, minutes) in minutes_options.iter().enumerate() {
+            transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                index as u64 + 2,
+                "lockTimeoutMinutes",
+                SettingValue::Integer(*minutes),
+            ))));
+        }
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        for minutes in minutes_options {
+            application
+                .handle_action(&release(&format!("settings.lock.timeout.{minutes}")), &mut document)
+                .expect("lock timeout option");
+            for option in minutes_options {
+                assert_eq!(
+                    document.highlighted[&format!("lock-timeout-{option}")],
+                    option == minutes,
+                    "lock-timeout-{option} highlight after writing {minutes}"
+                );
+            }
+        }
+
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "lockTimeoutMinutes")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<SettingValue> = minutes_options
+            .iter()
+            .map(|minutes| SettingValue::Integer(*minutes))
+            .collect();
+        assert_eq!(written, expected, "each timeout segment writes its exact minutes");
+    }
+
+    #[test]
+    fn lock_action_ids_parse_to_typed_writes_and_reject_off_list_values() {
+        for (action, ok) in [
+            ("settings.lock.timeout.0", true),
+            ("settings.lock.timeout.30", true),
+            ("settings.lock.timeout.7", false),
+            ("settings.lock.timeout.-5", false),
+            ("settings.lock.clock.12h", true),
+            ("settings.lock.clock.13h", false),
+            ("settings.lock.background.choose", true),
+            ("settings.lock.background.clear", true),
+            ("settings.toggle.lockShowDate", true),
+            ("settings.toggle.lockShowUsername", true),
+            ("settings.toggle.lockOnSuspend", true),
+            ("settings.color.lockbackground.r.step.16", true),
+            ("settings.color.lockbackground.swatch.0", true),
+        ] {
+            assert_eq!(crate::parse_action(action).is_ok(), ok, "{action}");
+        }
+    }
+
     #[test]
     fn visible_settings_buttons_cannot_be_actionless() {
         let html = include_str!("../../../ui/settings.html");

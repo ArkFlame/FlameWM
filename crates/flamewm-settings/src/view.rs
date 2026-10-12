@@ -60,6 +60,8 @@ mod tests {
         "start-menu-opacity-value",
         "accent-opacity-value",
         "animation-speed-value",
+        "color-value-lockbackground",
+        "lock-background-image-value",
         "titlebar-minimize-style-value",
         "titlebar-maximize-style-value",
         "titlebar-close-style-value",

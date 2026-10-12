@@ -24,6 +24,32 @@ const KNOWN_HOTKEYS: [&str; 8] = [
     ACTION_WINDOW_MAXIMIZE,
 ];
 
+/// Clock notation on the lock screen (`lockClockFormat`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockClockFormat {
+    TwentyFour,
+    Twelve,
+}
+
+impl LockClockFormat {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TwentyFour => "24h",
+            Self::Twelve => "12h",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "24h" => Some(Self::TwentyFour),
+            "12h" => Some(Self::Twelve),
+            _ => None,
+        }
+    }
+}
+
 /// Animation style shared by every element that animates. Consumers reuse one implementation per
 /// variant; `None` means no animation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +140,13 @@ pub struct ProductSettings {
     pub window_open_animation_enabled: bool,
     pub minimize_animation_enabled: bool,
     pub maximize_animation_enabled: bool,
+    pub lock_background_color: String,
+    pub lock_background_image: String,
+    pub lock_clock_format: LockClockFormat,
+    pub lock_show_date: bool,
+    pub lock_show_username: bool,
+    pub lock_timeout_minutes: u16,
+    pub lock_on_suspend: bool,
     pub per_output_scale: BTreeMap<String, u16>,
     pub panel_edges: BTreeMap<String, PanelEdge>,
     pub hotkeys: BTreeMap<String, String>,
@@ -167,6 +200,13 @@ impl Default for ProductSettings {
             window_open_animation_enabled: true,
             minimize_animation_enabled: true,
             maximize_animation_enabled: true,
+            lock_background_color: "#232629".to_owned(),
+            lock_background_image: String::new(),
+            lock_clock_format: LockClockFormat::TwentyFour,
+            lock_show_date: true,
+            lock_show_username: true,
+            lock_timeout_minutes: 0,
+            lock_on_suspend: true,
             per_output_scale: BTreeMap::new(),
             panel_edges: BTreeMap::new(),
             hotkeys: BTreeMap::new(),
@@ -299,6 +339,18 @@ impl ProductSettings {
         }
         if !(25..=200).contains(&self.animation_speed) {
             return invalid("animationSpeed must be 25..200");
+        }
+        validate_color(&self.lock_background_color, false, "lockBackgroundColor")?;
+        if self.lock_background_image.len() > 4096
+            || !(self.lock_background_image.is_empty() || self.lock_background_image.starts_with('/'))
+            || self.lock_background_image.chars().any(char::is_control)
+        {
+            return invalid(
+                "lockBackgroundImage must be empty or an absolute path of at most 4096 bytes",
+            );
+        }
+        if self.lock_timeout_minutes > 240 {
+            return invalid("lockTimeoutMinutes must be 0..240");
         }
         for output in self.panel_edges.keys() {
             if output.is_empty()
@@ -605,6 +657,23 @@ impl Slot for AnimationStyle {
     }
 }
 
+impl Slot for LockClockFormat {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
 impl Slot for AppearanceMode {
     fn to_value(&self) -> SettingValue {
         SettingValue::Text(self.as_str().to_owned())
@@ -700,6 +769,13 @@ stable_settings! {
     (false, windows, "windowOpenAnimationEnabled", window_open_animation_enabled),
     (false, windows, "minimizeAnimationEnabled", minimize_animation_enabled),
     (false, windows, "maximizeAnimationEnabled", maximize_animation_enabled),
+    (false, lock, "lockBackgroundColor", lock_background_color),
+    (false, lock, "lockBackgroundImage", lock_background_image),
+    (false, lock, "lockClockFormat", lock_clock_format),
+    (false, lock, "lockShowDate", lock_show_date),
+    (false, lock, "lockShowUsername", lock_show_username),
+    (false, lock, "lockTimeoutMinutes", lock_timeout_minutes),
+    (false, lock, "lockOnSuspend", lock_on_suspend),
 }
 
 #[must_use]
@@ -887,6 +963,81 @@ mod tests {
             settings.validate().expect_err("invalid scale").code,
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn lock_screen_defaults_match_the_contract_and_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.lock_background_color, "#232629");
+        assert_eq!(defaults.lock_background_image, "");
+        assert_eq!(defaults.lock_clock_format, LockClockFormat::TwentyFour);
+        assert!(defaults.lock_show_date);
+        assert!(defaults.lock_show_username);
+        assert_eq!(defaults.lock_timeout_minutes, 0);
+        assert!(defaults.lock_on_suspend);
+        let text = ConfigStore::serialize(&defaults);
+        assert!(!text.contains("lock"));
+    }
+
+    #[test]
+    fn lock_screen_round_trips_non_default_values() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot(
+                "revision=2\nlockBackgroundColor=#102030\nlockBackgroundImage=/usr/share/bg.png\n\
+                 lockClockFormat=12h\nlockShowDate=false\nlockShowUsername=0\n\
+                 lockTimeoutMinutes=240\nlockOnSuspend=false\n",
+            )
+            .expect("valid lock settings");
+        assert_eq!(parsed.lock_background_color, "#102030");
+        assert_eq!(parsed.lock_background_image, "/usr/share/bg.png");
+        assert_eq!(parsed.lock_clock_format, LockClockFormat::Twelve);
+        assert!(!parsed.lock_show_date);
+        assert!(!parsed.lock_show_username);
+        assert_eq!(parsed.lock_timeout_minutes, 240);
+        assert!(!parsed.lock_on_suspend);
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("lockClockFormat=12h\n"));
+        assert!(text.contains("lockShowDate=false\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn invalid_lock_screen_values_are_rejected() {
+        let store = ConfigStore::default();
+        let long_path = format!("/{}", "a".repeat(4096));
+        for line in [
+            "lockBackgroundColor=red".to_owned(),
+            "lockBackgroundColor=#12345".to_owned(),
+            "lockClockFormat=13h".to_owned(),
+            "lockClockFormat=24H".to_owned(),
+            "lockTimeoutMinutes=241".to_owned(),
+            "lockTimeoutMinutes=-5".to_owned(),
+            "lockTimeoutMinutes=5.5".to_owned(),
+            "lockBackgroundImage=wallpaper.png".to_owned(),
+            "lockBackgroundImage=images/bg.png".to_owned(),
+            "lockBackgroundImage=/tmp/a\tb.png".to_owned(),
+            format!("lockBackgroundImage={long_path}"),
+            "lockShowDate=maybe".to_owned(),
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err("invalid lock value")
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn lock_timeout_zero_means_never_and_is_accepted() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\nlockTimeoutMinutes=0\n")
+            .expect("zero timeout is never");
+        assert_eq!(parsed.lock_timeout_minutes, 0);
     }
 
     #[test]

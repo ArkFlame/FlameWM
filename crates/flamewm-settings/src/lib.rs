@@ -257,6 +257,13 @@ enum HotkeyOperation {
     Reset,
 }
 
+/// Which setting the shared file chooser writes on completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChooserTarget {
+    Wallpaper,
+    LockBackground,
+}
+
 /// Every control action the Settings markup may emit. Parsing is pure, so the
 /// markup coverage test can check each `data-action` without side effects.
 enum SettingsAction {
@@ -273,6 +280,14 @@ enum SettingsAction {
     ThemeInstallChoose { folder: bool },
     WallpaperChoose,
     WallpaperReset,
+    /// Opens the shared file chooser for the lock-screen background image.
+    LockBackgroundChoose,
+    LockBackgroundClear,
+    /// Writes one fixed integer value to a setting, from an explicit option button.
+    IntegerSelect {
+        key: &'static str,
+        value: i64,
+    },
     Toggle(&'static str),
     SelectionOpacity(i8),
     SnapOpacity(i8),
@@ -328,6 +343,8 @@ enum SettingsAction {
 pub struct SettingsApplication<T: ControlTransport> {
     client: SettingsClient<T>,
     wallpaper_chooser: Option<file_chooser::WallpaperChooserWorker>,
+    /// The setting the open file chooser writes when it completes.
+    chooser_target: ChooserTarget,
     pending_open: Option<Receiver<Result<(), String>>>,
     /// True only between a hotkey row capture and its committing key release.
     /// Gates key events so a stale capture armed by the core cannot commit later.
@@ -347,6 +364,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Self {
             client: SettingsClient::new(transport),
             wallpaper_chooser: None,
+            chooser_target: ChooserTarget::Wallpaper,
             pending_open: None,
             hotkey_armed: false,
             error: None,
@@ -458,14 +476,21 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.wallpaper_chooser = None;
             let mut wallpaper_changed = false;
             match result {
-                Ok(Some(path)) => match self
-                    .client
-                    .set_wallpaper(path.to_string_lossy().into_owned())
-                    .map_err(control_error)
-                {
-                    Ok(()) => wallpaper_changed = true,
-                    Err(error) => completion_errors.push(error),
-                },
+                Ok(Some(path)) => {
+                    let path = path.to_string_lossy().into_owned();
+                    let applied = match self.chooser_target {
+                        ChooserTarget::Wallpaper => {
+                            self.client.set_wallpaper(path).map_err(control_error)
+                        }
+                        ChooserTarget::LockBackground => {
+                            self.apply_text("lockBackgroundImage", path)
+                        }
+                    };
+                    match applied {
+                        Ok(()) => wallpaper_changed = true,
+                        Err(error) => completion_errors.push(error),
+                    }
+                }
                 Ok(None) => {}
                 Err(error) => completion_errors.push(error),
             }
@@ -549,14 +574,20 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.theme_picker = None;
             }
             SettingsAction::ThemeInstallChoose { folder } => self.start_theme_install(folder)?,
-            SettingsAction::WallpaperChoose => {
-                if self.wallpaper_chooser.is_some() {
-                    return Err("wallpaper chooser is already open".to_owned());
-                }
-                self.wallpaper_chooser = Some(file_chooser::WallpaperChooserWorker::start()?);
-            }
+            SettingsAction::WallpaperChoose => self.start_file_chooser(ChooserTarget::Wallpaper)?,
             SettingsAction::WallpaperReset => {
                 self.client.set_wallpaper("").map_err(control_error)?;
+            }
+            SettingsAction::LockBackgroundChoose => {
+                self.start_file_chooser(ChooserTarget::LockBackground)?;
+            }
+            SettingsAction::LockBackgroundClear => {
+                self.apply_text("lockBackgroundImage", String::new())?;
+            }
+            SettingsAction::IntegerSelect { key, value } => {
+                self.client
+                    .apply_setting(key, SettingValue::Integer(value))
+                    .map_err(control_error)?;
             }
             SettingsAction::Toggle(key) => {
                 let enabled = self
@@ -672,6 +703,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::OpenUri(uri) => self.start_open_uri(uri)?,
         }
+        Ok(())
+    }
+
+    fn start_file_chooser(&mut self, target: ChooserTarget) -> Result<(), String> {
+        if self.wallpaper_chooser.is_some() {
+            return Err("file chooser is already open".to_owned());
+        }
+        self.wallpaper_chooser = Some(file_chooser::WallpaperChooserWorker::start()?);
+        self.chooser_target = target;
         Ok(())
     }
 
@@ -1149,6 +1189,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("windowOpenAnimationEnabled", "anim-window-on", "anim-window-off"),
             ("minimizeAnimationEnabled", "anim-minimize-on", "anim-minimize-off"),
             ("maximizeAnimationEnabled", "anim-maximize-on", "anim-maximize-off"),
+            ("lockShowDate", "lock-date-on", "lock-date-off"),
+            ("lockShowUsername", "lock-username-on", "lock-username-off"),
+            ("lockOnSuspend", "lock-suspend-on", "lock-suspend-off"),
         ] {
             let enabled = self
                 .client
@@ -1176,6 +1219,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.sync_appearance(document)?;
         self.sync_decoration(document)?;
         self.sync_animation_styles(document)?;
+        self.sync_lock_screen(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
         optional_text(
@@ -1237,6 +1281,25 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     document.background_clear(&id)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Projects the lock-screen background path (or `None`) and highlights the clock and timeout segments.
+    fn sync_lock_screen(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        if let Ok(path) = self.text_setting("lockBackgroundImage") {
+            let label = if path.is_empty() { "None".to_owned() } else { path };
+            document.text("lock-background-image-value", label)?;
+        }
+        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        let clock = self.text_setting("lockClockFormat").ok();
+        for (value, id) in [("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")] {
+            highlight_segment(document, id, clock.as_deref() == Some(value), accent)?;
+        }
+        let timeout = self.integer_setting("lockTimeoutMinutes").ok();
+        for minutes in LOCK_TIMEOUT_CHOICES {
+            let id = format!("lock-timeout-{minutes}");
+            highlight_segment(document, &id, timeout == Some(minutes), accent)?;
         }
         Ok(())
     }
@@ -1518,12 +1581,16 @@ fn step(value: &str) -> Option<i8> {
 }
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-const COLOR_TARGETS: [(&str, &str); 4] = [
+const COLOR_TARGETS: [(&str, &str); 5] = [
     ("taskbar", "taskbarColor"),
     ("startmenu", "startMenuColor"),
     ("accent", "accent"),
     ("titlebar", "titlebarColor"),
+    ("lockbackground", "lockBackgroundColor"),
 ];
+
+/// Minutes offered by the lock-screen idle timeout segments; 0 means never.
+const LOCK_TIMEOUT_CHOICES: [i64; 5] = [0, 5, 10, 15, 30];
 
 /// Fixed swatch values offered beside each color row; `swatch.<index>` selects one.
 const COLOR_PALETTE: [&str; 8] = [
@@ -1548,6 +1615,20 @@ fn animation_style_node(key: &str, value: &str) -> String {
         _ => "window-open-style",
     };
     format!("{row}-{value}")
+}
+
+/// Paints one segment with the accent when selected, and clears its highlight otherwise.
+fn highlight_segment(
+    document: &mut impl UiDocumentAccess,
+    id: &str,
+    selected: bool,
+    accent: UiColor,
+) -> Result<(), String> {
+    if selected {
+        document.background(id, accent)
+    } else {
+        document.background_clear(id)
+    }
 }
 
 const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
@@ -1778,6 +1859,9 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "windowOpenAnimationEnabled" => Ok(SettingsAction::Toggle("windowOpenAnimationEnabled")),
             "minimizeAnimationEnabled" => Ok(SettingsAction::Toggle("minimizeAnimationEnabled")),
             "maximizeAnimationEnabled" => Ok(SettingsAction::Toggle("maximizeAnimationEnabled")),
+            "lockShowDate" => Ok(SettingsAction::Toggle("lockShowDate")),
+            "lockShowUsername" => Ok(SettingsAction::Toggle("lockShowUsername")),
+            "lockOnSuspend" => Ok(SettingsAction::Toggle("lockOnSuspend")),
             _ => Err(format!("unknown toggle '{key}'")),
         };
     }
@@ -1863,7 +1947,25 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
                 .ok_or_else(|| format!("unknown animation style '{value}' for {key}"));
         }
     }
+    if let Some(minutes) = action.strip_prefix("settings.lock.timeout.") {
+        return minutes
+            .parse::<i64>()
+            .ok()
+            .filter(|value| LOCK_TIMEOUT_CHOICES.contains(value))
+            .map(|value| SettingsAction::IntegerSelect { key: "lockTimeoutMinutes", value })
+            .ok_or_else(|| format!("unknown lock timeout '{minutes}'"));
+    }
     match action {
+        "settings.lock.clock.24h" => Ok(SettingsAction::TextSelect {
+            key: "lockClockFormat",
+            value: "24h",
+        }),
+        "settings.lock.clock.12h" => Ok(SettingsAction::TextSelect {
+            key: "lockClockFormat",
+            value: "12h",
+        }),
+        "settings.lock.background.choose" => Ok(SettingsAction::LockBackgroundChoose),
+        "settings.lock.background.clear" => Ok(SettingsAction::LockBackgroundClear),
         "settings.wallpaper.choose" => Ok(SettingsAction::WallpaperChoose),
         "settings.wallpaper.reset" => Ok(SettingsAction::WallpaperReset),
         "settings.taskbar.position" => Ok(SettingsAction::TaskbarEdgeCycle),

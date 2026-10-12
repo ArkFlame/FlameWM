@@ -121,3 +121,6 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .theme-row img { width:24px; height:24px; }
 
 #theme-install-status { max-width:250px; overflow:hidden; white-space:nowrap; }
+
+.lock-stacked { flex-direction:column; align-items:stretch; }
+.lock-path { flex-grow:1; min-width:0; overflow:hidden; white-space:nowrap; }
