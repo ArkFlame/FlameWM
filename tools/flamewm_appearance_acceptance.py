@@ -224,9 +224,12 @@ class Session:
         time.sleep(self.args.settle_seconds)
 
     def seed(self, values: dict[str, str]) -> None:
-        path = self.ctx.run / "xdg-config" / "flamewm" / "settings.toml"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(settings_text(values), encoding="ascii")
+        # The WM resolves FLAMEWM_CONFIG_DIR (session default HOME/.config/flamewm) before XDG_CONFIG_HOME,
+        # so the seed must land there; the XDG copy covers consumers that honour XDG_CONFIG_HOME.
+        for root in (self.ctx.run / "home" / ".config", self.ctx.run / "xdg-config"):
+            path = root / "flamewm" / "settings.toml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(settings_text(values), encoding="ascii")
 
     def restart(self, values: dict[str, str]) -> bool:
         self.seed(values)
