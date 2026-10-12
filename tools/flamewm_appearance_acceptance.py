@@ -671,6 +671,7 @@ def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
     ev: list[str] = []
     if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "taskbarOpacity": "100"}):
         return ["WM or shell exited before the slider check"], ev
+    s.ctx.stop(s.client)  # a leftover client window would sit above Settings and swallow the wheel
     settings = s.ctx.spawn("settings-ap06", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
     fails: list[str] = []
     try:
