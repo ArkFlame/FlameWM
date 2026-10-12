@@ -3754,8 +3754,13 @@ impl<'a, C: Connection> Wm<'a, C> {
         });
         let wants_fullscreen = atoms.contains(&self.atoms.net_wm_state_fullscreen);
         let wants_hidden = atoms.contains(&self.atoms.net_wm_state_hidden);
-        if wants_hidden && action != 0 {
-            return self.minimize(client);
+        if wants_hidden {
+            // Add/toggle hides; Remove (the control plane's RestoreWindow) un-minimizes.
+            return if action == 0 {
+                self.restore_minimized(client)
+            } else {
+                self.minimize(client)
+            };
         }
         if wants_fullscreen {
             let currently = self

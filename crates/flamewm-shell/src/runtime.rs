@@ -444,10 +444,11 @@ impl ShellRuntime {
                         options: ApplicationLaunchOptions::default(),
                     }]
                 }
-                flamewm_shell_core::TaskClickAction::RestoreAndActivate(window) => vec![
-                    ControlRequest::RestoreWindow(window),
-                    ControlRequest::ActivateWindow(window),
-                ],
+                // Restore maps the frame and focuses it, and bumps the window generation: a second
+                // ActivateWindow carrying the pre-restore reference would fail with StaleRevision.
+                flamewm_shell_core::TaskClickAction::RestoreAndActivate(window) => {
+                    vec![ControlRequest::RestoreWindow(window)]
+                }
                 flamewm_shell_core::TaskClickAction::Minimize(window) => {
                     vec![ControlRequest::MinimizeWindow(window)]
                 }

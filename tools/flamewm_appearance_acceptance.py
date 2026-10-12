@@ -941,7 +941,20 @@ def ap07(s: Session) -> dict:
         fails.append(f"client map state {map_state(wm_state)} after minimize")
     if rect is None or rect[1] < strip_y:
         fails.append(f"_NET_WM_ICON_GEOMETRY {rect} not inside taskbar strip")
+    # Restore through the taskbar button the lamp flew to (rect = _NET_WM_ICON_GEOMETRY).
+    restore_ev: list[str] = []
+    if rect is not None and not fails:
+        s.input(click=f"{rect[0] + rect[2] // 2},{rect[1] + rect[3] // 2}")
+        time.sleep(s.args.settle_seconds)
+        after_restore = subprocess.run(["xwininfo", "-display", s.ctx.display, "-id", client["id"]],
+                                       env=s.ctx.host_env, capture_output=True, text=True, timeout=20,
+                                       check=False).stdout
+        restore_state = map_state(after_restore)
+        restore_ev.append(f"taskbar_restore_map_state={restore_state}")
+        if restore_state != "IsViewable":
+            fails.append(f"taskbar click did not restore the minimized client (map state {restore_state})")
     extra_fails, extra_ev = extra_effect_checks(s)
+    extra_ev += restore_ev
     fails += extra_fails
     ev = [f"capability={capability}", f"rest_bbox={box0}", f"frame_bboxes={boxes}",
           f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"] + extra_ev
