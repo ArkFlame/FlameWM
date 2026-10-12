@@ -284,14 +284,25 @@ def lk03(s: LockSession) -> dict:
     for key in WRONG_PASSWORD_KEYS:
         s.input(key=key)
     s.input(key="Return")
-    time.sleep(s.args.settle_seconds)
-    win, nodes = s.window("LK03")
-    path, _ = s.shot("LK03-failure")
-    if path is None:
-        return entry("LK03", ENV_BLOCKED, "capture failed")
     if shutil.which("tesseract") is None:
+        time.sleep(s.args.settle_seconds)
         return entry("LK03", ENV_BLOCKED, "tesseract unavailable for failure-text OCR")
-    words = appear.ocr_word_centres(path, FAILURE_WORDS)
+    # PAM answers after its failure delay and the lock polls the worker once a second: wait for the
+    # message with a bounded poll instead of one fixed sleep (a slow PAM stack must not flake the check).
+    deadline = time.monotonic() + 12.0
+    time.sleep(1.0)
+    words: list = []
+    path = None
+    win, nodes = None, []
+    while True:
+        win, nodes = s.window("LK03")
+        path, _ = s.shot("LK03-failure")
+        if path is None:
+            return entry("LK03", ENV_BLOCKED, "capture failed")
+        words = appear.ocr_word_centres(path, FAILURE_WORDS)
+        if failure_text_seen(words) or time.monotonic() > deadline:
+            break
+        time.sleep(1.0)
     still_locked = win is not None and is_topmost(nodes, win["id"]) and s.lock.proc.poll() is None
     seen = failure_text_seen(words)
     ok = still_locked and seen
