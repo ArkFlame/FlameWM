@@ -18,7 +18,7 @@ fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 mkdir -p "$DIST"
 rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$VERSION.tar.gz" "$DIST/SHA256SUMS"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-render-x11 flamewm-render-compile flamewm-render-inspect; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing release binary: $BUILD_DIR/$binary"
 done
 
@@ -30,6 +30,7 @@ for source in \
     "$ROOT/docs/PACKAGING.md" \
     "$ROOT/packaging/flamewm.desktop" \
     "$ROOT/packaging/flamewm-session.desktop" \
+    "$ROOT/packaging/pam.d/flamewm-lock" \
     "$ROOT/packaging/install-manifest.txt" \
     "$ROOT/packaging/debian/control.in" \
     "$ROOT/packaging/debian/copyright"; do
@@ -37,13 +38,14 @@ for source in \
 done
 
 rm -rf "$STAGE"
-mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" \
+mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
     "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/doc/flamewm" \
     "$STAGE/DEBIAN"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-render-x11 flamewm-render-compile flamewm-render-inspect; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
+install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
 install -m 0644 "$ROOT/FLAMEWM_VERSION" "$STAGE/usr/share/flamewm/VERSION"
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"

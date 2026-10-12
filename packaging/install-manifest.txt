@@ -7,6 +7,8 @@
 .target/release/flamewm-render-x11       usr/bin/flamewm-render-x11
 .target/release/flamewm-render-compile   usr/bin/flamewm-render-compile
 .target/release/flamewm-render-inspect   usr/bin/flamewm-render-inspect
+.target/release/flamewm-lock             usr/bin/flamewm-lock
+packaging/pam.d/flamewm-lock             etc/pam.d/flamewm-lock
 FLAMEWM_VERSION                          usr/share/flamewm/VERSION
 assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme

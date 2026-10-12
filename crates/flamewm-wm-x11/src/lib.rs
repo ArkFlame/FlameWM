@@ -689,7 +689,7 @@ impl SessionPort for X11Desktop {
     }
     fn perform_session_action(&mut self, action: SessionAction) -> FlameResult<()> {
         let (program, args): (&str, &[&str]) = match action {
-            SessionAction::Lock => ("loginctl", &["lock-session"]),
+            SessionAction::Lock => return flamewm_x11_desktop::start_lock_screen(),
             SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),

@@ -302,6 +302,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-lock"
+version = "0.0.9"
+dependencies = [
+ "calloop",
+ "flamewm-api",
+ "flamewm-control-core",
+ "flamewm-control-dbus",
+ "flamewm-dbus-reactor",
+ "flamewm-image-core",
+ "flamewm-reactor",
+ "flamewm-render-compiler",
+ "flamewm-ui-x11",
+ "rustix",
+]
+
+[[package]]
 name = "flamewm-platform"
 version = "0.0.9"
 dependencies = [

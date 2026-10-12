@@ -42,8 +42,9 @@ def atomic_report(path: Path, value: dict) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--probe", action="store_true", help="report whether D-Bus service bindings load")
-    result.add_argument("--mode", choices=("success", "cancel", "error"))
-    result.add_argument("--image", help="absolute fixture image path returned in success mode")
+    result.add_argument("--mode", choices=("success", "cancel", "error", "folder"))
+    result.add_argument("--image", help="absolute fixture image path returned in success mode; "
+                                        "absolute fixture directory returned in folder mode")
     result.add_argument("--report", help="private JSON invocation report path")
     return result
 
@@ -60,11 +61,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.mode is None or args.report is None:
         parser().error("--mode and --report are required unless --probe is used")
-    if args.mode == "success":
+    if args.mode in ("success", "folder"):
         if not args.image:
-            parser().error("--image is required in success mode")
+            parser().error(f"--image is required in {args.mode} mode")
         image = Path(args.image)
-        if not image.is_absolute() or not image.is_file():
+        is_fixture = image.is_dir() if args.mode == "folder" else image.is_file()
+        if not image.is_absolute() or not is_fixture:
             parser().error("--image must name an existing absolute fixture path")
     else:
         image = None
@@ -110,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             self.requests.append(request)
             atomic_report(report_path, state)
 
-            if args.mode == "success":
+            if args.mode in ("success", "folder"):
                 results = dbus.Dictionary({"uris": dbus.Array([image.as_uri()], signature="s")},
                                           signature="sv")
                 request.Response(dbus.UInt32(0), results)

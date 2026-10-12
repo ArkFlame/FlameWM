@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Wrapper for the isolated native Magic Lamp bend acceptance runner (LAMP01..LAMP03).
+# Usage: scripts/lamp-acceptance --run-dir DIR [runner options]
+# Runs tools/flamewm_lamp_acceptance.py and prints the result.json path.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/lamp-acceptance --run-dir DIR [--geometry WxH] [--display :N]
+       [--wm-bin PATH] [--shell-bin PATH] [--settings-bin PATH] [--client-bin PATH]
+       [--settle-seconds S] [--icon-theme-alt NAME] [--cursor-theme-base NAME]
+       [--cursor-theme-alt NAME] [--taskbar-slot X,Y,W,H]
+
+Runs the isolated appearance matrix LAMP01..LAMP03 in a private Xephyr, a private
+D-Bus session and private XDG directories under DIR. DIR must not exist or be
+empty. Writes DIR/result.json and DIR/shots/*.png. Default binaries are the
+release artifacts under .target/release/.
+EOF
+}
+
+if [[ "$#" -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+  usage
+  exit 0
+fi
+if [[ "$#" -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+if [[ ! -f "$ROOT/Cargo.toml" ]]; then
+  echo "error: $ROOT does not contain Cargo.toml; refusing to run" >&2
+  exit 2
+fi
+
+RUNNER="$ROOT/tools/flamewm_lamp_acceptance.py"
+if [[ ! -f "$RUNNER" ]]; then
+  echo "error: runner missing: $RUNNER" >&2
+  exit 2
+fi
+
+rc=0
+output="$(python3 -I "$RUNNER" "$@")" || rc=$?
+printf '%s\n' "$output"
+result_path="$(printf '%s\n' "$output" | tail -n 1)"
+echo "result.json: $result_path"
+exit "$rc"

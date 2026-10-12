@@ -1,0 +1,7 @@
+#%PAM-1.0
+# PAM service for flamewm-lock (Debian/Ubuntu include layout).
+# Arch/Fedora/RH layout: replace the two @include lines below with
+#   auth     include   system-auth
+#   account  include   system-auth
+@include common-auth
+@include common-account

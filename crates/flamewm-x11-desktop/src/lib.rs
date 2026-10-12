@@ -1,8 +1,11 @@
 //! X11 desktop ports backed by the live X server and EWMH/RandR.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::process::Command;
+use std::ffi::OsStr;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
@@ -242,6 +245,131 @@ impl X11Desktop {
 
 fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
     FlameError::new(ErrorCode::IoFailure, error.to_string())
+}
+
+const LOCK_SCREEN_BINARY: &str = "flamewm-lock";
+
+/// What the Lock session action runs.
+#[derive(Debug, PartialEq, Eq)]
+enum LockProgram {
+    Screen(PathBuf),
+    Loginctl,
+}
+
+/// Prefers `flamewm-lock` next to the running executable, then on `PATH`,
+/// and falls back to `loginctl lock-session` when no executable is found.
+fn resolve_lock_program(exe_dir: Option<&Path>, path_var: Option<&OsStr>) -> LockProgram {
+    let on_path = path_var
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join(LOCK_SCREEN_BINARY));
+    exe_dir
+        .map(|dir| dir.join(LOCK_SCREEN_BINARY))
+        .into_iter()
+        .chain(on_path)
+        .find(|candidate| {
+            candidate.metadata().is_ok_and(|meta| {
+                meta.is_file() && meta.permissions().mode() & 0o111 != 0
+            })
+        })
+        .map_or(LockProgram::Loginctl, LockProgram::Screen)
+}
+
+/// Starts the lock screen. The lock binary is spawned detached and not waited
+/// on, so the WM never blocks on the lock surface's lifetime.
+pub fn start_lock_screen() -> FlameResult<()> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let path_var = std::env::var_os("PATH");
+    match resolve_lock_program(exe_dir.as_deref(), path_var.as_deref()) {
+        LockProgram::Screen(program) => Command::new(program)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .map(|_| ())
+            .map_err(io_error),
+        LockProgram::Loginctl => Command::new("loginctl")
+            .arg("lock-session")
+            .status()
+            .map_err(io_error)?
+            .success()
+            .then_some(())
+            .ok_or_else(|| {
+                FlameError::new(ErrorCode::PermissionDenied, "session action command failed")
+            }),
+    }
+}
+
+#[cfg(test)]
+mod lock_resolution_tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-lock-resolve-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn write_binary(dir: &Path, mode: u32) {
+        let path = dir.join(LOCK_SCREEN_BINARY);
+        std::fs::write(&path, b"#!/bin/sh\n").expect("write binary");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("chmod binary");
+    }
+
+    #[test]
+    fn falls_back_to_loginctl_when_binary_absent() {
+        let exe = temp_dir("absent-exe");
+        let path = temp_dir("absent-path");
+        let path_var = std::env::join_paths([&path]).expect("join");
+        assert_eq!(
+            resolve_lock_program(Some(&exe), Some(&path_var)),
+            LockProgram::Loginctl
+        );
+        assert_eq!(resolve_lock_program(None, None), LockProgram::Loginctl);
+    }
+
+    #[test]
+    fn prefers_sibling_of_current_executable() {
+        let exe = temp_dir("sibling-exe");
+        let path = temp_dir("sibling-path");
+        write_binary(&exe, 0o755);
+        write_binary(&path, 0o755);
+        let path_var = std::env::join_paths([&path]).expect("join");
+        assert_eq!(
+            resolve_lock_program(Some(&exe), Some(&path_var)),
+            LockProgram::Screen(exe.join(LOCK_SCREEN_BINARY))
+        );
+    }
+
+    #[test]
+    fn finds_binary_on_path_when_not_beside_executable() {
+        let exe = temp_dir("path-exe");
+        let path = temp_dir("path-dir");
+        write_binary(&path, 0o755);
+        let path_var = std::env::join_paths([&exe, &path]).expect("join");
+        assert_eq!(
+            resolve_lock_program(Some(&exe), Some(&path_var)),
+            LockProgram::Screen(path.join(LOCK_SCREEN_BINARY))
+        );
+    }
+
+    #[test]
+    fn ignores_non_executable_binary() {
+        let exe = temp_dir("noexec-exe");
+        write_binary(&exe, 0o644);
+        assert_eq!(
+            resolve_lock_program(Some(&exe), None),
+            LockProgram::Loginctl
+        );
+    }
 }
 fn unsupported(message: &'static str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
@@ -581,7 +709,7 @@ impl SessionPort for X11Desktop {
     }
     fn perform_session_action(&mut self, action: SessionAction) -> FlameResult<()> {
         let (program, args): (&str, &[&str]) = match action {
-            SessionAction::Lock => ("loginctl", &["lock-session"]),
+            SessionAction::Lock => return start_lock_screen(),
             SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),

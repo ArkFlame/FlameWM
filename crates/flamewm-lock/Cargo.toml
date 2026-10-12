@@ -1,0 +1,33 @@
+[package]
+name = "flamewm-lock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "FlameWM Breeze lock screen core (PAM authentication, settings, lock state)"
+
+[dependencies]
+calloop.workspace = true
+flamewm-api = { path = "../flamewm-api" }
+flamewm-control-core = { path = "../flamewm-control-core" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+flamewm-image-core = { path = "../flamewm-image-core" }
+flamewm-reactor = { path = "../flamewm-reactor" }
+flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+rustix = { workspace = true }
+
+[build-dependencies]
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
+
+[[bin]]
+name = "flamewm-lock"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
