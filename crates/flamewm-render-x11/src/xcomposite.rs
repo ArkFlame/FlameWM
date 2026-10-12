@@ -173,12 +173,53 @@ pub fn capture_window(display: *mut Display, window: Window) -> Result<CapturedI
     }
     let (width, height) = window_size(display, window)?;
     check_capture_size(width, height)?;
+    match capture_drawable_rect(display, window, (0, 0, width, height)) {
+        Ok(BackdropCapture {
+            width,
+            height,
+            pixels,
+        }) => rgba_to_argb(width, height, &pixels),
+        // A window hanging past the screen edge (a maximized frame's border) is refused by the
+        // server; capture what is on screen and pad the rest so the flight still has pixels.
+        Err(first) => capture_clipped(display, window, width, height).ok_or(first),
+    }
+}
+
+/// Visible part of a `w x h` window whose origin is at root `(ox, oy)` on an `sw x sh` screen,
+/// as window-local `(x, y, width, height)`; `None` when nothing is on screen.
+fn visible_subrect(ox: i32, oy: i32, w: u32, h: u32, sw: i32, sh: i32) -> Option<(i32, i32, u32, u32)> {
+    let x0 = (-ox).max(0);
+    let y0 = (-oy).max(0);
+    let x1 = (sw - ox).min(w as i32);
+    let y1 = (sh - oy).min(h as i32);
+    (x1 > x0 && y1 > y0).then(|| (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+}
+
+fn capture_clipped(display: *mut Display, window: Window, width: u32, height: u32) -> Option<CapturedImage> {
+    use crate::xlib::{XDisplayHeight, XDisplayWidth};
+    use crate::xlib_ext::XTranslateCoordinates;
+    let screen = unsafe { XDefaultScreen(display) };
+    let root = unsafe { XRootWindow(display, screen) };
+    let (mut ox, mut oy, mut child) = (0 as c_int, 0 as c_int, 0 as Window);
+    // SAFETY: display/window/root are live; the out-pointers are valid locals.
+    let ok = unsafe { XTranslateCoordinates(display, window, root, 0, 0, &mut ox, &mut oy, &mut child) };
+    if ok == 0 {
+        return None;
+    }
+    let (sw, sh) = unsafe { (XDisplayWidth(display, screen), XDisplayHeight(display, screen)) };
+    let (vx, vy, vw, vh) = visible_subrect(ox, oy, width, height, sw, sh)?;
     let BackdropCapture {
-        width,
-        height,
+        width: cw,
+        height: ch,
         pixels,
-    } = capture_drawable_rect(display, window, (0, 0, width, height))?;
-    rgba_to_argb(width, height, &pixels)
+    } = capture_drawable_rect(display, window, (vx, vy, vw, vh)).ok()?;
+    let mut full = vec![0u8; width as usize * height as usize * 4];
+    for row in 0..ch as usize {
+        let src = row * cw as usize * 4;
+        let dst = ((vy as usize + row) * width as usize + vx as usize) * 4;
+        full[dst..dst + cw as usize * 4].copy_from_slice(pixels.get(src..src + cw as usize * 4)?);
+    }
+    rgba_to_argb(width, height, &full).ok()
 }
 
 /// Uploads `capture` into a new depth-32 pixmap on the default screen.
@@ -306,6 +347,16 @@ mod tests {
     fn capture_window_rejects_null_display_without_x() {
         assert!(capture_window(std::ptr::null_mut(), 1).is_err());
         assert!(capture_window(std::ptr::null_mut(), 0).is_err());
+    }
+
+
+    #[test]
+    fn visible_subrect_clips_to_the_screen_and_rejects_offscreen() {
+        // Maximized 1280x756 frame interior at root (1,1) on a 1280x800 screen: one column short.
+        assert_eq!(visible_subrect(1, 1, 1280, 756, 1280, 800), Some((0, 0, 1279, 756)));
+        assert_eq!(visible_subrect(-4, -2, 100, 50, 1280, 800), Some((4, 2, 96, 48)));
+        assert_eq!(visible_subrect(0, 0, 10, 10, 1280, 800), Some((0, 0, 10, 10)));
+        assert_eq!(visible_subrect(1280, 0, 10, 10, 1280, 800), None);
     }
 
     #[test]

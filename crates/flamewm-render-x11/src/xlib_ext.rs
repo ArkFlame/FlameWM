@@ -17,5 +17,15 @@ unsafe extern "C" {
         border_width: *mut c_uint,
         depth: *mut c_uint,
     ) -> c_int;
+    pub fn XTranslateCoordinates(
+        display: *mut Display,
+        src_window: Window,
+        dest_window: Window,
+        src_x: c_int,
+        src_y: c_int,
+        dest_x_return: *mut c_int,
+        dest_y_return: *mut c_int,
+        child_return: *mut Window,
+    ) -> c_int;
     pub fn free(ptr: *mut c_void);
 }

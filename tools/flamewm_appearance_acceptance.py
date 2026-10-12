@@ -576,6 +576,7 @@ def ap05(s: Session) -> dict:
     tb = dominant_color(s.pixels(px, tb_rect))
     min_idle = dominant_color(s.pixels(px, min_rect))
     fails = []
+    ev_extra: list[str] = []
     if not close_enough(tb, base.accent_rgb("#1B1E20"), 3):
         fails.append(f"titlebar {tb} != #1B1E20")
     s.input(move=f"{fx + fw - BUTTON_WIDTH // 2},{fy + TITLEBAR_HEIGHT // 2}")
@@ -591,6 +592,29 @@ def ap05(s: Session) -> dict:
     if not close_enough(min_after, min_idle, 3):
         fails.append(f"minimize button changed on close hover: {min_idle} -> {min_after}")
 
+    # Minimize and maximize buttons: hovering each must repaint its own button (hover fill) and only it.
+    max_rect = (fx + fw - 2 * BUTTON_WIDTH + 6, fy + 4, BUTTON_WIDTH - 12, TITLEBAR_HEIGHT - 8)
+    for name, rect_btn, centre_x in (("minimize", min_rect, fx + fw - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2),
+                                     ("maximize", max_rect, fx + fw - 2 * BUTTON_WIDTH + BUTTON_WIDTH // 2)):
+        s.input(move=f"{s.args.screen_w // 2},{s.args.screen_h // 2}")
+        time.sleep(0.5)
+        _, idle_px = s.shot(f"AP05-{name}-idle")
+        s.input(move=f"{centre_x},{fy + TITLEBAR_HEIGHT // 2}")
+        time.sleep(1.0)
+        _, hover_px = s.shot(f"AP05-{name}-hover")
+        if idle_px is None or hover_px is None:
+            fails.append(f"{name} hover capture failed")
+            continue
+        changed = pixel_diff_count(s.pixels(idle_px, rect_btn), s.pixels(hover_px, rect_btn), 6)
+        other = max_rect if name == "minimize" else min_rect
+        leaked = pixel_diff_count(s.pixels(idle_px, other), s.pixels(hover_px, other), 6)
+        close_leak = pixel_diff_count(s.pixels(idle_px, close_rect), s.pixels(hover_px, close_rect), 6)
+        ev_extra.append(f"{name}_hover_changed_px={changed} other_button_px={leaked} close_px={close_leak}")
+        if changed < 40:
+            fails.append(f"{name} button did not repaint on hover ({changed} px changed)")
+        if leaked > 10 or close_leak > 10:
+            fails.append(f"{name} hover repainted a neighbouring button ({leaked}/{close_leak} px)")
+
     custom = "#00FF00"
     if not s.restart({"titlebarColor": "#1B1E20", "taskbarOpacity": "100", "titlebarCloseHoverColor": custom}):
         return entry("AP05", FAIL, "WM or shell exited during custom restart", [str(path)])
@@ -605,7 +629,7 @@ def ap05(s: Session) -> dict:
         custom_share = fraction_matching(s.pixels(pc, cr), base.accent_rgb(custom), 6)
         if custom_share < 0.15:
             fails.append(f"custom close hover {custom} covers {custom_share:.2f} of the button (<0.15)")
-    ev = [str(path), f"titlebar={tb}", f"close_hover={close_hover}", f"min_idle={min_idle}", f"min_after={min_after}"]
+    ev = [str(path), f"titlebar={tb}", f"close_hover={close_hover}", f"min_idle={min_idle}", f"min_after={min_after}"] + ev_extra
     if fails:
         return entry("AP05", FAIL, "; ".join(fails), ev, ["XTEST move", "import -window root"])
     return entry("AP05", PASS, "", ev, ["XTEST move", "import -window root"])
@@ -793,6 +817,17 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     ev += [f"maximize_rest_w={rest_w}", f"maximize_widths={widths}"]
     if final_w <= rest_w or not middle:
         fails.append(f"maximize did not animate through intermediate sizes (rest {rest_w}, widths {widths})")
+    # Unmaximize: the same titlebar button on the maximized frame must shrink back through intermediates.
+    _, frame_max = s.client_frame(s.tree("AP07-unmax-frame"))
+    if frame_max is not None and final_w > rest_w:
+        s.input(click=f"{frame_max['x'] + frame_max['w'] - 57},{frame_max['y'] + 15}")
+        boxes_u = sample_bright_boxes(s, 3.0, "AP07-unmax")
+        widths_u = [width(b) for b in boxes_u]
+        end_w = widths_u[-1] if widths_u else 0
+        middle_u = [w for w in widths_u if end_w * 1.15 < w < final_w * 0.9]
+        ev.append(f"unmaximize_widths={widths_u}")
+        if not (0 < end_w < final_w * 0.5) or not middle_u:
+            fails.append(f"unmaximize did not shrink through intermediate sizes (widths {widths_u})")
     # Window open: the first frames after map are smaller than the settled window.
     if not s.restart({"animationsEnabled": "true", "windowOpenAnimationEnabled": "true", "animationSpeed": "25",
                       "taskbarOpacity": "100"}):
