@@ -491,6 +491,21 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         let _ = ewmh_request(canary, t.id, "_NET_WM_STATE", 0, max_atom);
     }
     let _ = canary.conn.flush();
+    // The restore is animated (a flight of a few hundred ms): wait for the window to leave the
+    // maximized/fullscreen state before handing the session to the next scenario.
+    for _ in 0..40 {
+        let still_big = has_state(canary, t.id, "_NET_WM_STATE_FULLSCREEN")
+            || has_state(canary, t.id, "_NET_WM_STATE_MAXIMIZED_VERT")
+            || canary.by_id(t.id).is_some_and(|w| {
+                u32::from(w.width) >= u32::from(rw.saturating_sub(8))
+                    && u32::from(w.height) >= u32::from(rh.saturating_sub(8))
+            });
+        if !still_big {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
     let pass = clicked && (max_sent && maxed) && snapped && (fs_sent && fs || fs);
     let _ = AtomEnum::ATOM;
     let _ = CURRENT_TIME;
