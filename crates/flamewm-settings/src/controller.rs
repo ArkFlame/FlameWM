@@ -38,6 +38,7 @@ mod tests {
     struct ProbeDocument {
         texts: BTreeMap<String, String>,
         visible: BTreeMap<String, bool>,
+        highlighted: BTreeMap<String, bool>,
     }
 
     impl UiDocumentAccess for ProbeDocument {
@@ -76,7 +77,8 @@ mod tests {
             Ok(())
         }
 
-        fn background(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
+        fn background(&mut self, id: &str, _color: UiColor) -> Result<(), String> {
+            self.highlighted.insert(id.to_owned(), true);
             Ok(())
         }
 
@@ -88,7 +90,8 @@ mod tests {
             Ok(())
         }
 
-        fn background_clear(&mut self, _id: &str) -> Result<(), String> {
+        fn background_clear(&mut self, id: &str) -> Result<(), String> {
+            self.highlighted.insert(id.to_owned(), false);
             Ok(())
         }
 
@@ -633,6 +636,87 @@ mod tests {
             document.texts.get("hotkey-key-start").map(String::as_str),
             Some("Press a key..."),
             "capture stays armed after a modifier-only chord release"
+        );
+    }
+
+    fn decoration_snapshot(revision: u64, decoration: &str) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(revision);
+        snapshot
+            .values
+            .insert("accent".to_owned(), SettingValue::Text("#EF4048".to_owned()));
+        snapshot
+            .values
+            .insert("decoration".to_owned(), SettingValue::Text(decoration.to_owned()));
+        snapshot
+    }
+
+    #[test]
+    fn decoration_option_buttons_write_exact_values_and_highlight_the_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(1, "rounded"))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(2, "ios"))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(3, "rounded"))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        application
+            .handle_action(&release("settings.decoration.ios"), &mut document)
+            .expect("ios option");
+        assert!(document.highlighted["decoration-ios"], "ios is highlighted after its write");
+        assert!(!document.highlighted["decoration-rounded"], "rounded is cleared after ios write");
+
+        application
+            .handle_action(&release("settings.decoration.rounded"), &mut document)
+            .expect("rounded option");
+        assert!(document.highlighted["decoration-rounded"]);
+        assert!(!document.highlighted["decoration-ios"]);
+
+        let writes: Vec<(String, SettingValue)> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .and_then(|change| change.value.clone().map(|value| (change.key.clone(), value))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            vec![
+                ("decoration".to_owned(), SettingValue::Text("ios".to_owned())),
+                ("decoration".to_owned(), SettingValue::Text("rounded".to_owned())),
+            ],
+        );
+    }
+
+    #[test]
+    fn external_decoration_change_moves_the_highlight_without_a_write() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(1, "rounded"))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(2, "ios"))));
+        let mut application = SettingsApplication::new(transport);
+        let mut document = ProbeDocument::default();
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        application.sync(&mut document).expect("sync initial snapshot");
+        assert!(document.highlighted["decoration-rounded"]);
+        application.client_mut().refresh_settings().expect("external snapshot");
+        application.sync(&mut document).expect("sync external snapshot");
+        assert!(document.highlighted["decoration-ios"], "external ios snapshot moves the highlight");
+        assert!(!document.highlighted["decoration-rounded"]);
+        assert!(
+            requests.borrow().iter().all(|request| !matches!(request, ControlRequest::ApplySettings(_))),
+            "external sync must not write"
         );
     }
 

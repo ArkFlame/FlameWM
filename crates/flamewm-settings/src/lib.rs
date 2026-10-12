@@ -315,6 +315,11 @@ enum SettingsAction {
         key: &'static str,
         values: &'static [&'static str],
     },
+    /// Writes one fixed text value to a setting, from an explicit option button.
+    TextSelect {
+        key: &'static str,
+        value: &'static str,
+    },
     /// A native `keyboard.*` id from the X11 key source. It is not markup, so
     /// it never edits a row; hotkey capture is driven by the key-event path.
     NativeKeyEvent,
@@ -594,6 +599,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 let current = self.text_setting(key)?;
                 self.apply_text(key, cycle_text(values, &current).to_owned())?;
             }
+            SettingsAction::TextSelect { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::TaskbarEdgeCycle => self.cycle_panel_edge()?,
             SettingsAction::TaskbarEdge(edge) => {
                 let (output, _) = self.selected_panel()?;
@@ -1168,6 +1174,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             optional_text(document, "theme-install-status", status.clone());
         }
         self.sync_appearance(document)?;
+        self.sync_decoration(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
         optional_text(
@@ -1203,7 +1210,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.position("animation-speed-thumb", fill as f32, 0.0)?;
         }
         for (key, id) in [
-            ("decoration", "decoration-value"),
             ("titlebarMinimizeStyle", "titlebar-minimize-style-value"),
             ("titlebarMaximizeStyle", "titlebar-maximize-style-value"),
             ("titlebarCloseStyle", "titlebar-close-style-value"),
@@ -1212,6 +1218,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
             if let Ok(value) = self.text_setting(key) {
                 let label = if key == "startAnimation" { start_animation_label(&value) } else { value };
                 document.text(id, label)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Highlights the option button whose value matches the authoritative `decoration`.
+    fn sync_decoration(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let Ok(current) = self.text_setting("decoration") else {
+            return Ok(());
+        };
+        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        for (value, id) in [("rounded", "decoration-rounded"), ("ios", "decoration-ios")] {
+            if current == value {
+                document.background(id, accent)?;
+            } else {
+                document.background_clear(id)?;
             }
         }
         Ok(())
@@ -1811,9 +1833,13 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.taskbar.color" => Ok(SettingsAction::TaskbarColorCycle),
         "settings.taskbar.size" => Ok(SettingsAction::TaskbarSizeCycle),
         "settings.font.family" => Ok(SettingsAction::FontFamilyCycle),
-        "settings.decoration.cycle" => Ok(SettingsAction::TextCycle {
+        "settings.decoration.rounded" => Ok(SettingsAction::TextSelect {
             key: "decoration",
-            values: &["rounded", "ios"],
+            value: "rounded",
+        }),
+        "settings.decoration.ios" => Ok(SettingsAction::TextSelect {
+            key: "decoration",
+            value: "ios",
         }),
         "settings.titlebar.minimize.style" => Ok(SettingsAction::TextCycle {
             key: "titlebarMinimizeStyle",
@@ -2067,9 +2093,14 @@ mod value_text_tests {
             Ok(SettingsAction::TextCycle { key: "titlebarCloseStyle", .. })
         ));
         assert!(matches!(
-            parse_action("settings.decoration.cycle"),
-            Ok(SettingsAction::TextCycle { key: "decoration", .. })
+            parse_action("settings.decoration.rounded"),
+            Ok(SettingsAction::TextSelect { key: "decoration", value: "rounded" })
         ));
+        assert!(matches!(
+            parse_action("settings.decoration.ios"),
+            Ok(SettingsAction::TextSelect { key: "decoration", value: "ios" })
+        ));
+        assert!(parse_action("settings.decoration.cycle").is_err());
     }
 
     #[test]
