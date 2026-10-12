@@ -302,7 +302,6 @@ fn walk_theme_dir(
     files: &mut HashMap<String, Vec<IndexedIconFile>>,
     theme_rank: usize,
     directory_rank: usize,
-    format_fallback: usize,
 ) {
     // One build-time walk per unindexed theme dir; lookup stays memory-only.
     let mut stack = vec![base.to_path_buf()];
@@ -320,16 +319,10 @@ fn walk_theme_dir(
             let Some((base_name, ext)) = split_icon_filename(&name) else {
                 continue;
             };
-            let format_rank = IconLookupIndex::EXTENSIONS
-                .iter()
-                .position(|e| *e == ext)
-                .unwrap_or(format_fallback);
-            if format_rank == format_fallback && format_fallback == 9999 {
-                // Unindexed theme: accept only supported extensions.
-                if !IconLookupIndex::EXTENSIONS.contains(&ext.as_str()) {
-                    continue;
-                }
-            }
+            // Unindexed theme: accept only supported extensions.
+            let Some(format_rank) = IconLookupIndex::EXTENSIONS.iter().position(|e| *e == ext) else {
+                continue;
+            };
             files.entry(base_name).or_default().push(IndexedIconFile {
                 path,
                 theme_rank,
@@ -816,7 +809,7 @@ impl IconLookupIndex {
             };
             for root in roots_for_theme {
                 let base = root.join(theme);
-                walk_theme_dir(&base, &mut files, theme_rank, usize::MAX / 4, 9999);
+                walk_theme_dir(&base, &mut files, theme_rank, usize::MAX / 4);
             }
         }
         let mut pixmaps: HashMap<String, Vec<PathBuf>> = HashMap::new();
