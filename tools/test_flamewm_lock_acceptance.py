@@ -64,6 +64,42 @@ class TextAndColourTests(unittest.TestCase):
         self.assertFalse(lk.background_ok([]))
 
 
+class CustomisationTests(unittest.TestCase):
+    def test_colour_must_dominate_outside_strip(self):
+        blue = (0x33, 0x66, 0x99)
+        self.assertTrue(lk.colour_dominates([blue] * 100, blue, 3))
+        self.assertTrue(lk.colour_dominates([(0x36, 0x63, 0x9A)] * 100, blue, 3))
+        self.assertFalse(lk.colour_dominates([(0x23, 0x26, 0x29)] * 100, blue, 3))
+        # Majority right but a quarter of the strip wrong: the 95% floor rejects it.
+        self.assertFalse(lk.colour_dominates([blue] * 75 + [(0, 0, 0)] * 25, blue, 3))
+
+    def test_row_runs_group_consecutive_rows(self):
+        self.assertEqual(lk.row_runs([5, 6, 7, 20, 21, 40]), [(5, 7), (20, 21), (40, 40)])
+        self.assertEqual(lk.row_runs([]), [])
+
+    def test_rows_with_finds_bright_text_rows(self):
+        bright, dark = lk.TEXT_BRIGHT, (0x2A, 0x2E, 0x32)
+        # 3 wide, 4 rows: only row 2 holds a bright pixel.
+        pixels = [dark] * 6 + [dark, bright, dark] + [dark] * 3
+        self.assertEqual(lk.rows_with(pixels, 3, lk.TEXT_BRIGHT, lk.TEXT_TOLERANCE), [2])
+
+    def test_clock_and_username_recognised_after_layout_shift(self):
+        # Default card: clock (tall), date (grey, not bright), username (short) below it.
+        self.assertEqual(lk.clock_and_username([(53, 133), (186, 208)]), (True, True))
+        # Date and username hidden: the clock moves down but is still the only text run.
+        self.assertEqual(lk.clock_and_username([(99, 179)]), (True, False))
+        self.assertEqual(lk.clock_and_username([]), (False, False))
+
+    def test_date_words_cover_weekday_month_and_year(self):
+        words = lk.date_words(lk.datetime(2026, 10, 12))
+        self.assertEqual(words, {"monday", "monday,", "october", "2026"})
+
+    def test_pattern_quadrants_tile_the_generated_image(self):
+        boxes = [box for box, _ in lk.PATTERN_QUADRANTS.values()]
+        self.assertEqual(sorted(boxes), sorted([(0, 0, 160, 100), (160, 0, 320, 100),
+                                                (0, 100, 160, 200), (160, 100, 320, 200)]))
+
+
 class DocumentTests(unittest.TestCase):
     def test_lk06_not_run_blocks_all_pass(self):
         results = {sid: lk.entry(sid, lk.PASS, "") for sid in lk.IDS if sid != "LK06"}
@@ -71,7 +107,8 @@ class DocumentTests(unittest.TestCase):
         doc = lk.compose_document(results)
         self.assertEqual(doc["verdict"], "INCOMPLETE")
         self.assertEqual(doc["exit_code"], 0)
-        self.assertEqual(doc["results"][-1]["reason"], "needs real credentials")
+        lk06_entry = next(e for e in doc["results"] if e["id"] == "LK06")
+        self.assertEqual(lk06_entry["reason"], "needs real credentials")
 
     def test_fail_dominates(self):
         results = {"LK01": lk.entry("LK01", lk.FAIL, "x")}

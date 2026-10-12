@@ -605,11 +605,15 @@ unsafe extern "C" {
 }
 
 unsafe fn visual_alpha_mask(display: *mut Display, visual: *mut Visual) -> u32 {
+    // RTLD_NODELETE keeps libXrender mapped after the dlclose below. Calling
+    // XRenderFindVisualFormat registers an XESetCloseDisplay hook on `display`
+    // that jumps into libXrender, so unmapping it before XCloseDisplay SIGSEGVs.
     const RTLD_LAZY: c_int = 1;
+    const RTLD_NODELETE: c_int = 0x1000;
     let names: [&[u8]; 2] = [b"libXrender.so.1\0", b"libXrender.so\0"];
     let sym = b"XRenderFindVisualFormat\0";
     for name in names {
-        let handle = unsafe { dlopen(name.as_ptr() as *const i8, RTLD_LAZY) };
+        let handle = unsafe { dlopen(name.as_ptr() as *const i8, RTLD_LAZY | RTLD_NODELETE) };
         if handle.is_null() {
             continue;
         }

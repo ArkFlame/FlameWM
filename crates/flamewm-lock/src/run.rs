@@ -31,14 +31,7 @@ pub fn run(settings: &LockSettings, username: &str) -> Result<(), String> {
     let template = document::template()?;
     let mut runtime =
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
-    let outcome = lock_on(&mut runtime, settings, username, width, height, template);
-    // The render stack's display owner must not be dropped here: libXft and
-    // libXrender install XESetCloseDisplay hooks on the display, and their
-    // dlclose'd code is unmapped by the time XCloseDisplay runs (SIGSEGV).
-    // The process exits right after this, which closes the connection and
-    // releases the grabs in the kernel's X client teardown.
-    std::mem::forget(runtime);
-    outcome
+    lock_on(&mut runtime, settings, username, width, height, template)
 }
 
 fn lock_on(
@@ -212,5 +205,19 @@ impl LockLoop {
             .map_err(|error| format!("redraw lock surface: {error:?}"))?;
         self.shown = Some(view);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flamewm_ui_x11::SurfaceRuntime;
+
+    /// Needs a live X display (`DISPLAY`). Creates and drops the render stack
+    /// normally: a regression here is a SIGSEGV at XCloseDisplay.
+    #[test]
+    #[ignore = "requires DISPLAY"]
+    fn runtime_drops_cleanly_after_xft_and_xrender_load() {
+        let runtime = SurfaceRuntime::new().expect("create UI runtime");
+        drop(runtime);
     }
 }

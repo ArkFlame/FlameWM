@@ -25,14 +25,14 @@ body.lock-body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 360px;
+  width: 480px;
   padding: 32px;
   border-radius: 12px;
   background-color: #2a2e32;
   box-sizing: border-box;
 }
 .lock-clock {
-  font-size: 96px;
+  font-size: 80px;
   color: #eff0f1;
 }
 .lock-date {
