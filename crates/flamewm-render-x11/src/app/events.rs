@@ -695,10 +695,13 @@ impl X11App {
     }
 
     pub(crate) fn hit_test(&self, document: &RuntimeDocument, x: f32, y: f32) -> Option<u32> {
-        let scale = document.ui_scale();
+        // A pointer pixel is painted when its center is covered, so sample the
+        // center: a fractional layout edge (e.g. y=451.3) must not hide the
+        // top pixel row that the retained paint already shows as the control.
+        let (x, y) = pointer_sample_point(x, y, document.ui_scale());
         self.layout
             .as_ref()
-            .and_then(|layout| layout.hit_test_action(document, x / scale, y / scale))
+            .and_then(|layout| layout.hit_test_action(document, x, y))
     }
 
     pub(crate) unsafe fn refresh_shape_mask(&self, document: &RuntimeDocument) {
@@ -780,6 +783,37 @@ impl X11App {
             }
         }
         Ok(())
+    }
+}
+
+/// Logical point sampled for a device pointer pixel: its center, so a fractional
+/// layout edge cannot hide the top pixel row the retained paint already shows.
+pub(crate) fn pointer_sample_point(x: f32, y: f32, scale: f32) -> (f32, f32) {
+    ((x + 0.5) / scale, (y + 0.5) / scale)
+}
+
+#[cfg(test)]
+mod pointer_sample_regressions {
+    use super::{Rect, pointer_sample_point};
+
+    #[test]
+    fn fractional_track_top_row_is_hit_at_pixel_center() {
+        // AP06 measured: the animation slider track laid out at y=451.30 and the
+        // pointer pixel row 451 was painted as the track but missed the hit test.
+        let track = Rect {
+            x: 528.0,
+            y: 451.30005,
+            width: 180.0,
+            height: 12.0,
+        };
+        assert!(!track.contains(531.0, 451.0), "corner sample misses the track");
+        let (x, y) = pointer_sample_point(531.0, 451.0, 1.0);
+        assert!(track.contains(x, y), "pixel-center sample must hit the track");
+    }
+
+    #[test]
+    fn pixel_center_sampling_scales_device_pixels_to_logical_points() {
+        assert_eq!(pointer_sample_point(10.0, 20.0, 2.0), (5.25, 10.25));
     }
 }
 
