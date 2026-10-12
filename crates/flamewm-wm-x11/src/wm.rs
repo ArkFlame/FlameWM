@@ -78,8 +78,9 @@ fn warp_rect(rect: animation::Rect) -> WarpRect {
 }
 
 use flamewm_api::shortcuts::{
-    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
-    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+    ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
+    ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
+    ACTION_WORKSPACE_UP,
 };
 use flamewm_window_core::{
     SnapTarget, snap_geometry as core_snap_geometry, snap_target as core_snap_target,
@@ -2836,6 +2837,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
             // Single-row desktop layout (KDE default): up/down intentionally do nothing.
             ACTION_WORKSPACE_UP | ACTION_WORKSPACE_DOWN => {}
+            // Same spawn and supervision path as the Lock session action.
+            ACTION_SESSION_LOCK => {
+                if let Err(error) = flamewm_x11_desktop::start_lock_screen() {
+                    eprintln!("flamewm: lock shortcut failed: {error:?}");
+                }
+            }
             // Chorded start-menu binding: toggle on press. Bare Super is handled above
             // and toggles through the SuperTap commit at the end of the batch.
             ACTION_TOGGLE_START_MENU => self.changes.start_menu_toggle = true,

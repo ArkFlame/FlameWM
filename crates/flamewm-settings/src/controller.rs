@@ -495,8 +495,8 @@ mod tests {
     #[test]
     fn hotkey_row_markup_ids_parse_to_their_capture_action() {
         use flamewm_api::shortcuts::{
-            ACTION_TOGGLE_START_MENU, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT,
-            ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
+            ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WORKSPACE_DOWN,
+            ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
         };
         let html = include_str!("../../../ui/settings.html");
         let rows = [
@@ -505,6 +505,7 @@ mod tests {
             ("right", ACTION_WORKSPACE_RIGHT),
             ("up", ACTION_WORKSPACE_UP),
             ("down", ACTION_WORKSPACE_DOWN),
+            ("lock", ACTION_SESSION_LOCK),
         ];
         for (slot, binding) in rows {
             // The row's key button is the one that carries the capture id.

@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::{
-    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE, ACTION_WINDOW_MINIMIZE,
-    ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
-    KeyBinding,
+    ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
+    ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
+    ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
-pub const ACTIONS: [&str; 8] = [
+pub const ACTIONS: [&str; 9] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_WORKSPACE_LEFT,
     ACTION_WORKSPACE_RIGHT,
@@ -16,6 +16,7 @@ pub const ACTIONS: [&str; 8] = [
     ACTION_WINDOW_CLOSE,
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
+    ACTION_SESSION_LOCK,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +54,10 @@ impl Default for ShortcutRegistry {
             ),
             (ACTION_WINDOW_MINIMIZE.to_owned(), KeyBinding::unassigned()),
             (ACTION_WINDOW_MAXIMIZE.to_owned(), KeyBinding::unassigned()),
+            (
+                ACTION_SESSION_LOCK.to_owned(),
+                KeyBinding::assigned("Super+L"),
+            ),
         ]);
         Self {
             bindings: defaults.clone(),
@@ -260,6 +265,44 @@ mod tests {
             .expect_err("duplicate must fail");
         assert_eq!(error.code, ErrorCode::Conflict);
         assert_eq!(registry.binding(ACTION_WORKSPACE_RIGHT).cloned(), before);
+    }
+
+    #[test]
+    fn session_lock_defaults_to_super_l_and_conflicts_with_other_actions() {
+        let mut registry = ShortcutRegistry::default();
+        assert_eq!(
+            registry.binding(ACTION_SESSION_LOCK),
+            Some(&KeyBinding::assigned("Super+L"))
+        );
+        assert!(ACTIONS.contains(&ACTION_SESSION_LOCK));
+        let error = registry
+            .set(ACTION_WINDOW_CLOSE, "super+l")
+            .expect_err("Super+L is taken by the lock action");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        registry
+            .set(ACTION_SESSION_LOCK, "Ctrl+Super+K")
+            .expect("lock can be rebound");
+        assert_eq!(
+            registry.binding(ACTION_SESSION_LOCK),
+            Some(&KeyBinding::assigned("Ctrl+Super+K"))
+        );
+    }
+
+    #[test]
+    fn config_without_session_lock_key_loads_the_default_lock_binding() {
+        // A settings file written before SessionLock existed has no hotkey.SessionLock entry.
+        let persisted =
+            BTreeMap::from([(ACTION_WINDOW_CLOSE.to_owned(), "Ctrl+Super+Q".to_owned())]);
+        let effective = crate::services::shortcuts::effective_registry(&persisted)
+            .expect("legacy config is valid");
+        assert_eq!(
+            effective.binding(ACTION_SESSION_LOCK),
+            Some(&KeyBinding::assigned("Super+L"))
+        );
+        assert_eq!(
+            effective.binding(ACTION_WINDOW_CLOSE),
+            Some(&KeyBinding::assigned("Ctrl+Super+Q"))
+        );
     }
 
     #[test]

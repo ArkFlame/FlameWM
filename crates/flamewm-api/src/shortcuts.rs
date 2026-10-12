@@ -8,6 +8,7 @@ pub const ACTION_WORKSPACE_DOWN: &str = "WorkspaceDown";
 pub const ACTION_WINDOW_CLOSE: &str = "WindowClose";
 pub const ACTION_WINDOW_MINIMIZE: &str = "WindowMinimize";
 pub const ACTION_WINDOW_MAXIMIZE: &str = "WindowMaximize";
+pub const ACTION_SESSION_LOCK: &str = "SessionLock";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyBinding(pub Option<String>);

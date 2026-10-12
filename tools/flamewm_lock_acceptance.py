@@ -17,8 +17,11 @@ XTEST input and capture. Statuses: PASS, FAIL, NOT_RUN, ENVIRONMENT_BLOCKED.
   LK08 lockClockFormat=12h, lockShowDate=false, lockShowUsername=false: AM/PM seen by OCR,
        date words and the username label absent
   LK09 lockBackgroundImage=<generated PNG>: its quadrant colours show at the screen corners
+  LK10 Super+L (XTEST chord, WM+shell running, no lock) starts the lock covering the screen in 5 s
+  LK11 SIGKILL of the WM-started lock: a new lock window covers the screen again within 5 s
 
 LK07..LK09 each restart the WM with their own seeded settings (no state shared between them).
+LK10 and LK11 run on the WM-owned lock (the WM spawns it; the harness does not).
 
 Exit status: 0 no FAIL, 1 any FAIL, 2 usage error, 3 environment blocked.
 """
@@ -46,7 +49,7 @@ import flamewm_appearance_acceptance as appear  # noqa: E402
 
 ROOT = base.ROOT
 SCHEMA = "flamewm-lock-acceptance/1"
-IDS = tuple(f"LK{n:02d}" for n in range(1, 10))
+IDS = tuple(f"LK{n:02d}" for n in range(1, 12))
 TITLES = {
     "LK01": "lock starts and covers the screen",
     "LK02": "grab effective: WM shortcuts do not act, lock stays topmost",
@@ -57,11 +60,15 @@ TITLES = {
     "LK07": "customised background colour fills the screen outside the card",
     "LK08": "clock 12h, date and username hidden",
     "LK09": "customised background image is cover-scaled behind the card",
+    "LK10": "Super+L starts the lock",
+    "LK11": "killed lock comes back",
 }
+LOCK_APPEAR_SECONDS = 5.0
 PASS, FAIL = appear.PASS, appear.FAIL
 NOT_RUN, ENV_BLOCKED = appear.NOT_RUN, appear.ENV_BLOCKED
 STATUSES = (PASS, FAIL, NOT_RUN, ENV_BLOCKED)
 LOCK_BIN_DEFAULT = ROOT / ".target/release/flamewm-lock"
+LOCK_BIN_NAME = "flamewm-lock"
 WM_BIN_DEFAULT = ROOT / ".target/release/flamewm"
 BREEZE_BACKGROUND = (0x23, 0x26, 0x29)
 BACKGROUND_TOLERANCE = 4
@@ -94,6 +101,11 @@ def lock_window(nodes: list[dict], screen_w: int, screen_h: int) -> dict | None:
     """Largest root-level window covering the screen, or None."""
     candidates = [n for n in nodes if n["parent"] is None and covers_screen(n, screen_w, screen_h)]
     return max(candidates, key=lambda n: n["w"] * n["h"]) if candidates else None
+
+
+def respawned_pids(pids: list[int], victim: int) -> list[int]:
+    """WM-owned lock pids other than the killed one. X window ids are reused, so the pid is the identity."""
+    return [pid for pid in pids if pid != victim]
 
 
 def is_topmost(nodes: list[dict], window_id: str) -> bool:
@@ -181,6 +193,7 @@ class LockSession:
     def __init__(self, ctx: base.Ctx, args: argparse.Namespace) -> None:
         self.ctx, self.args = ctx, args
         self.lock: base.Owned | None = None
+        self.shell: base.Owned | None = None
 
     def ensure_lock(self) -> bool:
         if self.lock is None or self.lock.proc.poll() is not None:
@@ -216,6 +229,33 @@ class LockSession:
         x0, y0, w, h = rect
         width = self.args.screen_w
         return [pixels[y * width + x] for y in range(y0, y0 + h) for x in range(x0, x0 + w)]
+
+    def wm_lock_pids(self) -> list[int]:
+        """Lock processes whose parent is the WM: the WM, not the harness, spawns the lock on Super+L and on respawn."""
+        if self.ctx.wm is None:
+            return []
+        result = subprocess.run(["pgrep", "-P", str(self.ctx.wm.pid), "-x", LOCK_BIN_NAME],
+                                capture_output=True, text=True, timeout=10, check=False)
+        return [int(v) for v in result.stdout.split() if v.isdigit()]
+
+    def wait_for_lock(self, ready) -> tuple[dict | None, list[dict]]:
+        """Poll until ready(covering window or None) holds, bounded by LOCK_APPEAR_SECONDS."""
+        deadline = time.monotonic() + LOCK_APPEAR_SECONDS
+        while True:
+            win, nodes = self.window("wait-lock")
+            if ready(win) or time.monotonic() >= deadline:
+                return win, nodes
+            time.sleep(0.25)
+
+    def reap_wm_locks(self) -> None:
+        """Stops the WM, then SIGKILLs the WM-started locks: a lock outliving its WM would be left unsupervised."""
+        pids = self.wm_lock_pids()
+        self.ctx.stop(self.ctx.wm)
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def restart(self, values: dict[str, str]) -> bool:
         """Seed the settings, restart the WM so it serves them, then start a fresh lock instance."""
@@ -422,7 +462,49 @@ def lk09(s: LockSession) -> dict:
                  [str(path), str(image_path)] + seen, ["import -window root"])
 
 
-SCENARIOS = (lk01, lk02, lk03, lk04, lk05, lk06, lk07, lk08, lk09)
+def lk10(s: LockSession) -> dict:
+    # Start from a WM and shell with no lock: stop any harness-owned lock left by LK07..LK09.
+    s.ctx.stop(s.lock)
+    s.lock = None
+    if not base.restart_owned_wm(s.ctx, s.args, "flamewm-wm"):
+        return entry("LK10", FAIL, "flamewm WM did not become ready")
+    if s.shell is None or s.shell.proc.poll() is not None:
+        s.shell = s.ctx.spawn("flamewm-shell", [s.args.shell_bin], dict(s.ctx.app_env, XDG_SESSION_TYPE="x11"))
+    time.sleep(s.args.settle_seconds)
+    if s.shell.proc.poll() is not None:
+        return entry("LK10", FAIL, "flamewm-shell exited before the chord")
+    before, _ = s.window("LK10-before")
+    if before is not None:
+        return entry("LK10", FAIL, "a lock window is already mapped before Super+L")
+    status, _ = s.input(chord="Super+L")
+    win, nodes = s.wait_for_lock(lambda covering: covering is not None)
+    if win is None:
+        return entry("LK10", FAIL, f"no covering lock window within {LOCK_APPEAR_SECONDS:g}s of Super+L",
+                     [f"chord={status}"], ["flamewm_xtest.py --chord Super+L", "xwininfo -root -tree"])
+    return entry("LK10", PASS, "", [f"chord={status}", f"window={win['id']} {win['w']}x{win['h']}",
+                                    f"wm_lock_pids={s.wm_lock_pids()}"],
+                 ["flamewm_xtest.py --chord Super+L", "xwininfo -root -tree"])
+
+
+def lk11(s: LockSession) -> dict:
+    before, _ = s.window("LK11-before")
+    pids = s.wm_lock_pids()
+    if before is None or not pids:
+        return entry("LK11", NOT_RUN, "no WM-started lock to kill (LK10 did not observe one)")
+    victim = pids[0]
+    os.kill(victim, signal.SIGKILL)
+    win, _ = s.wait_for_lock(lambda covering: covering is not None
+                             and bool(respawned_pids(s.wm_lock_pids(), victim)))
+    respawned = respawned_pids(s.wm_lock_pids(), victim)
+    ok = win is not None and bool(respawned)
+    reason = "" if ok else (f"no WM-owned respawn within {LOCK_APPEAR_SECONDS:g}s of SIGKILL" if not respawned
+                            else "respawned lock did not cover the screen")
+    return entry("LK11", PASS if ok else FAIL, reason,
+                 [f"killed_pid={victim}", f"respawned_pids={respawned}",
+                  f"covering_window={win and win['id']}"], ["kill -KILL <lock pid>", "xwininfo -root -tree"])
+
+
+SCENARIOS = (lk01, lk02, lk03, lk04, lk05, lk06, lk07, lk08, lk09, lk10, lk11)
 
 
 # ---------------------------------------------------------------- driver
@@ -434,6 +516,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--display", default=None)
     p.add_argument("--lock-bin", default=str(LOCK_BIN_DEFAULT))
     p.add_argument("--wm-bin", default=str(WM_BIN_DEFAULT))
+    p.add_argument("--shell-bin", default=str(ROOT / ".target/release/flamewm-shell"))
     p.add_argument("--settle-seconds", type=float, default=3.0)
     args = p.parse_args(argv)
     if not re.fullmatch(r"\d+x\d+", args.geometry):
@@ -449,6 +532,7 @@ def write_doc(run: Path, doc: dict) -> None:
 def run_inner(args: argparse.Namespace, run: Path) -> int:
     ctx = base.Ctx(run)
     results: dict[str, dict] = {}
+    session: LockSession | None = None
     started = appear.utc_now()
     for sub in ("home", "xdg-config", "xdg-data", "xdg-cache", "xdg-runtime", "shots", "logs"):
         (run / sub).mkdir(parents=True, exist_ok=True)
@@ -477,6 +561,8 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                     except Exception as error:  # a crashed scenario is a FAIL, never a PASS
                         results[sid] = entry(sid, FAIL, f"scenario raised {type(error).__name__}: {error}")
     finally:
+        if session is not None:
+            session.reap_wm_locks()
         teardown = ctx.teardown()
         doc = compose_document(results)
         doc.update({"run_dir": str(run), "display": ctx.display, "geometry": args.geometry,

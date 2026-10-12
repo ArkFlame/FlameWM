@@ -31,6 +31,18 @@ class CoversScreenTests(unittest.TestCase):
         self.assertIsNone(lk.lock_window(nodes[:1], 1280, 800))
 
 
+class RespawnTests(unittest.TestCase):
+    def test_respawn_is_identified_by_pid_not_window_id(self):
+        # X reuses window ids: the respawned lock can map under the killed lock's id.
+        self.assertEqual(lk.respawned_pids([4001, 4002], 4001), [4002])
+        self.assertEqual(lk.respawned_pids([4001], 4001), [])
+
+    def test_lk10_and_lk11_are_registered_after_lk09(self):
+        self.assertEqual(lk.IDS[-2:], ("LK10", "LK11"))
+        self.assertEqual(len(lk.SCENARIOS), len(lk.IDS))
+        self.assertIn("LK11", lk.TITLES)
+
+
 class TopmostTests(unittest.TestCase):
     def test_first_root_child_is_topmost(self):
         # xwininfo -tree prints the root's children topmost first (checked natively by raising a window).

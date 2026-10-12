@@ -217,7 +217,7 @@ struct HotkeyRow {
     node: &'static str,
 }
 
-static HOTKEY_ROWS: [HotkeyRow; 5] = [
+static HOTKEY_ROWS: [HotkeyRow; 6] = [
     HotkeyRow {
         slot: "start",
         action: flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU,
@@ -247,6 +247,12 @@ static HOTKEY_ROWS: [HotkeyRow; 5] = [
         action: flamewm_api::shortcuts::ACTION_WORKSPACE_DOWN,
         label: "Desktop down",
         node: "hotkey-key-down",
+    },
+    HotkeyRow {
+        slot: "lock",
+        action: flamewm_api::shortcuts::ACTION_SESSION_LOCK,
+        label: "Lock screen",
+        node: "hotkey-key-lock",
     },
 ];
 

@@ -1,11 +1,13 @@
 //! X11 desktop ports backed by the live X server and EWMH/RandR.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
@@ -275,22 +277,100 @@ fn resolve_lock_program(exe_dir: Option<&Path>, path_var: Option<&OsStr>) -> Loc
         .map_or(LockProgram::Loginctl, LockProgram::Screen)
 }
 
-/// Starts the lock screen. The lock binary is spawned detached and not waited
-/// on, so the WM never blocks on the lock surface's lifetime.
+/// Delay before a crashed lock screen is respawned.
+const LOCK_RESPAWN_DELAY: Duration = Duration::from_millis(500);
+/// Respawns allowed inside [`LOCK_RESPAWN_WINDOW`] before supervision gives up.
+const LOCK_RESPAWN_CAP: usize = 5;
+const LOCK_RESPAWN_WINDOW: Duration = Duration::from_secs(30);
+
+/// What the lock supervisor does after the lock process exits.
+#[derive(Debug, PartialEq, Eq)]
+enum LockSupervision {
+    Respawn { delay: Duration },
+    Stop,
+}
+
+/// A successful exit means the user unlocked, so supervision ends. Any other
+/// exit (non-zero status or a signal such as SIGKILL, which drops the grabs)
+/// respawns the lock until the crash-loop cap is reached.
+fn decide(exit_status: ExitStatus, recent_restarts: usize) -> LockSupervision {
+    if exit_status.success() || recent_restarts >= LOCK_RESPAWN_CAP {
+        LockSupervision::Stop
+    } else {
+        LockSupervision::Respawn {
+            delay: LOCK_RESPAWN_DELAY,
+        }
+    }
+}
+
+fn spawn_lock_process(program: &Path) -> std::io::Result<Child> {
+    Command::new(program)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+}
+
+/// Owns the lock child for the lifetime of the lock screen: respawns it per
+/// [`decide`] and returns once supervision stops.
+fn supervise_lock(program: PathBuf, mut child: Child) {
+    let mut restarts: VecDeque<Instant> = VecDeque::new();
+    loop {
+        let status = match child.wait() {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("flamewm: lock screen wait failed: {error}");
+                return;
+            }
+        };
+        let now = Instant::now();
+        while restarts
+            .front()
+            .is_some_and(|at| now.duration_since(*at) > LOCK_RESPAWN_WINDOW)
+        {
+            restarts.pop_front();
+        }
+        match decide(status, restarts.len()) {
+            LockSupervision::Stop => {
+                if !status.success() {
+                    eprintln!(
+                        "flamewm: lock screen exited ({status}) and crash-loop cap reached; not respawning"
+                    );
+                }
+                return;
+            }
+            LockSupervision::Respawn { delay } => {
+                thread::sleep(delay);
+                restarts.push_back(Instant::now());
+                match spawn_lock_process(&program) {
+                    Ok(next) => child = next,
+                    Err(error) => {
+                        eprintln!("flamewm: lock screen respawn failed: {error}");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Starts the lock screen. The lock binary is spawned detached; a supervisor
+/// thread respawns it if it crashes so the screen cannot silently unlock.
 pub fn start_lock_screen() -> FlameResult<()> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let path_var = std::env::var_os("PATH");
     match resolve_lock_program(exe_dir.as_deref(), path_var.as_deref()) {
-        LockProgram::Screen(program) => Command::new(program)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .map(|_| ())
-            .map_err(io_error),
+        LockProgram::Screen(program) => {
+            let child = spawn_lock_process(&program).map_err(io_error)?;
+            thread::Builder::new()
+                .name("flamewm-lock-supervisor".to_owned())
+                .spawn(move || supervise_lock(program, child))
+                .map(|_| ())
+                .map_err(io_error)
+        }
         LockProgram::Loginctl => Command::new("loginctl")
             .arg("lock-session")
             .status()
@@ -997,5 +1077,49 @@ impl DisplayPort for X11Desktop {
             ));
         }
         self.flush()
+    }
+}
+
+#[cfg(test)]
+mod lock_supervision_tests {
+    use std::os::unix::process::ExitStatusExt;
+
+    use super::*;
+
+    /// Raw wait status: exit code lives in bits 8..16, a signal in bits 0..7.
+    fn exited(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    fn killed(signal: i32) -> ExitStatus {
+        ExitStatus::from_raw(signal)
+    }
+
+    #[test]
+    fn successful_exit_unlocks_and_ends_supervision() {
+        assert_eq!(decide(exited(0), 0), LockSupervision::Stop);
+        assert_eq!(
+            decide(exited(0), LOCK_RESPAWN_CAP - 1),
+            LockSupervision::Stop
+        );
+    }
+
+    #[test]
+    fn nonzero_exit_and_sigkill_respawn_after_backoff() {
+        let respawn = LockSupervision::Respawn {
+            delay: Duration::from_millis(500),
+        };
+        assert_eq!(decide(exited(1), 0), respawn);
+        assert_eq!(decide(killed(9), 0), respawn);
+        assert_eq!(decide(killed(9), LOCK_RESPAWN_CAP - 1), respawn);
+    }
+
+    #[test]
+    fn crash_loop_cap_stops_supervision() {
+        assert_eq!(decide(killed(9), LOCK_RESPAWN_CAP), LockSupervision::Stop);
+        assert_eq!(
+            decide(exited(1), LOCK_RESPAWN_CAP + 3),
+            LockSupervision::Stop
+        );
     }
 }
