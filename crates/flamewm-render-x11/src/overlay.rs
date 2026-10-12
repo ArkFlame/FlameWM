@@ -23,8 +23,8 @@ use crate::xlib::{
     CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
     Pixmap, TRANSPARENT_CLEAR_PIXEL, TRUE_COLOR_CLASS, Window, XCreateColormap, XCreateWindow,
     XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight, XDisplayWidth,
-    XFlush, XFreeColormap, XFreePixmap, XMapWindow, XMatchVisualInfo, XRootWindow,
-    XSetWindowAttributes, XSync, XVisualInfo, ALLOC_NONE,
+    XCreatePixmap, XFlush, XFreeColormap, XFreePixmap, XMapWindow, XMatchVisualInfo, XRootWindow,
+    XSetWindowAttributes, XSync, XVisualInfo, ALLOC_NONE, XInternAtom,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 
@@ -45,14 +45,41 @@ pub enum WarpSurface {
     OpaqueBackdrop,
 }
 
-/// The surface used for a Magic Lamp transition: the backdrop fallback only without ARGB.
+/// The surface used for a Magic Lamp transition. A transparent window is only shown through
+/// when a compositing manager blends it; without one its transparent pixels display as black.
 #[must_use]
-pub fn warp_surface_for(argb_visual: bool) -> WarpSurface {
-    if argb_visual {
+pub fn warp_surface_for(argb_visual: bool, compositing_manager: bool) -> WarpSurface {
+    if argb_visual && compositing_manager {
         WarpSurface::Argb
     } else {
         WarpSurface::OpaqueBackdrop
     }
+}
+
+#[link(name = "X11")]
+unsafe extern "C" {
+    fn XGetSelectionOwner(display: *mut Display, selection: c_ulong) -> c_ulong;
+}
+
+/// True when some client owns `_NET_WM_CM_S0`, the compositing-manager selection.
+#[must_use]
+pub fn compositing_manager_running(display: *mut Display) -> bool {
+    if display.is_null() {
+        return false;
+    }
+    // SAFETY: the display is live per the caller contract; the name is a static NUL-terminated
+    // string and `only_if_exists` keeps the atom lookup from creating it.
+    unsafe {
+        let atom = XInternAtom(display, b"_NET_WM_CM_S0\0".as_ptr().cast(), 1);
+        atom != 0 && XGetSelectionOwner(display, atom) != 0
+    }
+}
+
+/// True when Magic Lamp may draw on a transparent window: a 32-bit visual and a compositing
+/// manager. The WM hides the real frame only when this is false, so the snapshot stays visible.
+#[must_use]
+pub fn warp_argb_usable(display: *mut Display) -> bool {
+    argb_visual_available(display) && compositing_manager_running(display)
 }
 
 /// Scale and alpha of the window-open effect at linear progress `t` (clamped).
@@ -103,6 +130,9 @@ pub struct WarpOverlay {
     /// Destination picture on `window`. Zero until created.
     picture: c_ulong,
     backdrop: Option<Backdrop>,
+    /// Opaque warp frame: backdrop and strips are drawn here, then copied to the window once per
+    /// frame so the window never shows the intermediate black backdrop.
+    offscreen: Option<Backdrop>,
     /// Window-open effect resources. `fade` selects the paint path.
     fade: bool,
     fade_pixmap: Pixmap,
@@ -143,6 +173,7 @@ impl WarpOverlay {
             colormap: None,
             picture: 0,
             backdrop: None,
+            offscreen: None,
             fade: false,
             fade_pixmap: 0,
             fade_source: 0,
@@ -175,7 +206,7 @@ impl WarpOverlay {
         let local = |r: WarpRect| WarpRect { x: r.x - origin.x, y: r.y - origin.y, ..r };
         let mut overlay = Self::empty(display, api, capture, (bw, bh), local(source), local(target));
 
-        match warp_surface_for(argb_visual_available(display)) {
+        match warp_surface_for(argb_visual_available(display), compositing_manager_running(display)) {
             WarpSurface::Argb => {
                 // SAFETY: `display` is live per the caller contract; resources are recorded
                 // in `overlay` as soon as they exist, so Drop releases them on error.
@@ -195,6 +226,19 @@ impl WarpOverlay {
                 overlay.picture = unsafe {
                     overlay.api.create_standard_picture(display, window, PICT_STANDARD_RGB_24)
                 }?;
+                // SAFETY: `display` and `window` are live; the pixmap is recorded for Drop once created.
+                let pixmap = unsafe {
+                    XCreatePixmap(display, window, bw, bh, XDefaultDepth(display, XDefaultScreen(display)) as u32)
+                };
+                if pixmap == 0 {
+                    return Err("overlay: offscreen pixmap returned 0".to_string());
+                }
+                overlay.offscreen = Some(Backdrop { pixmap, picture: 0 });
+                // SAFETY: `pixmap` is live and owned by `overlay`.
+                let picture = unsafe { overlay.api.create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24) }?;
+                if let Some(off) = overlay.offscreen.as_mut() {
+                    off.picture = picture;
+                }
             }
         }
         Ok(overlay)
@@ -237,31 +281,34 @@ impl WarpOverlay {
     /// For a warp, `progress` 0 is the source and 1 the target. For a fade it is linear time
     /// 0..=1, eased by [`fade_frame`].
     pub fn paint(&mut self, progress: f64) -> Result<(), String> {
-        if self.fade {
-            self.paint_fade(progress)?;
-        } else {
-            self.paint_warp(progress)?;
-        }
+        // Map before the first draw: without backing store, pixels drawn into an unmapped window
+        // are discarded, and a picture created before mapping does not clip to the visible window.
         // SAFETY: `display` is live; the window is ours until Drop.
         unsafe {
             if !self.mapped {
                 XMapWindow(self.display, self.window);
                 self.mapped = true;
             }
-            XFlush(self.display);
         }
+        if self.fade {
+            self.paint_fade(progress)?;
+        } else {
+            self.paint_warp(progress)?;
+        }
+        // SAFETY: `display` is live; the window is ours until Drop.
+        unsafe { XFlush(self.display) };
         Ok(())
     }
 
     fn paint_warp(&mut self, progress: f64) -> Result<(), String> {
         let mesh = warp::magic_lamp_mesh(self.source, self.target, progress, STRIP_COUNT)?;
+        let (w, h) = self.size;
+        let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
         if let Some(backdrop) = &self.backdrop {
-            let (w, h) = self.size;
             // SAFETY: both pictures are live on `display` until Drop; the snapshot covers the
             // whole window, so every pixel is opaque before the strips are drawn.
             unsafe {
-                self.api
-                    .composite_src(self.display, backdrop.picture, self.picture, (0, 0, w, h));
+                self.api.composite_src(self.display, backdrop.picture, dest, (0, 0, w, h));
             }
         }
         if self.warp_source.is_none() {
@@ -272,8 +319,13 @@ impl WarpOverlay {
         let Some(source) = self.warp_source.as_ref() else {
             return Err("overlay: warp source missing after upload".to_string());
         };
-        // SAFETY: `display` and `picture` are live until Drop; `source` was uploaded on `display`.
-        unsafe { warp::paint_warped(self.display, &self.api, source, &mesh, self.picture) }
+        // SAFETY: `display` and `dest` are live until Drop; `source` was uploaded on `display`.
+        unsafe { warp::paint_warped(self.display, &self.api, source, &mesh, dest) }?;
+        if dest != self.picture {
+            // SAFETY: both pictures are live on `display`; one copy shows the finished frame.
+            unsafe { self.api.composite_src(self.display, dest, self.picture, (0, 0, w, h)) };
+        }
+        Ok(())
     }
 
     fn paint_fade(&mut self, progress: f64) -> Result<(), String> {
@@ -346,6 +398,12 @@ impl Drop for WarpOverlay {
             if let Some(backdrop) = self.backdrop.take() {
                 self.api.free_picture(self.display, backdrop.picture);
                 XFreePixmap(self.display, backdrop.pixmap);
+            }
+            if let Some(off) = self.offscreen.take() {
+                if off.picture != 0 {
+                    self.api.free_picture(self.display, off.picture);
+                }
+                XFreePixmap(self.display, off.pixmap);
             }
             if self.window != 0 {
                 XDestroyWindow(self.display, self.window);
@@ -550,13 +608,19 @@ mod tests {
 
     #[test]
     fn backdrop_surface_is_chosen_only_without_argb() {
-        assert_eq!(warp_surface_for(true), WarpSurface::Argb);
-        assert_eq!(warp_surface_for(false), WarpSurface::OpaqueBackdrop);
+        assert_eq!(warp_surface_for(true, true), WarpSurface::Argb);
+        // Without a compositing manager the ARGB window would show black, so the opaque
+        // root-snapshot path must take over even when a 32-bit visual exists.
+        assert_eq!(warp_surface_for(true, false), WarpSurface::OpaqueBackdrop);
+        assert_eq!(warp_surface_for(false, true), WarpSurface::OpaqueBackdrop);
+        assert_eq!(warp_surface_for(false, false), WarpSurface::OpaqueBackdrop);
     }
 
     #[test]
     fn argb_probe_is_false_for_null_display() {
         assert!(!argb_visual_available(std::ptr::null_mut()));
+        assert!(!warp_argb_usable(std::ptr::null_mut()));
+        assert!(!compositing_manager_running(std::ptr::null_mut()));
     }
 
     #[test]

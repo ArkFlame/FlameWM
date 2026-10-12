@@ -191,6 +191,21 @@ pub(crate) unsafe fn upload_argb_pixmap(
     display: *mut Display,
     capture: &CapturedImage,
 ) -> Result<Pixmap, String> {
+    // SAFETY: forwarded contract.
+    unsafe { upload_pixmap_depth(display, capture, 32) }
+}
+
+/// Uploads `capture` into a new pixmap of `depth` on the default screen (32 for ARGB, the screen
+/// depth for opaque sources). Pixels are the same native 32-bit words either way.
+///
+/// # Safety
+///
+/// `display` must be a live Xlib display.
+pub(crate) unsafe fn upload_pixmap_depth(
+    display: *mut Display,
+    capture: &CapturedImage,
+    depth: c_uint,
+) -> Result<Pixmap, String> {
     if display.is_null() {
         return Err("upload: null display".to_string());
     }
@@ -202,9 +217,9 @@ pub(crate) unsafe fn upload_argb_pixmap(
     let screen = unsafe { XDefaultScreen(display) };
     let root = unsafe { XRootWindow(display, screen) };
     let visual = unsafe { XDefaultVisual(display, screen) };
-    let pixmap = unsafe { XCreatePixmap(display, root, capture.width, capture.height, 32) };
+    let pixmap = unsafe { XCreatePixmap(display, root, capture.width, capture.height, depth) };
     if pixmap == 0 {
-        return Err("XCreatePixmap(depth 32) returned 0".to_string());
+        return Err(format!("XCreatePixmap(depth {depth}) returned 0"));
     }
     let gc = unsafe { XCreateGC(display, pixmap, 0, std::ptr::null_mut()) };
     if gc.is_null() {
@@ -223,7 +238,7 @@ pub(crate) unsafe fn upload_argb_pixmap(
         XCreateImage(
             display,
             visual,
-            32,
+            depth,
             ZPIXMAP,
             0,
             data,

@@ -588,8 +588,11 @@ def ap07(s: Session) -> dict:
         # A real lamp changes the painted shape mid-flight: narrower and/or shorter than the resting window,
         # never a static frame, and ends with the client gone from the screen.
         shaped = [b for b in mids if (b[2] - b[0]) < w0 * 0.95 or (b[3] - b[1]) < h0 * 0.95]
-        if not shaped:
-            fails.append(f"no mid-flight frame with a narrowed/shortened client image (rest={box0}, frames={boxes})")
+        # 0.25x makes the flight ~1 s against ~0.3 s per screenshot: a live lamp is seen in several frames,
+        # so one lucky frame followed by black (a blank overlay) must not pass.
+        if len(shaped) < 2:
+            fails.append(f"fewer than 2 mid-flight frames with a narrowed/shortened client image "
+                         f"({len(shaped)}; rest={box0}, frames={boxes})")
         if boxes and boxes[-1] is not None:
             fails.append(f"client pixels still on screen after the flight: {boxes[-1]}")
     if map_state(wm_state) not in ("IsUnMapped", "IsUnviewable"):

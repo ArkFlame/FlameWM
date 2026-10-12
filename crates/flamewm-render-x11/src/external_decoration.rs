@@ -13,9 +13,10 @@ use std::rc::{Rc, Weak};
 
 use flamewm_render_core::{Color, CursorKind, Rect};
 
-use super::overlay::{WarpOverlay, argb_visual_available};
+use super::overlay::{WarpOverlay, argb_visual_available, warp_argb_usable};
 use super::warp::WarpRect;
 use super::xcomposite::{CapturedImage, capture_window};
+use super::xrender_transform::XRenderTransformApi;
 use super::external_drawable::{
     ExternalDrawableSession, ExternalDrawableTarget, external_text_measure, use_cstring_title,
 };
@@ -34,6 +35,7 @@ pub struct ExternalDecorationRenderer {
     target: Option<ExternalDrawableTarget>,
     font_family: String,
     unavailable: Option<String>,
+    picture_transform: bool,
     last_title_style: Option<(f32, i32)>,
 }
 
@@ -93,6 +95,8 @@ impl ExternalDecorationRenderer {
             }
         };
         let backend = unsafe { XcursorBackend::with_theme(display, None, None) };
+        let picture_transform = XRenderTransformApi::load()
+            .is_ok_and(|api| api.capabilities().picture_transform);
         Ok(Self {
             display,
             session: Some(Box::new(session)),
@@ -100,6 +104,7 @@ impl ExternalDecorationRenderer {
             target: None,
             font_family: font_family.to_string(),
             unavailable: None,
+            picture_transform,
             last_title_style: None,
         })
     }
@@ -114,6 +119,7 @@ impl ExternalDecorationRenderer {
             target: None,
             font_family: String::new(),
             unavailable: Some(reason.to_string()),
+            picture_transform: false,
             last_title_style: None,
         }
     }
@@ -121,6 +127,12 @@ impl ExternalDecorationRenderer {
     /// False exactly when built via [`Self::unavailable`].
     pub fn is_available(&self) -> bool {
         self.unavailable.is_none()
+    }
+
+    /// True when XRender picture transforms can drive minimize/restore
+    /// flights. Probed once in [`Self::open`]; always false for unavailable.
+    pub fn supports_picture_transform(&self) -> bool {
+        self.picture_transform
     }
 
     fn live(&self) -> Result<(), String> {
@@ -300,6 +312,13 @@ impl ExternalDecorationRenderer {
     #[must_use]
     pub fn argb_visual_available(&self) -> bool {
         argb_visual_available(self.display)
+    }
+
+    /// True when Magic Lamp can draw on a transparent window (32-bit visual and a compositing
+    /// manager). Otherwise transitions use an opaque root-snapshot backdrop.
+    #[must_use]
+    pub fn warp_argb_usable(&self) -> bool {
+        warp_argb_usable(self.display)
     }
 
     /// Opens a window-open scale-and-fade at root `(x, y)`, sized to `capture`. Errors without
@@ -510,6 +529,7 @@ mod tests {
     fn unavailable_reports_explicit_errors() {
         let mut renderer = ExternalDecorationRenderer::unavailable("no DISPLAY in test");
         assert!(!renderer.is_available());
+        assert!(!renderer.supports_picture_transform());
         assert!(renderer.retarget(42, 8, 8).is_err());
         assert!(
             renderer

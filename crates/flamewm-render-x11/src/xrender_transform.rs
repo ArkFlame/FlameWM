@@ -73,8 +73,9 @@ struct XTransform {
     matrix: [[c_int; 3]; 3],
 }
 
-pub(crate) const PICT_STANDARD_RGB_24: c_int = 2;
-const PICT_STANDARD_ARGB_32: c_int = 1;
+// Xrender.h PictStandard* enum: ARGB32 = 0, RGB24 = 1, A8 = 2. RGB24 = 2 selected A8 (alpha only).
+pub(crate) const PICT_STANDARD_RGB_24: c_int = 1;
+const PICT_STANDARD_ARGB_32: c_int = 0;
 const PICT_OP_SRC: c_int = 1;
 const PICT_OP_OVER: c_int = 3;
 
@@ -269,7 +270,7 @@ impl XRenderTransformApi {
     }
 
     /// Source-over copy of `src` into `dst` over `rect`, multiplied by `mask` (0 for none).
-    /// Source offsets are zero because the transform maps destination pixels into source space.
+    /// The source offset equals the rect origin so the transform sees absolute destination pixels.
     ///
     /// # Safety
     ///
@@ -296,9 +297,13 @@ impl XRenderTransformApi {
         rect: (i32, i32, u32, u32),
     ) {
         let (x, y, width, height) = rect;
-        // SAFETY: caller contract on `display`/`src`/`mask`/`dst`; zero offsets as documented.
+        // The server feeds the transform with `dst_pixel - dst_origin + src_origin`. Every matrix in
+        // this module is expressed in absolute destination coordinates, so the source origin must
+        // equal the rect origin; a zero source origin sampled rect-relative points and went
+        // transparent (black under SRC) for strips away from the window origin.
+        // SAFETY: caller contract on `display`/`src`/`mask`/`dst`.
         unsafe {
-            (self.base.composite)(display, op, src, mask, dst, 0, 0, 0, 0, x, y, width, height)
+            (self.base.composite)(display, op, src, mask, dst, x, y, x, y, x, y, width, height)
         };
     }
 }

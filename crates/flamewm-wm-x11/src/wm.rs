@@ -907,9 +907,10 @@ where
         let changes = wm.take_changes();
         wm.pump_transitions(std::time::Instant::now())?;
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
-        let wait = wm.transition_wait(wait);
         drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         wm.commit_super_tap();
+        // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
+        let wait = wm.transition_wait(wait);
         emit_resize_summary();
         emit_move_summary();
         // Flush once per reactor turn.
@@ -1140,7 +1141,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             .ok()
             .map(flamewm_render_x11::ExternalDecorationRenderer::into_cursor_shared);
         let animator = Animator::new(
-            renderer.as_ref().is_some_and(|r| r.borrow().is_available()),
+            renderer
+                .as_ref()
+                .is_some_and(|r| r.borrow().is_available() && r.borrow().supports_picture_transform()),
             Settings::DEFAULT,
         );
         Ok(Self {
@@ -3990,7 +3993,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         // The window pixels are captured above. Without ARGB the overlay is opaque and snapshots
         // the root under it, so the frame is unmapped first, then synced before the snapshot.
         // Restore needs no hide: its frame is already unmapped while minimized.
-        let hide = !renderer.borrow().argb_visual_available()
+        let hide = !renderer.borrow().warp_argb_usable()
             && matches!(effect, Effect::Minimize | Effect::Maximize | Effect::Unmaximize);
         if hide {
             self.conn.unmap_window(frame).map_err(|e| e.to_string())?;
@@ -3998,11 +4001,16 @@ impl<'a, C: Connection> Wm<'a, C> {
                 state.ignore_unmap = state.ignore_unmap.saturating_add(1);
             }
             // Round trip on the WM connection: the unmap is processed before the root snapshot.
-            self.conn
+            let sync = self
+                .conn
                 .get_input_focus()
-                .map_err(|e| e.to_string())?
-                .reply()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())
+                .and_then(|cookie| cookie.reply().map_err(|e| e.to_string()));
+            if let Err(error) = sync {
+                // The unmap was sent and its UnmapNotify stays ignored; restore the frame.
+                let _ = self.conn.map_window(frame);
+                return Err(error);
+            }
         }
         let opened = renderer.borrow().open_warp_overlay(
             capture,

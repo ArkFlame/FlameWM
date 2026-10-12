@@ -8,9 +8,9 @@
 
 use std::os::raw::c_ulong;
 
-use crate::xcomposite::{CapturedImage, check_capture_size, upload_argb_pixmap};
+use crate::xcomposite::{CapturedImage, check_capture_size, upload_pixmap_depth};
 use crate::xlib::{Display, Pixmap, XFreePixmap};
-use crate::xrender_transform::XRenderTransformApi;
+use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 
 pub const MAX_WARP_STRIPS: usize = 64;
 
@@ -163,9 +163,10 @@ pub unsafe fn upload_warp_source(
     }
     check_capture_size(capture.width, capture.height)?;
     // SAFETY: `display` is live per contract; the pixmap is freed on every failure path below.
-    let pixmap = unsafe { upload_argb_pixmap(display, capture) }?;
+    // SAFETY: `display` is live per contract; the pixmap is freed on every failure path below.
+    let pixmap = unsafe { upload_pixmap_depth(display, capture, 24) }?;
     // SAFETY: `display` and `pixmap` are live; the picture is owned by the returned source.
-    match unsafe { api.create_argb_picture(display, pixmap) } {
+    match unsafe { api.create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24) } {
         Ok(picture) => Ok(WarpSource {
             pixmap,
             picture,
