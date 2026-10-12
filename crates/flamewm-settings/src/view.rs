@@ -63,7 +63,6 @@ mod tests {
         "titlebar-minimize-style-value",
         "titlebar-maximize-style-value",
         "titlebar-close-style-value",
-        "start-animation-value",
         "taskbar-opacity-value",
         "taskbar-size-value",
         "taskbar-color-value",

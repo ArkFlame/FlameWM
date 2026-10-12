@@ -720,6 +720,79 @@ mod tests {
         );
     }
 
+    fn animation_snapshot(revision: u64, key: &str, value: &str) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(revision);
+        snapshot.values.insert(key.to_owned(), SettingValue::Text(value.to_owned()));
+        snapshot
+    }
+
+    #[test]
+    fn animation_style_segments_write_exact_values_and_highlight_the_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        let mut revision = 1;
+        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(revision))));
+        let mut writes = Vec::new();
+        for (key, values) in crate::ANIMATION_STYLE_ROWS {
+            for value in values {
+                revision += 1;
+                transport
+                    .responses
+                    .push_back(Ok(ControlResponse::Settings(animation_snapshot(revision, key, value))));
+                writes.push((key, *value));
+            }
+        }
+        revision += 1;
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(animation_snapshot(revision, "startAnimation", "fade"))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        for (key, value) in &writes {
+            application
+                .handle_action(&release(&format!("settings.{key}.{value}")), &mut document)
+                .expect("animation style option");
+            let (_, values) = crate::ANIMATION_STYLE_ROWS
+                .iter()
+                .find(|(row, _)| row == key)
+                .expect("animation row");
+            for option in values.iter() {
+                assert_eq!(
+                    document.highlighted[&crate::animation_style_node(key, option)],
+                    option == value,
+                    "{key}.{option} highlight after writing {value}"
+                );
+            }
+        }
+
+        let written: Vec<(String, SettingValue)> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .and_then(|change| change.value.clone().map(|value| (change.key.clone(), value))),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<(String, SettingValue)> = writes
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), SettingValue::Text((*value).to_owned())))
+            .collect();
+        assert_eq!(written, expected, "each segment writes its exact key and value");
+
+        application.client_mut().refresh_settings().expect("external snapshot");
+        application.sync(&mut document).expect("sync external snapshot");
+        assert!(document.highlighted[&crate::animation_style_node("startAnimation", "fade")]);
+        assert!(!document.highlighted[&crate::animation_style_node("startAnimation", "none")]);
+    }
+
     #[test]
     fn visible_settings_buttons_cannot_be_actionless() {
         let html = include_str!("../../../ui/settings.html");

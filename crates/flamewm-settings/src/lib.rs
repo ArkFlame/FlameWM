@@ -1175,6 +1175,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         self.sync_appearance(document)?;
         self.sync_decoration(document)?;
+        self.sync_animation_styles(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
         optional_text(
@@ -1213,11 +1214,28 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("titlebarMinimizeStyle", "titlebar-minimize-style-value"),
             ("titlebarMaximizeStyle", "titlebar-maximize-style-value"),
             ("titlebarCloseStyle", "titlebar-close-style-value"),
-            ("startAnimation", "start-animation-value"),
         ] {
             if let Ok(value) = self.text_setting(key) {
-                let label = if key == "startAnimation" { start_animation_label(&value) } else { value };
-                document.text(id, label)?;
+                document.text(id, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Highlights, in each animation style row, the segment whose value matches the stored style.
+    fn sync_animation_styles(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        for (key, values) in ANIMATION_STYLE_ROWS {
+            let Ok(current) = self.text_setting(key) else {
+                continue;
+            };
+            for value in values {
+                let id = animation_style_node(key, value);
+                if current == *value {
+                    document.background(&id, accent)?;
+                } else {
+                    document.background_clear(&id)?;
+                }
             }
         }
         Ok(())
@@ -1512,14 +1530,24 @@ const COLOR_PALETTE: [&str; 8] = [
     "#000000", "#FFFFFF", "#1E1E1E", "#2D2D2D", "#3DAEE9", "#9B59B6", "#1ABC9C", "#EF4048",
 ];
 
-/// Display label for a stored text value, when it differs from the value.
-const START_ANIMATION_LABELS: [(&str, &str); 1] = [("slide-up", "Slide Up")];
+/// Animation style rows in the Animations card: stable key and the values its segments write.
+/// Each segment's node id is `animation_style_node(key, value)`.
+const ANIMATION_STYLE_ROWS: [(&str, &[&str]); 4] = [
+    ("startAnimation", &["none", "slide", "fade", "magic-lamp"]),
+    ("minimizeAnimation", &["none", "fade", "magic-lamp"]),
+    ("maximizeAnimation", &["none", "fade", "magic-lamp"]),
+    ("windowOpenAnimation", &["none", "scale", "fade"]),
+];
 
-fn start_animation_label(value: &str) -> String {
-    START_ANIMATION_LABELS
-        .iter()
-        .find(|(id, _)| *id == value)
-        .map_or_else(|| value.to_owned(), |(_, label)| (*label).to_owned())
+/// Node id of one animation style segment, e.g. `startAnimation` + `magic-lamp`.
+fn animation_style_node(key: &str, value: &str) -> String {
+    let row = match key {
+        "startAnimation" => "start-style",
+        "minimizeAnimation" => "minimize-style",
+        "maximizeAnimation" => "maximize-style",
+        _ => "window-open-style",
+    };
+    format!("{row}-{value}")
 }
 
 const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
@@ -1826,6 +1854,15 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(rest) = action.strip_prefix("settings.theme.") {
         return parse_theme_action(rest);
     }
+    if let Some((key, value)) = action.strip_prefix("settings.").and_then(|rest| rest.split_once('.')) {
+        if let Some((row, values)) = ANIMATION_STYLE_ROWS.iter().find(|(row, _)| *row == key) {
+            return values
+                .iter()
+                .find(|allowed| **allowed == value)
+                .map(|allowed| SettingsAction::TextSelect { key: row, value: allowed })
+                .ok_or_else(|| format!("unknown animation style '{value}' for {key}"));
+        }
+    }
     match action {
         "settings.wallpaper.choose" => Ok(SettingsAction::WallpaperChoose),
         "settings.wallpaper.reset" => Ok(SettingsAction::WallpaperReset),
@@ -1852,10 +1889,6 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.titlebar.close.style" => Ok(SettingsAction::TextCycle {
             key: "titlebarCloseStyle",
             values: &TITLEBAR_STYLES,
-        }),
-        "settings.start-animation.cycle" => Ok(SettingsAction::TextCycle {
-            key: "startAnimation",
-            values: &["slide-up"],
         }),
         "settings.display.keep" => Ok(SettingsAction::DisplayKeep),
         "settings.display.revert" => Ok(SettingsAction::DisplayRevert),
@@ -2062,8 +2095,8 @@ mod value_text_tests {
         ] {
             assert!(parse_action(action).is_err(), "{action} must be rejected");
         }
-        assert_eq!(start_animation_label("slide-up"), "Slide Up");
-        assert_eq!(start_animation_label("other"), "other");
+        assert_eq!(animation_style_node("startAnimation", "magic-lamp"), "start-style-magic-lamp");
+        assert_eq!(animation_style_node("windowOpenAnimation", "scale"), "window-open-style-scale");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use flamewm_ui_x11::{SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
 const DEFAULT_ACCENT: u32 = 0xef4048;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
-const DEFAULT_START_ANIMATION: &str = "slide-up";
+const DEFAULT_START_ANIMATION: &str = "slide";
 const DEFAULT_TASKBAR_COLOR: u32 = 0x191b1d;
 const DEFAULT_TASKBAR_OPACITY: u8 = 99;
 const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
@@ -89,7 +89,10 @@ pub(crate) fn project(
 pub(crate) fn start_slide(snapshot: &SettingsSnapshot, edge: PanelEdge) -> Option<SlideConfig> {
     if !bool_setting(snapshot, "animationsEnabled", true)
         || !bool_setting(snapshot, "startAnimationEnabled", true)
-        || text_setting(snapshot, "startAnimation", DEFAULT_START_ANIMATION) != "slide-up"
+        || !matches!(
+            text_setting(snapshot, "startAnimation", DEFAULT_START_ANIMATION).as_str(),
+            "slide" | "slide-up"
+        )
     {
         return None;
     }

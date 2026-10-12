@@ -24,6 +24,49 @@ const KNOWN_HOTKEYS: [&str; 8] = [
     ACTION_WINDOW_MAXIMIZE,
 ];
 
+/// Animation style shared by every element that animates. Consumers reuse one implementation per
+/// variant; `None` means no animation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationStyle {
+    None,
+    Slide,
+    Fade,
+    MagicLamp,
+    Scale,
+}
+
+impl AnimationStyle {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Slide => "slide",
+            Self::Fade => "fade",
+            Self::MagicLamp => "magic-lamp",
+            Self::Scale => "scale",
+        }
+    }
+
+    /// Parses one stable key's wire value. `slide-up` is the legacy spelling of `slide`.
+    fn parse_for(key: &str, text: &str) -> Option<Self> {
+        let style = match text {
+            "none" => Self::None,
+            "slide" | "slide-up" => Self::Slide,
+            "fade" => Self::Fade,
+            "magic-lamp" => Self::MagicLamp,
+            "scale" => Self::Scale,
+            _ => return None,
+        };
+        let allowed: &[Self] = match key {
+            "startAnimation" => &[Self::None, Self::Slide, Self::Fade, Self::MagicLamp],
+            "minimizeAnimation" | "maximizeAnimation" => &[Self::None, Self::Fade, Self::MagicLamp],
+            "windowOpenAnimation" => &[Self::None, Self::Scale, Self::Fade],
+            _ => return None,
+        };
+        allowed.contains(&style).then_some(style)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductSettings {
     pub revision: u64,
@@ -63,8 +106,11 @@ pub struct ProductSettings {
     pub cursor_theme: String,
     pub animations_enabled: bool,
     pub animation_speed: u16,
-    pub start_animation: String,
+    pub start_animation: AnimationStyle,
     pub start_animation_enabled: bool,
+    pub minimize_animation: AnimationStyle,
+    pub maximize_animation: AnimationStyle,
+    pub window_open_animation: AnimationStyle,
     pub window_open_animation_enabled: bool,
     pub minimize_animation_enabled: bool,
     pub maximize_animation_enabled: bool,
@@ -113,8 +159,11 @@ impl Default for ProductSettings {
             cursor_theme: String::new(),
             animations_enabled: true,
             animation_speed: 100,
-            start_animation: "slide-up".to_owned(),
+            start_animation: AnimationStyle::Slide,
             start_animation_enabled: true,
+            minimize_animation: AnimationStyle::MagicLamp,
+            maximize_animation: AnimationStyle::MagicLamp,
+            window_open_animation: AnimationStyle::Scale,
             window_open_animation_enabled: true,
             minimize_animation_enabled: true,
             maximize_animation_enabled: true,
@@ -127,6 +176,46 @@ impl Default for ProductSettings {
 }
 
 impl ProductSettings {
+    /// Effective Start menu style. A disabled toggle or the `none` style both mean no animation.
+    #[must_use]
+    pub fn start_animation_style(&self) -> AnimationStyle {
+        if self.start_animation_enabled {
+            self.start_animation
+        } else {
+            AnimationStyle::None
+        }
+    }
+
+    /// Effective minimize style. A disabled toggle or the `none` style both mean no animation.
+    #[must_use]
+    pub fn minimize_animation_style(&self) -> AnimationStyle {
+        if self.minimize_animation_enabled {
+            self.minimize_animation
+        } else {
+            AnimationStyle::None
+        }
+    }
+
+    /// Effective maximize style. A disabled toggle or the `none` style both mean no animation.
+    #[must_use]
+    pub fn maximize_animation_style(&self) -> AnimationStyle {
+        if self.maximize_animation_enabled {
+            self.maximize_animation
+        } else {
+            AnimationStyle::None
+        }
+    }
+
+    /// Effective window-open style. A disabled toggle or the `none` style both mean no animation.
+    #[must_use]
+    pub fn window_open_animation_style(&self) -> AnimationStyle {
+        if self.window_open_animation_enabled {
+            self.window_open_animation
+        } else {
+            AnimationStyle::None
+        }
+    }
+
     pub fn validate(&self) -> FlameResult<()> {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
         validate_color(&self.accent, true, "accent")?;
@@ -210,9 +299,6 @@ impl ProductSettings {
         }
         if !(25..=200).contains(&self.animation_speed) {
             return invalid("animationSpeed must be 25..200");
-        }
-        if self.start_animation != "slide-up" {
-            return invalid("startAnimation must be slide-up");
         }
         for output in self.panel_edges.keys() {
             if output.is_empty()
@@ -502,6 +588,23 @@ macro_rules! integer_slot {
 
 integer_slot!(i8, u16);
 
+impl Slot for AnimationStyle {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        Self::parse_for(key, text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
 impl Slot for AppearanceMode {
     fn to_value(&self) -> SettingValue {
         SettingValue::Text(self.as_str().to_owned())
@@ -591,6 +694,9 @@ stable_settings! {
     (false, windows, "animationSpeed", animation_speed),
     (false, windows, "startAnimation", start_animation),
     (false, windows, "startAnimationEnabled", start_animation_enabled),
+    (false, windows, "minimizeAnimation", minimize_animation),
+    (false, windows, "maximizeAnimation", maximize_animation),
+    (false, windows, "windowOpenAnimation", window_open_animation),
     (false, windows, "windowOpenAnimationEnabled", window_open_animation_enabled),
     (false, windows, "minimizeAnimationEnabled", minimize_animation_enabled),
     (false, windows, "maximizeAnimationEnabled", maximize_animation_enabled),
@@ -805,7 +911,10 @@ mod tests {
         assert!(defaults.titlebar_close_color.is_empty());
         assert!(defaults.cursor_theme.is_empty());
         assert_eq!(defaults.animation_speed, 100);
-        assert_eq!(defaults.start_animation, "slide-up");
+        assert_eq!(defaults.start_animation, AnimationStyle::Slide);
+        assert_eq!(defaults.minimize_animation, AnimationStyle::MagicLamp);
+        assert_eq!(defaults.maximize_animation, AnimationStyle::MagicLamp);
+        assert_eq!(defaults.window_open_animation, AnimationStyle::Scale);
         assert!(defaults.maximize_animation_enabled);
 
         let text = ConfigStore::serialize(&defaults);
@@ -911,5 +1020,123 @@ mod tests {
         assert!(text.find("fontBold=") < text.find("animationsEnabled="));
         let reparsed = ConfigStore::default().parse_snapshot(&text).expect("round trip");
         assert_eq!(reparsed, settings);
+    }
+
+    #[test]
+    fn legacy_slide_up_migrates_to_slide_and_stays_unwritten_at_default() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\nstartAnimation=slide-up\n")
+            .expect("legacy alias");
+        assert_eq!(parsed.start_animation, AnimationStyle::Slide);
+        assert_eq!(
+            Slot::to_value(&parsed.start_animation),
+            SettingValue::Text("slide".to_owned())
+        );
+        let serialized = ConfigStore::serialize(&parsed);
+        assert!(!serialized.contains("startAnimation"), "default style stays unwritten");
+        assert!(!serialized.contains("slide-up"));
+    }
+
+    #[test]
+    fn animation_style_values_are_validated_per_key() {
+        let store = ConfigStore::default();
+        for line in [
+            "startAnimation=none",
+            "startAnimation=slide",
+            "startAnimation=fade",
+            "startAnimation=magic-lamp",
+            "minimizeAnimation=none",
+            "minimizeAnimation=fade",
+            "minimizeAnimation=magic-lamp",
+            "maximizeAnimation=none",
+            "maximizeAnimation=fade",
+            "maximizeAnimation=magic-lamp",
+            "windowOpenAnimation=none",
+            "windowOpenAnimation=scale",
+            "windowOpenAnimation=fade",
+        ] {
+            store
+                .parse_snapshot(&format!("revision=2\n{line}\n"))
+                .unwrap_or_else(|error| panic!("{line} must be accepted: {error:?}"));
+        }
+        for line in [
+            "startAnimation=bounce",
+            "startAnimation=scale",
+            "startAnimation=slide-up-x",
+            "minimizeAnimation=slide",
+            "minimizeAnimation=slide-up",
+            "minimizeAnimation=scale",
+            "maximizeAnimation=slide",
+            "maximizeAnimation=",
+            "windowOpenAnimation=slide",
+            "windowOpenAnimation=magic-lamp",
+            "windowOpenAnimation=Scale",
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err(line)
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn animation_style_precedence_treats_disabled_or_none_as_none() {
+        let mut settings = ProductSettings::default();
+        assert_eq!(settings.start_animation_style(), AnimationStyle::Slide);
+        assert_eq!(settings.minimize_animation_style(), AnimationStyle::MagicLamp);
+        assert_eq!(settings.maximize_animation_style(), AnimationStyle::MagicLamp);
+        assert_eq!(settings.window_open_animation_style(), AnimationStyle::Scale);
+
+        settings.start_animation_enabled = false;
+        settings.minimize_animation_enabled = false;
+        settings.maximize_animation_enabled = false;
+        settings.window_open_animation_enabled = false;
+        assert_eq!(settings.start_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.minimize_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.maximize_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.window_open_animation_style(), AnimationStyle::None);
+
+        settings.start_animation_enabled = true;
+        settings.start_animation = AnimationStyle::None;
+        settings.minimize_animation_enabled = true;
+        settings.minimize_animation = AnimationStyle::None;
+        settings.maximize_animation_enabled = true;
+        settings.maximize_animation = AnimationStyle::None;
+        settings.window_open_animation_enabled = true;
+        settings.window_open_animation = AnimationStyle::None;
+        assert_eq!(settings.start_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.minimize_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.maximize_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.window_open_animation_style(), AnimationStyle::None);
+
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\nminimizeAnimation=fade\nmaximizeAnimationEnabled=0\n")
+            .expect("style and toggle");
+        assert_eq!(parsed.minimize_animation_style(), AnimationStyle::Fade);
+        assert_eq!(parsed.maximize_animation_style(), AnimationStyle::None);
+    }
+
+    #[test]
+    fn animation_style_keys_round_trip_when_set() {
+        let store = ConfigStore::default();
+        let text = "revision=2\nstartAnimation=fade\nminimizeAnimation=none\n\
+            maximizeAnimation=fade\nwindowOpenAnimation=fade\nwindowOpenAnimationEnabled=0\n";
+        let parsed = store.parse_snapshot(text).expect("valid animation styles");
+        assert_eq!(parsed.start_animation, AnimationStyle::Fade);
+        assert_eq!(parsed.minimize_animation, AnimationStyle::None);
+        assert_eq!(parsed.maximize_animation, AnimationStyle::Fade);
+        assert_eq!(parsed.window_open_animation, AnimationStyle::Fade);
+        assert_eq!(parsed.window_open_animation_style(), AnimationStyle::None);
+        let serialized = ConfigStore::serialize(&parsed);
+        assert!(serialized.contains("startAnimation=fade\n"));
+        assert!(serialized.contains("minimizeAnimation=none\n"));
+        assert!(serialized.contains("windowOpenAnimationEnabled=false\n"));
+        assert_eq!(store.parse_snapshot(&serialized).expect("round trip"), parsed);
     }
 }
