@@ -52,10 +52,13 @@ fn apply_session_environment() {
     // session-core contributes cursor, identity, and appearance-marker
     // state only. No generic toolkit default injection: explicit inherited
     // GTK_THEME/QT_STYLE_OVERRIDE pass through untouched, never synthesized.
-    let search_path = existing.get("XCURSOR_PATH").cloned().unwrap_or_default();
+    let plan = build_launch_plan_with_appearance(&paths, &[], &existing, None, appearance);
+    let search_path = cursor_search_path(
+        &existing,
+        plan.processes.first().map(|process| &process.environment),
+    );
     let persisted = persisted_cursor_theme().unwrap_or_default();
     let cursor_theme = resolve_cursor_theme(&persisted, &search_path);
-    let plan = build_launch_plan_with_appearance(&paths, &[], &existing, None, appearance);
     if let Some(process) = plan.processes.first() {
         for (key, value) in &process.environment {
             if key == "XDG_CURRENT_DESKTOP" && is_kde(value) {
@@ -73,6 +76,21 @@ fn apply_session_environment() {
     }
     pending.insert("XCURSOR_THEME".to_owned(), cursor_theme);
     flamewm_session_core::apply_current_process_env(&pending);
+}
+
+/// Search path for resolving the persisted cursor theme: an inherited `XCURSOR_PATH` wins, otherwise the
+/// session plan's own path (the same one exported to children). An empty search would make every
+/// persisted selection fall back to the default theme.
+fn cursor_search_path(
+    existing: &BTreeMap<String, String>,
+    plan_environment: Option<&BTreeMap<String, String>>,
+) -> String {
+    existing
+        .get("XCURSOR_PATH")
+        .filter(|value| !value.is_empty())
+        .or_else(|| plan_environment.and_then(|environment| environment.get("XCURSOR_PATH")))
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn is_kde(value: &str) -> bool {
@@ -311,6 +329,17 @@ mod tests {
             xsettings_input_from_snapshot(&wrong_type).font_bold,
             XSettingsInput::default().font_bold
         );
+    }
+
+    #[test]
+    fn cursor_search_path_falls_back_to_the_session_plan_when_not_inherited() {
+        let mut plan = BTreeMap::new();
+        plan.insert("XCURSOR_PATH".to_owned(), "/usr/share/icons".to_owned());
+        assert_eq!(cursor_search_path(&BTreeMap::new(), Some(&plan)), "/usr/share/icons");
+        let mut inherited = BTreeMap::new();
+        inherited.insert("XCURSOR_PATH".to_owned(), "/opt/icons".to_owned());
+        assert_eq!(cursor_search_path(&inherited, Some(&plan)), "/opt/icons");
+        assert_eq!(cursor_search_path(&BTreeMap::new(), None), "");
     }
 
     #[test]

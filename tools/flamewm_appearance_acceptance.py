@@ -638,15 +638,47 @@ def ap08(s: Session) -> dict:
             fails.append(f"Start menu icon region unchanged for iconTheme {s.args.icon_theme_alt} ({changed} px)")
     else:
         fails.append("icon capture failed")
+    # An installed package puts the bundled cursor themes under /usr/share/icons; stage the same layout in
+    # the private XDG_DATA_HOME so the WM can resolve them by name (symlinks into the repository assets).
+    icons = s.ctx.run / "xdg-data" / "icons"
+    icons.mkdir(parents=True, exist_ok=True)
+    mojave = icons / "McMojave-cursors"
+    if not mojave.exists():
+        mojave.symlink_to(base.ROOT / "assets" / "themes" / "cursors" / "McMojave-cursors")
+    breeze = icons / "FlameWM-Breeze-Dark"
+    if not breeze.exists():
+        breeze.mkdir()
+        (breeze / "cursors").symlink_to(base.ROOT / "assets" / "cursors" / "cursors")
+        index = (base.ROOT / "assets" / "cursors" / "index.theme").read_text(encoding="utf-8")
+        (breeze / "index.theme").write_text(index.replace("Name=Breeze Dark", "Name=FlameWM-Breeze-Dark", 1),
+                                            encoding="utf-8")
+    # libXcursor's default search path is ~/.icons and ~/.local/share/icons (HOME, not XDG_DATA_HOME).
+    s.ctx.app_env["FLAMEWM_CURSOR_PATH"] = str(icons)  # the session plan's search root for theme resolution
+    home_icons = s.ctx.run / "home" / ".icons"
+    if not home_icons.exists():
+        home_icons.parent.mkdir(parents=True, exist_ok=True)
+        home_icons.symlink_to(icons)
     digests = {}
     for theme in (s.args.cursor_theme_base, s.args.cursor_theme_alt):
         if not s.restart({"cursorTheme": theme, "taskbarOpacity": "100"}):
             return entry("AP08", FAIL, "WM or shell exited during cursor restart")
-        s.input(move=f"{s.args.screen_w // 2},{s.args.screen_h // 3}")
+        # The WM defines themed cursors on frame resize handles; the bare root keeps the stock X cursor.
+        s.spawn_client()
+        _, frame = s.client_frame(s.tree("AP08-cursor"))
+        if frame is None:
+            return entry("AP08", FAIL, "client frame not found for the cursor probe")
+        s.input(move=f"{frame['x'] + 3},{frame['y'] + 3}")
         time.sleep(1.0)
         digests[theme] = cursor_digest(s)
     ev.append(f"cursor_digests={digests}")
     if None in digests.values() or digests[s.args.cursor_theme_base] == digests[s.args.cursor_theme_alt]:
+        if not xfixes_cursor_observable(s):
+            ev.append("xfixes_negative_control=server reports identical cursor images for watch vs left_ptr")
+            if not fails:
+                return entry("AP08", ENV_BLOCKED,
+                             "icon theme measured; cursor pixels not observable: this server (Xephyr) reports an "
+                             f"identical XFixes cursor image for two different cursors ({digests})",
+                             ev, ["import -window root", "XFixesGetCursorImage"])
         fails.append(f"cursor image unchanged or unreadable: {digests}")
     if fails:
         return entry("AP08", FAIL, "; ".join(fails), ev, ["import -window root", "XFixesGetCursorImage"])
@@ -687,6 +719,50 @@ def cursor_digest(s: Session) -> str | None:
         raw = b"".join((int(cur.pixels[i]) & 0xFFFFFFFF).to_bytes(4, "little") for i in range(count))
         name = (cur.name or b"").decode("ascii", "replace")
         return f"{cur.width}x{cur.height}@{cur.xhot},{cur.yhot} {name} {hashlib.sha256(raw).hexdigest()[:16]}"
+    finally:
+        x11.XCloseDisplay(dpy)
+
+
+def xfixes_cursor_observable(s: Session) -> bool:
+    """Negative control: can this server report two known-different cursors through XFixes?
+
+    A probe window is given the stock `watch` then `left_ptr` cursor and the pointer is parked on it.
+    When both read back identically (Xephyr reports a fixed image), cursor-theme pixels cannot be
+    measured here and AP08 must say so instead of failing the product."""
+    x11_path = ctypes.util.find_library("X11")
+    if not x11_path:
+        return False
+    x11 = ctypes.cdll.LoadLibrary(x11_path)
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XCreateSimpleWindow.restype = ctypes.c_ulong
+    x11.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_int] * 2 + [ctypes.c_uint] * 3 + [ctypes.c_ulong] * 2
+    x11.XCreateFontCursor.restype = ctypes.c_ulong
+    x11.XCreateFontCursor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    x11.XDefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
+    x11.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    dpy = x11.XOpenDisplay(s.ctx.display.encode("ascii"))
+    if not dpy:
+        return False
+    try:
+        root = x11.XDefaultRootWindow(dpy)
+        window = x11.XCreateSimpleWindow(dpy, root, 40, 40, 200, 200, 0, 0, 0xFFFFFF)
+        x11.XMapRaised(dpy, window)
+        digests = []
+        for glyph in (150, 68):  # XC_watch, XC_left_ptr
+            x11.XDefineCursor(dpy, window, x11.XCreateFontCursor(dpy, glyph))
+            x11.XFlush(dpy)
+            s.input(move="140,140")
+            time.sleep(0.4)
+            digests.append(cursor_digest(s))
+        x11.XDestroyWindow(dpy, window)
+        x11.XFlush(dpy)
+        return None not in digests and digests[0] != digests[1]
     finally:
         x11.XCloseDisplay(dpy)
 
