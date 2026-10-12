@@ -42,6 +42,10 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .toggle-on { justify-content:flex-end; background:var(--accent); }.toggle-off { justify-content:flex-start; background:#555a5f; }
 .toggle i { width:18px; height:18px; display:block; border-radius:9px; background:white; }
 .step-control { display:flex; align-items:center; gap:6px; }
+.slider-control { display:flex; align-items:center; gap:10px; }
+.slider-track { position:relative; width:180px; height:12px; border:1px solid #4a5056; border-radius:6px; background:#202326; }
+.slider-fill { position:absolute; left:0px; top:0px; width:0px; height:12px; border-radius:6px; background:var(--accent); }
+.slider-thumb { position:absolute; left:0px; top:0px; width:12px; height:12px; border-radius:6px; background:#e6e8ea; }
 .step-button { width:32px; height:32px; display:flex; align-items:center; justify-content:center; border:1px solid #4a5056; border-radius:4px; background:#202326; font-size:16px; }
 .value-pill { min-width:58px; height:32px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .value-label { color:var(--quiet); font-size:10px; white-space:nowrap; }

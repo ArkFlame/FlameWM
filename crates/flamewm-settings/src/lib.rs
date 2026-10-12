@@ -308,8 +308,8 @@ enum SettingsAction {
     },
     /// Steps a percent setting by 5 within 0..=100.
     PercentStep(&'static str, i8),
-    /// Steps `animationSpeed` (hundredths) by 25 within 25..=200.
-    AnimationSpeed(i8),
+    /// Drag-only slider; the value arrives as event text, see `handle_animation_speed_drag`.
+    AnimationSpeedSlider,
     /// Advances a text setting through `values`, wrapping.
     TextCycle {
         key: &'static str,
@@ -385,11 +385,36 @@ impl<T: ControlTransport> SettingsApplication<T> {
         event: &UiActionEvent,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        if event.action == ANIMATION_SPEED_SLIDER {
+            return self.handle_animation_speed_drag(event, document);
+        }
         if event.phase != UiActionPhase::Release || !event.inside {
             return Ok(());
         }
         let action = parse_action(event.action.as_str())?;
         self.execute(action)?;
+        self.settle(document)
+    }
+
+    /// The native range drag reports the pointer as `text` (0..=100) on every
+    /// Motion and on the final Release, even when the pointer left the track.
+    fn handle_animation_speed_drag(
+        &mut self,
+        event: &UiActionEvent,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
+        if !matches!(event.phase, UiActionPhase::Motion | UiActionPhase::Release) {
+            return Ok(());
+        }
+        let Some(text) = event.text.as_deref() else {
+            return Ok(());
+        };
+        let speed = animation_speed_from_slider(text)?;
+        if self.integer_setting("animationSpeed").ok() != Some(speed) {
+            self.client
+                .apply_setting("animationSpeed", SettingValue::Integer(speed))
+                .map_err(control_error)?;
+        }
         self.settle(document)
     }
 
@@ -563,9 +588,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::PercentStep(key, direction) => self.step_percent(key, direction, 100)?,
-            SettingsAction::AnimationSpeed(direction) => {
-                self.step_integer("animationSpeed", i64::from(direction) * 25, 25, 200)?;
-            }
+            // Value is applied from the drag text in `handle_animation_speed_drag`.
+            SettingsAction::AnimationSpeedSlider => {}
             SettingsAction::TextCycle { key, values } => {
                 let current = self.text_setting(key)?;
                 self.apply_text(key, cycle_text(values, &current).to_owned())?;
@@ -1171,6 +1195,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if let Ok(speed) = self.integer_setting("animationSpeed") {
             document.text("animation-speed-value", format!("{:.2}x", speed as f64 / 100.0))?;
+            let ratio = (speed - ANIMATION_SPEED_MIN) as f64
+                / (ANIMATION_SPEED_MAX - ANIMATION_SPEED_MIN) as f64;
+            let fill = ratio * ANIMATION_SPEED_TRACK_TRAVEL;
+            let fill_width = (fill + ANIMATION_SPEED_THUMB).min(ANIMATION_SPEED_TRACK_WIDTH);
+            document.size("animation-speed-fill", fill_width as f32, 12.0)?;
+            document.position("animation-speed-thumb", fill as f32, 0.0)?;
         }
         for (key, id) in [
             ("decoration", "decoration-value"),
@@ -1411,6 +1441,32 @@ fn is_modifier_key(key: &str) -> bool {
             | "meta_l"
             | "meta_r"
     )
+}
+
+const ANIMATION_SPEED_SLIDER: &str = "slider.animation-speed";
+const ANIMATION_SPEED_MIN: i64 = 25;
+const ANIMATION_SPEED_MAX: i64 = 200;
+const ANIMATION_SPEED_STEP: f64 = 5.0;
+/// Must match the `.slider-track` width in ui/settings.css.
+const ANIMATION_SPEED_TRACK_WIDTH: f64 = 180.0;
+const ANIMATION_SPEED_THUMB: f64 = 12.0;
+const ANIMATION_SPEED_TRACK_TRAVEL: f64 = ANIMATION_SPEED_TRACK_WIDTH - ANIMATION_SPEED_THUMB;
+
+/// Maps a native slider value (track percent 0..=100) to `animationSpeed`
+/// hundredths in 25..=200, snapped to 5.
+fn animation_speed_from_slider(text: &str) -> Result<i64, String> {
+    let percent: f64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid animation speed value '{text}'"))?;
+    if !percent.is_finite() {
+        return Err(format!("invalid animation speed value '{text}'"));
+    }
+    let span = (ANIMATION_SPEED_MAX - ANIMATION_SPEED_MIN) as f64;
+    let raw = ANIMATION_SPEED_MIN as f64 + percent.clamp(0.0, 100.0) / 100.0 * span;
+    let steps = ((raw - ANIMATION_SPEED_MIN as f64) / ANIMATION_SPEED_STEP).round();
+    let snapped = ANIMATION_SPEED_MIN + (steps * ANIMATION_SPEED_STEP) as i64;
+    Ok(snapped.clamp(ANIMATION_SPEED_MIN, ANIMATION_SPEED_MAX))
 }
 
 fn step(value: &str) -> Option<i8> {
@@ -1684,8 +1740,8 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(direction) = action.strip_prefix("settings.accent-opacity.").and_then(step) {
         return Ok(SettingsAction::PercentStep("accentOpacity", direction));
     }
-    if let Some(direction) = action.strip_prefix("settings.animation-speed.").and_then(step) {
-        return Ok(SettingsAction::AnimationSpeed(direction));
+    if action == ANIMATION_SPEED_SLIDER {
+        return Ok(SettingsAction::AnimationSpeedSlider);
     }
     if let Some(direction) = action
         .strip_prefix("settings.selection-opacity.")
@@ -2003,10 +2059,6 @@ mod value_text_tests {
             Ok(SettingsAction::PercentStep("accentOpacity", -1))
         ));
         assert!(matches!(
-            parse_action("settings.animation-speed.up"),
-            Ok(SettingsAction::AnimationSpeed(1))
-        ));
-        assert!(matches!(
             parse_action("settings.toggle.maximizeAnimationEnabled"),
             Ok(SettingsAction::Toggle("maximizeAnimationEnabled"))
         ));
@@ -2032,6 +2084,29 @@ mod value_text_tests {
         ] {
             assert!(parse_action(action).is_err(), "{action} must be rejected");
         }
+    }
+
+    #[test]
+    fn animation_speed_slider_maps_pointer_percent_to_snapped_hundredths() {
+        assert_eq!(animation_speed_from_slider("0"), Ok(25));
+        assert_eq!(animation_speed_from_slider("100"), Ok(200));
+        // 50% of 25..200 is 112.5, which snaps to 115 (not 100 or 112).
+        assert_eq!(animation_speed_from_slider("50"), Ok(115));
+        // Default 1.00x = 100 hundredths sits at 75/175 of the track, snapped to 100.
+        assert_eq!(animation_speed_from_slider("42.85714285714286"), Ok(100));
+        // 37.5% -> 90.625 -> snaps to 90, not the raw 90.625.
+        assert_eq!(animation_speed_from_slider("37.5"), Ok(90));
+        assert_eq!(animation_speed_from_slider(" 37.5 "), Ok(90));
+    }
+
+    #[test]
+    fn animation_speed_slider_clamps_and_rejects_non_numeric_values() {
+        assert_eq!(animation_speed_from_slider("-40"), Ok(25));
+        assert_eq!(animation_speed_from_slider("140"), Ok(200));
+        assert!(animation_speed_from_slider("").is_err());
+        assert!(animation_speed_from_slider("abc").is_err());
+        assert!(animation_speed_from_slider("NaN").is_err());
+        assert!(animation_speed_from_slider("inf").is_err());
     }
 
     #[test]
