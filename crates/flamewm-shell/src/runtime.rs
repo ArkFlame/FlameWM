@@ -723,6 +723,15 @@ pub struct ShellSurfaces {
     pub media: SurfaceHandle,
     panels: Vec<PanelSurfaceRecord>,
     transient: Option<Transient>,
+    /// A Start slide, fade, or Magic Lamp is configured, so Start toggles close through `hide`.
+    start_motion: bool,
+}
+
+/// Whether a Start toggle-close animates out through `hide` (a configured motion) instead of
+/// the immediate `close_surface` used by Escape, outside clicks, and every other dismiss.
+#[must_use]
+pub fn start_toggle_animates(start_motion: bool) -> bool {
+    start_motion
 }
 
 fn create_panel_surface(
@@ -848,6 +857,7 @@ impl ShellSurfaces {
             media,
             panels,
             transient: None,
+            start_motion: false,
         })
     }
 
@@ -863,11 +873,32 @@ impl ShellSurfaces {
         Ok(())
     }
 
+    /// Sets whether Start toggles animate out (a Start slide, fade, or lamp is configured).
+    pub fn set_start_motion(&mut self, configured: bool) {
+        self.start_motion = configured;
+    }
+
     pub fn toggle_start(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
         if self.transient == Some(Transient::StartGroup) {
+            if start_toggle_animates(self.start_motion) {
+                // Animated close: `hide` keeps the grab/focus bookkeeping and plays the motion.
+                for surface in [self.task_menu, self.media] {
+                    runtime.close_surface(surface).map_err(ui_error)?;
+                }
+                runtime.hide(self.start).map_err(ui_error)?;
+                self.transient = None;
+                return Ok(());
+            }
             return self.close_transients(runtime);
         }
-        self.close_transients(runtime)?;
+        // A closing Start overlay is reversed by `show`, so it must not be cut short here.
+        if start_toggle_animates(self.start_motion) {
+            for surface in [self.task_menu, self.media] {
+                runtime.close_surface(surface).map_err(ui_error)?;
+            }
+        } else {
+            self.close_transients(runtime)?;
+        }
         self.open_start_group_measured(runtime)
     }
 
@@ -2010,5 +2041,20 @@ mod tests {
         assert_eq!(stale, vec![flamewm_api::OutputId::new("HDMI-2")]);
         let kept = panel_surface_outputs_to_remove(&existing[..1], &snapshot);
         assert!(kept.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod start_toggle_tests {
+    use super::start_toggle_animates;
+
+    #[test]
+    fn configured_motion_animates_the_start_toggle_close() {
+        assert!(start_toggle_animates(true));
+    }
+
+    #[test]
+    fn no_motion_keeps_the_immediate_toggle_close() {
+        assert!(!start_toggle_animates(false));
     }
 }

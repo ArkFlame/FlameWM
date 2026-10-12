@@ -269,6 +269,27 @@ impl XRenderTransformApi {
         unsafe { self.composite_op(display, PICT_OP_SRC, src, 0, dst, rect) };
     }
 
+    /// Source-replace copy of `src` (through its transform) into `dst` over `rect`. The server
+    /// feeds the transform `dst_pixel - rect_origin`, so the matrix is relative to `rect`.
+    ///
+    /// # Safety
+    ///
+    /// `display`, `src` and `dst` must be live on the same display.
+    pub(crate) unsafe fn composite_src_relative(
+        &self,
+        display: *mut Display,
+        src: Picture,
+        dst: Picture,
+        rect: (i32, i32, u32, u32),
+    ) {
+        let (x, y, width, height) = rect;
+        // SAFETY: forwarded contract; no mask; the source origin is zero so the transform input is
+        // relative to the rect origin.
+        unsafe {
+            (self.base.composite)(display, PICT_OP_SRC, src, 0, dst, 0, 0, 0, 0, x, y, width, height)
+        };
+    }
+
     /// Source-over copy of `src` into `dst` over `rect`, multiplied by `mask` (0 for none).
     /// The source offset equals the rect origin so the transform sees absolute destination pixels.
     ///

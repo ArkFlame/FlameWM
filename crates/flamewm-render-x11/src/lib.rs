@@ -5,10 +5,12 @@ mod xrender;
 mod xrender_transform;
 mod xshape;
 mod overlay;
+mod lamp;
 mod warp;
 mod xcomposite;
 
-pub use overlay::WarpOverlay;
+pub use lamp::PanelEdge;
+pub use overlay::{TransitionDirection, TransitionStyle, WarpOverlay, fade_alpha};
 pub use warp::WarpRect;
 pub use xcomposite::CapturedImage;
 

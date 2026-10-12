@@ -168,6 +168,17 @@ pub fn capture_root_rect(
     capture_drawable_rect(display, root, rect)
 }
 
+/// Channel masks to decode with. XGetImage on a pixmap reports zero masks, so a zero triple
+/// falls back to the 24/32-bpp TrueColor layout (red, green, blue in the low three bytes).
+/// Window images keep the masks their visual reports.
+pub fn channel_masks(red: u64, green: u64, blue: u64) -> (u64, u64, u64) {
+    if red | green | blue == 0 {
+        (0xff_0000, 0xff_00, 0xff)
+    } else {
+        (red, green, blue)
+    }
+}
+
 /// XGetImage of any window or pixmap drawable (`rect` is drawable-local),
 /// decoded to straight RGBA8 with the live server masks.
 pub fn capture_drawable_rect(
@@ -215,9 +226,8 @@ pub fn capture_drawable_rect(
     }
     let width_px = head.width as u32;
     let height_px = head.height as u32;
-    let red_mask = head.red_mask as u64;
-    let green_mask = head.green_mask as u64;
-    let blue_mask = head.blue_mask as u64;
+    let (red_mask, green_mask, blue_mask) =
+        channel_masks(head.red_mask as u64, head.green_mask as u64, head.blue_mask as u64);
     let byte_order = head.byte_order as u32;
     let bits_per_pixel = head.bits_per_pixel as u32;
     let bytes_per_line = head.bytes_per_line as usize;
@@ -286,6 +296,20 @@ pub fn capture_drawable_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pixmap_zero_masks_fall_back_to_truecolor_layout() {
+        assert_eq!(channel_masks(0, 0, 0), (0xff_0000, 0xff_00, 0xff));
+        // A window image keeps the masks its visual reports, even in BGR order.
+        assert_eq!(channel_masks(0xff, 0xff00, 0xff_0000), (0xff, 0xff00, 0xff_0000));
+    }
+
+    #[test]
+    fn pixmap_decode_with_fallback_masks_is_rgb_and_ignores_alpha_byte() {
+        let (r, g, b) = channel_masks(0, 0, 0);
+        // Server word 0xAA112233: alpha 0xAA in the top byte must not leak into any channel.
+        assert_eq!(decode_pixel(0xAA_11_22_33, r, g, b), (0x11, 0x22, 0x33));
+    }
 
     #[test]
     fn decode_uses_masks_not_hardcoded_order() {

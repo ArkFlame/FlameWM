@@ -85,28 +85,32 @@ pub(crate) fn project(
     Ok(())
 }
 
-/// Start slide for the panel edge hosting Start. `None` keeps the immediate show.
-pub(crate) fn start_slide(snapshot: &SettingsSnapshot, edge: PanelEdge) -> Option<SlideConfig> {
+/// Start presentation for the panel edge hosting Start. `start_button` is the Start button's root
+/// device rect `(x, y, width, height)`, which Magic Lamp folds into. `None` keeps the immediate
+/// show: animations disabled, `none`, an unknown style, or Magic Lamp before the button has layout.
+pub(crate) fn start_slide(
+    snapshot: &SettingsSnapshot,
+    edge: PanelEdge,
+    start_button: Option<(i32, i32, u32, u32)>,
+) -> Option<SlideConfig> {
     if !bool_setting(snapshot, "animationsEnabled", true)
         || !bool_setting(snapshot, "startAnimationEnabled", true)
-        || !matches!(
-            text_setting(snapshot, "startAnimation", DEFAULT_START_ANIMATION).as_str(),
-            "slide" | "slide-up"
-        )
     {
         return None;
     }
-    let speed = integer_setting(snapshot, "animationSpeed", DEFAULT_ANIMATION_SPEED).clamp(25, 200);
+    let speed = integer_setting(snapshot, "animationSpeed", DEFAULT_ANIMATION_SPEED).clamp(25, 200) as u16;
     let edge = match edge {
         PanelEdge::Bottom => SlideEdge::Bottom,
         PanelEdge::Top => SlideEdge::Top,
         PanelEdge::Left => SlideEdge::Left,
         PanelEdge::Right => SlideEdge::Right,
     };
-    Some(SlideConfig {
-        edge,
-        speed: speed as u16,
-    })
+    match text_setting(snapshot, "startAnimation", DEFAULT_START_ANIMATION).as_str() {
+        "slide" | "slide-up" => Some(SlideConfig::slide(edge, speed)),
+        "fade" => Some(SlideConfig::fade(edge, speed)),
+        "magic-lamp" => start_button.map(|target| SlideConfig::lamp(edge, speed, target)),
+        _ => None,
+    }
 }
 
 /// Accent carries `accentOpacity` as alpha for every accent consumer.
@@ -396,10 +400,12 @@ mod tests {
         snapshot
     }
 
+    const START_BUTTON: (i32, i32, u32, u32) = (20, 1050, 48, 36);
+
     #[test]
     fn start_slide_maps_each_panel_edge() {
         let snapshot = SettingsSnapshot::new(1);
-        let edge_of = |edge| start_slide(&snapshot, edge).map(|slide| slide.edge);
+        let edge_of = |edge| start_slide(&snapshot, edge, None).map(|slide| slide.edge);
         assert_eq!(edge_of(PanelEdge::Bottom), Some(SlideEdge::Bottom));
         assert_eq!(edge_of(PanelEdge::Top), Some(SlideEdge::Top));
         assert_eq!(edge_of(PanelEdge::Left), Some(SlideEdge::Left));
@@ -408,28 +414,70 @@ mod tests {
 
     #[test]
     fn start_slide_missing_keys_default_enabled_at_base_speed() {
-        let slide = start_slide(&SettingsSnapshot::new(1), PanelEdge::Bottom).expect("slide");
-        assert_eq!(slide.speed, 100);
+        let slide = start_slide(&SettingsSnapshot::new(1), PanelEdge::Bottom, None).expect("slide");
+        assert_eq!(slide, SlideConfig::slide(SlideEdge::Bottom, 100));
     }
 
     #[test]
-    fn start_slide_disabled_by_each_flag_or_other_animation() {
+    fn start_slide_disabled_by_each_flag_for_every_style() {
         let off = SettingValue::Boolean(false);
-        let cases = [
-            slide_snapshot(&[("animationsEnabled", off.clone())]),
-            slide_snapshot(&[("startAnimationEnabled", off)]),
-            slide_snapshot(&[("startAnimation", SettingValue::Text("fade".to_owned()))]),
-        ];
-        for snapshot in &cases {
-            assert_eq!(start_slide(snapshot, PanelEdge::Bottom), None);
+        for style in ["slide", "fade", "magic-lamp"] {
+            let style = SettingValue::Text(style.to_owned());
+            let cases = [
+                slide_snapshot(&[("animationsEnabled", off.clone()), ("startAnimation", style.clone())]),
+                slide_snapshot(&[("startAnimationEnabled", off.clone()), ("startAnimation", style.clone())]),
+            ];
+            for snapshot in &cases {
+                assert_eq!(start_slide(snapshot, PanelEdge::Bottom, Some(START_BUTTON)), None);
+            }
         }
+    }
+
+    #[test]
+    fn start_slide_none_and_unknown_styles_are_immediate() {
+        for style in ["none", "bounce"] {
+            let snapshot = slide_snapshot(&[("startAnimation", SettingValue::Text(style.to_owned()))]);
+            assert_eq!(start_slide(&snapshot, PanelEdge::Bottom, Some(START_BUTTON)), None, "{style}");
+        }
+    }
+
+    #[test]
+    fn start_slide_slide_and_legacy_slide_up_keep_the_slide() {
+        for style in ["slide", "slide-up"] {
+            let snapshot = slide_snapshot(&[("startAnimation", SettingValue::Text(style.to_owned()))]);
+            let slide = start_slide(&snapshot, PanelEdge::Top, None).expect(style);
+            assert_eq!(slide, SlideConfig::slide(SlideEdge::Top, 100), "{style}");
+        }
+    }
+
+    #[test]
+    fn start_slide_fade_has_no_target_and_keeps_the_speed() {
+        let snapshot = slide_snapshot(&[
+            ("startAnimation", SettingValue::Text("fade".to_owned())),
+            ("animationSpeed", SettingValue::Integer(50)),
+        ]);
+        assert_eq!(
+            start_slide(&snapshot, PanelEdge::Left, None),
+            Some(SlideConfig::fade(SlideEdge::Left, 50))
+        );
+    }
+
+    #[test]
+    fn start_slide_magic_lamp_folds_into_the_start_button() {
+        let snapshot = slide_snapshot(&[("startAnimation", SettingValue::Text("magic-lamp".to_owned()))]);
+        assert_eq!(
+            start_slide(&snapshot, PanelEdge::Bottom, Some(START_BUTTON)),
+            Some(SlideConfig::lamp(SlideEdge::Bottom, 100, START_BUTTON))
+        );
+        // Without button layout the lamp cannot fold anywhere, so the show stays immediate.
+        assert_eq!(start_slide(&snapshot, PanelEdge::Bottom, None), None);
     }
 
     #[test]
     fn start_slide_clamps_speed_to_supported_range() {
         let speed = |value| {
             let snapshot = slide_snapshot(&[("animationSpeed", SettingValue::Integer(value))]);
-            start_slide(&snapshot, PanelEdge::Top).expect("slide").speed
+            start_slide(&snapshot, PanelEdge::Top, None).expect("slide").speed
         };
         assert_eq!(speed(10), 25);
         assert_eq!(speed(25), 25);

@@ -114,14 +114,24 @@ impl<T> CaptureCache<T> {
     }
 }
 
-/// User settings snapshot. `minimize` gates both minimize and restore.
+/// Visual style of one effect. `None` means no overlay: the end state is applied immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    None,
+    Scale,
+    Fade,
+    MagicLamp,
+}
+
+/// User settings snapshot. `minimize` gates both minimize and restore; `maximize` gates both
+/// maximize and unmaximize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub enabled: bool,
     pub speed: u16,
-    pub minimize: bool,
-    pub maximize: bool,
-    pub open: bool,
+    pub minimize: Style,
+    pub maximize: Style,
+    pub open: Style,
 }
 
 impl Settings {
@@ -129,30 +139,83 @@ impl Settings {
     pub const DEFAULT: Self = Self {
         enabled: true,
         speed: 100,
-        minimize: true,
-        maximize: true,
-        open: true,
+        minimize: Style::MagicLamp,
+        maximize: Style::MagicLamp,
+        open: Style::Scale,
     };
 }
 
-/// Maps `animationsEnabled`, `animationSpeed` (hundredths), and the per-effect flags.
-/// Missing or mistyped keys keep the default for that key.
+/// Style for `effect`. Only the style of the effect's own group is consulted.
+#[must_use]
+pub fn effect_style(settings: Settings, effect: Effect) -> Style {
+    match effect {
+        Effect::Minimize | Effect::Restore => settings.minimize,
+        Effect::Maximize | Effect::Unmaximize => settings.maximize,
+        Effect::Open => settings.open,
+    }
+}
+
+/// Parses one per-effect style key. Disabled (`enabled_key` false) or `none` gives `None`.
+/// Unknown text or a style not offered for that effect keeps `default`.
+fn style_from_snapshot(
+    snapshot: &SettingsSnapshot,
+    enabled_key: &str,
+    style_key: &str,
+    default: Style,
+    allowed: &[(&str, Style)],
+) -> Style {
+    if matches!(snapshot.values.get(enabled_key), Some(SettingValue::Boolean(false))) {
+        return Style::None;
+    }
+    match snapshot.values.get(style_key) {
+        Some(SettingValue::Text(text)) => match allowed.iter().find(|(name, _)| *name == text.as_str()) {
+            Some((_, Style::None)) => Style::None,
+            Some((_, style)) => *style,
+            None => default,
+        },
+        _ => default,
+    }
+}
+
+/// Maps `animationsEnabled`, `animationSpeed` (hundredths), and the per-effect styles.
+/// `animationsEnabled=false` is applied by the timeline (`Settings::enabled`), not by the styles.
+/// Missing or mistyped keys keep the default.
 #[must_use]
 pub fn settings_from_snapshot(snapshot: &SettingsSnapshot) -> Settings {
-    let flag = |key: &str, default: bool| match snapshot.values.get(key) {
+    let enabled = match snapshot.values.get("animationsEnabled") {
         Some(SettingValue::Boolean(value)) => *value,
-        _ => default,
+        _ => Settings::DEFAULT.enabled,
     };
     let speed = match snapshot.values.get("animationSpeed") {
         Some(SettingValue::Integer(value)) => u16::try_from(*value).unwrap_or(Settings::DEFAULT.speed),
         _ => Settings::DEFAULT.speed,
     };
+    let group = |enabled_key: &str, style_key: &str, default: Style, allowed: &[(&str, Style)]| {
+        style_from_snapshot(snapshot, enabled_key, style_key, default, allowed)
+    };
+    let minimize_styles = [("none", Style::None), ("fade", Style::Fade), ("magic-lamp", Style::MagicLamp)];
+    let open_styles = [("none", Style::None), ("scale", Style::Scale), ("fade", Style::Fade)];
     Settings {
-        enabled: flag("animationsEnabled", Settings::DEFAULT.enabled),
+        enabled,
         speed,
-        minimize: flag("minimizeAnimationEnabled", Settings::DEFAULT.minimize),
-        maximize: flag("maximizeAnimationEnabled", Settings::DEFAULT.maximize),
-        open: flag("windowOpenAnimationEnabled", Settings::DEFAULT.open),
+        minimize: group(
+            "minimizeAnimationEnabled",
+            "minimizeAnimation",
+            Settings::DEFAULT.minimize,
+            &minimize_styles,
+        ),
+        maximize: group(
+            "maximizeAnimationEnabled",
+            "maximizeAnimation",
+            Settings::DEFAULT.maximize,
+            &minimize_styles,
+        ),
+        open: group(
+            "windowOpenAnimationEnabled",
+            "windowOpenAnimation",
+            Settings::DEFAULT.open,
+            &open_styles,
+        ),
     }
 }
 
@@ -365,11 +428,13 @@ impl Animator {
     }
 
     fn effect_allowed(&self, effect: Effect) -> bool {
-        match effect {
-            Effect::Minimize | Effect::Restore => self.settings.minimize,
-            Effect::Maximize | Effect::Unmaximize => self.settings.maximize,
-            Effect::Open => self.settings.open,
-        }
+        self.style(effect) != Style::None
+    }
+
+    /// Visual style the current settings give `effect`.
+    #[must_use]
+    pub fn style(&self, effect: Effect) -> Style {
+        effect_style(self.settings, effect)
     }
 
     fn base_ms(effect: Effect) -> u32 {
@@ -495,9 +560,9 @@ mod tests {
     const ON: Settings = Settings {
         enabled: true,
         speed: 100,
-        minimize: true,
-        maximize: true,
-        open: true,
+        minimize: Style::MagicLamp,
+        maximize: Style::MagicLamp,
+        open: Style::Scale,
     };
 
     fn animator() -> Animator {
@@ -571,7 +636,7 @@ mod tests {
     #[test]
     fn per_effect_flag_gates_only_that_effect() {
         let t0 = Instant::now();
-        let mut a = Animator::new(true, Settings { maximize: false, ..ON });
+        let mut a = Animator::new(true, Settings { maximize: Style::None, ..ON });
         assert_eq!(a.start(7, Effect::Maximize, t0), Begin::Immediate);
         assert_eq!(a.start(7, Effect::Minimize, t0), Begin::Started);
     }
@@ -645,8 +710,8 @@ mod tests {
         let mapped = settings_from_snapshot(&snapshot);
         assert!(!mapped.enabled);
         assert_eq!(mapped.speed, 50);
-        assert!(!mapped.maximize);
-        assert!(mapped.minimize && mapped.open, "missing keys keep the default");
+        assert_eq!(mapped.maximize, Style::None);
+        assert!(mapped.minimize != Style::None && mapped.open != Style::None, "missing keys keep the default");
         assert_eq!(settings_from_snapshot(&SettingsSnapshot::new(1)), Settings::DEFAULT);
     }
 
@@ -671,7 +736,7 @@ mod tests {
     #[test]
     fn unmaximize_is_gated_by_maximize_flag_and_completes_once() {
         let t0 = Instant::now();
-        let mut off = Animator::new(true, Settings { maximize: false, ..ON });
+        let mut off = Animator::new(true, Settings { maximize: Style::None, ..ON });
         assert_eq!(off.start(7, Effect::Unmaximize, t0), Begin::Immediate);
         let mut a = animator();
         assert_eq!(a.start(7, Effect::Unmaximize, t0), Begin::Started);
@@ -779,7 +844,7 @@ mod tests {
     fn open_wants_requires_enabled_capable_and_flag() {
         let on = Animator::new(true, Settings::DEFAULT);
         assert!(on.wants(Effect::Open));
-        let flag_off = Animator::new(true, Settings { open: false, ..Settings::DEFAULT });
+        let flag_off = Animator::new(true, Settings { open: Style::None, ..Settings::DEFAULT });
         assert!(!flag_off.wants(Effect::Open));
         let no_cap = Animator::new(false, Settings::DEFAULT);
         assert!(!no_cap.wants(Effect::Open));
@@ -803,5 +868,115 @@ mod tests {
         assert!(f64::from(start.width) < f64::from(outer.width) * 0.9, "below the 0.9x threshold");
         assert_eq!(start.x + start.width / 2, outer.x + outer.width / 2, "horizontally centred");
         assert_eq!(start.y + start.height / 2, outer.y + outer.height / 2, "vertically centred");
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+    fn snapshot(entries: &[(&str, SettingValue)]) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        for (key, value) in entries {
+            snapshot.values.insert((*key).into(), value.clone());
+        }
+        snapshot
+    }
+
+    fn text(value: &str) -> SettingValue {
+        SettingValue::Text(value.to_owned())
+    }
+
+    #[test]
+    fn missing_style_keys_keep_defaults() {
+        let mapped = settings_from_snapshot(&SettingsSnapshot::new(1));
+        assert_eq!(mapped, Settings::DEFAULT);
+        assert_eq!(mapped.minimize, Style::MagicLamp);
+        assert_eq!(mapped.maximize, Style::MagicLamp);
+        assert_eq!(mapped.open, Style::Scale);
+    }
+
+    #[test]
+    fn each_effect_parses_its_own_style_values() {
+        let mapped = settings_from_snapshot(&snapshot(&[
+            ("minimizeAnimation", text("fade")),
+            ("maximizeAnimation", text("none")),
+            ("windowOpenAnimation", text("fade")),
+        ]));
+        assert_eq!(mapped.minimize, Style::Fade);
+        assert_eq!(mapped.maximize, Style::None);
+        assert_eq!(mapped.open, Style::Fade);
+
+        let mapped = settings_from_snapshot(&snapshot(&[
+            ("minimizeAnimation", text("magic-lamp")),
+            ("maximizeAnimation", text("fade")),
+            ("windowOpenAnimation", text("none")),
+        ]));
+        assert_eq!(mapped.minimize, Style::MagicLamp);
+        assert_eq!(mapped.maximize, Style::Fade);
+        assert_eq!(mapped.open, Style::None);
+    }
+
+    #[test]
+    fn style_not_offered_for_an_effect_keeps_its_default() {
+        let mapped = settings_from_snapshot(&snapshot(&[
+            ("minimizeAnimation", text("scale")),
+            ("windowOpenAnimation", text("magic-lamp")),
+            ("maximizeAnimation", SettingValue::Integer(3)),
+        ]));
+        assert_eq!(mapped.minimize, Style::MagicLamp);
+        assert_eq!(mapped.open, Style::Scale);
+        assert_eq!(mapped.maximize, Style::MagicLamp);
+    }
+
+    #[test]
+    fn legacy_enabled_flag_false_forces_none_over_style() {
+        let mapped = settings_from_snapshot(&snapshot(&[
+            ("minimizeAnimationEnabled", SettingValue::Boolean(false)),
+            ("minimizeAnimation", text("fade")),
+            ("windowOpenAnimationEnabled", SettingValue::Boolean(false)),
+        ]));
+        assert_eq!(mapped.minimize, Style::None);
+        assert_eq!(mapped.open, Style::None);
+        assert_eq!(mapped.maximize, Style::MagicLamp);
+    }
+
+    #[test]
+    fn master_flag_false_is_timeline_gate_and_speed_is_kept() {
+        let mapped = settings_from_snapshot(&snapshot(&[
+            ("animationsEnabled", SettingValue::Boolean(false)),
+            ("animationSpeed", SettingValue::Integer(50)),
+            ("minimizeAnimation", text("fade")),
+        ]));
+        assert!(!mapped.enabled);
+        assert_eq!(mapped.speed, 50);
+        assert_eq!(mapped.minimize, Style::Fade);
+        assert!(!Animator::new(true, mapped).wants(Effect::Minimize));
+    }
+
+    #[test]
+    fn effect_style_selects_the_group_for_each_effect() {
+        let settings = Settings {
+            minimize: Style::Fade,
+            maximize: Style::MagicLamp,
+            open: Style::None,
+            ..Settings::DEFAULT
+        };
+        assert_eq!(effect_style(settings, Effect::Minimize), Style::Fade);
+        assert_eq!(effect_style(settings, Effect::Restore), Style::Fade);
+        assert_eq!(effect_style(settings, Effect::Maximize), Style::MagicLamp);
+        assert_eq!(effect_style(settings, Effect::Unmaximize), Style::MagicLamp);
+        assert_eq!(effect_style(settings, Effect::Open), Style::None);
+    }
+
+    #[test]
+    fn animator_refuses_effects_whose_style_is_none() {
+        let settings = Settings { open: Style::None, minimize: Style::Fade, ..Settings::DEFAULT };
+        let animator = Animator::new(true, settings);
+        assert_eq!(animator.style(Effect::Minimize), Style::Fade);
+        assert!(animator.wants(Effect::Minimize));
+        assert_eq!(animator.style(Effect::Open), Style::None);
+        assert!(!animator.wants(Effect::Open));
     }
 }

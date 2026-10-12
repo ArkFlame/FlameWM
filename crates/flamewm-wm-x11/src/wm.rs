@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use crate::animation::{self, Animator, Begin, CaptureCache, Effect, OpenGate, Settings, Tick};
-use flamewm_render_x11::{CapturedImage, WarpOverlay, WarpRect};
+use flamewm_render_x11::{CapturedImage, PanelEdge, TransitionDirection, TransitionStyle, WarpOverlay, WarpRect};
 
 /// Frame cadence while a transition is in flight (60 Hz).
 const TRANSITION_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
@@ -4052,11 +4052,50 @@ impl<'a, C: Connection> Wm<'a, C> {
                 return Err(error);
             }
         }
-        let opened = renderer.borrow().open_warp_overlay(
-            capture,
-            warp_rect(anim_rect(outer)),
-            warp_rect(target),
-        );
+        // Fade keeps the window rect (minimize, restore, open) or moves it between the two rects
+        // (maximize, unmaximize) while crossfading. Magic Lamp keeps the lamp warp; its panel edge is
+        // derived inside the renderer from the same source and target rects.
+        let style = self.animator.style(effect);
+        let mirrored = mirrored && style != animation::Style::Fade;
+        let source = warp_rect(anim_rect(outer));
+        let opened = match (effect, style) {
+            (Effect::Minimize | Effect::Restore | Effect::Open, animation::Style::Fade) => {
+                let direction = if effect == Effect::Minimize {
+                    TransitionDirection::Out
+                } else {
+                    TransitionDirection::In
+                };
+                renderer.borrow().open_warp_overlay_styled(
+                    capture,
+                    source,
+                    source,
+                    PanelEdge::Bottom,
+                    TransitionStyle::Fade,
+                    direction,
+                )
+            }
+            (Effect::Maximize | Effect::Unmaximize, animation::Style::Fade) => {
+                renderer.borrow().open_warp_overlay_styled(
+                    capture,
+                    source,
+                    warp_rect(target),
+                    PanelEdge::Bottom,
+                    TransitionStyle::Fade,
+                    TransitionDirection::In,
+                )
+            }
+            (Effect::Maximize | Effect::Unmaximize, animation::Style::MagicLamp) => {
+                renderer.borrow().open_warp_overlay_styled(
+                    capture,
+                    source,
+                    warp_rect(target),
+                    PanelEdge::Bottom,
+                    TransitionStyle::Stretch,
+                    TransitionDirection::In,
+                )
+            }
+            _ => renderer.borrow().open_warp_overlay(capture, source, warp_rect(target)),
+        };
         let overlay = match opened {
             Ok(overlay) => overlay,
             Err(error) => {
@@ -4097,6 +4136,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         if self.animator.start(client, Effect::Open, std::time::Instant::now()) != Begin::Started {
+            return Ok(());
+        }
+        // Fade is a crossfade of the window rect, which works with or without a compositing manager.
+        if self.animator.style(Effect::Open) == animation::Style::Fade {
+            if self.open_overlay(client, Effect::Open).is_err() {
+                self.animator.cancel(client);
+            }
             return Ok(());
         }
         // Without a compositing manager the transparent fade would show black, so the open uses

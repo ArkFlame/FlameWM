@@ -759,6 +759,10 @@ def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
 def ap06(s: Session) -> dict:
     result = _ap06_slide(s)
     fails, ev = animation_slider_check(s)
+    for style in START_STYLES:
+        style_fails, style_ev = start_style_check(s, style)
+        fails += style_fails
+        ev += style_ev
     result["evidence"] = list(result.get("evidence", [])) + ev
     if fails:
         reason = "; ".join(p for p in (result.get("reason", ""), *fails) if p)
@@ -795,6 +799,51 @@ def sample_bright_boxes(s: Session, seconds: float, label: str) -> list:
     return boxes
 
 
+def grab_flight(s: Session, seconds: float, measure) -> list:
+    """measure(img) for each in-process root grab of the strip above the taskbar, one per START_SAMPLE_PERIOD.
+
+    Screenshot tools take ~0.3 s per frame, too slow for an ~0.8 s flight; XGetImage does not."""
+    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
+
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    out: list = []
+    grab = lamp.RootGrab(s.ctx.display)
+    try:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            out.append(measure(grab.grab(0, 0, s.args.screen_w, strip_y)))
+            time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
+    finally:
+        grab.close()
+    return out
+
+
+def bright_bbox_pil(img) -> tuple[int, int, int, int] | None:
+    """PIL form of nonblack_bbox: inclusive (x0, y0, x1, y1) of all-channel >= 200 pixels, or None."""
+    from PIL import ImageChops
+
+    r, g, b = img.split()
+    low = ImageChops.darker(ImageChops.darker(r, g), b).point(lambda v: 255 if v >= 200 else 0)
+    box = low.getbbox()
+    return None if box is None else (box[0], box[1], box[2] - 1, box[3] - 1)
+
+
+def flight_bright_boxes(s: Session, seconds: float) -> list:
+    """In-process equivalent of sample_bright_boxes: bright bbox per grab."""
+    return grab_flight(s, seconds, bright_bbox_pil)
+
+
+def grab_samples(s: Session, seconds: float, rect: tuple[int, int, int, int]) -> list:
+    """In-process equivalent of timed_samples: (client bbox, mean brightness over rect) per grab."""
+    from PIL import ImageStat
+
+    def measure(img):
+        return (bright_bbox_pil(img), sum(ImageStat.Stat(img.crop(rect)).mean) / 3)
+
+    return grab_flight(s, seconds, measure)
+
+
 def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     """Window maximize and window-open animations measured as painted client sizes at 0.25x speed."""
     fails: list[str] = []
@@ -810,7 +859,7 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     _, pre = s.shot("AP07-max-pre")
     rest_w = width(nonblack_bbox(pre, s.args.screen_w, s.args.screen_h - TASKBAR_HEIGHT)) if pre else 0
     s.input(click=f"{frame['x'] + frame['w'] - 57},{frame['y'] + 15}")  # Maximize
-    boxes = sample_bright_boxes(s, 3.0, "AP07-max")
+    boxes = flight_bright_boxes(s, 3.0)
     widths = [width(b) for b in boxes]
     final_w = widths[-1] if widths else 0
     middle = [w for w in widths if rest_w * 1.15 < w < final_w * 0.9]
@@ -821,7 +870,7 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     _, frame_max = s.client_frame(s.tree("AP07-unmax-frame"))
     if frame_max is not None and final_w > rest_w:
         s.input(click=f"{frame_max['x'] + frame_max['w'] - 57},{frame_max['y'] + 15}")
-        boxes_u = sample_bright_boxes(s, 3.0, "AP07-unmax")
+        boxes_u = flight_bright_boxes(s, 3.0)
         widths_u = [width(b) for b in boxes_u]
         end_w = widths_u[-1] if widths_u else 0
         middle_u = [w for w in widths_u if end_w * 1.15 < w < final_w * 0.9]
@@ -856,6 +905,101 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
         fails.append(f"window open did not animate (widths {widths}, transient windows {sorted(transient)})")
     rf, rev = respawn_after_minimize_check(s)
     return fails + rf, ev + rev
+
+
+def region_brightness(pixels: list[tuple[int, int, int]], width: int, rect: tuple[int, int, int, int]) -> float:
+    """Mean channel value over the rect (x0, y0, x1, y1), used for the fade-out brightness check."""
+    x0, y0, x1, y1 = rect
+    values = [sum(pixels[y * width + x]) / 3 for y in range(y0, y1) for x in range(x0, x1)]
+    return sum(values) / len(values) if values else 0.0
+
+
+def timed_samples(s: Session, label: str, seconds: float, rect: tuple[int, int, int, int] | None) -> list:
+    """(client bbox or None, mean brightness over rect or None) per screenshot for `seconds`."""
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    out: list = []
+    deadline = time.monotonic() + seconds
+    n = 0
+    while time.monotonic() < deadline:
+        _, px = s.shot(f"{label}-{n}")
+        n += 1
+        if px is not None:
+            bright = region_brightness(px, s.args.screen_w, rect) if rect else None
+            out.append((nonblack_bbox(px, s.args.screen_w, strip_y), bright))
+    return out
+
+
+def style_matrix_checks(s: Session) -> tuple[list[str], list[str]]:
+    """Per-style checks at 0.25x (the settings floor). Fade is judged by mean brightness of the client rect (a fading client's
+    bright pixels drop below the bright-bbox threshold, so bboxes alone cannot see it); none must show no
+    intermediate state."""
+    fails: list[str] = []
+    ev: list[str] = []
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    width = lambda b: (b[2] - b[0]) if b else 0  # noqa: E731
+    base = {"animationsEnabled": "true", "animationSpeed": "25", "taskbarOpacity": "100"}
+    for effect, key, click in (
+        ("minimize", "minimizeAnimation", lambda f: f"{f['x'] + f['w'] - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2},{f['y'] + 15}"),
+        ("maximize", "maximizeAnimation", lambda f: f"{f['x'] + f['w'] - 57},{f['y'] + 15}"),
+    ):
+        for style in ("fade", "none"):
+            tag = f"AP07-style-{effect}-{style}"
+            if not s.restart({**base, key: style}):
+                return fails + [f"WM or shell exited before {tag}"], ev
+            s.spawn_client()
+            _, frame = s.client_frame(s.tree(f"{tag}-frame"))
+            if frame is None:
+                return fails + [f"client frame not found for {tag}"], ev
+            _, pre = s.shot(f"{tag}-pre")
+            rest = nonblack_bbox(pre, s.args.screen_w, strip_y) if pre else None
+            if rest is None:
+                fails.append(f"{tag}: client pixels not found before the effect")
+                continue
+            rest_b = region_brightness(pre, s.args.screen_w, rest)
+            s.input(click=click(frame))
+            samples = grab_samples(s, 4.0, rest) if effect == "maximize" else timed_samples(s, tag, 4.0, rest)
+            present = [(b, l) for b, l in samples if b is not None]
+            widths = [width(b) for b, _ in present]
+            rest_w = width(rest)
+            final_w = widths[-1] if widths else 0
+            ev.append(f"{tag}: rest={rest} widths={widths} brightness={[round(l) for _, l in samples]}")
+            if effect == "minimize" and style == "fade":
+                # In place: no neck, a dimmed frame mid-flight, and the client gone at the end.
+                mid = [l for _, l in samples if 0.1 * rest_b < l < 0.9 * rest_b]
+                if not mid:
+                    fails.append(f"{tag}: no mid-flight frame between 10% and 90% of rest brightness {rest_b:.0f}")
+                if any(abs(w - rest_w) > rest_w * 0.1 for w in widths):
+                    fails.append(f"{tag}: client changed size during the fade (widths {widths}, rest {rest_w})")
+                if samples and samples[-1][1] >= 0.1 * rest_b:
+                    fails.append(f"{tag}: client still visible after the fade")
+            elif effect == "minimize":
+                if not samples or samples[0][0] is not None or present:
+                    fails.append(f"{tag}: none should remove the client at the first sample (present {len(present)})")
+            elif style == "fade":
+                if not any(rest_w * 1.05 < w < final_w * 0.95 for w in widths):
+                    fails.append(f"{tag}: no intermediate size between rest {rest_w} and final {final_w}")
+            elif any(abs(w - final_w) > final_w * 0.05 for w in widths):
+                fails.append(f"{tag}: none showed intermediate sizes (widths {widths})")
+    # Window open: a fresh client mapped after restart, judged on the fixed rect the 300x200 client settles in.
+    open_rect = (300, 180, 600, 400)
+    for style in ("fade", "none"):
+        tag = f"AP07-style-open-{style}"
+        if not s.restart({**base, "windowOpenAnimation": style}):
+            return fails + [f"WM or shell exited before {tag}"], ev
+        s.ctx.stop(s.client)
+        s.client = s.ctx.spawn("client-xclock-style", [s.args.client_bin, "-geometry", "300x200+300+200"],
+                               s.ctx.app_env)
+        samples = timed_samples(s, tag, 4.0, open_rect)
+        settled = samples[-1][1] if samples else 0.0
+        ev.append(f"{tag}: brightness={[round(l) for _, l in samples]} settled={settled:.0f}")
+        if settled < 50:
+            fails.append(f"{tag}: client never appeared (settled brightness {settled:.0f})")
+        elif style == "fade":
+            if not any(0.1 * settled < l < 0.9 * settled for _, l in samples):
+                fails.append(f"{tag}: no mid-open frame between 10% and 90% of settled brightness")
+        elif any(b is not None and abs(l - settled) > settled * 0.1 for b, l in samples):
+            fails.append(f"{tag}: none showed intermediate brightness")
+    return fails, ev
 
 
 RESPAWN_CYCLES = 10
@@ -963,14 +1107,20 @@ def ap07(s: Session) -> dict:
     else:
         w0, h0 = box0[2] - box0[0], box0[3] - box0[1]
         mids = [b for b in boxes if b is not None and b != box0]
-        # A real lamp changes the painted shape mid-flight: narrower and/or shorter than the resting window,
-        # never a static frame, and ends with the client gone from the screen.
-        shaped = [b for b in mids if (b[2] - b[0]) < w0 * 0.95 or (b[3] - b[1]) < h0 * 0.95]
-        # 0.25x makes the flight ~1 s against ~0.3 s per screenshot: a live lamp is seen in several frames,
-        # so one lucky frame followed by black (a blank overlay) must not pass.
-        if len(shaped) < 2:
-            fails.append(f"fewer than 2 mid-flight frames with a narrowed/shortened client image "
-                         f"({len(shaped)}; rest={box0}, frames={boxes})")
+        # The lamp flies toward the icon: mid frames differ from the rest bbox, their centres approach
+        # _NET_WM_ICON_GEOMETRY step over step, and the last visible centre is within 60% of the first's
+        # distance. The bend itself is proven by scripts/lamp-acceptance (LAMP01-03).
+        mids = [b for b in boxes if b is not None and b != box0]
+        centres = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in mids]
+        if rect is not None:
+            icon_c = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2)
+            dists = [((cx - icon_c[0]) ** 2 + (cy - icon_c[1]) ** 2) ** 0.5 for cx, cy in centres]
+        else:
+            dists = []
+        approaching = len(dists) >= 2 and all(b <= a + 2 for a, b in zip(dists, dists[1:]))
+        if len(mids) < 2 or not approaching or dists[-1] > 0.6 * dists[0]:
+            fails.append(f"minimize lamp did not fly toward the icon (mid frames {len(mids)}, "
+                         f"icon-distance {[round(d) for d in dists]}; rest={box0}, frames={boxes})")
         if boxes and boxes[-1] is not None:
             fails.append(f"client pixels still on screen after the flight: {boxes[-1]}")
     if map_state(wm_state) not in ("IsUnMapped", "IsUnviewable"):
@@ -992,6 +1142,9 @@ def ap07(s: Session) -> dict:
     extra_fails, extra_ev = extra_effect_checks(s)
     extra_ev += restore_ev
     fails += extra_fails
+    style_fails, style_ev = style_matrix_checks(s)
+    extra_ev += style_ev
+    fails += style_fails
     ev = [f"capability={capability}", f"rest_bbox={box0}", f"frame_bboxes={boxes}",
           f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"] + extra_ev
     if fails:
@@ -1321,6 +1474,112 @@ def main(argv: list[str] | None = None) -> int:
     print(run / "result.json")
     return code
 
+
+
+# ---------------------------------------------------------------- AP06 Start animation styles
+
+START_STYLES = ("slide", "fade", "magic-lamp", "none")
+START_BG = (0x19, 0x1B, 0x1D)  # product default startMenuColor
+START_SAMPLE_PERIOD = 0.05     # <= 60 ms in-process XGetImage captures
+START_FLIGHT_SECONDS = 1.2     # slide/fade/lamp at animationSpeed 25 finish within ~0.72 s
+
+
+def start_popup_metrics(img, rest: dict, strip_y: int) -> dict:
+    """Start popup bbox (pixels within 6 of START_BG) and mean brightness over the resting rect."""
+    from PIL import Image, ImageChops, ImageStat
+
+    solid = Image.new("RGB", img.size, START_BG)
+    near = ImageChops.difference(img, solid).convert("L").point(lambda v: 255 if v <= 6 else 0)
+    bbox = near.crop((0, 0, img.width, strip_y)).getbbox()
+    box = (rest["x"], rest["y"], rest["x"] + rest["w"], rest["y"] + rest["h"])
+    brightness = ImageStat.Stat(img.crop(box).convert("L")).mean[0]
+    if bbox is None:
+        return {"bbox": None, "brightness": brightness}
+    return {"bbox": (bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]), "brightness": brightness}
+
+
+def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
+    """Open Start with Super for one animation style and sample the popup region in-process.
+
+    slide: the popup top moves. fade: geometry stays put while region brightness ramps up.
+    magic-lamp: the popup width is not rigid across frames. none: the final state at the first sample."""
+    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
+
+    ev: list[str] = []
+    tag = f"AP06-{style}"
+    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style,
+                      "animationSpeed": "25", "taskbarOpacity": "100"}):
+        return [f"{style}: WM or shell exited before the Start style check"], ev
+    s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+    time.sleep(s.args.settle_seconds)
+    rest_node = find_named(s.tree(f"{tag}-rest"), "FlameWM start")
+    s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+    time.sleep(s.args.settle_seconds)
+    if rest_node is None:
+        return [f"{style}: Start popup not found in the X tree"], ev
+    rest = {"x": rest_node["x"], "y": rest_node["y"], "w": rest_node["w"], "h": rest_node["h"]}
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    grab = lamp.RootGrab(s.ctx.display)
+    try:
+        # The popup must be fully gone before the next open is sampled, or the flight is read
+        # against a closing popup. Wait for an empty rest rect, up to 3 s.
+        pre_open = None
+        for _ in range(30):
+            pre_open = start_popup_metrics(grab.grab(0, 0, s.args.screen_w, strip_y), rest, strip_y)
+            if pre_open["brightness"] < 1.0:
+                break
+            time.sleep(0.1)
+        ev.append(f"{tag}: pre_open_brightness={round(pre_open['brightness'], 1)}")
+        t0 = time.monotonic()
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+        frames: list[tuple[float, dict]] = []
+        while time.monotonic() - t0 < START_FLIGHT_SECONDS:
+            started = time.monotonic()
+            img = grab.grab(0, 0, s.args.screen_w, strip_y)
+            frames.append((started - t0, start_popup_metrics(img, rest, strip_y)))
+            if len(frames) % 3 == 1 and len(frames) < 40:
+                # Keep a few frames of the flight as evidence (what is really on the root, per style).
+                img.crop((0, max(0, rest["y"] - 80), 700, strip_y)).save(
+                    s.ctx.run / "shots" / f"{tag}-flight-{len(frames):02d}.png")
+            time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+    finally:
+        grab.close()
+    boxes = [m["bbox"] for _, m in frames if m["bbox"] is not None]
+    bright = [m["brightness"] for _, m in frames]
+    ev.append(f"{tag}: rest={rest} frames={len(frames)} boxes_seen={len(boxes)}")
+    ev.append(f"{tag}: bboxes={[m['bbox'] for _, m in frames]}")
+    ev.append(f"{tag}: brightness={[round(b, 1) for b in bright]}")
+    fails: list[str] = []
+    if not boxes:
+        return [f"{style}: popup never visible in {len(frames)} samples"], ev
+    tops = [b[1] for b in boxes]
+    widths = [b[2] for b in boxes]
+    heights = [b[3] for b in boxes]
+    rest_top = rest["y"]
+    if style == "slide":
+        if max(tops) - min(tops) < 20 or abs(tops[-1] - rest_top) > 3:
+            fails.append(f"slide: popup top did not travel to rest (tops {tops}, rest {rest_top})")
+    elif style == "fade":
+        # Geometry is the rest rect from the first frame to the last: a low-alpha frame only shows its
+        # brighter content, so early bboxes may be INSIDE the rest rect (never outside it, never moved).
+        outside = [b for b in boxes if b[0] < rest["x"] - 3 or b[1] < rest_top - 3
+                   or b[0] + b[2] > rest["x"] + rest["w"] + 3 or b[1] + b[3] > rest_top + rest["h"] + 3]
+        if outside or abs(boxes[-1][1] - rest_top) > 3 or abs(boxes[-1][2] - rest["w"]) > 3:
+            fails.append(f"fade: geometry moved (boxes {boxes[:4]} ..., rest {rest})")
+        lo, hi = min(bright), max(bright)
+        rising = [b for b in bright if lo + 1 < b < hi - 1]
+        monotone = all(bright[i + 1] >= bright[i] - 0.5 for i in range(len(bright) - 1))
+        if hi - lo < 20 or len(rising) < 4 or not monotone:
+            fails.append(f"fade: no monotone brightness ramp (intermediate {len(rising)}, {bright[0]:.1f} -> {bright[-1]:.1f})")
+    elif style == "magic-lamp":
+        if max(widths) - min(widths) < max(10, 0.1 * rest["w"]):
+            fails.append(f"magic-lamp: width is rigid across frames (widths {widths})")
+    elif style == "none":
+        first = frames[0][1]["bbox"]
+        if first is None or abs(first[1] - rest_top) > 3 or abs(first[2] - rest["w"]) > 3:
+            fails.append(f"none: popup not at final state on the first sample ({first}, rest {rest})")
+    return fails, ev
 
 if __name__ == "__main__":
     raise SystemExit(main())

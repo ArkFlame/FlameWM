@@ -13,7 +13,10 @@ use std::rc::{Rc, Weak};
 
 use flamewm_render_core::{Color, CursorKind, Rect};
 
-use super::overlay::{WarpOverlay, argb_visual_available, warp_argb_usable};
+use super::overlay::{
+    TransitionDirection, TransitionStyle, WarpOverlay, argb_visual_available, warp_argb_usable,
+};
+use super::lamp::PanelEdge;
 use super::warp::WarpRect;
 use super::xcomposite::{CapturedImage, capture_window};
 use super::xrender_transform::XRenderTransformApi;
@@ -294,7 +297,8 @@ impl ExternalDecorationRenderer {
         capture_window(self.display, window)
     }
 
-    /// Opens a Magic Lamp overlay on this renderer's display. Errors when unavailable.
+    /// Opens a Magic Lamp overlay on this renderer's display. The panel edge is taken from the
+    /// icon's side of the window. Errors when unavailable.
     pub fn open_warp_overlay(
         &self,
         capture: CapturedImage,
@@ -305,6 +309,38 @@ impl ExternalDecorationRenderer {
             return Err("overlay: renderer has no display".to_string());
         }
         WarpOverlay::begin(self.display, capture, source, target)
+    }
+
+    /// Like [`ExternalDecorationRenderer::open_warp_overlay`] with the panel edge given by the caller.
+    pub fn open_warp_overlay_with_edge(
+        &self,
+        capture: CapturedImage,
+        source: WarpRect,
+        target: WarpRect,
+        edge: PanelEdge,
+    ) -> Result<WarpOverlay, String> {
+        if self.display.is_null() {
+            return Err("overlay: renderer has no display".to_string());
+        }
+        WarpOverlay::begin_with_edge(self.display, capture, source, target, edge)
+    }
+
+    /// Opens a transition of `style` (Magic Lamp or crossfade Fade) on this renderer's display.
+    /// `direction` is `In` for an appearing window and `Out` for a disappearing one. Works with or
+    /// without a compositing manager. Errors when unavailable.
+    pub fn open_warp_overlay_styled(
+        &self,
+        capture: CapturedImage,
+        source: WarpRect,
+        target: WarpRect,
+        edge: PanelEdge,
+        style: TransitionStyle,
+        direction: TransitionDirection,
+    ) -> Result<WarpOverlay, String> {
+        if self.display.is_null() {
+            return Err("overlay: renderer has no display".to_string());
+        }
+        WarpOverlay::begin_styled(self.display, capture, source, target, edge, style, direction)
     }
 
     /// True when this renderer's display has a 32-bit ARGB visual. Without one, Magic Lamp

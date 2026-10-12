@@ -1273,10 +1273,30 @@ impl ShellLoop {
     /// settings and the current panel edge, so it runs before each open and
     /// after each settings projection. A rejected slide is nonfatal and
     /// falls back to the immediate show path.
-    fn apply_start_slide(&self, runtime: &mut SurfaceRuntime) {
+    fn apply_start_slide(&mut self, runtime: &mut SurfaceRuntime) {
+        // Magic Lamp folds into the panel's Start button; without its layout the show stays immediate.
+        let start_button = runtime
+            .node_device_rect_by_id(
+                self.surfaces.panel(),
+                flamewm_shell::popup_role::PopupRole::Start.source_node_id(),
+            )
+            .filter(|rect| rect.width > 0.0 && rect.height > 0.0)
+            .map(|rect| {
+                (
+                    rect.x as i32,
+                    rect.y as i32,
+                    rect.width.max(1.0) as u32,
+                    rect.height.max(1.0) as u32,
+                )
+            });
         let slide = self.settings_cache.as_ref().and_then(|snapshot| {
-            crate::settings_projection::start_slide(snapshot, self.surfaces.panel_edge())
+            crate::settings_projection::start_slide(
+                snapshot,
+                self.surfaces.panel_edge(),
+                start_button,
+            )
         });
+        self.surfaces.set_start_motion(slide.is_some());
         if let Err(error) = runtime.set_slide(self.surfaces.start, slide) {
             eprintln!("flamewm-shell: start slide setup failed (nonfatal): {error:?}");
             let _ = runtime.set_slide(self.surfaces.start, None);

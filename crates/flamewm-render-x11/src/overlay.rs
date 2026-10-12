@@ -8,6 +8,9 @@
 //!   Exposed areas outside the snapshot rect are not refreshed; they are accepted as stale.
 //! - Window-open scale-and-fade on ARGB only ([`WarpOverlay::begin_fade`]). It never fakes a
 //!   fade on an opaque visual.
+//! - Crossfade ([`TransitionStyle::Fade`] via [`WarpOverlay::begin_styled`]). Draws the capture
+//!   with an alpha mask over the root backdrop (opaque) or over clear (ARGB with a compositor),
+//!   so it works with or without a compositing manager.
 //!
 //! The capture is taken once by the caller and owned here. Raw Xlib stays inside render-x11;
 //! the WM sees only [`WarpOverlay`]. The overlay must be dropped before the display it was
@@ -17,6 +20,7 @@ use std::mem::MaybeUninit;
 use std::os::raw::c_ulong;
 
 use crate::backdrop::capture_drawable_rect;
+use crate::lamp::{self, LampBand, PanelEdge};
 use crate::warp::{self, WarpRect, WarpSource};
 use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb, upload_argb_pixmap};
 use crate::xlib::{
@@ -28,8 +32,6 @@ use crate::xlib::{
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 
-/// Strips per frame: enough for a smooth genie curve at 60 Hz.
-const STRIP_COUNT: usize = 32;
 /// `CWBorderPixel` value bit (not exported by `xlib`).
 const CW_BORDER_PIXEL: c_ulong = 1 << 3;
 const ARGB_DEPTH: i32 = 32;
@@ -82,12 +84,84 @@ pub fn warp_argb_usable(display: *mut Display) -> bool {
     argb_visual_available(display) && compositing_manager_running(display)
 }
 
+/// Alpha a rect-to-rect crossfade starts from and ends at 1 (maximize/unmaximize).
+const MOVE_MIN_ALPHA: f64 = 0.35;
+
+/// Transition the overlay draws. `MagicLamp` bends the capture toward the panel icon; `Fade`
+/// crossfades the capture over the root backdrop, and moves it rect-to-rect when the rects differ.
+/// `Stretch` moves the whole capture rect-to-rect with one affine transform per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionStyle {
+    MagicLamp,
+    Fade,
+    Stretch,
+}
+
+/// Whether the window appears (`In`) or disappears (`Out`). Magic Lamp ignores it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionDirection {
+    In,
+    Out,
+}
+
+/// Ease-out quadratic of linear progress `t` (clamped). Exact 0 at `t = 0` and 1 at `t = 1`.
+fn ease_out_quad(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
+/// Opacity of a crossfade at linear progress `progress` (clamped): `In` rises 0 to 1, `Out` falls
+/// 1 to 0. Both end values are exact.
+#[must_use]
+pub fn fade_alpha(progress: f64, direction: TransitionDirection) -> f64 {
+    let eased = ease_out_quad(progress);
+    match direction {
+        TransitionDirection::In => eased,
+        TransitionDirection::Out => 1.0 - eased,
+    }
+}
+
+/// Opacity of a crossfade frame. A rect-to-rect move never fades to zero: it runs
+/// `MOVE_MIN_ALPHA` to 1 so the old content stays visible through the move.
+#[must_use]
+fn crossfade_alpha(progress: f64, direction: TransitionDirection, moving: bool) -> f64 {
+    if moving {
+        MOVE_MIN_ALPHA + (1.0 - MOVE_MIN_ALPHA) * ease_out_quad(progress)
+    } else {
+        fade_alpha(progress, direction)
+    }
+}
+
+/// Destination rect of a `Stretch` frame at linear `progress` (clamped), ease-out from `source` to
+/// `target`. Exact `source` at 0 and exact `target` at 1.
+#[must_use]
+fn stretch_frame(source: WarpRect, target: WarpRect, progress: f64) -> WarpRect {
+    let eased = ease_out_quad(progress);
+    if eased >= 1.0 {
+        target
+    } else if eased <= 0.0 {
+        source
+    } else {
+        lerp_rect(source, target, eased)
+    }
+}
+
+/// Linear blend of two rects by `t` (`t` in 0..=1, eased by the caller).
+fn lerp_rect(a: WarpRect, b: WarpRect, t: f64) -> WarpRect {
+    let mix = |p: f64, q: f64| p + (q - p) * t;
+    WarpRect {
+        x: mix(a.x, b.x),
+        y: mix(a.y, b.y),
+        width: mix(a.width, b.width),
+        height: mix(a.height, b.height),
+    }
+}
+
 /// Scale and alpha of the window-open effect at linear progress `t` (clamped).
 /// Ease-out quadratic: both reach their end values exactly at `t = 1`.
 #[must_use]
 pub fn fade_frame(t: f64) -> (f64, f64) {
-    let t = t.clamp(0.0, 1.0);
-    let eased = 1.0 - (1.0 - t) * (1.0 - t);
+    let eased = ease_out_quad(t);
     (FADE_START_SCALE + (1.0 - FADE_START_SCALE) * eased, eased)
 }
 
@@ -138,11 +212,21 @@ pub struct WarpOverlay {
     fade_pixmap: Pixmap,
     fade_source: c_ulong,
     fade_clear: c_ulong,
+    /// Crossfade direction when the overlay was opened with `TransitionStyle::Fade`. Uses
+    /// `fade_source` (the capture as ARGB) and `window_root`/`icon_root` as source/target rects.
+    crossfade: Option<TransitionDirection>,
+    /// `Stretch` style: the whole capture moves rect-to-rect through one band per frame.
+    stretch: bool,
     /// Warp capture uploaded once on the first warp frame and reused until Drop.
     warp_source: Option<WarpSource>,
-    /// Source and target in overlay-local coordinates.
-    source: WarpRect,
-    target: WarpRect,
+    /// Window and taskbar icon in root coordinates, and the panel edge the bend pulls toward.
+    window_root: WarpRect,
+    icon_root: WarpRect,
+    edge: PanelEdge,
+    /// Root position of the overlay window's (0,0).
+    origin: (i32, i32),
+    /// Transparent solid used to clear the ARGB window before each warp frame.
+    clear: c_ulong,
     mapped: bool,
 }
 
@@ -161,8 +245,10 @@ impl WarpOverlay {
         api: XRenderTransformApi,
         capture: CapturedImage,
         size: (u32, u32),
-        source: WarpRect,
-        target: WarpRect,
+        origin: (i32, i32),
+        window_root: WarpRect,
+        icon_root: WarpRect,
+        edge: PanelEdge,
     ) -> Self {
         Self {
             display,
@@ -178,8 +264,13 @@ impl WarpOverlay {
             fade_pixmap: 0,
             fade_source: 0,
             fade_clear: 0,
-            source,
-            target,
+            crossfade: None,
+            stretch: false,
+            window_root,
+            icon_root,
+            edge,
+            origin,
+            clear: 0,
             warp_source: None,
             mapped: false,
         }
@@ -197,34 +288,83 @@ impl WarpOverlay {
         source: WarpRect,
         target: WarpRect,
     ) -> Result<Self, String> {
+        let edge = lamp::edge_for(source, target, screen_rect(display));
+        Self::begin_with_edge(display, capture, source, target, edge)
+    }
+
+    /// Like [`WarpOverlay::begin`] with the panel edge given by the caller.
+    pub fn begin_with_edge(
+        display: *mut Display,
+        capture: CapturedImage,
+        source: WarpRect,
+        target: WarpRect,
+        edge: PanelEdge,
+    ) -> Result<Self, String> {
+        Self::begin_styled(
+            display,
+            capture,
+            source,
+            target,
+            edge,
+            TransitionStyle::MagicLamp,
+            TransitionDirection::In,
+        )
+    }
+
+    /// Opens a transition of `style` between `source` and `target` (root rects). `direction`
+    /// picks appear (`In`) or disappear (`Out`); Magic Lamp ignores it. `capture` must match
+    /// `source`'s size. Same failure and root-snapshot rules as [`WarpOverlay::begin`].
+    pub fn begin_styled(
+        display: *mut Display,
+        capture: CapturedImage,
+        source: WarpRect,
+        target: WarpRect,
+        edge: PanelEdge,
+        style: TransitionStyle,
+        direction: TransitionDirection,
+    ) -> Result<Self, String> {
         let api = load_checked_api(display)?;
         if f64::from(capture.width) != source.width || f64::from(capture.height) != source.height {
             return Err("overlay: capture size does not match source rect".to_string());
         }
         let (bx, by, bw, bh) = union_bounds(source, target);
-        let origin = WarpRect { x: f64::from(bx), y: f64::from(by), width: f64::from(bw), height: f64::from(bh) };
-        let local = |r: WarpRect| WarpRect { x: r.x - origin.x, y: r.y - origin.y, ..r };
-        let mut overlay = Self::empty(display, api, capture, (bw, bh), local(source), local(target));
+        let mut overlay = Self::empty(display, api, capture, (bw, bh), (bx, by), source, target, edge);
+        overlay.create_surface(bx, by, bw, bh)?;
+        match style {
+            TransitionStyle::MagicLamp => {}
+            TransitionStyle::Stretch => overlay.stretch = true,
+            TransitionStyle::Fade => {
+                overlay.crossfade = Some(direction);
+                overlay.upload_fade_source()?;
+            }
+        }
+        Ok(overlay)
+    }
 
+    /// Creates the window and its picture for the surface `warp_surface_for` picks. Each resource
+    /// is recorded in `self` once it exists, so Drop releases it when a later step fails.
+    fn create_surface(&mut self, bx: i32, by: i32, bw: u32, bh: u32) -> Result<(), String> {
+        let display = self.display;
         match warp_surface_for(argb_visual_available(display), compositing_manager_running(display)) {
             WarpSurface::Argb => {
-                // SAFETY: `display` is live per the caller contract; resources are recorded
-                // in `overlay` as soon as they exist, so Drop releases them on error.
+                // SAFETY: `display` is live per the caller contract.
                 let (window, colormap) = unsafe { create_argb_window(display, bx, by, bw, bh)? };
-                overlay.window = window;
-                overlay.colormap = Some(colormap);
-                // SAFETY: `window` is live and owned by `overlay`.
-                overlay.picture = unsafe { overlay.api.create_argb_picture(display, window) }?;
+                self.window = window;
+                self.colormap = Some(colormap);
+                // SAFETY: `window` is live and owned by `self`.
+                self.picture = unsafe { self.api.create_argb_picture(display, window) }?;
+                // SAFETY: `display` is live; the solid is recorded in `self` for Drop.
+                self.clear = unsafe { self.api.create_solid_fill(display, 0, 0, 0, 0) }?;
             }
             WarpSurface::OpaqueBackdrop => {
-                // SAFETY: `display` is live; the snapshot picture is owned by `overlay`.
-                overlay.backdrop = Some(unsafe { capture_backdrop(display, &overlay.api, bx, by, bw, bh)? });
+                // SAFETY: `display` is live; the snapshot picture is owned by `self`.
+                self.backdrop = Some(unsafe { capture_backdrop(display, &self.api, bx, by, bw, bh)? });
                 // SAFETY: `display` is live; the window is recorded for Drop.
                 let window = unsafe { create_default_window(display, bx, by, bw, bh)? };
-                overlay.window = window;
-                // SAFETY: `window` is live and owned by `overlay`.
-                overlay.picture = unsafe {
-                    overlay.api.create_standard_picture(display, window, PICT_STANDARD_RGB_24)
+                self.window = window;
+                // SAFETY: `window` is live and owned by `self`.
+                self.picture = unsafe {
+                    self.api.create_standard_picture(display, window, PICT_STANDARD_RGB_24)
                 }?;
                 // SAFETY: `display` and `window` are live; the pixmap is recorded for Drop once created.
                 let pixmap = unsafe {
@@ -233,15 +373,30 @@ impl WarpOverlay {
                 if pixmap == 0 {
                     return Err("overlay: offscreen pixmap returned 0".to_string());
                 }
-                overlay.offscreen = Some(Backdrop { pixmap, picture: 0 });
-                // SAFETY: `pixmap` is live and owned by `overlay`.
-                let picture = unsafe { overlay.api.create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24) }?;
-                if let Some(off) = overlay.offscreen.as_mut() {
+                self.offscreen = Some(Backdrop { pixmap, picture: 0 });
+                // SAFETY: `pixmap` is live and owned by `self`.
+                let picture = unsafe { self.api.create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24) }?;
+                if let Some(off) = self.offscreen.as_mut() {
                     off.picture = picture;
                 }
             }
         }
-        Ok(overlay)
+        Ok(())
+    }
+
+    /// Uploads the capture as an ARGB pixmap and picture (`fade_pixmap`, `fade_source`), with a
+    /// bilinear filter when available. Both are recorded before any further fallible call.
+    fn upload_fade_source(&mut self) -> Result<(), String> {
+        let display = self.display;
+        // SAFETY: `display` is live per the caller contract; the pixmap is recorded for Drop.
+        self.fade_pixmap = unsafe { upload_argb_pixmap(display, &self.capture) }?;
+        // SAFETY: `fade_pixmap` is live and owned by `self`.
+        self.fade_source = unsafe { self.api.create_argb_picture(display, self.fade_pixmap) }?;
+        if self.api.capabilities().picture_filter {
+            // SAFETY: `fade_source` is live and owned by `self`.
+            unsafe { self.api.set_bilinear_filter(display, self.fade_source) }?;
+        }
+        Ok(())
     }
 
     /// Opens a window-open scale-and-fade on an ARGB window at root position `(x, y)`.
@@ -255,7 +410,7 @@ impl WarpOverlay {
         check_capture_size(capture.width, capture.height)?;
         let (w, h) = (capture.width, capture.height);
         let full = WarpRect { x: 0.0, y: 0.0, width: f64::from(w), height: f64::from(h) };
-        let mut overlay = Self::empty(display, api, capture, (w, h), full, full);
+        let mut overlay = Self::empty(display, api, capture, (w, h), (x, y), full, full, PanelEdge::Bottom);
         overlay.fade = true;
         // SAFETY: `display` is live per the caller contract; resources are recorded as created.
         let (window, colormap) = unsafe { create_argb_window(display, x, y, w, h)? };
@@ -263,14 +418,7 @@ impl WarpOverlay {
         overlay.colormap = Some(colormap);
         // SAFETY: `window` is live and owned by `overlay`.
         overlay.picture = unsafe { overlay.api.create_argb_picture(display, window) }?;
-        // SAFETY: `display` is live; the pixmap is recorded for Drop before any further use.
-        overlay.fade_pixmap = unsafe { upload_argb_pixmap(display, &overlay.capture) }?;
-        // SAFETY: `fade_pixmap` is live and owned by `overlay`.
-        overlay.fade_source = unsafe { overlay.api.create_argb_picture(display, overlay.fade_pixmap) }?;
-        if overlay.api.capabilities().picture_filter {
-            // SAFETY: `fade_source` is live and owned by `overlay`.
-            unsafe { overlay.api.set_bilinear_filter(display, overlay.fade_source) }?;
-        }
+        overlay.upload_fade_source()?;
         // SAFETY: `display` is live; the solid transparent picture is owned by `overlay`.
         overlay.fade_clear = unsafe { overlay.api.create_solid_fill(display, 0, 0, 0, 0) }?;
         Ok(overlay)
@@ -292,6 +440,10 @@ impl WarpOverlay {
         }
         if self.fade {
             self.paint_fade(progress)?;
+        } else if self.stretch {
+            self.paint_stretch(progress)?;
+        } else if self.crossfade.is_some() {
+            self.paint_crossfade(progress)?;
         } else {
             self.paint_warp(progress)?;
         }
@@ -301,15 +453,42 @@ impl WarpOverlay {
     }
 
     fn paint_warp(&mut self, progress: f64) -> Result<(), String> {
-        let mesh = warp::magic_lamp_mesh(self.source, self.target, progress, STRIP_COUNT)?;
+        let extent = match self.edge {
+            PanelEdge::Bottom | PanelEdge::Top => self.window_root.height,
+            PanelEdge::Left | PanelEdge::Right => self.window_root.width,
+        };
+        let bands = lamp::lamp_bands(self.window_root, self.icon_root, self.edge, progress, extent)?;
+        self.paint_bands(&bands)
+    }
+
+    /// Stretch frame: the whole capture at the eased rect, one band, one affine transform.
+    fn paint_stretch(&mut self, progress: f64) -> Result<(), String> {
+        let rect = stretch_frame(self.window_root, self.icon_root, progress);
+        if !(rect.width > 0.0 && rect.height > 0.0) {
+            return Err("overlay: stretch rect has no area".to_string());
+        }
+        let band = LampBand {
+            src: (0.0, 0.0, f64::from(self.capture.width), f64::from(self.capture.height)),
+            dst: (rect.x, rect.y, rect.width, rect.height),
+        };
+        self.paint_bands(&[band])
+    }
+
+    /// Clears or snapshots the surface, then paints `bands` of the capture onto it.
+    fn paint_bands(&mut self, bands: &[LampBand]) -> Result<(), String> {
         let (w, h) = self.size;
+        let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
         let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
         if let Some(backdrop) = &self.backdrop {
             // SAFETY: both pictures are live on `display` until Drop; the snapshot covers the
-            // whole window, so every pixel is opaque before the strips are drawn.
+            // whole window, so every pixel is opaque before the bands are drawn.
             unsafe {
                 self.api.composite_src(self.display, backdrop.picture, dest, (0, 0, w, h));
             }
+        } else {
+            // SAFETY: both pictures are live on `display` until Drop; the transparent solid
+            // clears the previous frame so rows that moved away do not linger.
+            unsafe { self.api.composite_src(self.display, self.clear, dest, (0, 0, w, h)) };
         }
         if self.warp_source.is_none() {
             // SAFETY: `display` is live until Drop; the capture never changes after `begin`, so
@@ -320,7 +499,7 @@ impl WarpOverlay {
             return Err("overlay: warp source missing after upload".to_string());
         };
         // SAFETY: `display` and `dest` are live until Drop; `source` was uploaded on `display`.
-        unsafe { warp::paint_warped(self.display, &self.api, source, &mesh, dest) }?;
+        unsafe { warp::paint_warped(self.display, &self.api, source, bands, origin, dest) }?;
         if dest != self.picture {
             // SAFETY: both pictures are live on `display`; one copy shows the finished frame.
             unsafe { self.api.composite_src(self.display, dest, self.picture, (0, 0, w, h)) };
@@ -359,6 +538,56 @@ impl WarpOverlay {
         Ok(())
     }
 
+    /// Crossfade frame: the capture at the eased rect (`window_root` to `icon_root`, in overlay
+    /// pixels) composited over the backdrop, or over clear on ARGB, at the alpha of
+    /// [`crossfade_alpha`]. One mask picture per frame carries the alpha.
+    fn paint_crossfade(&mut self, progress: f64) -> Result<(), String> {
+        let Some(direction) = self.crossfade else {
+            return Err("overlay: crossfade direction missing".to_string());
+        };
+        let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
+        let local = |r: WarpRect| WarpRect { x: r.x - origin.0, y: r.y - origin.1, ..r };
+        let (from, to) = (local(self.window_root), local(self.icon_root));
+        let moving = from != to;
+        let eased = ease_out_quad(progress);
+        let rect = lerp_rect(from, to, eased);
+        if !(rect.width > 0.0 && rect.height > 0.0) {
+            return Err("overlay: crossfade rect has no area".to_string());
+        }
+        let alpha = crossfade_alpha(progress, direction, moving);
+        // Destination pixels to capture pixels: the capture spans the window's source size.
+        let scale_x = f64::from(self.capture.width) / rect.width;
+        let scale_y = f64::from(self.capture.height) / rect.height;
+        let matrix = [[scale_x, 0.0, -rect.x * scale_x], [0.0, scale_y, -rect.y * scale_y], [0.0, 0.0, 1.0]];
+        let (x0, y0) = (rect.x.floor(), rect.y.floor());
+        let (x1, y1) = ((rect.x + rect.width).ceil(), (rect.y + rect.height).ceil());
+        let dst_rect = (x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32);
+        let (w, h) = self.size;
+        let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
+        let display = self.display;
+        // SAFETY: all pictures are live on `display` until Drop; the mask is freed below.
+        unsafe {
+            if let Some(backdrop) = &self.backdrop {
+                self.api.composite_src(display, backdrop.picture, dest, (0, 0, w, h));
+            } else {
+                self.api.composite_src(display, self.clear, dest, (0, 0, w, h));
+            }
+            if alpha > 0.0 {
+                self.api.set_transform(display, self.fade_source, matrix)?;
+                let mask_alpha = (alpha.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16;
+                let mask = self.api.create_solid_fill(display, 0, 0, 0, mask_alpha)?;
+                self.api
+                    .composite_over_masked(display, self.fade_source, mask, dest, dst_rect);
+                self.api.free_picture(display, mask);
+            }
+            if dest != self.picture {
+                // One copy shows the finished frame, never the intermediate backdrop.
+                self.api.composite_src(display, dest, self.picture, (0, 0, w, h));
+            }
+        }
+        Ok(())
+    }
+
     /// Returns the capture for later reuse (for example a restore).
     #[must_use]
     pub fn finish(mut self) -> CapturedImage {
@@ -381,16 +610,18 @@ impl Drop for WarpOverlay {
             if let Some(source) = self.warp_source.take() {
                 warp::free_warp_source(self.display, &self.api, source);
             }
-            if self.fade {
-                if self.fade_source != 0 {
-                    self.api.free_picture(self.display, self.fade_source);
-                }
-                if self.fade_clear != 0 {
-                    self.api.free_picture(self.display, self.fade_clear);
-                }
-                if self.fade_pixmap != 0 {
-                    XFreePixmap(self.display, self.fade_pixmap);
-                }
+            if self.clear != 0 {
+                self.api.free_picture(self.display, self.clear);
+            }
+            // Fade and crossfade share the capture picture; zero ids were never created.
+            if self.fade_source != 0 {
+                self.api.free_picture(self.display, self.fade_source);
+            }
+            if self.fade_clear != 0 {
+                self.api.free_picture(self.display, self.fade_clear);
+            }
+            if self.fade_pixmap != 0 {
+                XFreePixmap(self.display, self.fade_pixmap);
             }
             if self.picture != 0 {
                 self.api.free_picture(self.display, self.picture);
@@ -416,6 +647,19 @@ impl Drop for WarpOverlay {
             }
         }
     }
+}
+
+/// Root screen rect of `display`'s default screen; zero size for a null display.
+fn screen_rect(display: *mut Display) -> WarpRect {
+    if display.is_null() {
+        return WarpRect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+    }
+    // SAFETY: live display per the caller contract; default screen queries have no other preconditions.
+    let (w, h) = unsafe {
+        let screen = XDefaultScreen(display);
+        (XDisplayWidth(display, screen), XDisplayHeight(display, screen))
+    };
+    WarpRect { x: 0.0, y: 0.0, width: f64::from(w), height: f64::from(h) }
 }
 
 /// Checks the display and the XRender transform capability before any X resource exists.
@@ -644,5 +888,108 @@ mod tests {
     fn fade_fails_closed_without_display() {
         let capture = CapturedImage { width: 40, height: 30, argb: vec![0; 40 * 30 * 4] };
         assert!(WarpOverlay::begin_fade(std::ptr::null_mut(), capture, 0, 0).is_err());
+    }
+
+    #[test]
+    fn crossfade_alpha_has_exact_endpoints_per_direction() {
+        assert_eq!(fade_alpha(0.0, TransitionDirection::In), 0.0);
+        assert_eq!(fade_alpha(1.0, TransitionDirection::In), 1.0);
+        assert_eq!(fade_alpha(0.0, TransitionDirection::Out), 1.0);
+        assert_eq!(fade_alpha(1.0, TransitionDirection::Out), 0.0);
+    }
+
+    #[test]
+    fn crossfade_alpha_is_eased_and_monotone_in_its_direction() {
+        // Ease-out leads the linear midpoint: In rises fast, Out falls fast.
+        assert_eq!(fade_alpha(0.5, TransitionDirection::In), 0.75);
+        assert_eq!(fade_alpha(0.5, TransitionDirection::Out), 0.25);
+        let (mut last_in, mut last_out) = (-1.0, 2.0);
+        for step in 0..=20 {
+            let t = f64::from(step) / 20.0;
+            let (a_in, a_out) = (fade_alpha(t, TransitionDirection::In), fade_alpha(t, TransitionDirection::Out));
+            assert!(a_in >= last_in && a_out <= last_out, "monotone at step {step}");
+            assert!((0.0..=1.0).contains(&a_in) && (0.0..=1.0).contains(&a_out));
+            assert!((a_in + a_out - 1.0).abs() < 1e-12, "Out is the mirror of In");
+            (last_in, last_out) = (a_in, a_out);
+        }
+    }
+
+    #[test]
+    fn crossfade_alpha_clamps_progress() {
+        assert_eq!(fade_alpha(-3.0, TransitionDirection::In), 0.0);
+        assert_eq!(fade_alpha(9.0, TransitionDirection::In), 1.0);
+        assert_eq!(fade_alpha(9.0, TransitionDirection::Out), 0.0);
+    }
+
+    #[test]
+    fn rect_move_never_fades_below_minimum_alpha() {
+        assert_eq!(crossfade_alpha(0.0, TransitionDirection::Out, true), MOVE_MIN_ALPHA);
+        assert_eq!(crossfade_alpha(1.0, TransitionDirection::In, true), 1.0);
+        // Without a rect move the plain fade applies.
+        assert_eq!(crossfade_alpha(1.0, TransitionDirection::Out, false), 0.0);
+    }
+
+    #[test]
+    fn lerp_rect_hits_both_rects_at_the_ends() {
+        let a = WarpRect { x: 10.0, y: 20.0, width: 100.0, height: 50.0 };
+        let b = WarpRect { x: 0.0, y: 0.0, width: 400.0, height: 300.0 };
+        assert_eq!(lerp_rect(a, b, 0.0), a);
+        assert_eq!(lerp_rect(a, b, 1.0), b);
+        assert_eq!(lerp_rect(a, a, 0.5), a);
+    }
+
+    #[test]
+    fn styled_begin_fails_closed_without_display_for_each_style() {
+        for style in [TransitionStyle::MagicLamp, TransitionStyle::Fade, TransitionStyle::Stretch] {
+            for direction in [TransitionDirection::In, TransitionDirection::Out] {
+                let capture = CapturedImage { width: 400, height: 300, argb: vec![0; 400 * 300 * 4] };
+                let result = WarpOverlay::begin_styled(
+                    std::ptr::null_mut(),
+                    capture,
+                    SOURCE,
+                    SOURCE,
+                    PanelEdge::Bottom,
+                    style,
+                    direction,
+                );
+                assert!(result.is_err(), "{style:?} {direction:?} must fail closed");
+            }
+        }
+    }
+
+    #[test]
+    fn stretch_frame_hits_source_and_target_exactly() {
+        let a = WarpRect { x: 0.0, y: 489.0, width: 1278.0, height: 300.0 };
+        let b = WarpRect { x: 0.0, y: 0.0, width: 1278.0, height: 1024.0 };
+        assert_eq!(stretch_frame(a, b, 0.0), a);
+        assert_eq!(stretch_frame(a, b, 1.0), b);
+        assert_eq!(stretch_frame(a, b, 9.0), b);
+        assert_eq!(stretch_frame(b, a, 0.0), b);
+        assert_eq!(stretch_frame(b, a, 1.0), a);
+    }
+
+    #[test]
+    fn stretch_frame_is_monotone_between_the_rects() {
+        let a = WarpRect { x: 200.0, y: 300.0, width: 100.0, height: 80.0 };
+        let b = WarpRect { x: 0.0, y: 0.0, width: 1278.0, height: 1024.0 };
+        let mut last = a;
+        for step in 1..=20 {
+            let r = stretch_frame(a, b, f64::from(step) / 20.0);
+            assert!(r.x <= last.x + 1e-9 && r.y <= last.y + 1e-9, "origin moves toward target at {step}");
+            assert!(r.width >= last.width - 1e-9 && r.height >= last.height - 1e-9, "size grows at {step}");
+            last = r;
+        }
+    }
+
+    #[test]
+    fn stretch_frame_has_no_nan_for_degenerate_rects() {
+        let zero = WarpRect { x: 5.0, y: 5.0, width: 0.0, height: 0.0 };
+        let wide = WarpRect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        for (a, b) in [(zero, wide), (wide, zero), (zero, zero)] {
+            for step in 0..=10 {
+                let r = stretch_frame(a, b, f64::from(step) / 10.0);
+                assert!(r.x.is_finite() && r.y.is_finite() && r.width.is_finite() && r.height.is_finite());
+            }
+        }
     }
 }

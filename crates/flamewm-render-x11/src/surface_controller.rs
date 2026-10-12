@@ -165,12 +165,18 @@ struct SurfaceInstance {
     /// Retained native window origin (root-space device pixels). Set at
     /// create, updated by move_resize; never recomputed from layout.
     origin: (i32, i32),
-    /// Opt-in slide presentation for the next show/hide; `None` is the immediate path.
+    /// Opt-in presentation for the next show/hide; `None` is the immediate path.
     slide: Option<SlideConfig>,
     /// Whether the window is mapped from the controller's point of view (slide bookkeeping).
     shown: bool,
     /// Native origin last written by slide motion; skips a repeat move to the same pixel.
     slide_drawn: Option<(i32, i32)>,
+    /// Fade or Magic Lamp transition in flight, with the transition that drives its progress.
+    /// The real window stays unmapped while it runs.
+    overlay: Option<(PopupTransition, WarpOverlay)>,
+    /// A pointer grab requested while the real window is still unmapped behind an opening
+    /// overlay: taken when the flight lands (XGrabPointer refuses a non-viewable window).
+    grab_pending: bool,
 }
 
 /// Panel edge a popup slides out of.
@@ -187,12 +193,79 @@ unsafe extern "C" {
     fn XRestackWindows(display: *mut Display, windows: *mut Window, count: std::os::raw::c_int) -> std::os::raw::c_int;
 }
 
-/// Slide presentation for a popup anchored to a panel edge.
+/// How a popup enters and leaves. `Slide` moves the native window along the panel edge.
+/// `Fade` and `Lamp` play a `WarpOverlay` over the captured popup; the real window maps only
+/// once the overlay has landed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupTransition {
+    Slide,
+    Fade,
+    /// Magic Lamp between the popup and `target`, a root device rect `(x, y, width, height)`.
+    Lamp { target: (i32, i32, u32, u32) },
+}
+
+/// Presentation for a popup anchored to a panel edge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlideConfig {
     pub edge: SlideEdge,
     /// Animation speed in hundredths (`100` = 1.0x).
     pub speed: u16,
+    pub transition: PopupTransition,
+}
+
+impl SlideConfig {
+    pub fn slide(edge: SlideEdge, speed: u16) -> Self {
+        Self { edge, speed, transition: PopupTransition::Slide }
+    }
+
+    pub fn fade(edge: SlideEdge, speed: u16) -> Self {
+        Self { edge, speed, transition: PopupTransition::Fade }
+    }
+
+    pub fn lamp(edge: SlideEdge, speed: u16, target: (i32, i32, u32, u32)) -> Self {
+        Self { edge, speed, transition: PopupTransition::Lamp { target } }
+    }
+}
+
+/// Panel edge as the Magic Lamp bend sees it.
+fn lamp_edge(edge: SlideEdge) -> crate::lamp::PanelEdge {
+    match edge {
+        SlideEdge::Top => crate::lamp::PanelEdge::Top,
+        SlideEdge::Bottom => crate::lamp::PanelEdge::Bottom,
+        SlideEdge::Left => crate::lamp::PanelEdge::Left,
+        SlideEdge::Right => crate::lamp::PanelEdge::Right,
+    }
+}
+
+/// Overlay style for a transition. Magic Lamp is the only bend; everything else crossfades.
+fn overlay_style(transition: PopupTransition) -> TransitionStyle {
+    match transition {
+        PopupTransition::Lamp { .. } => TransitionStyle::MagicLamp,
+        PopupTransition::Slide | PopupTransition::Fade => TransitionStyle::Fade,
+    }
+}
+
+/// Root rect the overlay folds toward: the Start button for Magic Lamp, the popup itself otherwise.
+fn overlay_target(transition: PopupTransition, popup: WarpRect) -> WarpRect {
+    match transition {
+        PopupTransition::Lamp { target: (x, y, width, height) } => WarpRect {
+            x: f64::from(x),
+            y: f64::from(y),
+            width: f64::from(width),
+            height: f64::from(height),
+        },
+        PopupTransition::Slide | PopupTransition::Fade => popup,
+    }
+}
+
+/// Overlay paint progress for timeline `progress` (0 at the start of an open, 1 at its end).
+/// Fade follows the timeline in both directions. Magic Lamp runs target (progress 1) to
+/// source (progress 0), so the popup emerges from the Start button and folds back into it.
+fn overlay_paint_progress(transition: PopupTransition, progress: f32) -> f64 {
+    match transition {
+        PopupTransition::Lamp { .. } => f64::from(1.0 - progress),
+        PopupTransition::Slide | PopupTransition::Fade => f64::from(progress),
+    }
 }
 
 const SLIDE_OPEN_BASE_MS: u32 = 180;
@@ -579,6 +652,8 @@ impl SurfaceController {
             slide: None,
             shown: config.initially_visible,
             slide_drawn: None,
+            overlay: None,
+            grab_pending: false,
         };
         // Overlay/passthrough surfaces are excluded from WM client
         // management: override-redirect + empty input region + no grab/focus.
@@ -708,11 +783,13 @@ impl SurfaceController {
         // starts a fresh slide instead of taking the "already shown" path with no animation.
         instance.shown = false;
         instance.slide_drawn = None;
+        // Immediate close drops any Fade/Lamp overlay without playing it.
+        instance.overlay = None;
         self.slides.cancel(id.get());
         Ok(())
     }
 
-    /// Sets (or clears with `None`) the slide presentation used by later `show`/`hide` calls.
+    /// Sets (or clears with `None`) the presentation used by later `show`/`hide` calls.
     pub fn set_slide(&mut self, id: SurfaceId, slide: Option<SlideConfig>) -> Result<(), String> {
         self.instance_mut(id)?.slide = slide;
         Ok(())
@@ -752,8 +829,13 @@ impl SurfaceController {
                 instance.app.window,
             )
         };
+        if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide) {
+            if self.begin_overlay_show(id, config, shown, now)? {
+                return Ok(());
+            }
+        }
         let mut emerging = false;
-        if let Some(config) = slide {
+        if let Some(config) = slide.filter(|config| config.transition == PopupTransition::Slide) {
             self.slides.set_speed(config.speed);
             let opening = SlideKind { edge: config.edge, opening: true };
             if shown {
@@ -845,6 +927,13 @@ impl SurfaceController {
             }
             (instance.slide, instance.shown)
         };
+        if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide) {
+            if self.begin_overlay_hide(id, config, shown, now)? {
+                unsafe { XFlush(display) };
+                return Ok(());
+            }
+        }
+        let slide = slide.filter(|config| config.transition == PopupTransition::Slide);
         if let (Some(config), true) = (slide, shown) {
             // Already closing: keep the running transition.
             if self.slides.kind(key).is_some_and(|active| !active.opening) {
@@ -875,6 +964,185 @@ impl SurfaceController {
         Ok(())
     }
 
+    /// Paints pending popup content into its backbuffer and captures it without mapping the window.
+    fn capture_popup(&mut self, id: SurfaceId) -> Result<CapturedImage, String> {
+        let display = self.display;
+        let instance = self.instance_mut(id)?;
+        let (width, height) = (instance.app.width, instance.app.height);
+        // SAFETY: the app owns its backbuffer and document; both are live for this call.
+        unsafe {
+            let painted = instance
+                .app
+                .redraw_if_dirty(&mut instance.document)
+                .map_err(|error| {
+                    mark_x_error_seen();
+                    error
+                })?;
+            if painted {
+                instance.app.refresh_shape_mask(&instance.document);
+            }
+        }
+        let backdrop = crate::backdrop::capture_drawable_rect(
+            display,
+            instance.app.backbuffer as u64,
+            (0, 0, width, height),
+        )?;
+        crate::xcomposite::rgba_to_argb(backdrop.width, backdrop.height, &backdrop.pixels)
+    }
+
+    /// Opens an overlay transition for `config` over the popup's final rect. `Ok(false)` leaves
+    /// `show` on the immediate path (already shown, or the overlay could not start).
+    fn begin_overlay_show(
+        &mut self,
+        id: SurfaceId,
+        config: SlideConfig,
+        shown: bool,
+        now: Instant,
+    ) -> Result<bool, String> {
+        let key = id.get();
+        self.slides.set_speed(config.speed);
+        if let Some(active) = self.slides.kind(key) {
+            // Already opening: converging on the final frame. Closing: reverse from current progress.
+            if !active.opening {
+                self.slides.start_towards(
+                    key,
+                    SlideKind { edge: config.edge, opening: true },
+                    now,
+                    SLIDE_OPEN_BASE_MS,
+                    Easing::EaseOutCubic,
+                    (0.0, 1.0),
+                );
+            }
+            return Ok(true);
+        }
+        if shown {
+            return Ok(false);
+        }
+        let capture = self.capture_popup(id)?;
+        let source = self.popup_root_rect(id)?;
+        let target = overlay_target(config.transition, source);
+        let display = self.display;
+        let overlay = match WarpOverlay::begin_styled(
+            display,
+            capture,
+            source,
+            target,
+            lamp_edge(config.edge),
+            overlay_style(config.transition),
+            TransitionDirection::In,
+        ) {
+            Ok(overlay) => overlay,
+            Err(error) => {
+                eprintln!("flamewm: popup overlay unavailable, mapping immediately: {error}");
+                return Ok(false);
+            }
+        };
+        if self.slides.start_towards(
+            key,
+            SlideKind { edge: config.edge, opening: true },
+            now,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseOutCubic,
+            (0.0, 1.0),
+        ) != Start::Started
+        {
+            return Ok(false);
+        }
+        let mut overlay = overlay;
+        if let Err(error) = overlay.paint(overlay_paint_progress(config.transition, 0.0)) {
+            eprintln!("flamewm: popup overlay paint failed, mapping immediately: {error}");
+            self.slides.cancel(key);
+            return Ok(false);
+        }
+        self.instance_mut(id)?.overlay = Some((config.transition, overlay));
+        Ok(true)
+    }
+
+    /// Starts an overlay close from the presented popup. The real window unmaps as the overlay
+    /// takes over, so a Magic Lamp gap never shows the unbent popup. `Ok(false)` leaves `hide`
+    /// on the immediate path.
+    fn begin_overlay_hide(
+        &mut self,
+        id: SurfaceId,
+        config: SlideConfig,
+        shown: bool,
+        now: Instant,
+    ) -> Result<bool, String> {
+        let key = id.get();
+        self.slides.set_speed(config.speed);
+        if let Some(active) = self.slides.kind(key) {
+            // Already closing: keep the running transition. Opening: reverse from current progress.
+            if active.opening {
+                self.slides.start_towards(
+                    key,
+                    SlideKind { edge: config.edge, opening: false },
+                    now,
+                    SLIDE_CLOSE_BASE_MS,
+                    Easing::EaseOutCubic,
+                    (1.0, 0.0),
+                );
+            }
+            return Ok(true);
+        }
+        if !shown {
+            return Ok(false);
+        }
+        let capture = self.capture_popup(id)?;
+        let source = self.popup_root_rect(id)?;
+        let target = overlay_target(config.transition, source);
+        let display = self.display;
+        let mut overlay = match WarpOverlay::begin_styled(
+            display,
+            capture,
+            source,
+            target,
+            lamp_edge(config.edge),
+            overlay_style(config.transition),
+            // Fade alpha follows the timeline itself, so direction stays `In` for both ends.
+            TransitionDirection::In,
+        ) {
+            Ok(overlay) => overlay,
+            Err(error) => {
+                eprintln!("flamewm: popup overlay unavailable, unmapping immediately: {error}");
+                return Ok(false);
+            }
+        };
+        if self.slides.start_towards(
+            key,
+            SlideKind { edge: config.edge, opening: false },
+            now,
+            SLIDE_CLOSE_BASE_MS,
+            Easing::EaseOutCubic,
+            (1.0, 0.0),
+        ) != Start::Started
+        {
+            return Ok(false);
+        }
+        if let Err(error) = overlay.paint(overlay_paint_progress(config.transition, 1.0)) {
+            eprintln!("flamewm: popup overlay paint failed, unmapping immediately: {error}");
+            self.slides.cancel(key);
+            return Ok(false);
+        }
+        let instance = self.instance_mut(id)?;
+        instance.overlay = Some((config.transition, overlay));
+        // SAFETY: the window is this controller's live child of the root.
+        unsafe { XUnmapWindow(display, instance.app.window) };
+        instance.shown = false;
+        instance.slide_drawn = None;
+        Ok(true)
+    }
+
+    /// Final root-space rect of the popup: its retained origin and backbuffer size.
+    fn popup_root_rect(&mut self, id: SurfaceId) -> Result<WarpRect, String> {
+        let instance = self.instance_mut(id)?;
+        Ok(WarpRect {
+            x: f64::from(instance.origin.0),
+            y: f64::from(instance.origin.1),
+            width: f64::from(instance.app.width),
+            height: f64::from(instance.app.height),
+        })
+    }
+
     /// Moves every active slide to `now`: one native move per changed pixel, the exact anchored
     /// origin on the last frame, and unmap when a slide-out completes. Content is never
     /// repainted here.
@@ -886,6 +1154,49 @@ impl SurfaceController {
                 continue;
             };
             let finished = self.slides.finished(key, now) == Some(true);
+            if let Some((transition, overlay)) = instance.overlay.as_mut() {
+                let landed = finished
+                    || overlay.paint(overlay_paint_progress(*transition, progress)).is_err();
+                if !landed {
+                    continue;
+                }
+                self.slides.finish(key);
+                if active.opening {
+                    // Map and present the real popup, then drop the overlay: same turn, no gap.
+                    // SAFETY: the window is this controller's live child of the root.
+                    unsafe {
+                        XMapWindow(display, instance.app.window);
+                        XRaiseWindow(display, instance.app.window);
+                    }
+                    let _ = unsafe { instance.app.present_scene() };
+                    instance.shown = true;
+                    if std::mem::take(&mut instance.grab_pending) {
+                        // SAFETY: the window was just mapped; display/window are live.
+                        let grabbed = unsafe {
+                            XGrabPointer(
+                                display,
+                                instance.app.window,
+                                1,
+                                (BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK) as u32,
+                                GRAB_MODE_ASYNC,
+                                GRAB_MODE_ASYNC,
+                                0,
+                                0,
+                                CURRENT_TIME,
+                            )
+                        };
+                        if grabbed == 0 {
+                            instance.app.pointer_grabbed = true;
+                            unsafe { popup_take_focus(display, &mut instance.app) };
+                        }
+                    }
+                } else {
+                    instance.grab_pending = false;
+                }
+                instance.overlay = None;
+                instance.slide_drawn = None;
+                continue;
+            }
             let window = instance.app.window;
             let size = (instance.app.width, instance.app.height);
             let (x, y) = if finished {
@@ -1177,6 +1488,11 @@ impl SurfaceController {
         }
         let display = self.display;
         let instance = self.instance_mut(id)?;
+        if instance.overlay.is_some() && !instance.shown {
+            // The real window maps when the opening flight lands; grab then.
+            instance.grab_pending = true;
+            return Ok(());
+        }
         let result = unsafe {
             XGrabPointer(
                 display,
@@ -1998,5 +2314,63 @@ mod slide_motion_tests {
         assert_eq!(slides.duration_for(SLIDE_OPEN_BASE_MS), Duration::from_millis(90));
         slides.set_speed(25);
         assert_eq!(slides.duration_for(SLIDE_OPEN_BASE_MS), Duration::from_millis(720));
+    }
+
+    #[test]
+    fn constructors_pick_each_transition() {
+        assert_eq!(SlideConfig::slide(SlideEdge::Top, 100).transition, PopupTransition::Slide);
+        assert_eq!(SlideConfig::fade(SlideEdge::Top, 100).transition, PopupTransition::Fade);
+        let lamp = SlideConfig::lamp(SlideEdge::Bottom, 100, (10, 900, 48, 40));
+        assert_eq!(lamp.transition, PopupTransition::Lamp { target: (10, 900, 48, 40) });
+        assert_eq!(lamp.edge, SlideEdge::Bottom);
+    }
+
+    #[test]
+    fn fade_paint_follows_timeline_in_both_directions() {
+        // Closing starts from the fully shown timeline value, so alpha starts at 1 and ends at 0.
+        assert_eq!(overlay_paint_progress(PopupTransition::Fade, 0.0), 0.0);
+        assert_eq!(overlay_paint_progress(PopupTransition::Fade, 1.0), 1.0);
+        assert_eq!(overlay_style(PopupTransition::Fade), TransitionStyle::Fade);
+    }
+
+    #[test]
+    fn lamp_paint_runs_target_to_source_on_open_and_back_on_close() {
+        let lamp = PopupTransition::Lamp { target: (0, 0, 1, 1) };
+        // Open: starts folded into the button (warp progress 1) and unfolds to the window (0).
+        assert_eq!(overlay_paint_progress(lamp, 0.0), 1.0);
+        assert_eq!(overlay_paint_progress(lamp, 1.0), 0.0);
+        assert_eq!(overlay_style(lamp), TransitionStyle::MagicLamp);
+    }
+
+    #[test]
+    fn lamp_target_is_the_start_button_rect_and_fade_keeps_popup_rect() {
+        let popup = WarpRect { x: 100.0, y: 500.0, width: 300.0, height: 400.0 };
+        assert_eq!(
+            overlay_target(PopupTransition::Lamp { target: (12, 1050, 48, 36) }, popup),
+            WarpRect { x: 12.0, y: 1050.0, width: 48.0, height: 36.0 }
+        );
+        assert_eq!(overlay_target(PopupTransition::Fade, popup), popup);
+    }
+
+    #[test]
+    fn panel_edge_maps_one_to_one_for_the_lamp_bend() {
+        assert_eq!(lamp_edge(SlideEdge::Top), crate::lamp::PanelEdge::Top);
+        assert_eq!(lamp_edge(SlideEdge::Bottom), crate::lamp::PanelEdge::Bottom);
+        assert_eq!(lamp_edge(SlideEdge::Left), crate::lamp::PanelEdge::Left);
+        assert_eq!(lamp_edge(SlideEdge::Right), crate::lamp::PanelEdge::Right);
+    }
+
+    #[test]
+    fn reversed_fade_keeps_its_timeline_value() {
+        // A fade-out reversed mid-flight continues from the same timeline value, so the overlay
+        // paint argument does not jump.
+        let t0 = Instant::now();
+        let mut slides = Timeline::new();
+        slides.start_towards(1, CLOSE, t0, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0));
+        let now = t0 + Duration::from_millis(40);
+        let before = overlay_paint_progress(PopupTransition::Fade, slides.progress(1, now).unwrap());
+        slides.start_towards(1, OPEN, now, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0));
+        let after = overlay_paint_progress(PopupTransition::Fade, slides.progress(1, now).unwrap());
+        assert!((before - after).abs() < 1e-6, "no jump on reverse");
     }
 }
