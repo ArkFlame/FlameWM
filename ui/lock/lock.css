@@ -38,7 +38,7 @@ body.lock-body {
 .lock-date {
   font-size: 18px;
   color: #bdc3c7;
-  margin-bottom: 24px;
+  margin-bottom: 8px;
 }
 .lock-avatar {
   display: flex;
@@ -48,6 +48,8 @@ body.lock-body {
   height: 96px;
   border-radius: 48px;
   background-color: #3daee9;
+  margin-top: 16px;
+  margin-bottom: 12px;
 }
 .lock-avatar-initial {
   font-size: 40px;
@@ -55,7 +57,6 @@ body.lock-body {
 }
 .lock-username {
   font-size: 20px;
-  margin-top: 12px;
   margin-bottom: 16px;
 }
 .lock-field {
