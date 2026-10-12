@@ -361,7 +361,7 @@ def ap04(s: Session) -> dict:
         return entry("AP04", FAIL, "client frame not found in the X tree")
     path, px = s.shot("AP04-rounded-floating")
     title = s.pixel(px, frame["x"] + frame["w"] // 2, frame["y"] + 3)
-    corner = s.pixel(px, frame["x"], frame["y"])
+    corner = s.pixel(px, frame["x"] + 2, frame["y"] + 2)
     cut = not close_enough(corner, title, 24)
     ev += [str(path), f"frame={frame}", f"title={title}", f"corner={corner}", f"corner_cut={cut}"]
     if not cut:
@@ -374,7 +374,7 @@ def ap04(s: Session) -> dict:
     if frame_max is None or pmax is None:
         fails.append("maximized frame not observed")
     else:
-        mc = s.pixel(pmax, frame_max["x"], frame_max["y"])
+        mc = s.pixel(pmax, frame_max["x"] + 2, frame_max["y"] + 2)
         mt = s.pixel(pmax, frame_max["x"] + frame_max["w"] // 2, frame_max["y"] + 3)
         ev += [f"maximized_frame={frame_max}", f"maximized_corner={mc}"]
         if not close_enough(mc, mt, 24):
@@ -385,7 +385,7 @@ def ap04(s: Session) -> dict:
     _, frame_back = s.client_frame(s.tree("AP04-restored"))
     _, prest = s.shot("AP04-restored")
     if frame_back and prest:
-        rc = s.pixel(prest, frame_back["x"], frame_back["y"])
+        rc = s.pixel(prest, frame_back["x"] + 2, frame_back["y"] + 2)
         rt = s.pixel(prest, frame_back["x"] + frame_back["w"] // 2, frame_back["y"] + 3)
         ev.append(f"restored_corner={rc}")
         if close_enough(rc, rt, 24):
@@ -398,7 +398,7 @@ def ap04(s: Session) -> dict:
     _, frame_snap = s.client_frame(s.tree("AP04-snap-left"))
     _, psnap = s.shot("AP04-snap-left")
     if frame_snap and psnap:
-        sc = s.pixel(psnap, frame_snap["x"], frame_snap["y"])
+        sc = s.pixel(psnap, frame_snap["x"] + 2, frame_snap["y"] + 2)
         st = s.pixel(psnap, frame_snap["x"] + frame_snap["w"] // 2, frame_snap["y"] + 3)
         ev.append(f"snap_left_corner={sc} frame={frame_snap}")
         if not close_enough(sc, st, 24):
@@ -447,10 +447,13 @@ def ap05(s: Session) -> dict:
     s.input(move=f"{fx + fw - BUTTON_WIDTH // 2},{fy + TITLEBAR_HEIGHT // 2}")
     time.sleep(1.0)
     path, px_hover = s.shot("AP05-close-hover")
-    close_hover = dominant_color(s.pixels(px_hover, close_rect))
+    close_pixels = s.pixels(px_hover, close_rect)
+    close_hover = dominant_color(close_pixels)
+    # The hover fill is a circle, so the titlebar stays the dominant colour: require a sizeable matching area.
+    hover_share = fraction_matching(close_pixels, CLOSE_HOVER_DEFAULT, 6)
     min_after = dominant_color(s.pixels(px_hover, min_rect))
-    if not close_enough(close_hover, CLOSE_HOVER_DEFAULT, 6):
-        fails.append(f"close hover {close_hover} != default {CLOSE_HOVER_DEFAULT}")
+    if hover_share < 0.15:
+        fails.append(f"close hover {CLOSE_HOVER_DEFAULT} covers {hover_share:.2f} of the button (<0.15), dominant {close_hover}")
     if not close_enough(min_after, min_idle, 3):
         fails.append(f"minimize button changed on close hover: {min_idle} -> {min_after}")
 
@@ -465,9 +468,9 @@ def ap05(s: Session) -> dict:
         s.input(move=f"{frame2['x'] + frame2['w'] - BUTTON_WIDTH // 2},{frame2['y'] + TITLEBAR_HEIGHT // 2}")
         time.sleep(1.0)
         _, pc = s.shot("AP05-custom-close-hover")
-        custom_hover = dominant_color(s.pixels(pc, cr))
-        if not close_enough(custom_hover, base.accent_rgb(custom), 6):
-            fails.append(f"custom close hover {custom_hover} != {custom}")
+        custom_share = fraction_matching(s.pixels(pc, cr), base.accent_rgb(custom), 6)
+        if custom_share < 0.15:
+            fails.append(f"custom close hover {custom} covers {custom_share:.2f} of the button (<0.15)")
     ev = [str(path), f"titlebar={tb}", f"close_hover={close_hover}", f"min_idle={min_idle}", f"min_after={min_after}"]
     if fails:
         return entry("AP05", FAIL, "; ".join(fails), ev, ["XTEST move", "import -window root"])
@@ -494,6 +497,25 @@ def ap06(s: Session) -> dict:
     ok = slide_up_ok(ys)
     res = entry("AP06", PASS if ok else FAIL, "" if ok else f"y sequence not slide-up: {ys}",
                 [f"y_samples={ys}"], ["xwininfo -root -tree polling", "XTEST key Super_L"])
+    # Regression: the slide must play on EVERY open, not just the first (a stale "shown" flag after an
+    # immediate close once made later opens appear without any motion).
+    rest_y = final["y"]
+    for cycle in range(1, 5):
+        time.sleep(0.6)
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)  # open
+        seen: list[int] = []
+        deadline = time.monotonic() + 0.8
+        while time.monotonic() < deadline:
+            popup = find_named(s.tree("AP06-repeat"), "FlameWM start")
+            if popup:
+                seen.append(popup["y"])
+        time.sleep(s.args.settle_seconds / 2)
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)  # close
+        if not seen or max(seen) <= rest_y + 10:
+            ok = False
+            res = entry("AP06", FAIL, f"open #{cycle + 1} did not slide (y samples {seen}, rest y {rest_y})",
+                        [f"y_samples={ys}", f"repeat_{cycle}={seen}"], ["xwininfo -root -tree polling"])
+            break
     if not s.restart({"animationsEnabled": "false", "startAnimationEnabled": "false", "startAnimation": "slide-up"}):
         return entry("AP06", FAIL, "WM or shell exited during disabled restart")
     ys2: list[int] = []
@@ -510,61 +532,107 @@ def ap06(s: Session) -> dict:
     return entry("AP06", FAIL, reason, [f"enabled_y={ys}", f"disabled_y={ys2}"], res["command"].split(" && "))
 
 
+def nonblack_bbox(pixels: list[tuple[int, int, int]], width: int, y_limit: int) -> tuple[int, int, int, int] | None:
+    """(x0, y0, x1, y1) of the bright (clock face, all channels >= 200) pixels above y_limit, or None.
+
+    The shell popups and chrome are dark, so only the white xclock client counts; a Start popup or a
+    black overlay can never satisfy the lamp measurement."""
+    xs, ys = [], []
+    for y in range(y_limit):
+        row = pixels[y * width:(y + 1) * width]
+        hit = [x for x, p in enumerate(row) if min(p) >= 200]
+        if hit:
+            xs += [hit[0], hit[-1]]
+            ys.append(y)
+    return (min(xs), ys[0], max(xs), ys[-1]) if xs else None
+
+
 def ap07(s: Session) -> dict:
-    if not s.restart({"minimizeAnimationEnabled": "true", "taskbarOpacity": "100"}):
+    # Slowed to 0.25x so the ~100 ms screenshots land inside the flight; the measurement is the painted
+    # client pixels (bounding box of non-black content above the taskbar), not an overlay window's size.
+    if not s.restart({"animationsEnabled": "true", "minimizeAnimationEnabled": "true", "animationSpeed": "25",
+                      "taskbarOpacity": "100"}):
         return entry("AP07", FAIL, "WM or shell exited during restart")
     capability = "32-bit ARGB visual" if "depth 32" in subprocess.run(
         ["xdpyinfo", "-display", s.ctx.display], env=s.ctx.host_env, capture_output=True, text=True,
         timeout=20, check=False).stdout else "root-visual fallback (no 32-bit visual reported)"
     s.spawn_client()
-    before = {n["id"] for n in s.tree("AP07-before")}
     _, frame = s.client_frame(s.tree("AP07-frame"))
     client = find_named(s.tree("AP07-client"), "xclock")
     if frame is None or client is None:
         return entry("AP07", FAIL, "client/frame not found")
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    _, pre = s.shot("AP07-pre")
+    box0 = nonblack_bbox(pre, s.args.screen_w, strip_y) if pre else None
     s.input(click=f"{frame['x'] + frame['w'] - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2},{frame['y'] + 15}")  # Minimize
-    widths: dict[str, list[int]] = {}
-    deadline = time.monotonic() + 1.5
+    boxes: list = []
+    deadline = time.monotonic() + 3.0
+    n = 0
     while time.monotonic() < deadline:
-        for node in s.tree("AP07-anim"):
-            if node["id"] not in before and node["id"] not in (client["id"], frame["id"]):
-                widths.setdefault(node["id"], []).append(node["w"])
-        time.sleep(0.04)
-    lamp_ok = any(len(w) >= 3 and is_nonincreasing(w) and w[0] > w[-1] for w in widths.values())
+        _, px = s.shot(f"AP07-mid-{n}")
+        s.tree(f"AP07-mid-{n}")
+        n += 1
+        if px is not None:
+            boxes.append(nonblack_bbox(px, s.args.screen_w, strip_y))
     wm_state = subprocess.run(["xwininfo", "-display", s.ctx.display, "-id", client["id"]], env=s.ctx.host_env,
                               capture_output=True, text=True, timeout=20, check=False).stdout
     icon = subprocess.run(["xprop", "-display", s.ctx.display, "-id", client["id"], "_NET_WM_ICON_GEOMETRY"],
                           env=s.ctx.host_env, capture_output=True, text=True, timeout=20, check=False).stdout
     rect = parse_icon_geometry(icon)
-    strip_y = s.args.screen_h - TASKBAR_HEIGHT
     fails = []
-    if not lamp_ok:
-        fails.append(f"no transient window narrowing toward taskbar: {widths}")
+    if box0 is None:
+        fails.append("client pixels not found before minimize")
+    else:
+        w0, h0 = box0[2] - box0[0], box0[3] - box0[1]
+        mids = [b for b in boxes if b is not None and b != box0]
+        # A real lamp changes the painted shape mid-flight: narrower and/or shorter than the resting window,
+        # never a static frame, and ends with the client gone from the screen.
+        shaped = [b for b in mids if (b[2] - b[0]) < w0 * 0.95 or (b[3] - b[1]) < h0 * 0.95]
+        if not shaped:
+            fails.append(f"no mid-flight frame with a narrowed/shortened client image (rest={box0}, frames={boxes})")
+        if boxes and boxes[-1] is not None:
+            fails.append(f"client pixels still on screen after the flight: {boxes[-1]}")
     if map_state(wm_state) not in ("IsUnMapped", "IsUnviewable"):
         fails.append(f"client map state {map_state(wm_state)} after minimize")
     if rect is None or rect[1] < strip_y:
         fails.append(f"_NET_WM_ICON_GEOMETRY {rect} not inside taskbar strip")
-    ev = [f"capability={capability}", f"lamp_widths={widths}", f"map_state={map_state(wm_state)}",
-          f"icon_geometry={rect}"]
+    ev = [f"capability={capability}", f"rest_bbox={box0}", f"frame_bboxes={boxes}",
+          f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"]
     if fails:
-        return entry("AP07", FAIL, "; ".join(fails), ev, ["xwininfo -root -tree polling", "xprop _NET_WM_ICON_GEOMETRY"])
-    return entry("AP07", PASS, "", ev, ["xwininfo -root -tree polling", "xprop _NET_WM_ICON_GEOMETRY"])
+        return entry("AP07", FAIL, "; ".join(fails), ev, ["import -window root polling", "xprop _NET_WM_ICON_GEOMETRY"])
+    return entry("AP07", PASS, "", ev, ["import -window root polling", "xprop _NET_WM_ICON_GEOMETRY"])
 
 
 def ap08(s: Session) -> dict:
     fails, ev = [], []
+    # No app icon is visible without desktop entries in the private XDG_DATA_HOME, so seed one and compare
+    # the Start menu (its app list renders the entry's themed icon) between the two icon themes.
+    apps = s.ctx.run / "xdg-data" / "applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    (apps / "ap08-probe.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=AP08 Probe\nExec=true\nIcon=folder\nCategories=Utility;\n",
+        encoding="utf-8")
+
     if not s.restart({"iconTheme": "McMojave-circle", "taskbarOpacity": "100"}):
         return entry("AP08", FAIL, "WM or shell exited during restart")
-    _, pa = s.shot("AP08-icon-base")
+    def start_menu_shot(name: str):
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+        time.sleep(s.args.settle_seconds)
+        result = s.shot(name)
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+        time.sleep(1.0)
+        return result
+
+    _, pa = start_menu_shot("AP08-icon-base")
     if not s.restart({"iconTheme": s.args.icon_theme_alt, "taskbarOpacity": "100"}):
         return entry("AP08", FAIL, "WM or shell exited during alt restart")
-    _, pb = s.shot("AP08-icon-alt")
-    rect = s.taskbar_rect()
+    _, pb = start_menu_shot("AP08-icon-alt")
+    rect = (0, s.args.screen_h - TASKBAR_HEIGHT - 400, 560, 400)
     if pa is not None and pb is not None:
         changed = pixel_diff_count(s.pixels(pa, rect), s.pixels(pb, rect))
-        ev.append(f"taskbar_changed_pixels={changed} alt={s.args.icon_theme_alt}")
+        ev.append(f"start_menu_changed_pixels={changed} alt={s.args.icon_theme_alt}")
         if changed < 20:
-            fails.append(f"taskbar icon region unchanged for iconTheme {s.args.icon_theme_alt} ({changed} px)")
+            fails.append(f"Start menu icon region unchanged for iconTheme {s.args.icon_theme_alt} ({changed} px)")
     else:
         fails.append("icon capture failed")
     digests = {}
@@ -614,7 +682,8 @@ def cursor_digest(s: Session) -> str | None:
         cur = image.contents
         count = cur.width * cur.height
         raw = b"".join((int(cur.pixels[i]) & 0xFFFFFFFF).to_bytes(4, "little") for i in range(count))
-        return hashlib.sha256(raw).hexdigest()
+        name = (cur.name or b"").decode("ascii", "replace")
+        return f"{cur.width}x{cur.height}@{cur.xhot},{cur.yhot} {name} {hashlib.sha256(raw).hexdigest()[:16]}"
     finally:
         x11.XCloseDisplay(dpy)
 
@@ -664,6 +733,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--settings-bin", default=str(ROOT / ".target/release/flamewm-settings"))
     p.add_argument("--client-bin", default="xclock")
     p.add_argument("--settle-seconds", type=float, default=3.0)
+    p.add_argument("--only", default=None, metavar="AP07,AP08",
+                   help="debug: run only these scenarios; the others stay NOT_RUN so the verdict cannot be PASS")
     p.add_argument("--icon-theme-alt", default="breeze-dark")
     p.add_argument("--cursor-theme-base", default="McMojave-cursors")
     p.add_argument("--cursor-theme-alt", default="FlameWM-Breeze-Dark")
@@ -712,8 +783,11 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                 raise_block(results, f"Xephyr did not become ready on {ctx.display}")
             else:
                 session = Session(ctx, args)
+                only = {x.strip().upper() for x in args.only.split(",")} if args.only else None
                 for scenario in SCENARIOS:
                     sid = scenario.__name__.upper()
+                    if only is not None and sid not in only:
+                        continue
                     try:
                         results[sid] = scenario(session)
                     except Exception as error:  # a crashed scenario is a FAIL with its reason, never a PASS

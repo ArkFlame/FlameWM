@@ -182,6 +182,11 @@ pub enum SlideEdge {
     Right,
 }
 
+unsafe extern "C" {
+    /// Not declared in the baseline-pinned `xlib.rs`.
+    fn XRestackWindows(display: *mut Display, windows: *mut Window, count: std::os::raw::c_int) -> std::os::raw::c_int;
+}
+
 /// Slide presentation for a popup anchored to a panel edge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlideConfig {
@@ -699,6 +704,11 @@ impl SurfaceController {
             })?;
             XFlush(display);
         }
+        // The popup is unmapped here without a slide-out: drop slide bookkeeping so the next show
+        // starts a fresh slide instead of taking the "already shown" path with no animation.
+        instance.shown = false;
+        instance.slide_drawn = None;
+        self.slides.cancel(id.get());
         Ok(())
     }
 
@@ -706,6 +716,21 @@ impl SurfaceController {
     pub fn set_slide(&mut self, id: SurfaceId, slide: Option<SlideConfig>) -> Result<(), String> {
         self.instance_mut(id)?.slide = slide;
         Ok(())
+    }
+
+    /// Stacks `window` directly beneath the dock panel so a slide appears to emerge from under it.
+    /// A no-op without a mapped dock surface.
+    fn restack_below_dock(&self, window: Window) {
+        let dock = self
+            .surfaces
+            .values()
+            .find(|instance| instance.role == SurfaceRole::Dock)
+            .map(|instance| instance.app.window);
+        if let Some(dock) = dock {
+            let mut order = [dock, window];
+            // SAFETY: both windows are live children of the controller's display root.
+            unsafe { XRestackWindows(self.display, order.as_mut_ptr(), 2) };
+        }
     }
 
     pub fn show(&mut self, id: SurfaceId) -> Result<(), String> {
@@ -727,6 +752,7 @@ impl SurfaceController {
                 instance.app.window,
             )
         };
+        let mut emerging = false;
         if let Some(config) = slide {
             self.slides.set_speed(config.speed);
             let opening = SlideKind { edge: config.edge, opening: true };
@@ -750,6 +776,7 @@ impl SurfaceController {
                 let (x, y) = slide_origin(origin, size, config.edge, 0.0);
                 unsafe { XMoveResizeWindow(display, window, x, y, size.0, size.1) };
                 self.instance_mut(id)?.slide_drawn = Some((x, y));
+                emerging = true;
             }
             // A refused start (timeline full or disabled) maps at the final origin with no slide.
         }
@@ -784,6 +811,10 @@ impl SurfaceController {
             }
         }
         cycle.advance("map_raise")?;
+        if emerging {
+            self.restack_below_dock(window);
+        }
+        let instance = self.instance_mut(id)?;
         unsafe {
             instance.app.present_scene().map_err(|error| {
                 mark_x_error_seen();
@@ -822,6 +853,8 @@ impl SurfaceController {
             }
             self.slides.set_speed(config.speed);
             let closing = SlideKind { edge: config.edge, opening: false };
+            let window = self.instance_mut(id)?.app.window;
+            self.restack_below_dock(window);
             // A new close starts fully shown; a reversed open continues from its progress.
             if self.slides.start_towards(key, closing, now, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0))
                 == Start::Started
@@ -868,7 +901,10 @@ impl SurfaceController {
                 continue;
             }
             self.slides.finish(key);
-            if !active.opening {
+            if active.opening {
+                // Back on top: the popup sits against the panel, so the raise is invisible.
+                unsafe { XRaiseWindow(display, window) };
+            } else {
                 unsafe { XUnmapWindow(display, window) };
                 instance.shown = false;
                 instance.slide_drawn = None;
