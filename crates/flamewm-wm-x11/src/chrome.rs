@@ -271,13 +271,12 @@ pub fn control_glyph_raster(
         flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok()?;
     if material != ControlMaterial::Rest {
         match look.button.shape {
-            ButtonShape::Default if role == ControlRole::Close => {
+            // Default: every control gets its hover/pressed disk (red for close, light for min/max,
+            // whose glyph turns dark and would otherwise vanish on the dark titlebar).
+            ButtonShape::Default | ButtonShape::Circle => {
                 paint_fill_behind(&mut raster, scheme.background, FillMask::Circle);
             }
-            ButtonShape::Default | ButtonShape::Flat => {}
-            ButtonShape::Circle => {
-                paint_fill_behind(&mut raster, scheme.background, FillMask::Circle);
-            }
+            ButtonShape::Flat => {}
             ButtonShape::Square => {
                 paint_fill_behind(&mut raster, scheme.background, FillMask::Square);
             }
