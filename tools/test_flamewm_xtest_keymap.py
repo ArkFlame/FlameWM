@@ -129,5 +129,35 @@ class X11BackendKeymapTests(unittest.TestCase):
         self.assertEqual(modifiers_from_keymap(backend, backend.query_keymap()), ["Shift_L"])
 
 
+class MainEntrypointTests(unittest.TestCase):
+    def test_query_modifiers_and_input_actions_do_not_raise(self) -> None:
+        """Regression: main() once hit NameError (modifier_actions) and exited 1 on every call."""
+        import contextlib
+        import io
+        import tempfile
+        from unittest import mock
+
+        import flamewm_xtest
+
+        token = "ab" * 32
+        fake = mock.MagicMock()
+        fake.XServerVendor.return_value = b"Xephyr"
+        fake.XOpenDisplay.return_value = 1
+        for flag in (["--query-modifiers"], ["--move", "10,10"]):
+            with tempfile.NamedTemporaryFile("w", suffix=".marker") as marker:
+                marker.write(f":97\n{token}\n")
+                marker.flush()
+                argv = ["x", "--display", ":97", "--owner-token", token, "--owner-marker", marker.name, *flag]
+                err = io.StringIO()
+                with mock.patch.object(sys, "argv", argv), \
+                        mock.patch.object(flamewm_xtest.ctypes, "CDLL", return_value=fake), \
+                        mock.patch.object(flamewm_xtest.ctypes.util, "find_library", return_value="lib"), \
+                        mock.patch.object(flamewm_xtest.X11Backend, "query_keymap", return_value=bytes(32)), \
+                        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                    code = flamewm_xtest.main()
+                self.assertNotIn("INPUT_FAIL", err.getvalue(), flag)
+                self.assertEqual(code, 0, flag)
+
+
 if __name__ == "__main__":
     unittest.main()

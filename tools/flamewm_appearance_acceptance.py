@@ -263,6 +263,8 @@ class Session:
         return pixels[y * self.args.screen_w + x]
 
     def input(self, **kwargs) -> tuple[int, str]:
+        kwargs.setdefault("click", None)
+        kwargs.setdefault("key", None)
         return base.send_input(self.ctx, **kwargs)
 
     def client_frame(self, nodes: list[dict]) -> tuple[dict | None, dict | None]:

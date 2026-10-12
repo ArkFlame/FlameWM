@@ -367,7 +367,7 @@ def main() -> int:
                 for code in reversed(pressed):
                     xtst.XTestFakeKeyEvent(display, code, 0, 0)
         backend = X11Backend(x11, xtst, display)
-        if modifier_actions:
+        if args.query_modifiers or args.release_modifiers:
             if args.release_modifiers:
                 released = release_stuck_modifiers(backend)
                 x11.XSync(display, 0)

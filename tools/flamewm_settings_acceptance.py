@@ -178,9 +178,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--geometry", default="1280x800", help="Xephyr screen WxH (default 1280x800, minimum 960x640)")
     parser.add_argument("--display", default=None, help="explicit display in :90..:99; refused when already in use")
     parser.add_argument("--wm-bin", default=str(ROOT / ".target/debug/flamewm"))
-    parser.add_argument("--settings-bin", default=str(ROOT / ".target/debug/flamewm-settings"))
-    parser.add_argument("--shell-bin", default=str(ROOT / ".target/debug/flamewm-shell"))
-    parser.add_argument("--desktop-bin", default=str(ROOT / ".target/debug/flamewm-desktop"))
+    parser.add_argument("--settings-bin", default=None, help="default: flamewm-settings next to --wm-bin")
+    parser.add_argument("--shell-bin", default=None, help="default: flamewm-shell next to --wm-bin")
+    parser.add_argument("--desktop-bin", default=None, help="default: flamewm-desktop next to --wm-bin")
     parser.add_argument("--settle-seconds", type=float, default=3.0)
     parser.add_argument("--hotkey-click", metavar="X,Y", default=None, help="XTEST click before the NATIVE_HOTKEY_INPUT key press")
     parser.add_argument("--hotkey-key", metavar="KEYSYM", default=None, help="XTEST key for NATIVE_HOTKEY_INPUT (needs --hotkey-click too)")
@@ -219,9 +219,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     # Children start with cwd set to the run directory, so relative binary paths must be resolved first.
     args.wm_bin = str(Path(args.wm_bin).resolve())
-    args.settings_bin = str(Path(args.settings_bin).resolve())
-    args.shell_bin = str(Path(args.shell_bin).resolve())
-    args.desktop_bin = str(Path(args.desktop_bin).resolve())
+    for name in ("settings", "shell", "desktop"):
+        value = getattr(args, f"{name}_bin") or str(Path(args.wm_bin).parent / f"flamewm-{name}")
+        setattr(args, f"{name}_bin", str(Path(value).resolve()))
     args.canary_bin = str(Path(args.canary_bin).resolve())
     return args
 
@@ -999,7 +999,7 @@ def query_modifiers(ctx: Ctx) -> tuple[str | None, list[str] | None, str]:
     result, command = xtest_control(ctx, "--query-modifiers")
     match = re.search(r"KEYMAP_SNAPSHOT: ([0-9a-f]{64}) HELD_MODIFIERS: (\S+)", result.stdout)
     if result.returncode or not match:
-        return None, None, command
+        return None, None, f"{command}  # exit {result.returncode}: {result.stderr.strip()[:300]}"
     held = [] if match.group(2) == "none" else match.group(2).split(",")
     return match.group(1), held, command
 
