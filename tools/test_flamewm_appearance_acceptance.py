@@ -196,5 +196,122 @@ class RunDirGuardTests(unittest.TestCase):
             ap.validate_inner_run_dir(self.run)
 
 
+class StartAboveWindowsMetricTests(unittest.TestCase):
+    """Pure pixel metrics behind AP06 stacking; the negative controls must fail."""
+
+    def setUp(self) -> None:
+        from PIL import Image
+
+        self.Image = Image
+        self.rest = (100, 300, 200, 100)
+        self.client = (120, 250, 300, 200)
+        self.popup_colour = (0x19, 0x1B, 0x1D)
+
+    def frame(self, colour, size=(400, 400)):
+        return self.Image.new("RGB", size, colour)
+
+    def test_count_white_counts_only_client_white(self):
+        img = self.frame(self.popup_colour)
+        img.paste((255, 255, 255), (150, 320, 180, 360))
+        self.assertEqual(ap.count_white(img, self.rest), 30 * 40)
+        self.assertEqual(ap.count_white(img, (0, 0, 50, 50)), 0)
+
+    def test_popup_on_top_has_no_client_white_in_its_area(self):
+        img = self.frame(self.popup_colour)
+        self.assertEqual(ap.count_client_white(img, self.rest, self.client), 0)
+
+    def test_client_white_inside_the_popup_area_is_counted(self):
+        # Negative control: the client face (white) shows where the popup should be.
+        img = self.frame(self.popup_colour)
+        img.paste((255, 255, 255), (150, 320, 180, 360))
+        self.assertGreater(ap.count_client_white(img, self.rest, self.client), ap.WHITE_SLACK)
+
+    def test_popup_region_outside_the_client_is_ignored(self):
+        img = self.frame(self.popup_colour)
+        img.paste((255, 255, 255), (0, 0, 50, 50))
+        self.assertEqual(ap.count_client_white(img, self.rest, self.client), 0)
+
+    def test_disjoint_region_never_counts(self):
+        img = self.frame((255, 255, 255))
+        self.assertEqual(ap.count_client_white(img, (0, 0, 10, 10), self.client), 0)
+
+    def test_popup_top_finds_the_first_full_width_popup_row(self):
+        img = self.frame((0x40, 0x40, 0x40))
+        img.paste(self.popup_colour, (100, 350, 300, 400))
+        self.assertEqual(ap.popup_top(img, (100, 300, 200, 100), 400), 350)
+
+    def test_popup_top_ignores_a_thin_client_edge(self):
+        img = self.frame((0x40, 0x40, 0x40))
+        img.paste(self.popup_colour, (100, 320, 150, 321))  # 25% of the rest width
+        self.assertIsNone(ap.popup_top(img, (100, 300, 200, 100), 400))
+
+    def test_strip_changed_detects_popup_below_the_panel(self):
+        settled = self.frame((0x10, 0x10, 0x10), size=(400, 44))
+        self.assertEqual(ap.strip_changed(settled, settled, (100, 300)), 0)
+        leaked = self.frame((0x10, 0x10, 0x10), size=(400, 44))
+        leaked.paste((0x60, 0x60, 0x60), (150, 0, 200, 20))
+        self.assertGreater(ap.strip_changed(leaked, settled, (100, 300)), 0)
+
+    def test_rect_intersection(self):
+        self.assertEqual(ap.rect_intersection((0, 0, 10, 10), (5, 5, 10, 10)), (5, 5, 5, 5))
+        self.assertIsNone(ap.rect_intersection((0, 0, 10, 10), (10, 0, 5, 5)))
+
+
+class ColourPickerMetricTests(unittest.TestCase):
+    """Negative controls for the AP04 colour picker helpers on synthetic pixel grids."""
+
+    W = 40
+    H = 30
+
+    def canvas(self, fill=(0, 0, 0)):
+        return [fill] * (self.W * self.H)
+
+    def paint(self, px, x0, y0, w, h, rgb):
+        for y in range(y0, y0 + h):
+            for x in range(x0, x0 + w):
+                px[y * self.W + x] = rgb
+
+    def test_colour_blobs_finds_only_exact_matches(self):
+        px = self.canvas()
+        self.paint(px, 2, 2, 8, 8, (0x3D, 0xAE, 0xE9))
+        self.paint(px, 20, 2, 8, 8, (0x3D, 0xAE, 0xF0))  # 7 steps off: beyond tolerance 3
+        self.paint(px, 2, 20, 2, 2, (0x3D, 0xAE, 0xE9))  # too small for min_px
+        blobs = ap.colour_blobs(px, self.W, (0, 0, self.W, self.H), "#3DAEE9", min_px=40)
+        self.assertEqual(blobs, [(2, 2, 9, 9, 64)])
+
+    def test_preset_rows_needs_four_circles_on_one_band(self):
+        px = self.canvas()
+        for index, hex_value in enumerate(ap.PICKER_VIVID_PRESETS[:3]):
+            rgb = tuple(int(hex_value[i:i + 2], 16) for i in (1, 3, 5))
+            self.paint(px, 2 + index * 12, 2, 10, 10, rgb)
+        self.assertEqual(ap.preset_rows(px, self.W, (0, 0, self.W, self.H)), [])
+
+    def test_dot_row_selects_the_row_whose_seeded_circle_is_marked(self):
+        px = self.canvas()
+        seeded = tuple(int("336699"[i:i + 2], 16) for i in (0, 2, 4))
+        self.paint(px, 2, 2, 12, 12, seeded)
+        self.paint(px, 4, 4, 6, 6, (0xF1, 0xF2, 0xF3))  # selected dot at the circle centre
+        rows = [{"y": 8, "circles": [(8, "#336699", None)]}, {"y": 20, "circles": [(8, "#336699", None)]}]
+        self.assertEqual(ap.dot_row(px, self.W, rows, "#336699"), rows[0])
+        px2 = self.canvas()
+        self.paint(px2, 2, 2, 12, 12, seeded)
+        self.assertIsNone(ap.dot_row(px2, self.W, rows[:1], "#336699"))
+
+    def test_snapshot_value_reads_exact_key_only(self):
+        text = "{'taskbarColor': <'#3DAEE9'>, 'startMenuColor': <'#191B1D'>}"
+        self.assertEqual(ap.snapshot_value(text, "taskbarColor"), "#3DAEE9")
+        self.assertEqual(ap.snapshot_value(text, "taskbar"), None)
+        self.assertIsNone(ap.snapshot_value(None, "taskbarColor"))
+
+    def test_hue_bins_separates_a_wheel_from_a_flat_circle(self):
+        flat = self.canvas()
+        self.paint(flat, 0, 0, 10, 10, (0x3D, 0xAE, 0xE9))
+        self.assertEqual(ap.hue_bins(flat, self.W, (0, 0, 10, 10)), 1)
+        wheel = self.canvas()
+        for index, rgb in enumerate([(255, 0, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255), (255, 0, 255)]):
+            self.paint(wheel, index * 2, 0, 2, 10, rgb)
+        self.assertGreaterEqual(ap.hue_bins(wheel, self.W, (0, 0, 12, 10)), 6)
+
+
 if __name__ == "__main__":
     unittest.main()

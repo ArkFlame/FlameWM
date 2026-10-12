@@ -552,6 +552,9 @@ def ap04(s: Session) -> dict:
     else:
         fails.append("WM or shell exited during iOS restart")
     decoration_selector_check(s, ev, fails)
+    picker_ev, picker_fails = color_picker_check(s)
+    ev += picker_ev
+    fails += picker_fails
     if fails:
         return entry("AP04", FAIL, "; ".join(fails), ev, ["xwininfo -tree", "import -window root", "XTEST click/drag"])
     if not fullscreen_measured:
@@ -763,6 +766,10 @@ def ap06(s: Session) -> dict:
         style_fails, style_ev = start_style_check(s, style)
         fails += style_fails
         ev += style_ev
+    for style in START_STYLES:
+        above_fails, above_ev = start_above_windows_check(s, style)
+        fails += above_fails
+        ev += above_ev
     result["evidence"] = list(result.get("evidence", [])) + ev
     if fails:
         reason = "; ".join(p for p in (result.get("reason", ""), *fails) if p)
@@ -1580,6 +1587,341 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
         if first is None or abs(first[1] - rest_top) > 3 or abs(first[2] - rest["w"]) > 3:
             fails.append(f"none: popup not at final state on the first sample ({first}, rest {rest})")
     return fails, ev
+
+# ---------------------------------------------------------------- AP06 Start stacking over windows
+
+ABOVE_CLIENT_GEOMETRY = (120, 250, 300, 200)  # xclock placed under the Start rest rect
+CLIENT_WHITE = 200                             # xclock face: all channels >= 200
+WHITE_SLACK = 32                               # popup-own light text and antialiasing, in pixels
+
+
+def _flat(img):
+    return img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata()
+
+
+def rect_intersection(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
+    """Intersection of two (x, y, w, h) rects, or None when they do not overlap."""
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[0] + a[2], b[0] + b[2]), min(a[1] + a[3], b[1] + b[3])
+    return (x0, y0, x1 - x0, y1 - y0) if x1 > x0 and y1 > y0 else None
+
+
+def count_white(img, rect: tuple[int, int, int, int]) -> int:
+    """Pixels inside rect whose every channel is >= CLIENT_WHITE (the xclock face)."""
+    from PIL import ImageChops
+
+    x, y, w, h = rect
+    r, g, b = img.crop((x, y, x + w, y + h)).split()
+    lowest = ImageChops.darker(ImageChops.darker(r, g), b)
+    return lowest.point(lambda v: 255 if v >= CLIENT_WHITE else 0).histogram()[255]
+
+
+def count_client_white(img, region: tuple[int, int, int, int], client: tuple[int, int, int, int]) -> int:
+    """Client-white pixels inside (region ∩ client rect)."""
+    area = rect_intersection(region, client)
+    return count_white(img, area) if area else 0
+
+
+def strip_changed(strip, reference, columns: tuple[int, int]) -> int:
+    """Taskbar-strip pixels in the columns that differ (>12 luminance) from the settled strip."""
+    from PIL import ImageChops
+
+    x0, x1 = columns
+    if x1 <= x0:
+        return 0
+    box = (x0, 0, x1, strip.height)
+    diff = ImageChops.difference(strip.crop(box), reference.crop(box)).convert("L")
+    return diff.point(lambda v: 255 if v > 12 else 0).histogram()[255]
+
+
+def popup_top(img, rest: tuple[int, int, int, int], strip_y: int, min_fraction: float = 0.8) -> int | None:
+    """Top row of the Start popup inside the rest columns: the first row at or below the rest top where
+    at least min_fraction of the columns are START_BG. A client frame edge covers far fewer columns."""
+    from PIL import Image, ImageChops
+
+    x, y, w, h = rest
+    crop = img.crop((x, y, x + w, strip_y))
+    near = ImageChops.difference(crop, Image.new("RGB", crop.size, START_BG)).convert("L").point(
+        lambda v: 255 if v <= 6 else 0)
+    fractions = _flat(near.resize((1, crop.height), Image.Resampling.BOX))
+    for row, value in enumerate(fractions):
+        if value >= min_fraction * 255:
+            return y + row
+    return None
+
+
+def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[str]]:
+    """Start popup stacks above a white xclock it overlaps during every style's flight.
+
+    The popup's own light pixels are measured first with no client present (reference). During the flight,
+    client-white pixels inside the popup area may not exceed that reference (the popup covers the client).
+    For slide the popup must stay out of the taskbar strip while it moves (the panel clip)."""
+    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
+
+    ev: list[str] = []
+    tag = f"AP06-above-{style}"
+    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style,
+                      "animationSpeed": "25", "taskbarOpacity": "100"}):
+        return [f"{style}: WM or shell exited before the stacking check"], ev
+    s.ctx.stop(s.client)
+    s.client = None
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    grab = lamp.RootGrab(s.ctx.display)
+    try:
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+        time.sleep(s.args.settle_seconds)
+        rest_node = find_named(s.tree(f"{tag}-rest"), "FlameWM start")
+        if rest_node is None:
+            return [f"{style}: Start popup not found in the X tree"], ev
+        rest = (rest_node["x"], rest_node["y"], rest_node["w"], rest_node["h"])
+        reference_white = count_white(grab.grab(0, 0, s.args.screen_w, strip_y), rest)
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+        for _ in range(30):
+            if start_popup_metrics(grab.grab(0, 0, s.args.screen_w, strip_y), {"x": rest[0], "y": rest[1],
+                                   "w": rest[2], "h": rest[3]}, strip_y)["brightness"] < 1.0:
+                break
+            time.sleep(0.1)
+        s.client = s.ctx.spawn("client-xclock-above", [s.args.client_bin, "-geometry",
+                               "{}x{}+{}+{}".format(*ABOVE_CLIENT_GEOMETRY[2:], *ABOVE_CLIENT_GEOMETRY[:2])],
+                               s.ctx.app_env)
+        time.sleep(s.args.settle_seconds)
+        client_node, client_frame = s.client_frame(s.tree(f"{tag}-client"))
+        node = client_frame or client_node
+        if node is None:
+            return [f"{style}: stacking client xclock not found in the X tree"], ev
+        client = (node["x"], node["y"], node["w"], node["h"])
+        t0 = time.monotonic()
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+        frames: list[tuple[int | None, int, object]] = []
+        while time.monotonic() - t0 < START_FLIGHT_SECONDS:
+            started = time.monotonic()
+            img = grab.grab(0, 0, s.args.screen_w, strip_y)
+            top = popup_top(img, rest, strip_y)
+            region = (rest[0], top, rest[2], min(rest[3], strip_y - top)) if top is not None else None
+            white = count_client_white(img, region, client) if region else 0
+            frames.append((top, white, grab.grab(0, strip_y, s.args.screen_w, TASKBAR_HEIGHT)))
+            if len(frames) % 4 == 1 and len(frames) < 24:
+                img.crop((max(0, client[0] - 40), max(0, client[1] - 40), 700, strip_y)).save(
+                    s.ctx.run / "shots" / f"{tag}-flight-{len(frames):02d}.png")
+            time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
+        s.input(key=base.SHORTCUT_DEFAULT_BINDING)
+    finally:
+        grab.close()
+    settled_strip = frames[-1][2]
+    below = [strip_changed(f[2], settled_strip, (rest[0], rest[0] + rest[2])) if f[0] is not None else 0
+             for f in frames]
+    overlapped = [f for f in frames if f[0] is not None and rect_intersection((rest[0], f[0], rest[2], rest[3]), client)]
+    ev.append(f"{tag}: client={client} rest={rest} reference_white={reference_white} frames={len(frames)}")
+    ev.append(f"{tag}: popup_top={[f[0] for f in frames]}")
+    ev.append(f"{tag}: client_white_in_popup={[f[1] for f in frames]}")
+    ev.append(f"{tag}: taskbar_popup_pixels={below}")
+    fails: list[str] = []
+    if not overlapped:
+        fails.append(f"{style}: popup never overlapped the client in {len(frames)} samples")
+    if any(f[1] > reference_white + WHITE_SLACK for f in frames):
+        fails.append(f"{style}: client-white pixels inside the popup area (client stacked above the popup)")
+    if style == "slide" and any(value > 0 for value in below):
+        fails.append("slide: popup pixels below the panel top edge while sliding")
+    return fails, ev
+
+
+# ---------------------------------------------------------------- colour picker (AP04)
+
+PICKER_SURFACE_PRESETS = ["#191B1D", "#232629", "#1B1E20", "#2A2E32", "#336699",
+                          "#3DAEE9", "#1ABC9C", "#EF4048", "#9B59B6"]
+PICKER_VIVID_PRESETS = ["#336699", "#3DAEE9", "#1ABC9C", "#EF4048", "#9B59B6"]
+
+
+def hex_of(pixel: tuple[int, int, int]) -> str:
+    return "#{:02X}{:02X}{:02X}".format(*pixel)
+
+
+def colour_matches(pixel: tuple[int, int, int], hex_value: str, tolerance: int = 3) -> bool:
+    target = tuple(int(hex_value[i:i + 2], 16) for i in (1, 3, 5))
+    return all(abs(a - b) <= tolerance for a, b in zip(pixel, target))
+
+
+def colour_blobs(px: list, width: int, rect: tuple[int, int, int, int], hex_value: str,
+                 min_px: int = 40) -> list[tuple[int, int, int, int, int]]:
+    """Connected blobs of pixels matching `hex_value` inside rect: (x0, y0, x1, y1, count)."""
+    rx, ry, rw, rh = rect
+    hits = {(x, y) for y in range(ry, ry + rh) for x in range(rx, rx + rw)
+            if colour_matches(px[y * width + x], hex_value)}
+    blobs = []
+    while hits:
+        stack = [hits.pop()]
+        xs, ys = [], []
+        while stack:
+            x, y = stack.pop()
+            xs.append(x)
+            ys.append(y)
+            for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if n in hits:
+                    hits.remove(n)
+                    stack.append(n)
+        if len(xs) >= min_px:
+            blobs.append((min(xs), min(ys), max(xs), max(ys), len(xs)))
+    return sorted(blobs, key=lambda b: (b[1], b[0]))
+
+
+def centre(blob: tuple[int, int, int, int, int]) -> tuple[int, int]:
+    return (blob[0] + blob[2]) // 2, (blob[1] + blob[3]) // 2
+
+
+def preset_rows(px: list, width: int, rect: tuple[int, int, int, int]) -> list[dict]:
+    """Rows of circles: each row holds vivid preset blobs whose centres share one band."""
+    found = []
+    for hex_value in PICKER_VIVID_PRESETS:
+        for blob in colour_blobs(px, width, rect, hex_value, min_px=200):
+            if blob[2] - blob[0] <= 34 and blob[3] - blob[1] <= 34:
+                found.append((hex_value, centre(blob), blob))
+    rows: list[dict] = []
+    for hex_value, (cx, cy), blob in sorted(found, key=lambda item: item[1][1]):
+        for row in rows:
+            if abs(row["y"] - cy) <= 6:
+                row["circles"].append((cx, hex_value, blob))
+                break
+        else:
+            rows.append({"y": cy, "circles": [(cx, hex_value, blob)]})
+    for row in rows:
+        row["circles"].sort()
+    return [row for row in rows if len(row["circles"]) >= 4]
+
+
+def hue_bins(px: list, width: int, rect: tuple[int, int, int, int]) -> int:
+    """Distinct 30-degree hue bins among saturated, bright pixels: a wheel has many, a flat circle one."""
+    import colorsys
+    rx, ry, rw, rh = rect
+    bins = set()
+    for y in range(ry, ry + rh):
+        for x in range(rx, rx + rw):
+            r, g, b = (c / 255 for c in px[y * width + x])
+            h, sat, val = colorsys.rgb_to_hsv(r, g, b)
+            if sat > 0.5 and val > 0.5:
+                bins.add(int(h * 12))
+    return len(bins)
+
+
+def dot_row(px: list, width: int, rows: list[dict], seeded: str) -> dict | None:
+    """The row whose circle for `seeded` carries the selected dot: that row is the setting it shows."""
+    for row in rows:
+        for cx, hex_value, _ in row["circles"]:
+            if hex_value == seeded and colour_matches(px[row["y"] * width + cx], "#F1F2F3", 12):
+                return row
+    return None
+
+
+def snapshot_value(text: str | None, key: str) -> str | None:
+    match = re.search(r"'%s': <'([^']*)'>" % re.escape(key), text or "")
+    return match.group(1) if match else None
+
+
+def color_picker_check(s: Session) -> tuple[list, list]:
+    """AP04 colour picker: presets, wheel, palette cell and typed hex, read back from the snapshot."""
+    ev: list = []
+    fails: list = []
+    if not s.restart({"taskbarColor": "#336699", "startMenuColor": "#191B1D", "taskbarOpacity": "100"}):
+        return ev, ["WM or shell exited before the colour picker check"]
+    settings = s.ctx.spawn("settings-ap04-picker", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
+    try:
+        time.sleep(s.args.settle_seconds)
+        s.input(click="400,16")  # title bar: raise Settings above the AP04 client window
+        time.sleep(0.6)
+        s.input(move="500,300")
+        s.input(wheel="down:12")  # Start menu and Accent rows scroll away; Taskbar color is next
+        time.sleep(0.8)
+        width = s.args.screen_w
+        window = (0, 0, 830, 580)
+        _, px = s.shot("AP04-picker-rows")
+        if px is None:
+            return ev, ["colour picker check could not capture the Settings page"]
+        rows = preset_rows(px, width, window)
+        ev.append(f"preset_rows={[(r['y'], len(r['circles'])) for r in rows]}")
+        before, _ = base.dbus_settings_snapshot(s.ctx)
+        if snapshot_value(before, "taskbarColor") != "#336699":
+            fails.append("colour picker negative control: taskbarColor was not the seeded #336699")
+        target = dot_row(px, width, rows, "#336699")
+        if target is None:
+            return ev, fails + ["no row shows the seeded #336699 as selected; the Taskbar row is not visible"]
+        blue = next((c for c in target["circles"] if c[1] == "#3DAEE9"), None)
+        if blue is None:
+            return ev, fails + ["the Taskbar row has no #3DAEE9 circle"]
+        s.input(click=f"{blue[0]},{target['y']}")
+        time.sleep(1.2)
+        after, _ = base.dbus_settings_snapshot(s.ctx)
+        preset_value = snapshot_value(after, "taskbarColor")
+        ev.append(f"preset_click={blue[0]},{target['y']} taskbarColor={preset_value}")
+        if preset_value != "#3DAEE9":
+            fails.append(f"preset circle did not write taskbarColor=#3DAEE9 (got {preset_value})")
+        if target["circles"][-1][0] + 38 <= blue[0]:
+            fails.append("wheel circle is not after the preset circles")
+        wheel_x = target["circles"][-1][0] + 38
+        _, px_before = s.shot("AP04-picker-closed")
+        s.input(click=f"{wheel_x},{target['y']}")
+        time.sleep(1.2)
+        _, px_open = s.shot("AP04-picker-open")
+        if px_before is None or px_open is None:
+            return ev, fails + ["picker screenshots could not be captured"]
+        changed = pixel_diff_count(px_before, px_open, 8)
+        wheel_hues = hue_bins(px_open, width, (wheel_x - 15, target["y"] - 15, 30, 30))
+        ev += [f"wheel_click={wheel_x},{target['y']} wheel_hues={wheel_hues} picker_changed_px={changed}"]
+        if changed < 2000:
+            fails.append("clicking the wheel did not open the colour picker panel")
+        palette_hexes = []
+        # Palette cells sit inside the fixed-size panel (460x330 at 250,60 in the Settings body).
+        for y in range(145, 305, 2):
+            for x in range(255, 705, 2):
+                pixel = px_open[y * width + x]
+                h = hex_of(pixel)
+                if h not in ("#000000", "#FFFFFF") and max(pixel) - min(pixel) > 60 and h not in PICKER_VIVID_PRESETS:
+                    palette_hexes.append((x, y, h))
+        if not palette_hexes:
+            return ev, fails + ["no palette cell colours found in the open picker"]
+        cx, cy, cell_hex = palette_hexes[0]
+        cell_box = next((b for b in colour_blobs(px_open, width, window, cell_hex, min_px=30)
+                         if b[0] <= cx <= b[2] and b[1] <= cy <= b[3]), None)
+        if cell_box is None:
+            return ev, fails + [f"palette cell {cell_hex} at {cx},{cy} has no blob"]
+        cell_x, cell_y = centre(cell_box)
+        s.input(click=f"{cell_x},{cell_y}")
+        time.sleep(1.2)
+        picked, _ = base.dbus_settings_snapshot(s.ctx)
+        ev.append(f"palette_cell={cell_x},{cell_y} colour={cell_hex} taskbarColor={snapshot_value(picked, 'taskbarColor')}")
+        if snapshot_value(picked, "taskbarColor") != cell_hex:
+            fails.append(f"palette cell {cell_hex} did not write taskbarColor")
+        _, px_applied = s.shot("AP04-picker-applied")
+        previews = colour_blobs(px_applied, width, window, cell_hex, min_px=200)
+        if not previews:
+            return ev, fails + ["preview swatch not found after the palette pick"]
+        preview = max(previews, key=lambda b: b[3])
+        field = (preview[0] - 40, centre(preview)[1])
+        s.input(click=f"{field[0]},{field[1]}")
+        time.sleep(0.6)
+        # The buffer keeps the last applied value, so clear it before typing.
+        for key in ["BackSpace"] * 8 + ["3", "d", "a", "e", "e", "9", "Return"]:
+            s.input(key=key)
+            time.sleep(0.15)
+        time.sleep(1.2)
+        typed, _ = base.dbus_settings_snapshot(s.ctx)
+        ev.append(f"typed_hex taskbarColor={snapshot_value(typed, 'taskbarColor')}")
+        if snapshot_value(typed, "taskbarColor") != "#3DAEE9":
+            fails.append("typed #3DAEE9 + Enter did not write taskbarColor")
+        for key in ["BackSpace"] * 8 + ["1", "2", "3", "4", "5", "Return"]:
+            s.input(key=key)
+            time.sleep(0.15)
+        time.sleep(1.2)
+        _, px_error = s.shot("AP04-picker-invalid")
+        invalid, _ = base.dbus_settings_snapshot(s.ctx)
+        error_changed = pixel_diff_count(px_applied, px_error, 8) if px_error else 0
+        ev.append(f"invalid_hex taskbarColor={snapshot_value(invalid, 'taskbarColor')} error_px={error_changed}")
+        if snapshot_value(invalid, "taskbarColor") != "#3DAEE9":
+            fails.append("invalid hex changed taskbarColor")
+        if error_changed < 20:
+            fails.append("invalid hex showed no inline error pixels")
+    finally:
+        s.ctx.stop(settings)
+    return ev, fails
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

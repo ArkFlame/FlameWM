@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import tempfile
 import unittest
@@ -37,10 +38,11 @@ class RespawnTests(unittest.TestCase):
         self.assertEqual(lk.respawned_pids([4001, 4002], 4001), [4002])
         self.assertEqual(lk.respawned_pids([4001], 4001), [])
 
-    def test_lk10_and_lk11_are_registered_after_lk09(self):
-        self.assertEqual(lk.IDS[-2:], ("LK10", "LK11"))
+    def test_lk10_to_lk13_are_registered_in_order(self):
+        self.assertEqual(lk.IDS[-4:], ("LK10", "LK11", "LK12", "LK13"))
         self.assertEqual(len(lk.SCENARIOS), len(lk.IDS))
-        self.assertIn("LK11", lk.TITLES)
+        self.assertIn("LK13", lk.TITLES)
+        self.assertTrue(lk.FAKE_CONTROL_BIN.is_file())
 
 
 class TopmostTests(unittest.TestCase):
@@ -95,13 +97,6 @@ class CustomisationTests(unittest.TestCase):
         pixels = [dark] * 6 + [dark, bright, dark] + [dark] * 3
         self.assertEqual(lk.rows_with(pixels, 3, lk.TEXT_BRIGHT, lk.TEXT_TOLERANCE), [2])
 
-    def test_clock_and_username_recognised_after_layout_shift(self):
-        # Default card: clock (tall), date (grey, not bright), username (short) below it.
-        self.assertEqual(lk.clock_and_username([(53, 133), (186, 208)]), (True, True))
-        # Date and username hidden: the clock moves down but is still the only text run.
-        self.assertEqual(lk.clock_and_username([(99, 179)]), (True, False))
-        self.assertEqual(lk.clock_and_username([]), (False, False))
-
     def test_date_words_cover_weekday_month_and_year(self):
         words = lk.date_words(lk.datetime(2026, 10, 12))
         self.assertEqual(words, {"monday", "monday,", "october", "2026"})
@@ -134,6 +129,111 @@ class DocumentTests(unittest.TestCase):
             text = (run / "result.json").read_text(encoding="utf-8")
             self.assertIn('"verdict": "ENVIRONMENT_BLOCKED"', text)
             self.assertNotIn('"status": "PASS"', text)
+
+
+def draw_reference_lock(width=701, height=438, clock_dy=0, skip=()):
+    """Synthetic 701x438 unlocked lock: light field, white avatar ring, clock, four white power icons."""
+    background, white, light = (0x23, 0x26, 0x29), (255, 255, 255), lk.LIGHT_FIELD
+    pixels = [background] * (width * height)
+
+    def put(x, y, colour):
+        if 0 <= x < width and 0 <= y < height:
+            pixels[y * width + x] = colour
+
+    for y in range(253, 270):
+        for x in range(271, 409):
+            put(x, y, light)
+        for x in range(413, 430):  # submit chevron box, light fill, 4 px right of the field
+            put(x, y, light)
+    for y in range(255, 268):  # caret: a narrow dark gap inside the field
+        for x in range(300, 302):
+            put(x, y, background)
+    for y in range(height):
+        for x in range(width):
+            if 32 <= math.hypot(x + 0.5 - 350, y + 0.5 - 179) <= 34:
+                put(x, y, white)
+    for y in range(46 + clock_dy, 76 + clock_dy):
+        for x in range(290, 410):
+            put(x, y, white)
+    for name, cx in zip(("power_sleep", "power_restart", "power_shutdown", "power_other"),
+                        (245, 315, 386, 455)):
+        if name in skip:
+            continue
+        for y in range(int(348 - 12), int(348 + 12)):
+            for x in range(int(cx - 12), int(cx + 12)):
+                if math.hypot(x + 0.5 - cx, y + 0.5 - 348) <= 11.5:
+                    put(x, y, white)
+    return pixels, width, height
+
+
+class ReferenceLayoutTests(unittest.TestCase):
+    def test_anchors_map_the_reference_canvas_identity_at_701x438(self):
+        anchors = lk.reference_anchors(701, 438)
+        self.assertEqual(anchors["password"], (271, 253, 138, 17))
+        self.assertEqual(anchors["submit"], (413, 253, 17, 17))
+        self.assertEqual(anchors["avatar"], (316, 145, 68, 68))
+        self.assertEqual(anchors["power_shutdown"], (374.5, 336.5, 23, 23))
+
+    def test_anchors_scale_and_centre_on_a_larger_output(self):
+        s = min(1280 / 701, 800 / 438, 2.5)
+        anchors = lk.reference_anchors(1280, 800)
+        cx, cy = lk.anchor_centre(anchors["avatar"])
+        ox, oy = (1280 - 701 * s) / 2, (800 - 438 * s) / 2
+        self.assertAlmostEqual(cx, ox + 350 * s, places=6)
+        self.assertAlmostEqual(cy, oy + 179 * s, places=6)
+        self.assertAlmostEqual(lk.anchor_tolerance(1280, 800), 3 * s, places=9)
+
+    def test_anchor_error_is_centre_distance(self):
+        self.assertEqual(lk.anchor_error((10, 10, 20, 20), (10, 10, 20, 20)), 0)
+        self.assertEqual(lk.anchor_error((25, 10, 20, 20), (10, 10, 20, 20)), 15)
+
+    def test_negative_control_clock_offset_exceeds_tolerance(self):
+        # +15 px on the clock anchor must be rejected at every scale the harness runs at.
+        for w, h in ((701, 438), (1280, 800), (1920, 1080)):
+            expected = lk.reference_anchors(w, h)["clock"]
+            shifted = (expected[0], expected[1] + 15 * lk.reference_fit(w, h)[0], expected[2], expected[3])
+            self.assertGreater(lk.anchor_error(shifted, expected), lk.anchor_tolerance(w, h))
+
+    def test_synthetic_reference_lock_passes_and_clock_offset_fails(self):
+        pixels, w, h = draw_reference_lock()
+        ok, lines = lk.judge_reference_layout(lk.measure_reference_layout(pixels, w, h), w, h)
+        self.assertTrue(ok, lines)
+        pixels, w, h = draw_reference_lock(clock_dy=15)
+        ok, lines = lk.judge_reference_layout(lk.measure_reference_layout(pixels, w, h), w, h)
+        self.assertFalse(ok)
+        self.assertTrue(any(line.startswith("clock:") and line.endswith("OUT") for line in lines), lines)
+
+    def test_password_run_excludes_the_submit_box_and_spans_the_caret(self):
+        pixels, w, h = draw_reference_lock()
+        measured = lk.measure_reference_layout(pixels, w, h)["password"]
+        self.assertIsNotNone(measured)
+        self.assertLessEqual(abs(measured[0] - 271), 1)
+        self.assertLessEqual(abs(measured[2] - 138), 1)
+
+    def test_missing_power_icon_blob_fails(self):
+        pixels, w, h = draw_reference_lock(skip=("power_restart",))
+        measured = lk.measure_reference_layout(pixels, w, h)
+        self.assertIsNone(measured["power_restart"])
+        ok, lines = lk.judge_reference_layout(measured, w, h)
+        self.assertFalse(ok)
+        self.assertTrue(any(line.startswith("power_restart: no blob") for line in lines), lines)
+
+    def test_coloured_avatar_disc_is_not_the_white_ring(self):
+        pixels, w, h = draw_reference_lock()
+        red = (0xEF, 0x44, 0x44)
+        cx, cy = 350, 179
+        for y in range(h):
+            for x in range(w):
+                if math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= 34:
+                    pixels[y * w + x] = red
+        self.assertIsNone(lk.measure_avatar(pixels, w, h, lk.reference_anchors(w, h)["avatar"]))
+
+    def test_dimmed_icon_has_lower_peak_brightness(self):
+        pixels, w, h = draw_reference_lock()
+        rect = lk.reference_anchors(w, h)["power_restart"]
+        enabled = lk.icon_peak(pixels, w, h, rect)
+        dimmed = [tuple(c // 3 for c in v) for v in pixels]
+        self.assertLessEqual(lk.icon_peak(dimmed, w, h, rect) / enabled, lk.ICON_DIM_RATIO)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Wrapper for the isolated native idle-to-lock acceptance runner (IL01..IL03).
+# Usage: scripts/idle-lock-acceptance --run-dir DIR [runner options]
+# Runs tools/flamewm_idle_lock_acceptance.py and prints the result.json path.
+set -euo pipefail
+
+usage() {
+  cat <<'EOT'
+Usage: scripts/idle-lock-acceptance --run-dir DIR [--geometry WxH] [--display :N]
+       [--lock-bin PATH] [--wm-bin PATH] [--shell-bin PATH] [--settle-seconds S]
+
+Runs the isolated idle-to-lock matrix IL01..IL03 in a private Xephyr (default :112),
+a private D-Bus session and private XDG directories under DIR. DIR must not exist or
+be empty. Takes about four minutes. Writes DIR/result.json. Default binaries are the
+release artifacts under .target/release/.
+EOT
+}
+
+if [[ "$#" -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+  usage
+  exit 0
+fi
+if [[ "$#" -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+if [[ ! -f "$ROOT/Cargo.toml" ]]; then
+  echo "error: $ROOT does not contain Cargo.toml; refusing to run" >&2
+  exit 2
+fi
+
+RUNNER="$ROOT/tools/flamewm_idle_lock_acceptance.py"
+if [[ ! -f "$RUNNER" ]]; then
+  echo "error: runner missing: $RUNNER" >&2
+  exit 2
+fi
+
+rc=0
+output="$(python3 -I "$RUNNER" "$@")" || rc=$?
+printf '%s\n' "$output"
+result_path="$(printf '%s\n' "$output" | tail -n 1)"
+echo "result.json: $result_path"
+exit "$rc"
