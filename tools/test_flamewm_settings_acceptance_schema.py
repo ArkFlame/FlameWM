@@ -1086,6 +1086,7 @@ class Ss12DefaultClickGeometryTests(unittest.TestCase):
                 patch("flamewm_settings_acceptance.stop_dbus_monitor"), \
                 patch("flamewm_settings_acceptance.time.sleep"), \
                 patch("flamewm_settings_acceptance.wait_for_settings_window", return_value=geometry), \
+                patch("flamewm_settings_acceptance.keyboard_preflight", return_value=None), \
                 patch("flamewm_settings_acceptance.send_input",
                       side_effect=lambda *a, **k: sent.append(a) or (0, "x")):
             entry = acc.run_ss12(ctx, acc.parse_args(["--run-dir", str(tmp / "run"), *(extra or [])]))
@@ -1383,6 +1384,74 @@ class Ss18IngestTests(unittest.TestCase):
         with patch("flamewm_settings_acceptance.subprocess.run", return_value=SimpleNamespace(returncode=3)):
             entry = acc.ss18_result(self._args(ss18_prefix="/staged"), tmp)
         self.assertEqual(entry["status"], "NOT_RUN")
+
+
+class KeyboardPreflightTests(unittest.TestCase):
+    """Stuck-modifier preflight for keyboard-driven scenarios; query and release are faked, never run."""
+
+    def _ctx(self) -> SimpleNamespace:
+        return SimpleNamespace(display=":97", token="a" * 64, marker=Path("/nonexistent"), host_env={},
+                               spawn=self._no_spawn)
+
+    @staticmethod
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError("scenario must not start clients when a modifier is stuck")
+
+    def test_clean_keymap_proceeds_unchanged(self) -> None:
+        details: dict = {"commands": []}
+        with patch.object(acc, "query_modifiers", return_value=("00" * 32, [], "q")) as query, \
+                patch.object(acc, "xtest_control") as control:
+            self.assertIsNone(acc.keyboard_preflight(self._ctx(), details))
+        control.assert_not_called()
+        self.assertEqual(query.call_count, 1)
+        self.assertEqual(details["held_modifiers_before"], [])
+        self.assertNotIn("released_leaked_modifiers", details)
+
+    def test_held_then_released_proceeds_with_visible_leak_evidence(self) -> None:
+        details: dict = {"commands": []}
+        queries = [("ff" * 32, ["Shift_L"], "q1"), ("00" * 32, [], "q2")]
+        with patch.object(acc, "query_modifiers", side_effect=queries), \
+                patch.object(acc, "xtest_control", return_value=(SimpleNamespace(returncode=0, stdout=""), "r")) as control:
+            self.assertIsNone(acc.keyboard_preflight(self._ctx(), details))
+        control.assert_called_once_with(self._ctx(), "--release-modifiers")
+        self.assertEqual(details["held_modifiers_before"], ["Shift_L"])
+        self.assertEqual(details["held_modifiers_after_release"], [])
+        self.assertEqual(details["released_leaked_modifiers"], ["Shift_L"])
+
+    def test_still_held_after_release_is_environment_not_run_reason(self) -> None:
+        details: dict = {"commands": []}
+        queries = [("ff" * 32, ["Shift_L", "Super_L"], "q1"), ("ff" * 32, ["Shift_L", "Super_L"], "q2")]
+        with patch.object(acc, "query_modifiers", side_effect=queries), \
+                patch.object(acc, "xtest_control", return_value=(SimpleNamespace(returncode=0, stdout=""), "r")):
+            reason = acc.keyboard_preflight(self._ctx(), details)
+        self.assertEqual(reason, "environment: stuck modifier Shift_L, Super_L on :97")
+        self.assertNotIn("released_leaked_modifiers", details)
+
+    def test_unreadable_keymap_is_environment_not_run_reason(self) -> None:
+        details: dict = {"commands": []}
+        with patch.object(acc, "query_modifiers", return_value=(None, None, "q")):
+            reason = acc.keyboard_preflight(self._ctx(), details)
+        self.assertEqual(reason, "environment: keymap unreadable on :97")
+
+    def test_ss12_stuck_modifier_is_not_run_without_input_or_snapshot(self) -> None:
+        ctx = self._ctx()
+        args = SimpleNamespace(ss12_chord="Super+F8", settle_seconds=0.1, ss12_click=None, ss12_reset_click=None)
+        reason = "environment: stuck modifier Shift_L on :97"
+        with patch.object(acc.shutil, "which", return_value="/usr/bin/x"), \
+                patch.object(acc, "keyboard_preflight", return_value=reason), \
+                patch.object(acc, "dbus_shortcuts_snapshot", side_effect=AssertionError("no snapshot")), \
+                patch.object(acc, "send_input", side_effect=AssertionError("no input")):
+            entry = acc.run_ss12(ctx, args)
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertEqual(entry["reason"], reason)
+
+    def test_ss15_stuck_modifier_is_not_run_without_input(self) -> None:
+        ctx = self._ctx()
+        with patch.object(acc, "keyboard_preflight", return_value="environment: stuck modifier Super_R on :97"), \
+                patch.object(acc, "send_input", side_effect=AssertionError("no input")):
+            entry = acc.run_ss15(ctx, SimpleNamespace(settle_seconds=0.1, settings_bin="/bin/true"))
+        self.assertEqual(entry["status"], "NOT_RUN")
+        self.assertIn("stuck modifier Super_R", entry["reason"])
 
 
 if __name__ == "__main__":

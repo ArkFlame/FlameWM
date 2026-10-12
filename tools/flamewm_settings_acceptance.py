@@ -984,6 +984,54 @@ def send_input(ctx: Ctx, click: str | None, key: str | None, chord: str | None =
     return result.returncode, shell(recorded)
 
 
+def xtest_control(ctx: Ctx, flag: str) -> tuple[subprocess.CompletedProcess, str]:
+    """Run a read-only or modifier-release flamewm_xtest.py action on the owned display; token is redacted."""
+    script = ROOT / "tools" / "flamewm_xtest.py"
+    argv = [sys.executable, str(script), "--display", ctx.display,
+            "--owner-token", ctx.token, "--owner-marker", str(ctx.marker), flag]
+    recorded = [part if part != ctx.token else "<owner-token>" for part in argv]
+    result = subprocess.run(argv, env=ctx.host_env, capture_output=True, text=True, timeout=60, check=False)
+    return result, shell(recorded)
+
+
+def query_modifiers(ctx: Ctx) -> tuple[str | None, list[str] | None, str]:
+    """Return (keymap hex snapshot, held modifier keysyms, command); snapshot and held are None when unreadable."""
+    result, command = xtest_control(ctx, "--query-modifiers")
+    match = re.search(r"KEYMAP_SNAPSHOT: ([0-9a-f]{64}) HELD_MODIFIERS: (\S+)", result.stdout)
+    if result.returncode or not match:
+        return None, None, command
+    held = [] if match.group(2) == "none" else match.group(2).split(",")
+    return match.group(1), held, command
+
+
+def keyboard_preflight(ctx: Ctx, details: dict) -> str | None:
+    """Ensure no modifier is logically stuck down before a keyboard-driven scenario types anything.
+
+    Returns an environment NOT_RUN reason when the keymap is unreadable or a modifier stays down after one
+    release attempt; otherwise None. Held modifiers that were released are recorded (never hidden) as
+    released_leaked_modifiers while the verdict logic stays unchanged.
+    """
+    snapshot, held, command = query_modifiers(ctx)
+    details["commands"].append(command)
+    details["keymap_snapshot_before"] = snapshot
+    if held is None:
+        return f"environment: keymap unreadable on {ctx.display}"
+    details["held_modifiers_before"] = held
+    if not held:
+        return None
+    _, release_command = xtest_control(ctx, "--release-modifiers")
+    details["commands"].append(release_command)
+    _, after, requery_command = query_modifiers(ctx)
+    details["commands"].append(requery_command)
+    details["held_modifiers_after_release"] = after
+    if after is None:
+        return f"environment: keymap unreadable after modifier release on {ctx.display}"
+    if after:
+        return f"environment: stuck modifier {', '.join(after)} on {ctx.display}"
+    details["released_leaked_modifiers"] = held
+    return None
+
+
 def dbus_shortcuts_snapshot(ctx: Ctx) -> tuple[str | None, str]:
     return dbus_get_snapshot(ctx, "Shortcuts")
 
@@ -1411,6 +1459,12 @@ def run_ss12(ctx: Ctx, args: argparse.Namespace) -> dict:
         return not_run("SS12 XTEST requires an owned display in :97..:119")
     if shutil.which("gdbus") is None or shutil.which("dbus-monitor") is None:
         return not_run("SS12 lease and authoritative snapshot observation tools unavailable")
+    preflight = keyboard_preflight(ctx, details)
+    if preflight:
+        details["reason"] = preflight
+        entry = result_entry("SS12", STATUS_NOT_RUN, preflight, commands=details["commands"])
+        entry["details"] = details
+        return entry
 
     before_output, before_command = dbus_shortcuts_snapshot(ctx)
     details["commands"].append(before_command)
@@ -1658,6 +1712,12 @@ def run_ss15(ctx: Ctx, args: argparse.Namespace) -> dict:
     if ctx.display not in (f":{n}" for n in XTEST_DISPLAY_RANGE):
         details["reason"] = "SS15 XTEST requires an owned display in :97..:119"
         return finish()
+    preflight = keyboard_preflight(ctx, details)
+    if preflight:
+        details["reason"] = preflight
+        entry = result_entry("SS15", STATUS_NOT_RUN, preflight, commands=details["commands"])
+        entry["details"] = details
+        return entry
     displays = ctx.spawn("settings-ss15-displays", [args.settings_bin, "--page", "displays"], ctx.app_env)
     details["commands"].append(shell([args.settings_bin, "--page", "displays"]))
     time.sleep(min(max(args.settle_seconds, 0.25), 1.0))

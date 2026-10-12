@@ -92,6 +92,34 @@ class X11Backend:
     def fake_motion(self, x: int, y: int) -> bool:
         return bool(self._xtst.XTestFakeMotionEvent(self._display, -1, x, y, 0))
 
+    def query_keymap(self) -> bytes:
+        """Read-only XQueryKeymap snapshot: 32 bytes, one bit per keycode (no events sent)."""
+        buffer = (ctypes.c_char * 32)()
+        self._x11.XQueryKeymap(self._display, buffer)
+        return bytes(buffer)
+
+
+HELD_MODIFIER_KEYSYMS = ("Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", "Super_L", "Super_R", "Meta")
+
+
+def modifiers_from_keymap(backend, keymap: bytes) -> list[str]:
+    """Return the HELD_MODIFIER_KEYSYMS whose keycode bit is set in KEYMAP. Performs no X11 writes."""
+    held = []
+    for name in HELD_MODIFIER_KEYSYMS:
+        code = backend.keycode(name)
+        if code and keymap[code // 8] >> (code % 8) & 1:
+            held.append(name)
+    return held
+
+
+def release_stuck_modifiers(backend) -> list[str]:
+    """Send one XTEST key release for each modifier the keymap reports down; return the names released."""
+    released = modifiers_from_keymap(backend, backend.query_keymap())
+    for name in released:
+        if not backend.fake_key(backend.keycode(name), False):
+            raise RuntimeError(f"XTEST release rejected for stuck modifier {name!r}")
+    return released
+
 
 def press_key(backend, keysym: str, down: bool) -> None:
     """Send exactly one key press (down=True) or release (down=False) for KEYSYM."""
@@ -217,15 +245,23 @@ def parse_args() -> argparse.Namespace:
                         help="press button 1 at X1,Y1, move to X2,Y2 in STEPS increments, hold HOLD_MS, then release")
     parser.add_argument("--drag-keep", action="store_true", help="with --drag: leave button 1 down (end with --release)")
     parser.add_argument("--release", action="store_true", help="release button 1 left down by --drag --drag-keep")
+    parser.add_argument("--query-modifiers", action="store_true",
+                        help="read-only: print the XQueryKeymap snapshot and held modifiers (exclusive)")
+    parser.add_argument("--release-modifiers", action="store_true",
+                        help="release each modifier XQueryKeymap reports down, then print the snapshot (exclusive)")
     args = parser.parse_args()
     if not DISPLAY_RE.fullmatch(args.display):
         parser.error("--display must be a nested display in :97..:119")
     if not re.fullmatch(r"[0-9a-f]{64}", args.owner_token):
         parser.error("--owner-token must be a 256-bit hexadecimal token")
-    if not (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold or args.wheel
-            or args.drag or args.release):
+    input_actions = (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold
+                     or args.wheel or args.drag or args.release)
+    modifier_actions = args.query_modifiers or args.release_modifiers
+    if not (input_actions or modifier_actions):
         parser.error("request at least one of --click, --move, --key, --chord, --key-down, --key-up, --hold, "
-                     "--wheel, --drag or --release")
+                     "--wheel, --drag, --release, --query-modifiers or --release-modifiers")
+    if modifier_actions and input_actions:
+        parser.error("--query-modifiers and --release-modifiers cannot be combined with input actions")
     if args.drag_keep and not args.drag:
         parser.error("--drag-keep needs --drag")
     if args.drag:
@@ -293,6 +329,8 @@ def main() -> int:
         xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
         x11.XStringToKeysym.argtypes, x11.XStringToKeysym.restype = [ctypes.c_char_p], ctypes.c_ulong
         x11.XKeysymToKeycode.argtypes, x11.XKeysymToKeycode.restype = [ctypes.c_void_p, ctypes.c_ulong], ctypes.c_ubyte
+        x11.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_char * 32]
+        x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
         if args.click:
             x, y = args.click_xy
             if not xtst.XTestFakeMotionEvent(display, -1, x, y, 0) or not xtst.XTestFakeButtonEvent(display, 1, 1, 0) or not xtst.XTestFakeButtonEvent(display, 1, 0, 0):
@@ -329,6 +367,15 @@ def main() -> int:
                 for code in reversed(pressed):
                     xtst.XTestFakeKeyEvent(display, code, 0, 0)
         backend = X11Backend(x11, xtst, display)
+        if modifier_actions:
+            if args.release_modifiers:
+                released = release_stuck_modifiers(backend)
+                x11.XSync(display, 0)
+                print(f"MODIFIERS_RELEASED: {','.join(released) or 'none'}")
+            keymap = backend.query_keymap()
+            held = modifiers_from_keymap(backend, keymap)
+            print(f"KEYMAP_SNAPSHOT: {keymap.hex()} HELD_MODIFIERS: {','.join(held) or 'none'}")
+            return 0
         if args.key_down:
             press_key(backend, args.key_down, down=True)
         if args.key_up:
