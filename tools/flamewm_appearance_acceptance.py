@@ -611,7 +611,7 @@ def ap05(s: Session) -> dict:
     return entry("AP05", PASS, "", ev, ["XTEST move", "import -window root"])
 
 
-def ap06(s: Session) -> dict:
+def _ap06_slide(s: Session) -> dict:
     if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": "slide-up"}):
         return entry("AP06", FAIL, "WM or shell exited during restart")
     ys: list[int] = []
@@ -666,6 +666,81 @@ def ap06(s: Session) -> dict:
     return entry("AP06", FAIL, reason, [f"enabled_y={ys}", f"disabled_y={ys2}"], res["command"].split(" && "))
 
 
+def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
+    """Drag the real Settings animation speed slider to its far end and read animationSpeed back."""
+    ev: list[str] = []
+    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "taskbarOpacity": "100"}):
+        return ["WM or shell exited before the slider check"], ev
+    settings = s.ctx.spawn("settings-ap06", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
+    fails: list[str] = []
+    try:
+        time.sleep(s.args.settle_seconds)
+        before, _ = base.dbus_settings_snapshot(s.ctx)
+        row = None
+        for round_index in range(36):
+            path, _ = s.shot(f"AP06-slider-{round_index}")
+            if path is None:
+                return ["slider check could not capture the Settings page"], ev
+            # The filled part of the slider track is a long accent-coloured run in the control column
+            # (x 500..720); toggles sit right of x=737 and the accent swatches are short.
+            with base.Image.open(path) as image:
+                rgb = image.convert("RGB")
+                for y in range(40, 560):
+                    run = 0
+                    for x in range(500, 721):
+                        if close_enough(rgb.getpixel((x, y)), (0xEF, 0x40, 0x48), 24):
+                            run += 1
+                            if run >= 40:
+                                row = ("track", x, y)
+                                break
+                        else:
+                            run = 0
+                    if row:
+                        break
+            if row:
+                break
+            s.input(move="500,300")
+            s.input(wheel="down:8")
+            time.sleep(0.6)
+        if before is None:
+            return ["Settings snapshot unreadable before the slider drag"], ev
+        if row is None:
+            return ["animation speed row not found on the Appearance page"], ev
+        # Track: 180px, then a 58px value pill after a 10px gap, right-aligned at the card edge (x ~ 776).
+        right = 776 - 58 - 10
+        left = right - 180
+        y = row[2]
+        s.input(drag=f"{left + 4},{y},{right + 20},{y}:12")
+        time.sleep(1.5)
+        after, _ = base.dbus_settings_snapshot(s.ctx)
+        ev += [f"slider_row={row}", f"slider_drag={left + 4},{y}->{right + 20}",
+               f"animationSpeed_before_100={'animationSpeed\': <100>' in before or 'animationSpeed\': <int64 100>' in before}"]
+        match = re.search(r"'animationSpeed': <(?:int64 )?(\d+)>", after or "")
+        speed = int(match.group(1)) if match else None
+        ev.append(f"animationSpeed_after={speed}")
+        if speed is None or speed < 190:
+            # Diagnostic only: does a plain click on the track near its far end register?
+            s.input(click=f"{right - 3},{y}")
+            time.sleep(1.0)
+            clicked, _ = base.dbus_settings_snapshot(s.ctx)
+            match2 = re.search(r"'animationSpeed': <(?:int64 )?(\d+)>", clicked or "")
+            ev.append(f"animationSpeed_after_click={match2.group(1) if match2 else None}")
+            fails.append(f"dragging the animation speed slider to the end gave animationSpeed={speed} (expected ~200)")
+    finally:
+        s.ctx.stop(settings)
+    return fails, ev
+
+
+def ap06(s: Session) -> dict:
+    result = _ap06_slide(s)
+    fails, ev = animation_slider_check(s)
+    result["evidence"] = list(result.get("evidence", [])) + ev
+    if fails:
+        reason = "; ".join(p for p in (result.get("reason", ""), *fails) if p)
+        return entry("AP06", FAIL, reason, result["evidence"], result.get("commands"))
+    return result
+
+
 def nonblack_bbox(pixels: list[tuple[int, int, int]], width: int, y_limit: int) -> tuple[int, int, int, int] | None:
     """(x0, y0, x1, y1) of the bright (clock face, all channels >= 200) pixels above y_limit, or None.
 
@@ -679,6 +754,71 @@ def nonblack_bbox(pixels: list[tuple[int, int, int]], width: int, y_limit: int) 
             xs += [hit[0], hit[-1]]
             ys.append(y)
     return (min(xs), ys[0], max(xs), ys[-1]) if xs else None
+
+
+def sample_bright_boxes(s: Session, seconds: float, label: str) -> list:
+    """Bright-pixel (client) bounding boxes above the taskbar over `seconds` of repeated screenshots."""
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    boxes: list = []
+    deadline = time.monotonic() + seconds
+    n = 0
+    while time.monotonic() < deadline:
+        _, px = s.shot(f"{label}-{n}")
+        n += 1
+        if px is not None:
+            boxes.append(nonblack_bbox(px, s.args.screen_w, strip_y))
+    return boxes
+
+
+def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
+    """Window maximize and window-open animations measured as painted client sizes at 0.25x speed."""
+    fails: list[str] = []
+    ev: list[str] = []
+    width = lambda b: (b[2] - b[0]) if b else 0  # noqa: E731
+    if not s.restart({"animationsEnabled": "true", "maximizeAnimationEnabled": "true", "animationSpeed": "25",
+                      "taskbarOpacity": "100"}):
+        return ["WM or shell exited before the maximize check"], ev
+    s.spawn_client()
+    _, frame = s.client_frame(s.tree("AP07-max-frame"))
+    if frame is None:
+        return ["client frame not found for the maximize check"], ev
+    _, pre = s.shot("AP07-max-pre")
+    rest_w = width(nonblack_bbox(pre, s.args.screen_w, s.args.screen_h - TASKBAR_HEIGHT)) if pre else 0
+    s.input(click=f"{frame['x'] + frame['w'] - 57},{frame['y'] + 15}")  # Maximize
+    boxes = sample_bright_boxes(s, 3.0, "AP07-max")
+    widths = [width(b) for b in boxes]
+    final_w = widths[-1] if widths else 0
+    middle = [w for w in widths if rest_w * 1.15 < w < final_w * 0.9]
+    ev += [f"maximize_rest_w={rest_w}", f"maximize_widths={widths}"]
+    if final_w <= rest_w or not middle:
+        fails.append(f"maximize did not animate through intermediate sizes (rest {rest_w}, widths {widths})")
+    # Window open: the first frames after map are smaller than the settled window.
+    if not s.restart({"animationsEnabled": "true", "windowOpenAnimationEnabled": "true", "animationSpeed": "25",
+                      "taskbarOpacity": "100"}):
+        return fails + ["WM or shell exited before the window-open check"], ev
+    s.ctx.stop(s.client)
+    s.client = s.ctx.spawn("client-xclock-open", [s.args.client_bin, "-geometry", "300x200+300+200"],
+                           s.ctx.app_env)
+    # Screenshots are slower than the 0.25x open flight start, so also poll the cheap X tree for the
+    # transient overlay window (a nameless top-level that does not contain the client).
+    top_before = {n["id"] for n in s.tree("AP07-open-before") if n.get("parent") is None}
+    transient: set[str] = set()
+    for poll in range(10):
+        nodes = s.tree(f"AP07-open-poll-{poll}")
+        client = find_named(nodes, "xclock")
+        owner = parent_of(nodes, client) if client else None
+        for node in nodes:
+            if (node.get("parent") is None and node["id"] not in top_before and not node.get("name")
+                    and (owner is None or node["id"] != owner["id"]) and node["w"] > 1):
+                transient.add(node["id"])
+    boxes = sample_bright_boxes(s, 2.0, "AP07-open")
+    widths = [width(b) for b in boxes]
+    settled = max(widths) if widths else 0
+    smaller = [w for w in widths if 0 < w < settled * 0.9]
+    ev += [f"open_widths={widths}", f"open_transient_windows={sorted(transient)}"]
+    if settled == 0 or not (smaller or transient):
+        fails.append(f"window open did not animate (widths {widths}, transient windows {sorted(transient)})")
+    return fails, ev
 
 
 def ap07(s: Session) -> dict:
@@ -733,8 +873,10 @@ def ap07(s: Session) -> dict:
         fails.append(f"client map state {map_state(wm_state)} after minimize")
     if rect is None or rect[1] < strip_y:
         fails.append(f"_NET_WM_ICON_GEOMETRY {rect} not inside taskbar strip")
+    extra_fails, extra_ev = extra_effect_checks(s)
+    fails += extra_fails
     ev = [f"capability={capability}", f"rest_bbox={box0}", f"frame_bboxes={boxes}",
-          f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"]
+          f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"] + extra_ev
     if fails:
         return entry("AP07", FAIL, "; ".join(fails), ev, ["import -window root polling", "xprop _NET_WM_ICON_GEOMETRY"])
     return entry("AP07", PASS, "", ev, ["import -window root polling", "xprop _NET_WM_ICON_GEOMETRY"])

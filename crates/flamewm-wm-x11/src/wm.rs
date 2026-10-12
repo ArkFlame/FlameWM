@@ -23,7 +23,6 @@ fn log_once(once: &std::sync::Once, message: &str) {
     once.call_once(|| eprintln!("flamewm: {message}"));
 }
 
-static OPEN_SKIP_LOG: std::sync::Once = std::sync::Once::new();
 static TRANSITION_SKIP_LOG: std::sync::Once = std::sync::Once::new();
 
 /// Rect a maximized client returns to on unmaximize, when that is a floating restore.
@@ -3191,12 +3190,13 @@ impl<'a, C: Connection> Wm<'a, C> {
         let Some(client_id) = self.client_for(window) else {
             return Ok(());
         };
-        self.cancel_open_for(client_id)?;
+        // An unmap the WM expects (the transition's own backdrop hide) must not cancel the flight.
         if let Some(client) = self.clients.get_mut(&client_id) {
             if consume_expected_unmap(&mut client.ignore_unmap) {
                 return Ok(());
             }
         }
+        self.cancel_open_for(client_id)?;
         if window == client_id {
             self.unmanage(client_id, true)?;
         }
@@ -3444,6 +3444,14 @@ impl<'a, C: Connection> Wm<'a, C> {
                 ),
                 _ => (false, None),
             };
+        if matches!(control, Some(FrameControl::MaximizeRestore)) {
+            // The controller would toggle and move the frame during this release, before any
+            // overlay can capture it. Only end the press here, then run the animated toggle.
+            self.reduce_and_execute(client_id, FrameEvent::Cancel)?;
+            move_counters().record_toggle_max();
+            self.toggle_maximize(client_id)?;
+            return Ok(());
+        }
         let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
         let _ = self.reduce_and_execute(client_id, FrameEvent::Release { pointer });
         if release_from_move {
@@ -3985,6 +3993,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .ok_or("transition: no restored rect")?;
                 (capture, false, anim_rect(crate::client::root_to_rect(restored)))
             }
+            Effect::Open => {
+                let capture = renderer.borrow().capture_window(u64::from(frame))?;
+                (capture, true, animation::open_start_rect(anim_rect(outer)))
+            }
             _ => {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, false, self.minimize_target_for(client, outer))
@@ -3994,7 +4006,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         // the root under it, so the frame is unmapped first, then synced before the snapshot.
         // Restore needs no hide: its frame is already unmapped while minimized.
         let hide = !renderer.borrow().warp_argb_usable()
-            && matches!(effect, Effect::Minimize | Effect::Maximize | Effect::Unmaximize);
+            && matches!(effect, Effect::Minimize | Effect::Maximize | Effect::Unmaximize | Effect::Open);
         if hide {
             self.conn.unmap_window(frame).map_err(|e| e.to_string())?;
             if let Some(state) = self.clients.get_mut(&client) {
@@ -4048,11 +4060,6 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.open_gate.clear(client);
             return Ok(());
         };
-        if !renderer.borrow().argb_visual_available() {
-            log_once(&OPEN_SKIP_LOG, "window open animation skipped (no 32-bit ARGB visual)");
-            self.open_gate.clear(client);
-            return Ok(());
-        }
         let Ok(capture) = renderer.borrow().capture_window(u64::from(frame)) else {
             self.open_gate.clear(client);
             return Ok(());
@@ -4062,6 +4069,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         if self.animator.start(client, Effect::Open, std::time::Instant::now()) != Begin::Started {
+            return Ok(());
+        }
+        // Without a compositing manager the transparent fade would show black, so the open uses
+        // the opaque warp from a smaller rect, the same backdrop path as minimize.
+        if !renderer.borrow().warp_argb_usable() {
+            if self.open_overlay(client, Effect::Open).is_err() {
+                self.animator.cancel(client);
+            }
             return Ok(());
         }
         let opened = renderer.borrow().open_fade_overlay(capture, outer.x, outer.y);
@@ -4169,6 +4184,12 @@ impl<'a, C: Connection> Wm<'a, C> {
                 self.commit_maximize(client)
             }
             Effect::Open => {
+                if hidden {
+                    // The frame was unmapped for the backdrop snapshot; show it again.
+                    if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
+                        self.conn.map_window(frame)?;
+                    }
+                }
                 drop(flight);
                 Ok(())
             }

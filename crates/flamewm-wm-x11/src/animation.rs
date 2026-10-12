@@ -237,6 +237,23 @@ pub fn overlay_t(progress: f32, mirrored: bool) -> f64 {
     if mirrored { 1.0 - p } else { p }
 }
 
+/// Window-open start rect: `outer` scaled to `OPEN_START_SCALE` about its centre. The open warp
+/// runs from this rect (mirrored, so it is the warp target) up to `outer`.
+#[must_use]
+pub fn open_start_rect(outer: Rect) -> Rect {
+    let width = ((f64::from(outer.width) * OPEN_START_SCALE).round() as i32).max(1);
+    let height = ((f64::from(outer.height) * OPEN_START_SCALE).round() as i32).max(1);
+    Rect {
+        x: outer.x + (outer.width - width) / 2,
+        y: outer.y + (outer.height - height) / 2,
+        width,
+        height,
+    }
+}
+
+/// Window-open scale at the start of the flight, as a fraction of the settled size.
+const OPEN_START_SCALE: f64 = 0.6;
+
 /// True when every pixel of an ARGB32 capture equals the first one. A window that has not
 /// painted yet captures as one solid colour (its frame background), so it is not worth animating.
 #[must_use]
@@ -776,5 +793,15 @@ mod tests {
         let b = Rect { x: 500, y: 900, width: 32, height: 24 };
         assert_eq!(lerp_rect(a, b, 0.0), a);
         assert_eq!(lerp_rect(a, b, 1.0), b);
+    }
+
+    #[test]
+    fn open_start_rect_is_smaller_and_centred_on_the_window() {
+        let outer = Rect { x: 300, y: 200, width: 300, height: 200 };
+        let start = open_start_rect(outer);
+        assert!(start.width < outer.width && start.height < outer.height, "scales up from smaller");
+        assert!(f64::from(start.width) < f64::from(outer.width) * 0.9, "below the 0.9x threshold");
+        assert_eq!(start.x + start.width / 2, outer.x + outer.width / 2, "horizontally centred");
+        assert_eq!(start.y + start.height / 2, outer.y + outer.height / 2, "vertically centred");
     }
 }
