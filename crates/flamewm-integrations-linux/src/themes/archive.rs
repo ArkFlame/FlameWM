@@ -1,26 +1,48 @@
 //! Bounded in-memory tar reader (ustar, pax `x`/`g`, GNU `L`/`K`). Parses only.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::import::{ImportError, MAX_ENTRIES, MAX_TOTAL_BYTES};
 use super::xz::XzReader;
 
 const BLOCK: usize = 512;
+const DECODE_CHUNK: usize = 64 * 1024;
 
 /// Decode a `.tar.xz` file (magic checked by `XzReader`) and parse it with the
-/// same bounded tar path as `.tar.gz`. Output is capped by `take`.
+/// same bounded tar path as `.tar.gz`.
 pub(crate) fn parse_xz(file: File, cancel: &AtomicBool) -> Result<Vec<RawEntry>, ImportError> {
-    let mut archive_bytes = Vec::new();
-    XzReader::new(file)
-        .take(MAX_TOTAL_BYTES + 1)
-        .read_to_end(&mut archive_bytes)
-        .map_err(|err| ImportError::Corrupt(format!("xz stream: {err}")))?;
-    if archive_bytes.len() as u64 > MAX_TOTAL_BYTES {
-        return Err(ImportError::TooLarge);
-    }
+    let archive_bytes = read_decoded(XzReader::new(file), cancel, "xz")?;
     parse(&archive_bytes, MAX_ENTRIES, cancel)
+}
+
+/// Drain a decoder in bounded chunks, checking `cancel` before each chunk so a
+/// cancel during a large decode stops promptly. Output above `MAX_TOTAL_BYTES`
+/// is `TooLarge`.
+pub(crate) fn read_decoded(
+    mut reader: impl Read,
+    cancel: &AtomicBool,
+    format: &str,
+) -> Result<Vec<u8>, ImportError> {
+    let mut out = Vec::new();
+    let mut chunk = vec![0u8; DECODE_CHUNK];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ImportError::Cancelled);
+        }
+        let n = match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(ImportError::Corrupt(format!("{format} stream: {err}"))),
+        };
+        out.extend_from_slice(&chunk[..n]);
+        if out.len() as u64 > MAX_TOTAL_BYTES {
+            return Err(ImportError::TooLarge);
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -222,4 +244,60 @@ fn ustar_name(header: &[u8]) -> Vec<u8> {
 fn trim_nul(field: &[u8]) -> &[u8] {
     let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
     &field[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::io::{self, Read};
+    use std::sync::atomic::AtomicBool;
+
+    use super::read_decoded;
+    use crate::themes::import::ImportError;
+
+    /// Endless decoder output that counts how often it was asked for data.
+    struct Endless<'a> {
+        reads: &'a Cell<usize>,
+        on_read: Option<(usize, &'a AtomicBool)>,
+    }
+
+    impl Read for Endless<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            if let Some((at, flag)) = self.on_read {
+                if self.reads.get() == at {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            buf.fill(0);
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn pre_set_cancel_never_drives_the_decoder() {
+        let cancel = AtomicBool::new(true);
+        let reads = Cell::new(0);
+        let err = read_decoded(Endless { reads: &reads, on_read: None }, &cancel, "gzip").unwrap_err();
+        assert!(matches!(err, ImportError::Cancelled), "got {err:?}");
+        assert_eq!(reads.get(), 0, "a pre-cancelled decode must not read any input");
+    }
+
+    #[test]
+    fn cancel_during_decode_stops_before_the_output_cap() {
+        let cancel = AtomicBool::new(false);
+        let reads = Cell::new(0);
+        let decoder = Endless { reads: &reads, on_read: Some((3, &cancel)) };
+        let err = read_decoded(decoder, &cancel, "xz").unwrap_err();
+        assert!(matches!(err, ImportError::Cancelled), "got {err:?}");
+        assert!(reads.get() <= 4, "decode kept running after cancel: {} reads", reads.get());
+    }
+
+    #[test]
+    fn decoded_output_over_cap_is_too_large() {
+        let cancel = AtomicBool::new(false);
+        let reads = Cell::new(0);
+        let err = read_decoded(Endless { reads: &reads, on_read: None }, &cancel, "gzip").unwrap_err();
+        assert!(matches!(err, ImportError::TooLarge), "got {err:?}");
+    }
 }

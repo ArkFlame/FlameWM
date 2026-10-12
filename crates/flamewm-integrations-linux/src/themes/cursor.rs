@@ -1,8 +1,9 @@
 //! Pure-Rust Xcursor reader for the `left_ptr` preview. Read-only.
 
 use std::fmt;
-use std::fs;
 use std::path::Path;
+
+use super::read_regular_capped;
 
 const MAGIC: &[u8; 4] = b"Xcur";
 const IMAGE_TYPE: u32 = 0xfffd_0002;
@@ -43,12 +44,30 @@ impl std::error::Error for CursorError {}
 /// Load `<theme_root>/cursors/left_ptr` and decode its preview frame.
 pub fn load_left_ptr_preview(theme_root: &Path) -> Result<CursorPreview, CursorError> {
     let path = theme_root.join("cursors").join("left_ptr");
-    let meta = fs::metadata(&path).map_err(CursorError::Io)?;
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(CursorError::TooLarge);
-    }
-    let bytes = fs::read(&path).map_err(CursorError::Io)?;
+    let bytes = read_regular_capped(&path, MAX_FILE_BYTES)
+        .map_err(CursorError::Io)?
+        .ok_or(CursorError::TooLarge)?;
     parse_xcursor_preview(&bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    use super::{CursorError, load_left_ptr_preview};
+
+    #[test]
+    fn left_ptr_symlink_is_not_followed() {
+        let root = std::env::temp_dir().join(format!("flamewm-cursor-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+        fs::write(root.join("outside"), b"Xcur").expect("outside file");
+        symlink(root.join("outside"), root.join("cursors").join("left_ptr")).expect("symlink");
+        let err = load_left_ptr_preview(&root).unwrap_err();
+        assert!(matches!(err, CursorError::Io(_)), "symlinked left_ptr must be refused: {err:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> Result<u32, CursorError> {

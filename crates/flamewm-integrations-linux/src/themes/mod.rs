@@ -7,10 +7,35 @@ mod xz;
 pub mod import;
 
 use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 
 use crate::icon_theme::{IconThemeIndex, inheritance_chain, parse_ini_value, search_roots};
+
+#[cfg(target_arch = "aarch64")]
+const O_NOFOLLOW: i32 = 0o100_000;
+#[cfg(not(target_arch = "aarch64"))]
+const O_NOFOLLOW: i32 = 0o400_000;
+const O_NONBLOCK: i32 = 0o4_000;
+
+/// Read a regular file without following a final symlink. The cap applies to
+/// bytes actually read from the open handle, not to a prior `stat`. Reads at
+/// most `limit + 1` bytes; `Ok(None)` means the file holds more than `limit`.
+pub(crate) fn read_regular_capped(path: &Path, limit: u64) -> io::Result<Option<Vec<u8>>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW | O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    let mut buf = Vec::new();
+    file.take(limit.saturating_add(1)).read_to_end(&mut buf)?;
+    let fits = buf.len() as u64 <= limit;
+    Ok(fits.then_some(buf))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeKind {

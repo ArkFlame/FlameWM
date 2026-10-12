@@ -5,15 +5,16 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::ThemeKind;
 use super::archive::{self, RawEntry, RawKind};
+use super::read_regular_capped;
 use crate::icon_theme::IconThemeIndex;
 
 pub(crate) const MAX_ENTRIES: usize = 10_000;
@@ -21,6 +22,10 @@ pub(crate) const MAX_DEPTH: usize = 32;
 pub(crate) const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ID_LEN: usize = 64;
 const MAX_LINK_HOPS: usize = 40;
+/// Crashed-import leftovers older than this are swept at the next import.
+const STALE_AGE: Duration = Duration::from_secs(60 * 60);
+const STAGING_PREFIX: &[u8] = b".flamewm-staging-";
+const REPLACED_PREFIX: &[u8] = b".flamewm-replaced-";
 
 #[derive(Debug)]
 pub enum ImportError {
@@ -107,6 +112,8 @@ pub fn install_theme(
         return Err(ImportError::Cancelled);
     }
     fs::create_dir_all(icons_dir)?;
+    // Best effort: a failed sweep must not block the import.
+    let _ = sweep_stale(icons_dir, STALE_AGE);
     let staging = icons_dir.join(format!(".flamewm-staging-{}-{}", std::process::id(), stamp()));
     fs::create_dir(&staging)?;
     let outcome = write_plan(&staging, &plan.entries, cancel)
@@ -126,6 +133,36 @@ fn stamp() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos())
+}
+
+/// Remove `.flamewm-staging-*` and `.flamewm-replaced-*` directories left by a
+/// crashed import. Only real directories directly inside `icons_dir` whose mtime
+/// is at least `max_age` old are removed; symlinks are never followed.
+fn sweep_stale(icons_dir: &Path, max_age: Duration) -> io::Result<()> {
+    let now = SystemTime::now();
+    for item in fs::read_dir(icons_dir)? {
+        let item = item?;
+        let name = item.file_name();
+        let bytes = name.as_bytes();
+        if !(bytes.starts_with(STAGING_PREFIX) || bytes.starts_with(REPLACED_PREFIX)) {
+            continue;
+        }
+        let path = item.path();
+        let meta = fs::symlink_metadata(&path)?;
+        if !meta.is_dir() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age >= max_age {
+            fs::remove_dir_all(&path)?;
+        }
+    }
+    Ok(())
 }
 
 fn remove_entry(path: &Path) -> io::Result<()> {
@@ -204,14 +241,7 @@ fn load_source(source: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, Impo
     let name = source.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         let file = File::open(source)?;
-        let mut decoder = flate2::read::GzDecoder::new(file).take(MAX_TOTAL_BYTES + 1);
-        let mut archive_bytes = Vec::new();
-        decoder
-            .read_to_end(&mut archive_bytes)
-            .map_err(|err| ImportError::Corrupt(format!("gzip stream: {err}")))?;
-        if archive_bytes.len() as u64 > MAX_TOTAL_BYTES {
-            return Err(ImportError::TooLarge);
-        }
+        let archive_bytes = archive::read_decoded(flate2::read::GzDecoder::new(file), cancel, "gzip")?;
         return archive::parse(&archive_bytes, MAX_ENTRIES, cancel);
     }
     if name.ends_with(".tar.xz") || name.ends_with(".txz") {
@@ -251,14 +281,16 @@ fn walk_folder(root: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, Import
                 });
                 stack.push((path, rel, depth + 1));
             } else if file_type.is_file() {
-                total = total.saturating_add(item.metadata()?.len());
-                if total > MAX_TOTAL_BYTES {
+                // Cap on bytes actually read, so a file that grows or is swapped
+                // after the directory listing cannot exceed the budget.
+                let Some(data) = read_regular_capped(&path, MAX_TOTAL_BYTES - total)? else {
                     return Err(ImportError::TooLarge);
-                }
+                };
+                total += data.len() as u64;
                 out.push(RawEntry {
                     path: rel,
                     kind: RawKind::File,
-                    data: fs::read(&path)?,
+                    data,
                 });
             } else if file_type.is_symlink() {
                 let target = fs::read_link(&path)?;
@@ -522,4 +554,68 @@ fn build_plan(
         entries.push((rel, kind));
     }
     Ok(Plan { id, kind, entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    use super::{REPLACED_PREFIX, STAGING_PREFIX, STALE_AGE, sweep_stale};
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("flamewm-sweep-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn age_dir(path: &Path, age: Duration) {
+        let when = SystemTime::now() - age;
+        fs::File::open(path).and_then(|f| f.set_modified(when)).expect("set mtime");
+    }
+
+    #[test]
+    fn stale_staging_and_replaced_dirs_are_swept_but_fresh_and_foreign_entries_stay() {
+        let icons = scratch("sweep");
+        let stale_staging = icons.join(format!("{}1-2", std::str::from_utf8(STAGING_PREFIX).unwrap()));
+        let stale_replaced = icons.join(format!("{}1-2", std::str::from_utf8(REPLACED_PREFIX).unwrap()));
+        let fresh_staging = icons.join(format!("{}9-9", std::str::from_utf8(STAGING_PREFIX).unwrap()));
+        let theme = icons.join("Adwaita");
+        let foreign = icons.join(".flamewm-other-1");
+        for dir in [&stale_staging, &stale_replaced, &fresh_staging, &theme, &foreign] {
+            fs::create_dir_all(dir.join("keep")).expect("dir");
+        }
+        age_dir(&stale_staging, STALE_AGE * 2);
+        age_dir(&stale_replaced, STALE_AGE * 2);
+        age_dir(&theme, STALE_AGE * 2);
+        age_dir(&foreign, STALE_AGE * 2);
+
+        sweep_stale(&icons, STALE_AGE).expect("sweep");
+
+        assert!(!stale_staging.exists(), "stale staging dir must be swept");
+        assert!(!stale_replaced.exists(), "stale replaced dir must be swept");
+        assert!(fresh_staging.exists(), "fresh staging dir may belong to a live import");
+        assert!(theme.exists(), "installed themes are never swept");
+        assert!(foreign.exists(), "only the exact prefixes are swept");
+        let _ = fs::remove_dir_all(&icons);
+    }
+
+    #[test]
+    fn symlink_named_like_staging_is_never_followed_or_removed_recursively() {
+        let icons = scratch("sweep-link");
+        let outside = scratch("sweep-link-target");
+        fs::write(outside.join("precious"), b"keep").expect("target file");
+        let link = icons.join(format!("{}3-4", std::str::from_utf8(STAGING_PREFIX).unwrap()));
+        symlink(&outside, &link).expect("symlink");
+        age_dir(&outside, STALE_AGE * 2);
+
+        sweep_stale(&icons, STALE_AGE).expect("sweep");
+
+        assert!(outside.join("precious").exists(), "sweep must not follow the symlink");
+        let _ = fs::remove_dir_all(&icons);
+        let _ = fs::remove_dir_all(&outside);
+    }
 }
