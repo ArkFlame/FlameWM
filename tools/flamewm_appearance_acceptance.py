@@ -818,6 +818,74 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     ev += [f"open_widths={widths}", f"open_transient_windows={sorted(transient)}"]
     if settled == 0 or not (smaller or transient):
         fails.append(f"window open did not animate (widths {widths}, transient windows {sorted(transient)})")
+    rf, rev = respawn_after_minimize_check(s)
+    return fails + rf, ev + rev
+
+
+RESPAWN_CYCLES = 10
+RESPAWN_TIMEOUT_SECONDS = 10.0
+
+
+def wait_unmapped_xclock(s: Session) -> bool:
+    """Polls until the owned xclock is no longer viewable (the minimize unmap is visible)."""
+    deadline = time.monotonic() + RESPAWN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        client, _ = s.client_frame(s.tree("AP07-respawn-unmap"))
+        if client is not None and "IsViewable" not in map_state_of(s, client["id"]):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def map_state_of(s: Session, win_id: str) -> str:
+    out = subprocess.run(["xwininfo", "-display", s.ctx.display, "-id", win_id], env=s.ctx.host_env,
+                         capture_output=True, text=True, timeout=20, check=False).stdout
+    return map_state(out) or ""
+
+
+def wait_framed_xclock(s: Session, label: str) -> tuple[dict | None, dict | None]:
+    """Polls the tree until the owned xclock has a frame parent, or the respawn timeout passes."""
+    deadline = time.monotonic() + RESPAWN_TIMEOUT_SECONDS
+    while True:
+        client, frame = s.client_frame(s.tree(label))
+        if (client is not None and frame is not None) or time.monotonic() >= deadline:
+            return client, frame
+        time.sleep(0.25)
+
+
+def respawn_after_minimize_check(s: Session) -> tuple[list[str], list[str]]:
+    """Each xclock is minimized, stopped while minimized, then the next xclock must be framed.
+
+    A client XID recycled after a minimized client was destroyed must not inherit that client's state, so
+    the new window still gets a frame parent (an unframed map means the old client was never unmanaged)."""
+    fails: list[str] = []
+    ev: list[str] = []
+    if not s.restart({"taskbarOpacity": "100"}):
+        return ["WM or shell exited before the respawn check"], ev
+    framed = 0
+    for n in range(RESPAWN_CYCLES):
+        s.spawn_client()
+        _, frame = s.client_frame(s.tree(f"AP07-respawn-{n}-first"))
+        if frame is None:
+            fails.append(f"respawn cycle {n}: first xclock frame not found")
+            break
+        minimize_at = f"{frame['x'] + frame['w'] - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2},{frame['y'] + 15}"
+        s.input(click=minimize_at)
+        minimized = wait_unmapped_xclock(s)
+        s.ctx.stop(s.client)
+        s.spawn_client()
+        client, frame = wait_framed_xclock(s, f"AP07-respawn-{n}-next")
+        if not minimized:
+            fails.append(f"respawn cycle {n}: minimize did not unmap the xclock")
+        if client is None or frame is None:
+            alive = s.client.proc.poll() is None
+            state = map_state_of(s, client["id"]) if client is not None else "no client"
+            ev.append(f"respawn cycle {n}: next xclock framed=False (process alive={alive}, map={state})")
+            fails.append(f"respawn cycle {n}: next xclock after a destroyed minimized client has no frame")
+            continue
+        framed += 1
+        ev.append(f"respawn cycle {n}: next xclock framed=True")
+    ev.append(f"respawn_framed={framed}/{RESPAWN_CYCLES}")
     return fails, ev
 
 

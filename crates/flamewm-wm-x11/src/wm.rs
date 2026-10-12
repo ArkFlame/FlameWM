@@ -24,6 +24,16 @@ fn log_once(once: &std::sync::Once, message: &str) {
 }
 
 static TRANSITION_SKIP_LOG: std::sync::Once = std::sync::Once::new();
+static DESTROYED_WINDOW_RACE_LOG: std::sync::Once = std::sync::Once::new();
+
+/// True for X errors that mean the target window/drawable no longer exists.
+fn is_destroyed_window_race(error: &ReplyOrIdError) -> bool {
+    matches!(
+        error,
+        ReplyOrIdError::X11Error(x11)
+            if matches!(x11.error_kind, ErrorKind::Window | ErrorKind::Drawable | ErrorKind::Pixmap)
+    )
+}
 
 /// Rect a maximized client returns to on unmaximize, when that is a floating restore.
 /// `None` when the client is not maximized or its saved placement is not floating.
@@ -2713,7 +2723,20 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    /// Dispatches one event. A request that raced a client's destruction (BadWindow and friends)
+    /// is expected on a window manager and must never end the session: the window is gone, and its
+    /// DestroyNotify performs the cleanup.
     fn handle_event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
+        match self.handle_event_inner(event) {
+            Err(error) if is_destroyed_window_race(&error) => {
+                log_once(&DESTROYED_WINDOW_RACE_LOG, &format!("ignored a request that raced a destroyed window: {error}"));
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
+    fn handle_event_inner(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
         match event {
             Event::MapRequest(event) => self.handle_map_request(event)?,
             Event::ConfigureRequest(event) => self.handle_configure_request(event)?,
@@ -4864,6 +4887,27 @@ fn workspace_switch_touches_windows(visibility: &[(bool, bool)], focus_changed: 
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn destroyed_window_races_are_not_fatal_but_other_errors_are() {
+        use x11rb::x11_utils::X11Error;
+        let error = |kind: ErrorKind| {
+            ReplyOrIdError::X11Error(X11Error {
+                error_kind: kind,
+                error_code: 3,
+                sequence: 1,
+                bad_value: 0,
+                minor_opcode: 0,
+                major_opcode: 20,
+                extension_name: None,
+                request_name: Some("GetProperty"),
+            })
+        };
+        assert!(is_destroyed_window_race(&error(ErrorKind::Window)));
+        assert!(is_destroyed_window_race(&error(ErrorKind::Drawable)));
+        assert!(!is_destroyed_window_race(&error(ErrorKind::Access)));
+        assert!(!is_destroyed_window_race(&ReplyOrIdError::IdsExhausted));
+    }
     use super::*;
     use crate::frame::model::ResizeEdges;
     use crate::frame::session::{MoveAnchor, MoveSession};
