@@ -27,7 +27,7 @@ use crate::xlib::{
     CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
     Pixmap, TRANSPARENT_CLEAR_PIXEL, TRUE_COLOR_CLASS, Window, XCreateColormap, XCreateWindow,
     XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight, XDisplayWidth,
-    XCreatePixmap, XFlush, XFreeColormap, XFreePixmap, XMapWindow, XMatchVisualInfo, XRootWindow,
+    XCreatePixmap, XFlush, XFreeColormap, XFreePixmap, XMapWindow, XMatchVisualInfo, XRaiseWindow, XRootWindow,
     XSetWindowAttributes, XSync, XVisualInfo, ALLOC_NONE, XInternAtom,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
@@ -428,6 +428,12 @@ impl WarpOverlay {
     ///
     /// For a warp, `progress` 0 is the source and 1 the target. For a fade it is linear time
     /// 0..=1, eased by [`fade_frame`].
+    /// Stacks the overlay above application windows (a flight starts over the popup).
+    pub fn raise(&self) {
+        // SAFETY: `display` is live; the window is ours until Drop.
+        unsafe { XRaiseWindow(self.display, self.window) };
+    }
+
     pub fn paint(&mut self, progress: f64) -> Result<(), String> {
         // Map before the first draw: without backing store, pixels drawn into an unmapped window
         // are discarded, and a picture created before mapping does not clip to the visible window.

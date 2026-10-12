@@ -77,6 +77,38 @@ impl XShapeBridge {
         unsafe { self.apply_mask_kind(window, SHAPE_BOUNDING, spans) }
     }
 
+    /// Apply the rounded mask intersected with `clip` (window-local). An empty result is a valid
+    /// bounding region and hides the window, so a slide that starts fully below the panel stays
+    /// invisible.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a live X window on this bridge's display.
+    pub(crate) unsafe fn apply_clipped_mask(
+        &self,
+        window: Window,
+        spans: &[(u32, u32, u32)],
+        clip: ClipRect,
+    ) -> Result<(), String> {
+        let clipped = clip_spans(spans, clip);
+        let rects = spans_to_rects(&clipped);
+        // SAFETY: display is live per `new`; rects is a valid slice for the call.
+        unsafe {
+            (self.shape_rectangles)(
+                self.display,
+                window,
+                SHAPE_BOUNDING,
+                0,
+                0,
+                rects.as_ptr(),
+                rects.len().min(c_int::MAX as usize) as c_int,
+                SHAPE_SET,
+                SHAPE_YX_SORTED,
+            )
+        };
+        Ok(())
+    }
+
     /// Apply an input-region mask. Pass-through surfaces call this with an
     /// empty span list, producing an empty XShape input region so pointer
     /// events fall through. Empty input is legal here (unlike bounding).
@@ -115,19 +147,7 @@ impl XShapeBridge {
         kind: c_int,
         spans: &[(u32, u32, u32)],
     ) -> Result<(), String> {
-        let rects: Vec<XRectangle> = spans
-            .iter()
-            .filter(|(_, start, end)| end > start)
-            .filter_map(|(y, start, end)| {
-                let width = end.checked_sub(*start)?;
-                Some(XRectangle {
-                    x: (*start).min(i16::MAX as u32) as i16,
-                    y: (*y).min(i16::MAX as u32) as i16,
-                    width: width.min(u16::MAX as u32) as u16,
-                    height: 1,
-                })
-            })
-            .collect();
+        let rects = spans_to_rects(spans);
         if rects.is_empty() {
             return Err("rounded shape mask has no visible rows".to_string());
         }
@@ -147,6 +167,38 @@ impl XShapeBridge {
         };
         Ok(())
     }
+}
+
+/// Window-local clip rectangle as (x0, y0, x1_exclusive, y1_exclusive).
+pub(crate) type ClipRect = (u32, u32, u32, u32);
+
+fn spans_to_rects(spans: &[(u32, u32, u32)]) -> Vec<XRectangle> {
+    spans
+        .iter()
+        .filter(|(_, start, end)| end > start)
+        .filter_map(|(y, start, end)| {
+            let width = end.checked_sub(*start)?;
+            Some(XRectangle {
+                x: (*start).min(i16::MAX as u32) as i16,
+                y: (*y).min(i16::MAX as u32) as i16,
+                width: width.min(u16::MAX as u32) as u16,
+                height: 1,
+            })
+        })
+        .collect()
+}
+
+/// Intersects row spans with `clip`; order is preserved so YX-sorted Shape requests stay valid.
+pub(crate) fn clip_spans(spans: &[(u32, u32, u32)], clip: ClipRect) -> Vec<(u32, u32, u32)> {
+    let (x0, y0, x1, y1) = clip;
+    spans
+        .iter()
+        .filter(|(y, _, _)| *y >= y0 && *y < y1)
+        .filter_map(|&(y, start, end)| {
+            let (start, end) = (start.max(x0), end.min(x1));
+            (end > start).then_some((y, start, end))
+        })
+        .collect()
 }
 
 /// Pure geometry shared with the `flamewm-ui-x11` span tests: row spans
@@ -205,6 +257,24 @@ mod tests {
                 (7, 2, 6),
             ]
         );
+    }
+
+    #[test]
+    fn clip_keeps_rows_inside_the_clip_rect() {
+        let spans = rounded_mask_spans(8, 8, 4);
+        // Keep rows 0..3 only: rows 0 and 1 and 2 survive with their own spans.
+        assert_eq!(clip_spans(&spans, (0, 0, 8, 3)), vec![(0, 2, 6), (1, 0, 8), (2, 0, 8)]);
+        // Keep the lower half-plane: rows 5..8, columns 2..8 of the cut shape.
+        assert_eq!(clip_spans(&spans, (2, 5, 8, 8)), vec![(5, 2, 8), (6, 2, 8), (7, 2, 6)]);
+    }
+
+    #[test]
+    fn clip_outside_the_shape_is_empty() {
+        let spans = rounded_mask_spans(8, 8, 4);
+        // A clip entirely below the popup (slide start) yields an empty bounding region.
+        assert!(clip_spans(&spans, (0, 8, 8, 16)).is_empty());
+        // A clip that removes all columns is empty too.
+        assert!(clip_spans(&spans, (9, 0, 12, 8)).is_empty());
     }
 
     #[test]

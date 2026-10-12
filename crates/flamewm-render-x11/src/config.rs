@@ -162,7 +162,90 @@ pub struct DockStrut {
     pub bottom_end_x: u32,
 }
 
+/// Root edge a dock surface reserves. Explicit so a floating bar that touches no root edge
+/// still reserves space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
 impl DockStrut {
+    const NONE: Self = Self {
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        left_start_y: 0,
+        left_end_y: 0,
+        right_start_y: 0,
+        right_end_y: 0,
+        top_start_x: 0,
+        top_end_x: 0,
+        bottom_start_x: 0,
+        bottom_end_x: 0,
+    };
+
+    /// Reserves `edge` with extent = distance from that root edge to the rect (bar thickness
+    /// plus any floating inset). Classic bars yield the same values as `from_root_and_rect`.
+    pub fn from_edge_rect(
+        root_w: u32,
+        root_h: u32,
+        edge: DockEdge,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    ) -> Option<Self> {
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let (root_w, root_h) = (root_w as i64, root_h as i64);
+        let (x, y, w, h) = (x as i64, y as i64, w as i64, h as i64);
+        let mut s = Self::NONE;
+        match edge {
+            DockEdge::Bottom => {
+                let extent = root_h - y;
+                if extent <= 0 {
+                    return None;
+                }
+                s.bottom = extent as u32;
+                s.bottom_start_x = x.max(0) as u32;
+                s.bottom_end_x = (x + w - 1).max(0) as u32;
+            }
+            DockEdge::Top => {
+                let extent = y + h;
+                if extent <= 0 {
+                    return None;
+                }
+                s.top = extent as u32;
+                s.top_start_x = x.max(0) as u32;
+                s.top_end_x = (x + w - 1).max(0) as u32;
+            }
+            DockEdge::Left => {
+                let extent = x + w;
+                if extent <= 0 {
+                    return None;
+                }
+                s.left = extent as u32;
+                s.left_start_y = y.max(0) as u32;
+                s.left_end_y = (y + h - 1).max(0) as u32;
+            }
+            DockEdge::Right => {
+                let extent = root_w - x;
+                if extent <= 0 {
+                    return None;
+                }
+                s.right = extent as u32;
+                s.right_start_y = y.max(0) as u32;
+                s.right_end_y = (y + h - 1).max(0) as u32;
+            }
+        }
+        Some(s)
+    }
+
     pub fn from_root_and_rect(
         root_w: u32,
         root_h: u32,
@@ -293,6 +376,34 @@ mod dock_strut_tests {
     fn floating_rect_reserves_nothing() {
         assert!(DockStrut::from_root_and_rect(1920, 1080, 400, 300, 800, 600).is_none());
         assert!(DockStrut::from_root_and_rect(1920, 1080, 0, 0, 1920, 1080).is_none());
+    }
+
+    #[test]
+    fn explicit_edge_classic_matches_inferred_strut() {
+        let classic = DockStrut::from_root_and_rect(1920, 1080, 0, 1036, 1920, 44);
+        assert_eq!(
+            DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, 0, 1036, 1920, 44),
+            classic
+        );
+        let left = DockStrut::from_root_and_rect(1920, 1080, 0, 100, 48, 880);
+        assert_eq!(
+            DockStrut::from_edge_rect(1920, 1080, DockEdge::Left, 0, 100, 48, 880),
+            left
+        );
+    }
+
+    #[test]
+    fn explicit_edge_floating_bar_reserves_thickness_plus_inset() {
+        // Bar inset 8px from every side: 44px thick, anchored bottom.
+        let s = DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, 8, 1028, 1904, 44)
+            .expect("floating bottom reserves");
+        assert_eq!(s.strut4(), [0, 0, 0, 52]);
+        assert_eq!((s.bottom_start_x, s.bottom_end_x), (8, 1911));
+        let top = DockStrut::from_edge_rect(1920, 1080, DockEdge::Top, 8, 8, 1904, 44).unwrap();
+        assert_eq!(top.strut4(), [0, 0, 52, 0]);
+        let right = DockStrut::from_edge_rect(1920, 1080, DockEdge::Right, 1868, 8, 44, 1064).unwrap();
+        assert_eq!(right.strut4(), [0, 52, 0, 0]);
+        assert!(DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, 0, 1080, 1920, 44).is_none());
     }
 }
 

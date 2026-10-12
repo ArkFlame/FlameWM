@@ -27,6 +27,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", css.display());
     println!("cargo:rerun-if-changed={}", breeze.display());
     println!("cargo:rerun-if-changed={}", branding.display());
+    println!("cargo:rerun-if-changed={}", web.join("color-wheel.png").display());
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let staged_ui = out_dir.join("settings");
@@ -38,7 +39,7 @@ fn main() {
     stage_tree(&branding, &staged_assets.join("branding"));
     let staged_web = staged_assets.join("web");
     fs::create_dir_all(&staged_web).expect("create staged settings web assets");
-    for name in ["flamewm-icon.svg", "github.svg", "paypal.svg"] {
+    for name in ["flamewm-icon.svg", "github.svg", "paypal.svg", "color-wheel.png"] {
         fs::copy(web.join(name), staged_assets.join("web").join(name))
             .unwrap_or_else(|_| panic!("stage settings web asset {name}"));
     }

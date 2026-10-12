@@ -90,8 +90,9 @@ input { cursor:text; }
 .start-category img { width:20px; height:20px; }
 .start-category div { flex-grow:1; }
 .start-category .chevron { width:12px; height:12px; }
-.start-search { height:45px; margin:0px 6px 6px 6px; border-radius:8px; padding:0px 7px; display:flex; align-items:center; background:#1b1e20; color:var(--text); border:1px solid #373a3d; cursor:default; }
-.start-search-field { flex-grow:1; height:32px; padding-left:8px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:#141618; border:1px solid #454a4f; border-radius:3px; }
+/* Just the bar: no outer card behind or around the search field. */
+.start-search { height:45px; margin:0px 6px 6px 6px; padding:0px 7px; display:flex; align-items:center; background:transparent; color:var(--text); border:0px solid transparent; cursor:default; }
+.start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:#141618; border:1px solid #454a4f; border-radius:8px; }
 .start-search-field img { width:15px; height:15px; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
 .start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:12px; overflow-x:hidden; overflow-y:auto; }

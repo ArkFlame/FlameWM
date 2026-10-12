@@ -18,6 +18,7 @@ flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-debug = { path = "../flamewm-debug" }
+flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 calloop.workspace = true

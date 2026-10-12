@@ -19,6 +19,7 @@ use flamewm_api::{
     TransactionId, WindowRef,
 };
 
+use crate::panel::TaskbarFrame;
 use crate::scale::is_supported_scale;
 use crate::services::applications::ApplicationService;
 use crate::services::background::BackgroundService;
@@ -94,6 +95,8 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.seed_persisted_panel_edges();
         self.panels
             .reconcile_taskbar_height(self.settings.current().taskbar_height);
+        self.panels
+            .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
         self.started = true;
         self.generation = self.generation.saturating_add(1).max(1);
         Ok(())
@@ -479,6 +482,8 @@ impl<E: EnginePorts> PlatformHost<E> {
             })?;
             self.panels.reconcile_taskbar_height(logical_size);
         }
+        self.panels
+            .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
         Ok(snapshot)
     }
 

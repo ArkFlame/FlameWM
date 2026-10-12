@@ -9,6 +9,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::time::Instant;
 
 use calloop::{Interest, RegistrationToken};
+use x11rb::connection::Connection as _;
 
 use crate::{X11Desktop, log_committed_startup_shortcuts};
 use flamewm_api::ports::FdEvents;
@@ -24,6 +25,7 @@ use flamewm_platform::host::PlatformHost;
 use flamewm_reactor::{FdAction, FdReadiness, Reactor};
 
 use crate::atoms::AnyError;
+use crate::idle;
 use crate::wm::{WmChangeSet, WmConfig, run_with_hook};
 
 struct WmBuilderFields {
@@ -319,6 +321,7 @@ fn run_session(
     let control_now_ms_for_hook = Rc::clone(&control_now_ms);
     let control_error_for_hook = Rc::clone(&control_error);
     let settings_observer_for_hook = Rc::clone(&settings_observer);
+    let idle_lock_for_hook = Rc::new(RefCell::new(idle::IdleLock::new()));
 
     let result = run_with_hook(config, &catalog, &reactor, Rc::clone(&icon_service), move |wm, conn, screen, changes| {
         if let Some(error) = control_error_for_hook.borrow_mut().take() {
@@ -326,6 +329,10 @@ fn run_session(
         }
         wm.apply_decoration_tokens(crate::chrome::live_chrome_tokens())?;
         wm.apply_transition_settings(crate::animation::live_settings())?;
+        let root = conn.setup().roots[screen].root;
+        idle_lock_for_hook
+            .borrow_mut()
+            .turn(&reactor_for_hook, conn.as_ref(), root);
         refresh_control(
             &reactor_for_hook,
             &mut control_registration,
@@ -492,7 +499,9 @@ pub fn persisted_cursor_theme() -> Option<String> {
 /// notifies the optional observer with the same snapshot.
 fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &SettingsSnapshot) {
     sync_snap_preview_opacity(snapshot);
+    crate::live_settings::sync(snapshot);
     sync_window_decoration(snapshot);
+    sync_idle_lock_timeout(snapshot);
     if let Some(observer) = observer.borrow_mut().as_mut() {
         observer(snapshot);
     }
@@ -501,6 +510,15 @@ fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &Setti
 fn sync_window_decoration(snapshot: &SettingsSnapshot) {
     crate::chrome::set_live_chrome_tokens(crate::chrome::chrome_tokens_from_settings(snapshot));
     crate::animation::set_live_settings(crate::animation::settings_from_snapshot(snapshot));
+}
+
+fn sync_idle_lock_timeout(snapshot: &SettingsSnapshot) {
+    // Missing or out-of-range values fall back to manual lock only (0).
+    let minutes = match snapshot.values.get("lockTimeoutMinutes") {
+        Some(SettingValue::Integer(minutes)) => u16::try_from(*minutes).unwrap_or(0),
+        _ => 0,
+    };
+    idle::set_live_lock_timeout(minutes);
 }
 
 fn sync_snap_preview_opacity(snapshot: &SettingsSnapshot) {

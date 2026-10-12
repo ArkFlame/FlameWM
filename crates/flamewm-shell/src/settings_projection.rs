@@ -1,15 +1,19 @@
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use chrono::Local;
 use flamewm_api::PanelEdge;
 use flamewm_platform::chrome::{parse_hex_rgb, ACCENT_SOFT_ALPHA};
+use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_x11::{SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
+
+use crate::projection::{project_clock_at, ClockDisplay};
 
 const DEFAULT_ACCENT: u32 = 0xef4048;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
 const DEFAULT_TASKBAR_COLOR: u32 = 0x191b1d;
-const DEFAULT_TASKBAR_OPACITY: u8 = 99;
+const DEFAULT_TASKBAR_OPACITY: u8 = 80;
 const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
-const DEFAULT_START_MENU_OPACITY: u8 = 99;
+const DEFAULT_START_MENU_OPACITY: u8 = 80;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;
 const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
 const DEFAULT_FONT_SIZE: f32 = 13.0;
@@ -63,6 +67,7 @@ pub(crate) fn project(
             )?;
             // Stable presentation node; this never changes panel geometry.
             document.background("taskbar-line", accent)?;
+            project_clock_at(document, Local::now(), clock_display(snapshot))?;
         }
         SurfaceKind::Start => {
             let color = color_setting(snapshot, "startMenuColor", DEFAULT_START_MENU_COLOR);
@@ -114,6 +119,18 @@ pub(crate) fn start_slide(
 }
 
 /// Accent carries `accentOpacity` as alpha for every accent consumer.
+/// Clock presentation keys; unknown or missing values fall back to the product defaults.
+pub(crate) fn clock_display(snapshot: &SettingsSnapshot) -> ClockDisplay {
+    let defaults = ClockDisplay::default();
+    let format = ClockFormat::parse(&text_setting(snapshot, "taskbarClockFormat", "24h"))
+        .unwrap_or(defaults.format);
+    ClockDisplay {
+        format,
+        show_seconds: bool_setting(snapshot, "taskbarShowSeconds", defaults.show_seconds),
+        show_date: bool_setting(snapshot, "taskbarShowDate", defaults.show_date),
+    }
+}
+
 fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
     let accent = color_setting(snapshot, "accent", DEFAULT_ACCENT);
     let opacity = percent_setting(snapshot, "accentOpacity", DEFAULT_ACCENT_OPACITY);
@@ -307,7 +324,7 @@ mod tests {
         assert_eq!(doc.variables["--accent-strong"], UiColor { a: 0xdd, ..accent });
         assert_eq!(
             doc.backgrounds["start-menu"],
-            UiColor { r: 0x19, g: 0x1b, b: 0x1d, a: 252 }
+            UiColor { r: 0x19, g: 0x1b, b: 0x1d, a: 204 }
         );
     }
 
@@ -345,7 +362,7 @@ mod tests {
     fn opacity_percent_maps_to_alpha_bounds() {
         assert_eq!(opacity_alpha(0), 0);
         assert_eq!(opacity_alpha(100), 255);
-        assert_eq!(opacity_alpha(DEFAULT_TASKBAR_OPACITY), 252);
+        assert_eq!(opacity_alpha(DEFAULT_TASKBAR_OPACITY), 204);
     }
 
     #[test]
@@ -372,7 +389,7 @@ mod tests {
             DEFAULT_START_MENU_COLOR,
         );
         assert_eq!((color.r, color.g, color.b), (0x19, 0x1b, 0x1d));
-        assert_eq!(opacity_alpha(DEFAULT_START_MENU_OPACITY), 252);
+        assert_eq!(opacity_alpha(DEFAULT_START_MENU_OPACITY), 204);
     }
 
     #[test]
@@ -491,5 +508,46 @@ mod tests {
         assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
         assert_eq!(icon_theme_name(None), "McMojave-circle");
         assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "McMojave-circle");
+    }
+}
+
+#[cfg(test)]
+mod clock_settings_tests {
+    use super::clock_display;
+    use crate::projection::ClockDisplay;
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use flamewm_platform::settings::ClockFormat;
+
+    #[test]
+    fn missing_keys_resolve_to_product_clock_defaults() {
+        assert_eq!(
+            clock_display(&SettingsSnapshot::new(1)),
+            ClockDisplay::default()
+        );
+    }
+
+    #[test]
+    fn clock_keys_map_to_display_and_unknown_format_falls_back_to_24h() {
+        let mut snapshot = SettingsSnapshot::new(2);
+        snapshot.values.insert(
+            "taskbarClockFormat".to_owned(),
+            SettingValue::Text("12h".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("taskbarShowSeconds".to_owned(), SettingValue::Boolean(true));
+        snapshot
+            .values
+            .insert("taskbarShowDate".to_owned(), SettingValue::Boolean(false));
+        let display = clock_display(&snapshot);
+        assert_eq!(display.format, ClockFormat::Twelve);
+        assert!(display.show_seconds);
+        assert!(!display.show_date);
+
+        snapshot.values.insert(
+            "taskbarClockFormat".to_owned(),
+            SettingValue::Text("bogus".to_owned()),
+        );
+        assert_eq!(clock_display(&snapshot).format, ClockFormat::TwentyFour);
     }
 }

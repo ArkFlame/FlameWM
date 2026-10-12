@@ -30,6 +30,26 @@ pub fn logical_to_physical(logical: u16, scale_percent: u16) -> i32 {
     ((u32::from(logical) * u32::from(scale) + 50) / 100) as i32
 }
 
+/// Taskbar layout from `taskbarStyle`, `taskbarFloatingMargin` and `taskbarFloatingRadius`.
+/// `margin` and `radius` are logical px. Classic ignores both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TaskbarFrame {
+    pub floating: bool,
+    pub margin: u16,
+    pub radius: u16,
+}
+
+impl TaskbarFrame {
+    #[must_use]
+    pub fn from_settings(settings: &crate::settings::ProductSettings) -> Self {
+        Self {
+            floating: settings.taskbar_style == crate::settings::TaskbarStyle::Floating,
+            margin: settings.taskbar_floating_margin,
+            radius: settings.taskbar_floating_radius,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputPanel {
     pub output: OutputId,
@@ -37,6 +57,7 @@ pub struct OutputPanel {
     pub edge: PanelEdge,
     pub scale_percent: u16,
     pub logical_size: u16,
+    pub frame: TaskbarFrame,
 }
 
 impl OutputPanel {
@@ -52,6 +73,27 @@ impl OutputPanel {
                 100
             },
             logical_size: DEFAULT_PANEL_LOGICAL_SIZE,
+            frame: TaskbarFrame::default(),
+        }
+    }
+
+    /// Physical gap between the bar and each screen edge it touches. Zero when classic.
+    #[must_use]
+    pub fn inset(&self) -> i32 {
+        if self.frame.floating {
+            logical_to_physical(self.frame.margin, self.scale_percent)
+        } else {
+            0
+        }
+    }
+
+    /// Corner radius in physical px, clamped to half the bar thickness. Zero when classic.
+    #[must_use]
+    pub fn corner_radius(&self) -> i32 {
+        if self.frame.floating {
+            logical_to_physical(self.frame.radius, self.scale_percent).min(self.thickness() / 2)
+        } else {
+            0
         }
     }
 
@@ -71,52 +113,50 @@ impl OutputPanel {
     #[must_use]
     pub fn panel_rect(&self) -> Rect {
         let thickness = self.thickness();
+        let inset = self.inset();
+        let out = self.output_rect;
         match self.edge {
             PanelEdge::Bottom => Rect::new(
-                self.output_rect.x,
-                self.output_rect.bottom() - thickness,
-                self.output_rect.width,
+                out.x + inset,
+                out.bottom() - inset - thickness,
+                out.width - 2 * inset,
                 thickness,
             ),
-            PanelEdge::Top => Rect::new(
-                self.output_rect.x,
-                self.output_rect.y,
-                self.output_rect.width,
-                thickness,
-            ),
-            PanelEdge::Left => Rect::new(
-                self.output_rect.x,
-                self.output_rect.y,
-                thickness,
-                self.output_rect.height,
-            ),
+            PanelEdge::Top => Rect::new(out.x + inset, out.y + inset, out.width - 2 * inset, thickness),
+            PanelEdge::Left => Rect::new(out.x + inset, out.y + inset, thickness, out.height - 2 * inset),
             PanelEdge::Right => Rect::new(
-                self.output_rect.right() - thickness,
-                self.output_rect.y,
+                out.right() - inset - thickness,
+                out.y + inset,
                 thickness,
-                self.output_rect.height,
+                out.height - 2 * inset,
             ),
         }
     }
 
+    /// Screen space reserved on the anchored edge: bar thickness plus the floating margin.
+    #[must_use]
+    fn reserved(&self) -> i32 {
+        self.thickness() + self.inset()
+    }
+
     #[must_use]
     pub fn strut(&self) -> Strut {
-        let thickness = self.thickness();
+        let reserved = self.reserved();
         match self.edge {
             PanelEdge::Bottom => Strut {
-                bottom: thickness,
+                bottom: reserved,
                 ..Strut::default()
             },
             PanelEdge::Top => Strut {
-                top: thickness,
+                top: reserved,
                 ..Strut::default()
             },
             PanelEdge::Left => Strut {
-                left: thickness,
+                left: reserved,
                 ..Strut::default()
             },
             PanelEdge::Right => Strut {
-                right: thickness,
+                right: reserved,
                 ..Strut::default()
             },
         }
@@ -124,30 +164,30 @@ impl OutputPanel {
 
     #[must_use]
     pub fn work_area(&self) -> Rect {
-        let thickness = self.thickness();
+        let reserved = self.reserved();
         match self.edge {
             PanelEdge::Bottom => Rect::new(
                 self.output_rect.x,
                 self.output_rect.y,
                 self.output_rect.width,
-                self.output_rect.height - thickness,
+                self.output_rect.height - reserved,
             ),
             PanelEdge::Top => Rect::new(
                 self.output_rect.x,
-                self.output_rect.y + thickness,
+                self.output_rect.y + reserved,
                 self.output_rect.width,
-                self.output_rect.height - thickness,
+                self.output_rect.height - reserved,
             ),
             PanelEdge::Left => Rect::new(
-                self.output_rect.x + thickness,
+                self.output_rect.x + reserved,
                 self.output_rect.y,
-                self.output_rect.width - thickness,
+                self.output_rect.width - reserved,
                 self.output_rect.height,
             ),
             PanelEdge::Right => Rect::new(
                 self.output_rect.x,
                 self.output_rect.y,
-                self.output_rect.width - thickness,
+                self.output_rect.width - reserved,
                 self.output_rect.height,
             ),
         }
@@ -356,6 +396,93 @@ mod tests {
         assert_eq!(manager.active_output(), Some(id("eDP-1")));
         manager.set_focused_frame_output(Some(id("HDMI-1")));
         assert_eq!(manager.active_output(), Some(id("HDMI-1")));
+    }
+
+    fn floating_panel(edge: PanelEdge, margin: u16, radius: u16) -> OutputPanel {
+        let mut panel = OutputPanel::new(
+            id("eDP-1"),
+            Rect::new(0, 0, 1920, 1080),
+            edge,
+            100,
+        );
+        panel.frame = TaskbarFrame {
+            floating: true,
+            margin,
+            radius,
+        };
+        panel
+    }
+
+    #[test]
+    fn classic_frame_ignores_margin_and_radius() {
+        let mut panel = OutputPanel::new(
+            id("eDP-1"),
+            Rect::new(0, 0, 1920, 1080),
+            PanelEdge::Bottom,
+            100,
+        );
+        panel.frame = TaskbarFrame {
+            floating: false,
+            margin: 8,
+            radius: 12,
+        };
+        assert_eq!(panel.inset(), 0);
+        assert_eq!(panel.corner_radius(), 0);
+        assert_eq!(panel.panel_rect(), Rect::new(0, 1036, 1920, 44));
+        assert_eq!(panel.strut(), Strut { bottom: 44, ..Strut::default() });
+        assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1036));
+    }
+
+    #[test]
+    fn floating_bottom_insets_bar_and_reserves_thickness_plus_margin() {
+        let panel = floating_panel(PanelEdge::Bottom, 8, 12);
+        assert_eq!(panel.panel_rect(), Rect::new(8, 1028, 1904, 44));
+        assert_eq!(panel.strut(), Strut { bottom: 52, ..Strut::default() });
+        assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1028));
+        assert_eq!(panel.corner_radius(), 12);
+    }
+
+    #[test]
+    fn floating_top_left_right_inset_and_reserve_per_edge() {
+        let top = floating_panel(PanelEdge::Top, 8, 0);
+        assert_eq!(top.panel_rect(), Rect::new(8, 8, 1904, 44));
+        assert_eq!(top.strut(), Strut { top: 52, ..Strut::default() });
+        assert_eq!(top.work_area(), Rect::new(0, 52, 1920, 1028));
+
+        let left = floating_panel(PanelEdge::Left, 8, 0);
+        assert_eq!(left.panel_rect(), Rect::new(8, 8, 44, 1064));
+        assert_eq!(left.strut(), Strut { left: 52, ..Strut::default() });
+        assert_eq!(left.work_area(), Rect::new(52, 0, 1868, 1080));
+
+        let right = floating_panel(PanelEdge::Right, 8, 0);
+        assert_eq!(right.panel_rect(), Rect::new(1868, 8, 44, 1064));
+        assert_eq!(right.strut(), Strut { right: 52, ..Strut::default() });
+        assert_eq!(right.work_area(), Rect::new(0, 0, 1868, 1080));
+    }
+
+    #[test]
+    fn floating_zero_margin_matches_classic_geometry_with_radius_only() {
+        let floating = floating_panel(PanelEdge::Bottom, 0, 12);
+        let mut classic = floating.clone();
+        classic.frame = TaskbarFrame::default();
+        assert_eq!(floating.panel_rect(), classic.panel_rect());
+        assert_eq!(floating.strut(), classic.strut());
+        assert_eq!(floating.work_area(), classic.work_area());
+        assert_eq!(floating.corner_radius(), 12);
+    }
+
+    #[test]
+    fn floating_radius_clamps_to_half_thickness_and_margin_scales() {
+        let huge = floating_panel(PanelEdge::Bottom, 8, 60);
+        assert_eq!(huge.corner_radius(), 22);
+
+        let mut scaled = floating_panel(PanelEdge::Bottom, 8, 60);
+        scaled.scale_percent = 125;
+        assert_eq!(scaled.thickness(), 55);
+        assert_eq!(scaled.inset(), 10);
+        assert_eq!(scaled.corner_radius(), 27);
+        assert_eq!(scaled.strut().bottom, 65);
+        assert_eq!(scaled.panel_rect(), Rect::new(10, 1080 - 65, 1900, 55));
     }
 
     #[test]

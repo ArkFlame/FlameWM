@@ -164,7 +164,20 @@ fn xsettings_input_with_cursor_env(
     if let Some(points) = font_size_points(snapshot) {
         input.font_size_points = points;
     }
+    if let Some(size) = cursor_size(snapshot) {
+        input.cursor_size = size;
+    }
     input
+}
+
+/// `cursorSize` is one of the supported pixel sizes; anything else keeps the XSettings default.
+fn cursor_size(snapshot: &SettingsSnapshot) -> Option<u32> {
+    match snapshot.values.get("cursorSize") {
+        Some(SettingValue::Integer(size)) => u32::try_from(*size)
+            .ok()
+            .filter(|size| matches!(*size, 24 | 32 | 48 | 64)),
+        _ => None,
+    }
 }
 
 fn text_value<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str> {
@@ -249,6 +262,30 @@ mod tests {
 
     fn text(value: &str) -> SettingValue {
         SettingValue::Text(value.to_owned())
+    }
+
+    #[test]
+    fn cursor_size_follows_supported_snapshot_values_only() {
+        for size in [24, 32, 48, 64] {
+            let snapshot = snapshot_with(&[("cursorSize", SettingValue::Integer(size))]);
+            assert_eq!(
+                xsettings_input_from_snapshot(&snapshot).cursor_size,
+                u32::try_from(size).expect("size")
+            );
+        }
+        for value in [
+            SettingValue::Integer(16),
+            SettingValue::Integer(65),
+            SettingValue::Integer(-24),
+            text("48"),
+        ] {
+            let snapshot = snapshot_with(&[("cursorSize", value.clone())]);
+            assert_eq!(
+                xsettings_input_from_snapshot(&snapshot).cursor_size,
+                XSettingsInput::default().cursor_size,
+                "{value:?} must fall back"
+            );
+        }
     }
 
     #[test]

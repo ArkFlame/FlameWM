@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use flamewm_api::panels::PanelEdge;
 use flamewm_api::settings::{AppearanceMode, SettingValue};
@@ -48,6 +49,120 @@ impl LockClockFormat {
             _ => None,
         }
     }
+}
+
+/// Lock-screen idle action after the Ribbons screensaver (`screensaverMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreensaverMode {
+    Ribbons,
+    /// Turn the display off while locked.
+    None,
+}
+
+impl ScreensaverMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ribbons => "ribbons",
+            Self::None => "none",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ribbons" => Some(Self::Ribbons),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// Taskbar layout (`taskbarStyle`). `Floating` insets the bar and rounds its corners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskbarStyle {
+    Classic,
+    Floating,
+}
+
+impl TaskbarStyle {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Floating => "floating",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "classic" => Some(Self::Classic),
+            "floating" => Some(Self::Floating),
+            _ => None,
+        }
+    }
+}
+
+/// Clock notation on the taskbar (`taskbarClockFormat`). Same `24h`/`12h` wire values as the lock
+/// screen, so both keys share one type.
+pub type ClockFormat = LockClockFormat;
+
+/// Desktop wallpaper placement (`wallpaperFit`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WallpaperFit {
+    Fill,
+    Fit,
+    Stretch,
+    Center,
+    Tile,
+}
+
+impl WallpaperFit {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fill => "fill",
+            Self::Fit => "fit",
+            Self::Stretch => "stretch",
+            Self::Center => "center",
+            Self::Tile => "tile",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "fill" => Some(Self::Fill),
+            "fit" => Some(Self::Fit),
+            "stretch" => Some(Self::Stretch),
+            "center" => Some(Self::Center),
+            "tile" => Some(Self::Tile),
+            _ => None,
+        }
+    }
+}
+
+/// Translucent surface policy for the taskbar or Start menu.
+///
+/// `blur_percent` (0..=100) maps to a blur radius of `blur_percent / 100 * 24` px at 1x. Blur is
+/// only applied when `opacity_percent < 100`; at 100% the radius is always 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Backdrop {
+    pub opacity_percent: u8,
+    pub blur_percent: u8,
+    pub radius_px: f32,
+}
+
+/// Typed view of the `screensaver*` keys. Ribbon width is in pixels at 1280x720.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreensaverSettings {
+    pub mode: ScreensaverMode,
+    pub after_lock: Duration,
+    pub num_ribbons: u8,
+    pub ribbon_width_px: f32,
+    pub span_monitors: bool,
+    pub display_off_minutes: u16,
 }
 
 /// Animation style shared by every element that animates. Consumers reuse one implementation per
@@ -101,19 +216,30 @@ pub struct ProductSettings {
     pub appearance: AppearanceMode,
     /// Empty means use the desktop/theme default wallpaper.
     pub wallpaper: String,
+    pub wallpaper_fit: WallpaperFit,
     pub desktop_selection_fill_opacity: u8,
     pub window_snap_preview_fill_opacity: u8,
+    pub snap_preview_enabled: bool,
+    pub focus_follows_mouse: bool,
     pub font_family: String,
     pub font_bold: bool,
     pub font_size_offset: i8,
     pub taskbar_color: String,
     pub taskbar_opacity: u8,
     pub taskbar_height: u16,
+    pub taskbar_style: TaskbarStyle,
+    pub taskbar_floating_margin: u16,
+    pub taskbar_floating_radius: u16,
+    pub taskbar_blur_percent: u8,
+    pub taskbar_clock_format: ClockFormat,
+    pub taskbar_show_seconds: bool,
+    pub taskbar_show_date: bool,
     pub start_button_text: String,
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
     pub start_menu_color: String,
     pub start_menu_opacity: u8,
+    pub start_menu_blur_percent: u8,
     pub accent_opacity: u8,
     pub decoration: String,
     pub titlebar_color: String,
@@ -130,6 +256,8 @@ pub struct ProductSettings {
     pub titlebar_close_hover_color: String,
     pub titlebar_close_pressed_color: String,
     pub cursor_theme: String,
+    /// Cursor pixel size; one of 24, 32, 48, 64.
+    pub cursor_size: u16,
     pub animations_enabled: bool,
     pub animation_speed: u16,
     pub start_animation: AnimationStyle,
@@ -147,6 +275,12 @@ pub struct ProductSettings {
     pub lock_show_username: bool,
     pub lock_timeout_minutes: u16,
     pub lock_on_suspend: bool,
+    pub screensaver_mode: ScreensaverMode,
+    pub screensaver_after_lock_minutes: u16,
+    pub screensaver_num_ribbons: u16,
+    pub screensaver_ribbon_width_tenths: u16,
+    pub screensaver_span_monitors: bool,
+    pub screensaver_display_off_minutes: u16,
     pub per_output_scale: BTreeMap<String, u16>,
     pub panel_edges: BTreeMap<String, PanelEdge>,
     pub hotkeys: BTreeMap<String, String>,
@@ -161,19 +295,30 @@ impl Default for ProductSettings {
             icon_theme: "McMojave-circle".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
+            wallpaper_fit: WallpaperFit::Fill,
             desktop_selection_fill_opacity: 20,
             window_snap_preview_fill_opacity: 20,
+            snap_preview_enabled: true,
+            focus_follows_mouse: true,
             font_family: "IBM Plex Sans".to_owned(),
             font_bold: false,
             font_size_offset: 0,
             taskbar_color: "#191b1d".to_owned(),
-            taskbar_opacity: 99,
+            taskbar_opacity: 80,
             taskbar_height: 44,
+            taskbar_style: TaskbarStyle::Classic,
+            taskbar_floating_margin: 8,
+            taskbar_floating_radius: 12,
+            taskbar_blur_percent: 80,
+            taskbar_clock_format: ClockFormat::TwentyFour,
+            taskbar_show_seconds: false,
+            taskbar_show_date: true,
             start_button_text: String::new(),
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
             start_menu_color: "#191b1d".to_owned(),
-            start_menu_opacity: 99,
+            start_menu_opacity: 80,
+            start_menu_blur_percent: 80,
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
             titlebar_color: "#1b1e20".to_owned(),
@@ -190,6 +335,7 @@ impl Default for ProductSettings {
             titlebar_close_hover_color: String::new(),
             titlebar_close_pressed_color: String::new(),
             cursor_theme: String::new(),
+            cursor_size: 24,
             animations_enabled: true,
             animation_speed: 100,
             start_animation: AnimationStyle::Slide,
@@ -207,6 +353,12 @@ impl Default for ProductSettings {
             lock_show_username: true,
             lock_timeout_minutes: 0,
             lock_on_suspend: true,
+            screensaver_mode: ScreensaverMode::Ribbons,
+            screensaver_after_lock_minutes: 1,
+            screensaver_num_ribbons: 6,
+            screensaver_ribbon_width_tenths: 110,
+            screensaver_span_monitors: false,
+            screensaver_display_off_minutes: 20,
             per_output_scale: BTreeMap::new(),
             panel_edges: BTreeMap::new(),
             hotkeys: BTreeMap::new(),
@@ -256,6 +408,31 @@ impl ProductSettings {
         }
     }
 
+    /// Taskbar backdrop. See [`Backdrop`] for the blur-to-radius mapping.
+    #[must_use]
+    pub fn taskbar_backdrop(&self) -> Backdrop {
+        backdrop(self.taskbar_opacity, self.taskbar_blur_percent)
+    }
+
+    /// Start menu backdrop. See [`Backdrop`] for the blur-to-radius mapping.
+    #[must_use]
+    pub fn start_menu_backdrop(&self) -> Backdrop {
+        backdrop(self.start_menu_opacity, self.start_menu_blur_percent)
+    }
+
+    /// Typed screensaver policy. Ribbon width converts tenths of a pixel to `f32` pixels.
+    #[must_use]
+    pub fn screensaver(&self) -> ScreensaverSettings {
+        ScreensaverSettings {
+            mode: self.screensaver_mode,
+            after_lock: Duration::from_secs(u64::from(self.screensaver_after_lock_minutes) * 60),
+            num_ribbons: u8::try_from(self.screensaver_num_ribbons).unwrap_or(u8::MAX),
+            ribbon_width_px: f32::from(self.screensaver_ribbon_width_tenths) / 10.0,
+            span_monitors: self.screensaver_span_monitors,
+            display_off_minutes: self.screensaver_display_off_minutes,
+        }
+    }
+
     pub fn validate(&self) -> FlameResult<()> {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
         validate_color(&self.accent, true, "accent")?;
@@ -280,6 +457,21 @@ impl ProductSettings {
         }
         if !(34..=72).contains(&self.taskbar_height) {
             return invalid("taskbarHeight must be 34..72");
+        }
+        if self.taskbar_floating_margin > 32 {
+            return invalid("taskbarFloatingMargin must be 0..32");
+        }
+        if self.taskbar_floating_radius > 24 {
+            return invalid("taskbarFloatingRadius must be 0..24");
+        }
+        if self.taskbar_blur_percent > 100 {
+            return invalid("taskbarBlurPercent must be 0..100");
+        }
+        if self.start_menu_blur_percent > 100 {
+            return invalid("startMenuBlurPercent must be 0..100");
+        }
+        if !matches!(self.cursor_size, 24 | 32 | 48 | 64) {
+            return invalid("cursorSize must be 24, 32, 48 or 64");
         }
         validate_color(&self.start_menu_color, false, "startMenuColor")?;
         validate_color(&self.titlebar_color, false, "titlebarColor")?;
@@ -351,6 +543,18 @@ impl ProductSettings {
         }
         if self.lock_timeout_minutes > 240 {
             return invalid("lockTimeoutMinutes must be 0..240");
+        }
+        if self.screensaver_after_lock_minutes > 60 {
+            return invalid("screensaverAfterLockMinutes must be 0..60");
+        }
+        if !(1..=12).contains(&self.screensaver_num_ribbons) {
+            return invalid("screensaverNumRibbons must be 1..12");
+        }
+        if !(20..=280).contains(&self.screensaver_ribbon_width_tenths) {
+            return invalid("screensaverRibbonWidthTenths must be 20..280");
+        }
+        if self.screensaver_display_off_minutes > 240 {
+            return invalid("screensaverDisplayOffMinutes must be 0..240");
         }
         for output in self.panel_edges.keys() {
             if output.is_empty()
@@ -640,6 +844,19 @@ macro_rules! integer_slot {
 
 integer_slot!(i8, u16);
 
+fn backdrop(opacity_percent: u8, blur_percent: u8) -> Backdrop {
+    let radius_px = if opacity_percent >= 100 {
+        0.0
+    } else {
+        f32::from(blur_percent) / 100.0 * 24.0
+    };
+    Backdrop {
+        opacity_percent,
+        blur_percent,
+        radius_px,
+    }
+}
+
 impl Slot for AnimationStyle {
     fn to_value(&self) -> SettingValue {
         SettingValue::Text(self.as_str().to_owned())
@@ -658,6 +875,57 @@ impl Slot for AnimationStyle {
 }
 
 impl Slot for LockClockFormat {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
+impl Slot for TaskbarStyle {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
+impl Slot for WallpaperFit {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
+impl Slot for ScreensaverMode {
     fn to_value(&self) -> SettingValue {
         SettingValue::Text(self.as_str().to_owned())
     }
@@ -737,12 +1005,24 @@ stable_settings! {
     (true, taskbar, "taskbarColor", taskbar_color),
     (true, taskbar, "taskbarOpacity", taskbar_opacity),
     (true, taskbar, "taskbarHeight", taskbar_height),
+    (false, taskbar, "taskbarStyle", taskbar_style),
+    (false, taskbar, "taskbarFloatingMargin", taskbar_floating_margin),
+    (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),
+    (false, taskbar, "taskbarBlurPercent", taskbar_blur_percent),
     (true, taskbar, "startButtonText", start_button_text),
     (true, taskbar, "customStartIcon", custom_start_icon),
     (true, desktop, "stickyNotesEnabled", sticky_notes_enabled),
     (false, appearance, "iconTheme", icon_theme),
     (false, taskbar, "startMenuColor", start_menu_color),
     (false, taskbar, "startMenuOpacity", start_menu_opacity),
+    (false, taskbar, "startMenuBlurPercent", start_menu_blur_percent),
+    (false, taskbar, "taskbarClockFormat", taskbar_clock_format),
+    (false, taskbar, "taskbarShowSeconds", taskbar_show_seconds),
+    (false, taskbar, "taskbarShowDate", taskbar_show_date),
+    (false, desktop, "wallpaperFit", wallpaper_fit),
+    (false, windows, "snapPreviewEnabled", snap_preview_enabled),
+    (false, windows, "focusFollowsMouse", focus_follows_mouse),
+    (false, appearance, "cursorSize", cursor_size),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
     (false, windows, "titlebarColor", titlebar_color),
@@ -776,6 +1056,12 @@ stable_settings! {
     (false, lock, "lockShowUsername", lock_show_username),
     (false, lock, "lockTimeoutMinutes", lock_timeout_minutes),
     (false, lock, "lockOnSuspend", lock_on_suspend),
+    (false, screensaver, "screensaverMode", screensaver_mode),
+    (false, screensaver, "screensaverAfterLockMinutes", screensaver_after_lock_minutes),
+    (false, screensaver, "screensaverNumRibbons", screensaver_num_ribbons),
+    (false, screensaver, "screensaverRibbonWidthTenths", screensaver_ribbon_width_tenths),
+    (false, screensaver, "screensaverSpanMonitors", screensaver_span_monitors),
+    (false, screensaver, "screensaverDisplayOffMinutes", screensaver_display_off_minutes),
 }
 
 #[must_use]
@@ -1041,6 +1327,156 @@ mod tests {
     }
 
     #[test]
+    fn taskbar_style_and_backdrop_defaults_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.taskbar_style, TaskbarStyle::Classic);
+        assert_eq!(defaults.taskbar_floating_margin, 8);
+        assert_eq!(defaults.taskbar_floating_radius, 12);
+        assert_eq!(defaults.taskbar_blur_percent, 80);
+        assert_eq!(defaults.start_menu_blur_percent, 80);
+        let taskbar = defaults.taskbar_backdrop();
+        assert_eq!(taskbar.opacity_percent, 80);
+        assert_eq!(taskbar.blur_percent, 80);
+        assert!((taskbar.radius_px - 19.2).abs() < 1e-4);
+        let start = defaults.start_menu_backdrop();
+        assert_eq!(start.opacity_percent, 80);
+        assert!((start.radius_px - 19.2).abs() < 1e-4);
+        let text = ConfigStore::serialize(&defaults);
+        assert!(!text.contains("taskbarStyle"));
+        assert!(!text.contains("taskbarBlurPercent"));
+        assert!(!text.contains("startMenuBlurPercent"));
+        assert!(!text.contains("taskbarFloating"));
+    }
+
+    #[test]
+    fn taskbar_style_and_blur_round_trip_and_opaque_has_no_radius() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot(
+                "revision=2\ntaskbarStyle=floating\ntaskbarFloatingMargin=32\n\
+                 taskbarFloatingRadius=0\ntaskbarBlurPercent=100\ntaskbarOpacity=100\n\
+                 startMenuBlurPercent=0\nstartMenuOpacity=50\n",
+            )
+            .expect("valid taskbar settings");
+        assert_eq!(parsed.taskbar_style, TaskbarStyle::Floating);
+        assert_eq!(parsed.taskbar_floating_margin, 32);
+        assert_eq!(parsed.taskbar_floating_radius, 0);
+        assert!((parsed.taskbar_backdrop().radius_px - 0.0).abs() < 1e-6);
+        assert!((parsed.start_menu_backdrop().radius_px - 0.0).abs() < 1e-6);
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("taskbarStyle=floating\n"));
+        assert!(text.contains("taskbarBlurPercent=100\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn invalid_taskbar_style_and_blur_values_are_rejected() {
+        let store = ConfigStore::default();
+        for line in [
+            "taskbarStyle=Floating",
+            "taskbarStyle=bar",
+            "taskbarFloatingMargin=33",
+            "taskbarFloatingMargin=-1",
+            "taskbarFloatingRadius=25",
+            "taskbarBlurPercent=101",
+            "taskbarBlurPercent=80.5",
+            "startMenuBlurPercent=101",
+        ] {
+            assert!(
+                store.parse_snapshot(&format!("revision=2\n{line}\n")).is_err(),
+                "{line} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn screensaver_defaults_match_contract_and_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert_eq!(
+            defaults.screensaver(),
+            ScreensaverSettings {
+                mode: ScreensaverMode::Ribbons,
+                after_lock: Duration::from_secs(60),
+                num_ribbons: 6,
+                ribbon_width_px: 11.0,
+                span_monitors: false,
+                display_off_minutes: 20,
+            }
+        );
+        // lockTimeoutMinutes stays 0 (manual lock) so upgrades never lock unexpectedly.
+        assert_eq!(defaults.lock_timeout_minutes, 0);
+        let text = ConfigStore::serialize(&defaults);
+        assert!(!text.contains("screensaver"));
+    }
+
+    #[test]
+    fn legacy_file_without_screensaver_keys_loads_defaults() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=1\nlockTimeoutMinutes=5\nlockOnSuspend=false\n")
+            .expect("legacy lock file");
+        assert_eq!(
+            parsed.screensaver(),
+            ProductSettings::default().screensaver()
+        );
+        assert_eq!(parsed.lock_timeout_minutes, 5);
+    }
+
+    #[test]
+    fn screensaver_round_trips_non_default_values() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot(
+                "revision=2\nscreensaverMode=none\nscreensaverAfterLockMinutes=0\n\
+                 screensaverNumRibbons=12\nscreensaverRibbonWidthTenths=280\n\
+                 screensaverSpanMonitors=true\nscreensaverDisplayOffMinutes=240\n",
+            )
+            .expect("valid screensaver settings");
+        assert_eq!(
+            parsed.screensaver(),
+            ScreensaverSettings {
+                mode: ScreensaverMode::None,
+                after_lock: Duration::ZERO,
+                num_ribbons: 12,
+                ribbon_width_px: 28.0,
+                span_monitors: true,
+                display_off_minutes: 240,
+            }
+        );
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("screensaverMode=none\n"));
+        assert!(text.contains("screensaverSpanMonitors=true\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn invalid_screensaver_values_are_rejected() {
+        let store = ConfigStore::default();
+        for line in [
+            "screensaverMode=Ribbons",
+            "screensaverMode=blank",
+            "screensaverAfterLockMinutes=61",
+            "screensaverAfterLockMinutes=-1",
+            "screensaverNumRibbons=0",
+            "screensaverNumRibbons=13",
+            "screensaverRibbonWidthTenths=19",
+            "screensaverRibbonWidthTenths=281",
+            "screensaverRibbonWidthTenths=11.0",
+            "screensaverDisplayOffMinutes=241",
+            "screensaverSpanMonitors=maybe",
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err("invalid screensaver value")
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn empty_persistence_path_is_rejected_before_io() {
         assert_eq!(
             ConfigStore::persist(Path::new(""), &ProductSettings::default())
@@ -1054,7 +1490,8 @@ mod tests {
     fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
         let defaults = ProductSettings::default();
         assert_eq!(defaults.start_menu_color, "#191b1d");
-        assert_eq!(defaults.start_menu_opacity, 99);
+        assert_eq!(defaults.start_menu_opacity, 80);
+        assert_eq!(defaults.taskbar_opacity, 80);
         assert_eq!(defaults.accent_opacity, 100);
         assert_eq!(defaults.decoration, "rounded");
         assert_eq!(defaults.titlebar_color, "#1b1e20");
@@ -1289,5 +1726,121 @@ mod tests {
         assert!(serialized.contains("minimizeAnimation=none\n"));
         assert!(serialized.contains("windowOpenAnimationEnabled=false\n"));
         assert_eq!(store.parse_snapshot(&serialized).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn new_customization_defaults_match_contract_and_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.wallpaper_fit, WallpaperFit::Fill);
+        assert_eq!(defaults.cursor_size, 24);
+        assert_eq!(defaults.taskbar_clock_format, ClockFormat::TwentyFour);
+        assert!(!defaults.taskbar_show_seconds);
+        assert!(defaults.taskbar_show_date);
+        assert!(defaults.snap_preview_enabled);
+        assert!(defaults.focus_follows_mouse);
+        let text = ConfigStore::serialize(&defaults);
+        for key in [
+            "wallpaperFit",
+            "cursorSize",
+            "taskbarClockFormat",
+            "taskbarShowSeconds",
+            "taskbarShowDate",
+            "snapPreviewEnabled",
+            "focusFollowsMouse",
+        ] {
+            assert!(!text.contains(key), "{key} must not be written at default");
+        }
+    }
+
+    #[test]
+    fn new_customization_keys_round_trip_when_set() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot(
+                "revision=2\nwallpaperFit=tile\ncursorSize=64\ntaskbarClockFormat=12h\n\
+                 taskbarShowSeconds=true\ntaskbarShowDate=false\nsnapPreviewEnabled=0\n\
+                 focusFollowsMouse=yes\n",
+            )
+            .expect("valid customization settings");
+        assert_eq!(parsed.wallpaper_fit, WallpaperFit::Tile);
+        assert_eq!(parsed.cursor_size, 64);
+        assert_eq!(parsed.taskbar_clock_format, ClockFormat::Twelve);
+        assert!(parsed.taskbar_show_seconds);
+        assert!(!parsed.taskbar_show_date);
+        assert!(!parsed.snap_preview_enabled);
+        assert!(parsed.focus_follows_mouse);
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("wallpaperFit=tile\n"));
+        assert!(text.contains("cursorSize=64\n"));
+        assert!(text.contains("taskbarClockFormat=12h\n"));
+        assert!(text.contains("taskbarShowSeconds=true\n"));
+        assert!(text.contains("snapPreviewEnabled=false\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn invalid_new_customization_values_are_rejected() {
+        let store = ConfigStore::default();
+        for line in [
+            "wallpaperFit=Fill",
+            "wallpaperFit=zoom",
+            "cursorSize=16",
+            "cursorSize=20",
+            "cursorSize=65",
+            "cursorSize=24.0",
+            "cursorSize=-24",
+            "taskbarClockFormat=24H",
+            "taskbarClockFormat=ampm",
+            "taskbarShowSeconds=maybe",
+            "taskbarShowDate=2",
+            "snapPreviewEnabled=on",
+            "focusFollowsMouse=sometimes",
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err("invalid customization value")
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_file_without_customization_keys_loads_defaults() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
+            .expect("legacy file");
+        assert_eq!(parsed.wallpaper_fit, WallpaperFit::Fill);
+        assert_eq!(parsed.cursor_size, 24);
+        assert_eq!(parsed.taskbar_clock_format, ClockFormat::TwentyFour);
+        assert!(parsed.snap_preview_enabled);
+        assert!(parsed.focus_follows_mouse);
+    }
+
+    #[test]
+    fn focus_follows_mouse_writes_only_false() {
+        let mut settings = ProductSettings::default();
+        settings.focus_follows_mouse = false;
+        let text = ConfigStore::serialize(&settings);
+        assert!(text.contains("focusFollowsMouse=false\n"));
+        let store = ConfigStore::default();
+        assert!(!store.parse_snapshot(&text).expect("round trip").focus_follows_mouse);
+    }
+
+    #[test]
+    fn wallpaper_fit_parse_and_as_str_are_inverse() {
+        for fit in [
+            WallpaperFit::Fill,
+            WallpaperFit::Fit,
+            WallpaperFit::Stretch,
+            WallpaperFit::Center,
+            WallpaperFit::Tile,
+        ] {
+            assert_eq!(WallpaperFit::parse(fit.as_str()), Some(fit));
+        }
+        assert_eq!(WallpaperFit::parse("Tile"), None);
     }
 }

@@ -50,6 +50,7 @@ use flamewm_ui_x11::{
 };
 
 mod projection;
+mod wallpaper_fit;
 mod wallpaper_loader;
 mod workspace_sync;
 
@@ -415,7 +416,10 @@ fn main() -> Result<(), String> {
         packaged_root(),
     )?;
     wallpaper_loader
-        .request(setting_text(&settings, "wallpaper"))
+        .request(
+            setting_text(&settings, "wallpaper"),
+            wallpaper_fit::parse(&setting_text(&settings, "wallpaperFit")),
+        )
         .map_err(|_| "wallpaper loader closed during startup".to_owned())?;
     let mut model = DesktopModel::default();
     let output = OutputId::new("default");
@@ -565,7 +569,8 @@ fn main() -> Result<(), String> {
                                     _ => String::new(),
                                 };
                                 let mut state = state_cell.borrow_mut();
-                                if let Err(error) = state.wallpaper_loader.request(wallpaper) {
+                                let fit = wallpaper_fit::parse(&setting_text(&snapshot, "wallpaperFit"));
+                                if let Err(error) = state.wallpaper_loader.request(wallpaper, fit) {
                                     eprintln!(
                                         "desktop: wallpaper settings request failed: {error:?}"
                                     );

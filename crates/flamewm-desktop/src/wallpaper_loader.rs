@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -5,9 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use flamewm_integrations_linux::icons::{IconSize, Rgba8Raster, rasterize_path};
+use flamewm_api::background::WallpaperFit;
+use flamewm_image_core::ImageSourceFormat;
+use flamewm_integrations_linux::icons::{IconOrigin, Rgba8Raster};
 
-const DEFAULT_WALLPAPER_PATH: &str = "assets/branding/flamewm-wallpaper.webp";
+use crate::wallpaper_fit;
+
+const DEFAULT_WALLPAPER_PATH: &str = "assets/wallpapers/fitz-roy-dawn.webp";
 
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +55,7 @@ impl Default for WallpaperState {
 struct WallpaperRequest {
     generation: u64,
     path: PathBuf,
+    fit: WallpaperFit,
 }
 
 #[derive(Debug)]
@@ -124,10 +130,11 @@ impl WallpaperLoader {
         let worker_control = Arc::clone(&control);
         let packaged_root = packaged_root.into();
         let worker_root = packaged_root.clone();
-        let target = IconSize::new(width, height);
         let worker = thread::Builder::new()
             .name("flamewm-wallpaper-loader".to_owned())
-            .spawn(move || wallpaper_worker(worker_control, target, worker_root, wake_write))
+            .spawn(move || {
+                wallpaper_worker(worker_control, (width, height), worker_root, wake_write)
+            })
             .map_err(|error| format!("failed to start wallpaper loader: {error}"))?;
         Ok(Self {
             control,
@@ -138,12 +145,18 @@ impl WallpaperLoader {
         })
     }
 
-    /// Replaces the pending request. At most one request waits for the worker.
-    pub fn request(&mut self, path: impl Into<PathBuf>) -> Result<u64, LoaderClosed> {
+    /// Replaces the pending request. At most one request waits for the worker. `fit` places the
+    /// decoded image on the root-sized canvas; a fit change re-renders even for the same path.
+    pub fn request(
+        &mut self,
+        path: impl Into<PathBuf>,
+        fit: WallpaperFit,
+    ) -> Result<u64, LoaderClosed> {
         self.next_generation = self.next_generation.saturating_add(1);
         let request = WallpaperRequest {
             generation: self.next_generation,
             path: path.into(),
+            fit,
         };
         let mut state = self
             .control
@@ -260,7 +273,7 @@ impl Drop for WallpaperLoader {
 
 fn wallpaper_worker(
     control: Arc<WorkerControl>,
-    target: IconSize,
+    target: (u32, u32),
     packaged_root: PathBuf,
     mut wake_write: UnixStream,
 ) {
@@ -284,7 +297,7 @@ fn wallpaper_worker(
         let Some(mut request) = request else {
             continue;
         };
-        let result = load_wallpaper(&request.path, target, &packaged_root);
+        let result = load_wallpaper(&request.path, request.fit, target, &packaged_root);
         if request.path.as_os_str().is_empty() || request.path.to_string_lossy().trim().is_empty() {
             request.path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
         }
@@ -309,10 +322,15 @@ fn wallpaper_worker(
     }
 }
 
-fn load_wallpaper(path: &Path, target: IconSize, packaged_root: &Path) -> LoadResult {
+fn load_wallpaper(
+    path: &Path,
+    fit: WallpaperFit,
+    target: (u32, u32),
+    packaged_root: &Path,
+) -> LoadResult {
     if path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty() {
         let default_path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
-        return match rasterize_path(&default_path, target) {
+        return match decode_bytes_at(&default_path, fit, target) {
             Ok(image) => LoadResult::Image(image),
             Err(error) => LoadResult::Failure(format!(
                 "packaged default wallpaper {} unavailable: {error}",
@@ -323,7 +341,7 @@ fn load_wallpaper(path: &Path, target: IconSize, packaged_root: &Path) -> LoadRe
     if !is_supported_wallpaper(path) {
         return LoadResult::Failure(format!("unsupported wallpaper format: {}", path.display()));
     }
-    match decode_bytes_at(path, target) {
+    match decode_bytes_at(path, fit, target) {
         Ok(image) => LoadResult::Image(image),
         Err(message) => LoadResult::Failure(message),
     }
@@ -335,15 +353,32 @@ fn is_supported_wallpaper(path: &Path) -> bool {
             .and_then(|extension| extension.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("png" | "svg" | "ppm" | "webp")
+        Some("png" | "svg" | "ppm" | "webp" | "jpg" | "jpeg" | "gif")
     )
 }
 
-/// Existing image-core-backed decoder seam. The integration adapter owns the filesystem read and
-/// delegates the bounded raster decode/scaling to the shared image core; XPM and all other formats
-/// are fenced out above before this call.
-fn decode_bytes_at(path: &Path, target: IconSize) -> Result<Rgba8Raster, String> {
-    rasterize_path(path, target).map_err(|error| error.to_string())
+/// Decodes at natural size through the shared image core, then composes onto the root-sized
+/// canvas by `fit`. Formats are fenced by `is_supported_wallpaper` before this call.
+fn decode_bytes_at(
+    path: &Path,
+    fit: WallpaperFit,
+    target: (u32, u32),
+) -> Result<Rgba8Raster, String> {
+    let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    let format = ImageSourceFormat::from_extension(path)
+        .ok_or_else(|| format!("unsupported wallpaper format: {}", path.display()))?;
+    let natural = flamewm_image_core::decode_bytes(&bytes, format)
+        .map_err(|message| format!("decode {}: {message}", path.display()))?;
+    let image = wallpaper_fit::compose(&natural, target.0, target.1, fit)
+        .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
+    Ok(Rgba8Raster {
+        source: path.to_string_lossy().into_owned(),
+        width: image.width,
+        height: image.height,
+        pixels: image.pixels,
+        origin: IconOrigin::ExplicitPath,
+        fallback_reason: None,
+    })
 }
 
 #[cfg(test)]
@@ -443,8 +478,12 @@ mod tests {
         ppm(&second, [0, 255, 0]);
         let mut loader =
             WallpaperLoader::new(1, 1, packaged_root()).expect("start wallpaper loader");
-        let first_generation = loader.request(&first).expect("request first wallpaper");
-        let second_generation = loader.request(&second).expect("request second wallpaper");
+        let first_generation = loader
+            .request(&first, WallpaperFit::Fill)
+            .expect("request first wallpaper");
+        let second_generation = loader
+            .request(&second, WallpaperFit::Fill)
+            .expect("request second wallpaper");
         assert!(second_generation > first_generation);
         wait_for(&mut loader, second_generation);
         assert_eq!(loader.state().generation, second_generation);
@@ -479,13 +518,17 @@ mod tests {
         let missing = temp_path("png");
         let mut loader =
             WallpaperLoader::new(1, 1, packaged_root()).expect("start wallpaper loader");
-        let valid_generation = loader.request(&valid).expect("request valid wallpaper");
+        let valid_generation = loader
+            .request(&valid, WallpaperFit::Fill)
+            .expect("request valid wallpaper");
         assert!(matches!(
             wait_for(&mut loader, valid_generation),
             PollOutcome::Applied { .. }
         ));
         let previous = loader.state().presentation.clone();
-        let failed_generation = loader.request(&missing).expect("request failed wallpaper");
+        let failed_generation = loader
+            .request(&missing, WallpaperFit::Fill)
+            .expect("request failed wallpaper");
         assert!(matches!(
             wait_for(&mut loader, failed_generation),
             PollOutcome::Failed { .. }
@@ -501,7 +544,9 @@ mod tests {
     fn empty_and_unsupported_requests_have_explicit_contracts() {
         let root = packaged_fixture_root("empty-and-unsupported-root");
         let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper loader");
-        let empty_generation = loader.request("").expect("request default wallpaper");
+        let empty_generation = loader
+            .request("", WallpaperFit::Fill)
+            .expect("request default wallpaper");
         assert!(matches!(
             wait_for(&mut loader, empty_generation),
             PollOutcome::Applied { .. }
@@ -513,7 +558,7 @@ mod tests {
         let unsupported = temp_path("jpg");
         fs::write(&unsupported, b"not a supported wallpaper").expect("write unsupported file");
         let failed_generation = loader
-            .request(&unsupported)
+            .request(&unsupported, WallpaperFit::Fill)
             .expect("request unsupported wallpaper");
         assert!(matches!(
             wait_for(&mut loader, failed_generation),
@@ -533,7 +578,9 @@ mod tests {
         let root = packaged_fixture_root("packaged-root");
         let default_path = root.join(DEFAULT_WALLPAPER_PATH);
         let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper worker");
-        let default_generation = loader.request("").expect("request packaged default");
+        let default_generation = loader
+            .request("", WallpaperFit::Fill)
+            .expect("request packaged default");
         assert!(matches!(
             wait_for(&mut loader, default_generation),
             PollOutcome::Applied { .. }
@@ -548,7 +595,9 @@ mod tests {
         let custom = temp_path("webp");
         fs::write(&custom, include_bytes!("testdata/wallpaper-test.webp"))
             .expect("write custom WebP fixture");
-        let custom_generation = loader.request(&custom).expect("request custom WebP");
+        let custom_generation = loader
+            .request(&custom, WallpaperFit::Fill)
+            .expect("request custom WebP");
         assert!(matches!(
             wait_for(&mut loader, custom_generation),
             PollOutcome::Applied { .. }
@@ -559,7 +608,9 @@ mod tests {
                 if image.source.as_str() == custom.to_string_lossy().as_ref()
         ));
 
-        let reset_generation = loader.request("").expect("reset to packaged default");
+        let reset_generation = loader
+            .request("", WallpaperFit::Fill)
+            .expect("reset to packaged default");
         assert!(matches!(
             wait_for(&mut loader, reset_generation),
             PollOutcome::Applied { .. }
@@ -571,10 +622,60 @@ mod tests {
     }
 
     #[test]
+    fn decoded_image_is_composed_to_root_size_and_refit_on_same_path() {
+        // CONTRACT: the presented wallpaper is the root-sized canvas composed by fit, not the
+        // natural image or a square raster; a fit change re-renders the same path.
+        // FAILURE MUTATION: skip compose (natural 2x1) or keep the square rasterize; this turns red.
+        let path = temp_path("ppm");
+        fs::write(
+            &path,
+            [
+                b'P', b'6', b'\n', b'2', b' ', b'1', b'\n', b'2', b'5', b'5', b'\n', 9, 9, 9, 7, 7,
+                7,
+            ],
+        )
+        .expect("write 2x1 PPM");
+        let mut loader = WallpaperLoader::new(4, 2, packaged_root()).expect("start loader");
+        let center = loader
+            .request(&path, WallpaperFit::Center)
+            .expect("request centered");
+        assert!(matches!(
+            wait_for(&mut loader, center),
+            PollOutcome::Applied { .. }
+        ));
+        let WallpaperPresentation::Image(centered) = loader.state().presentation.clone() else {
+            panic!("centered image expected");
+        };
+        assert_eq!((centered.width, centered.height), (4, 2));
+        assert_eq!(&centered.pixels[..4], &[0, 0, 0, 255]);
+        assert_eq!(&centered.pixels[4..8], &[9, 9, 9, 255]);
+        assert_eq!(&centered.pixels[8..12], &[7, 7, 7, 255]);
+        assert_eq!(&centered.pixels[12..16], &[0, 0, 0, 255]);
+        assert_eq!(&centered.pixels[16..24], &[0, 0, 0, 255, 0, 0, 0, 255]);
+
+        let stretch = loader
+            .request(&path, WallpaperFit::Stretch)
+            .expect("request stretched");
+        assert!(matches!(
+            wait_for(&mut loader, stretch),
+            PollOutcome::Applied { .. }
+        ));
+        let WallpaperPresentation::Image(stretched) = &loader.state().presentation else {
+            panic!("stretched image expected");
+        };
+        assert_eq!((stretched.width, stretched.height), (4, 2));
+        assert_ne!(stretched.pixels, centered.pixels);
+        loader.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn missing_packaged_default_reports_runtime_asset_path() {
         let root = temp_path("missing-packaged-root");
         let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper worker");
-        let generation = loader.request("").expect("request packaged default");
+        let generation = loader
+            .request("", WallpaperFit::Fill)
+            .expect("request packaged default");
         assert!(matches!(
             wait_for(&mut loader, generation),
             PollOutcome::Failed { .. }

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::native::cursor::DeferredNativeLibraryHandles;
 use crate::xlib::*;
+use crate::xshape::ClipRect;
 use flamewm_reactor::timeline::FRAME_INTERVAL;
 use flamewm_reactor::{Easing, Reactor, Start, Timeline};
 use flamewm_render_core::{Rect, SurfaceDamage};
@@ -177,6 +178,66 @@ struct SurfaceInstance {
     /// A pointer grab requested while the real window is still unmapped behind an opening
     /// overlay: taken when the flight lands (XGrabPointer refuses a non-viewable window).
     grab_pending: bool,
+    /// Root edge this dock reserves (floating docks touch no edge). `None` infers from the rect.
+    dock_edge: Option<DockEdge>,
+    /// Corner radius (window px) last published by `set_dock_frame`; zero means rectangular.
+    dock_radius: u32,
+}
+
+/// Pure mask decision for a dock window: keep the current shape, round it to `radius`, or
+/// reset it to the full rectangle after floating. `prev_radius` is the radius last published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DockMask {
+    Keep,
+    Round(u32),
+    Reset,
+}
+
+pub(crate) fn dock_mask_plan(prev_radius: u32, radius: u32) -> DockMask {
+    match (prev_radius, radius) {
+        (_, r) if r > 0 => DockMask::Round(r),
+        (p, 0) if p > 0 => DockMask::Reset,
+        _ => DockMask::Keep,
+    }
+}
+
+/// Applies the dock corner mask for `instance` at window size `w` x `h`. `Keep` with a zero
+/// radius is a no-op, so classic docks never touch the XShape state.
+fn apply_dock_mask(instance: &SurfaceInstance, w: u32, h: u32, mask: DockMask) {
+    let radius = match mask {
+        DockMask::Keep if instance.dock_radius == 0 => return,
+        DockMask::Keep => instance.dock_radius,
+        DockMask::Round(radius) => radius,
+        DockMask::Reset => 0,
+    };
+    let spans = crate::xshape::rounded_mask_spans(w, h, radius);
+    if let Some(bridge) = instance.app.xshape.as_ref() {
+        if let Err(error) = unsafe { bridge.apply_rounded_mask(instance.app.window, &spans) } {
+            eprintln!("FLAMEWM_DOCK_SHAPE degraded reason={error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod dock_frame_plan_tests {
+    use super::*;
+
+    #[test]
+    fn classic_to_classic_keeps_shape() {
+        assert_eq!(dock_mask_plan(0, 0), DockMask::Keep);
+    }
+
+    #[test]
+    fn floating_to_classic_resets_rectangle() {
+        assert_eq!(dock_mask_plan(12, 0), DockMask::Reset);
+    }
+
+    #[test]
+    fn floating_radius_rounds_and_resize_keeps_it() {
+        assert_eq!(dock_mask_plan(0, 12), DockMask::Round(12));
+        assert_eq!(dock_mask_plan(12, 12), DockMask::Round(12));
+        assert_eq!(dock_mask_plan(12, 6), DockMask::Round(6));
+    }
 }
 
 /// Panel edge a popup slides out of.
@@ -188,9 +249,21 @@ pub enum SlideEdge {
     Right,
 }
 
-unsafe extern "C" {
-    /// Not declared in the baseline-pinned `xlib.rs`.
-    fn XRestackWindows(display: *mut Display, windows: *mut Window, count: std::os::raw::c_int) -> std::os::raw::c_int;
+/// Window-local clip that keeps a slid popup on the screen side of the dock edge it emerges from.
+/// Without a dock the whole popup is kept.
+fn panel_clip(dock: Option<(i32, i32, u32, u32)>, origin: (i32, i32), size: (u32, u32), edge: SlideEdge) -> ClipRect {
+    let Some((dx, dy, dw, dh)) = dock else {
+        return (0, 0, size.0, size.1);
+    };
+    let local = |offset: i64, extent: u32| offset.clamp(0, i64::from(extent)) as u32;
+    let (px, py) = (i64::from(origin.0), i64::from(origin.1));
+    let (dx, dy, dw, dh) = (i64::from(dx), i64::from(dy), i64::from(dw), i64::from(dh));
+    match edge {
+        SlideEdge::Bottom => (0, 0, size.0, local(dy - py, size.1)),
+        SlideEdge::Top => (0, local(dy + dh - py, size.1), size.0, size.1),
+        SlideEdge::Left => (local(dx + dw - px, size.0), 0, size.0, size.1),
+        SlideEdge::Right => (0, 0, local(dx - px, size.0), size.1),
+    }
 }
 
 /// How a popup enters and leaves. `Slide` moves the native window along the panel edge.
@@ -631,6 +704,46 @@ impl SurfaceController {
         }
     }
 
+    /// Publishes the dock frame: `Some(edge)` reserves that root edge and clips the window to
+    /// `corner_radius` (window px). `None` is classic: legacy strut inference and a full
+    /// rectangle mask, restored only if this surface was previously floating.
+    pub fn set_dock_frame(
+        &mut self,
+        id: SurfaceId,
+        edge: Option<DockEdge>,
+        corner_radius: u32,
+    ) -> Result<(), String> {
+        let display = self.display;
+        let (root_w, root_h) = self.root_geometry();
+        let instance = self.instance_mut(id)?;
+        if instance.role != SurfaceRole::Dock {
+            return Err("set_dock_frame requires a dock surface".to_string());
+        }
+        if instance.dock_edge == edge && instance.dock_radius == corner_radius {
+            return Ok(());
+        }
+        let mask = dock_mask_plan(instance.dock_radius, corner_radius);
+        instance.dock_edge = edge;
+        instance.dock_radius = corner_radius;
+        instance.app.dock_corner_radius = corner_radius;
+        let (x, y) = instance.origin;
+        let (w, h) = (instance.app.width, instance.app.height);
+        crate::app::apply_dock_strut(
+            instance.app.display,
+            instance.app.window,
+            root_w,
+            root_h,
+            edge,
+            x,
+            y,
+            w,
+            h,
+        );
+        apply_dock_mask(instance, w, h, mask);
+        unsafe { XFlush(display) };
+        Ok(())
+    }
+
     pub fn create_surface(
         &mut self,
         document: RuntimeDocument,
@@ -654,6 +767,8 @@ impl SurfaceController {
             slide_drawn: None,
             overlay: None,
             grab_pending: false,
+            dock_edge: None,
+            dock_radius: 0,
         };
         // Overlay/passthrough surfaces are excluded from WM client
         // management: override-redirect + empty input region + no grab/focus.
@@ -783,6 +898,8 @@ impl SurfaceController {
         // starts a fresh slide instead of taking the "already shown" path with no animation.
         instance.shown = false;
         instance.slide_drawn = None;
+        // SAFETY: display/window live; a closed popup must not keep a slide clip for its next show.
+        unsafe { instance.app.refresh_shape_mask(&instance.document) };
         // Immediate close drops any Fade/Lamp overlay without playing it.
         instance.overlay = None;
         self.slides.cancel(id.get());
@@ -795,19 +912,12 @@ impl SurfaceController {
         Ok(())
     }
 
-    /// Stacks `window` directly beneath the dock panel so a slide appears to emerge from under it.
-    /// A no-op without a mapped dock surface.
-    fn restack_below_dock(&self, window: Window) {
-        let dock = self
-            .surfaces
+    /// Root rect (x, y, width, height) of the dock panel, if one is mapped.
+    fn dock_rect(&self) -> Option<(i32, i32, u32, u32)> {
+        self.surfaces
             .values()
             .find(|instance| instance.role == SurfaceRole::Dock)
-            .map(|instance| instance.app.window);
-        if let Some(dock) = dock {
-            let mut order = [dock, window];
-            // SAFETY: both windows are live children of the controller's display root.
-            unsafe { XRestackWindows(self.display, order.as_mut_ptr(), 2) };
-        }
+            .map(|instance| (instance.origin.0, instance.origin.1, instance.app.width, instance.app.height))
     }
 
     pub fn show(&mut self, id: SurfaceId) -> Result<(), String> {
@@ -834,7 +944,7 @@ impl SurfaceController {
                 return Ok(());
             }
         }
-        let mut emerging = false;
+        let mut emerging: Option<SlideEdge> = None;
         if let Some(config) = slide.filter(|config| config.transition == PopupTransition::Slide) {
             self.slides.set_speed(config.speed);
             let opening = SlideKind { edge: config.edge, opening: true };
@@ -858,44 +968,46 @@ impl SurfaceController {
                 let (x, y) = slide_origin(origin, size, config.edge, 0.0);
                 unsafe { XMoveResizeWindow(display, window, x, y, size.0, size.1) };
                 self.instance_mut(id)?.slide_drawn = Some((x, y));
-                emerging = true;
+                emerging = Some(config.edge);
             }
             // A refused start (timeline full or disabled) maps at the final origin with no slide.
         }
+        let dock = self.dock_rect();
         let instance = self.instance_mut(id)?;
         let mut cycle = PresentCycle::new();
         cycle.advance("project")?;
         cycle.advance("measure")?;
         cycle.advance("anchor")?;
         cycle.advance("prepare")?;
-        let painted = unsafe {
+        unsafe {
             instance
                 .app
                 .redraw_if_dirty(&mut instance.document)
                 .map_err(|error| {
                     mark_x_error_seen();
                     error
-                })?
-        };
+                })?;
+        }
         cycle.advance("paint")?;
-        if painted {
-            // SAFETY: display/window live; shape follows retained repaint.
-            unsafe { instance.app.refresh_shape_mask(&instance.document) };
+        // SAFETY: display/window live; shape follows retained repaint. A slide clips to the
+        // panel side before the window maps, so its first visible frame is already clipped.
+        match emerging {
+            Some(edge) => unsafe {
+                let start = slide_origin(origin, size, edge, 0.0);
+                instance.app.refresh_shape_mask_clipped(panel_clip(dock, start, size, edge));
+            },
+            None => unsafe { instance.app.refresh_shape_mask(&instance.document) },
         }
         cycle.advance("shape")?;
         cycle.advance("commit")?;
         unsafe {
-            if surface_role_needs_popup_raise(role) {
-                XMapWindow(display, instance.app.window);
-                XRaiseWindow(display, instance.app.window);
-            } else {
-                XMapWindow(display, instance.app.window);
+            XMapWindow(display, window);
+            // Slides stack above application windows; the panel clip keeps the emerging part hidden.
+            if emerging.is_some() || surface_role_needs_popup_raise(role) {
+                XRaiseWindow(display, window);
             }
         }
         cycle.advance("map_raise")?;
-        if emerging {
-            self.restack_below_dock(window);
-        }
         let instance = self.instance_mut(id)?;
         unsafe {
             instance.app.present_scene().map_err(|error| {
@@ -943,7 +1055,8 @@ impl SurfaceController {
             self.slides.set_speed(config.speed);
             let closing = SlideKind { edge: config.edge, opening: false };
             let window = self.instance_mut(id)?.app.window;
-            self.restack_below_dock(window);
+            // Slide-out starts above application windows; the panel clip hides the sinking part.
+            unsafe { XRaiseWindow(display, window) };
             // A new close starts fully shown; a reversed open continues from its progress.
             if self.slides.start_towards(key, closing, now, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0))
                 == Start::Started
@@ -1054,6 +1167,7 @@ impl SurfaceController {
             self.slides.cancel(key);
             return Ok(false);
         }
+        overlay.raise();
         self.instance_mut(id)?.overlay = Some((config.transition, overlay));
         Ok(true)
     }
@@ -1123,6 +1237,7 @@ impl SurfaceController {
             self.slides.cancel(key);
             return Ok(false);
         }
+        overlay.raise();
         let instance = self.instance_mut(id)?;
         instance.overlay = Some((config.transition, overlay));
         // SAFETY: the window is this controller's live child of the root.
@@ -1148,6 +1263,7 @@ impl SurfaceController {
     /// repainted here.
     fn advance_motion(&mut self, now: Instant) {
         let display = self.display;
+        let dock = self.dock_rect();
         for (id, instance) in self.surfaces.iter_mut() {
             let key = id.get();
             let (Some(active), Some(progress)) = (self.slides.kind(key), self.slides.progress(key, now)) else {
@@ -1207,10 +1323,15 @@ impl SurfaceController {
             if instance.slide_drawn != Some((x, y)) {
                 unsafe { XMoveResizeWindow(display, window, x, y, size.0, size.1) };
                 instance.slide_drawn = Some((x, y));
+                // Keep the popup on the screen side of the panel edge while it moves.
+                let clip = panel_clip(dock, (x, y), size, active.edge);
+                unsafe { instance.app.refresh_shape_mask_clipped(clip) };
             }
             if !finished {
                 continue;
             }
+            // Slide landed: the base rounded mask is exact again.
+            unsafe { instance.app.refresh_shape_mask(&instance.document) };
             self.slides.finish(key);
             if active.opening {
                 // Back on top: the popup sits against the panel, so the raise is invisible.
@@ -1314,11 +1435,13 @@ impl SurfaceController {
                     instance.app.window,
                     root_w,
                     root_h,
+                    instance.dock_edge,
                     ox,
                     oy,
                     w,
                     h,
                 );
+                apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
             }
             unsafe { XFlush(display) };
             return Ok(());
@@ -1337,11 +1460,13 @@ impl SurfaceController {
                 instance.app.window,
                 root_w,
                 root_h,
+                instance.dock_edge,
                 x,
                 y,
                 w,
                 h,
             );
+            apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
         }
         span_trace.retained((x, y, w as i32, h as i32));
         unsafe { XFlush(display) };
@@ -2232,6 +2357,25 @@ mod slide_motion_tests {
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Top, 0.0), (100, 100));
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Left, 0.0), (-200, 500));
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Right, 0.0), (400, 500));
+    }
+
+    #[test]
+    fn panel_clip_keeps_only_the_screen_side_of_the_dock_edge() {
+        // Bottom dock at y 1040..1080: rows above the panel top survive the clip.
+        let bottom = Some((0, 1040, 1920, 40));
+        assert_eq!(panel_clip(bottom, (100, 900), (300, 400), SlideEdge::Bottom), (0, 0, 300, 140));
+        // Still fully below the panel: nothing may show.
+        assert_eq!(panel_clip(bottom, (100, 1100), (300, 400), SlideEdge::Bottom), (0, 0, 300, 0));
+        // Top dock at y 0..40: rows from the panel bottom down survive.
+        let top = Some((0, 0, 1920, 40));
+        assert_eq!(panel_clip(top, (100, -200), (300, 400), SlideEdge::Top), (0, 240, 300, 400));
+        // Left and right docks clip columns on the same rule.
+        let left = Some((0, 0, 60, 1080));
+        assert_eq!(panel_clip(left, (-100, 0), (300, 400), SlideEdge::Left), (160, 0, 300, 400));
+        let right = Some((1860, 0, 60, 1080));
+        assert_eq!(panel_clip(right, (1700, 0), (300, 400), SlideEdge::Right), (0, 0, 160, 400));
+        // No dock: nothing is clipped.
+        assert_eq!(panel_clip(None, (1, 2), (300, 400), SlideEdge::Bottom), (0, 0, 300, 400));
     }
 
     #[test]

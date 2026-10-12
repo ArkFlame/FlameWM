@@ -14,6 +14,7 @@ use flamewm_shell::{projection, start, ShellControl, ShellRuntime, ShellSnapshot
 use flamewm_shell_core::clock::ClockDateTracker;
 use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
+use flamewm_platform::panel::TaskbarFrame;
 use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
 /// C07: one shell operation owns exactly one total span; nested totals must
@@ -1078,7 +1079,7 @@ impl ShellLoop {
         self.context_menu = None;
         // Sync BEFORE next open/projection; refusal keeps old context.
         match self.surfaces.sync_panel_context(runtime, snapshot) {
-            Ok(true) => {}
+            Ok(true) => self.apply_taskbar_frame(runtime),
             Ok(false) => {
                 eprintln!("flamewm-shell: panel context sync refused (missing output/panel)");
                 return false;
@@ -1238,9 +1239,14 @@ impl ShellLoop {
         let clock_fired = clock_due.swap(false, Ordering::Acquire);
         if clock_fired {
             let now = Local::now();
+            let clock = self
+                .settings_cache
+                .as_ref()
+                .map(crate::settings_projection::clock_display)
+                .unwrap_or_default();
             for (handle, _) in self.surfaces.panel_outputs() {
                 runtime.with_document(handle, |document| {
-                    projection::project_clock_at(document, now)
+                    projection::project_clock_at(document, now, clock)
                 })?;
                 runtime.redraw(handle)?;
             }
@@ -1303,6 +1309,17 @@ impl ShellLoop {
         }
     }
 
+    /// Publishes the taskbar dock frame (strut edge and corner radius); a no-op while unchanged.
+    fn apply_taskbar_frame(&self, runtime: &mut SurfaceRuntime) {
+        let Some(settings) = self.settings_cache.as_ref() else {
+            return;
+        };
+        let frame = taskbar_frame(settings);
+        if let Err(error) = self.surfaces.apply_dock_frame(runtime, frame) {
+            eprintln!("flamewm-shell: {error}");
+        }
+    }
+
     fn project_settings(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), UiBackendError> {
         if !self.settings_projection_pending {
             return Ok(());
@@ -1349,7 +1366,26 @@ impl ShellLoop {
             let _ = runtime.redraw(self.surfaces.media);
         }
         self.settings_projection_pending = false;
+        self.apply_taskbar_frame(runtime);
         Ok(())
+    }
+}
+
+/// Flat `taskbarStyle` / `taskbarFloating*` keys as the platform reads them (defaults match
+/// `ProductSettings::default()`).
+fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {
+    let floating = matches!(
+        settings.values.get("taskbarStyle"),
+        Some(SettingValue::Text(style)) if style == "floating"
+    );
+    let logical = |key: &str, default: u16| match settings.values.get(key) {
+        Some(SettingValue::Integer(value)) => u16::try_from(*value).unwrap_or(default),
+        _ => default,
+    };
+    TaskbarFrame {
+        floating,
+        margin: logical("taskbarFloatingMargin", 8),
+        radius: logical("taskbarFloatingRadius", 12),
     }
 }
 

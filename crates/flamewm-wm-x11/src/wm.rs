@@ -3324,7 +3324,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         if active_session {
             return Ok(());
         }
-        self.focus(client_id)?;
+        // Default is focus-follows-mouse (true): pointer entry focuses unless focusFollowsMouse=false.
+        if crate::live_settings::focus_follows_mouse() {
+            self.focus(client_id)?;
+        }
         let _ = self.reduce_and_execute(client_id, FrameEvent::Enter);
         Ok(())
     }
@@ -4352,6 +4355,11 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// shared `snap_geometry`. `None` hides. Skips redraw when unchanged.
     /// No new native renderer: the compiled snap-preview surface moves/shows.
     fn update_snap_preview(&mut self, root_x: i16, root_y: i16, work: Rect, client: Window) {
+        // Preview is cosmetic only: snapping on release is decided by the frame controller.
+        if !crate::live_settings::snap_preview_enabled() {
+            self.snap_preview.hide();
+            return;
+        }
         let target = {
             let _guard = flamewm_profiler::start("wm.move.snap_target");
             core_snap_target(

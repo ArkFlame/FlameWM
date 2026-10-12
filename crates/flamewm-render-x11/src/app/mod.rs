@@ -141,6 +141,9 @@ pub(crate) struct X11App {
     pub(crate) xft: Option<XftBackend>,
     pub(crate) xrender: Option<XRenderBackend>,
     pub(crate) xshape: Option<XShapeBridge>,
+    /// Floating dock corner radius in window px. Non-zero keeps the coverage refresh from
+    /// replacing the rounded dock mask; zero leaves the coverage mask in charge.
+    pub(crate) dock_corner_radius: u32,
     #[allow(dead_code)]
     pub(crate) visual: *mut Visual,
     pub(crate) alpha_mode: SurfaceAlphaMode,
@@ -311,7 +314,7 @@ impl X11App {
         if config.role == X11WindowRole::Dock {
             let root_w = unsafe { XDisplayWidth(display, screen).max(1) as u32 };
             let root_h = unsafe { XDisplayHeight(display, screen).max(1) as u32 };
-            apply_dock_strut(display, window, root_w, root_h, x, y, width, height);
+            apply_dock_strut(display, window, root_w, root_h, None, x, y, width, height);
         }
         let gc = unsafe { XCreateGC(display, window, 0, ptr::null_mut()) };
         if gc.is_null() {
@@ -524,6 +527,7 @@ impl X11App {
             xft,
             xrender,
             xshape,
+            dock_corner_radius: 0,
             visual,
             alpha_mode,
             surface: Some(surface),
@@ -645,6 +649,7 @@ pub(crate) fn apply_dock_strut(
     window: Window,
     root_w: u32,
     root_h: u32,
+    edge: Option<crate::config::DockEdge>,
     x: i32,
     y: i32,
     w: u32,
@@ -658,7 +663,11 @@ pub(crate) fn apply_dock_strut(
     if partial == 0 || strut == 0 {
         return;
     }
-    match crate::config::DockStrut::from_root_and_rect(root_w, root_h, x, y, w, h) {
+    let reserved = match edge {
+        Some(edge) => crate::config::DockStrut::from_edge_rect(root_w, root_h, edge, x, y, w, h),
+        None => crate::config::DockStrut::from_root_and_rect(root_w, root_h, x, y, w, h),
+    };
+    match reserved {
         Some(reserved) => {
             let values12 = reserved.partial12();
             unsafe {

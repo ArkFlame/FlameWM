@@ -25,7 +25,7 @@ flamewm-render-x11 = { path = "../flamewm-render-x11" }
 flamewm-skin = { path = "../flamewm-skin" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-x11-desktop = { path = "../flamewm-x11-desktop" }
-x11rb.workspace = true
+x11rb = { workspace = true, features = ["screensaver"] }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }

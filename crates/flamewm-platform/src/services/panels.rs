@@ -9,7 +9,7 @@ use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, OutputId, PanelEdge, TaskEntryId,
 };
 
-use crate::panel::{OutputPanel, PanelManager, StartController};
+use crate::panel::{OutputPanel, PanelManager, StartController, TaskbarFrame};
 use crate::task::{TaskEntryKind, TaskStrip};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -68,11 +68,11 @@ impl PanelService {
             }
         }
         for output in &connected {
-            let (edge, logical_size) = self
+            let (edge, logical_size, frame) = self
                 .manager
                 .panel(&output.id)
-                .map_or((PanelEdge::Bottom, 44), |panel| {
-                    (panel.edge, panel.logical_size)
+                .map_or((PanelEdge::Bottom, 44, TaskbarFrame::default()), |panel| {
+                    (panel.edge, panel.logical_size, panel.frame)
                 });
             let mut panel = OutputPanel::new(
                 output.id.clone(),
@@ -81,6 +81,7 @@ impl PanelService {
                 output.shell_scale_percent,
             );
             panel.set_logical_size(logical_size);
+            panel.frame = frame;
             self.manager.upsert_output(panel);
         }
 
@@ -148,6 +149,21 @@ impl PanelService {
         for output in self.manager.outputs() {
             if let Some(panel) = self.manager.panel_mut(&output) {
                 panel.set_logical_size(logical_size);
+            }
+        }
+        let changed = self.manager != before;
+        if changed {
+            self.bump_revision();
+        }
+        changed
+    }
+
+    /// Reconcile every live output with the persisted taskbar style, margin and radius.
+    pub fn reconcile_taskbar_frame(&mut self, frame: TaskbarFrame) -> bool {
+        let before = self.manager.clone();
+        for output in self.manager.outputs() {
+            if let Some(panel) = self.manager.panel_mut(&output) {
+                panel.frame = frame;
             }
         }
         let changed = self.manager != before;
@@ -332,5 +348,42 @@ mod tests {
             Rect::new(0, 1028, 1920, 52)
         );
         assert!(!service.reconcile_taskbar_height(52));
+    }
+
+    #[test]
+    fn floating_frame_survives_display_sync_and_reserves_margin() {
+        use crate::panel::TaskbarFrame;
+
+        let displays = DisplaySnapshot {
+            generation: 1,
+            outputs: vec![OutputSnapshot {
+                id: OutputId::new("eDP-1"),
+                connector: "eDP-1".to_owned(),
+                edid_identity: "panel".to_owned(),
+                connected: true,
+                primary: true,
+                geometry: Rect::new(0, 0, 1920, 1080),
+                current_mode: ModeId(1),
+                modes: Vec::new(),
+                shell_scale_percent: 100,
+            }],
+            pending: None,
+        };
+        let mut service = PanelService::default();
+        service.sync_outputs(&displays);
+        let floating = TaskbarFrame {
+            floating: true,
+            margin: 8,
+            radius: 12,
+        };
+        assert!(service.reconcile_taskbar_frame(floating));
+        assert!(!service.reconcile_taskbar_frame(floating));
+        service.sync_outputs(&displays);
+        let output = OutputId::new("eDP-1");
+        let panel = service.manager().panel(&output).expect("panel exists");
+        assert_eq!(panel.frame, floating);
+        assert_eq!(panel.strut().bottom, 52);
+        assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1028));
+        assert_eq!(panel.panel_rect(), Rect::new(8, 1028, 1904, 44));
     }
 }

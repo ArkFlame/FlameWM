@@ -19,8 +19,10 @@ use flamewm_shell_core::popup::{
 };
 use flamewm_shell_core::start_surface_layout;
 use flamewm_ui_core::style::ShellMetrics;
+use flamewm_platform::panel::{OutputPanel, TaskbarFrame};
+use flamewm_api::PanelEdge;
 use flamewm_ui_x11::{
-    decode_document, GeometryTrace, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
+    decode_document, DockEdge, GeometryTrace, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
     SurfaceRuntime, UiBackendError, UiTemplate,
 };
 
@@ -732,6 +734,43 @@ pub struct ShellSurfaces {
 #[must_use]
 pub fn start_toggle_animates(start_motion: bool) -> bool {
     start_motion
+}
+
+impl ShellSurfaces {
+    /// Publishes the dock frame on every panel surface: floating reserves the bar's edge and
+    /// rounds its corners; classic passes `None` so the surface returns to legacy behaviour.
+    pub fn apply_dock_frame(
+        &self,
+        runtime: &mut SurfaceRuntime,
+        frame: TaskbarFrame,
+    ) -> Result<(), String> {
+        for record in &self.panels {
+            let placement = &record.placement;
+            let mut panel = OutputPanel::new(
+                placement.output.id.clone(),
+                placement.output.geometry,
+                placement.panel.edge,
+                placement.output.shell_scale_percent,
+            );
+            panel.set_logical_size(placement.panel.logical_size);
+            panel.frame = frame;
+            let edge = frame.floating.then(|| match placement.panel.edge {
+                PanelEdge::Bottom => DockEdge::Bottom,
+                PanelEdge::Top => DockEdge::Top,
+                PanelEdge::Left => DockEdge::Left,
+                PanelEdge::Right => DockEdge::Right,
+            });
+            let radius = if frame.floating {
+                u32::try_from(panel.corner_radius()).unwrap_or(0)
+            } else {
+                0
+            };
+            runtime
+                .set_dock_frame(record.panel, edge, radius)
+                .map_err(|error| format!("panel dock frame: {error:?}"))?;
+        }
+        Ok(())
+    }
 }
 
 fn create_panel_surface(

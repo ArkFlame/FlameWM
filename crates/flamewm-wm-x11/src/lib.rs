@@ -9,6 +9,8 @@ pub(crate) mod decoration;
 pub mod event_pump;
 mod frame;
 mod geometry;
+mod idle;
+mod live_settings;
 mod runtime;
 mod size_hints;
 pub(crate) mod snap_preview;

@@ -15,7 +15,7 @@ fn main() {
     let html_path = manifest.join("../../ui/desktop/index.html");
     let css_path = manifest.join("../../ui/desktop/desktop.css");
     let raster = root.join("assets/raster");
-    let wallpaper = root.join("assets/branding/flamewm-wallpaper.webp");
+    let wallpaper = root.join("assets/wallpapers/fitz-roy-dawn.webp");
     let breeze = root.join("assets/web/breeze");
     println!("cargo:rerun-if-changed={}", html_path.display());
     println!("cargo:rerun-if-changed={}", css_path.display());
@@ -57,6 +57,10 @@ fn main() {
         fs::copy(raster.join(asset), staged_assets.join(asset)).expect("stage desktop asset");
     }
     stage_tree(&breeze, &staged_assets.join("breeze"));
+    let staged_wallpapers = staged_assets.join("wallpapers");
+    fs::create_dir_all(&staged_wallpapers).expect("create staged wallpaper dir");
+    fs::copy(&wallpaper, staged_wallpapers.join("fitz-roy-dawn.webp"))
+        .expect("stage default wallpaper");
 
     let output = compile_file(
         &staged_ui.join("index.html"),

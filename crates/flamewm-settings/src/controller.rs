@@ -868,8 +868,8 @@ mod tests {
             ("settings.toggle.lockShowDate", true),
             ("settings.toggle.lockShowUsername", true),
             ("settings.toggle.lockOnSuspend", true),
-            ("settings.color.lockbackground.r.step.16", true),
-            ("settings.color.lockbackground.swatch.0", true),
+            ("settings.color.lockbackground.preset.0", true),
+            ("settings.color.lockbackground.swatch.0", false),
         ] {
             assert_eq!(crate::parse_action(action).is_ok(), ok, "{action}");
         }
@@ -905,6 +905,311 @@ mod tests {
             opacity.contains("data-action=\""),
             "RED admission: current source has no opacity stepper action; exact action names remain unsupported by source"
         );
+    }
+
+    #[test]
+    fn taskbar_and_screensaver_action_ids_parse_to_typed_writes_and_reject_off_list_values() {
+        for (action, ok) in [
+            ("settings.taskbar.style.floating", true),
+            ("settings.taskbar.style.bar", false),
+            ("settings.taskbar.clock.12h", true),
+            ("settings.taskbar.clock.13h", false),
+            ("settings.cursor.size.48", true),
+            ("settings.cursor.size.40", false),
+            ("settings.wallpaper.fit", true),
+            ("settings.screensaver.mode.none", true),
+            ("settings.screensaver.mode.off", false),
+            ("settings.taskbar-blur.up", true),
+            ("settings.taskbar-blur.sideways", false),
+            ("settings.start-menu-blur.down", true),
+            ("settings.taskbar-floating-margin.up", true),
+            ("settings.taskbar-floating-radius.down", true),
+            ("settings.screensaver-after-lock.up", true),
+            ("settings.screensaver-ribbons.down", true),
+            ("settings.screensaver-ribbon-width.up", true),
+            ("settings.screensaver-display-off.down", true),
+            ("settings.screensaver-ribbons.sideways", false),
+            ("settings.toggle.taskbarShowSeconds", true),
+            ("settings.toggle.taskbarShowDate", true),
+            ("settings.toggle.snapPreviewEnabled", true),
+            ("settings.toggle.focusFollowsMouse", true),
+            ("settings.toggle.screensaverSpanMonitors", true),
+        ] {
+            assert_eq!(crate::parse_action(action).is_ok(), ok, "{action}");
+        }
+    }
+
+    #[test]
+    fn floating_margin_stepper_clamps_at_its_maximum_and_writes_an_integer() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "taskbarFloatingMargin",
+            SettingValue::Integer(32),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "taskbarFloatingMargin",
+            SettingValue::Integer(32),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        application
+            .handle_action(&release("settings.taskbar-floating-margin.up"), &mut document)
+            .expect("margin up at maximum");
+
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "taskbarFloatingMargin")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Integer(32)], "32 is the maximum, never 33");
+        assert_eq!(document.texts["taskbar-floating-margin-value"], "32");
+    }
+
+    #[test]
+    fn ribbon_width_stepper_moves_by_half_a_pixel_in_tenths() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "screensaverRibbonWidthTenths",
+            SettingValue::Integer(110),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "screensaverRibbonWidthTenths",
+            SettingValue::Integer(105),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            3,
+            "screensaverRibbonWidthTenths",
+            SettingValue::Integer(110),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        application
+            .handle_action(&release("settings.screensaver-ribbon-width.down"), &mut document)
+            .expect("ribbon width down");
+        assert_eq!(document.texts["screensaver-ribbon-width-value"], "10.5 px");
+        application
+            .handle_action(&release("settings.screensaver-ribbon-width.up"), &mut document)
+            .expect("ribbon width up");
+
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "screensaverRibbonWidthTenths")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            written,
+            vec![SettingValue::Integer(105), SettingValue::Integer(110)],
+            "each click moves the width by exactly 5 tenths",
+        );
+    }
+
+    #[test]
+    fn taskbar_style_segment_writes_floating_and_shows_only_its_floating_steppers() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "taskbarStyle",
+            SettingValue::Text("classic".to_owned()),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "taskbarStyle",
+            SettingValue::Text("floating".to_owned()),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application.sync(&mut document).expect("sync classic snapshot");
+        assert!(document.highlighted["taskbar-style-classic"]);
+        assert!(!document.visible["taskbar-floating-margin-row"], "classic hides floating steppers");
+        assert!(!document.visible["taskbar-floating-radius-row"]);
+
+        application
+            .handle_action(&release("settings.taskbar.style.floating"), &mut document)
+            .expect("floating segment");
+
+        assert!(document.highlighted["taskbar-style-floating"]);
+        assert!(!document.highlighted["taskbar-style-classic"]);
+        assert!(document.visible["taskbar-floating-margin-row"], "floating shows margin");
+        assert!(document.visible["taskbar-floating-radius-row"], "floating shows radius");
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "taskbarStyle")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Text("floating".to_owned())]);
+    }
+
+    #[test]
+    fn cursor_size_segments_write_exact_pixels_and_highlight_the_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "cursorSize",
+            SettingValue::Integer(32),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "cursorSize",
+            SettingValue::Integer(64),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application.sync(&mut document).expect("sync initial snapshot");
+        assert!(document.highlighted["cursor-size-32"]);
+        assert!(!document.highlighted["cursor-size-64"]);
+
+        application
+            .handle_action(&release("settings.cursor.size.64"), &mut document)
+            .expect("cursor size 64");
+        assert!(document.highlighted["cursor-size-64"]);
+        assert!(!document.highlighted["cursor-size-32"]);
+
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "cursorSize")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Integer(64)]);
+    }
+
+    #[test]
+    fn wallpaper_fit_selector_writes_the_next_wire_value_and_labels_it() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "wallpaperFit",
+            SettingValue::Text("fill".to_owned()),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "wallpaperFit",
+            SettingValue::Text("fit".to_owned()),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        application
+            .handle_action(&release("settings.wallpaper.fit"), &mut document)
+            .expect("wallpaper fit cycle");
+
+        assert_eq!(document.texts["wallpaper-fit-value"], "Fit");
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "wallpaperFit")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Text("fit".to_owned())]);
+    }
+
+    #[test]
+    fn focus_follows_mouse_toggle_flips_its_boolean_and_moves_the_highlight() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "focusFollowsMouse",
+            SettingValue::Boolean(false),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "focusFollowsMouse",
+            SettingValue::Boolean(true),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application.sync(&mut document).expect("sync initial snapshot");
+        assert!(document.visible["focus-mouse-off"]);
+        assert!(!document.visible["focus-mouse-on"]);
+
+        application
+            .handle_action(&release("settings.toggle.focusFollowsMouse"), &mut document)
+            .expect("toggle focus follows mouse");
+
+        assert!(document.visible["focus-mouse-on"]);
+        assert!(!document.visible["focus-mouse-off"]);
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "focusFollowsMouse")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Boolean(true)]);
     }
 
     #[test]
@@ -1066,63 +1371,138 @@ mod tests {
         assert_eq!(application.client().settings(), Some(&reset));
     }
 
-    fn color_step_application(initial_value: &str, action: &str) -> Vec<ControlRequest> {
+    /// A session whose snapshot holds `initial` for the surface colours. One queued
+    /// response per expected ApplySettings call keeps the transport in step.
+    fn color_session(
+        initial: &str,
+        applies: usize,
+    ) -> (SettingsApplication<RecordingTransport>, Rc<RefCell<Vec<ControlRequest>>>) {
         let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut initial = SettingsSnapshot::new(7);
-        initial.values.insert(
-            "startMenuColor".to_owned(),
-            SettingValue::Text(initial_value.to_owned()),
-        );
-        initial.values.insert(
-            "accent".to_owned(),
-            SettingValue::Text(initial_value.to_owned()),
-        );
+        let mut snapshot = SettingsSnapshot::new(7);
+        for key in ["taskbarColor", "startMenuColor", "titlebarColor", "lockBackgroundColor", "accent"] {
+            snapshot
+                .values
+                .insert(key.to_owned(), SettingValue::Text(initial.to_owned()));
+        }
         let mut transport = RecordingTransport {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(initial.clone())));
-        transport.responses.push_back(Ok(ControlResponse::Settings(initial)));
+        for _ in 0..=applies {
+            transport.responses.push_back(Ok(ControlResponse::Settings(snapshot.clone())));
+        }
         let mut application = SettingsApplication::new(transport);
         application.client_mut().refresh_settings().expect("initial snapshot");
+        (application, requests)
+    }
+
+    fn typed(text: &str) -> UiActionEvent {
+        UiActionEvent {
+            text: Some(text.to_owned()),
+            ..release("keyboard.input")
+        }
+    }
+
+    fn last_apply(requests: &Rc<RefCell<Vec<ControlRequest>>>, key: &str) -> Option<String> {
+        match requests.borrow().last() {
+            Some(ControlRequest::ApplySettings(transaction)) => transaction
+                .changes
+                .iter()
+                .find(|change| change.key == key)
+                .and_then(|change| match &change.value {
+                    Some(SettingValue::Text(value)) => Some(value.clone()),
+                    _ => None,
+                }),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn surface_preset_circle_writes_its_exact_hex_in_one_transaction() {
+        let (mut application, requests) = color_session("#191B1D", 1);
         application
-            .handle_action(&release(action), &mut ProbeDocument::default())
-            .expect("color step release");
-        let recorded = requests.borrow().clone();
-        recorded
-    }
-
-    #[test]
-    fn start_menu_color_step_sends_exact_hex_channel_change_in_one_transaction() {
-        let requests = color_step_application("#191B1D", "settings.color.startmenu.r.step.16");
+            .handle_action(&release("settings.color.taskbar.preset.5"), &mut ProbeDocument::default())
+            .expect("preset release");
         assert_eq!(
-            requests.last(),
+            requests.borrow().last(),
             Some(&ControlRequest::ApplySettings(SettingsTransaction {
                 expected_revision: 7,
                 changes: vec![SettingsChange {
-                    key: "startMenuColor".to_owned(),
-                    value: Some(SettingValue::Text("#291B1D".to_owned())),
+                    key: "taskbarColor".to_owned(),
+                    value: Some(SettingValue::Text("#3DAEE9".to_owned())),
                 }],
                 reset_section: None,
             })),
         );
-        assert_eq!(requests.len(), 2, "one GetSettings and one ApplySettings only");
+        assert_eq!(requests.borrow().len(), 2, "one GetSettings and one ApplySettings only");
     }
 
     #[test]
-    fn accent_color_step_clamps_channels_at_255_instead_of_wrapping() {
-        let requests = color_step_application("#FFFFFF", "settings.color.accent.g.step.16");
-        assert_eq!(
-            requests.last(),
-            Some(&ControlRequest::ApplySettings(SettingsTransaction {
-                expected_revision: 7,
-                changes: vec![SettingsChange {
-                    key: "accent".to_owned(),
-                    value: Some(SettingValue::Text("#FFFFFF".to_owned())),
-                }],
-                reset_section: None,
-            })),
+    fn picker_palette_cells_write_their_exact_hex_values() {
+        let (mut application, requests) = color_session("#191B1D", 2);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release("settings.picker.open.startmenu"), &mut document)
+            .expect("open picker");
+        assert_eq!(document.visible.get("color-picker"), Some(&true));
+        // Hue 0 (red) at the darkest shade is #3E0909; greys step from black to white.
+        application
+            .handle_action(&release("settings.picker.pick.0.5"), &mut document)
+            .expect("red cell");
+        assert_eq!(last_apply(&requests, "startMenuColor").as_deref(), Some("#3E0909"));
+        application
+            .handle_action(&release("settings.picker.pick.grey.5"), &mut document)
+            .expect("white cell");
+        assert_eq!(last_apply(&requests, "startMenuColor").as_deref(), Some("#FFFFFF"));
+    }
+
+    #[test]
+    fn picker_typed_hex_applies_on_enter_and_invalid_hex_writes_nothing() {
+        let (mut application, requests) = color_session("#191B1D", 1);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release("settings.picker.open.titlebar"), &mut document)
+            .expect("open picker");
+        for text in ["#", "3", "d", "A", "e", "E", "9"] {
+            application.handle_action(&typed(text), &mut document).expect("typed digit");
+        }
+        application.handle_action(&typed("\n"), &mut document).expect("enter");
+        assert_eq!(last_apply(&requests, "titlebarColor").as_deref(), Some("#3DAEE9"));
+
+        let before = requests.borrow().len();
+        application.handle_action(&release("settings.picker.hex.focus"), &mut document).expect("focus");
+        application.handle_action(&release("settings.picker.close"), &mut document).expect("close");
+        application.handle_action(&release("settings.picker.open.titlebar"), &mut document).expect("reopen");
+        for text in ["1", "2", "3", "4", "5"] {
+            application.handle_action(&typed(text), &mut document).expect("typed digit");
+        }
+        application.handle_action(&typed("\n"), &mut document).expect("enter invalid");
+        assert_eq!(requests.borrow().len(), before, "invalid #RRGGBB writes nothing");
+        assert!(
+            document.texts.get("color-picker-error").is_some_and(|text| text.contains("#RRGGBB")),
+            "invalid buffer is shown inline"
         );
+    }
+
+    #[test]
+    fn picker_escape_closes_and_unfocused_keys_do_not_edit_the_buffer() {
+        let (mut application, requests) = color_session("#191B1D", 0);
+        let mut document = ProbeDocument::default();
+        application
+            .handle_action(&release("settings.picker.open.lockbackground"), &mut document)
+            .expect("open picker");
+        // Apply with an empty buffer is inline-invalid and writes nothing, and it
+        // moves focus off the hex field.
+        application
+            .handle_action(&release("settings.picker.apply"), &mut document)
+            .expect("empty apply");
+        let writes = requests.borrow().len();
+        application.handle_action(&typed("7"), &mut document).expect("unfocused digit");
+        application.handle_action(&typed("\n"), &mut document).expect("enter empty buffer");
+        assert_eq!(requests.borrow().len(), writes, "unfocused digits are not buffered");
+        assert_eq!(document.visible.get("color-picker"), Some(&true));
+        application.handle_action(&typed("\u{1b}"), &mut document).expect("escape");
+        assert_eq!(document.visible.get("color-picker"), Some(&false));
     }
 
     #[test]

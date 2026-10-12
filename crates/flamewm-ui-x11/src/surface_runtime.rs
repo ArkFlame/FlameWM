@@ -147,6 +147,19 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
+    /// Declare the root edge a dock surface reserves (strut) and its window corner radius.
+    /// `None` restores classic inference and a rectangular window.
+    pub fn set_dock_frame(
+        &mut self,
+        surface: SurfaceHandle,
+        edge: Option<flamewm_render_x11::DockEdge>,
+        corner_radius: u32,
+    ) -> Result<(), UiBackendError> {
+        self.controller
+            .set_dock_frame(surface.0, edge, corner_radius)
+            .map_err(UiBackendError::Renderer)
+    }
+
     /// Apply the consumer-selected output scale to one retained surface.
     /// Call before first presentation and again when output assignment or
     /// output scale changes. Invalid scales fall back to 1.0; the document

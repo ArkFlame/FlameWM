@@ -19,6 +19,7 @@ use flamewm_api::panels::PanelEdge;
 use flamewm_api::settings::SettingValue;
 use flamewm_api::{ModeId, OutputId};
 use flamewm_control_core::ControlError;
+use flamewm_integrations_linux::media_store::{MediaKind, import_for_setting};
 use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS, SettingsClient, SettingsPage};
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess, UiKeyEvent, UiKeyPhase, UiWindowConfig,
@@ -316,19 +317,29 @@ enum SettingsAction {
     DisplayKeep,
     DisplayRevert,
     OpenUri(&'static str),
-    /// Adds `delta` to one channel (0 = R, 1 = G, 2 = B) of a `#RRGGBB` setting.
-    ColorStep {
-        key: &'static str,
-        channel: usize,
-        delta: i16,
-    },
-    /// Sets a `#RRGGBB` setting to one fixed palette value in one transaction.
+    /// Opens the shared colour picker for one `#RRGGBB` setting.
+    ColorPickerOpen(&'static str),
+    ColorPickerClose,
+    /// Focuses the picker's hex field so typed keys edit its buffer.
+    ColorPickerFocus,
+    /// Applies one palette cell (`#RRGGBB`) to the picker's setting at once.
+    ColorPickerPick(String),
+    /// Validates the hex buffer and applies it; an invalid buffer writes nothing.
+    ColorPickerApply,
+    /// Sets a `#RRGGBB` setting to one fixed preset value in one transaction.
     ColorSwatch {
         key: &'static str,
         value: &'static str,
     },
     /// Steps a percent setting by 5 within 0..=100.
     PercentStep(&'static str, i8),
+    /// Adds `delta` to an integer setting and clamps the result to `minimum..=maximum`.
+    IntegerStep {
+        key: &'static str,
+        delta: i64,
+        minimum: i64,
+        maximum: i64,
+    },
     /// Drag-only slider; the value arrives as event text, see `handle_animation_speed_drag`.
     AnimationSpeedSlider,
     /// Advances a text setting through `values`, wrapping.
@@ -360,6 +371,7 @@ pub struct SettingsApplication<T: ControlTransport> {
     themes: theme_picker::ThemeRegistry,
     /// The open theme picker and its current page.
     theme_picker: Option<(theme_picker::PickerKind, usize)>,
+    color_picker: Option<ColorPicker>,
     theme_scan: Option<Receiver<theme_picker::ThemeRegistry>>,
     theme_install: Option<Receiver<theme_picker::InstallOutcome>>,
     theme_status: Option<String>,
@@ -377,6 +389,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             pages: DisplayPages::default(),
             themes: theme_picker::ThemeRegistry::default(),
             theme_picker: None,
+            color_picker: None,
             theme_scan: None,
             theme_install: None,
             theme_status: None,
@@ -419,6 +432,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         if event.phase != UiActionPhase::Release || !event.inside {
             return Ok(());
+        }
+        if event.action == KEYBOARD_INPUT_ACTION && self.color_picker.is_some() {
+            self.color_picker_text(event.text.as_deref().unwrap_or_default())?;
+            return self.settle(document);
         }
         let action = parse_action(event.action.as_str())?;
         self.execute(action)?;
@@ -483,14 +500,20 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let mut wallpaper_changed = false;
             match result {
                 Ok(Some(path)) => {
-                    let path = path.to_string_lossy().into_owned();
-                    let applied = match self.chooser_target {
-                        ChooserTarget::Wallpaper => {
-                            self.client.set_wallpaper(path).map_err(control_error)
-                        }
-                        ChooserTarget::LockBackground => {
-                            self.apply_text("lockBackgroundImage", path)
-                        }
+                    let kind = match self.chooser_target {
+                        ChooserTarget::Wallpaper => MediaKind::DesktopWallpaper,
+                        ChooserTarget::LockBackground => MediaKind::LockWallpaper,
+                    };
+                    let applied = match import_for_setting(kind, &path) {
+                        Ok(managed) => match self.chooser_target {
+                            ChooserTarget::Wallpaper => {
+                                self.client.set_wallpaper(managed).map_err(control_error)
+                            }
+                            ChooserTarget::LockBackground => {
+                                self.apply_text("lockBackgroundImage", managed)
+                            }
+                        },
+                        Err(error) => Err(error),
                     };
                     match applied {
                         Ok(()) => wallpaper_changed = true,
@@ -552,8 +575,36 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.client.cancel_hotkey_capture().map_err(control_error)?;
             self.hotkey_armed = false;
         }
+        if let Some(picker) = self.color_picker.as_mut() {
+            if !matches!(action, SettingsAction::ColorPickerFocus | SettingsAction::NativeKeyEvent) {
+                picker.focused = false;
+            }
+        }
         match action {
             SettingsAction::NativeKeyEvent => {}
+            SettingsAction::ColorPickerOpen(key) => {
+                self.color_picker = Some(ColorPicker {
+                    key,
+                    buffer: String::new(),
+                    focused: true,
+                    error: None,
+                });
+            }
+            SettingsAction::ColorPickerClose => self.color_picker = None,
+            SettingsAction::ColorPickerFocus => {
+                if let Some(picker) = self.color_picker.as_mut() {
+                    picker.focused = true;
+                }
+            }
+            SettingsAction::ColorPickerPick(value) => {
+                let key = self.open_color_picker()?.key;
+                self.apply_text(key, value.clone())?;
+                if let Some(picker) = self.color_picker.as_mut() {
+                    picker.buffer = value;
+                    picker.error = None;
+                }
+            }
+            SettingsAction::ColorPickerApply => self.apply_picker_buffer()?,
             SettingsAction::Page(page) => self.client.set_page(page),
             SettingsAction::AccentSwatch(accent) => {
                 self.apply_text("accent", accent.to_owned())?;
@@ -621,15 +672,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::FontSize(direction) => {
                 self.step_integer("fontSizeOffset", i64::from(direction), -2, 4)?;
             }
-            SettingsAction::ColorStep { key, channel, delta } => {
-                let color = accent_color(&self.text_setting(key)?)?;
-                let mut channels = [color.r, color.g, color.b];
-                channels[channel] = (i16::from(channels[channel]) + delta).clamp(0, 255) as u8;
-                let [r, g, b] = channels;
-                self.apply_text(key, format!("#{r:02X}{g:02X}{b:02X}"))?;
-            }
             SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
             SettingsAction::PercentStep(key, direction) => self.step_percent(key, direction, 100)?,
+        SettingsAction::IntegerStep {
+            key,
+            delta,
+            minimum,
+            maximum,
+        } => self.step_integer(key, delta, minimum, maximum)?,
             // Value is applied from the drag text in `handle_animation_speed_drag`.
             SettingsAction::AnimationSpeedSlider => {}
             SettingsAction::TextCycle { key, values } => {
@@ -840,6 +890,64 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.client
             .apply_setting(key, SettingValue::Text(value))
             .map_err(control_error)
+    }
+
+    fn open_color_picker(&self) -> Result<&ColorPicker, String> {
+        self.color_picker
+            .as_ref()
+            .ok_or_else(|| "colour picker is not open".to_owned())
+    }
+
+    /// Applies typed keys to the picker: Escape closes, Enter applies, Backspace
+    /// edits and hex digits append only while the field is focused.
+    fn color_picker_text(&mut self, text: &str) -> Result<(), String> {
+        for ch in text.chars() {
+            match ch {
+                '\u{1b}' => {
+                    self.color_picker = None;
+                    return Ok(());
+                }
+                '\n' | '\r' => self.apply_picker_buffer()?,
+                '\u{8}' => {
+                    if let Some(picker) = self.color_picker.as_mut().filter(|picker| picker.focused) {
+                        picker.buffer.pop();
+                        picker.error = None;
+                    }
+                }
+                ch if ch == '#' || ch.is_ascii_hexdigit() => {
+                    if let Some(picker) = self.color_picker.as_mut().filter(|picker| {
+                        picker.focused && picker.buffer.len() < PICKER_BUFFER_MAX
+                    }) {
+                        picker.buffer.push(ch);
+                        picker.error = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes the buffer as the picker's setting. An invalid buffer is shown inline
+    /// and writes nothing.
+    fn apply_picker_buffer(&mut self) -> Result<(), String> {
+        let picker = self.open_color_picker()?;
+        let key = picker.key;
+        match parse_hex_color(&picker.buffer) {
+            Ok(value) => {
+                self.apply_text(key, value.clone())?;
+                if let Some(picker) = self.color_picker.as_mut() {
+                    picker.buffer = value;
+                    picker.error = None;
+                }
+            }
+            Err(message) => {
+                if let Some(picker) = self.color_picker.as_mut() {
+                    picker.error = Some(message);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn begin_display_mode(&mut self, mode: ModeId) -> Result<(), String> {
@@ -1198,6 +1306,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("lockShowDate", "lock-date-on", "lock-date-off"),
             ("lockShowUsername", "lock-username-on", "lock-username-off"),
             ("lockOnSuspend", "lock-suspend-on", "lock-suspend-off"),
+            ("taskbarShowSeconds", "taskbar-seconds-on", "taskbar-seconds-off"),
+            ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
+            ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
+            ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
+            ("screensaverSpanMonitors", "screensaver-span-on", "screensaver-span-off"),
         ] {
             let enabled = self
                 .client
@@ -1226,6 +1339,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.sync_decoration(document)?;
         self.sync_animation_styles(document)?;
         self.sync_lock_screen(document)?;
+        self.sync_segment_rows(document)?;
         self.sync_taskbar_outputs(document);
         self.sync_hotkeys(document);
         optional_text(
@@ -1238,13 +1352,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        for (target, key) in COLOR_TARGETS {
-            if let Ok(color) = self.text_setting(key) {
-                document.text(&format!("color-value-{target}"), color.to_ascii_uppercase())?;
-            }
-        }
+        self.sync_color_rows(document)?;
+        self.sync_color_picker(document)?;
         for (key, id) in [
             ("startMenuOpacity", "start-menu-opacity-value"),
+            ("startMenuBlurPercent", "start-menu-blur-value"),
+            ("taskbarBlurPercent", "taskbar-blur-value"),
             ("accentOpacity", "accent-opacity-value"),
         ] {
             if let Ok(value) = self.percent_setting(key) {
@@ -1273,6 +1386,67 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     /// Highlights, in each animation style row, the segment whose value matches the stored style.
+    /// Highlights the preset that matches each surface setting, and shows each
+    /// setting's current colour on its wheel circle.
+    fn sync_color_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        for (target, key) in COLOR_TARGETS {
+            let Ok(value) = self.text_setting(key) else {
+                continue;
+            };
+            let current = solid_color(&value)?;
+            document.background(&format!("color-{target}-current"), current)?;
+            if target == "accent" {
+                continue;
+            }
+            for (index, preset) in SURFACE_PRESETS.iter().enumerate() {
+                document.background(&format!("color-{target}-preset-{index}"), solid_color(preset)?)?;
+                document.visible(
+                    &format!("color-{target}-selected-{index}"),
+                    preset.eq_ignore_ascii_case(&value),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Projects the shared picker panel: open state, the hex buffer with its focus
+    /// caret, the preview, the inline error and the palette cells.
+    fn sync_color_picker(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        for hue in 0..PICKER_HUES {
+            for shade in 0..PICKER_SHADES {
+                let id = format!("color-picker-grid-{hue}-{shade}");
+                document.background(&id, solid_color(&picker_grid_color(hue, shade))?)?;
+            }
+        }
+        for step in 0..PICKER_GREYS {
+            let id = format!("color-picker-grid-grey-{step}");
+            document.background(&id, solid_color(&picker_grey(step))?)?;
+        }
+        let Some(picker) = self.color_picker.as_ref() else {
+            document.visible("color-picker", false)?;
+            return Ok(());
+        };
+        document.visible("color-picker", true)?;
+        let caret = if picker.focused { "|" } else { "" };
+        let hex = if picker.buffer.is_empty() {
+            "#RRGGBB".to_owned()
+        } else {
+            format!("{}{caret}", picker.buffer)
+        };
+        document.text("color-picker-hex", hex)?;
+        let shown = parse_hex_color(&picker.buffer)
+            .ok()
+            .or_else(|| self.text_setting(picker.key).ok())
+            .unwrap_or_else(|| SURFACE_PRESETS[0].to_owned());
+        document.background("color-picker-preview", solid_color(&shown)?)?;
+        optional_text(
+            document,
+            "color-picker-error",
+            picker.error.clone().unwrap_or_else(|| "\u{200b}".to_owned()),
+        );
+        Ok(())
+    }
+
     fn sync_animation_styles(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
         for (key, values) in ANIMATION_STYLE_ROWS {
@@ -1306,6 +1480,32 @@ impl<T: ControlTransport> SettingsApplication<T> {
         for minutes in LOCK_TIMEOUT_CHOICES {
             let id = format!("lock-timeout-{minutes}");
             highlight_segment(document, &id, timeout == Some(minutes), accent)?;
+        }
+        Ok(())
+    }
+
+    /// Highlights the segment rows (taskbar layout, clock, cursor size, screensaver mode) and shows
+    /// the floating-only taskbar steppers only while `taskbarStyle` is `floating`.
+    fn sync_segment_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        let style = self.text_setting("taskbarStyle").ok();
+        for (value, id) in [("classic", "taskbar-style-classic"), ("floating", "taskbar-style-floating")] {
+            highlight_segment(document, id, style.as_deref() == Some(value), accent)?;
+        }
+        let floating = style.as_deref() == Some("floating");
+        document.visible("taskbar-floating-margin-row", floating)?;
+        document.visible("taskbar-floating-radius-row", floating)?;
+        let clock = self.text_setting("taskbarClockFormat").ok();
+        for (value, id) in [("24h", "taskbar-clock-24h"), ("12h", "taskbar-clock-12h")] {
+            highlight_segment(document, id, clock.as_deref() == Some(value), accent)?;
+        }
+        let size = self.integer_setting("cursorSize").ok();
+        for value in CURSOR_SIZE_CHOICES {
+            highlight_segment(document, &format!("cursor-size-{value}"), size == Some(value), accent)?;
+        }
+        let mode = self.text_setting("screensaverMode").ok();
+        for (value, id) in [("ribbons", "screensaver-mode-ribbons"), ("none", "screensaver-mode-none")] {
+            highlight_segment(document, id, mode.as_deref() == Some(value), accent)?;
         }
         Ok(())
     }
@@ -1472,6 +1672,19 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = percent("taskbarOpacity") {
             document.text("taskbar-opacity-value", format!("{value}%"))?;
         }
+        for row in INTEGER_STEPPERS {
+            if let Some(value) = integer(row.key) {
+                let label = if row.key == "screensaverRibbonWidthTenths" {
+                    format!("{:.1} px", value as f64 / 10.0)
+                } else {
+                    value.to_string()
+                };
+                document.text(&format!("{}-value", row.slug), label)?;
+            }
+        }
+        if let Some(value) = text("wallpaperFit") {
+            document.text("wallpaper-fit-value", wallpaper_fit_label(&value))?;
+        }
         if let Some(value) = integer("taskbarHeight") {
             document.text(
                 "taskbar-size-value",
@@ -1598,10 +1811,65 @@ const COLOR_TARGETS: [(&str, &str); 5] = [
 /// Minutes offered by the lock-screen idle timeout segments; 0 means never.
 const LOCK_TIMEOUT_CHOICES: [i64; 5] = [0, 5, 10, 15, 30];
 
-/// Fixed swatch values offered beside each color row; `swatch.<index>` selects one.
-const COLOR_PALETTE: [&str; 8] = [
-    "#000000", "#FFFFFF", "#1E1E1E", "#2D2D2D", "#3DAEE9", "#9B59B6", "#1ABC9C", "#EF4048",
+/// Cursor sizes offered by the Appearance segments; the wire value is the pixel size.
+const CURSOR_SIZE_CHOICES: [i64; 4] = [24, 32, 48, 64];
+
+/// Wallpaper placements cycled by the Desktop selector, in wire order.
+const WALLPAPER_FITS: [&str; 5] = ["fill", "fit", "stretch", "center", "tile"];
+
+fn wallpaper_fit_label(value: &str) -> String {
+    let label = match value {
+        "fill" => "Fill",
+        "fit" => "Fit",
+        "stretch" => "Stretch",
+        "center" => "Center",
+        "tile" => "Tile",
+        other => other,
+    };
+    label.to_owned()
+}
+
+/// A stepper row: its HTML slug (`settings.<slug>.up|down`), the integer key it writes, and the
+/// step size and inclusive bounds.
+struct IntegerStepper {
+    slug: &'static str,
+    key: &'static str,
+    step: i64,
+    minimum: i64,
+    maximum: i64,
+}
+
+const INTEGER_STEPPERS: [IntegerStepper; 6] = [
+    IntegerStepper { slug: "taskbar-floating-margin", key: "taskbarFloatingMargin", step: 1, minimum: 0, maximum: 32 },
+    IntegerStepper { slug: "taskbar-floating-radius", key: "taskbarFloatingRadius", step: 1, minimum: 0, maximum: 24 },
+    IntegerStepper { slug: "screensaver-after-lock", key: "screensaverAfterLockMinutes", step: 1, minimum: 0, maximum: 60 },
+    IntegerStepper { slug: "screensaver-ribbons", key: "screensaverNumRibbons", step: 1, minimum: 1, maximum: 12 },
+    IntegerStepper { slug: "screensaver-ribbon-width", key: "screensaverRibbonWidthTenths", step: 5, minimum: 20, maximum: 280 },
+    IntegerStepper { slug: "screensaver-display-off", key: "screensaverDisplayOffMinutes", step: 5, minimum: 0, maximum: 240 },
 ];
+
+/// Preset circles offered beside each surface color row; `preset.<index>` selects one.
+const SURFACE_PRESETS: [&str; 9] = [
+    "#191B1D", "#232629", "#1B1E20", "#2A2E32", "#336699", "#3DAEE9", "#1ABC9C", "#EF4048",
+    "#9B59B6",
+];
+
+/// Colour picker palette: hue columns by shade rows, then one row of greys.
+const PICKER_HUES: usize = 12;
+const PICKER_SHADES: usize = 6;
+const PICKER_GREYS: usize = 6;
+/// Typed key text from the native key source, see `keyboard_text`.
+const KEYBOARD_INPUT_ACTION: &str = "keyboard.input";
+/// Longest buffer the picker accepts: `#` plus six hex digits.
+const PICKER_BUFFER_MAX: usize = 7;
+
+/// State of the one shared colour picker: the setting it writes and its hex buffer.
+struct ColorPicker {
+    key: &'static str,
+    buffer: String,
+    focused: bool,
+    error: Option<String>,
+}
 
 /// Animation style rows in the Animations card: stable key and the values its segments write.
 /// Each segment's node id is `animation_style_node(key, value)`.
@@ -1639,49 +1907,93 @@ fn highlight_segment(
 
 const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
 
-/// Parses `<target>.<r|g|b>.step.<+-1|+-16|+-64>` or `<target>.swatch.<0..8>`,
-/// the rest after `settings.color.`.
-fn parse_color_step(rest: &str) -> Result<SettingsAction, String> {
+/// Parses `<target>.preset.<0..8>`, the rest after `settings.color.`.
+fn parse_color_preset(rest: &str) -> Result<SettingsAction, String> {
     let (target, rest) = rest
-        .split_once('.')
+        .split_once(".preset.")
         .ok_or_else(|| format!("invalid color action '{rest}'"))?;
-    if let Some(index) = rest.strip_prefix("swatch.") {
-        let key = COLOR_TARGETS
-            .iter()
-            .find(|(name, _)| *name == target)
-            .map(|(_, key)| *key)
-            .ok_or_else(|| format!("unknown color target '{target}'"))?;
-        let value = index
+    let key = color_target_key(target)?;
+    let index = rest
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| SURFACE_PRESETS.get(index))
+        .ok_or_else(|| format!("unknown color preset '{rest}'"))?;
+    Ok(SettingsAction::ColorSwatch { key, value: index })
+}
+
+/// Parses the picker actions, the rest after `settings.picker.`.
+fn parse_color_picker(rest: &str) -> Result<SettingsAction, String> {
+    match rest {
+        "close" => return Ok(SettingsAction::ColorPickerClose),
+        "apply" => return Ok(SettingsAction::ColorPickerApply),
+        "hex.focus" => return Ok(SettingsAction::ColorPickerFocus),
+        _ => {}
+    }
+    if let Some(target) = rest.strip_prefix("open.") {
+        return Ok(SettingsAction::ColorPickerOpen(color_target_key(target)?));
+    }
+    let cell = rest
+        .strip_prefix("pick.")
+        .ok_or_else(|| format!("unknown picker action '{rest}'"))?;
+    if let Some(step) = cell.strip_prefix("grey.") {
+        let step = step
             .parse::<usize>()
             .ok()
-            .and_then(|index| COLOR_PALETTE.get(index))
-            .ok_or_else(|| format!("unknown color swatch '{index}'"))?;
-        return Ok(SettingsAction::ColorSwatch { key, value });
+            .filter(|step| *step < PICKER_GREYS)
+            .ok_or_else(|| format!("unknown picker grey '{step}'"))?;
+        return Ok(SettingsAction::ColorPickerPick(picker_grey(step)));
     }
-    let (channel, delta) = rest
-        .split_once(".step.")
-        .ok_or_else(|| format!("invalid color step '{rest}'"))?;
-    let key = COLOR_TARGETS
+    let (hue, shade) = cell
+        .split_once('.')
+        .and_then(|(hue, shade)| Some((hue.parse::<usize>().ok()?, shade.parse::<usize>().ok()?)))
+        .filter(|(hue, shade)| *hue < PICKER_HUES && *shade < PICKER_SHADES)
+        .ok_or_else(|| format!("unknown picker cell '{cell}'"))?;
+    Ok(SettingsAction::ColorPickerPick(picker_grid_color(hue, shade)))
+}
+
+fn color_target_key(target: &str) -> Result<&'static str, String> {
+    COLOR_TARGETS
         .iter()
         .find(|(name, _)| *name == target)
         .map(|(_, key)| *key)
-        .ok_or_else(|| format!("unknown color target '{target}'"))?;
-    let channel = match channel {
-        "r" => 0,
-        "g" => 1,
-        "b" => 2,
-        _ => return Err(format!("unknown color channel '{channel}'")),
+        .ok_or_else(|| format!("unknown color target '{target}'"))
+}
+
+/// Parses `#RRGGBB` (the leading `#` is optional) and returns it uppercase with `#`.
+fn parse_hex_color(text: &str) -> Result<String, String> {
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(format!("#{}", digits.to_ascii_uppercase()))
+    } else {
+        Err(format!("'{text}' is not a #RRGGBB colour"))
+    }
+}
+
+/// Palette cell at `hue` (0..PICKER_HUES) and `shade` (0..PICKER_SHADES): HSL with
+/// fixed saturation and six lightness steps, lightest first.
+fn picker_grid_color(hue: usize, shade: usize) -> String {
+    const LIGHTNESS: [f64; PICKER_SHADES] = [0.88, 0.72, 0.56, 0.42, 0.28, 0.14];
+    let lightness = LIGHTNESS[shade];
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * 0.75;
+    let sector = hue as f64 / 2.0;
+    let x = chroma * (1.0 - ((sector % 2.0) - 1.0).abs());
+    let (r, g, b) = match sector.floor() as usize {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
     };
-    let delta = match delta {
-        "1" => 1,
-        "-1" => -1,
-        "16" => 16,
-        "-16" => -16,
-        "64" => 64,
-        "-64" => -64,
-        _ => return Err(format!("unknown color step '{delta}'")),
-    };
-    Ok(SettingsAction::ColorStep { key, channel, delta })
+    let offset = lightness - chroma / 2.0;
+    let channel = |value: f64| ((value + offset) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", channel(r), channel(g), channel(b))
+}
+
+/// Neutral palette cell `step` (0..PICKER_GREYS), black to white.
+fn picker_grey(step: usize) -> String {
+    let value = (step * 255 / (PICKER_GREYS - 1)) as u8;
+    format!("#{value:02X}{value:02X}{value:02X}")
 }
 
 /// Next value in `values`, wrapping at both ends. An unknown current value
@@ -1754,6 +2066,11 @@ fn accent_for_swatch(name: &str) -> Option<&'static str> {
         "teal" => Some("#1ABC9C"),
         _ => None,
     }
+}
+
+/// An opaque swatch colour for a `#RRGGBB` value.
+fn solid_color(value: &str) -> Result<UiColor, String> {
+    Ok(UiColor { a: 255, ..accent_color(value)? })
 }
 
 fn accent_color(value: &str) -> Result<UiColor, String> {
@@ -1868,14 +2185,45 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "lockShowDate" => Ok(SettingsAction::Toggle("lockShowDate")),
             "lockShowUsername" => Ok(SettingsAction::Toggle("lockShowUsername")),
             "lockOnSuspend" => Ok(SettingsAction::Toggle("lockOnSuspend")),
+            "taskbarShowSeconds" => Ok(SettingsAction::Toggle("taskbarShowSeconds")),
+            "taskbarShowDate" => Ok(SettingsAction::Toggle("taskbarShowDate")),
+            "snapPreviewEnabled" => Ok(SettingsAction::Toggle("snapPreviewEnabled")),
+            "focusFollowsMouse" => Ok(SettingsAction::Toggle("focusFollowsMouse")),
+            "screensaverSpanMonitors" => Ok(SettingsAction::Toggle("screensaverSpanMonitors")),
             _ => Err(format!("unknown toggle '{key}'")),
         };
     }
     if let Some(rest) = action.strip_prefix("settings.color.") {
-        return parse_color_step(rest);
+        return parse_color_preset(rest);
+    }
+    if let Some(rest) = action.strip_prefix("settings.picker.") {
+        return parse_color_picker(rest);
     }
     if let Some(direction) = action.strip_prefix("settings.start-menu-opacity.").and_then(step) {
         return Ok(SettingsAction::PercentStep("startMenuOpacity", direction));
+    }
+    if let Some(direction) = action.strip_prefix("settings.taskbar-blur.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("taskbarBlurPercent", direction));
+    }
+    if let Some(direction) = action.strip_prefix("settings.start-menu-blur.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("startMenuBlurPercent", direction));
+    }
+    if let Some((slug, direction)) = action
+        .strip_prefix("settings.")
+        .and_then(|rest| rest.rsplit_once('.'))
+        .filter(|(slug, _)| INTEGER_STEPPERS.iter().any(|row| row.slug == *slug))
+    {
+        let row = INTEGER_STEPPERS
+            .iter()
+            .find(|row| row.slug == slug)
+            .ok_or_else(|| format!("unknown stepper '{slug}'"))?;
+        let direction = step(direction).ok_or_else(|| format!("unknown step '{direction}' for {slug}"))?;
+        return Ok(SettingsAction::IntegerStep {
+            key: row.key,
+            delta: i64::from(direction) * row.step,
+            minimum: row.minimum,
+            maximum: row.maximum,
+        });
     }
     if let Some(direction) = action.strip_prefix("settings.accent-opacity.").and_then(step) {
         return Ok(SettingsAction::PercentStep("accentOpacity", direction));
@@ -1953,6 +2301,14 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
                 .ok_or_else(|| format!("unknown animation style '{value}' for {key}"));
         }
     }
+    if let Some(size) = action.strip_prefix("settings.cursor.size.") {
+        return size
+            .parse::<i64>()
+            .ok()
+            .filter(|value| CURSOR_SIZE_CHOICES.contains(value))
+            .map(|value| SettingsAction::IntegerSelect { key: "cursorSize", value })
+            .ok_or_else(|| format!("unknown cursor size '{size}'"));
+    }
     if let Some(minutes) = action.strip_prefix("settings.lock.timeout.") {
         return minutes
             .parse::<i64>()
@@ -1969,6 +2325,34 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.lock.clock.12h" => Ok(SettingsAction::TextSelect {
             key: "lockClockFormat",
             value: "12h",
+        }),
+        "settings.taskbar.style.classic" => Ok(SettingsAction::TextSelect {
+            key: "taskbarStyle",
+            value: "classic",
+        }),
+        "settings.taskbar.style.floating" => Ok(SettingsAction::TextSelect {
+            key: "taskbarStyle",
+            value: "floating",
+        }),
+        "settings.taskbar.clock.24h" => Ok(SettingsAction::TextSelect {
+            key: "taskbarClockFormat",
+            value: "24h",
+        }),
+        "settings.taskbar.clock.12h" => Ok(SettingsAction::TextSelect {
+            key: "taskbarClockFormat",
+            value: "12h",
+        }),
+        "settings.wallpaper.fit" => Ok(SettingsAction::TextCycle {
+            key: "wallpaperFit",
+            values: &WALLPAPER_FITS,
+        }),
+        "settings.screensaver.mode.ribbons" => Ok(SettingsAction::TextSelect {
+            key: "screensaverMode",
+            value: "ribbons",
+        }),
+        "settings.screensaver.mode.none" => Ok(SettingsAction::TextSelect {
+            key: "screensaverMode",
+            value: "none",
         }),
         "settings.lock.background.choose" => Ok(SettingsAction::LockBackgroundChoose),
         "settings.lock.background.clear" => Ok(SettingsAction::LockBackgroundClear),
@@ -2180,26 +2564,33 @@ mod value_text_tests {
     #[test]
     fn color_swatches_and_coarse_steps_parse_to_fixed_typed_targets() {
         assert!(matches!(
-            parse_action("settings.color.taskbar.swatch.0"),
-            Ok(SettingsAction::ColorSwatch { key: "taskbarColor", value: "#000000" })
+            parse_action("settings.color.taskbar.preset.0"),
+            Ok(SettingsAction::ColorSwatch { key: "taskbarColor", value: "#191B1D" })
         ));
         assert!(matches!(
-            parse_action("settings.color.accent.swatch.7"),
-            Ok(SettingsAction::ColorSwatch { key: "accent", value: "#EF4048" })
+            parse_action("settings.color.lockbackground.preset.8"),
+            Ok(SettingsAction::ColorSwatch { key: "lockBackgroundColor", value: "#9B59B6" })
         ));
         assert!(matches!(
-            parse_action("settings.color.titlebar.g.step.64"),
-            Ok(SettingsAction::ColorStep { key: "titlebarColor", channel: 1, delta: 64 })
+            parse_action("settings.picker.open.titlebar"),
+            Ok(SettingsAction::ColorPickerOpen("titlebarColor"))
         ));
         assert!(matches!(
-            parse_action("settings.color.startmenu.b.step.-64"),
-            Ok(SettingsAction::ColorStep { key: "startMenuColor", channel: 2, delta: -64 })
+            parse_action("settings.picker.pick.0.0"),
+            Ok(SettingsAction::ColorPickerPick(value)) if value == "#F7C9C9"
+        ));
+        assert!(matches!(
+            parse_action("settings.picker.pick.grey.5"),
+            Ok(SettingsAction::ColorPickerPick(value)) if value == "#FFFFFF"
         ));
         for action in [
-            "settings.color.taskbar.swatch.8",
-            "settings.color.taskbar.swatch.x",
-            "settings.color.desktop.swatch.0",
+            "settings.color.taskbar.preset.9",
+            "settings.color.taskbar.preset.x",
+            "settings.color.desktop.preset.0",
             "settings.color.accent.r.step.32",
+            "settings.picker.open.desktop",
+            "settings.picker.pick.12.0",
+            "settings.picker.pick.grey.6",
         ] {
             assert!(parse_action(action).is_err(), "{action} must be rejected");
         }
@@ -2209,14 +2600,6 @@ mod value_text_tests {
 
     #[test]
     fn appearance_actions_parse_to_their_exact_typed_targets() {
-        assert!(matches!(
-            parse_action("settings.color.startmenu.r.step.-16"),
-            Ok(SettingsAction::ColorStep { key: "startMenuColor", channel: 0, delta: -16 })
-        ));
-        assert!(matches!(
-            parse_action("settings.color.titlebar.b.step.1"),
-            Ok(SettingsAction::ColorStep { key: "titlebarColor", channel: 2, delta: 1 })
-        ));
         assert!(matches!(
             parse_action("settings.start-menu-opacity.up"),
             Ok(SettingsAction::PercentStep("startMenuOpacity", 1))
@@ -2242,6 +2625,54 @@ mod value_text_tests {
             Ok(SettingsAction::TextSelect { key: "decoration", value: "ios" })
         ));
         assert!(parse_action("settings.decoration.cycle").is_err());
+    }
+
+    #[test]
+    fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
+        assert!(matches!(
+            parse_action("settings.taskbar-blur.up"),
+            Ok(SettingsAction::PercentStep("taskbarBlurPercent", 1))
+        ));
+        assert!(matches!(
+            parse_action("settings.start-menu-blur.down"),
+            Ok(SettingsAction::PercentStep("startMenuBlurPercent", -1))
+        ));
+        assert!(matches!(
+            parse_action("settings.taskbar-floating-margin.up"),
+            Ok(SettingsAction::IntegerStep { key: "taskbarFloatingMargin", delta: 1, minimum: 0, maximum: 32 })
+        ));
+        assert!(matches!(
+            parse_action("settings.screensaver-ribbon-width.down"),
+            Ok(SettingsAction::IntegerStep { key: "screensaverRibbonWidthTenths", delta: -5, minimum: 20, maximum: 280 })
+        ));
+        assert!(matches!(
+            parse_action("settings.screensaver-display-off.up"),
+            Ok(SettingsAction::IntegerStep { key: "screensaverDisplayOffMinutes", delta: 5, minimum: 0, maximum: 240 })
+        ));
+        assert!(matches!(
+            parse_action("settings.cursor.size.48"),
+            Ok(SettingsAction::IntegerSelect { key: "cursorSize", value: 48 })
+        ));
+        assert!(matches!(
+            parse_action("settings.taskbar.style.floating"),
+            Ok(SettingsAction::TextSelect { key: "taskbarStyle", value: "floating" })
+        ));
+        assert!(matches!(
+            parse_action("settings.taskbar.clock.12h"),
+            Ok(SettingsAction::TextSelect { key: "taskbarClockFormat", value: "12h" })
+        ));
+        assert!(matches!(
+            parse_action("settings.screensaver.mode.none"),
+            Ok(SettingsAction::TextSelect { key: "screensaverMode", value: "none" })
+        ));
+        assert!(matches!(
+            parse_action("settings.wallpaper.fit"),
+            Ok(SettingsAction::TextCycle { key: "wallpaperFit", .. })
+        ));
+        assert!(matches!(
+            parse_action("settings.toggle.screensaverSpanMonitors"),
+            Ok(SettingsAction::Toggle("screensaverSpanMonitors"))
+        ));
     }
 
     #[test]

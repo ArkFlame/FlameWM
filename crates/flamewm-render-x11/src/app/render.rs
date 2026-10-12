@@ -2,6 +2,7 @@ use super::primitives::scale_rect;
 use super::*;
 use crate::external_drawable::match_argb32_visual;
 use crate::native::coverage::{build_coverage, build_coverage_scaled};
+use crate::xshape::ClipRect;
 
 /// Fingerprint of retained scroll state for the paint cache key.
 /// Revision alone is not enough: scroll writes are light-touch.
@@ -352,6 +353,17 @@ impl X11App {
         let Some(bridge) = self.xshape.as_ref() else {
             return;
         };
+        if self.dock_corner_radius > 0 {
+            let spans = crate::xshape::rounded_mask_spans(
+                self.width,
+                self.height,
+                self.dock_corner_radius,
+            );
+            if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
+                eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
+            }
+            return;
+        }
         let spans = if scale == 1.0 {
             build_coverage(commands, self.width, self.height, 0.0)
         } else {
@@ -362,6 +374,19 @@ impl X11App {
             return;
         }
         if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &rects) } {
+            eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
+        }
+    }
+
+    /// Rounded popup mask intersected with `clip` (window-local). Used while a slide keeps the
+    /// popup on the screen side of the panel edge; the base mask is restored with
+    /// `refresh_shape_mask` once the slide lands.
+    pub(crate) unsafe fn refresh_shape_mask_clipped(&self, clip: ClipRect) {
+        let (Some(cached), Some(bridge)) = (self.cached_paint.as_ref(), self.xshape.as_ref()) else {
+            return;
+        };
+        let spans = build_coverage(&cached.commands, self.width, self.height, 0.0);
+        if let Err(error) = unsafe { bridge.apply_clipped_mask(self.window, &spans, clip) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
     }
