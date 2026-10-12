@@ -278,19 +278,6 @@ pub fn minimize_target(icon_geometry: Option<Rect>, output: Rect) -> Rect {
     }
 }
 
-/// Linear interpolation between two rectangles at `progress` in `[0, 1]`.
-#[must_use]
-pub fn lerp_rect(from: Rect, to: Rect, progress: f32) -> Rect {
-    let p = progress.clamp(0.0, 1.0);
-    let mix = |a: i32, b: i32| (a as f32 + (b - a) as f32 * p).round() as i32;
-    Rect {
-        x: mix(from.x, to.x),
-        y: mix(from.y, to.y),
-        width: mix(from.width, to.width).max(1),
-        height: mix(from.height, to.height).max(1),
-    }
-}
-
 /// Overlay warp parameter for a flight progress value. A mirrored overlay (restore) plays
 /// target→source, so progress 0 starts at the target. Reversal keeps the overlay continuous
 /// because the mirror flag never changes after the overlay is opened.
@@ -850,14 +837,6 @@ mod tests {
         assert!(!no_cap.wants(Effect::Open));
         let disabled = Animator::new(true, Settings { enabled: false, ..Settings::DEFAULT });
         assert!(!disabled.wants(Effect::Open));
-    }
-
-    #[test]
-    fn lerp_rect_endpoints_are_exact() {
-        let a = Rect { x: 10, y: 20, width: 300, height: 200 };
-        let b = Rect { x: 500, y: 900, width: 32, height: 24 };
-        assert_eq!(lerp_rect(a, b, 0.0), a);
-        assert_eq!(lerp_rect(a, b, 1.0), b);
     }
 
     #[test]

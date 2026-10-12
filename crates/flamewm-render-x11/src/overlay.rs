@@ -507,6 +507,29 @@ impl WarpOverlay {
         Ok(())
     }
 
+    /// Composites the fade source OVER `dest` at `rect` through a solid mask of `alpha` (0..=1).
+    ///
+    /// # Safety
+    ///
+    /// `display`, the fade source and `dest` must be live pictures on the same display.
+    unsafe fn composite_alpha(
+        &self,
+        display: *mut Display,
+        dest: c_ulong,
+        rect: (i32, i32, u32, u32),
+        alpha: f64,
+    ) -> Result<(), String> {
+        let mask_alpha = (alpha.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16;
+        // SAFETY: forwarded contract; the mask is freed before returning.
+        unsafe {
+            let mask = self.api.create_solid_fill(display, 0, 0, 0, mask_alpha)?;
+            self.api
+                .composite_over_masked(display, self.fade_source, mask, dest, rect);
+            self.api.free_picture(display, mask);
+        }
+        Ok(())
+    }
+
     fn paint_fade(&mut self, progress: f64) -> Result<(), String> {
         let (scale, alpha) = fade_frame(progress);
         let (w, h) = (f64::from(self.size.0), f64::from(self.size.1));
@@ -528,11 +551,7 @@ impl WarpOverlay {
                 .composite_src(display, self.fade_clear, self.picture, (0, 0, window_w, window_h));
             if alpha > 0.0 {
                 self.api.set_transform(display, self.fade_source, matrix)?;
-                let mask_alpha = (alpha.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16;
-                let mask = self.api.create_solid_fill(display, 0, 0, 0, mask_alpha)?;
-                self.api
-                    .composite_over_masked(display, self.fade_source, mask, self.picture, rect);
-                self.api.free_picture(display, mask);
+                self.composite_alpha(display, self.picture, rect, alpha)?;
             }
         }
         Ok(())
@@ -574,11 +593,7 @@ impl WarpOverlay {
             }
             if alpha > 0.0 {
                 self.api.set_transform(display, self.fade_source, matrix)?;
-                let mask_alpha = (alpha.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16;
-                let mask = self.api.create_solid_fill(display, 0, 0, 0, mask_alpha)?;
-                self.api
-                    .composite_over_masked(display, self.fade_source, mask, dest, dst_rect);
-                self.api.free_picture(display, mask);
+                self.composite_alpha(display, dest, dst_rect, alpha)?;
             }
             if dest != self.picture {
                 // One copy shows the finished frame, never the intermediate backdrop.
