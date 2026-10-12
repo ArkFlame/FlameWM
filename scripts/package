@@ -66,6 +66,7 @@ chmod 0644 "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
 mkdir -p "$STAGE/usr/share/icons"
 cp -a "$ROOT/assets/themes/icons/McMojave-circle" "$STAGE/usr/share/icons/McMojave-circle"
 cp -a "$ROOT/assets/themes/cursors/McMojave-cursors" "$STAGE/usr/share/icons/McMojave-cursors"
+cp -a "$ROOT/assets/themes/icons/candy-icons" "$STAGE/usr/share/icons/candy-icons"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
     sed -e "s/@VERSION@/$VERSION/g" "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
