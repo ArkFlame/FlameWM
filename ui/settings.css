@@ -119,3 +119,5 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .theme-picker-head { width:100%; display:flex; align-items:center; gap:8px; }
 .theme-row { width:100%; min-width:0; height:36px; padding:0 10px; display:flex; align-items:center; gap:10px; font-size:12px; white-space:nowrap; overflow:hidden; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .theme-row img { width:24px; height:24px; }
+
+#theme-install-status { max-width:250px; overflow:hidden; white-space:nowrap; }
