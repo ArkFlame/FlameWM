@@ -7,6 +7,8 @@ pub enum SessionAction {
     Suspend,
     Reboot,
     Shutdown,
+    /// Runs the screensaver in non-grabbing preview mode; exits on any input.
+    ScreensaverPreview,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

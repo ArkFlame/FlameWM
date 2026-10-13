@@ -392,32 +392,52 @@ fn current_lock_program() -> LockProgram {
 /// Argument vector for the preview lock: it takes no grabs and exits on any input.
 const LOCK_PREVIEW_ARGS: &[&str] = &["--preview"];
 
-/// The single live preview child. Reaped with `try_wait` before each spawn decision.
+/// Argument vector for the screensaver preview: ribbons only, no grabs, no PAM, exits on input.
+const SCREENSAVER_PREVIEW_ARGS: &[&str] = &["--preview-screensaver"];
+
+/// The single live lock preview child. Reaped with `try_wait` before each spawn decision.
 static LOCK_PREVIEW: Mutex<Option<Child>> = Mutex::new(None);
 
+/// The single live screensaver preview child, tracked separately from the lock preview.
+static SCREENSAVER_PREVIEW: Mutex<Option<Child>> = Mutex::new(None);
+
 /// Spawns a preview unless `slot` still holds a running child. An exited child is reaped first.
-fn spawn_preview_once(slot: &mut Option<Child>, program: &Path) -> std::io::Result<()> {
+fn spawn_preview_once(
+    slot: &mut Option<Child>,
+    program: &Path,
+    args: &[&str],
+) -> std::io::Result<()> {
     if let Some(child) = slot.as_mut() {
         if matches!(child.try_wait(), Ok(None)) {
             return Ok(());
         }
     }
-    *slot = Some(spawn_lock_process(program, LOCK_PREVIEW_ARGS)?);
+    *slot = Some(spawn_lock_process(program, args)?);
     Ok(())
 }
 
-/// Starts the lock screen in preview mode. At most one preview runs at a time.
-pub fn start_lock_preview() -> FlameResult<()> {
+/// Starts one preview of `slot`'s kind. At most one preview of each kind runs at a time.
+fn start_preview(slot: &Mutex<Option<Child>>, args: &[&str]) -> FlameResult<()> {
     match current_lock_program() {
         LockProgram::Screen(program) => {
-            let mut slot = LOCK_PREVIEW.lock().unwrap_or_else(PoisonError::into_inner);
-            spawn_preview_once(&mut slot, &program).map_err(io_error)
+            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            spawn_preview_once(&mut slot, &program, args).map_err(io_error)
         }
         LockProgram::Loginctl => Err(FlameError::new(
             ErrorCode::NotFound,
             "flamewm-lock binary not found; lock preview unavailable",
         )),
     }
+}
+
+/// Starts the lock screen in preview mode. At most one preview runs at a time.
+pub fn start_lock_preview() -> FlameResult<()> {
+    start_preview(&LOCK_PREVIEW, LOCK_PREVIEW_ARGS)
+}
+
+/// Starts the screensaver preview. At most one preview runs at a time.
+pub fn start_screensaver_preview() -> FlameResult<()> {
+    start_preview(&SCREENSAVER_PREVIEW, SCREENSAVER_PREVIEW_ARGS)
 }
 
 #[cfg(test)]
@@ -470,9 +490,13 @@ mod lock_preview_tests {
     /// Spawns the preview, retrying `ETXTBSY`: exec of a just-written script races with a fork
     /// in a parallel test thread that still holds the write fd.
     fn spawn_retrying(slot: &mut Option<Child>, program: &Path) -> std::io::Result<()> {
+        spawn_retrying_with(slot, program, LOCK_PREVIEW_ARGS)
+    }
+
+    fn spawn_retrying_with(slot: &mut Option<Child>, program: &Path, args: &[&str]) -> std::io::Result<()> {
         let mut last = None;
         for _ in 0..100 {
-            match spawn_preview_once(slot, program) {
+            match spawn_preview_once(slot, program, args) {
                 Err(error) if error.raw_os_error() == Some(26) => {
                     last = Some(error);
                     std::thread::sleep(Duration::from_millis(20));
@@ -486,6 +510,23 @@ mod lock_preview_tests {
     #[test]
     fn preview_argument_vector_is_exactly_preview_flag() {
         assert_eq!(LOCK_PREVIEW_ARGS, ["--preview"]);
+    }
+
+    #[test]
+    fn screensaver_preview_argument_vector_is_exactly_its_flag() {
+        assert_eq!(SCREENSAVER_PREVIEW_ARGS, ["--preview-screensaver"]);
+    }
+
+    #[test]
+    fn screensaver_preview_spawns_once_with_only_its_flag() {
+        let dir = temp_dir("screensaver-argv");
+        let program = fake_lock(&dir);
+        let mut slot = None;
+        spawn_retrying_with(&mut slot, &program, SCREENSAVER_PREVIEW_ARGS).expect("spawn");
+        spawn_preview_once(&mut slot, &program, SCREENSAVER_PREVIEW_ARGS).expect("second spawn");
+        wait_for_launches(&dir, 1);
+        assert_eq!(launches(&dir), ["--preview-screensaver"]);
+        let _ = slot.expect("child tracked").kill();
     }
 
     #[test]
@@ -936,6 +977,7 @@ impl SessionPort for X11Desktop {
         let (program, args): (&str, &[&str]) = match action {
             SessionAction::Lock => return start_lock_screen(),
             SessionAction::LockPreview => return start_lock_preview(),
+            SessionAction::ScreensaverPreview => return start_screensaver_preview(),
             SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),

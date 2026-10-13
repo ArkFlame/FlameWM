@@ -326,7 +326,7 @@ fn platform_start_projects_panel_without_mutating_native_reservations() {
     let snapshot = host.panels_snapshot();
     assert_eq!(snapshot.panels.len(), 1);
     assert_eq!(snapshot.panels[0].output, OutputId::new("eDP-1"));
-    assert_eq!(snapshot.panels[0].geometry, Rect::new(8, 1028, 1904, 44));
+    assert_eq!(snapshot.panels[0].geometry, Rect::new(4, 1032, 1912, 44));
     assert!(host.engine().reservations.is_empty());
 }
 

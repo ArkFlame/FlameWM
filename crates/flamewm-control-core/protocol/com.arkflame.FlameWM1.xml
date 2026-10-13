@@ -222,6 +222,7 @@
     <method name="Suspend"/>
     <method name="Reboot"/>
     <method name="Shutdown"/>
+    <method name="ScreensaverPreview"/>
   </interface>
 
   <!-- System -->

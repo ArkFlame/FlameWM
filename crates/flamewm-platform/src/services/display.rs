@@ -79,7 +79,9 @@ impl DisplayService {
         self.coordinator
             .pending()
             .map(|pending| pending.transaction)
-            .ok_or_else(|| FlameError::new(ErrorCode::InternalFailure, "missing display transaction"))
+            .ok_or_else(|| {
+                FlameError::new(ErrorCode::InternalFailure, "missing display transaction")
+            })
     }
 
     #[must_use]
@@ -95,19 +97,27 @@ impl DisplayService {
         expected_generation: u64,
         now_ms: u64,
     ) -> FlameResult<TransactionId> {
-        if self.coordinator.pending().is_some() {
-            return Err(FlameError::new(
-                ErrorCode::Busy,
-                "display transaction already pending",
-            ));
-        }
         if self.cached.is_none() {
             self.refresh(port)?;
+        }
+        // The caller's generation is checked against the snapshot it observed, before the
+        // superseded transaction's revert bumps the generation.
+        let observed = self.cached.as_ref().ok_or_else(|| {
+            FlameError::new(ErrorCode::InternalFailure, "missing display snapshot")
+        })?;
+        require_generation(observed, expected_generation)?;
+        if let Some(superseded) = self
+            .coordinator
+            .pending()
+            .map(|pending| pending.transaction)
+        {
+            // Restore the superseded transaction's baseline first so the new baseline is never
+            // the intermediate mode. A refused revert aborts before any new apply.
+            self.revert(port, superseded)?;
         }
         let cached = self.cached.as_ref().ok_or_else(|| {
             FlameError::new(ErrorCode::InternalFailure, "missing display snapshot")
         })?;
-        require_generation(cached, expected_generation)?;
         let fresh = port.display_snapshot()?;
         if self.engine_generation != 0 && fresh.generation != self.engine_generation {
             self.refresh(port)?;
@@ -240,13 +250,20 @@ impl DisplayService {
         if let Err(refresh_error) = refreshed {
             // Only a failed initial read leaves the expired transaction live here; the other
             // refresh failures already retired it. Never leave an expired transaction pending.
-            let Some(transaction) = self.coordinator.pending().map(|pending| pending.transaction)
+            let Some(transaction) = self
+                .coordinator
+                .pending()
+                .map(|pending| pending.transaction)
             else {
                 return Err(refresh_error);
             };
             return Err(self.retire_after_read_failure(port, transaction, refresh_error));
         }
-        let Some(transaction) = self.coordinator.pending().map(|pending| pending.transaction) else {
+        let Some(transaction) = self
+            .coordinator
+            .pending()
+            .map(|pending| pending.transaction)
+        else {
             return Ok(true);
         };
         self.revert(port, transaction)?;
@@ -385,7 +402,12 @@ mod tests {
 
     impl TwoModePort {
         fn new() -> Self {
-            Self { mode: ModeId(1), generation: 1, fail_apply: false, fail_revert: false }
+            Self {
+                mode: ModeId(1),
+                generation: 1,
+                fail_apply: false,
+                fail_revert: false,
+            }
         }
     }
 
@@ -402,8 +424,24 @@ mod tests {
                     geometry: Rect::new(0, 0, 1920, 1080),
                     current_mode: self.mode,
                     modes: vec![
-                        DisplayMode { id: ModeId(1), resolution: Size { width: 1920, height: 1080 }, refresh_millihz: 60_000, preferred: true },
-                        DisplayMode { id: ModeId(2), resolution: Size { width: 1280, height: 720 }, refresh_millihz: 60_000, preferred: false },
+                        DisplayMode {
+                            id: ModeId(1),
+                            resolution: Size {
+                                width: 1920,
+                                height: 1080,
+                            },
+                            refresh_millihz: 60_000,
+                            preferred: true,
+                        },
+                        DisplayMode {
+                            id: ModeId(2),
+                            resolution: Size {
+                                width: 1280,
+                                height: 720,
+                            },
+                            refresh_millihz: 60_000,
+                            preferred: false,
+                        },
                     ],
                     shell_scale_percent: 100,
                 }],
@@ -413,18 +451,26 @@ mod tests {
 
         fn apply_mode(&mut self, _output: &OutputId, mode: ModeId) -> FlameResult<TransactionId> {
             if self.fail_apply {
-                return Err(FlameError::new(ErrorCode::Unavailable, "fake apply failure"));
+                return Err(FlameError::new(
+                    ErrorCode::Unavailable,
+                    "fake apply failure",
+                ));
             }
             self.mode = mode;
             self.generation += 1;
             Ok(TransactionId(7))
         }
 
-        fn keep_mode(&mut self, _transaction: TransactionId) -> FlameResult<()> { Ok(()) }
+        fn keep_mode(&mut self, _transaction: TransactionId) -> FlameResult<()> {
+            Ok(())
+        }
 
         fn revert_mode(&mut self, _transaction: TransactionId) -> FlameResult<()> {
             if self.fail_revert {
-                return Err(FlameError::new(ErrorCode::Unavailable, "fake revert failure"));
+                return Err(FlameError::new(
+                    ErrorCode::Unavailable,
+                    "fake revert failure",
+                ));
             }
             self.mode = ModeId(1);
             self.generation += 1;
@@ -442,10 +488,21 @@ mod tests {
         let mut port = TwoModePort::new();
         let mut service = DisplayService::default();
         let transaction = begin(&mut port, &mut service).expect("apply mode");
-        assert_eq!(service.cached().and_then(|s| s.pending.as_ref()).map(|p| p.mode), Some(ModeId(2)));
-        service.keep(&mut port, transaction, 100).expect("keep mode");
+        assert_eq!(
+            service
+                .cached()
+                .and_then(|s| s.pending.as_ref())
+                .map(|p| p.mode),
+            Some(ModeId(2))
+        );
+        service
+            .keep(&mut port, transaction, 100)
+            .expect("keep mode");
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert_eq!(service.cached().map(|s| s.outputs[0].current_mode), Some(ModeId(2)));
+        assert_eq!(
+            service.cached().map(|s| s.outputs[0].current_mode),
+            Some(ModeId(2))
+        );
     }
 
     #[test]
@@ -457,7 +514,10 @@ mod tests {
         assert!(service.tick(&mut port, 15_100).expect("deadline tick"));
         assert!(!service.tick(&mut port, 15_101).expect("subsequent tick"));
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert_eq!(service.cached().map(|s| s.outputs[0].current_mode), Some(ModeId(1)));
+        assert_eq!(
+            service.cached().map(|s| s.outputs[0].current_mode),
+            Some(ModeId(1))
+        );
     }
 
     #[test]
@@ -465,8 +525,21 @@ mod tests {
         let mut port = TwoModePort::new();
         port.fail_apply = true;
         let mut service = DisplayService::default();
-        let generation = service.refresh(&mut port).expect("initial snapshot").generation;
-        assert!(service.begin_mode(&mut port, &OutputId::new("fake"), ModeId(2), generation, 100).is_err());
+        let generation = service
+            .refresh(&mut port)
+            .expect("initial snapshot")
+            .generation;
+        assert!(
+            service
+                .begin_mode(
+                    &mut port,
+                    &OutputId::new("fake"),
+                    ModeId(2),
+                    generation,
+                    100
+                )
+                .is_err()
+        );
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
     }
 
@@ -500,6 +573,7 @@ mod tests {
         reverted: Vec<TransactionId>,
         fail_revert: bool,
         fail_snapshot: bool,
+        fail_apply: bool,
     }
 
     impl TwoOutputPort {
@@ -527,11 +601,15 @@ mod tests {
                 reverted: Vec::new(),
                 fail_revert: false,
                 fail_snapshot: false,
+                fail_apply: false,
             }
         }
 
         fn output(&self, id: &str) -> &FakeOutput {
-            self.outputs.iter().find(|o| o.id.as_str() == id).expect("fixture output")
+            self.outputs
+                .iter()
+                .find(|o| o.id.as_str() == id)
+                .expect("fixture output")
         }
 
         fn disconnect(&mut self, id: &str) {
@@ -549,7 +627,10 @@ mod tests {
     impl DisplayPort for TwoOutputPort {
         fn display_snapshot(&self) -> FlameResult<DisplaySnapshot> {
             if self.fail_snapshot {
-                return Err(FlameError::new(ErrorCode::Unavailable, "fake snapshot read failed"));
+                return Err(FlameError::new(
+                    ErrorCode::Unavailable,
+                    "fake snapshot read failed",
+                ));
             }
             Ok(DisplaySnapshot {
                 generation: self.generation,
@@ -571,7 +652,10 @@ mod tests {
                             .iter()
                             .map(|id| DisplayMode {
                                 id: *id,
-                                resolution: Size { width: 1920, height: 1080 },
+                                resolution: Size {
+                                    width: 1920,
+                                    height: 1080,
+                                },
                                 refresh_millihz: 60_000,
                                 preferred: false,
                             })
@@ -584,13 +668,19 @@ mod tests {
         }
 
         fn apply_mode(&mut self, output: &OutputId, mode: ModeId) -> FlameResult<TransactionId> {
+            if self.fail_apply {
+                return Err(FlameError::new(ErrorCode::Unavailable, "fake apply failed"));
+            }
             let index = self
                 .outputs
                 .iter()
                 .position(|o| o.connected && &o.id == output)
                 .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake output missing"))?;
             if !self.outputs[index].modes.contains(&mode) {
-                return Err(FlameError::new(ErrorCode::InvalidArgument, "fake mode missing"));
+                return Err(FlameError::new(
+                    ErrorCode::InvalidArgument,
+                    "fake mode missing",
+                ));
             }
             let previous = self.outputs[index].current;
             self.outputs[index].current = mode;
@@ -607,7 +697,10 @@ mod tests {
                 Some((pending, _, _)) if pending == transaction => Ok(()),
                 other => {
                     self.pending = other;
-                    Err(FlameError::new(ErrorCode::NotFound, "fake transaction missing"))
+                    Err(FlameError::new(
+                        ErrorCode::NotFound,
+                        "fake transaction missing",
+                    ))
                 }
             }
         }
@@ -615,7 +708,10 @@ mod tests {
         fn revert_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
             self.reverted.push(transaction);
             if self.fail_revert {
-                return Err(FlameError::new(ErrorCode::Unavailable, "fake revert refused"));
+                return Err(FlameError::new(
+                    ErrorCode::Unavailable,
+                    "fake revert refused",
+                ));
             }
             let (pending, output, previous) = self
                 .pending
@@ -623,7 +719,10 @@ mod tests {
                 .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake transaction missing"))?;
             if pending != transaction {
                 self.pending = Some((pending, output, previous));
-                return Err(FlameError::new(ErrorCode::NotFound, "fake transaction missing"));
+                return Err(FlameError::new(
+                    ErrorCode::NotFound,
+                    "fake transaction missing",
+                ));
             }
             let index = self
                 .outputs
@@ -644,7 +743,13 @@ mod tests {
         now_ms: u64,
     ) -> FlameResult<TransactionId> {
         let generation = service.refresh(port)?.generation;
-        service.begin_mode(port, &OutputId::new(output), ModeId(mode), generation, now_ms)
+        service.begin_mode(
+            port,
+            &OutputId::new(output),
+            ModeId(mode),
+            generation,
+            now_ms,
+        )
     }
 
     #[test]
@@ -654,15 +759,27 @@ mod tests {
         let generation = service.refresh(&mut port).expect("snapshot").generation;
         assert!(
             service
-                .begin_mode(&mut port, &OutputId::new("DP-B"), ModeId(101), generation, 0)
+                .begin_mode(
+                    &mut port,
+                    &OutputId::new("DP-B"),
+                    ModeId(101),
+                    generation,
+                    0
+                )
                 .is_err(),
             "current mode is not a change"
         );
 
         for mode in 102..=112u64 {
             let transaction = begin_on(&mut port, &mut service, "DP-B", mode, 0).expect("begin");
-            assert_eq!(port.applied.last(), Some(&(OutputId::new("DP-B"), ModeId(mode))));
-            let pending = service.cached().and_then(|s| s.pending.clone()).expect("pending");
+            assert_eq!(
+                port.applied.last(),
+                Some(&(OutputId::new("DP-B"), ModeId(mode)))
+            );
+            let pending = service
+                .cached()
+                .and_then(|s| s.pending.clone())
+                .expect("pending");
             assert_eq!(pending.transaction, transaction);
             assert_eq!(pending.output, OutputId::new("DP-B"));
             assert_eq!(pending.mode, ModeId(mode));
@@ -673,7 +790,10 @@ mod tests {
         assert_eq!(port.output("DP-A").current, ModeId(1));
 
         let transaction = begin_on(&mut port, &mut service, "DP-A", 2, 0).expect("begin on DP-A");
-        assert_eq!(port.applied.last(), Some(&(OutputId::new("DP-A"), ModeId(2))));
+        assert_eq!(
+            port.applied.last(),
+            Some(&(OutputId::new("DP-A"), ModeId(2)))
+        );
         service.keep(&mut port, transaction, 0).expect("keep DP-A");
         assert_eq!(port.output("DP-A").current, ModeId(2));
         assert_eq!(port.output("DP-B").current, ModeId(112));
@@ -701,8 +821,16 @@ mod tests {
         assert_eq!(after.pending, None, "pending transaction cleared");
         assert_ne!(after, &before, "snapshot change emitted");
         assert_eq!(after.generation, before.generation + 1);
-        assert_eq!(port.output("DP-B").current, ModeId(101), "previous mode restored on DP-B");
-        assert_eq!(port.output("DP-A").current, ModeId(1), "other output untouched");
+        assert_eq!(
+            port.output("DP-B").current,
+            ModeId(101),
+            "previous mode restored on DP-B"
+        );
+        assert_eq!(
+            port.output("DP-A").current,
+            ModeId(1),
+            "other output untouched"
+        );
     }
 
     #[test]
@@ -716,10 +844,23 @@ mod tests {
             .expect_err("late confirmation must not keep the unconfirmed mode");
 
         assert_eq!(error.code, ErrorCode::Timeout);
-        assert_eq!(port.reverted, vec![transaction], "one rollback at late Keep");
+        assert_eq!(
+            port.reverted,
+            vec![transaction],
+            "one rollback at late Keep"
+        );
         assert_eq!(port.output("DP-B").current, ModeId(101));
-        assert_eq!(service.cached().and_then(|snapshot| snapshot.pending.as_ref()), None);
-        assert!(!service.tick(&mut port, 15_002).expect("no retry after late Keep"));
+        assert_eq!(
+            service
+                .cached()
+                .and_then(|snapshot| snapshot.pending.as_ref()),
+            None
+        );
+        assert!(
+            !service
+                .tick(&mut port, 15_002)
+                .expect("no retry after late Keep")
+        );
         assert_eq!(port.reverted.len(), 1, "rollback is attempted exactly once");
     }
 
@@ -747,12 +888,27 @@ mod tests {
         begin_on(&mut port, &mut service, "DP-B", 112, 0).expect("begin");
         port.fail_snapshot = true;
 
-        assert!(service.tick(&mut port, 15_000).is_err(), "snapshot failure surfaced");
-        assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None, "expired transaction retired");
-        assert_eq!(port.reverted.len(), 1, "one rollback attempt for the applied mode");
+        assert!(
+            service.tick(&mut port, 15_000).is_err(),
+            "snapshot failure surfaced"
+        );
+        assert_eq!(
+            service.cached().and_then(|s| s.pending.as_ref()),
+            None,
+            "expired transaction retired"
+        );
+        assert_eq!(
+            port.reverted.len(),
+            1,
+            "one rollback attempt for the applied mode"
+        );
 
         port.fail_snapshot = false;
-        assert!(!service.tick(&mut port, 15_001).expect("no retry after retirement"));
+        assert!(
+            !service
+                .tick(&mut port, 15_001)
+                .expect("no retry after retirement")
+        );
         assert_eq!(port.reverted.len(), 1, "no busy retry");
     }
 
@@ -791,7 +947,10 @@ mod tests {
 
         let error = service.refresh(&mut port).expect_err("disconnect surfaced");
         assert_eq!(error.code, ErrorCode::NotFound);
-        assert!(port.reverted.is_empty(), "no revert against the missing output");
+        assert!(
+            port.reverted.is_empty(),
+            "no revert against the missing output"
+        );
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
         assert!(!service.tick(&mut port, 15_000).expect("nothing pending"));
         assert!(port.reverted.is_empty());
@@ -804,11 +963,20 @@ mod tests {
         begin_on(&mut port, &mut service, "DP-B", 112, 0).expect("begin");
         port.disconnect("DP-B");
 
-        let error = service.tick(&mut port, 15_000).expect_err("disconnect surfaced at deadline");
+        let error = service
+            .tick(&mut port, 15_000)
+            .expect_err("disconnect surfaced at deadline");
         assert_eq!(error.code, ErrorCode::NotFound);
-        assert!(port.reverted.is_empty(), "no revert against the missing output");
+        assert!(
+            port.reverted.is_empty(),
+            "no revert against the missing output"
+        );
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert!(!service.tick(&mut port, 15_001).expect("transaction already cleared"));
+        assert!(
+            !service
+                .tick(&mut port, 15_001)
+                .expect("transaction already cleared")
+        );
     }
 
     #[test]
@@ -856,14 +1024,21 @@ mod tests {
             .begin_mode(&mut port, &output.id, mode, snapshot.generation, 0)
             .expect("begin on output index 4");
         assert_eq!(port.applied, vec![(OutputId::new("O4"), ModeId(412))]);
-        let pending = service.cached().and_then(|s| s.pending.clone()).expect("pending");
+        let pending = service
+            .cached()
+            .and_then(|s| s.pending.clone())
+            .expect("pending");
         assert_eq!(
             (pending.transaction, pending.output, pending.mode),
             (transaction, OutputId::new("O4"), ModeId(412))
         );
         service.keep(&mut port, transaction, 0).expect("keep");
         assert_eq!(port.output("O4").current, ModeId(412));
-        assert_eq!(port.output("O0").current, ModeId(1), "other outputs untouched");
+        assert_eq!(
+            port.output("O0").current,
+            ModeId(1),
+            "other outputs untouched"
+        );
     }
 
     #[test]
@@ -878,18 +1053,125 @@ mod tests {
             .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), stale, 0)
             .expect_err("stale generation rejected");
         assert_eq!(error.code, ErrorCode::StaleRevision);
-        assert!(port.applied.is_empty(), "no native apply for a stale request");
+        assert!(
+            port.applied.is_empty(),
+            "no native apply for a stale request"
+        );
 
         // The refreshed generation is accepted for the same request.
-        let fresh = service.refresh(&mut port).expect("fresh snapshot").generation;
+        let fresh = service
+            .refresh(&mut port)
+            .expect("fresh snapshot")
+            .generation;
         assert_ne!(fresh, stale);
-        assert!(service
-            .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), stale, 0)
-            .is_err());
+        assert!(
+            service
+                .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), stale, 0)
+                .is_err()
+        );
         assert!(port.applied.is_empty());
         service
             .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), fresh, 0)
             .expect("fresh generation accepted");
         assert_eq!(port.applied, vec![(OutputId::new("O4"), ModeId(412))]);
+    }
+
+    #[test]
+    fn supersede_keeps_only_latest_transaction_and_rejects_old_keep() {
+        let mut port = TwoOutputPort::new();
+        let mut service = DisplayService::default();
+        let first = begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
+        let second = begin_on(&mut port, &mut service, "DP-B", 103, 100).expect("B to C");
+        assert_ne!(first, second);
+        let pending = service
+            .cached()
+            .and_then(|s| s.pending.clone())
+            .expect("pending");
+        assert_eq!(pending.transaction, second);
+        assert_eq!(pending.mode, ModeId(103));
+        assert_eq!(
+            service
+                .keep(&mut port, first, 100)
+                .expect_err("old keep")
+                .code,
+            ErrorCode::Conflict
+        );
+        service.keep(&mut port, second, 100).expect("latest keep");
+        assert_eq!(port.output("DP-B").current, ModeId(103));
+    }
+
+    #[test]
+    fn supersede_cancel_rolls_back_to_original_baseline_not_intermediate() {
+        let mut port = TwoOutputPort::new();
+        let mut service = DisplayService::default();
+        begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
+        let latest = begin_on(&mut port, &mut service, "DP-B", 103, 0).expect("B to C");
+        service.revert(&mut port, latest).expect("cancel");
+        assert_eq!(port.output("DP-B").current, ModeId(101));
+        assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
+    }
+
+    #[test]
+    fn supersede_sets_fresh_15000ms_deadline() {
+        let mut port = TwoOutputPort::new();
+        let mut service = DisplayService::default();
+        begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
+        begin_on(&mut port, &mut service, "DP-B", 103, 10_000).expect("B to C");
+        let pending = service
+            .cached()
+            .and_then(|s| s.pending.clone())
+            .expect("pending");
+        assert_eq!(pending.deadline_ms, 25_000);
+        assert!(
+            !service
+                .tick(&mut port, 24_999)
+                .expect("before fresh deadline")
+        );
+        assert!(service.tick(&mut port, 25_000).expect("fresh deadline"));
+        assert_eq!(port.output("DP-B").current, ModeId(101));
+    }
+
+    #[test]
+    fn supersede_failed_apply_leaves_no_orphan_pending_and_original_baseline() {
+        let mut port = TwoOutputPort::new();
+        let mut service = DisplayService::default();
+        begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
+        port.fail_apply = true;
+        assert!(begin_on(&mut port, &mut service, "DP-B", 103, 0).is_err());
+        assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
+        assert_eq!(port.output("DP-B").current, ModeId(101));
+        assert!(!service.tick(&mut port, 15_000).expect("no orphan deadline"));
+    }
+
+    #[test]
+    fn supersede_refused_revert_blocks_apply() {
+        let mut port = TwoOutputPort::new();
+        let mut service = DisplayService::default();
+        let first = begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
+        port.fail_revert = true;
+        assert!(begin_on(&mut port, &mut service, "DP-B", 103, 0).is_err());
+        assert_eq!(port.applied.len(), 1);
+        assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
+        assert_eq!(
+            service.keep(&mut port, first, 0).expect_err("retired").code,
+            ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn supersede_other_output_reverts_pending_output_before_apply() {
+        let mut port = TwoOutputPort::new();
+        let mut service = DisplayService::default();
+        begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("DP-B");
+        let latest = begin_on(&mut port, &mut service, "DP-A", 2, 0).expect("DP-A");
+        assert_eq!(port.output("DP-B").current, ModeId(101));
+        assert_eq!(port.output("DP-A").current, ModeId(2));
+        let pending = service
+            .cached()
+            .and_then(|s| s.pending.clone())
+            .expect("pending");
+        assert_eq!(pending.output, OutputId::new("DP-A"));
+        service.revert(&mut port, latest).expect("cancel");
+        assert_eq!(port.output("DP-A").current, ModeId(1));
     }
 }

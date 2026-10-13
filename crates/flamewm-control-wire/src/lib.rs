@@ -412,6 +412,9 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
         (IFACE_SESSION, "Suspend") => session_action(call, SessionAction::Suspend),
         (IFACE_SESSION, "Reboot") => session_action(call, SessionAction::Reboot),
         (IFACE_SESSION, "Shutdown") => session_action(call, SessionAction::Shutdown),
+        (IFACE_SESSION, "ScreensaverPreview") => {
+            session_action(call, SessionAction::ScreensaverPreview)
+        }
         (IFACE_SYSTEM, "GetSnapshot") => expect_arity(call, 0).map(|()| ControlRequest::GetSystem),
         (IFACE_SYSTEM, member) => system_action_request(call, member),
         _ => Err(ControlError {
@@ -681,6 +684,7 @@ const fn session_method(action: SessionAction) -> &'static str {
         SessionAction::Suspend => "Suspend",
         SessionAction::Reboot => "Reboot",
         SessionAction::Shutdown => "Shutdown",
+        SessionAction::ScreensaverPreview => "ScreensaverPreview",
     }
 }
 
@@ -889,7 +893,11 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
         | (IFACE_DISPLAYS, "Keep" | "Revert" | "SetShellScale")
         | (IFACE_SHORTCUTS, "SetBinding" | "ClearBinding" | "ResetBinding" | "EndCapture")
         | (IFACE_PANELS, "SetEdge" | "SetSize" | "Pin" | "Unpin" | "Reorder")
-        | (IFACE_SESSION, "Lock" | "LockPreview" | "Logout" | "Suspend" | "Reboot" | "Shutdown")
+        | (
+            IFACE_SESSION,
+            "Lock" | "LockPreview" | "Logout" | "Suspend" | "Reboot" | "Shutdown"
+            | "ScreensaverPreview",
+        )
         | (IFACE_WINDOWS, "ActivateWindow" | "MinimizeWindow" | "RestoreWindow" | "CloseWindow")
         | (IFACE_APPLICATIONS, "LaunchApplication") => {
             expect_reply_arity(reply, 0)?;
@@ -2309,6 +2317,8 @@ fn setting_value_for_key(key: &str, value: &WireValue) -> Result<SettingValue, C
         | "taskbarOpacity"
         | "startMenuOpacity"
         | "taskbarBlurPercent"
+        | "surfaceOpacity"
+        | "surfaceBlurPercent"
         | "startMenuBlurPercent"
         | "accentOpacity" => {
             let percent = required_u32(value, key)?;
@@ -2741,12 +2751,8 @@ mod tests {
 
     #[test]
     fn keep_display_mode_uses_reactor_clock_for_deadline_enforcement() {
-        let call = WireCall::new(
-            IFACE_DISPLAYS,
-            "Keep",
-            vec![WireValue::U64(7)],
-        )
-        .with_now_ms(15_001);
+        let call =
+            WireCall::new(IFACE_DISPLAYS, "Keep", vec![WireValue::U64(7)]).with_now_ms(15_001);
         assert_eq!(
             decode_call(&call).expect("valid"),
             ControlRequest::KeepDisplayMode {
@@ -3022,6 +3028,25 @@ mod tests {
         assert_ne!(
             decode_call(&WireCall::new(IFACE_SESSION, "Lock", Vec::new())).expect("decode lock"),
             request
+        );
+    }
+
+    #[test]
+    fn screensaver_preview_session_action_round_trips_additively() {
+        let request = ControlRequest::SessionAction(SessionAction::ScreensaverPreview);
+        let call = encode_call(&request).expect("encode");
+        assert_eq!(call.interface, IFACE_SESSION);
+        assert_eq!(call.member, "ScreensaverPreview");
+        assert!(call.args.is_empty());
+        assert_eq!(decode_call(&call).expect("decode"), request);
+        assert_ne!(
+            decode_call(&WireCall::new(IFACE_SESSION, "LockPreview", Vec::new())).expect("decode"),
+            request
+        );
+        let reply = encode_reply(&call, &ControlResponse::Unit).expect("encode reply");
+        assert_eq!(
+            decode_reply(&call, &reply).expect("decode reply"),
+            ControlResponse::Unit
         );
     }
 
@@ -3423,7 +3448,12 @@ mod hotkey_capture_lease_wire_tests {
     }
     #[test]
     fn blur_percent_keys_decode_as_percent_like_the_opacities() {
-        for key in ["taskbarBlurPercent", "startMenuBlurPercent"] {
+        for key in [
+            "taskbarBlurPercent",
+            "startMenuBlurPercent",
+            "surfaceOpacity",
+            "surfaceBlurPercent",
+        ] {
             assert_eq!(
                 super::setting_value_for_key(key, &WireValue::U32(80)).expect("percent"),
                 SettingValue::Percent(80),
@@ -3431,5 +3461,4 @@ mod hotkey_capture_lease_wire_tests {
             );
         }
     }
-
 }

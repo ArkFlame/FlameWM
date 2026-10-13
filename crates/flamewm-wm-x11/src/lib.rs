@@ -693,6 +693,9 @@ impl SessionPort for X11Desktop {
         let (program, args): (&str, &[&str]) = match action {
             SessionAction::Lock => return flamewm_x11_desktop::start_lock_screen(),
             SessionAction::LockPreview => return flamewm_x11_desktop::start_lock_preview(),
+            SessionAction::ScreensaverPreview => {
+                return flamewm_x11_desktop::start_screensaver_preview()
+            }
             SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),

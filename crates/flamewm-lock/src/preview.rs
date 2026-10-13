@@ -63,7 +63,11 @@ mod tests {
         let before = at(10, 10);
         let moved = at(200, 10);
         assert!(!dismisses(Duration::ZERO, &before, &moved));
-        assert!(!dismisses(PREVIEW_GRACE - Duration::from_millis(1), &before, &moved));
+        assert!(!dismisses(
+            PREVIEW_GRACE - Duration::from_millis(1),
+            &before,
+            &moved
+        ));
     }
 
     #[test]
@@ -100,6 +104,28 @@ mod tests {
             &PreviewInput::new(0, 0, 0, pressed_later)
         ));
         // Releasing a held key is not a press.
-        assert!(!dismisses(PREVIEW_GRACE, &before, &PreviewInput::new(0, 0, 0, [0; 32])));
+        assert!(!dismisses(
+            PREVIEW_GRACE,
+            &before,
+            &PreviewInput::new(0, 0, 0, [0; 32])
+        ));
+    }
+
+    /// Esc is X keycode 9: bit 1 of byte 1. Pressing it escapes the Ribbons preview.
+    #[test]
+    fn escape_press_dismisses_the_screensaver_preview() {
+        let mut escape = [0u8; 32];
+        escape[1] = 1 << 1;
+        let idle = at(0, 0);
+        assert!(!dismisses(
+            PREVIEW_GRACE - Duration::from_millis(1),
+            &idle,
+            &PreviewInput::new(0, 0, 0, escape)
+        ));
+        assert!(dismisses(
+            PREVIEW_GRACE,
+            &idle,
+            &PreviewInput::new(0, 0, 0, escape)
+        ));
     }
 }

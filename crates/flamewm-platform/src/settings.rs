@@ -234,6 +234,9 @@ pub struct ProductSettings {
     pub taskbar_clock_format: ClockFormat,
     pub taskbar_show_seconds: bool,
     pub taskbar_show_date: bool,
+    pub surface_color: String,
+    pub surface_opacity: u8,
+    pub surface_blur_percent: u8,
     pub start_button_text: String,
     pub custom_start_icon: String,
     pub sticky_notes_enabled: bool,
@@ -311,12 +314,15 @@ impl Default for ProductSettings {
             taskbar_opacity: 50,
             taskbar_height: 44,
             taskbar_style: TaskbarStyle::Floating,
-            taskbar_floating_margin: 8,
+            taskbar_floating_margin: 4,
             taskbar_floating_radius: 12,
             taskbar_blur_percent: 80,
             taskbar_clock_format: ClockFormat::TwentyFour,
             taskbar_show_seconds: false,
             taskbar_show_date: true,
+            surface_color: "#191b1d".to_owned(),
+            surface_opacity: 50,
+            surface_blur_percent: 80,
             start_button_text: String::new(),
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
@@ -324,7 +330,7 @@ impl Default for ProductSettings {
             start_menu_opacity: 50,
             start_menu_blur_percent: 80,
             accent_opacity: 100,
-            decoration: "ios".to_owned(),
+            decoration: "rounded".to_owned(),
             titlebar_color: "#1b1e20".to_owned(),
             titlebar_minimize_style: "default".to_owned(),
             titlebar_maximize_style: "default".to_owned(),
@@ -442,6 +448,7 @@ impl ProductSettings {
 
     pub fn validate(&self) -> FlameResult<()> {
         validate_color(&self.taskbar_color, false, "taskbarColor")?;
+        validate_color(&self.surface_color, false, "surfaceColor")?;
         validate_color(&self.accent, true, "accent")?;
         if self
             .wallpaper
@@ -473,6 +480,12 @@ impl ProductSettings {
         }
         if self.taskbar_blur_percent > 100 {
             return invalid("taskbarBlurPercent must be 0..100");
+        }
+        if self.surface_opacity > 100 {
+            return invalid("surfaceOpacity must be 0..100");
+        }
+        if self.surface_blur_percent > 100 {
+            return invalid("surfaceBlurPercent must be 0..100");
         }
         if self.start_menu_blur_percent > 100 {
             return invalid("startMenuBlurPercent must be 0..100");
@@ -516,8 +529,8 @@ impl ProductSettings {
         if self.accent_opacity > 100 {
             return invalid("accentOpacity must be 0..100");
         }
-        if !matches!(self.decoration.as_str(), "rounded" | "ios") {
-            return invalid("decoration must be rounded or ios");
+        if !matches!(self.decoration.as_str(), "rounded" | "squared") {
+            return invalid("decoration must be rounded or squared");
         }
         for style in [
             &self.titlebar_minimize_style,
@@ -619,6 +632,8 @@ impl ConfigStore {
 
     pub fn parse_snapshot(&self, text: &str) -> FlameResult<ProductSettings> {
         let mut snapshot = self.current.clone();
+        let mut has_surface_key = false;
+        let mut has_legacy_taskbar_surface_key = false;
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -629,6 +644,14 @@ impl ConfigStore {
             };
             let key = key.trim();
             let value = value.trim();
+            has_surface_key |= matches!(
+                key,
+                "surfaceColor" | "surfaceOpacity" | "surfaceBlurPercent"
+            );
+            has_legacy_taskbar_surface_key |= matches!(
+                key,
+                "taskbarColor" | "taskbarOpacity" | "taskbarBlurPercent"
+            );
             if let Some(row) = stable_setting(key) {
                 (row.parse)(&mut snapshot, value, key)?;
                 continue;
@@ -658,6 +681,14 @@ impl ConfigStore {
                         .insert(key.to_owned(), value.to_owned());
                 }
             }
+        }
+        if has_legacy_taskbar_surface_key && !has_surface_key {
+            snapshot.surface_color = snapshot.taskbar_color.clone();
+            snapshot.surface_opacity = snapshot.taskbar_opacity;
+            snapshot.surface_blur_percent = snapshot.taskbar_blur_percent;
+        }
+        if snapshot.decoration == "ios" {
+            "rounded".clone_into(&mut snapshot.decoration);
         }
         snapshot.validate()?;
         Ok(snapshot)
@@ -1016,6 +1047,9 @@ stable_settings! {
     (false, taskbar, "taskbarFloatingMargin", taskbar_floating_margin),
     (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),
     (false, taskbar, "taskbarBlurPercent", taskbar_blur_percent),
+    (false, taskbar, "surfaceColor", surface_color),
+    (false, taskbar, "surfaceOpacity", surface_opacity),
+    (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
     (true, taskbar, "startButtonText", start_button_text),
     (true, taskbar, "customStartIcon", custom_start_icon),
     (true, desktop, "stickyNotesEnabled", sticky_notes_enabled),
@@ -1147,7 +1181,9 @@ fn validate_lock_image_path(value: &str, name: &str) -> FlameResult<()> {
         || !(value.is_empty() || value.starts_with('/'))
         || value.chars().any(char::is_control)
     {
-        return invalid_owned(format!("{name} must be empty or an absolute path of at most 4096 bytes"));
+        return invalid_owned(format!(
+            "{name} must be empty or an absolute path of at most 4096 bytes"
+        ));
     }
     Ok(())
 }
@@ -1194,7 +1230,9 @@ mod tests {
     #[test]
     fn unset_icon_theme_defaults_to_plaguesur_and_writes_nothing() {
         let store = ConfigStore::default();
-        let parsed = store.parse_snapshot("revision=2\n").expect("valid snapshot");
+        let parsed = store
+            .parse_snapshot("revision=2\n")
+            .expect("valid snapshot");
         assert_eq!(parsed.icon_theme, "PlagueSur");
         assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
     }
@@ -1344,7 +1382,9 @@ mod tests {
     fn lock_background_blur_and_dim_round_trip_bounds() {
         let store = ConfigStore::default();
         let parsed = store
-            .parse_snapshot("revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n")
+            .parse_snapshot(
+                "revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n",
+            )
             .expect("bounds are valid");
         assert_eq!(parsed.lock_background_blur_percent, 100);
         assert_eq!(parsed.lock_background_dim_percent, 80);
@@ -1461,7 +1501,7 @@ mod tests {
     fn taskbar_style_and_backdrop_defaults_write_nothing() {
         let defaults = ProductSettings::default();
         assert_eq!(defaults.taskbar_style, TaskbarStyle::Floating);
-        assert_eq!(defaults.taskbar_floating_margin, 8);
+        assert_eq!(defaults.taskbar_floating_margin, 4);
         assert_eq!(defaults.taskbar_floating_radius, 12);
         assert_eq!(defaults.taskbar_blur_percent, 80);
         assert_eq!(defaults.start_menu_blur_percent, 80);
@@ -1514,7 +1554,9 @@ mod tests {
             "startMenuBlurPercent=101",
         ] {
             assert!(
-                store.parse_snapshot(&format!("revision=2\n{line}\n")).is_err(),
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .is_err(),
                 "{line} should be rejected"
             );
         }
@@ -1624,7 +1666,7 @@ mod tests {
         assert_eq!(defaults.start_menu_opacity, 50);
         assert_eq!(defaults.taskbar_opacity, 50);
         assert_eq!(defaults.accent_opacity, 100);
-        assert_eq!(defaults.decoration, "ios");
+        assert_eq!(defaults.decoration, "rounded");
         assert_eq!(defaults.titlebar_color, "#1b1e20");
         assert_eq!(defaults.titlebar_close_style, "default");
         assert!(defaults.titlebar_close_color.is_empty());
@@ -1666,7 +1708,7 @@ mod tests {
         assert_eq!(parsed.start_menu_color, "#112233");
         assert_eq!(parsed.start_menu_opacity, 80);
         assert_eq!(parsed.accent_opacity, 40);
-        assert_eq!(parsed.decoration, "ios");
+        assert_eq!(parsed.decoration, "rounded");
         assert_eq!(parsed.titlebar_close_style, "circle");
         assert_eq!(parsed.titlebar_minimize_hover_color, "#FFFFFF");
         assert_eq!(parsed.cursor_theme, "Adwaita");
@@ -1685,6 +1727,91 @@ mod tests {
             store.parse_snapshot(&serialized).expect("round trip"),
             parsed
         );
+    }
+
+    #[test]
+    fn surface_defaults_and_legacy_taskbar_surface_promotes() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.surface_color, "#191b1d");
+        assert_eq!(defaults.surface_opacity, 50);
+        assert_eq!(defaults.surface_blur_percent, 80);
+        assert!(!ConfigStore::serialize(&defaults).contains("surface"));
+
+        let store = ConfigStore::default();
+        let legacy = store
+            .parse_snapshot(
+                "revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n",
+            )
+            .expect("legacy taskbar surface");
+        assert_eq!(legacy.surface_color, "#112233");
+        assert_eq!(legacy.surface_opacity, 70);
+        assert_eq!(legacy.surface_blur_percent, 30);
+        assert_eq!(legacy.taskbar_color, "#112233");
+
+        let explicit = store
+            .parse_snapshot(
+                "revision=3\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n\
+                 surfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
+            )
+            .expect("explicit surface wins");
+        assert_eq!(explicit.surface_color, "#445566");
+        assert_eq!(explicit.surface_opacity, 10);
+        assert_eq!(explicit.surface_blur_percent, 5);
+        assert_eq!(explicit.taskbar_opacity, 70);
+
+        let round = store
+            .parse_snapshot(&ConfigStore::serialize(&explicit))
+            .expect("round trip");
+        assert_eq!(round, explicit);
+        assert!(
+            store
+                .parse_snapshot("revision=4\nsurfaceOpacity=101\n")
+                .is_err()
+        );
+        assert!(
+            store
+                .parse_snapshot("revision=4\nsurfaceColor=red\n")
+                .is_err()
+        );
+        assert!(
+            store
+                .parse_snapshot("revision=4\nsurfaceBlurPercent=101\n")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn decoration_ios_parses_as_rounded_and_squared_is_accepted() {
+        let store = ConfigStore::default();
+        let ios = store
+            .parse_snapshot("revision=2\ndecoration=ios\n")
+            .expect("legacy ios");
+        assert_eq!(ios.decoration, "rounded");
+        let squared = store
+            .parse_snapshot("revision=2\ndecoration=squared\n")
+            .expect("squared");
+        assert_eq!(squared.decoration, "squared");
+        assert!(
+            store
+                .parse_snapshot("revision=2\ndecoration=neon\n")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn floating_margin_defaults_to_four_and_stored_value_is_kept() {
+        let store = ConfigStore::default();
+        assert_eq!(
+            store
+                .parse_snapshot("revision=2\n")
+                .expect("unset")
+                .taskbar_floating_margin,
+            4
+        );
+        let legacy = store
+            .parse_snapshot("revision=2\ntaskbarFloatingMargin=8\n")
+            .expect("stored 8");
+        assert_eq!(legacy.taskbar_floating_margin, 8);
     }
 
     #[test]
@@ -1737,7 +1864,9 @@ mod tests {
         assert!(text.contains("stickyNotesEnabled=0\n"));
         assert!(text.contains("animationsEnabled=false\n"));
         assert!(text.find("fontBold=") < text.find("animationsEnabled="));
-        let reparsed = ConfigStore::default().parse_snapshot(&text).expect("round trip");
+        let reparsed = ConfigStore::default()
+            .parse_snapshot(&text)
+            .expect("round trip");
         assert_eq!(reparsed, settings);
     }
 
@@ -1753,7 +1882,10 @@ mod tests {
             SettingValue::Text("slide".to_owned())
         );
         let serialized = ConfigStore::serialize(&parsed);
-        assert!(!serialized.contains("startAnimation"), "default style stays unwritten");
+        assert!(
+            !serialized.contains("startAnimation"),
+            "default style stays unwritten"
+        );
         assert!(!serialized.contains("slide-up"));
     }
 
@@ -1807,9 +1939,18 @@ mod tests {
     fn animation_style_precedence_treats_disabled_or_none_as_none() {
         let mut settings = ProductSettings::default();
         assert_eq!(settings.start_animation_style(), AnimationStyle::Slide);
-        assert_eq!(settings.minimize_animation_style(), AnimationStyle::MagicLamp);
-        assert_eq!(settings.maximize_animation_style(), AnimationStyle::MagicLamp);
-        assert_eq!(settings.window_open_animation_style(), AnimationStyle::Scale);
+        assert_eq!(
+            settings.minimize_animation_style(),
+            AnimationStyle::MagicLamp
+        );
+        assert_eq!(
+            settings.maximize_animation_style(),
+            AnimationStyle::MagicLamp
+        );
+        assert_eq!(
+            settings.window_open_animation_style(),
+            AnimationStyle::Scale
+        );
 
         settings.start_animation_enabled = false;
         settings.minimize_animation_enabled = false;
@@ -1856,7 +1997,10 @@ mod tests {
         assert!(serialized.contains("startAnimation=fade\n"));
         assert!(serialized.contains("minimizeAnimation=none\n"));
         assert!(serialized.contains("windowOpenAnimationEnabled=false\n"));
-        assert_eq!(store.parse_snapshot(&serialized).expect("round trip"), parsed);
+        assert_eq!(
+            store.parse_snapshot(&serialized).expect("round trip"),
+            parsed
+        );
     }
 
     #[test]
@@ -1958,7 +2102,12 @@ mod tests {
         let text = ConfigStore::serialize(&settings);
         assert!(text.contains("focusFollowsMouse=true\n"));
         let store = ConfigStore::default();
-        assert!(store.parse_snapshot(&text).expect("round trip").focus_follows_mouse);
+        assert!(
+            store
+                .parse_snapshot(&text)
+                .expect("round trip")
+                .focus_follows_mouse
+        );
     }
 
     #[test]

@@ -29,6 +29,21 @@ fn main() -> ExitCode {
             }
         };
     }
+    if std::env::args().any(|arg| arg == "--preview-screensaver") {
+        // Settings screensaver preview: ribbons only, no grabs, no PAM, no DPMS.
+        let Some(username) = session::username() else {
+            eprintln!("flamewm-lock: cannot determine the session user; no screensaver preview");
+            return ExitCode::FAILURE;
+        };
+        let settings = session::load_settings();
+        return match run::run_screensaver_preview(&settings, &username) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("flamewm-lock: screensaver preview: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     // Ignore before any lock work so a stray SIGTERM/SIGINT/SIGHUP never unlocks.
     signals::ignore_unlock_signals();
     let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") else {

@@ -20,15 +20,15 @@ use flamewm_ui_x11::{
 };
 
 use crate::document;
-use crate::preview::{self, PreviewInput};
-use crate::signals;
 use crate::native_time::local_now;
 use crate::pam::{self, Outcome};
 use crate::power::{self, Effect as PowerEffect, POWER_ORDER, PowerEvent, PowerUi, PowerView};
+use crate::preview::{self, PreviewInput};
 use crate::ribbons::{FRAME_INTERVAL, RibbonFrames};
 use crate::screensaver::{Phase, Screensaver};
 use crate::secret::PasswordBuffer;
 use crate::settings::LockSettings;
+use crate::signals;
 use crate::state::{Effect, Key, LockState, Status};
 use crate::view::LockView;
 use crate::x11::{KeyBatch, PointerState, Session, grab_with_retry};
@@ -56,17 +56,34 @@ pub fn run(settings: &LockSettings, username: &str) -> Result<(), String> {
 /// no power actions and no screensaver. Closes on the first input after the grace
 /// period, or on SIGTERM.
 pub fn run_preview(settings: &LockSettings, username: &str) -> Result<(), String> {
+    preview_loop(settings, username, false)
+}
+
+/// Shows the Ribbons screensaver over the lock UI as a temporary preview. Same
+/// dismissal as [`run_preview`]. It takes no grab, never authenticates, never changes
+/// DPMS and owns no idle timer, so the real lock's idle state is untouched.
+pub fn run_screensaver_preview(settings: &LockSettings, username: &str) -> Result<(), String> {
+    preview_loop(settings, username, true)
+}
+
+/// Shared preview loop. `ribbons` selects the animated background and nothing else.
+fn preview_loop(settings: &LockSettings, username: &str, ribbons: bool) -> Result<(), String> {
     let (width, height) = flamewm_ui_x11::root_geometry()?;
     let template = document::template()?;
     let mut runtime =
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
+    let title = if ribbons {
+        "FlameWM screensaver preview"
+    } else {
+        "FlameWM lock preview"
+    };
     let surface = runtime
         .create_surface(
             template,
             SurfaceConfig {
                 width,
                 height,
-                title: "FlameWM lock preview".to_string(),
+                title: title.to_string(),
                 role: SurfaceRole::Overlay,
                 input: SurfaceInputMode::Interactive,
                 initially_visible: false,
@@ -75,7 +92,13 @@ pub fn run_preview(settings: &LockSettings, username: &str) -> Result<(), String
             },
         )
         .map_err(|error| format!("create preview surface: {error:?}"))?;
-    let background = document::background_image(settings, width, height);
+    let started = Instant::now();
+    let mut frames = ribbons.then(|| RibbonFrames::new(width, height, &settings.saver, started));
+    let background = match frames.as_mut() {
+        Some(frames) => frames.frame(started),
+        None => document::background_image(settings, width, height),
+    };
+    let mut next_frame = started + FRAME_INTERVAL;
     let power = PowerUi::new(SessionCapabilities::default()).view();
     let view = LockView::project(
         settings,
@@ -122,9 +145,23 @@ pub fn run_preview(settings: &LockSettings, username: &str) -> Result<(), String
                 || matches!((previous, current),
                     (Some(before), Some(now)) if preview::dismisses(mapped.elapsed(), &before, &now));
             if dismiss {
+                frames = None;
                 runtime
                     .destroy(surface)
                     .map_err(|error| UiBackendError::Renderer(format!("destroy preview: {error:?}")))?;
+            }
+            if let Some(frames) = frames.as_mut() {
+                let now = Instant::now();
+                if now >= next_frame {
+                    let image = frames.frame(now);
+                    next_frame = now + FRAME_INTERVAL;
+                    runtime
+                        .with_document(surface, |view| document::set_background(view, image))
+                        .map_err(|error| UiBackendError::Renderer(format!("update preview background: {error:?}")))?;
+                    runtime
+                        .redraw(surface)
+                        .map_err(|error| UiBackendError::Renderer(format!("redraw preview: {error:?}")))?;
+                }
             }
             previous = current;
             Ok(())
@@ -387,10 +424,20 @@ impl LockLoop {
     }
 
     /// Applies a phase the screensaver entered on idle time.
-    fn enter(&mut self, runtime: &mut SurfaceRuntime, phase: Phase, now: Instant) -> Result<(), String> {
+    fn enter(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        phase: Phase,
+        now: Instant,
+    ) -> Result<(), String> {
         match phase {
             Phase::RibbonsActive => {
-                self.frames = Some(RibbonFrames::new(self.width, self.height, &self.settings.saver, now));
+                self.frames = Some(RibbonFrames::new(
+                    self.width,
+                    self.height,
+                    &self.settings.saver,
+                    now,
+                ));
                 self.next_frame = now;
                 self.frame_pacer.set_running(true);
             }
@@ -434,9 +481,14 @@ impl LockLoop {
 
     fn key(&mut self, key: Key, now: Instant) {
         match key {
-            Key::Enter if self.power.view().confirm.is_some() => self.power_event(PowerEvent::Confirm),
+            Key::Enter if self.power.view().confirm.is_some() => {
+                self.power_event(PowerEvent::Confirm)
+            }
             Key::Function(number) => {
-                if let Some(button) = usize::from(number).checked_sub(1).and_then(|i| POWER_ORDER.get(i)) {
+                if let Some(button) = usize::from(number)
+                    .checked_sub(1)
+                    .and_then(|i| POWER_ORDER.get(i))
+                {
                     self.power_event(PowerEvent::Click(*button));
                 }
             }
@@ -574,6 +626,32 @@ mod tests {
         drop(runtime);
     }
 
+    /// The shared preview body must never reach a grab, PAM, a screensaver or DPMS.
+    #[test]
+    fn preview_loop_has_no_grab_auth_screensaver_or_dpms_call_sites() {
+        let source = include_str!("run.rs");
+        let start = source.find("fn preview_loop(").expect("preview loop");
+        let end = source
+            .find("fn lock_on(")
+            .expect("lock loop follows the preview");
+        assert!(start < end, "preview loop must sit before the lock loop");
+        let body = &source[start..end];
+        for forbidden in [
+            "set_display_power",
+            "grab_pointer",
+            "grab_with_retry",
+            "try_grab",
+            "pam::",
+            "Screensaver::new",
+            "perform_on_worker",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "preview path reaches {forbidden}"
+            );
+        }
+    }
+
     /// Counts the frame wakes that arrive within `window`.
     fn wakes_within(reader: &mut UnixStream, window: Duration) -> usize {
         let deadline = Instant::now() + window;
@@ -584,7 +662,9 @@ mod tests {
             if remaining.is_zero() {
                 return count;
             }
-            reader.set_read_timeout(Some(remaining)).expect("read timeout");
+            reader
+                .set_read_timeout(Some(remaining))
+                .expect("read timeout");
             match reader.read(&mut byte) {
                 Ok(1) => count += 1,
                 _ => return count,
@@ -596,12 +676,23 @@ mod tests {
     fn frame_pacer_wakes_only_while_the_animation_runs() {
         let (mut reader, writer) = UnixStream::pair().expect("socket pair");
         let pacer = FramePacer::start(writer).expect("start pacer");
-        assert_eq!(wakes_within(&mut reader, Duration::from_millis(150)), 0, "idle pacer must stay silent");
+        assert_eq!(
+            wakes_within(&mut reader, Duration::from_millis(150)),
+            0,
+            "idle pacer must stay silent"
+        );
         pacer.set_running(true);
-        assert!(wakes_within(&mut reader, Duration::from_millis(300)) >= 3, "active pacer ticks at frame rate");
+        assert!(
+            wakes_within(&mut reader, Duration::from_millis(300)) >= 3,
+            "active pacer ticks at frame rate"
+        );
         pacer.set_running(false);
         thread::sleep(FRAME_INTERVAL * 2);
         let _ = wakes_within(&mut reader, Duration::from_millis(10));
-        assert_eq!(wakes_within(&mut reader, Duration::from_millis(150)), 0, "stopped pacer must stay silent");
+        assert_eq!(
+            wakes_within(&mut reader, Duration::from_millis(150)),
+            0,
+            "stopped pacer must stay silent"
+        );
     }
 }

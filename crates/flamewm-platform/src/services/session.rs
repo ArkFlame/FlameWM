@@ -16,6 +16,7 @@ impl SessionService {
         let available = match action {
             SessionAction::Lock => caps.lock,
             SessionAction::LockPreview => caps.lock,
+            SessionAction::ScreensaverPreview => caps.lock,
             SessionAction::Logout => caps.logout,
             SessionAction::Suspend => caps.suspend,
             SessionAction::Reboot => caps.reboot,
