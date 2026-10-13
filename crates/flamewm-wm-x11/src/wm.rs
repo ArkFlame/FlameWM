@@ -93,7 +93,7 @@ use flamewm_api::shortcuts::{
     ACTION_WORKSPACE_UP,
 };
 use flamewm_window_core::{
-    SnapTarget, snap_geometry as core_snap_geometry, snap_target as core_snap_target,
+    SnapTarget, snap_geometry as core_snap_geometry, snap_target_in_output as core_snap_target_in_output,
 };
 use x11rb::connection::Connection;
 use x11rb::errors::{ReplyError, ReplyOrIdError};
@@ -119,6 +119,7 @@ use crate::frame::geometry::{
     FrameExtents, GeometryReason, GeometryRequest, frame_to_client_root, plan_client_configure,
 };
 use crate::frame::model::{
+    frame_border_for_mode,
     FrameControl, FrameRegion, PlacementMode, PlacementSnapshot, PlacementState, ResizeEdges,
 };
 use crate::frame::resources::{
@@ -1472,6 +1473,23 @@ impl<'a, C: Connection> Wm<'a, C> {
         }).or_else(|| self.output_for_rect(fallback))
     }
 
+    /// Output geometry and its work area at a root point; falls back to the primary work area.
+    fn snap_zones_at(&self, root_x: i16, root_y: i16, fallback: Rect) -> (Rect, Rect) {
+        self.output_for_point(i32::from(root_x), i32::from(root_y), fallback)
+            .map_or((self.work_area(), self.work_area()), |o| (o.geometry, o.work_area))
+    }
+
+    /// Snap target for a root point. Far edges use the physical output so bottom/right
+    /// docks do not hide the corners from the pointer.
+    fn snap_target_at(&self, root_x: i16, root_y: i16, fallback: Rect) -> SnapTarget {
+        let (output, work) = self.snap_zones_at(root_x, root_y, fallback);
+        core_snap_target_in_output(
+            flamewm_api::Point::new(i32::from(root_x), i32::from(root_y)),
+            to_core_rect(output),
+            to_core_rect(work),
+        )
+    }
+
     pub fn take_changes(&mut self) -> WmChangeSet {
         self.changes.take()
     }
@@ -1723,11 +1741,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                         let Some(frame) = self.clients.get(&client).map(|state| state.frame) else {
                             continue;
                         };
+                        let border = u32::from(self.effective_frame_border(client));
                         let result = self.conn.configure_window(
                             frame,
                             &ConfigureWindowAux::new()
                                 .x(x)
                                 .y(y)
+                                .border_width(border)
                                 .width(w.max(1) as u32)
                                 .height(h.max(1) as u32),
                         );
@@ -3740,10 +3760,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         let target = {
             let _guard = flamewm_profiler::start("wm.move.snap_target");
-            core_snap_target(
-                flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
-                to_core_rect(self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer)).map_or(self.work_area(), |o| o.work_area)),
-            )
+            self.snap_target_at(event.root_x, event.root_y, self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer))
         };
         move_counters().record_snap_target(snap_target_bits(target));
         let placement = self
@@ -3807,19 +3824,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .map(|state| state.placement.mode),
                 None,
                 if move_active {
-                    let target = core_snap_target(
-                        flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
-                        to_core_rect(self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer)).map_or(self.work_area(), |o| o.work_area)),
-                    );
+                    let target = self.snap_target_at(event.root_x, event.root_y, self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer));
                     Some(format!("{target:?}"))
                 } else {
                     None
                 },
                 if move_active {
-                    let target = core_snap_target(
-                        flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
-                        to_core_rect(self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer)).map_or(self.work_area(), |o| o.work_area)),
-                    );
+                    let target = self.snap_target_at(event.root_x, event.root_y, self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer));
                     Some(target != SnapTarget::None)
                 } else {
                     None
@@ -3843,8 +3854,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .is_some_and(|state| state.placement.mode == PlacementMode::Floating);
             if preview_allowed {
                 let fallback = self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer);
-                let work = self.output_for_point(i32::from(event.root_x), i32::from(event.root_y), fallback).map_or(self.work_area(), |o| o.work_area);
-                self.update_snap_preview(event.root_x, event.root_y, work, client_id);
+                let (output, work) = self.snap_zones_at(event.root_x, event.root_y, fallback);
+                self.update_snap_preview(event.root_x, event.root_y, output, work, client_id);
             } else if move_active {
                 self.snap_preview.hide();
             }
@@ -4690,7 +4701,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Drag-motion preview: candidate from shared `snap_target`, geometry from
     /// shared `snap_geometry`. `None` hides. Skips redraw when unchanged.
     /// No new native renderer: the compiled snap-preview surface moves/shows.
-    fn update_snap_preview(&mut self, root_x: i16, root_y: i16, work: Rect, client: Window) {
+    fn update_snap_preview(&mut self, root_x: i16, root_y: i16, output: Rect, work: Rect, client: Window) {
         // Preview is cosmetic only: snapping on release is decided by the frame controller.
         if !crate::live_settings::snap_preview_enabled() {
             self.snap_preview.hide();
@@ -4698,8 +4709,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         let target = {
             let _guard = flamewm_profiler::start("wm.move.snap_target");
-            core_snap_target(
+            core_snap_target_in_output(
                 flamewm_api::Point::new(i32::from(root_x), i32::from(root_y)),
+                to_core_rect(output),
                 to_core_rect(work),
             )
         };
@@ -4761,9 +4773,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 &ConfigureWindowAux::new()
                     .x(outer.x)
                     .y(outer.y)
+                    .border_width(u32::from(self.effective_frame_border(client)))
                     .width(outer.width.max(1))
                     .height(outer.height.max(titlebar + 1)),
             )?;
+            self.set_frame_extents(client)?;
         }
         {
             let _guard = flamewm_profiler::start("wm.resize.client_configure");
@@ -4995,10 +5009,19 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// `_NET_FRAME_EXTENTS` (EWMH: left, right, top, bottom). Client-drawn
     /// frames publish zeros: Flame adds no frame, so the window is its own
     /// visible area and GTK's `_GTK_FRAME_EXTENTS` stays client-owned.
+    /// Effective X border for `client`'s frame: the configured border only
+    /// while floating, zero for snapped/maximized/fullscreen frames.
+    fn effective_frame_border(&self, client: Window) -> u16 {
+        let configured = self.config.frame_border;
+        self.clients.get(&client).map_or(configured, |state| {
+            frame_border_for_mode(state.placement.mode, configured)
+        })
+    }
+
     fn set_frame_extents(&self, client: Window) -> Result<(), ReplyError> {
         let (border, titlebar) = match self.clients.get(&client).map(|state| state.decoration) {
             None | Some(Decoration::Server) => (
-                u32::from(self.config.frame_border),
+                u32::from(self.effective_frame_border(client)),
                 u32::from(self.config.titlebar_height),
             ),
             Some(Decoration::ClientSide | Decoration::None) => (0, 0),

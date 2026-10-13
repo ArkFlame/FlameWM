@@ -337,3 +337,51 @@ mod tests {
         assert_eq!(frame.to_root(origin), state.floating_restore);
     }
 }
+
+/// X `border_width` of a frame window for its placement mode.
+///
+/// Only floating frames show the configured border. Snapped, maximized and
+/// fullscreen frames are borderless so the border-inclusive X extent equals
+/// the model rect (interior == outer == target). Pure: no X state.
+#[must_use]
+pub fn frame_border_for_mode(mode: PlacementMode, configured: u16) -> u16 {
+    match mode {
+        PlacementMode::Floating => configured,
+        PlacementMode::Snapped(_) | PlacementMode::Maximized | PlacementMode::Fullscreen => 0,
+    }
+}
+
+#[cfg(test)]
+mod frame_border_tests {
+    use super::*;
+
+    #[test]
+    fn floating_keeps_configured_border() {
+        assert_eq!(frame_border_for_mode(PlacementMode::Floating, 1), 1);
+        assert_eq!(frame_border_for_mode(PlacementMode::Floating, 2), 2);
+    }
+
+    #[test]
+    fn snapped_maximized_fullscreen_are_borderless() {
+        for target in [
+            SnapTarget::Left,
+            SnapTarget::Right,
+            SnapTarget::Top,
+            SnapTarget::Bottom,
+            SnapTarget::TopLeft,
+            SnapTarget::TopRight,
+            SnapTarget::BottomLeft,
+            SnapTarget::BottomRight,
+        ] {
+            assert_eq!(frame_border_for_mode(PlacementMode::Snapped(target), 1), 0);
+        }
+        assert_eq!(frame_border_for_mode(PlacementMode::Maximized, 1), 0);
+        assert_eq!(frame_border_for_mode(PlacementMode::Fullscreen, 1), 0);
+    }
+
+    #[test]
+    fn configured_zero_stays_zero() {
+        assert_eq!(frame_border_for_mode(PlacementMode::Floating, 0), 0);
+        assert_eq!(frame_border_for_mode(PlacementMode::Maximized, 0), 0);
+    }
+}

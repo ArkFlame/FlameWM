@@ -25,11 +25,20 @@ pub enum SnapTarget {
 
 #[must_use]
 pub fn snap_target(pointer: Point, work_area: Rect) -> SnapTarget {
+    snap_target_in_output(pointer, work_area, work_area)
+}
+
+/// Snap detection for a pointer on an output whose work area may be reserved by docks.
+/// Left/top zones are measured from the work area; right/bottom zones extend to the
+/// output edge so a pointer over a bottom/right dock band still reaches the physical corner.
+#[must_use]
+pub fn snap_target_in_output(pointer: Point, output: Rect, work_area: Rect) -> SnapTarget {
     let left = pointer.x >= work_area.x && pointer.x < work_area.x + EDGE_THRESHOLD;
-    let right = pointer.x >= work_area.right() - EDGE_THRESHOLD && pointer.x < work_area.right();
+    let right = pointer.x >= work_area.right() - EDGE_THRESHOLD
+        && pointer.x < work_area.right().max(output.right());
     let top = pointer.y >= work_area.y && pointer.y < work_area.y + CORNER_THRESHOLD;
-    let bottom =
-        pointer.y >= work_area.bottom() - CORNER_THRESHOLD && pointer.y < work_area.bottom();
+    let bottom = pointer.y >= work_area.bottom() - CORNER_THRESHOLD
+        && pointer.y < work_area.bottom().max(output.bottom());
     match (left, right, top, bottom) {
         (true, _, true, _) => SnapTarget::TopLeftQuarter,
         (_, true, true, _) => SnapTarget::TopRightQuarter,
@@ -91,6 +100,33 @@ mod tests {
         assert_eq!(
             snap_target(Point::new(1000, 1079), area()),
             SnapTarget::None
+        );
+    }
+
+    #[test]
+    fn bottom_dock_physical_corners_snap_to_quarters() {
+        // 1280x800 output with a 48px bottom dock: work area is 0,0,1280,752.
+        let output = Rect::new(0, 0, 1280, 800);
+        let work = Rect::new(0, 0, 1280, 752);
+        assert_eq!(
+            snap_target_in_output(Point::new(0, 799), output, work),
+            SnapTarget::BottomLeftQuarter
+        );
+        assert_eq!(
+            snap_target_in_output(Point::new(1279, 799), output, work),
+            SnapTarget::BottomRightQuarter
+        );
+        assert_eq!(
+            snap_target_in_output(Point::new(0, 751), output, work),
+            SnapTarget::BottomLeftQuarter
+        );
+        assert_eq!(
+            snap_target_in_output(Point::new(640, 799), output, work),
+            SnapTarget::None
+        );
+        assert_eq!(
+            snap_geometry(SnapTarget::BottomLeftQuarter, work, Size::new(800, 600)),
+            Rect::new(0, 376, 640, 376)
         );
     }
 
