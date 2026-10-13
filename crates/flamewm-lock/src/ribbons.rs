@@ -55,16 +55,13 @@ impl RibbonFrames {
     pub fn frame(&mut self, now: Instant) -> RuntimeImage {
         let t = now.saturating_duration_since(self.started).as_secs_f64();
         self.ribbons.step_to(t);
-        let mut bgra = vec![0u8; self.width as usize * self.height as usize * 4];
-        self.rasterizer.render(&self.ribbons, &mut bgra);
-        for pixel in bgra.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-        }
+        let mut rgba = vec![0u8; self.width as usize * self.height as usize * 4];
+        self.rasterizer.render_rgba(&self.ribbons, &mut rgba);
         RuntimeImage {
             source: "lock-ribbons".to_string(),
             width: self.width,
             height: self.height,
-            pixels: bgra,
+            pixels: rgba,
         }
     }
 }

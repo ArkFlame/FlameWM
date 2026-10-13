@@ -86,6 +86,16 @@ impl Rasterizer {
     /// Renders `state` into `out`, which must be exactly `width * height * 4` bytes (BGRA).
     /// Scratch buffers are reused; allocation happens only when the viewport size changes.
     pub fn render(&mut self, state: &Ribbons, out: &mut [u8]) {
+        self.render_ordered(state, out, [2, 1, 0]);
+    }
+
+    /// Same pixels as [`Rasterizer::render`], written as RGBA (`A = 255`) in one pass.
+    pub fn render_rgba(&mut self, state: &Ribbons, out: &mut [u8]) {
+        self.render_ordered(state, out, [0, 1, 2]);
+    }
+
+    /// `order` gives the source channel index (of linear RGB) stored at each output byte.
+    fn render_ordered(&mut self, state: &Ribbons, out: &mut [u8], order: [usize; 3]) {
         let (w, h) = (state.width() as usize, state.height() as usize);
         assert_eq!(out.len(), w * h * 4, "output must be width*height*4 bytes");
         if w == 0 || h == 0 {
@@ -158,7 +168,7 @@ impl Rasterizer {
                 let (pa, pb) = (row[xa], row[xb]);
                 let rgb: [u8; 3] =
                     std::array::from_fn(|c| ((1.0 - tx) * pa[c] + tx * pb[c] + 0.5) as u8);
-                px_out.copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
+                px_out.copy_from_slice(&[rgb[order[0]], rgb[order[1]], rgb[order[2]], 255]);
             }
         }
     }
@@ -380,6 +390,38 @@ mod tests {
             out.chunks_exact(4)
                 .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 255)
         );
+    }
+
+    #[test]
+    fn rgba_render_is_bgra_render_with_swapped_channels() {
+        let rect = crate::config::Rect { x: 0, y: 0, w: 640, h: 360 };
+        for quality in [Quality::Half, Quality::Full] {
+            for seed in [21u64, 4, 13] {
+                let config = Config {
+                    num: 6,
+                    width_px: 11.0,
+                    span_rects: vec![rect],
+                    seed,
+                };
+                let mut state = Ribbons::new_with_speed_factor(config, 0.0, 1.0);
+                let mut rast = Rasterizer::new(quality);
+                let mut frame = 1u64;
+                for t in [1u64, 3, 8] {
+                    while frame <= t * 60 {
+                        state.step_to(frame as f64 / 60.0);
+                        frame += 1;
+                    }
+                    let mut bgra = vec![0u8; 640 * 360 * 4];
+                    let mut rgba = vec![0u8; 640 * 360 * 4];
+                    rast.render(&state, &mut bgra);
+                    rast.render_rgba(&state, &mut rgba);
+                    for px in bgra.chunks_exact_mut(4) {
+                        px.swap(0, 2);
+                    }
+                    assert!(bgra == rgba, "quality {quality:?} seed {seed} t {t}s");
+                }
+            }
+        }
     }
 
     #[test]
