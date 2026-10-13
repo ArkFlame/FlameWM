@@ -5408,6 +5408,43 @@ mod tests {
     }
 
     #[test]
+    fn cross_output_window_selects_output_containing_centre_for_unequal_layouts() {
+        // Horizontal: 1920x1080 left, 1280x720 right offset down by 180.
+        let horizontal = vec![
+            output("left", Rect::new(0, 0, 1920, 1080), Rect::new(0, 0, 1920, 1050), true),
+            output("right", Rect::new(1920, 180, 1280, 720), Rect::new(1920, 180, 1280, 690), false),
+        ];
+        // 400x300 window straddling x=1920 with centre (2020, 330) on the right output.
+        assert_eq!(select_output_for_rect(&horizontal, Rect::new(1820, 180, 400, 300)), Some(1));
+        // Centre (1900, 330) stays on the left output even though the window spills right.
+        assert_eq!(select_output_for_rect(&horizontal, Rect::new(1700, 180, 400, 300)), Some(0));
+
+        // Negative-coordinate: 1280x720 left at x=-1280, 1920x1080 primary right.
+        let negative = vec![
+            output("left", Rect::new(-1280, 0, 1280, 720), Rect::new(-1280, 0, 1280, 690), false),
+            output("right", Rect::new(0, 0, 1920, 1080), Rect::new(0, 0, 1920, 1050), true),
+        ];
+        assert_eq!(select_output_for_rect(&negative, Rect::new(-500, 100, 400, 300)), Some(0));
+        assert_eq!(select_output_for_rect(&negative, Rect::new(-100, 100, 400, 300)), Some(1));
+        // The selected output's work area (panel strut) is the one used for maximize/snap.
+        assert_eq!(
+            negative[select_output_for_rect(&negative, Rect::new(-500, 100, 400, 300)).unwrap()].work_area,
+            Rect::new(-1280, 0, 1280, 690)
+        );
+        assert_eq!(
+            horizontal[select_output_for_rect(&horizontal, Rect::new(1820, 180, 400, 300)).unwrap()].work_area,
+            Rect::new(1920, 180, 1280, 690)
+        );
+        // Vertical: right output stacked above at negative y.
+        let vertical = vec![
+            output("below", Rect::new(0, 0, 1920, 1080), Rect::new(0, 0, 1920, 1050), true),
+            output("above", Rect::new(0, -720, 1280, 720), Rect::new(0, -720, 1280, 690), false),
+        ];
+        assert_eq!(select_output_for_rect(&vertical, Rect::new(100, -600, 300, 200)), Some(1));
+        assert_eq!(select_output_for_rect(&vertical, Rect::new(100, -200, 300, 400)), Some(0));
+    }
+
+    #[test]
     fn output_reconciliation_drops_unplugged_and_accepts_replugged_geometry() {
         let mut outputs = vec![output("panel", Rect::new(0, 0, 100, 100), Rect::new(0, 0, 100, 56), true)];
         assert_eq!(select_output_for_rect(&outputs, Rect::new(20, 20, 10, 10)), Some(0));

@@ -153,6 +153,33 @@ mod tests {
         assert_eq!((rect.x, rect.y), (400 - size.width, 300 - size.height));
     }
 
+    #[test]
+    fn menu_clamps_inside_the_output_containing_the_anchor_near_shared_edge() {
+        fn inside(outer: Rect, inner: Rect) -> bool {
+            inner.x >= outer.x
+                && inner.y >= outer.y
+                && inner.right() <= outer.right()
+                && inner.bottom() <= outer.bottom()
+        }
+        let size = Size::new(205, 160);
+        // Left 1920x1080 at origin, right 1280x720 offset down by 180; shared edge at x=1920.
+        let left = Rect::new(0, 0, 1920, 1080);
+        let right = Rect::new(1920, 180, 1280, 720);
+        // Anchor 5px left of the shared edge stays on the left output and flips inside it.
+        let on_left = menu_rect(left, Point::new(1915, 300), size);
+        assert_eq!(on_left, Rect::new(1715, 300, 205, 160));
+        assert!(inside(left, on_left));
+        // Anchor 5px right of the shared edge on the right output stays inside the right output.
+        let on_right = menu_rect(right, Point::new(1925, 800), size);
+        assert_eq!(on_right, Rect::new(1925, 740, 205, 160));
+        assert!(inside(right, on_right));
+        // Negative-origin left output at x=-1280: anchor at its right edge flips inside it, not into x=0.
+        let negative_left = Rect::new(-1280, 0, 1280, 720);
+        let flipped = menu_rect(negative_left, Point::new(-1, 710), size);
+        assert_eq!(flipped, Rect::new(0 - 205, 720 - 160, 205, 160));
+        assert!(inside(negative_left, flipped));
+    }
+
     fn snapshot_with(key: &str, value: SettingValue) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(key.to_owned(), value);

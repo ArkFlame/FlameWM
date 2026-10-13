@@ -486,6 +486,47 @@ mod tests {
     }
 
     #[test]
+    fn per_output_panel_reservation_uses_own_scale_and_survives_hotplug() {
+        let t100 = logical_to_physical(DEFAULT_PANEL_LOGICAL_SIZE, 100);
+        let t150 = logical_to_physical(DEFAULT_PANEL_LOGICAL_SIZE, 150);
+        assert_ne!(t100, t150);
+        let mut manager = PanelManager::default();
+        manager.upsert_output(OutputPanel::new(
+            id("L"),
+            Rect::new(0, 0, 1920, 1080),
+            PanelEdge::Bottom,
+            100,
+        ));
+        manager.upsert_output(OutputPanel::new(
+            id("R"),
+            Rect::new(1920, 180, 1280, 720),
+            PanelEdge::Bottom,
+            150,
+        ));
+        assert_eq!(manager.panel(&id("L")).map(|p| p.strut().bottom), Some(t100));
+        assert_eq!(manager.panel(&id("R")).map(|p| p.strut().bottom), Some(t150));
+        assert_eq!(
+            manager.panel(&id("R")).map(OutputPanel::work_area),
+            Some(Rect::new(1920, 180, 1280, 720 - t150))
+        );
+
+        // Unplug R, re-plug it at a negative origin: its reservation still uses its own scale and L is untouched.
+        assert!(manager.remove_output(&id("R")));
+        manager.upsert_output(OutputPanel::new(
+            id("R"),
+            Rect::new(-1280, 0, 1280, 720),
+            PanelEdge::Bottom,
+            150,
+        ));
+        assert_eq!(manager.panel(&id("R")).map(|p| p.strut().bottom), Some(t150));
+        assert_eq!(
+            manager.panel(&id("R")).map(OutputPanel::work_area),
+            Some(Rect::new(-1280, 0, 1280, 720 - t150))
+        );
+        assert_eq!(manager.panel(&id("L")).map(|p| p.strut().bottom), Some(t100));
+    }
+
+    #[test]
     fn start_is_single_open_and_toggle_is_output_local() {
         let mut start = StartController::default();
         assert!(start.toggle(Some(id("eDP-1"))));

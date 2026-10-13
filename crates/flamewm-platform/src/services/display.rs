@@ -10,6 +10,8 @@ pub struct DisplayService {
     coordinator: DisplayCoordinator,
     cached: Option<DisplaySnapshot>,
     engine_generation: u64,
+    /// Last shell scale set per output ID, kept across unplug so a re-plugged output keeps it.
+    scale_memory: std::collections::BTreeMap<OutputId, u16>,
 }
 
 impl DisplayService {
@@ -61,6 +63,11 @@ impl DisplayService {
                 {
                     output.shell_scale_percent = old.shell_scale_percent;
                 }
+            }
+        }
+        for output in &mut fresh.outputs {
+            if let Some(scale) = self.scale_memory.get(&output.id) {
+                output.shell_scale_percent = *scale;
             }
         }
         fresh.generation = next_product_generation;
@@ -330,6 +337,7 @@ impl DisplayService {
             .iter_mut()
             .find(|candidate| candidate.connected && candidate.id == *output)
             .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "display output not found"))?;
+        self.scale_memory.insert(output.clone(), scale_percent);
         if selected.shell_scale_percent == scale_percent {
             return Ok(false);
         }
@@ -1074,6 +1082,53 @@ mod tests {
             .begin_mode(&mut port, &OutputId::new("O4"), ModeId(412), fresh, 0)
             .expect("fresh generation accepted");
         assert_eq!(port.applied, vec![(OutputId::new("O4"), ModeId(412))]);
+    }
+
+    fn scale_of(snapshot: &DisplaySnapshot, output: &str) -> u16 {
+        snapshot
+            .outputs
+            .iter()
+            .find(|candidate| candidate.id.as_str() == output)
+            .map(|candidate| candidate.shell_scale_percent)
+            .expect("output present in snapshot")
+    }
+
+    #[test]
+    fn per_output_scales_survive_remove_readd_and_primary_change_independently() {
+        let mut port = five_output_port();
+        let mut service = DisplayService::default();
+        let scales = [("O0", 100), ("O1", 125), ("O2", 150), ("O3", 175), ("O4", 200)];
+        for (output, scale) in scales {
+            let generation = service.refresh(&mut port).expect("snapshot").generation;
+            service
+                .set_shell_scale(&OutputId::new(output), scale, generation)
+                .expect("supported scale applies");
+        }
+
+        // Unplug O1, then re-plug it: its scale must come back unchanged and the others stay put.
+        port.disconnect("O1");
+        service.refresh(&mut port).expect("snapshot after unplug");
+        port.outputs[1].connected = true;
+        port.bump_generation(1);
+        let after_readd = service.refresh(&mut port).expect("snapshot after re-add");
+        assert_eq!(scale_of(after_readd, "O1"), 125);
+        for (output, scale) in scales {
+            assert_eq!(scale_of(after_readd, output), scale, "{output} after re-add");
+        }
+
+        // Unplug the primary O0: O1 becomes primary but keeps its own scale; O0 keeps its scale on re-add.
+        port.disconnect("O0");
+        let after_primary_loss = service.refresh(&mut port).expect("snapshot after primary loss");
+        assert_eq!(
+            after_primary_loss.outputs.iter().find(|o| o.primary).map(|o| o.id.as_str()),
+            Some("O1")
+        );
+        assert_eq!(scale_of(after_primary_loss, "O1"), 125);
+        port.outputs[0].connected = true;
+        port.bump_generation(1);
+        let restored = service.refresh(&mut port).expect("snapshot after primary re-add");
+        assert_eq!(scale_of(restored, "O0"), 100);
+        assert_eq!(scale_of(restored, "O1"), 125);
     }
 
     #[test]
