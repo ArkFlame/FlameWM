@@ -317,23 +317,23 @@ pub fn capture_is_ready(rgba: &[u8]) -> bool {
 }
 
 /// Opaque ARGB32 words (0xFFRRGGBB) for a straight RGBA8 snapshot, blurred per
-/// [`blur_radius_px`]. Blur failure keeps the unblurred pixels.
+/// [`blur_radius_px`]. Takes ownership so the blur runs in place without a copy.
+/// Blur failure keeps the unblurred pixels.
 #[must_use]
 pub fn blurred_argb_words(
     width: u32,
     height: u32,
-    rgba: &[u8],
+    mut rgba: Vec<u8>,
     opacity_percent: u8,
     blur_percent: u8,
 ) -> Vec<u32> {
-    let mut pixels = rgba.to_vec();
     let radius = blur_radius_px(opacity_percent, blur_percent);
     if radius > 0.0 {
-        if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut pixels, width, height, radius) {
+        if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut rgba, width, height, radius) {
             eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
         }
     }
-    pixels
+    rgba
         .chunks_exact(4)
         .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
         .collect()
@@ -368,14 +368,44 @@ mod tests {
 
     #[test]
     fn unblurred_words_are_opaque_argb_in_rgb_order() {
-        let words = blurred_argb_words(2, 1, &[0x11, 0x22, 0x33, 0x00, 0x11, 0x22, 0x33, 0x00], 100, 80);
+        let words = blurred_argb_words(2, 1, vec![0x11, 0x22, 0x33, 0x00, 0x11, 0x22, 0x33, 0x00], 100, 80);
         assert_eq!(words, vec![0xff11_2233, 0xff11_2233]);
     }
 
     #[test]
     fn blur_of_uniform_snapshot_keeps_colour() {
-        let words = blurred_argb_words(8, 8, &[0x40, 0x80, 0xc0, 0xff].repeat(64), 40, 100);
+        let words = blurred_argb_words(8, 8, [0x40, 0x80, 0xc0, 0xff].repeat(64), 40, 100);
         assert!(words.iter().all(|&w| w == 0xff40_80c0));
+    }
+
+    #[test]
+    fn in_place_blur_matches_copying_reference_on_random_pixels() {
+        // Reference: the pre-move path (copy, blur the copy, then convert).
+        fn reference(width: u32, height: u32, rgba: &[u8], radius: f32) -> Vec<u32> {
+            let mut pixels = rgba.to_vec();
+            if radius > 0.0 {
+                flamewm_image_core::blur::gaussian_blur_rgba(&mut pixels, width, height, radius).unwrap();
+            }
+            pixels
+                .chunks_exact(4)
+                .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
+                .collect()
+        }
+        let mut seed: u32 = 0x1234_5678;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 16) as u8
+        };
+        for &(width, height) in &[(1u32, 1u32), (7, 5), (31, 17)] {
+            let len = (width * height * 4) as usize;
+            let rgba: Vec<u8> = (0..len).map(|_| next()).collect();
+            for &(opacity, blur) in &[(100u8, 80u8), (80, 0), (40, 100), (60, 33)] {
+                let radius = blur_radius_px(opacity, blur);
+                let expected = reference(width, height, &rgba, radius);
+                let actual = blurred_argb_words(width, height, rgba.clone(), opacity, blur);
+                assert_eq!(actual, expected, "{width}x{height} opacity={opacity} blur={blur}");
+            }
+        }
     }
 
     #[test]

@@ -13,6 +13,9 @@ use flamewm_shell_core::popup::{fitted_start_placement, measured_popup_rect, Pop
 use flamewm_ui_core::popover::{PopoverAlign, PopoverEdge};
 use flamewm_ui_x11::{SurfaceHandle, SurfaceRuntime};
 
+/// Shared shell popup gap (px) between a popup and its panel anchor.
+pub(crate) const POPUP_GAP: i32 = 8;
+
 /// Reusable popup open descriptor. Raw HTML ids, never `'#...'`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PopupSpec {

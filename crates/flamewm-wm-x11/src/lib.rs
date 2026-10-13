@@ -165,23 +165,21 @@ impl X11Desktop {
     fn flush(&self) -> FlameResult<()> {
         self.conn.flush().map_err(io_error)
     }
-    fn property32(&self, window: Window, name: &str) -> FlameResult<Vec<u32>> {
-        let reply = self
-            .conn
+    fn fetch_property(&self, window: Window, name: &str) -> FlameResult<xproto::GetPropertyReply> {
+        self.conn
             .get_property(false, window, self.atom(name), AtomEnum::ANY, 0, u32::MAX)
             .map_err(io_error)?
             .reply()
-            .map_err(io_error)?;
-        Ok(reply.value32().map_or_else(Vec::new, Iterator::collect))
+            .map_err(io_error)
+    }
+    fn property32(&self, window: Window, name: &str) -> FlameResult<Vec<u32>> {
+        Ok(self
+            .fetch_property(window, name)?
+            .value32()
+            .map_or_else(Vec::new, Iterator::collect))
     }
     fn property_bytes(&self, window: Window, name: &str) -> FlameResult<Vec<u8>> {
-        Ok(self
-            .conn
-            .get_property(false, window, self.atom(name), AtomEnum::ANY, 0, u32::MAX)
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?
-            .value)
+        Ok(self.fetch_property(window, name)?.value)
     }
     fn managed_windows(&self) -> FlameResult<Vec<Window>> {
         let support_window = self

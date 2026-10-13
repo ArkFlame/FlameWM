@@ -1741,15 +1741,10 @@ impl SurfaceController {
             instance.app.clear_surface_backdrop();
             return Ok(());
         };
-        let words = crate::backdrop::blurred_argb_words(
-            capture.width,
-            capture.height,
-            &capture.pixels,
-            opacity,
-            blur,
-        );
+        let (width, height) = (capture.width, capture.height);
+        let words = crate::backdrop::blurred_argb_words(width, height, capture.pixels, opacity, blur);
         // SAFETY: the popup's display and backbuffer are live and the window is still unmapped.
-        let installed = unsafe { instance.app.set_surface_backdrop(&words, capture.width, capture.height) };
+        let installed = unsafe { instance.app.set_surface_backdrop(&words, width, height) };
         if installed.is_err() {
             instance.app.clear_surface_backdrop();
         }

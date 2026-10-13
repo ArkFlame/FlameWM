@@ -12,11 +12,9 @@ use flamewm_api::{PanelEdge, Rect, Size};
 use flamewm_ui_core::popover::{PopoverAlign, PopoverEdge};
 use flamewm_ui_x11::{SurfaceHandle, SurfaceRuntime};
 
-use crate::popup_controller::{self, PopupError, PopupSpec};
+use crate::popup_controller::{self, POPUP_GAP, PopupError, PopupSpec};
 use crate::popup_role::PopupRole;
 use crate::quick_controls::protocol::{OpenRequest, QuickControlKind};
-
-const POPUP_GAP: i32 = 8;
 
 #[must_use]
 pub fn role_for_kind(kind: QuickControlKind) -> PopupRole {
@@ -156,7 +154,12 @@ mod tests {
         // 125% scale: device-pixel output 2400 wide; no rounding drift at the edge.
         let output = Rect::new(0, 0, 2400, 1500);
         let anchor = Rect::new(2000, 1456, 40, 44);
-        let req = request(QuickControlKind::Calendar, anchor, output, PanelEdge::Bottom);
+        let req = request(
+            QuickControlKind::Calendar,
+            anchor,
+            output,
+            PanelEdge::Bottom,
+        );
         let rect = fit_helper(&req, Size::new(388, 275)).expect("fit");
         assert_eq!(rect.right(), 2400);
     }

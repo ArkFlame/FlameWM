@@ -4,7 +4,7 @@
 //! in-process Start surface. No placement math and no measurement logic
 //! here; anchor/measure/fit come from `popup_controller`.
 
-use crate::popup_controller::{self, PopupError, PopupSpec};
+use crate::popup_controller::{self, PopupError, PopupSpec, POPUP_GAP};
 use crate::popup_role::PopupRole;
 use flamewm_api::{PanelEdge, Rect};
 use flamewm_ui_core::popover::{PopoverAlign, PopoverEdge};
@@ -35,7 +35,7 @@ pub fn open(
         work_area,
         PopoverEdge::Above,
         panel_edge,
-        8,
+        POPUP_GAP,
     )
     .map_err(|error| error.to_string())
 }
