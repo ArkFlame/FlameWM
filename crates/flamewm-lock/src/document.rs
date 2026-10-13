@@ -867,6 +867,26 @@ mod tests {
         assert_eq!(hidden, ids);
     }
 
+    /// The action hit-test skips nodes that are not effectively visible, so hidden power
+    /// and dialog actions cannot be clicked at their former centres.
+    #[test]
+    fn hidden_lock_ui_clears_every_power_and_dialog_action() {
+        let mut recorder = Recorder::default();
+        set_lock_ui_shown(&mut recorder, false).expect("hide lock UI");
+        for id in [
+            "lock-power-0",
+            "lock-power-1",
+            "lock-power-2",
+            "lock-power-3",
+            "lock-confirm-ok",
+            "lock-confirm-cancel",
+            "lock-other-logout",
+            "lock-other-cancel",
+        ] {
+            assert_eq!(recorder.visible.get(id), Some(&false), "{id} must be hidden");
+        }
+    }
+
     #[test]
     fn cover_scales_and_crops_to_exact_size() {
         let source = solid(4, 2);

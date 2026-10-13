@@ -254,6 +254,9 @@ fn lock_on(
         last_pointer: None,
         caps_lock: false,
         shown: None,
+        ui_shown_wanted: true,
+        ui_visibility_dirty: false,
+        display_on_pending: false,
         username: username.to_string(),
         outcome_tx,
         outcome_rx,
@@ -344,10 +347,32 @@ struct LockLoop {
     last_pointer: Option<PointerState>,
     caps_lock: bool,
     shown: Option<LockView>,
+    /// Wanted visibility of the lock widgets; `ui_visibility_dirty` means the document
+    /// does not yet match it and the next tick retries.
+    ui_shown_wanted: bool,
+    ui_visibility_dirty: bool,
+    /// Set when waking a dead display; the next tick retries DPMS on.
+    display_on_pending: bool,
     username: String,
     outcome_tx: Sender<Outcome>,
     outcome_rx: Receiver<Outcome>,
     unlocked: bool,
+}
+
+/// Applies the wanted widget visibility. A failure is logged and leaves `dirty` set so the
+/// next turn retries; it never ends the loop or touches the grabs.
+fn settle_lock_ui(
+    dirty: &mut bool,
+    shown: bool,
+    apply: impl FnOnce(bool) -> Result<(), String>,
+) {
+    match apply(shown) {
+        Ok(()) => *dirty = false,
+        Err(error) => {
+            *dirty = true;
+            eprintln!("flamewm-lock: lock UI visibility, retrying next turn: {error}");
+        }
+    }
 }
 
 impl LockLoop {
@@ -409,6 +434,8 @@ impl LockLoop {
                 .map_err(|error| format!("destroy lock surface: {error:?}"))?;
             return Ok(());
         }
+        self.settle_display();
+        self.sync_ui_visibility(runtime);
         self.animate(runtime, now)?;
         // A lost grab is retried every turn; the lock is never dropped by a failed retry.
         self.session.borrow_mut().try_grab();
@@ -434,13 +461,12 @@ impl LockLoop {
             self.restore_background(runtime)?;
         }
         if before == Phase::DisplayOff {
-            self.session.borrow_mut().set_display_power(true);
+            self.display_on_pending = true;
         }
         if before != Phase::Visible {
             // Showing the widgets again; the repaint this turn re-applies their content.
-            runtime
-                .with_document(self.surface, |view| document::set_lock_ui_shown(view, true))
-                .map_err(|error| format!("show lock UI: {error:?}"))?;
+            self.ui_shown_wanted = true;
+            self.ui_visibility_dirty = true;
             self.shown = None;
             self.shown_power = None;
         }
@@ -455,11 +481,8 @@ impl LockLoop {
         now: Instant,
     ) -> Result<(), String> {
         if phase != Phase::Visible {
-            runtime
-                .with_document(self.surface, |view| {
-                    document::set_lock_ui_shown(view, false)
-                })
-                .map_err(|error| format!("hide lock UI: {error:?}"))?;
+            self.ui_shown_wanted = false;
+            self.ui_visibility_dirty = true;
         }
         match phase {
             Phase::RibbonsActive => {
@@ -483,6 +506,32 @@ impl LockLoop {
             Phase::Visible => {}
         }
         Ok(())
+    }
+
+    /// Pushes the wanted widget visibility to the document while it is dirty.
+    fn sync_ui_visibility(&mut self, runtime: &mut SurfaceRuntime) {
+        if !self.ui_visibility_dirty {
+            return;
+        }
+        let surface = self.surface;
+        let shown = self.ui_shown_wanted;
+        settle_lock_ui(&mut self.ui_visibility_dirty, shown, |shown| {
+            runtime
+                .with_document(surface, |view| document::set_lock_ui_shown(view, shown))
+                .map_err(|error| format!("set lock UI shown: {error:?}"))
+        });
+    }
+
+    /// Retries DPMS on until the server accepts it; a refused call is logged, never fatal.
+    fn settle_display(&mut self) {
+        if !self.display_on_pending {
+            return;
+        }
+        if self.session.borrow_mut().set_display_power(true) {
+            self.display_on_pending = false;
+        } else {
+            eprintln!("flamewm-lock: display power on refused, retrying next turn");
+        }
     }
 
     /// Renders the next Ribbons frame into the background when one is due.
@@ -712,8 +761,28 @@ mod tests {
             let end = start + source[start..].find("\n    }\n").expect("function end");
             &source[start..end]
         };
-        assert!(body("fn enter(").contains("set_lock_ui_shown(view, false)"));
-        assert!(body("fn wake(").contains("set_lock_ui_shown(view, true)"));
+        assert!(body("fn enter(").contains("ui_shown_wanted = false"));
+        assert!(body("fn wake(").contains("ui_shown_wanted = true"));
+        assert!(body("fn sync_ui_visibility(").contains("set_lock_ui_shown(view, shown)"));
+    }
+
+    /// A refused widget update must keep the loop alive: it is retried with the same
+    /// wanted state on the next turn, and a success clears the dirty flag.
+    #[test]
+    fn failed_widget_visibility_is_retried_next_turn() {
+        let mut dirty = true;
+        let mut calls = Vec::new();
+        settle_lock_ui(&mut dirty, false, |shown| {
+            calls.push(shown);
+            Err("document unavailable".to_string())
+        });
+        assert!(dirty, "a failed update stays dirty for the next tick");
+        settle_lock_ui(&mut dirty, false, |shown| {
+            calls.push(shown);
+            Ok(())
+        });
+        assert!(!dirty, "a successful retry clears the flag");
+        assert_eq!(calls, vec![false, false], "the retry re-applies the same wanted state");
     }
 
     /// Counts the frame wakes that arrive within `window`.

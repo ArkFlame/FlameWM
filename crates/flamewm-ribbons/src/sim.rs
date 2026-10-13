@@ -246,6 +246,11 @@ impl Ribbons {
     /// Like `new`, but multiplies the base ribbon speed by `factor` instead of the default.
     /// `factor` does not change RNG draw order, so the same seed gives the same paths, scaled.
     pub fn new_with_speed_factor(config: Config, now: f64, factor: f64) -> Self {
+        let factor = if factor.is_finite() {
+            factor.clamp(0.0, 4.0)
+        } else {
+            RIBBON_DEFAULT_SPEED_FACTOR
+        };
         let config = config.clamped();
         let bounds = union_bounds(&config.span_rects);
         let mask: Vec<Rect> = config
@@ -490,6 +495,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn speed_factor_is_sanitised_before_use() {
+        let speed = |factor: f64| Ribbons::new_with_speed_factor(cfg(4, 1), 0.0, factor).speed_factor;
+        assert_eq!(speed(f64::NAN), RIBBON_DEFAULT_SPEED_FACTOR);
+        assert_eq!(speed(f64::INFINITY), RIBBON_DEFAULT_SPEED_FACTOR);
+        assert_eq!(speed(f64::NEG_INFINITY), RIBBON_DEFAULT_SPEED_FACTOR);
+        assert_eq!(speed(-2.0), 0.0);
+        assert_eq!(speed(9.0), 4.0);
+        assert_eq!(speed(1.0), 1.0);
     }
 
     #[test]
