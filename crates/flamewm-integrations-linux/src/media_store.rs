@@ -27,6 +27,8 @@ pub enum MediaKind {
     LockWallpaper,
     /// Lock-screen profile picture.
     Avatar,
+    /// Custom Start menu icon (raster formats only; SVG is rejected).
+    StartIcon,
 }
 
 impl MediaKind {
@@ -35,7 +37,13 @@ impl MediaKind {
             Self::DesktopWallpaper => "desktop",
             Self::LockWallpaper => "lock",
             Self::Avatar => "avatar",
+            Self::StartIcon => "start",
         }
+    }
+
+    /// Start icons are PNG/WebP/JPEG only; wallpapers and avatars also accept GIF.
+    fn accepts(self, format: ImageSourceFormat) -> bool {
+        !matches!(self, Self::StartIcon) || !matches!(format, ImageSourceFormat::Gif)
     }
 }
 
@@ -53,6 +61,7 @@ pub enum MediaError {
     NotRegularFile,
     TooLarge,
     UnsupportedFormat,
+    UnsupportedStartIconFormat,
     Decode(String),
     TooManyPixels { width: u32, height: u32 },
     NameCollision(PathBuf),
@@ -64,13 +73,22 @@ impl fmt::Display for MediaError {
             Self::Io(error) => write!(f, "media I/O failed: {error}"),
             Self::NotRegularFile => f.write_str("selected media is not a regular file"),
             Self::TooLarge => write!(f, "media exceeds {MAX_SOURCE_BYTES} bytes"),
-            Self::UnsupportedFormat => f.write_str("unsupported image format (PNG, WebP, JPEG or GIF)"),
+            Self::UnsupportedFormat => {
+                f.write_str("unsupported image format (PNG, WebP, JPEG or GIF)")
+            }
+            Self::UnsupportedStartIconFormat => {
+                f.write_str("unsupported start icon format (PNG, WebP or JPEG)")
+            }
             Self::Decode(message) => write!(f, "image decode failed: {message}"),
             Self::TooManyPixels { width, height } => {
                 write!(f, "image {width}x{height} exceeds {MAX_PIXELS} pixels")
             }
             Self::NameCollision(path) => {
-                write!(f, "managed media name already holds other content: {}", path.display())
+                write!(
+                    f,
+                    "managed media name already holds other content: {}",
+                    path.display()
+                )
             }
         }
     }
@@ -111,7 +129,12 @@ impl MediaStore {
     }
 
     fn import_bytes(&self, bytes: &[u8], kind: MediaKind) -> Result<ImportedMedia, MediaError> {
-        let (format, extension) = sniff(bytes).ok_or(MediaError::UnsupportedFormat)?;
+        let (format, extension) = sniff(bytes)
+            .filter(|(format, _)| kind.accepts(*format))
+            .ok_or(match kind {
+                MediaKind::StartIcon => MediaError::UnsupportedStartIconFormat,
+                _ => MediaError::UnsupportedFormat,
+            })?;
         let image = decode_bytes(bytes, format).map_err(MediaError::Decode)?;
         let (width, height) = (image.width, image.height);
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
@@ -152,7 +175,9 @@ impl MediaStore {
             Err(error) => return Err(error.into()),
         }
         let leaf = dest.file_name().and_then(OsStr::to_str).unwrap_or("media");
-        let temp = self.root.join(format!(".{leaf}.{}.tmp", std::process::id()));
+        let temp = self
+            .root
+            .join(format!(".{leaf}.{}.tmp", std::process::id()));
         let _ = fs::remove_file(&temp);
         let staged = (|| -> io::Result<()> {
             let mut file = OpenOptions::new()
@@ -263,9 +288,7 @@ fn open_source(src: &Path) -> Result<File, MediaError> {
 /// Reads at most `MAX_SOURCE_BYTES` from `reader`.
 pub fn read_source<R: Read>(reader: R) -> Result<Vec<u8>, MediaError> {
     let mut bytes = Vec::new();
-    reader
-        .take(MAX_SOURCE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
+    reader.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_SOURCE_BYTES {
         return Err(MediaError::TooLarge);
     }
@@ -289,10 +312,12 @@ fn is_managed_name(name: &str) -> bool {
     let Some((prefix, hash)) = stem.split_once('-') else {
         return false;
     };
-    matches!(prefix, "desktop" | "lock" | "avatar")
+    matches!(prefix, "desktop" | "lock" | "avatar" | "start")
         && matches!(extension, "png" | "webp" | "jpg" | "gif")
         && hash.len() == SHORT_HASH_LEN
-        && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 const SHA256_K: [u32; 64] = [
@@ -335,8 +360,10 @@ fn sha256_compress(state: &mut [u32; 8], block: &[u8]) {
         w[index] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
     }
     for index in 16..64 {
-        let s0 = w[index - 15].rotate_right(7) ^ w[index - 15].rotate_right(18) ^ (w[index - 15] >> 3);
-        let s1 = w[index - 2].rotate_right(17) ^ w[index - 2].rotate_right(19) ^ (w[index - 2] >> 10);
+        let s0 =
+            w[index - 15].rotate_right(7) ^ w[index - 15].rotate_right(18) ^ (w[index - 15] >> 3);
+        let s1 =
+            w[index - 2].rotate_right(17) ^ w[index - 2].rotate_right(19) ^ (w[index - 2] >> 10);
         w[index] = w[index - 16]
             .wrapping_add(s0)
             .wrapping_add(w[index - 7])
@@ -404,7 +431,11 @@ mod tests {
         for &byte in data {
             crc ^= u32::from(byte);
             for _ in 0..8 {
-                crc = if crc & 1 != 0 { 0xedb8_8320 ^ (crc >> 1) } else { crc >> 1 };
+                crc = if crc & 1 != 0 {
+                    0xedb8_8320 ^ (crc >> 1)
+                } else {
+                    crc >> 1
+                };
             }
         }
         !crc
@@ -505,8 +536,18 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("lock.png");
         write_file(&src, &png_bytes(2, 2));
-        let imported = store_in(&dir).import(&src, MediaKind::LockWallpaper).unwrap();
-        assert!(imported.path.file_name().unwrap().to_str().unwrap().starts_with("lock-"));
+        let imported = store_in(&dir)
+            .import(&src, MediaKind::LockWallpaper)
+            .unwrap();
+        assert!(
+            imported
+                .path
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("lock-")
+        );
     }
 
     #[test]
@@ -520,7 +561,10 @@ mod tests {
         let name = avatar.path.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with("avatar-"), "{name}");
         assert!(name.ends_with(".png"), "{name}");
-        assert_ne!(avatar.path, lock.path, "avatar and lock copies must not share a name");
+        assert_ne!(
+            avatar.path, lock.path,
+            "avatar and lock copies must not share a name"
+        );
         assert!(store.is_managed(&avatar.path));
     }
 
@@ -606,7 +650,9 @@ mod tests {
         file.set_len(MAX_SOURCE_BYTES + 1).unwrap();
         drop(file);
 
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
 
         assert!(matches!(error, MediaError::TooLarge));
     }
@@ -622,7 +668,9 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("wide.png");
         write_file(&src, &png_bytes(4097, 1));
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -638,8 +686,155 @@ mod tests {
         push_chunk(&mut bytes, b"IHDR", &ihdr);
         push_chunk(&mut bytes, b"IEND", &[]);
         write_file(&src, &bytes);
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
+    }
+
+    /// Minimal valid 1x1 opaque black lossless WebP (VP8L, single-symbol prefix codes).
+    fn webp_1x1_bytes() -> Vec<u8> {
+        let mut bits: Vec<bool> = Vec::new();
+        let mut push = |value: u32, count: u32| {
+            for index in 0..count {
+                bits.push((value >> index) & 1 == 1);
+            }
+        };
+        push(0x2f, 8); // VP8L signature
+        push(0, 14); // width - 1
+        push(0, 14); // height - 1
+        push(1, 1); // alpha used
+        push(0, 3); // version
+        push(0, 3); // no transform, no colour cache, no meta prefix
+        for alphabet in 0..5 {
+            push(1, 1); // simple code
+            push(0, 1); // one symbol
+            if alphabet == 3 {
+                push(1, 1); // alpha symbol is 8 bits wide
+                push(255, 8);
+            } else {
+                push(0, 1);
+                push(0, 1);
+            }
+        }
+        let mut payload: Vec<u8> = bits
+            .chunks(8)
+            .map(|byte| {
+                byte.iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, bit)| acc | (u8::from(*bit) << i))
+            })
+            .collect();
+        if payload.len() % 2 == 1 {
+            payload.push(0);
+        }
+        let mut riff = b"WEBP".to_vec();
+        riff.extend_from_slice(b"VP8L");
+        riff.extend_from_slice(&(bits.len().div_ceil(8) as u32).to_le_bytes());
+        riff.extend_from_slice(&payload);
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(riff.len() as u32).to_le_bytes());
+        out.extend_from_slice(&riff);
+        out
+    }
+
+    #[test]
+    fn start_icon_accepts_png_webp_and_jpeg_by_content() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        let src = dir.0.join("icon.bin");
+
+        write_file(&src, &png_bytes(2, 2));
+        let png = store.import(&src, MediaKind::StartIcon).unwrap();
+        assert!(
+            png.path
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("start-")
+        );
+        assert!(png.path.to_str().unwrap().ends_with(".png"));
+
+        let webp = webp_1x1_bytes();
+        write_file(&src, &webp);
+        let imported = store.import(&src, MediaKind::StartIcon).unwrap();
+        assert_eq!((imported.width, imported.height), (1, 1));
+        assert!(imported.path.to_str().unwrap().ends_with(".webp"));
+        assert_eq!(fs::read(&imported.path).unwrap(), webp);
+
+        let jpeg = include_bytes!("../../flamewm-image-core/tests/fixtures/baseline-16x16.jpg");
+        write_file(&src, jpeg);
+        let imported = store.import(&src, MediaKind::StartIcon).unwrap();
+        assert_eq!((imported.width, imported.height), (16, 16));
+        assert!(imported.path.to_str().unwrap().ends_with(".jpg"));
+    }
+
+    #[test]
+    fn start_icon_rejects_svg_gif_and_non_images() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        let src = dir.0.join("icon.bin");
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"></svg>";
+        for bytes in [
+            &svg[..],
+            include_bytes!("../../flamewm-image-core/tests/fixtures/first-frame-4x4.gif"),
+            b"plain text",
+        ] {
+            write_file(&src, bytes);
+            let error = store.import(&src, MediaKind::StartIcon).unwrap_err();
+            assert!(
+                matches!(error, MediaError::UnsupportedStartIconFormat),
+                "{error}"
+            );
+            assert_eq!(
+                error.to_string(),
+                "unsupported start icon format (PNG, WebP or JPEG)"
+            );
+        }
+        assert_eq!(
+            fs::read_dir(&dir.0.join("store")).map_or(0, |entries| entries.count()),
+            0
+        );
+    }
+
+    #[test]
+    fn start_icon_rejects_oversized_source_and_dimensions() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        let huge = dir.0.join("huge.png");
+        File::create(&huge)
+            .unwrap()
+            .set_len(MAX_SOURCE_BYTES + 1)
+            .unwrap();
+        assert!(matches!(
+            store.import(&huge, MediaKind::StartIcon),
+            Err(MediaError::TooLarge)
+        ));
+
+        let wide = dir.0.join("wide.png");
+        write_file(&wide, &png_bytes(4097, 1));
+        assert!(matches!(
+            store.import(&wide, MediaKind::StartIcon),
+            Err(MediaError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn start_icon_managed_path_round_trips_and_only_managed_names_are_removable() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        let src = dir.0.join("icon.png");
+        write_file(&src, &png_bytes(2, 2));
+        let imported = store.import(&src, MediaKind::StartIcon).unwrap();
+
+        let stored = imported.path.to_str().unwrap().to_owned();
+        let reloaded = PathBuf::from(&stored);
+        assert_eq!(reloaded, imported.path);
+        assert!(store.is_managed(&reloaded));
+        assert!(!store.is_managed(&dir.0.join("start-0123456789abcdef.png")));
+        assert!(!store.is_managed(&store.root.join("notes.png")));
+        assert!(!store.is_managed(&store.root.join("start-0123456789ABCDEF.png")));
     }
 
     #[test]
@@ -647,7 +842,9 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("photo.bmp");
         write_file(&src, &[b'B', b'M', 0, 0, 0, 0, 0, 0, 0, 0]);
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
         assert!(matches!(error, MediaError::UnsupportedFormat));
     }
 
@@ -679,7 +876,9 @@ mod tests {
         let jpeg = include_bytes!("../../flamewm-image-core/tests/fixtures/baseline-16x16.jpg");
         let src = dir.0.join("cut.jpg");
         write_file(&src, &jpeg[..jpeg.len() / 2]);
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -689,7 +888,9 @@ mod tests {
         let jpeg = include_bytes!("../../flamewm-image-core/tests/fixtures/progressive-16x16.jpg");
         let src = dir.0.join("progressive.jpg");
         write_file(&src, jpeg);
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -698,7 +899,9 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("folder.png");
         fs::create_dir(&src).unwrap();
-        let error = store_in(&dir).import(&src, MediaKind::DesktopWallpaper).unwrap_err();
+        let error = store_in(&dir)
+            .import(&src, MediaKind::DesktopWallpaper)
+            .unwrap_err();
         assert!(matches!(error, MediaError::NotRegularFile));
     }
 
@@ -710,7 +913,9 @@ mod tests {
         write_file(&target, &bytes);
         let link = dir.0.join("link.png");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let imported = store_in(&dir).import(&link, MediaKind::LockWallpaper).unwrap();
+        let imported = store_in(&dir)
+            .import(&link, MediaKind::LockWallpaper)
+            .unwrap();
         assert_eq!(fs::read(&imported.path).unwrap(), bytes);
     }
 

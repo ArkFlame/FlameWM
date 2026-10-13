@@ -855,17 +855,11 @@ impl ShellSurfaces {
         self.panels.iter().map(|record| record.panel).collect()
     }
 
-    /// Captures the root under the primary panel. Call before the panel's first map so the bar's
-    /// own translucent pixels never enter the snapshot. Static: never recaptured on settings.
+    /// Pre-map hook kept for the startup sequence. The snapshot is no longer read from the root
+    /// here: a root read before the desktop paints its wallpaper yields the wrong pixels, so the
+    /// snapshot is derived by `refresh_panel_backdrop` from the wallpaper itself.
     pub fn capture_panel_backdrop(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
         runtime.watch_root_changes();
-        let panel = self.panel();
-        let raw = runtime.capture_root_under_unmapped(panel).map_err(ui_error)?;
-        self.panel_snapshot = Some(RgbaImage {
-            width: raw.width,
-            height: raw.height,
-            pixels: raw.pixels,
-        });
         Ok(())
     }
 
@@ -884,13 +878,16 @@ impl ShellSurfaces {
         self.panel_capture.as_ref().is_none_or(|capture| !capture.settled)
     }
 
-    /// Recaptures the panel snapshot when its key changed (wallpaper, fit, or bar rect). A blank
-    /// root is retried on the next call, up to `MAX_CAPTURE_ATTEMPTS`; the bar stays solid meanwhile.
-    /// Each call is driven by a settings or panel event, so no timer is involved.
+    /// Recomputes the panel snapshot when its key changed (wallpaper, fit, or bar rect). `wallpaper`
+    /// supplies the fitted wallpaper pixels under the bar; those are deterministic and used as-is.
+    /// Only when it yields nothing (wallpaper unavailable) does the root get read under the unmapped
+    /// bar, and a blank root is retried on the next call, up to `MAX_CAPTURE_ATTEMPTS`. Each call is
+    /// driven by a settings or panel event, so no timer is involved.
     pub fn refresh_panel_backdrop(
         &mut self,
         runtime: &mut SurfaceRuntime,
         key: CaptureKey,
+        wallpaper: impl FnOnce() -> Option<RgbaImage>,
     ) -> Result<(), String> {
         runtime.watch_root_changes();
         let attempts_so_far = match &self.panel_capture {
@@ -899,25 +896,25 @@ impl ShellSurfaces {
             _ => 0,
         };
         let panel = self.panel();
-        let raw = runtime.capture_root_under_unmapped(panel).map_err(ui_error)?;
         let attempts = attempts_so_far.saturating_add(1);
-        let ready = flamewm_render_x11::backdrop::capture_is_ready(&raw.pixels);
-        let step = capture_step(ready, attempts);
+        let (step, raw) = match wallpaper() {
+            Some(image) => (CaptureStep::Use, image),
+            None => {
+                let capture = runtime.capture_root_under_unmapped(panel).map_err(ui_error)?;
+                let ready = flamewm_render_x11::backdrop::capture_is_ready(&capture.pixels);
+                let image = RgbaImage {
+                    width: capture.width,
+                    height: capture.height,
+                    pixels: capture.pixels,
+                };
+                (capture_step(ready, attempts), image)
+            }
+        };
         crate::surface_backdrop::backdrop_trace(format_args!(
-            "capture rect={:?} size={}x{} ready={ready} attempts={attempts} step={step:?} centre_rgba={:?}",
-            key.rect,
-            raw.width,
-            raw.height,
-            raw.pixels
-                .chunks_exact(4)
-                .nth((raw.width as usize * raw.height as usize) / 2)
-                .map(|p| (p[0], p[1], p[2]))
+            "snapshot rect={:?} size={}x{} step={step:?} attempts={attempts}",
+            key.rect, raw.width, raw.height
         ));
-        self.panel_snapshot = (step == CaptureStep::Use).then(|| RgbaImage {
-            width: raw.width,
-            height: raw.height,
-            pixels: raw.pixels,
-        });
+        self.panel_snapshot = (step == CaptureStep::Use).then_some(raw);
         self.panel_capture = Some(PanelCapture {
             key,
             attempts,
@@ -938,7 +935,6 @@ impl ShellSurfaces {
         let rect = runtime.surface_device_rect(panel).map_err(ui_error)?;
         let fitting = self.panel_snapshot.as_ref().filter(|snapshot| {
             opacity_percent < 100
-                && flamewm_render_x11::backdrop::capture_is_ready(&snapshot.pixels)
                 && snapshot.width as f32 == rect.width
                 && snapshot.height as f32 == rect.height
         });

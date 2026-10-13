@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use chrono::{Datelike, Local};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot, SettingsTransaction};
 use flamewm_control_core::ControlRequest;
+use flamewm_platform::panel::TaskbarFrame;
 use flamewm_shell::async_projection::{self, StartViewNote};
 use flamewm_shell::icon_loader::{DependentSurface, IconLoader, IconTarget};
 use flamewm_shell::start::StartCategory;
@@ -14,7 +15,6 @@ use flamewm_shell::{projection, start, ShellControl, ShellRuntime, ShellSnapshot
 use flamewm_shell_core::clock::ClockDateTracker;
 use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
-use flamewm_platform::panel::TaskbarFrame;
 use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
 /// C07: one shell operation owns exactly one total span; nested totals must
@@ -652,7 +652,8 @@ impl ShellLoop {
             eprintln!("flamewm-shell: pager cells skipped (stage=panel-origin)");
             return;
         };
-        let mut cells: Vec<[u64; 4]> = Vec::with_capacity(flamewm_shell_core::workspaces::PAGE_SIZE);
+        let mut cells: Vec<[u64; 4]> =
+            Vec::with_capacity(flamewm_shell_core::workspaces::PAGE_SIZE);
         for index in 0..flamewm_shell_core::workspaces::PAGE_SIZE {
             let id = format!("workspace-{}", index + 1);
             let Some(rect) = runtime.node_device_rect_by_id(panel, &id) else {
@@ -767,7 +768,9 @@ impl ShellLoop {
                                 image.clone(),
                             )? {
                                 true => Ok(true),
-                                false => async_projection::apply_cached_binding(document, res.target),
+                                false => {
+                                    async_projection::apply_cached_binding(document, res.target)
+                                }
                             }
                         });
                         if matches!(applied, Ok(true)) {
@@ -851,10 +854,9 @@ impl ShellLoop {
         let Some(invocation) = self.active_start_launch else {
             return Ok(());
         };
-        let Some(outcome) = flamewm_shell::control_actions::matching_launch_outcome(
-            outcomes,
-            invocation,
-        ) else {
+        let Some(outcome) =
+            flamewm_shell::control_actions::matching_launch_outcome(outcomes, invocation)
+        else {
             return Ok(());
         };
         if !self.start_open {
@@ -1109,10 +1111,8 @@ impl ShellLoop {
             ..Default::default()
         };
         let panel_outputs = self.surfaces.panel_outputs();
-        let projected = projection::for_each_panel_record(
-            snapshot,
-            panel_outputs.clone(),
-            |handle, view| {
+        let projected =
+            projection::for_each_panel_record(snapshot, panel_outputs.clone(), |handle, view| {
                 runtime.with_document(handle, |document| {
                     async_projection::project_panel_for_changed(
                         document,
@@ -1121,8 +1121,7 @@ impl ShellLoop {
                         changed,
                     )
                 })
-            },
-        );
+            });
         if let Err(error) = &projected {
             eprintln!("flamewm-shell: panel projection failed (stage=resync-partial): {error:?}");
         }
@@ -1223,7 +1222,10 @@ impl ShellLoop {
                 for (handle, _) in panel_outputs {
                     let result = runtime.with_document(handle, |document| {
                         async_projection::project_panel_for_changed(
-                            document, &snapshot, loader.as_deref_mut(), changed,
+                            document,
+                            &snapshot,
+                            loader.as_deref_mut(),
+                            changed,
                         )
                     });
                     if let Err(error) = result {
@@ -1327,19 +1329,52 @@ impl ShellLoop {
             return;
         };
         let (opacity, blur) = crate::settings_projection::taskbar_backdrop_percents(settings);
-        let text = |key: &str| settings.values.get(key).map(|value| format!("{value:?}")).unwrap_or_default();
+        let text = |key: &str| {
+            settings
+                .values
+                .get(key)
+                .map(|value| format!("{value:?}"))
+                .unwrap_or_default()
+        };
+        let wallpaper_path = match settings.values.get("wallpaper") {
+            Some(SettingValue::Text(value)) => value.clone(),
+            _ => String::new(),
+        };
+        let fit_name = match settings.values.get("wallpaperFit") {
+            Some(SettingValue::Text(value)) => value.clone(),
+            _ => String::new(),
+        };
         let key = match runtime.surface_device_rect(self.surfaces.panel()) {
             Ok(rect) => flamewm_shell::surface_backdrop::CaptureKey {
                 wallpaper: text("wallpaper"),
                 fit: text("wallpaperFit"),
-                rect: (rect.x as i32, rect.y as i32, rect.width as u32, rect.height as u32),
+                rect: (
+                    rect.x as i32,
+                    rect.y as i32,
+                    rect.width as u32,
+                    rect.height as u32,
+                ),
             },
             Err(error) => {
                 eprintln!("flamewm-shell: taskbar backdrop rect unavailable (nonfatal): {error:?}");
                 return;
             }
         };
-        if let Err(error) = self.surfaces.refresh_panel_backdrop(runtime, key) {
+        let rect = key.rect;
+        let wallpaper = || {
+            let (width, height) = flamewm_render_x11::root_geometry().ok()?;
+            flamewm_shell::surface_backdrop::wallpaper_source(
+                &wallpaper_path,
+                flamewm_image_core::wallpaper::parse(&fit_name),
+                (width, height),
+                rect,
+                &crate::packaged_root(),
+            )
+        };
+        if let Err(error) = self
+            .surfaces
+            .refresh_panel_backdrop(runtime, key, wallpaper)
+        {
             eprintln!("flamewm-shell: taskbar backdrop capture failed (nonfatal): {error}");
         }
         if let Err(error) = self.surfaces.apply_panel_backdrop(runtime, opacity, blur) {
@@ -1416,7 +1451,12 @@ impl ShellLoop {
             self.surfaces.panel_outputs(),
             |handle, view| {
                 runtime.with_document(handle, |document| {
-                    async_projection::project_panel_for_changed(document, view, loader.as_mut(), task_changed)
+                    async_projection::project_panel_for_changed(
+                        document,
+                        view,
+                        loader.as_mut(),
+                        task_changed,
+                    )
                 })
             },
         );

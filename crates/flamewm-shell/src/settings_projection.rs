@@ -1,18 +1,28 @@
-use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use chrono::Local;
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::PanelEdge;
+use flamewm_image_core::scale::ScaleFilter;
+use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
 use flamewm_platform::chrome::{parse_hex_rgb, ACCENT_SOFT_ALPHA};
 use flamewm_platform::settings::ClockFormat;
-use flamewm_ui_x11::{SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
+use flamewm_ui_core::context_menu::shape_radius;
+use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
 use crate::projection::{project_clock_at, ClockDisplay};
+
+/// Panel image node that carries the custom Start icon (`ui/shell/panel.html`).
+const START_ICON_ID: &str = "task-start-icon";
+/// Square raster for the 25px `.task-start-icon` box.
+const START_ICON_SIZE: u32 = 25;
+/// Largest custom Start icon file read, so a bad path cannot stall the panel.
+const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
 const DEFAULT_ACCENT: u32 = 0xef4048;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
-const DEFAULT_TASKBAR_COLOR: u32 = 0x191b1d;
-const DEFAULT_TASKBAR_OPACITY: u8 = 50;
-const DEFAULT_TASKBAR_BLUR_PERCENT: u8 = 80;
+const DEFAULT_SURFACE_COLOR: u32 = 0x191b1d;
+const DEFAULT_SURFACE_OPACITY: u8 = 50;
+const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
 const DEFAULT_START_MENU_OPACITY: u8 = 50;
 const DEFAULT_START_MENU_BLUR_PERCENT: u8 = 80;
@@ -56,29 +66,26 @@ pub fn project(
 
     match surface {
         SurfaceKind::Panel => {
-            let taskbar = color_setting(snapshot, "taskbarColor", DEFAULT_TASKBAR_COLOR);
-            let opacity = percent_setting(snapshot, "taskbarOpacity", DEFAULT_TASKBAR_OPACITY);
-            document.background(
-                "taskbar",
-                UiColor {
-                    r: taskbar.r,
-                    g: taskbar.g,
-                    b: taskbar.b,
-                    a: opacity_alpha(opacity),
-                },
-            )?;
+            document.background("taskbar", surface_background(snapshot))?;
             crate::projection::set_task_accent(accent);
             project_clock_at(document, Local::now(), clock_display(snapshot))?;
+            project_start_icon(document, custom_start_icon(snapshot))?;
         }
         SurfaceKind::Start => {
-            project_menu_background(document, snapshot, root)?;
-            let opacity =
-                percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
+            // Start keeps its own startMenu* override; popups use the shared surface* pair.
+            document.background(root, menu_background(snapshot))?;
+            document.corner_radius(root, popup_corner_radius(snapshot))?;
+            let opacity = percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
             // The search field fill follows the same alpha as the menu root so every Start layer
             // (category column, app list, search, footer) fades together.
             document.background(
                 "start-search-box",
-                UiColor { r: 0x14, g: 0x16, b: 0x18, a: opacity_alpha(opacity) },
+                UiColor {
+                    r: 0x14,
+                    g: 0x16,
+                    b: 0x18,
+                    a: opacity_alpha(opacity),
+                },
             )?;
             // No accent outline: the menu's rounded panes cover the border on three sides, so an
             // accent-coloured border only ever showed as a red line down the left edge.
@@ -90,17 +97,25 @@ pub fn project(
     Ok(())
 }
 
-/// Shared menu background for the Start menu and the audio, Wi-Fi and calendar popups: the
-/// `startMenuColor` / `startMenuOpacity` pair on the popup root. Layers inside stay transparent.
+/// Shared surface background for the audio, Wi-Fi and calendar popups: the `surfaceColor` /
+/// `surfaceOpacity` pair on the popup root. Layers inside stay transparent. Start keeps its own
+/// `startMenu*` override via [`menu_background`].
 pub fn project_menu_background(
     document: &mut impl UiDocumentAccess,
     snapshot: &SettingsSnapshot,
     root: &str,
 ) -> Result<(), String> {
-    document.background(root, menu_background(snapshot))
+    document.background(root, surface_background(snapshot))?;
+    document.corner_radius(root, popup_corner_radius(snapshot))
 }
 
-/// Menu background colour with the `startMenuOpacity` alpha.
+/// Popup and menu corner radius from the `decoration` setting: Rounded 12, Squared 0.
+pub fn popup_corner_radius(snapshot: &SettingsSnapshot) -> f32 {
+    let rounded = text_setting(snapshot, "decoration", "rounded") != "squared";
+    shape_radius(rounded) as f32
+}
+
+/// Start menu background colour with the `startMenuOpacity` alpha.
 pub fn menu_background(snapshot: &SettingsSnapshot) -> UiColor {
     let color = color_setting(snapshot, "startMenuColor", DEFAULT_START_MENU_COLOR);
     let opacity = percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
@@ -108,6 +123,64 @@ pub fn menu_background(snapshot: &SettingsSnapshot) -> UiColor {
         a: opacity_alpha(opacity),
         ..color
     }
+}
+
+/// Shared surface colour with the `surfaceOpacity` alpha (taskbar, popups, desktop menus).
+pub fn surface_background(snapshot: &SettingsSnapshot) -> UiColor {
+    let color = color_setting(snapshot, "surfaceColor", DEFAULT_SURFACE_COLOR);
+    let opacity = percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY);
+    UiColor {
+        a: opacity_alpha(opacity),
+        ..color
+    }
+}
+
+/// Configured Start icon path (`customStartIcon`). `None` keeps the default FlameWM glyph.
+pub fn custom_start_icon(snapshot: &SettingsSnapshot) -> Option<String> {
+    let path = text_setting(snapshot, "customStartIcon", "");
+    (!path.trim().is_empty()).then_some(path)
+}
+
+/// Applies the configured Start icon to the panel. `None`, or a path that fails
+/// to load, keeps the packaged default `flamewm-start.svg` already in the template.
+fn project_start_icon(
+    document: &mut impl UiDocumentAccess,
+    path: Option<String>,
+) -> Result<(), String> {
+    // Clearing (or a path that no longer loads) drops any previously applied custom raster.
+    let image = path.as_deref().and_then(|path| load_start_icon(path).ok());
+    match image {
+        Some(image) => document.image_rgba8(START_ICON_ID, image),
+        None => document.image_reset(START_ICON_ID),
+    }
+}
+
+/// Decodes a custom Start icon to a `START_ICON_SIZE` square RGBA raster through
+/// the shared image core, which enforces the format and pixel limits.
+fn load_start_icon(path: &str) -> Result<RuntimeImage, String> {
+    let path = std::path::Path::new(path);
+    let format = ImageSourceFormat::from_extension(path)
+        .ok_or_else(|| format!("unsupported start icon format: {}", path.display()))?;
+    let len = std::fs::metadata(path)
+        .map_err(|error| error.to_string())?
+        .len();
+    if len > MAX_START_ICON_BYTES {
+        return Err(format!("start icon exceeds {MAX_START_ICON_BYTES} bytes"));
+    }
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let image = decode_bytes_at(
+        &bytes,
+        format,
+        START_ICON_SIZE,
+        START_ICON_SIZE,
+        ScaleFilter::Area,
+    )?;
+    Ok(RuntimeImage {
+        source: path.display().to_string(),
+        width: image.width,
+        height: image.height,
+        pixels: image.pixels,
+    })
 }
 
 /// Start presentation for the panel edge hosting Start. `start_button` is the Start button's root
@@ -123,7 +196,8 @@ pub fn start_slide(
     {
         return None;
     }
-    let speed = integer_setting(snapshot, "animationSpeed", DEFAULT_ANIMATION_SPEED).clamp(25, 200) as u16;
+    let speed =
+        integer_setting(snapshot, "animationSpeed", DEFAULT_ANIMATION_SPEED).clamp(25, 200) as u16;
     let edge = match edge {
         PanelEdge::Bottom => SlideEdge::Bottom,
         PanelEdge::Top => SlideEdge::Top,
@@ -208,11 +282,11 @@ fn integer_setting(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 
     }
 }
 
-/// Taskbar `(opacity, blur)` percents for the pseudo-transparency backdrop.
+/// Surface `(opacity, blur)` percents for the taskbar pseudo-transparency backdrop.
 pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     (
-        percent_setting(snapshot, "taskbarOpacity", DEFAULT_TASKBAR_OPACITY),
-        percent_setting(snapshot, "taskbarBlurPercent", DEFAULT_TASKBAR_BLUR_PERCENT),
+        percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
+        percent_setting(snapshot, "surfaceBlurPercent", DEFAULT_SURFACE_BLUR_PERCENT),
     )
 }
 
@@ -220,7 +294,11 @@ pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
 pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     (
         percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY),
-        percent_setting(snapshot, "startMenuBlurPercent", DEFAULT_START_MENU_BLUR_PERCENT),
+        percent_setting(
+            snapshot,
+            "startMenuBlurPercent",
+            DEFAULT_START_MENU_BLUR_PERCENT,
+        ),
     )
 }
 
@@ -268,6 +346,8 @@ mod tests {
     struct RecordingDocument {
         backgrounds: HashMap<String, UiColor>,
         variables: HashMap<String, UiColor>,
+        images: HashMap<String, (u32, u32)>,
+        radii: HashMap<String, f32>,
     }
 
     impl UiDocumentAccess for RecordingDocument {
@@ -277,7 +357,17 @@ mod tests {
         fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
             Ok(())
         }
-        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+        fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
+            self.images
+                .insert(id.to_owned(), (image.width, image.height));
+            Ok(())
+        }
+        fn image_reset(&mut self, id: &str) -> Result<(), String> {
+            self.images.remove(id);
+            Ok(())
+        }
+        fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
+            self.radii.insert(id.to_owned(), radius_px);
             Ok(())
         }
         fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
@@ -335,17 +425,40 @@ mod tests {
     #[test]
     fn start_projection_applies_background_and_accent_tokens() {
         let mut snapshot = SettingsSnapshot::new(1);
-        snapshot.values.insert("startMenuColor".to_owned(), SettingValue::Text("#102030".to_owned()));
-        snapshot.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
-        snapshot.values.insert("accent".to_owned(), SettingValue::Text("#00ff00".to_owned()));
-        snapshot.values.insert("accentOpacity".to_owned(), SettingValue::Percent(50));
+        snapshot.values.insert(
+            "startMenuColor".to_owned(),
+            SettingValue::Text("#102030".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
+        snapshot.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text("#00ff00".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("accentOpacity".to_owned(), SettingValue::Percent(50));
         let mut doc = RecordingDocument::default();
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
         assert_eq!(
             doc.backgrounds["start-menu"],
-            UiColor { r: 0x10, g: 0x20, b: 0x30, a: 127 }
+            UiColor {
+                r: 0x10,
+                g: 0x20,
+                b: 0x30,
+                a: 127
+            }
         );
-        assert_eq!(doc.variables["--accent"], UiColor { r: 0, g: 255, b: 0, a: 127 });
+        assert_eq!(
+            doc.variables["--accent"],
+            UiColor {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 127
+            }
+        );
         assert_eq!(doc.variables["--accent-soft"].a, 27);
         assert_eq!(doc.variables["--accent-strong"].a, 110);
     }
@@ -353,7 +466,9 @@ mod tests {
     #[test]
     fn start_projection_fades_search_field_with_menu_opacity() {
         let mut snapshot = SettingsSnapshot::new(1);
-        snapshot.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+        snapshot
+            .values
+            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
         let mut doc = RecordingDocument::default();
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
         assert_eq!(doc.backgrounds["start-menu"].a, 0);
@@ -364,13 +479,223 @@ mod tests {
     fn default_projection_keeps_accent_tokens_at_stylesheet_values() {
         let mut doc = RecordingDocument::default();
         project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
-        let accent = UiColor { r: 0xef, g: 0x40, b: 0x48, a: 255 };
+        let accent = UiColor {
+            r: 0xef,
+            g: 0x40,
+            b: 0x48,
+            a: 255,
+        };
         assert_eq!(doc.variables["--accent"], accent);
-        assert_eq!(doc.variables["--accent-soft"], UiColor { a: 0x38, ..accent });
-        assert_eq!(doc.variables["--accent-strong"], UiColor { a: 0xdd, ..accent });
+        assert_eq!(
+            doc.variables["--accent-soft"],
+            UiColor { a: 0x38, ..accent }
+        );
+        assert_eq!(
+            doc.variables["--accent-strong"],
+            UiColor { a: 0xdd, ..accent }
+        );
         assert_eq!(
             doc.backgrounds["start-menu"],
-            UiColor { r: 0x19, g: 0x1b, b: 0x1d, a: 127 }
+            UiColor {
+                r: 0x19,
+                g: 0x1b,
+                b: 0x1d,
+                a: 127
+            }
+        );
+    }
+
+    #[test]
+    fn surface_background_uses_surface_keys_and_ignores_legacy_taskbar_keys() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "surfaceColor".to_owned(),
+            SettingValue::Text("#102030".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(100));
+        snapshot.values.insert(
+            "taskbarColor".to_owned(),
+            SettingValue::Text("#ff0000".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("taskbarOpacity".to_owned(), SettingValue::Percent(0));
+        assert_eq!(
+            surface_background(&snapshot),
+            UiColor {
+                r: 0x10,
+                g: 0x20,
+                b: 0x30,
+                a: 255
+            }
+        );
+        assert_eq!(
+            surface_background(&SettingsSnapshot::new(1)),
+            UiColor {
+                r: 0x19,
+                g: 0x1b,
+                b: 0x1d,
+                a: 127
+            }
+        );
+    }
+
+    #[test]
+    fn popup_and_start_corner_radius_follow_decoration_setting() {
+        let mut doc = RecordingDocument::default();
+        project_menu_background(
+            &mut doc,
+            &snapshot_with("decoration", "rounded"),
+            "audio-popup",
+        )
+        .expect("rounded popup");
+        assert_eq!(doc.radii["audio-popup"], 12.0);
+        project_menu_background(
+            &mut doc,
+            &snapshot_with("decoration", "squared"),
+            "audio-popup",
+        )
+        .expect("squared popup");
+        assert_eq!(doc.radii["audio-popup"], 0.0);
+        project(
+            &mut doc,
+            &snapshot_with("decoration", "squared"),
+            SurfaceKind::Start,
+        )
+        .expect("start");
+        assert_eq!(doc.radii["start-menu"], 0.0);
+    }
+
+    #[test]
+    fn popup_projection_uses_surface_pair_while_start_keeps_startmenu_pair() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "surfaceColor".to_owned(),
+            SettingValue::Text("#445566".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(10));
+        snapshot.values.insert(
+            "startMenuColor".to_owned(),
+            SettingValue::Text("#102030".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(90));
+        let mut doc = RecordingDocument::default();
+        project_menu_background(&mut doc, &snapshot, "audio-popup").expect("popup");
+        assert_eq!(
+            doc.backgrounds["audio-popup"],
+            UiColor {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 25
+            }
+        );
+        project(&mut doc, &snapshot, SurfaceKind::Start).expect("start");
+        assert_eq!(
+            doc.backgrounds["start-menu"],
+            UiColor {
+                r: 0x10,
+                g: 0x20,
+                b: 0x30,
+                a: 229
+            }
+        );
+    }
+
+    #[test]
+    fn taskbar_projection_and_backdrop_follow_surface_keys() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "surfaceColor".to_owned(),
+            SettingValue::Text("#445566".to_owned()),
+        );
+        snapshot
+            .values
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(20));
+        snapshot
+            .values
+            .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(15));
+        let mut doc = RecordingDocument::default();
+        project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
+        assert_eq!(
+            doc.backgrounds["taskbar"],
+            UiColor {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 51
+            }
+        );
+        assert_eq!(taskbar_backdrop_percents(&snapshot), (20, 15));
+    }
+
+    fn write_ppm_fixture(name: &str) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("flamewm-start-icon-{}-{name}", std::process::id()));
+        let mut bytes = b"P6\n2 2\n255\n".to_vec();
+        bytes.extend_from_slice(&[200u8; 12]);
+        std::fs::write(&path, bytes).expect("write ppm fixture");
+        path
+    }
+
+    #[test]
+    fn configured_start_icon_projects_a_square_raster_into_the_panel_node() {
+        let path = write_ppm_fixture("ok.ppm");
+        let mut document = RecordingDocument::default();
+        project_start_icon(&mut document, Some(path.display().to_string())).expect("project");
+        let _ = std::fs::remove_file(&path);
+        // A 2x2 source must be scaled to the 25px box, not kept at natural size.
+        assert_eq!(document.images.get(START_ICON_ID), Some(&(25, 25)));
+    }
+
+    #[test]
+    fn clearing_custom_start_icon_reverts_live_to_packaged_default() {
+        let path = write_ppm_fixture("clear.ppm");
+        let mut document = RecordingDocument::default();
+        project_start_icon(&mut document, Some(path.display().to_string())).expect("apply");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(document.images.get(START_ICON_ID), Some(&(25, 25)));
+        project_start_icon(&mut document, None).expect("clear");
+        assert!(!document.images.contains_key(START_ICON_ID));
+    }
+
+    #[test]
+    fn missing_none_or_unsupported_start_icon_keeps_the_packaged_default() {
+        let mut document = RecordingDocument::default();
+        project_start_icon(&mut document, None).expect("none");
+        project_start_icon(&mut document, Some("/nonexistent/start.png".to_owned()))
+            .expect("missing");
+        let path = write_ppm_fixture("unsupported.txt");
+        let renamed = path.with_extension("txt");
+        std::fs::rename(&path, &renamed).expect("rename fixture");
+        project_start_icon(&mut document, Some(renamed.display().to_string())).expect("txt");
+        let _ = std::fs::remove_file(&renamed);
+        assert!(document.images.is_empty());
+    }
+
+    #[test]
+    fn custom_start_icon_is_none_for_empty_and_blank_values() {
+        assert_eq!(custom_start_icon(&SettingsSnapshot::new(1)), None);
+        assert_eq!(
+            custom_start_icon(&snapshot_with("customStartIcon", "")),
+            None
+        );
+        assert_eq!(
+            custom_start_icon(&snapshot_with("customStartIcon", "   ")),
+            None
+        );
+        assert_eq!(
+            custom_start_icon(&snapshot_with(
+                "customStartIcon",
+                "/home/u/.local/share/flamewm/start.png"
+            )),
+            Some("/home/u/.local/share/flamewm/start.png".to_owned())
         );
     }
 
@@ -381,8 +706,12 @@ mod tests {
             start_backdrop_percents(&snapshot),
             (DEFAULT_START_MENU_OPACITY, DEFAULT_START_MENU_BLUR_PERCENT)
         );
-        snapshot.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
-        snapshot.values.insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
+        snapshot
+            .values
+            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
+        snapshot
+            .values
+            .insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
         assert_eq!(start_backdrop_percents(&snapshot), (50, 30));
     }
 
@@ -397,17 +726,24 @@ mod tests {
     #[test]
     fn font_mapping_applies_saved_family_and_size_offset() {
         let mut saved = SettingsSnapshot::new(2);
-        saved
-            .values
-            .insert("fontFamily".to_owned(), SettingValue::Text("DejaVu Sans".to_owned()));
+        saved.values.insert(
+            "fontFamily".to_owned(),
+            SettingValue::Text("DejaVu Sans".to_owned()),
+        );
         saved
             .values
             .insert("fontSizeOffset".to_owned(), SettingValue::Integer(3));
-        assert_eq!(text_setting(&saved, "fontFamily", DEFAULT_FONT_FAMILY), "DejaVu Sans");
+        assert_eq!(
+            text_setting(&saved, "fontFamily", DEFAULT_FONT_FAMILY),
+            "DejaVu Sans"
+        );
         assert_eq!(font_size_px(&saved), 16.0);
 
         let defaults = SettingsSnapshot::new(1);
-        assert_eq!(text_setting(&defaults, "fontFamily", DEFAULT_FONT_FAMILY), DEFAULT_FONT_FAMILY);
+        assert_eq!(
+            text_setting(&defaults, "fontFamily", DEFAULT_FONT_FAMILY),
+            DEFAULT_FONT_FAMILY
+        );
         assert_eq!(font_size_px(&defaults), DEFAULT_FONT_SIZE);
 
         let mut tiny = SettingsSnapshot::new(3);
@@ -420,7 +756,7 @@ mod tests {
     fn opacity_percent_maps_to_alpha_bounds() {
         assert_eq!(opacity_alpha(0), 0);
         assert_eq!(opacity_alpha(100), 255);
-        assert_eq!(opacity_alpha(DEFAULT_TASKBAR_OPACITY), 127);
+        assert_eq!(opacity_alpha(DEFAULT_SURFACE_OPACITY), 127);
     }
 
     #[test]
@@ -430,7 +766,10 @@ mod tests {
             .values
             .insert("accentOpacity".to_owned(), SettingValue::Percent(0));
         let transparent = accent_color(&snapshot);
-        assert_eq!((transparent.r, transparent.g, transparent.b, transparent.a), (0xef, 0x40, 0x48, 0));
+        assert_eq!(
+            (transparent.r, transparent.g, transparent.b, transparent.a),
+            (0xef, 0x40, 0x48, 0)
+        );
 
         snapshot
             .values
@@ -452,18 +791,34 @@ mod tests {
 
     #[test]
     fn color_setting_parses_hex_and_falls_back_to_default() {
-        let red = color_setting(&snapshot_with("taskbarColor", "#FF0000"), "taskbarColor", 0);
+        let red = color_setting(&snapshot_with("surfaceColor", "#FF0000"), "surfaceColor", 0);
         assert_eq!((red.r, red.g, red.b, red.a), (255, 0, 0, 255));
         let green = color_setting(&snapshot_with("accent", "00ff00"), "accent", 0);
         assert_eq!((green.r, green.g, green.b), (0, 255, 0));
-        let signed = color_setting(&snapshot_with("accent", "#+12345"), "accent", DEFAULT_ACCENT);
+        let signed = color_setting(
+            &snapshot_with("accent", "#+12345"),
+            "accent",
+            DEFAULT_ACCENT,
+        );
         assert_eq!(signed, rgb(DEFAULT_ACCENT, 255));
-        let bad = color_setting(&snapshot_with("accent", "#GG0000"), "accent", DEFAULT_ACCENT);
+        let bad = color_setting(
+            &snapshot_with("accent", "#GG0000"),
+            "accent",
+            DEFAULT_ACCENT,
+        );
         assert_eq!(
             (bad.r, bad.g, bad.b),
-            ((DEFAULT_ACCENT >> 16) as u8, (DEFAULT_ACCENT >> 8) as u8, DEFAULT_ACCENT as u8)
+            (
+                (DEFAULT_ACCENT >> 16) as u8,
+                (DEFAULT_ACCENT >> 8) as u8,
+                DEFAULT_ACCENT as u8
+            )
         );
-        let missing = color_setting(&SettingsSnapshot::new(1), "taskbarColor", DEFAULT_TASKBAR_COLOR);
+        let missing = color_setting(
+            &SettingsSnapshot::new(1),
+            "surfaceColor",
+            DEFAULT_SURFACE_COLOR,
+        );
         assert_eq!(missing.r, 0x19);
     }
 
@@ -499,11 +854,20 @@ mod tests {
         for style in ["slide", "fade", "magic-lamp"] {
             let style = SettingValue::Text(style.to_owned());
             let cases = [
-                slide_snapshot(&[("animationsEnabled", off.clone()), ("startAnimation", style.clone())]),
-                slide_snapshot(&[("startAnimationEnabled", off.clone()), ("startAnimation", style.clone())]),
+                slide_snapshot(&[
+                    ("animationsEnabled", off.clone()),
+                    ("startAnimation", style.clone()),
+                ]),
+                slide_snapshot(&[
+                    ("startAnimationEnabled", off.clone()),
+                    ("startAnimation", style.clone()),
+                ]),
             ];
             for snapshot in &cases {
-                assert_eq!(start_slide(snapshot, PanelEdge::Bottom, Some(START_BUTTON)), None);
+                assert_eq!(
+                    start_slide(snapshot, PanelEdge::Bottom, Some(START_BUTTON)),
+                    None
+                );
             }
         }
     }
@@ -511,15 +875,21 @@ mod tests {
     #[test]
     fn start_slide_none_and_unknown_styles_are_immediate() {
         for style in ["none", "bounce"] {
-            let snapshot = slide_snapshot(&[("startAnimation", SettingValue::Text(style.to_owned()))]);
-            assert_eq!(start_slide(&snapshot, PanelEdge::Bottom, Some(START_BUTTON)), None, "{style}");
+            let snapshot =
+                slide_snapshot(&[("startAnimation", SettingValue::Text(style.to_owned()))]);
+            assert_eq!(
+                start_slide(&snapshot, PanelEdge::Bottom, Some(START_BUTTON)),
+                None,
+                "{style}"
+            );
         }
     }
 
     #[test]
     fn start_slide_slide_and_legacy_slide_up_keep_the_slide() {
         for style in ["slide", "slide-up"] {
-            let snapshot = slide_snapshot(&[("startAnimation", SettingValue::Text(style.to_owned()))]);
+            let snapshot =
+                slide_snapshot(&[("startAnimation", SettingValue::Text(style.to_owned()))]);
             let slide = start_slide(&snapshot, PanelEdge::Top, None).expect(style);
             assert_eq!(slide, SlideConfig::slide(SlideEdge::Top, 100), "{style}");
         }
@@ -539,7 +909,10 @@ mod tests {
 
     #[test]
     fn start_slide_magic_lamp_folds_into_the_start_button() {
-        let snapshot = slide_snapshot(&[("startAnimation", SettingValue::Text("magic-lamp".to_owned()))]);
+        let snapshot = slide_snapshot(&[(
+            "startAnimation",
+            SettingValue::Text("magic-lamp".to_owned()),
+        )]);
         assert_eq!(
             start_slide(&snapshot, PanelEdge::Bottom, Some(START_BUTTON)),
             Some(SlideConfig::lamp(SlideEdge::Bottom, 100, START_BUTTON))
@@ -552,7 +925,9 @@ mod tests {
     fn start_slide_clamps_speed_to_supported_range() {
         let speed = |value| {
             let snapshot = slide_snapshot(&[("animationSpeed", SettingValue::Integer(value))]);
-            start_slide(&snapshot, PanelEdge::Top, None).expect("slide").speed
+            start_slide(&snapshot, PanelEdge::Top, None)
+                .expect("slide")
+                .speed
         };
         assert_eq!(speed(10), 25);
         assert_eq!(speed(25), 25);
@@ -565,7 +940,10 @@ mod tests {
         let set = snapshot_with("iconTheme", "ThemeX");
         assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
         assert_eq!(icon_theme_name(None), "PlagueSur");
-        assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "PlagueSur");
+        assert_eq!(
+            icon_theme_name(Some(&SettingsSnapshot::new(1))),
+            "PlagueSur"
+        );
     }
 }
 

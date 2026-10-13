@@ -4,21 +4,45 @@
   <meta charset="utf-8">
   <title>FlameWM network</title>
   <link rel="stylesheet" href="flamewm.css">
+  <style>
+    #wifi-popup.network-popup { width:461px; height:453px; box-sizing:border-box; padding:12px; gap:8px; background:#111214; border:1px solid #353638; border-radius:6px; overflow:hidden; }
+    .network-header { width:100%; height:32px; display:flex; align-items:center; justify-content:space-between; }
+    .network-title { font-size:16px; font-weight:600; color:#f1f2f3; }
+    .network-controls { width:100%; height:30px; display:flex; align-items:center; gap:8px; }
+    .network-search { width:153px; height:30px; display:flex; align-items:center; gap:6px; }
+    .network-search input { width:153px; height:30px; box-sizing:border-box; background:#1b1d20; color:#f1f2f3; border:1px solid #353638; border-radius:4px; padding:0px 8px; }
+    .network-group-title { width:100%; height:20px; color:#aeb4bb; font-size:11px; font-weight:600; }
+    .network-connected-row { width:100%; height:44px; box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0px 8px; background:#1a1c1f; border-radius:4px; }
+    .network-row { width:100%; height:44px; box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0px 8px; background:transparent; color:#f1f2f3; border-radius:4px; cursor:default; }
+    .network-row:hover { background:#1a1c1f; }
+    .network-tile { width:28px; height:28px; padding:4px; box-sizing:border-box; border-radius:6px; background:#3daee9; }
+    .network-text { flex-grow:1; display:flex; flex-direction:column; justify-content:center; }
+    .network-name { font-size:13px; font-weight:700; color:#f1f2f3; }
+    .network-status { font-size:11px; color:#aeb4bb; }
+    .network-action { height:24px; padding:0px 8px; border:1px solid #353638; border-radius:4px; color:#f1f2f3; background:#23262a; }
+    .network-connect { font-size:11px; color:#3daee9; }
+    .network-chevron { width:12px; height:12px; }
+    .network-slots { width:100%; max-height:200px; display:flex; flex-direction:column; gap:2px; overflow-y:auto; }
+    .network-secret { display:flex; align-items:center; gap:6px; }
+  </style>
 </head>
 <body class="popup-body">
-  <section id="wifi-popup" class="tray-popup wifi-popup" data-action="popup.surface">
-    <div class="popup-title">Networks</div><div class="network-search"><label id="network-filter-label" for="network-filter">Filter</label><input id="network-filter" type="text" aria-label="Filter networks" data-action="network.filter.focus"></div>
+  <section id="wifi-popup" class="tray-popup wifi-popup network-popup" data-action="popup.surface">
+    <div class="network-header"><div class="network-title">Networks</div><button id="network-scan" data-action="network.scan">Scan</button></div>
+    <div class="network-controls"><button id="network-wifi-toggle" data-action="network.wifi.toggle"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg">Wi-Fi</button><div class="network-search"><label id="network-filter-label" for="network-filter">Filter</label><input id="network-filter" type="text" aria-label="Filter networks" data-action="network.filter.focus"></div></div>
     <div class="popup-subtitle">Connected to <span id="wifi-connected-name">&#8203;</span></div>
-    <div class="network-actions"><button id="network-wifi-toggle" data-action="network.wifi.toggle">Wi-Fi</button><button id="network-scan" data-action="network.scan">Scan</button><button id="network-disconnect" data-action="network.disconnect">Disconnect</button></div>
-    <div class="popup-subtitle">Connected</div><div id="network-connected" class="network-slots">&#8203;</div><div class="popup-subtitle">Available</div><div id="network-slots" class="network-slots" data-scroll="network-slots">
-      <button id="network-slot-1" class="wifi-row" data-action="network.connect.1"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-1-name">&#8203;</div><div id="network-slot-1-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-2" class="wifi-row" data-action="network.connect.2"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-2-name">&#8203;</div><div id="network-slot-2-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-3" class="wifi-row" data-action="network.connect.3"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-3-name">&#8203;</div><div id="network-slot-3-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-4" class="wifi-row" data-action="network.connect.4"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-4-name">&#8203;</div><div id="network-slot-4-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-5" class="wifi-row" data-action="network.connect.5"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-5-name">&#8203;</div><div id="network-slot-5-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-6" class="wifi-row" data-action="network.connect.6"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-6-name">&#8203;</div><div id="network-slot-6-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-7" class="wifi-row" data-action="network.connect.7"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-7-name">&#8203;</div><div id="network-slot-7-status" class="wifi-status">&#8203;</div></div></button>
-      <button id="network-slot-8" class="wifi-row" data-action="network.connect.8"><img class="symbolic-icon" src="assets/breeze/network-wireless.svg"><div><div id="network-slot-8-name">&#8203;</div><div id="network-slot-8-status" class="wifi-status">&#8203;</div></div></button>
+    <div class="network-group-title">Connected</div>
+    <div id="network-connected-row" class="network-connected-row"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-connected" class="network-name">&#8203;</div><div id="network-connected-status" class="network-status">&#8203;</div></div><button id="network-disconnect" class="network-action" data-action="network.disconnect">Disconnect</button><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></div>
+    <div class="network-group-title">Available</div>
+    <div id="network-slots" class="network-slots" data-scroll="network-slots">
+      <button id="network-slot-1" class="network-row" data-action="network.connect.1"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-1-name" class="network-name">&#8203;</div><div id="network-slot-1-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-2" class="network-row" data-action="network.connect.2"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-2-name" class="network-name">&#8203;</div><div id="network-slot-2-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-3" class="network-row" data-action="network.connect.3"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-3-name" class="network-name">&#8203;</div><div id="network-slot-3-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-4" class="network-row" data-action="network.connect.4"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-4-name" class="network-name">&#8203;</div><div id="network-slot-4-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-5" class="network-row" data-action="network.connect.5"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-5-name" class="network-name">&#8203;</div><div id="network-slot-5-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-6" class="network-row" data-action="network.connect.6"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-6-name" class="network-name">&#8203;</div><div id="network-slot-6-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-7" class="network-row" data-action="network.connect.7"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-7-name" class="network-name">&#8203;</div><div id="network-slot-7-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
+      <button id="network-slot-8" class="network-row" data-action="network.connect.8"><img class="symbolic-icon network-tile" src="assets/breeze/network-wireless.svg"><div class="network-text"><div id="network-slot-8-name" class="network-name">&#8203;</div><div id="network-slot-8-status" class="network-status">&#8203;</div></div><span class="network-connect">Connect</span><img class="symbolic-icon" src="assets/breeze/network-wired.svg"><img class="symbolic-icon network-chevron" src="assets/breeze/go-next.svg"></button>
     </div>
     <div id="network-secret" class="network-secret"><label for="network-secret-input">Network password</label><input id="network-secret-input" type="password" autocomplete="new-password" aria-label="Network password" data-action="network.secret.focus"><div id="network-secret-value" class="network-secret-value">&#8203;</div><div id="network-secret-error" role="status" aria-live="polite">&#8203;</div><button data-action="network.secret.submit">Connect</button><button data-action="network.secret.cancel">Cancel</button></div>
   </section>

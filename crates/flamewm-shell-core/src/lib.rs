@@ -128,9 +128,11 @@ impl StatusViews {
     }
 }
 
-pub const AUDIO_POPOVER_SIZE: Size = Size::new(240, 100);
+/// Audio popup: 459x460 logical px (matches ui/shell/audio.html root).
+pub const AUDIO_POPOVER_SIZE: Size = Size::new(459, 460);
 pub const MEDIA_POPOVER_SIZE: Size = Size::new(276, 80);
-pub const NETWORK_POPOVER_SIZE: Size = Size::new(270, 204);
+/// Network popup: 461x453 logical px (matches ui/shell/network.html root).
+pub const NETWORK_POPOVER_SIZE: Size = Size::new(461, 453);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioPopoverModel {
@@ -293,9 +295,9 @@ impl CalendarGrid {
             return None;
         }
         let days = days_in_month(year, month);
-        let first = sunday_index(year, month, 1);
-        let (previous_year, previous_month) = previous_month(year, month);
-        let (next_year, next_month) = next_month(year, month);
+        let first = monday_index(year, month, 1);
+        let (previous_year, previous_month) = shift_month(year, month, -1);
+        let (next_year, next_month) = shift_month(year, month, 1);
         let previous_days = days_in_month(previous_year, previous_month);
         let mut cells = Vec::with_capacity(42);
         for index in 0..42 {
@@ -376,27 +378,13 @@ fn monday_index(year: i32, month: u8, day: u8) -> u8 {
     ((h + 5).rem_euclid(7)) as u8
 }
 
+/// Calendar month arithmetic: `delta` months from `year`/`month`, wrapping years.
 #[must_use]
-fn sunday_index(year: i32, month: u8, day: u8) -> u8 {
-    (monday_index(year, month, day) + 1) % 7
-}
-
-#[must_use]
-fn previous_month(year: i32, month: u8) -> (i32, u8) {
-    if month == 1 {
-        (year - 1, 12)
-    } else {
-        (year, month - 1)
-    }
-}
-
-#[must_use]
-fn next_month(year: i32, month: u8) -> (i32, u8) {
-    if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    }
+pub fn shift_month(year: i32, month: u8, delta: i32) -> (i32, u8) {
+    let index = i64::from(year) * 12 + i64::from(month) - 1 + i64::from(delta);
+    let year = index.div_euclid(12) as i32;
+    let month = index.rem_euclid(12) as u8 + 1;
+    (year, month)
 }
 
 #[must_use]
@@ -481,13 +469,10 @@ pub fn clock_timer_plan(format: &str, now_epoch_ms: u64) -> ClockTimerPlan {
     }
 }
 
+/// Clock calendar popup: 580x476 logical px (Plasma reference layout).
 #[must_use]
-pub fn calendar_popover_size(metrics: ShellMetrics) -> Size {
-    // Month title + six week rows; native rows are 32 logical px.
-    Size::new(
-        i32::from(metrics.clock_popover_width),
-        i32::from(metrics.popover_padding) * 2 + 7 * 32,
-    )
+pub fn calendar_popover_size() -> Size {
+    Size::new(580, 476)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -716,32 +701,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn september_2026_calendar_is_sunday_first_and_marks_today() {
+    fn september_2026_calendar_is_monday_first_and_marks_today() {
         let calendar = CalendarGrid::build_for_date(2026, 9, 2026, 9, 5).expect("valid month");
         assert_eq!(
             calendar.cells[0],
             CalendarCell {
                 year: 2026,
                 month: 8,
-                day: 30,
+                day: 31,
                 month_kind: CalendarMonth::Previous,
                 today: false
             }
         );
-        assert_eq!(calendar.cells[2].day, 1);
-        assert_eq!(calendar.cells[6].day, 5);
-        assert!(calendar.cells[6].today);
+        assert_eq!(calendar.cells[1].day, 1);
+        assert_eq!(calendar.cells[5].day, 5);
+        assert!(calendar.cells[5].today);
         assert!(calendar.cells[41].month_kind == CalendarMonth::Next);
     }
 
     #[test]
-    fn calendar_always_contains_six_sunday_first_rows() {
+    fn calendar_always_contains_six_monday_first_rows() {
         let calendar = CalendarGrid::build_for_date(2026, 9, 2000, 1, 1).expect("valid month");
         assert_eq!(calendar.cells.len(), 42);
         assert_eq!(calendar.cells[0].month_kind, CalendarMonth::Previous);
-        assert_eq!(calendar.cells[2].month_kind, CalendarMonth::Current);
-        assert_eq!(calendar.cells[31].month_kind, CalendarMonth::Current);
-        assert_eq!(calendar.cells[32].month_kind, CalendarMonth::Next);
+        assert_eq!(calendar.cells[1].month_kind, CalendarMonth::Current);
+        assert_eq!(calendar.cells[30].month_kind, CalendarMonth::Current);
+        assert_eq!(calendar.cells[31].month_kind, CalendarMonth::Next);
     }
 
     #[test]
@@ -874,10 +859,65 @@ mod tests {
     }
 
     #[test]
-    fn calendar_popover_is_month_header_plus_six_weeks() {
+    fn audio_and_network_popovers_match_html_roots() {
+        assert_eq!(AUDIO_POPOVER_SIZE, Size::new(459, 460));
+        assert_eq!(NETWORK_POPOVER_SIZE, Size::new(461, 453));
+    }
+
+    #[test]
+    fn calendar_popover_is_580_by_476() {
+        assert_eq!(calendar_popover_size(), Size::new(580, 476));
+    }
+
+    #[test]
+    fn shift_month_wraps_years_both_directions() {
+        assert_eq!(shift_month(2026, 12, 1), (2027, 1));
+        assert_eq!(shift_month(2026, 1, -1), (2025, 12));
+        assert_eq!(shift_month(2026, 10, -12), (2025, 10));
+        assert_eq!(shift_month(2026, 10, 0), (2026, 10));
+    }
+
+    #[test]
+    fn october_2026_is_monday_first_with_leading_days() {
+        let calendar = CalendarGrid::build_for_date(2026, 10, 2026, 10, 13).expect("valid month");
         assert_eq!(
-            calendar_popover_size(ShellMetrics::default()),
-            Size::new(286, 250)
+            calendar.cells[0],
+            CalendarCell {
+                year: 2026,
+                month: 9,
+                day: 28,
+                month_kind: CalendarMonth::Previous,
+                today: false,
+            }
         );
+        assert_eq!(calendar.cells[3].day, 1);
+        assert_eq!(calendar.cells[3].month_kind, CalendarMonth::Current);
+        assert_eq!(calendar.cells[6].day, 4);
+        // Oct 13 2026 is a Tuesday in the third week (index 15).
+        assert!(calendar.cells[15].today);
+        assert_eq!(calendar.cells[15].day, 13);
+        assert_eq!(calendar.cells[34].year, 2026);
+        assert_eq!(calendar.cells[34].month, 11);
+        assert_eq!(calendar.cells[34].day, 1);
+    }
+
+    #[test]
+    fn leap_february_2028_has_29_days() {
+        let calendar = CalendarGrid::build_for_date(2028, 2, 2000, 1, 1).expect("valid month");
+        assert_eq!(calendar.cells[1].day, 1);
+        assert_eq!(calendar.cells[29].day, 29);
+        assert_eq!(calendar.cells[29].month_kind, CalendarMonth::Current);
+        assert_eq!(calendar.cells[30].month, 3);
+        assert_eq!(calendar.cells[30].day, 1);
+    }
+
+    #[test]
+    fn january_2026_rolls_back_into_december_2025() {
+        let calendar = CalendarGrid::build_for_date(2026, 1, 2000, 1, 1).expect("valid month");
+        assert_eq!(calendar.cells[0].year, 2025);
+        assert_eq!(calendar.cells[0].month, 12);
+        assert_eq!(calendar.cells[0].day, 29);
+        assert_eq!(calendar.cells[2].day, 31);
+        assert_eq!(calendar.cells[3].month_kind, CalendarMonth::Current);
     }
 }

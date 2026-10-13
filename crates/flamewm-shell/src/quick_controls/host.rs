@@ -104,6 +104,10 @@ pub struct QuickControlSnapshot {
     pub system: flamewm_api::system::SystemSnapshot,
     pub audio_tab: AudioTab,
     pub audio_settings: AudioSettings,
+    /// Audio row whose slider holds the pointer (press..release).
+    pub audio_drag_slot: Option<usize>,
+    /// Audio row-list scroll offset in px, moved by wheel `scroll` events.
+    pub audio_scroll_offset: u32,
     pub network_query: NetworkQuery,
     pub network_scroll_offset: u32,
     pub network_secret_masked_len: usize,
@@ -116,6 +120,8 @@ pub struct QuickControlSnapshot {
     pub network_secret_submit_id: Option<u64>,
     /// Presentation settings for the shared menu background and popup backdrop.
     pub settings: SettingsSnapshot,
+    /// Clock calendar view state; changed only by `calendar.*` actions.
+    pub calendar: crate::calendar::CalendarState,
 }
 
 impl QuickControlSnapshot {
@@ -125,8 +131,11 @@ impl QuickControlSnapshot {
                 system,
                 audio_tab: AudioTab::default(),
                 audio_settings: AudioSettings::default(),
+                audio_drag_slot: None,
+                audio_scroll_offset: 0,
                 network_query: NetworkQuery::default(),
                 network_scroll_offset: 0,
+                calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
                 network_secret_masked_len: 0,
                 network_secret: String::new(),
                 network_secret_request: None,
@@ -430,6 +439,7 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
             // Disjoint field borrows through one &mut HostState: route gets
             // &mut surfaces and &mut snapshot in place, no snapshot clone.
             let state = &mut *guard;
+            let calendar_before = state.snapshot.calendar;
             let keep = route_helper_event(
                 &event,
                 runtime,
@@ -437,6 +447,10 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
                 &mut state.snapshot,
                 state.dispatcher.as_ref(),
             );
+            if state.snapshot.calendar != calendar_before {
+                // Data-only reprojection of the open calendar; no reopen or resize.
+                state.system_reprojection_pending = true;
+            }
             if !keep {
                 state.shutdown = true;
             }
@@ -819,7 +833,7 @@ fn project_snapshot(
                 &shell,
                 snapshot.audio_tab,
                 snapshot.audio_settings,
-                0,
+                snapshot.audio_scroll_offset,
             ),
             QuickControlKind::Network => {
                 let query = snapshot.network_query.clone();
@@ -843,9 +857,11 @@ fn project_snapshot(
                 )
             }
             QuickControlKind::Calendar => {
-                let grid = crate::projection::current_calendar()
-                    .ok_or_else(|| "invalid local calendar date".to_owned())?;
-                crate::projection::project_calendar(document, &grid)
+                crate::projection::project_calendar(
+                    document,
+                    &snapshot.calendar,
+                    crate::projection::local_date(),
+                )
             }
             }
         })
@@ -906,10 +922,43 @@ pub fn route_helper_event(
     if surfaces.open.is_none() {
         return true;
     }
+    if action == "scroll" && surfaces.open == Some(QuickControlKind::Audio) {
+        if let Some(dy) = event
+            .action
+            .text
+            .as_deref()
+            .and_then(|text| text.split_once(','))
+            .and_then(|(_, dy)| dy.parse::<f32>().ok())
+        {
+            scroll_audio_rows(snapshot, dy);
+        }
+        return true;
+    }
+    if let Some((slot, "set")) = audio_slot_command(action) {
+        match event.action.phase {
+            ActionPhase::Press => snapshot.audio_drag_slot = Some(slot),
+            ActionPhase::Release => snapshot.audio_drag_slot = None,
+            _ => {}
+        }
+        if snapshot.audio_drag_slot == Some(slot)
+            && matches!(event.action.phase, ActionPhase::Press | ActionPhase::Motion)
+        {
+            if let Some(request) = audio_pointer_request(snapshot, slot, event.action.x) {
+                crate::control_actions::enqueue_action(dispatcher, request);
+            }
+        }
+    }
     if event.action.phase == ActionPhase::Release && event.action.inside {
         match action {
-            "audio.tab.devices" => snapshot.audio_tab = AudioTab::Devices,
-            "audio.tab.apps" => snapshot.audio_tab = AudioTab::Applications,
+            "audio.back" => surfaces.close(runtime),
+            "audio.tab.devices" => {
+                snapshot.audio_tab = AudioTab::Devices;
+                snapshot.audio_scroll_offset = 0;
+            }
+            "audio.tab.apps" => {
+                snapshot.audio_tab = AudioTab::Applications;
+                snapshot.audio_scroll_offset = 0;
+            }
             "audio.raise.toggle" => {
                 snapshot.audio_settings.raise_maximum = !snapshot.audio_settings.raise_maximum;
                 if let Some(dispatcher) = dispatcher {
@@ -955,6 +1004,9 @@ pub fn route_helper_event(
                 snapshot.network_query.filter = value["network.filter.".len()..].to_owned();
                 snapshot.network_scroll_offset = 0;
             }
+            value if value.starts_with("calendar.") => {
+                snapshot.calendar.apply(value, crate::projection::local_date());
+            }
             _ => {}
         }
         if let Some(request) = helper_control_request(action, snapshot) {
@@ -994,6 +1046,52 @@ fn sync_network_secret(snapshot: &mut QuickControlSnapshot) {
         snapshot.network_filter_focused = false;
         snapshot.network_secret_request = key;
     }
+}
+
+/// `audio.slot.<n>.<command>` -> (zero-based slot, command).
+/// Wheel `dy` (positive = down) moves the audio row list by one whole row,
+/// clamped to the rows beyond the popup viewport.
+fn scroll_audio_rows(snapshot: &mut QuickControlSnapshot, dy: f32) {
+    use crate::taskbar::status::audio::{AUDIO_POPUP_ROWS, AUDIO_ROW_HEIGHT};
+    if dy == 0.0 {
+        return;
+    }
+    let total = crate::taskbar::status::audio::tab_rows(&snapshot.system.audio, snapshot.audio_tab).len();
+    let max_rows = total.saturating_sub(AUDIO_POPUP_ROWS);
+    let row = (snapshot.audio_scroll_offset / AUDIO_ROW_HEIGHT) as usize;
+    let next = if dy > 0.0 { (row + 1).min(max_rows) } else { row.saturating_sub(1) };
+    snapshot.audio_scroll_offset = (next as u32) * AUDIO_ROW_HEIGHT;
+}
+
+fn audio_slot_command(action: &str) -> Option<(usize, &str)> {
+    let (slot_text, command) = action.strip_prefix("audio.slot.")?.rsplit_once('.')?;
+    let slot = slot_text.parse::<usize>().ok()?.checked_sub(1)?;
+    Some((slot, command))
+}
+
+/// Pointer x on the slider track -> snapped percent under the current cap.
+fn audio_pointer_request(
+    snapshot: &QuickControlSnapshot,
+    slot: usize,
+    x: f32,
+) -> Option<ControlRequest> {
+    use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
+    let row = crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, snapshot.audio_tab, snapshot.audio_scroll_offset)
+        .into_iter()
+        .nth(slot)?;
+    let spec = snapshot.audio_settings.slider_spec(row.volume_percent);
+    let value = flamewm_ui_core::range::RangeState::value_from_pointer(
+        spec,
+        AUDIO_TRACK_X,
+        AUDIO_TRACK_WIDTH,
+        x,
+    );
+    crate::taskbar::status::audio::system_action_for_row(
+        &snapshot.system,
+        &row.id,
+        Some(value.round() as u8),
+        None,
+    )
 }
 
 fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Option<ControlRequest> {
@@ -1037,16 +1135,9 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
     {
         let (_, slot) = kind_slot.rsplit_once('.')?;
         let slot = slot.parse::<usize>().ok()?.checked_sub(1)?;
-        crate::taskbar::status::audio::popover_view(system)
-            .and_then(|popover| popover.visible_rows.get(slot).cloned())
-            .map(|row| crate::taskbar::status::audio::RowSource {
-                kind: row.kind,
-                id: row.id,
-                label: row.label,
-                volume_percent: row.volume_percent,
-                muted: row.muted,
-                selected: row.selected,
-            })
+        crate::taskbar::status::audio::visible_rows(&system.audio, snapshot.audio_tab, snapshot.audio_scroll_offset)
+            .into_iter()
+            .nth(slot)
     } else {
         None
     }?;
@@ -1233,8 +1324,11 @@ mod tests {
             system: flamewm_api::system::SystemSnapshot::default(),
             audio_tab: AudioTab::Devices,
             audio_settings: AudioSettings::default(),
+            audio_drag_slot: None,
+            audio_scroll_offset: 0,
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
+            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
             network_secret_masked_len: 8,
             network_secret: String::new(),
             network_secret_request: None,
@@ -1264,8 +1358,11 @@ mod tests {
             system: flamewm_api::system::SystemSnapshot::default(),
             audio_tab: AudioTab::default(),
             audio_settings: AudioSettings::default(),
+            audio_drag_slot: None,
+            audio_scroll_offset: 0,
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
+            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
             network_secret_masked_len: 0,
             network_secret: String::new(),
             network_secret_request: None,
@@ -1307,6 +1404,8 @@ mod tests {
             system,
             audio_tab: AudioTab::Devices,
             audio_settings: AudioSettings::default(),
+            audio_drag_slot: None,
+            audio_scroll_offset: 0,
             network_query: NetworkQuery {
                 filter: "MATCH".to_owned(),
             },
@@ -1319,17 +1418,19 @@ mod tests {
             network_secret_error: false,
             network_secret_submit_id: None,
             settings: SettingsSnapshot::new(0),
+            calendar: crate::calendar::CalendarState::for_today((2026, 10, 13)),
         };
 
-        // Filtering leaves five rows; connected-first ordering moves provider
-        // index 4 ahead of them, then one-row scrolling makes provider index 1
-        // the visible slot 0. This differs from raw provider slot 0.
+        // Filtering leaves five rows; the connected provider index 4 is excluded
+        // (it has its own container), leaving four Available rows. The 44px scroll
+        // then makes provider index 3 the visible slot 0, not raw provider slot 0.
         let rows = crate::taskbar::status::network::project_visible_rows(
             &quick.system,
             &quick.network_query,
             quick.network_scroll_offset,
         );
-        assert_eq!(rows[0].path, "/ap/1");
+        assert_eq!(rows[0].path, "/ap/3");
+        assert!(rows.iter().all(|row| row.path != "/ap/4"));
         let request = helper_control_request("network.connect.1", &quick)
             .expect("projected slot resolves to a connect request");
         assert_eq!(
@@ -1609,8 +1710,11 @@ mod tests {
             system: flamewm_api::system::SystemSnapshot::default(),
             audio_tab: AudioTab::default(),
             audio_settings: AudioSettings::default(),
+            audio_drag_slot: None,
+            audio_scroll_offset: 0,
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
+            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
             network_secret_masked_len: 0,
             network_secret: String::new(),
             network_secret_request: None,
@@ -1652,5 +1756,142 @@ mod tests {
         document
             .text("network-secret-error", String::new())
             .expect("empty secret error projects");
+    }
+}
+
+#[cfg(test)]
+mod audio_routing_tests {
+    use super::*;
+    use flamewm_api::system::{
+        AudioEndpointKind, AudioEndpointSnapshot, AudioStreamSnapshot, AudioTarget,
+        ServiceAvailability, SystemAction,
+    };
+
+    // Fake provider: one default output at 50%, one app stream at 30%.
+    fn quick(tab: AudioTab, raise_maximum: bool) -> QuickControlSnapshot {
+        let mut system = flamewm_api::system::SystemSnapshot::default();
+        system.revision = 4;
+        system.audio.availability = ServiceAvailability::Available;
+        system.audio.endpoints = vec![AudioEndpointSnapshot {
+            id: 1,
+            kind: AudioEndpointKind::Sink,
+            name: "speakers".to_owned(),
+            description: "Built-in Speakers".to_owned(),
+            volume_percent: 50,
+            muted: false,
+            is_default: true,
+        }];
+        system.audio.streams = vec![AudioStreamSnapshot {
+            id: 10,
+            endpoint_id: 1,
+            name: "Firefox".to_owned(),
+            volume_percent: 30,
+            muted: false,
+        }];
+        QuickControlSnapshot {
+            system,
+            audio_tab: tab,
+            audio_settings: AudioSettings { raise_maximum },
+            audio_drag_slot: None,
+            audio_scroll_offset: 0,
+            network_query: NetworkQuery::default(),
+            network_scroll_offset: 0,
+            network_secret_masked_len: 0,
+            network_secret: String::new(),
+            network_secret_request: None,
+            network_secret_focused: false,
+            network_filter_focused: false,
+            network_secret_error: false,
+            network_secret_submit_id: None,
+            settings: SettingsSnapshot::new(0),
+            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+        }
+    }
+
+    #[test]
+    fn wheel_scroll_moves_audio_rows_by_whole_rows_and_clamps_to_the_model() {
+        let mut quick = quick(AudioTab::Devices, false);
+        for id in 2..=6 {
+            quick.system.audio.endpoints.push(AudioEndpointSnapshot {
+                id,
+                kind: AudioEndpointKind::Sink,
+                name: format!("sink{id}"),
+                description: format!("Sink {id}"),
+                volume_percent: 10,
+                muted: false,
+                is_default: false,
+            });
+        }
+        // Six device rows in a four-row viewport: two rows of scroll room.
+        scroll_audio_rows(&mut quick, 48.0);
+        assert_eq!(quick.audio_scroll_offset, 84);
+        scroll_audio_rows(&mut quick, 48.0);
+        assert_eq!(quick.audio_scroll_offset, 168);
+        scroll_audio_rows(&mut quick, 48.0);
+        assert_eq!(quick.audio_scroll_offset, 168);
+        scroll_audio_rows(&mut quick, -48.0);
+        assert_eq!(quick.audio_scroll_offset, 84);
+        // The projected window and the routed slot both start at the scrolled row.
+        let rows = crate::taskbar::status::audio::visible_rows(
+            &quick.system.audio,
+            quick.audio_tab,
+            quick.audio_scroll_offset,
+        );
+        assert_eq!(rows[0].stable_id(), "endpoint:sink:2");
+        let request = helper_control_request("audio.slot.1.mute", &quick);
+        assert_eq!(target_of(request), Some(AudioTarget::Endpoint { id: 2, kind: AudioEndpointKind::Sink }));
+    }
+
+    fn target_of(request: Option<ControlRequest>) -> Option<AudioTarget> {
+        match request? {
+            ControlRequest::SystemAction {
+                action: SystemAction::SetMute(mute),
+                ..
+            } => Some(mute.target),
+            ControlRequest::SystemAction {
+                action: SystemAction::SetVolume(volume),
+                ..
+            } => Some(volume.target),
+            _ => None,
+        }
+    }
+
+    // Slot numbers follow the projected tab, not the raw provider order.
+    #[test]
+    fn row_mute_routes_to_the_projected_tab_row() {
+        let devices = quick(AudioTab::Devices, false);
+        assert_eq!(
+            target_of(helper_control_request("audio.slot.1.mute", &devices)),
+            Some(AudioTarget::Endpoint {
+                id: 1,
+                kind: AudioEndpointKind::Sink
+            })
+        );
+        let apps = quick(AudioTab::Applications, false);
+        assert_eq!(
+            target_of(helper_control_request("audio.slot.1.mute", &apps)),
+            Some(AudioTarget::Stream { id: 10 })
+        );
+    }
+
+    #[test]
+    fn pointer_drag_to_track_end_is_capped_at_100_or_150() {
+        use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
+        let end = AUDIO_TRACK_X + AUDIO_TRACK_WIDTH;
+        let percent = |raise: bool, x: f32| match audio_pointer_request(
+            &quick(AudioTab::Devices, raise),
+            0,
+            x,
+        ) {
+            Some(ControlRequest::SystemAction {
+                action: SystemAction::SetVolume(volume),
+                ..
+            }) => Some(volume.percent),
+            _ => None,
+        };
+        assert_eq!(percent(false, end), Some(100));
+        assert_eq!(percent(true, end), Some(150));
+        assert_eq!(percent(false, AUDIO_TRACK_X), Some(0));
+        assert_eq!(percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH / 2.0), Some(75));
     }
 }

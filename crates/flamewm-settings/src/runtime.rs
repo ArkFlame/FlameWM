@@ -23,6 +23,7 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
         SettingsControl::connect_session().map_err(|error| error.to_string())?,
     );
     application.client_mut().set_page(options.page);
+    application.appearance_tab = options.appearance_tab;
     let mut document = view::document()?;
     if let Err(message) = application.refresh(&mut document) {
         application.report_error(&mut document, message);

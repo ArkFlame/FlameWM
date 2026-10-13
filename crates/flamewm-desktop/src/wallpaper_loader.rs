@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -7,12 +6,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
 use flamewm_api::background::WallpaperFit;
-use flamewm_image_core::ImageSourceFormat;
 use flamewm_integrations_linux::icons::{IconOrigin, Rgba8Raster};
 
 use crate::wallpaper_fit;
 
-const DEFAULT_WALLPAPER_PATH: &str = "assets/wallpapers/fitz-roy-dawn.webp";
+use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -364,11 +362,7 @@ fn decode_bytes_at(
     fit: WallpaperFit,
     target: (u32, u32),
 ) -> Result<Rgba8Raster, String> {
-    let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
-    let format = ImageSourceFormat::from_extension(path)
-        .ok_or_else(|| format!("unsupported wallpaper format: {}", path.display()))?;
-    let natural = flamewm_image_core::decode_bytes(&bytes, format)
-        .map_err(|message| format!("decode {}: {message}", path.display()))?;
+    let natural = flamewm_image_core::wallpaper::decode_file(path)?;
     let image = wallpaper_fit::compose(&natural, target.0, target.1, fit)
         .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
     Ok(Rgba8Raster {

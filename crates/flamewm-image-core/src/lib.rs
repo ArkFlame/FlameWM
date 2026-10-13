@@ -16,6 +16,7 @@ pub mod png;
 pub mod ppm;
 pub mod scale;
 pub mod svg;
+pub mod wallpaper;
 pub mod webp;
 pub mod xpm;
 

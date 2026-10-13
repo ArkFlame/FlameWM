@@ -11,7 +11,7 @@ use crate::taskbar::workspaces::{
     project as project_workspaces, slot_position, visible_page, WorkspaceView, PAGE_SIZE,
 };
 use crate::ShellSnapshot;
-use flamewm_shell_core::{task_visual_states, CalendarGrid, StartModel};
+use flamewm_shell_core::{task_visual_states, StartModel};
 
 const TASK_SLOT_COUNT: usize = 8;
 const START_APP_SLOT_COUNT: usize = 8;
@@ -532,68 +532,60 @@ pub fn project_audio_full(
             .map(|popover| popover.popover.details.clone())
             .unwrap_or_else(|| view.label.clone())
     };
-    let (volume_percent, muted) = popover
-        .as_ref()
-        .map(|popover| (popover.popover.volume_percent, popover.popover.muted))
-        .unwrap_or((view.volume_percent, view.muted));
     document.text("audio-details", details)?;
-    // RangeSpec slider: value snapped into the current cap (100/150), mute
-    // plus percent shown; overflow scrolls via the template container.
-    let spec = settings.slider_spec(volume_percent);
-    document.text("volume-value", format!("{volume_percent}%"))?;
-    document.size(
-        "volume-track-fill",
-        spec.snap(f32::from(volume_percent)),
-        7.0,
+    let devices = tab == flamewm_shell_core::status::AudioTab::Devices;
+    document.visible("audio-tab-devices-bg", devices)?;
+    document.visible("audio-tab-apps-bg", !devices)?;
+    // Rows come from the tab-filtered, scroll-windowed list shared with host routing.
+    let rows =
+        crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, tab, scroll_offset);
+    document.visible("audio-empty", rows.is_empty())?;
+    document.text(
+        "audio-empty",
+        if rows.is_empty() {
+            if devices {
+                "No audio devices"
+            } else {
+                "No active applications"
+            }
+            .to_owned()
+        } else {
+            String::new()
+        },
     )?;
-    let _ = (tab, scroll_offset);
-    document.visible("popup-volume-icon", !muted)?;
-    document.visible("popup-muted-icon", muted)?;
-    // Tab-filtered rows over the full snapshot (devices = endpoints,
-    // applications = streams), virtualized window from scroll offset.
-    let rows: Vec<_> = {
-        let audio = &snapshot.system.audio;
-        let all: Vec<crate::taskbar::status::audio::RowSource> = audio
-            .endpoints()
-            .iter()
-            .map(crate::taskbar::status::audio::RowSource::from_endpoint)
-            .chain(
-                audio
-                    .streams()
-                    .iter()
-                    .map(crate::taskbar::status::audio::RowSource::from_stream),
-            )
-            .filter(|row| match tab {
-                flamewm_shell_core::status::AudioTab::Devices => {
-                    row.kind == crate::taskbar::status::audio::AudioRowKind::Endpoint
-                }
-                flamewm_shell_core::status::AudioTab::Applications => {
-                    row.kind == crate::taskbar::status::audio::AudioRowKind::Stream
-                }
-            })
-            .collect();
-        let (first, last) =
-            flamewm_shell_core::status::visible_window(all.len(), 32, 220, scroll_offset);
-        all.into_iter()
-            .enumerate()
-            .filter(|(index, _)| *index >= first && *index < last)
-            .take(crate::taskbar::status::audio::AUDIO_SLOT_COUNT)
-            .map(|(_, row)| row)
-            .collect()
-    };
-    for slot in 0..crate::taskbar::status::audio::AUDIO_SLOT_COUNT {
+    for slot in 0..crate::taskbar::status::audio::AUDIO_POPUP_ROWS {
+        let n = slot + 1;
         let row = rows.get(slot);
-        document.visible(&format!("audio-slot-{}", slot + 1), row.is_some())?;
+        document.visible(&format!("audio-slot-{n}"), row.is_some())?;
+        let Some(row) = row else { continue };
+        // Per-row RangeSpec under the current 100/150 cap; fill snapped into it.
+        let spec = settings.slider_spec(row.volume_percent);
+        let shown = spec.snap(f32::from(row.volume_percent));
+        let is_stream = row.kind == crate::taskbar::status::audio::AudioRowKind::Stream;
+        let is_input = row.id.starts_with("endpoint:source:");
+        document.text(&format!("audio-slot-{n}-label"), row.label.clone())?;
         document.text(
-            &format!("audio-slot-{}-label", slot + 1),
-            row.map(|row| row.label.clone()).unwrap_or_default(),
+            &format!("audio-slot-{n}-value"),
+            format!("{}%", row.volume_percent),
         )?;
         document.text(
-            &format!("audio-slot-{}-value", slot + 1),
-            row.map(|row| format!("{}%", row.volume_percent))
-                .unwrap_or_default(),
+            &format!("audio-slot-{n}-mute"),
+            if row.muted { "Unmute" } else { "Mute" }.to_owned(),
         )?;
+        document.size(
+            &format!("audio-slot-{n}-fill"),
+            crate::taskbar::status::audio::AUDIO_TRACK_WIDTH * shown / spec.max,
+            6.0,
+        )?;
+        document.visible(&format!("audio-slot-{n}-icon-out"), !is_stream && !is_input)?;
+        document.visible(&format!("audio-slot-{n}-icon-in"), !is_stream && is_input)?;
+        document.visible(&format!("audio-slot-{n}-icon-app"), is_stream)?;
     }
+    document.toggle(
+        "audio-raise-track",
+        "audio-raise-knob",
+        settings.raise_maximum,
+    )?;
     Ok(())
 }
 
@@ -642,13 +634,22 @@ pub fn project_network_full(
     let view = crate::taskbar::status::network::project(&snapshot.system);
     let popover = crate::taskbar::status::network::popover_view(&snapshot.system);
     // Dedicated connected container: independent of paging, shown on every page.
-    let connected = crate::taskbar::status::network::connected_row(&snapshot.system);
+    // The connected row is filtered by the same search query as Available rows.
+    let connected = crate::taskbar::status::network::connected_row(&snapshot.system)
+        .filter(|row| query.matches(&row.label));
     document.text(
         "network-connected",
         connected
             .as_ref()
             .map_or_else(String::new, |row| row.label.clone()),
     )?;
+    document.text(
+        "network-connected-status",
+        connected.as_ref().map_or_else(String::new, |row| {
+            format!("Connected · {}%", row.strength_percent)
+        }),
+    )?;
+    document.visible("network-connected-row", connected.is_some())?;
     document.visible("network-connected", connected.is_some())?;
     if let Some(popover) = popover {
         document.text("wifi-connected-name", popover.connected_label.clone())?;
@@ -714,21 +715,22 @@ pub fn project_network_full(
 
 pub fn project_calendar(
     document: &mut impl UiDocumentAccess,
-    grid: &CalendarGrid,
+    state: &crate::calendar::CalendarState,
+    today: (i32, u8, u8),
 ) -> Result<(), String> {
-    // Exactly one today marker: the first model cell flagged `today` that
-    // belongs to the displayed month gets the Flame-red marker; every
-    // other cell renders without a marker. Gating on the grid year/month
-    // (equivalent to `CalendarMonth::Current` without widening imports)
-    // keeps adjacent-month rollover cells (e.g. Jan 1 inside the December
-    // grid) dim, and full re-projection on midnight refresh clears the
-    // previous cell. Adjacent-month cells render dim (cleared marker);
-    // `UiDocumentAccess` exposes no text-color/opacity/class toggle, so
-    // dim is projected as absence of marker fill while today uses the
-    // accent fill.
+    // Today: accent red circle on its marker (or Months/Years tile). Selected:
+    // neutral rounded gray tile on the cell, so both can show together.
+    // Adjacent-month cells render dim (cleared marker foreground).
+    use crate::calendar::{year_page_start, CalendarView};
     const FLAME_RED: UiColor = UiColor {
         r: 239,
         g: 64,
+        b: 72,
+        a: 255,
+    };
+    const SELECTED_TILE: UiColor = UiColor {
+        r: 64,
+        g: 68,
         b: 72,
         a: 255,
     };
@@ -744,26 +746,82 @@ pub fn project_calendar(
         b: 240,
         a: 255,
     };
-    document.text("calendar-month", month_name(grid.month).to_owned())?;
-    document.text("calendar-year", grid.year.to_string())?;
-    let today = grid
-        .cells
-        .iter()
-        .position(|cell| cell.today && cell.year == grid.year && cell.month == grid.month);
-    for (index, cell) in grid.cells.iter().enumerate() {
-        // 42 cells: day text + per-month foreground (adjacent #62686d,
-        // current light) on the 27x27 marker child, never on the cell.
-        let marker = format!("calendar-day-{}-marker", index + 1);
-        document.text(&marker, cell.day.to_string())?;
-        if cell.month_kind == flamewm_shell_core::CalendarMonth::Current {
-            document.foreground(&marker, CURRENT_FG)?;
+    let view = state.view;
+    document.visible("calendar-week", view == CalendarView::Days)?;
+    document.visible("calendar-days", view == CalendarView::Days)?;
+    document.visible("calendar-months", view == CalendarView::Months)?;
+    document.visible("calendar-years", view == CalendarView::Years)?;
+    for (id, active) in [
+        ("calendar-tab-days", CalendarView::Days),
+        ("calendar-tab-months", CalendarView::Months),
+        ("calendar-tab-years", CalendarView::Years),
+    ]
+    .map(|(id, tab)| (id, tab == view))
+    {
+        if active {
+            document.background(id, SELECTED_TILE)?;
         } else {
-            document.foreground(&marker, ADJACENT_FG)?;
+            document.background_clear(id)?;
         }
-        if Some(index) == today {
-            document.background(&marker, FLAME_RED)?;
-        } else {
-            document.background_clear(&marker)?;
+    }
+    document.text("calendar-month", month_name(state.month).to_owned())?;
+    document.text("calendar-year", state.year.to_string())?;
+    match view {
+        CalendarView::Days => {
+            let grid = state
+                .grid(today)
+                .ok_or_else(|| "invalid calendar month".to_owned())?;
+            for (index, cell) in grid.cells.iter().enumerate() {
+                let cell_id = format!("calendar-day-{}", index + 1);
+                let marker = format!("calendar-day-{}-marker", index + 1);
+                document.text(&marker, cell.day.to_string())?;
+                if cell.month_kind == flamewm_shell_core::CalendarMonth::Current {
+                    document.foreground(&marker, CURRENT_FG)?;
+                } else {
+                    document.foreground(&marker, ADJACENT_FG)?;
+                }
+                let is_today = cell.today && cell.year == grid.year && cell.month == grid.month;
+                if is_today {
+                    document.background(&marker, FLAME_RED)?;
+                } else {
+                    document.background_clear(&marker)?;
+                }
+                if state.selected == Some((cell.year, cell.month, cell.day)) {
+                    document.background(&cell_id, SELECTED_TILE)?;
+                } else {
+                    document.background_clear(&cell_id)?;
+                }
+            }
+        }
+        CalendarView::Months => {
+            for month in 1..=12u8 {
+                let id = format!("calendar-pick-month-{month}");
+                document.text(&id, month_name(month).to_owned())?;
+                document.foreground(&id, CURRENT_FG)?;
+                if state.year == today.0 && month == today.1 {
+                    document.background(&id, FLAME_RED)?;
+                } else if month == state.month {
+                    document.background(&id, SELECTED_TILE)?;
+                } else {
+                    document.background_clear(&id)?;
+                }
+            }
+        }
+        CalendarView::Years => {
+            let start = year_page_start(state.year);
+            for offset in 0..12i32 {
+                let year = start + offset;
+                let id = format!("calendar-pick-year-{}", offset + 1);
+                document.text(&id, year.to_string())?;
+                document.foreground(&id, CURRENT_FG)?;
+                if year == today.0 {
+                    document.background(&id, FLAME_RED)?;
+                } else if year == state.year {
+                    document.background(&id, SELECTED_TILE)?;
+                } else {
+                    document.background_clear(&id)?;
+                }
+            }
         }
     }
     Ok(())
@@ -865,19 +923,35 @@ mod calendar_tests {
         a: 255,
     };
 
+    const SELECTED_TILE: UiColor = UiColor {
+        r: 64,
+        g: 68,
+        b: 72,
+        a: 255,
+    };
+
     #[test]
-    fn today_projects_exactly_one_circular_marker() {
-        let grid = CalendarGrid::build_for_date(2026, 9, 2026, 9, 7).expect("valid grid");
-        let today = grid
+    fn today_marker_and_selected_tile_show_together() {
+        let today = (2026, 9, 7);
+        let state = crate::calendar::CalendarState::for_today(today);
+        let grid = state.grid(today).expect("valid grid");
+        let today_index = grid
             .cells
             .iter()
             .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
             .expect("known date is a current-month cell");
         let mut document = FakeDocument::default();
-        project_calendar(&mut document, &grid).expect("projection succeeds");
-        let marker = format!("calendar-day-{}-marker", today + 1);
-        assert_eq!(document.backgrounds.len(), 1);
+        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let marker = format!("calendar-day-{}-marker", today_index + 1);
+        let tile = format!("calendar-day-{}", today_index + 1);
         assert_eq!(document.backgrounds.get(&marker), Some(&FLAME_RED));
+        assert_eq!(document.backgrounds.get(&tile), Some(&SELECTED_TILE));
+        let red_markers = document
+            .backgrounds
+            .iter()
+            .filter(|(id, color)| id.ends_with("-marker") && **color == FLAME_RED)
+            .count();
+        assert_eq!(red_markers, 1, "exactly one today marker");
         for (index, cell) in grid.cells.iter().enumerate() {
             let id = format!("calendar-day-{}-marker", index + 1);
             assert_eq!(
@@ -885,49 +959,67 @@ mod calendar_tests {
                 Some(cell.day.to_string()).as_deref(),
                 "day text lives on the marker, not the cell",
             );
-            if index != today {
+            if index != today_index {
                 assert!(
                     document.cleared.contains(&id),
-                    "non-today marker {id} is cleared",
+                    "non-today marker {id} is cleared"
                 );
+            }
+            if cell.month_kind != flamewm_shell_core::CalendarMonth::Current {
                 assert!(
-                    cell.month != grid.month || !cell.today,
-                    "adjacent-month cells are never marked",
+                    document.cleared.contains(&id),
+                    "adjacent-month marker {id} is never marked",
                 );
             }
         }
         assert!(
             !document.cleared.contains(&marker),
-            "today marker keeps its fill",
+            "today marker keeps its fill"
         );
     }
 
     #[test]
-    fn reprojection_clears_previous_marker() {
-        let first = CalendarGrid::build_for_date(2026, 9, 2026, 9, 7).expect("valid grid");
-        let second = CalendarGrid::build_for_date(2026, 9, 2026, 9, 8).expect("valid grid");
+    fn reprojection_clears_previous_marker_and_moves_selection() {
         let mut document = FakeDocument::default();
-        project_calendar(&mut document, &first).expect("first projection succeeds");
-        project_calendar(&mut document, &second).expect("second projection succeeds");
-        let today = second
-            .cells
-            .iter()
-            .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
-            .expect("second date is a current-month cell");
-        let marker = format!("calendar-day-{}-marker", today + 1);
-        assert_eq!(document.backgrounds.len(), 1);
-        assert_eq!(document.backgrounds.get(&marker), Some(&FLAME_RED));
-        let previous = first
-            .cells
-            .iter()
-            .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
-            .expect("first date is a current-month cell");
-        assert_ne!(previous, today);
+        let first = crate::calendar::CalendarState::for_today((2026, 9, 7));
+        project_calendar(&mut document, &first, (2026, 9, 7)).expect("first projection succeeds");
+        let second = crate::calendar::CalendarState::for_today((2026, 9, 8));
+        project_calendar(&mut document, &second, (2026, 9, 8)).expect("second projection succeeds");
+        // Sep 1 2026 is a Tuesday: Sep 7 is cell 8 in the Monday-first grid.
         assert!(
             document
                 .cleared
-                .contains(&format!("calendar-day-{}-marker", previous + 1)),
+                .iter()
+                .any(|id| id == "calendar-day-8-marker"),
             "previous marker is cleared on reprojection",
+        );
+        assert_eq!(
+            document.backgrounds.get("calendar-day-9-marker"),
+            Some(&FLAME_RED),
+        );
+        assert_eq!(
+            document.backgrounds.get("calendar-day-9"),
+            Some(&SELECTED_TILE)
+        );
+    }
+
+    #[test]
+    fn months_view_marks_current_month_in_accent() {
+        let today = (2026, 10, 13);
+        let mut state = crate::calendar::CalendarState::for_today(today);
+        state.apply("calendar.view.months", today);
+        let mut document = FakeDocument::default();
+        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        assert_eq!(
+            document
+                .texts
+                .get("calendar-pick-month-10")
+                .map(String::as_str),
+            Some("October"),
+        );
+        assert_eq!(
+            document.backgrounds.get("calendar-pick-month-10"),
+            Some(&FLAME_RED),
         );
     }
 }
@@ -981,19 +1073,10 @@ pub fn project_clock_at(
     Ok(())
 }
 
-pub fn current_calendar() -> Option<CalendarGrid> {
-    calendar_for_date(local_date())
-}
-
 #[must_use]
 pub fn local_date() -> (i32, u8, u8) {
     let now = Local::now();
     (now.year(), now.month() as u8, now.day() as u8)
-}
-
-#[must_use]
-pub fn calendar_for_date(date: (i32, u8, u8)) -> Option<CalendarGrid> {
-    CalendarGrid::build_for_date(date.0, date.1, date.0, date.1, date.2)
 }
 
 fn month_name(month: u8) -> &'static str {
@@ -1080,7 +1163,8 @@ fn runtime_image(raster: Rgb8Raster) -> RuntimeImage {
 mod network_template_tests {
     use super::*;
 
-    const NETWORK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
+    const NETWORK_ARTIFACT: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
 
     // CONTRACT-REGRESSION: every text target the network projection writes must be a
     // single-text-node element in the compiled network template.
@@ -1093,6 +1177,7 @@ mod network_template_tests {
             .expect("network artifact must decode");
         let mut ids = vec![
             "network-connected".to_owned(),
+            "network-connected-status".to_owned(),
             "wifi-connected-name".to_owned(),
             "network-filter-label".to_owned(),
             "network-secret-value".to_owned(),
@@ -1157,6 +1242,39 @@ mod network_template_tests {
     // first two Available slots must carry name text and visible=true.
     // OBSERVABLE: slot-1 name is the strongest AP, slot-2 the next; the
     // connected AP appears in the Connected container and the slot list.
+    // REGRESSION: active AP path set but absent from scan must keep the
+    // connected container visible with the active network label.
+    #[test]
+    fn absent_connected_access_point_keeps_connected_container_visible() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.network.availability = ServiceAvailability::Available;
+        snapshot.system.network.wifi_enabled = true;
+        snapshot.system.network.networking_enabled = true;
+        snapshot.system.network.label = "LinsaFTW".to_owned();
+        snapshot.system.network.strength_percent = 70;
+        snapshot.system.network.active_access_point_path =
+            "/org/freedesktop/NetworkManager/AccessPoint/9".to_owned();
+        snapshot.system.network.access_points =
+            vec![flamewm_api::system::NetworkAccessPointSnapshot {
+                path: "/org/freedesktop/NetworkManager/AccessPoint/2".to_owned(),
+                ssid: "StubNeighbor".to_owned(),
+                strength_percent: 42,
+                secured: false,
+                known: false,
+            }];
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert!(!recorder.texts["network-connected"].is_empty());
+        assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
+        assert_eq!(recorder.visible.get("network-connected"), Some(&true));
+    }
+
     #[test]
     fn projected_access_points_reach_slot_name_and_visible_flags() {
         let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
@@ -1192,10 +1310,137 @@ mod network_template_tests {
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
         assert_eq!(recorder.visible.get("network-connected"), Some(&true));
-        assert_eq!(recorder.texts["network-slot-1-name"], "LinsaFTW");
+        // The connected AP lives only in the connected container; the Available
+        // slots list the remaining APs without repeating it.
+        assert_eq!(recorder.texts["network-slot-1-name"], "StubNeighbor");
         assert_eq!(recorder.visible.get("network-slot-1"), Some(&true));
-        assert_eq!(recorder.texts["network-slot-2-name"], "StubNeighbor");
-        assert_eq!(recorder.visible.get("network-slot-2"), Some(&true));
+        assert_eq!(recorder.texts["network-slot-1-status"], "42%");
+        assert_eq!(recorder.visible.get("network-slot-2"), Some(&false));
+        assert_eq!(recorder.texts["network-slot-2-name"], "");
+    }
+
+    fn network_snapshot(
+        active_ap: &str,
+        label: &str,
+        access_points: Vec<(&str, &str, u8)>,
+    ) -> crate::ShellSnapshot {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.network.availability = ServiceAvailability::Available;
+        snapshot.system.network.wifi_enabled = true;
+        snapshot.system.network.networking_enabled = true;
+        snapshot.system.network.label = label.to_owned();
+        snapshot.system.network.strength_percent = 72;
+        snapshot.system.network.active_access_point_path = active_ap.to_owned();
+        snapshot.system.network.access_points = access_points
+            .into_iter()
+            .map(
+                |(path, ssid, strength)| flamewm_api::system::NetworkAccessPointSnapshot {
+                    path: path.to_owned(),
+                    ssid: ssid.to_owned(),
+                    strength_percent: strength,
+                    secured: true,
+                    known: false,
+                },
+            )
+            .collect();
+        snapshot
+    }
+
+    // REGRESSION: the Connected row carries the status line "Connected · N%" from
+    // the model strength only; no traffic rates are fabricated.
+    #[test]
+    fn connected_row_status_line_uses_model_strength_only() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot(
+            "/ap/1",
+            "LinsaFTW",
+            vec![("/ap/1", "LinsaFTW", 72), ("/ap/2", "StubNeighbor", 42)],
+        );
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(
+            recorder.texts["network-connected-status"],
+            "Connected · 72%"
+        );
+        assert_eq!(recorder.visible.get("network-connected-row"), Some(&true));
+    }
+
+    // REGRESSION: an active AP absent from the scan keeps the Connected row
+    // visible, named from the network label, and never duplicated in Available.
+    #[test]
+    fn absent_connected_ap_keeps_connected_row_and_adds_no_available_duplicate() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot("/ap/9", "LinsaFTW", vec![("/ap/2", "StubNeighbor", 42)]);
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
+        assert_eq!(recorder.visible.get("network-connected-row"), Some(&true));
+        assert_eq!(recorder.texts["network-slot-1-name"], "StubNeighbor");
+        assert_eq!(recorder.visible.get("network-slot-2"), Some(&false));
+    }
+
+    // REGRESSION: duplicate SSIDs are keyed by AP path. The active path (/ap/2)
+    // is the connected container only; the same-SSID /ap/1 stays an Available slot.
+    #[test]
+    fn duplicate_ssids_keep_the_non_active_access_point_in_available_slots() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot(
+            "/ap/2",
+            "FlameNet",
+            vec![("/ap/1", "FlameNet", 80), ("/ap/2", "FlameNet", 50)],
+        );
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(recorder.texts["network-connected"], "FlameNet");
+        assert_eq!(recorder.texts["network-slot-1-name"], "FlameNet");
+        assert_eq!(recorder.texts["network-slot-1-status"], "80% · secured");
+        assert_eq!(recorder.visible.get("network-slot-2"), Some(&false));
+        assert_eq!(recorder.texts["network-slot-2-name"], "");
+    }
+
+    // REGRESSION: the search query filters both groups. A non-matching
+    // Connected row is hidden and only matching Available rows remain.
+    #[test]
+    fn search_filters_connected_and_available_groups() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot(
+            "/ap/1",
+            "LinsaFTW",
+            vec![
+                ("/ap/1", "LinsaFTW", 72),
+                ("/ap/2", "StubNeighbor", 42),
+                ("/ap/3", "OtherStub", 30),
+            ],
+        );
+        let query = flamewm_shell_core::status::NetworkQuery {
+            filter: "stub".to_owned(),
+        };
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        };
+        project_network_full(&mut recorder, &snapshot, &query, 0)
+            .expect("network projection must succeed");
+        assert_eq!(recorder.visible.get("network-connected-row"), Some(&false));
+        assert_eq!(recorder.texts["network-slot-1-name"], "StubNeighbor");
+        assert_eq!(recorder.texts["network-slot-2-name"], "OtherStub");
         assert_eq!(recorder.visible.get("network-slot-3"), Some(&false));
     }
 }
@@ -1215,8 +1460,8 @@ mod panel_template_tests {
     // MUTATION: drop the text child of #clock-time; project_clock_at must be refused.
     #[test]
     fn every_projected_panel_clock_and_pager_target_is_writable() {
-        let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
-            .expect("panel artifact must decode");
+        let mut document =
+            flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
         project_clock_at(&mut document, Local::now(), ClockDisplay::default())
             .unwrap_or_else(|error| panic!("panel clock refused: {error}"));
         for slot in 1..=PAGE_SIZE {
@@ -1245,35 +1490,44 @@ mod panel_template_tests {
     // and the rightmost nodes fall outside and this test fails.
     #[test]
     fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
-        let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
-            .expect("panel artifact must decode");
+        let mut document =
+            flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
         // Live panel: 1350x90 device px window, 125% output scale, logical 72.
         let output = flamewm_api::OutputId::new("HDMI-1");
         let mut snapshot = crate::ShellSnapshot::default();
-        snapshot.displays.outputs.push(flamewm_api::display::OutputSnapshot {
-            id: output.clone(),
-            connector: "HDMI-1".to_owned(),
-            edid_identity: String::new(),
-            connected: true,
-            primary: true,
-            geometry: flamewm_api::Rect::new(0, 0, 1350, 641),
-            current_mode: flamewm_api::ModeId(1),
-            modes: Vec::new(),
-            shell_scale_percent: 125,
-        });
-        snapshot.panels.panels.push(flamewm_api::panels::PanelSnapshot {
-            output,
-            edge: flamewm_api::PanelEdge::Bottom,
-            logical_size: 72,
-            visible: true,
-            geometry: flamewm_api::Rect::new(0, 551, 1350, 90),
-        });
+        snapshot
+            .displays
+            .outputs
+            .push(flamewm_api::display::OutputSnapshot {
+                id: output.clone(),
+                connector: "HDMI-1".to_owned(),
+                edid_identity: String::new(),
+                connected: true,
+                primary: true,
+                geometry: flamewm_api::Rect::new(0, 0, 1350, 641),
+                current_mode: flamewm_api::ModeId(1),
+                modes: Vec::new(),
+                shell_scale_percent: 125,
+            });
+        snapshot
+            .panels
+            .panels
+            .push(flamewm_api::panels::PanelSnapshot {
+                output,
+                edge: flamewm_api::PanelEdge::Bottom,
+                logical_size: 72,
+                visible: true,
+                geometry: flamewm_api::Rect::new(0, 551, 1350, 90),
+            });
         project_taskbar_height(&mut document, &snapshot)
             .expect("taskbar size projects from the panel snapshot");
-        project_clock_at(&mut document, Local::now(), ClockDisplay::default()).expect("clock projects");
+        project_clock_at(&mut document, Local::now(), ClockDisplay::default())
+            .expect("clock projects");
         for slot in 1..=PAGE_SIZE {
             let id = format!("workspace-{slot}");
-            document.text(&id, slot.to_string()).expect("pager text projects");
+            document
+                .text(&id, slot.to_string())
+                .expect("pager text projects");
             document.visible(&id, true).expect("pager visible projects");
         }
         for id in [
@@ -1321,8 +1575,8 @@ mod panel_template_tests {
     // before the later nodes are written.
     #[test]
     fn full_panel_projection_succeeds_on_real_artifact() {
-        let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
-            .expect("panel artifact must decode");
+        let mut document =
+            flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
         crate::async_projection::project_panel_async(
             &mut document,
             &crate::ShellSnapshot::default(),
@@ -1416,7 +1670,10 @@ mod panel_record_tests {
         for_each_panel_record(&snapshot, records, |key, view| {
             seen.push(key);
             if key == "secondary" {
-                assert_eq!(view.panels.panels[0].geometry, Rect::new(1920, 1036, 1920, 44));
+                assert_eq!(
+                    view.panels.panels[0].geometry,
+                    Rect::new(1920, 1036, 1920, 44)
+                );
                 assert_eq!(view.displays.outputs[0].shell_scale_percent, 175);
             }
             Ok::<_, String>(())
@@ -1488,5 +1745,222 @@ mod clock_display_tests {
         assert_eq!(defaults.format, ClockFormat::TwentyFour);
         assert!(!defaults.show_seconds);
         assert!(defaults.show_date);
+    }
+}
+
+#[cfg(test)]
+mod audio_template_tests {
+    use super::*;
+    use flamewm_api::system::{
+        AudioEndpointKind, AudioEndpointSnapshot, AudioStreamSnapshot, ServiceAvailability,
+    };
+    use flamewm_shell_core::status::{AudioSettings, AudioTab};
+
+    const AUDIO_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-audio.rwr"));
+
+    // Forwards every write to the real compiled audio template while recording
+    // what the projection assigned, so the test reads back per-row state.
+    #[derive(Default)]
+    struct Recorded {
+        texts: std::collections::HashMap<String, String>,
+        visible: std::collections::HashMap<String, bool>,
+        widths: std::collections::HashMap<String, f32>,
+        toggles: std::collections::HashMap<String, bool>,
+    }
+
+    struct AudioRecorder<'a> {
+        document: &'a mut flamewm_ui_x11::UiDocument,
+        recorded: Recorded,
+    }
+
+    macro_rules! forward {
+        ($($method:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
+            $(fn $method(&mut self, $($arg: $ty),*) -> Result<(), String> {
+                UiDocumentAccess::$method(self.document, $($arg),*)
+            })*
+        };
+    }
+
+    impl UiDocumentAccess for AudioRecorder<'_> {
+        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            self.recorded.texts.insert(id.to_owned(), text.clone());
+            UiDocumentAccess::text(self.document, id, text)
+        }
+        fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
+            self.recorded.visible.insert(id.to_owned(), visible);
+            UiDocumentAccess::visible(self.document, id, visible)
+        }
+        fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String> {
+            self.recorded.widths.insert(id.to_owned(), width);
+            UiDocumentAccess::size(self.document, id, width, height)
+        }
+        fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
+            self.recorded.toggles.insert(track_id.to_owned(), checked);
+            UiDocumentAccess::toggle(self.document, track_id, knob_id, checked)
+        }
+        forward!(
+            image_rgb8(id: &str, image: RuntimeImage),
+            image_rgba8(id: &str, image: RuntimeImage),
+            position(id: &str, left: f32, top: f32),
+            background(id: &str, color: UiColor),
+            border(id: &str, color: UiColor),
+            foreground(id: &str, color: UiColor),
+            background_clear(id: &str),
+            border_clear(id: &str),
+            foreground_clear(id: &str),
+            font_size(id: &str, size_px: f32),
+            font_weight(id: &str, weight: u16),
+            overflow(id: &str, x: flamewm_ui_x11::Overflow, y: flamewm_ui_x11::Overflow),
+            layer(id: &str, layer: flamewm_ui_core::style::UiLayer),
+        );
+    }
+
+    // Two outputs (default speakers at 120%, muted headphones at 40%), one
+    // input at 70%, and two app streams at 80% and 25%.
+    fn fixture(tab: AudioTab, raise_maximum: bool) -> Recorded {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        snapshot.system.audio.endpoints = vec![
+            AudioEndpointSnapshot {
+                id: 1,
+                kind: AudioEndpointKind::Sink,
+                name: "speakers".to_owned(),
+                description: "Built-in Speakers".to_owned(),
+                volume_percent: 120,
+                muted: false,
+                is_default: true,
+            },
+            AudioEndpointSnapshot {
+                id: 2,
+                kind: AudioEndpointKind::Sink,
+                name: "headphones".to_owned(),
+                description: "Headphones".to_owned(),
+                volume_percent: 40,
+                muted: true,
+                is_default: false,
+            },
+            AudioEndpointSnapshot {
+                id: 3,
+                kind: AudioEndpointKind::Source,
+                name: "mic".to_owned(),
+                description: "Microphone".to_owned(),
+                volume_percent: 70,
+                muted: false,
+                is_default: false,
+            },
+        ];
+        snapshot.system.audio.streams = vec![
+            AudioStreamSnapshot {
+                id: 10,
+                endpoint_id: 1,
+                name: "Firefox".to_owned(),
+                volume_percent: 80,
+                muted: false,
+            },
+            AudioStreamSnapshot {
+                id: 11,
+                endpoint_id: 1,
+                name: "Spotify".to_owned(),
+                volume_percent: 25,
+                muted: true,
+            },
+        ];
+        let settings = AudioSettings { raise_maximum };
+        let mut document =
+            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
+        let mut recorder = AudioRecorder {
+            document: &mut document,
+            recorded: Recorded::default(),
+        };
+        project_audio_full(&mut recorder, &snapshot, tab, settings, 0)
+            .expect("every projected audio id must be a valid target");
+        recorder.recorded
+    }
+
+    fn text<'a>(recorded: &'a Recorded, id: &str) -> &'a str {
+        recorded
+            .texts
+            .get(id)
+            .map(String::as_str)
+            .unwrap_or("<unset>")
+    }
+
+    #[test]
+    fn devices_tab_projects_default_output_then_outputs_then_inputs_with_own_slider() {
+        let recorded = fixture(AudioTab::Devices, false);
+        assert_eq!(text(&recorded, "audio-slot-1-label"), "Built-in Speakers");
+        assert_eq!(text(&recorded, "audio-slot-2-label"), "Headphones");
+        assert_eq!(text(&recorded, "audio-slot-3-label"), "Microphone");
+        assert_eq!(recorded.visible.get("audio-slot-4"), Some(&false));
+        // Cap 100: the 120% default output shows its real value but its fill snaps to the cap.
+        assert_eq!(text(&recorded, "audio-slot-1-value"), "120%");
+        assert_eq!(recorded.widths.get("audio-slot-1-fill"), Some(&350.0));
+        assert_eq!(text(&recorded, "audio-slot-2-value"), "40%");
+        assert_eq!(recorded.widths.get("audio-slot-2-fill"), Some(&140.0));
+        assert_eq!(text(&recorded, "audio-slot-2-mute"), "Unmute");
+        assert_eq!(text(&recorded, "audio-slot-1-mute"), "Mute");
+        assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&false));
+        // Output rows keep the volume icon; the source (microphone) row swaps to the input icon.
+        assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&true));
+        assert_eq!(recorded.visible.get("audio-slot-1-icon-in"), Some(&false));
+        assert_eq!(recorded.visible.get("audio-slot-3-icon-out"), Some(&false));
+        assert_eq!(recorded.visible.get("audio-slot-3-icon-in"), Some(&true));
+        assert_eq!(recorded.visible.get("audio-empty"), Some(&false));
+        assert_eq!(recorded.toggles.get("audio-raise-track"), Some(&false));
+    }
+
+    #[test]
+    fn raise_maximum_extends_the_slider_range_to_150_without_rescaling_values() {
+        let recorded = fixture(AudioTab::Devices, true);
+        assert_eq!(text(&recorded, "audio-slot-1-value"), "120%");
+        assert_eq!(recorded.widths.get("audio-slot-1-fill"), Some(&280.0));
+        let headphones = recorded
+            .widths
+            .get("audio-slot-2-fill")
+            .copied()
+            .unwrap_or(-1.0);
+        assert!(
+            (headphones - 350.0 * 40.0 / 150.0).abs() < 0.01,
+            "got {headphones}"
+        );
+        assert_eq!(recorded.toggles.get("audio-raise-track"), Some(&true));
+    }
+
+    #[test]
+    fn applications_tab_projects_playback_streams_with_app_icons() {
+        let recorded = fixture(AudioTab::Applications, false);
+        assert_eq!(text(&recorded, "audio-slot-1-label"), "Firefox");
+        assert_eq!(text(&recorded, "audio-slot-2-label"), "Spotify");
+        assert_eq!(text(&recorded, "audio-slot-2-mute"), "Unmute");
+        assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&true));
+        assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&false));
+        assert_eq!(recorded.visible.get("audio-slot-3"), Some(&false));
+        assert_eq!(recorded.visible.get("audio-tab-apps-bg"), Some(&true));
+        assert_eq!(recorded.visible.get("audio-tab-devices-bg"), Some(&false));
+    }
+
+    #[test]
+    fn applications_tab_without_streams_shows_empty_state() {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        let mut document =
+            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
+        let mut recorder = AudioRecorder {
+            document: &mut document,
+            recorded: Recorded::default(),
+        };
+        project_audio_full(
+            &mut recorder,
+            &snapshot,
+            AudioTab::Applications,
+            AudioSettings::default(),
+            0,
+        )
+        .expect("empty applications projection must succeed");
+        assert_eq!(recorder.recorded.visible.get("audio-empty"), Some(&true));
+        assert_eq!(
+            text(&recorder.recorded, "audio-empty"),
+            "No active applications"
+        );
     }
 }

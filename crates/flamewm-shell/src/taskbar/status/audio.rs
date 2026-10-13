@@ -12,6 +12,15 @@ use super::super::intent::StatusIntent;
 /// are visible to callers; the model itself is never truncated.
 pub const AUDIO_SLOT_COUNT: usize = 3;
 
+/// Rows materialized by the Audio Volume popup template (`audio-slot-1..4`).
+pub const AUDIO_POPUP_ROWS: usize = 4;
+/// Pixel height of one popup row group and of the scrolling list viewport.
+pub const AUDIO_ROW_HEIGHT: u32 = 84;
+pub const AUDIO_LIST_VIEWPORT: u32 = AUDIO_ROW_HEIGHT * AUDIO_POPUP_ROWS as u32;
+/// Slider track left edge and width in popup coordinates (see audio.html).
+pub const AUDIO_TRACK_X: f32 = 58.0;
+pub const AUDIO_TRACK_WIDTH: f32 = 350.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioRowKind {
     Endpoint,
@@ -154,6 +163,57 @@ pub fn popover_view(snapshot: &SystemSnapshot) -> Option<AudioPopoverView> {
         page_count: count,
         visible_rows,
     })
+}
+
+/// Tab rows in popup order. Devices: default output, other outputs, then
+/// inputs (endpoints only). Applications: playback/recording streams.
+#[must_use]
+pub fn tab_rows(
+    snapshot: &AudioSnapshot,
+    tab: flamewm_shell_core::status::AudioTab,
+) -> Vec<RowSource> {
+    use flamewm_api::system::AudioEndpointKind;
+    use flamewm_shell_core::status::AudioTab;
+    match tab {
+        AudioTab::Applications => snapshot
+            .streams()
+            .iter()
+            .map(RowSource::from_stream)
+            .collect(),
+        AudioTab::Devices => {
+            let mut endpoints: Vec<_> = snapshot.endpoints().iter().collect();
+            endpoints.sort_by_key(|endpoint| match (endpoint.kind, endpoint.is_default) {
+                (AudioEndpointKind::Sink, true) => 0,
+                (AudioEndpointKind::Sink, false) => 1,
+                (AudioEndpointKind::Source, _) => 2,
+            });
+            endpoints
+                .into_iter()
+                .map(RowSource::from_endpoint)
+                .collect()
+        }
+    }
+}
+
+/// Visible popup rows for `tab` at `scroll_offset` (px). Projection and host
+/// routing both call this so `audio.slot.N.*` always names the projected row.
+#[must_use]
+pub fn visible_rows(
+    snapshot: &AudioSnapshot,
+    tab: flamewm_shell_core::status::AudioTab,
+    scroll_offset: u32,
+) -> Vec<RowSource> {
+    let all = tab_rows(snapshot, tab);
+    let (first, last) = flamewm_shell_core::status::visible_window(
+        all.len(),
+        AUDIO_ROW_HEIGHT,
+        AUDIO_LIST_VIEWPORT,
+        scroll_offset,
+    );
+    all.into_iter()
+        .skip(first)
+        .take(last.saturating_sub(first).min(AUDIO_POPUP_ROWS))
+        .collect()
 }
 
 #[must_use]
@@ -413,8 +473,16 @@ mod tests {
         ] {
             let snapshot = sink_fixture(availability);
             let allowed = audio_available(&snapshot);
-            assert_eq!(project(&snapshot).visible, allowed, "{availability:?} visibility");
-            assert_eq!(popover(&snapshot).is_some(), allowed, "{availability:?} popover");
+            assert_eq!(
+                project(&snapshot).visible,
+                allowed,
+                "{availability:?} visibility"
+            );
+            assert_eq!(
+                popover(&snapshot).is_some(),
+                allowed,
+                "{availability:?} popover"
+            );
             assert_eq!(
                 system_action_for_row(&snapshot, "endpoint:sink:7", Some(60), None).is_some(),
                 allowed,
@@ -426,6 +494,57 @@ mod tests {
                 "{availability:?} intent"
             );
         }
+    }
+
+    #[test]
+    fn devices_order_is_default_output_other_outputs_then_inputs() {
+        use flamewm_shell_core::status::AudioTab;
+        let mut snapshot = AudioSnapshot::default();
+        for (id, kind, is_default) in [
+            (3, AudioEndpointKind::Source, false),
+            (2, AudioEndpointKind::Sink, false),
+            (1, AudioEndpointKind::Sink, true),
+        ] {
+            snapshot.endpoints.push(AudioEndpointSnapshot {
+                id,
+                kind,
+                name: format!("dev-{id}"),
+                description: String::new(),
+                volume_percent: 10,
+                muted: false,
+                is_default,
+            });
+        }
+        let ids: Vec<String> = visible_rows(&snapshot, AudioTab::Devices, 0)
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["endpoint:sink:1", "endpoint:sink:2", "endpoint:source:3"]
+        );
+        assert!(visible_rows(&snapshot, AudioTab::Applications, 0).is_empty());
+    }
+
+    #[test]
+    fn popup_window_caps_visible_rows_at_the_popup_slot_count() {
+        use flamewm_shell_core::status::AudioTab;
+        let mut snapshot = AudioSnapshot::default();
+        for id in 1..=6 {
+            snapshot.streams.push(AudioStreamSnapshot {
+                id,
+                endpoint_id: 1,
+                name: format!("app-{id}"),
+                volume_percent: 10,
+                muted: false,
+            });
+        }
+        assert_eq!(
+            visible_rows(&snapshot, AudioTab::Applications, 0).len(),
+            AUDIO_POPUP_ROWS
+        );
+        let scrolled = visible_rows(&snapshot, AudioTab::Applications, AUDIO_ROW_HEIGHT);
+        assert_eq!(scrolled[0].id, "stream:2");
     }
 
     #[test]

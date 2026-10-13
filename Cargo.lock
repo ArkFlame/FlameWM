@@ -276,6 +276,7 @@ dependencies = [
 name = "flamewm-image-core"
 version = "0.0.9"
 dependencies = [
+ "flamewm-api",
  "gif",
  "image-webp",
  "resvg",

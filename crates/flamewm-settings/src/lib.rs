@@ -21,7 +21,7 @@ use flamewm_api::settings::SettingValue;
 use flamewm_api::{ModeId, OutputId};
 use flamewm_api::session::SessionAction;
 use flamewm_control_core::{ControlError, ControlRequest};
-use flamewm_integrations_linux::media_store::{MediaKind, import_for_setting};
+use flamewm_integrations_linux::media_store::{MediaKind, MediaStore, import_for_setting};
 use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS, SettingsClient, SettingsPage};
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess, UiKeyEvent, UiKeyPhase, UiWindowConfig,
@@ -272,6 +272,7 @@ enum ChooserTarget {
     Wallpaper,
     LockBackground,
     Avatar,
+    StartIcon,
 }
 
 impl ChooserTarget {
@@ -281,7 +282,47 @@ impl ChooserTarget {
             Self::Wallpaper => MediaKind::DesktopWallpaper,
             Self::LockBackground => MediaKind::LockWallpaper,
             Self::Avatar => MediaKind::Avatar,
+            Self::StartIcon => MediaKind::StartIcon,
         }
+    }
+}
+
+/// Presentation sub-pages that the Appearance nav rows open. They share the core
+/// `SettingsPage::Appearance` and are local to this window, never WM state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppearanceTab {
+    Theme,
+    StartMenu,
+    Surfaces,
+    Animations,
+    LockScreen,
+    Screensaver,
+}
+
+impl AppearanceTab {
+    const ALL: [Self; 6] = [
+        Self::Theme,
+        Self::StartMenu,
+        Self::Surfaces,
+        Self::Animations,
+        Self::LockScreen,
+        Self::Screensaver,
+    ];
+
+    /// The markup suffix: nav action `settings.page.<node>` and section `page-<node>`.
+    fn node(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::StartMenu => "start-menu",
+            Self::Surfaces => "surfaces",
+            Self::Animations => "animations",
+            Self::LockScreen => "lock-screen",
+            Self::Screensaver => "screensaver",
+        }
+    }
+
+    fn parse(node: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tab| tab.node() == node)
     }
 }
 
@@ -290,7 +331,12 @@ impl ChooserTarget {
 enum SettingsAction {
     Page(SettingsPage),
     AccentSwatch(&'static str),
-    AccentReset,
+    /// Shows one Appearance sub-page from the nav.
+    AppearanceTab(AppearanceTab),
+    /// Opens the Start icon chooser. Import is not wired yet (see `execute`).
+    StartIconChoose,
+    /// Clears the Start icon and removes its managed copy.
+    StartIconClear,
     /// Opens the icon or cursor theme picker on its first page.
     ThemePickerOpen(theme_picker::PickerKind),
     ThemePickerClose,
@@ -309,6 +355,8 @@ enum SettingsAction {
     AvatarClear,
     /// Starts the lock screen in preview mode through the desktop control bus.
     LockPreview,
+    /// Starts the screensaver in preview mode through the desktop control bus.
+    ScreensaverPreview,
     /// Writes one fixed integer value to a setting, from an explicit option button.
     IntegerSelect {
         key: &'static str,
@@ -317,7 +365,6 @@ enum SettingsAction {
     Toggle(&'static str),
     SelectionOpacity(i8),
     SnapOpacity(i8),
-    TaskbarOpacity(i8),
     FontSize(i8),
     TaskbarEdgeCycle,
     TaskbarEdge(PanelEdge),
@@ -393,6 +440,7 @@ pub struct SettingsApplication<T: ControlTransport> {
     theme_scan: Option<Receiver<theme_picker::ThemeRegistry>>,
     theme_install: Option<Receiver<theme_picker::InstallOutcome>>,
     theme_status: Option<String>,
+    appearance_tab: AppearanceTab,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -411,6 +459,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             theme_scan: None,
             theme_install: None,
             theme_status: None,
+            appearance_tab: AppearanceTab::Theme,
         }
     }
 
@@ -527,6 +576,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                                 self.apply_text("lockBackgroundImage", managed)
                             }
                             ChooserTarget::Avatar => self.apply_text("avatarImage", managed),
+                            ChooserTarget::StartIcon => self.replace_start_icon(managed),
                         },
                         Err(error) => Err(error),
                     };
@@ -624,8 +674,15 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::AccentSwatch(accent) => {
                 self.apply_text("accent", accent.to_owned())?;
             }
-            SettingsAction::AccentReset => {
-                self.apply_text("accent", DEFAULT_ACCENT.to_owned())?;
+            SettingsAction::AppearanceTab(tab) => {
+                self.appearance_tab = tab;
+                self.client.set_page(SettingsPage::Appearance);
+            }
+            SettingsAction::StartIconChoose => self.start_file_chooser(ChooserTarget::StartIcon)?,
+            SettingsAction::StartIconClear => {
+                let previous = self.text_setting("customStartIcon")?;
+                self.apply_text("customStartIcon", String::new())?;
+                remove_managed_media(&previous)?;
             }
             SettingsAction::ThemePickerOpen(kind) => self.theme_picker = Some((kind, 0)),
             SettingsAction::ThemePickerClose => self.theme_picker = None,
@@ -662,7 +719,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::AvatarClear => {
                 self.apply_text("avatarImage", String::new())?;
             }
-            SettingsAction::LockPreview => start_lock_preview()?,
+            SettingsAction::LockPreview => start_session_preview(SessionAction::LockPreview)?,
+            SettingsAction::ScreensaverPreview => {
+                start_session_preview(SessionAction::ScreensaverPreview)?;
+            }
             SettingsAction::IntegerSelect { key, value } => {
                 self.client
                     .apply_setting(key, SettingValue::Integer(value))
@@ -687,9 +747,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::SnapOpacity(direction) => {
                 self.step_percent("WindowSnapPreviewFillOpacity", direction, 60)?;
-            }
-            SettingsAction::TaskbarOpacity(direction) => {
-                self.set_taskbar_value("opacity", direction)?;
             }
             SettingsAction::FontSize(direction) => {
                 self.step_integer("fontSizeOffset", i64::from(direction), -2, 4)?;
@@ -717,7 +774,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     .map_err(control_error)?;
             }
             // Size is the global `taskbarHeight` service setting, shared by all outputs.
-            SettingsAction::TaskbarSizeCycle => self.set_taskbar_value("size", 1)?,
+            SettingsAction::TaskbarSizeCycle => self.set_taskbar_size(1)?,
             SettingsAction::FontFamilyCycle => self.cycle_font_family()?,
             SettingsAction::Hotkey(action, operation) => self.handle_hotkey(action, operation)?,
             SettingsAction::DisplaySelect(slot) => {
@@ -903,6 +960,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     None => document.visible(&preview, false)?,
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Points `customStartIcon` at `managed` and deletes the previous managed copy when it differs.
+    fn replace_start_icon(&mut self, managed: String) -> Result<(), String> {
+        let previous = self.text_setting("customStartIcon")?;
+        self.apply_text("customStartIcon", managed.clone())?;
+        if previous != managed {
+            remove_managed_media(&previous)?;
         }
         Ok(())
     }
@@ -1120,23 +1187,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .map_err(control_error)
     }
 
-    fn set_taskbar_value(&mut self, kind: &str, direction: i8) -> Result<(), String> {
+    fn set_taskbar_size(&mut self, direction: i8) -> Result<(), String> {
         let color = self.text_setting("taskbarColor")?;
         let opacity = self.percent_setting("taskbarOpacity")?;
         let height = self.integer_setting("taskbarHeight")?;
-        let (opacity, height) = match kind {
-            "opacity" => (
-                (i16::from(opacity) + i16::from(direction) * 5).clamp(0, 100) as u8,
-                height,
-            ),
-            "size" => {
-                let sizes = [34_i64, 44, 52, 64, 72];
-                (opacity, cycle_value(&sizes, height, direction))
-            }
-            _ => return Err(format!("unknown taskbar setting '{kind}'")),
-        };
+        let sizes = [34_i64, 44, 52, 64, 72];
         self.client
-            .set_taskbar_appearance(color, opacity, height as u16)
+            .set_taskbar_appearance(color, opacity, cycle_value(&sizes, height, direction) as u16)
             .map_err(control_error)
     }
 
@@ -1217,7 +1274,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        document.position("nav-selection", 8.0, nav_top(self.client.ui().page))?;
+        document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
         if let Some(SettingValue::Text(accent)) = self
             .client
             .settings()
@@ -1232,8 +1289,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 )?;
             }
         }
+        for tab in AppearanceTab::ALL {
+            document.visible(
+                &format!("page-{}", tab.node()),
+                self.client.ui().page == SettingsPage::Appearance && self.appearance_tab == tab,
+            )?;
+        }
         for (name, page) in [
-            ("appearance", SettingsPage::Appearance),
             ("desktop", SettingsPage::Desktop),
             ("taskbar", SettingsPage::Taskbar),
             ("displays", SettingsPage::Displays),
@@ -1365,13 +1427,26 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
+    /// Nav row index of the visible page: the six Appearance tabs first, then the rest.
+    fn nav_index(&self) -> usize {
+        match self.client.ui().page {
+            SettingsPage::Appearance => self.appearance_tab as usize,
+            SettingsPage::Desktop => 6,
+            SettingsPage::Taskbar => 7,
+            SettingsPage::Displays => 8,
+            SettingsPage::Fonts => 9,
+            SettingsPage::Hotkeys => 10,
+            SettingsPage::About => 11,
+        }
+    }
+
     fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         self.sync_color_rows(document)?;
         self.sync_color_picker(document)?;
         for (key, id) in [
             ("startMenuOpacity", "start-menu-opacity-value"),
             ("startMenuBlurPercent", "start-menu-blur-value"),
-            ("taskbarBlurPercent", "taskbar-blur-value"),
+            ("surfaceBlurPercent", "surface-blur-value"),
             ("accentOpacity", "accent-opacity-value"),
         ] {
             if let Ok(value) = self.percent_setting(key) {
@@ -1533,7 +1608,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return Ok(());
         };
         let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
-        for (value, id) in [("rounded", "decoration-rounded"), ("ios", "decoration-ios")] {
+        for (value, id) in [("rounded", "decoration-rounded"), ("squared", "decoration-squared")] {
             if current == value {
                 document.background(id, accent)?;
             } else {
@@ -1686,8 +1761,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 document.text(kind.select_box(), self.themes.label(kind, &value))?;
             }
         }
-        if let Some(value) = percent("taskbarOpacity") {
-            document.text("taskbar-opacity-value", format!("{value}%"))?;
+        if let Some(value) = percent("surfaceOpacity") {
+            document.text("surface-opacity-value", format!("{value}%"))?;
+        }
+        if let Some(value) = text("customStartIcon") {
+            document.text("start-icon-value", start_icon_label(&value))?;
         }
         for row in INTEGER_STEPPERS {
             if let Some(value) = integer(row.key) {
@@ -1815,7 +1893,7 @@ fn step(value: &str) -> Option<i8> {
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
 const COLOR_TARGETS: [(&str, &str); 5] = [
-    ("taskbar", "taskbarColor"),
+    ("surface", "surfaceColor"),
     ("startmenu", "startMenuColor"),
     ("accent", "accent"),
     ("titlebar", "titlebarColor"),
@@ -1865,9 +1943,8 @@ const INTEGER_STEPPERS: [IntegerStepper; 8] = [
 ];
 
 /// Preset circles offered beside each surface color row; `preset.<index>` selects one.
-const SURFACE_PRESETS: [&str; 9] = [
-    "#191B1D", "#232629", "#1B1E20", "#2A2E32", "#336699", "#3DAEE9", "#1ABC9C", "#EF4048",
-    "#9B59B6",
+const SURFACE_PRESETS: [&str; 6] = [
+    "#191B1D", "#336699", "#3DAEE9", "#1ABC9C", "#EF4048", "#9B59B6",
 ];
 
 /// Colour picker palette: hue columns by shade rows, then one row of greys.
@@ -1923,7 +2000,7 @@ fn highlight_segment(
 
 const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
 
-/// Parses `<target>.preset.<0..8>`, the rest after `settings.color.`.
+/// Parses `<target>.preset.<0..5>`, the rest after `settings.color.`.
 fn parse_color_preset(rest: &str) -> Result<SettingsAction, String> {
     let (target, rest) = rest
         .split_once(".preset.")
@@ -2060,17 +2137,29 @@ fn shortcut_label(owner: &str) -> String {
         .map_or_else(|| owner.to_owned(), |row| row.label.to_owned())
 }
 
-fn nav_top(page: SettingsPage) -> f32 {
-    let index = match page {
-        SettingsPage::Appearance => 0,
-        SettingsPage::Desktop => 1,
-        SettingsPage::Taskbar => 2,
-        SettingsPage::Displays => 3,
-        SettingsPage::Fonts => 4,
-        SettingsPage::Hotkeys => 5,
-        SettingsPage::About => 6,
+fn nav_top(index: usize) -> f32 {
+    72.0 + index as f32 * 32.0
+}
+
+/// Deletes the managed copy behind a cleared Start icon. Empty, unmanaged and
+/// already-missing paths are left alone; the store never deletes foreign files.
+fn remove_managed_media(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    let Some(root) = MediaStore::default_root() else {
+        return Ok(());
     };
-    72.0 + index as f32 * 40.0
+    let path = Path::new(path);
+    if !MediaStore::new(root).is_managed(path) {
+        return Ok(());
+    }
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("remove start icon copy: {error}"))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Authoritative accent value behind each palette swatch in the Appearance page.
@@ -2125,13 +2214,13 @@ fn control_error(error: ControlError) -> String {
     format!("{}: {}", error.name, error.message)
 }
 
-/// Asks the desktop to start the lock screen in preview mode over the control bus.
-/// The desktop owns the lock process; Settings only sends the typed request.
-fn start_lock_preview() -> Result<(), String> {
+/// Asks the desktop to start a preview over the control bus.
+/// The desktop owns the preview process; Settings only sends the typed request.
+fn start_session_preview(action: SessionAction) -> Result<(), String> {
     let mut control = control::SettingsControl::connect_session()
         .map_err(|error| format!("could not reach the desktop: {error}"))?;
     control
-        .call(ControlRequest::SessionAction(SessionAction::LockPreview))
+        .call(ControlRequest::SessionAction(action))
         .map(|_| ())
         .map_err(control_error)
 }
@@ -2179,17 +2268,16 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if action.starts_with("keyboard.") {
         return Ok(SettingsAction::NativeKeyEvent);
     }
+    if let Some(tab) = action.strip_prefix("settings.page.").and_then(AppearanceTab::parse) {
+        return Ok(SettingsAction::AppearanceTab(tab));
+    }
     if let Some(page) = action.strip_prefix("settings.page.").and_then(page) {
         return Ok(SettingsAction::Page(page));
     }
     if let Some(name) = action.strip_prefix("settings.accent.") {
-        return if name == "reset" {
-            Ok(SettingsAction::AccentReset)
-        } else {
-            accent_for_swatch(name)
-                .map(SettingsAction::AccentSwatch)
-                .ok_or_else(|| format!("unknown accent '{name}'"))
-        };
+        return accent_for_swatch(name)
+            .map(SettingsAction::AccentSwatch)
+            .ok_or_else(|| format!("unknown accent '{name}'"));
     }
     if let Some(edge) = action.strip_prefix("settings.taskbar.position.") {
         return match edge {
@@ -2229,8 +2317,11 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(direction) = action.strip_prefix("settings.start-menu-opacity.").and_then(step) {
         return Ok(SettingsAction::PercentStep("startMenuOpacity", direction));
     }
-    if let Some(direction) = action.strip_prefix("settings.taskbar-blur.").and_then(step) {
-        return Ok(SettingsAction::PercentStep("taskbarBlurPercent", direction));
+    if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
+    }
+    if let Some(direction) = action.strip_prefix("settings.surface-opacity.").and_then(step) {
+        return Ok(SettingsAction::PercentStep("surfaceOpacity", direction));
     }
     if let Some(direction) = action.strip_prefix("settings.start-menu-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("startMenuBlurPercent", direction));
@@ -2266,12 +2357,6 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     }
     if let Some(direction) = action.strip_prefix("settings.snap-opacity.").and_then(step) {
         return Ok(SettingsAction::SnapOpacity(direction));
-    }
-    if let Some(direction) = action
-        .strip_prefix("settings.taskbar-opacity.")
-        .and_then(step)
-    {
-        return Ok(SettingsAction::TaskbarOpacity(direction));
     }
     if let Some(direction) = action.strip_prefix("settings.font-size.").and_then(step) {
         return Ok(SettingsAction::FontSize(direction));
@@ -2386,6 +2471,7 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.avatar.choose" => Ok(SettingsAction::AvatarChoose),
         "settings.avatar.clear" => Ok(SettingsAction::AvatarClear),
         "settings.lock.preview" => Ok(SettingsAction::LockPreview),
+        "settings.screensaver.preview" => Ok(SettingsAction::ScreensaverPreview),
         "settings.wallpaper.choose" => Ok(SettingsAction::WallpaperChoose),
         "settings.wallpaper.reset" => Ok(SettingsAction::WallpaperReset),
         "settings.taskbar.position" => Ok(SettingsAction::TaskbarEdgeCycle),
@@ -2395,10 +2481,12 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             key: "decoration",
             value: "rounded",
         }),
-        "settings.decoration.ios" => Ok(SettingsAction::TextSelect {
+        "settings.decoration.squared" => Ok(SettingsAction::TextSelect {
             key: "decoration",
-            value: "ios",
+            value: "squared",
         }),
+        "settings.start-icon.choose" => Ok(SettingsAction::StartIconChoose),
+        "settings.start-icon.clear" => Ok(SettingsAction::StartIconClear),
         "settings.titlebar.minimize.style" => Ok(SettingsAction::TextCycle {
             key: "titlebarMinimizeStyle",
             values: &TITLEBAR_STYLES,
@@ -2463,6 +2551,18 @@ fn avatar_label(path: &str) -> String {
     if path.is_empty() {
         return "Default".to_owned();
     }
+    file_name_label(path)
+}
+
+/// Start icon label: the managed file name, or `Built-in icon` for the default logo.
+fn start_icon_label(path: &str) -> String {
+    if path.is_empty() {
+        return "Built-in icon".to_owned();
+    }
+    file_name_label(path)
+}
+
+fn file_name_label(path: &str) -> String {
     Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -2479,6 +2579,7 @@ mod value_text_tests {
         assert_eq!(ChooserTarget::Avatar.media_kind(), MediaKind::Avatar);
         assert_eq!(ChooserTarget::LockBackground.media_kind(), MediaKind::LockWallpaper);
         assert_eq!(ChooserTarget::Wallpaper.media_kind(), MediaKind::DesktopWallpaper);
+        assert_eq!(ChooserTarget::StartIcon.media_kind(), MediaKind::StartIcon);
     }
 
     #[test]
@@ -2617,11 +2718,16 @@ mod value_text_tests {
     #[test]
     fn color_swatches_and_coarse_steps_parse_to_fixed_typed_targets() {
         assert!(matches!(
-            parse_action("settings.color.taskbar.preset.0"),
-            Ok(SettingsAction::ColorSwatch { key: "taskbarColor", value: "#191B1D" })
+            parse_action("settings.color.surface.preset.0"),
+            Ok(SettingsAction::ColorSwatch { key: "surfaceColor", value: "#191B1D" })
         ));
+        assert!(
+            parse_action("settings.color.surface.preset.6").is_err(),
+            "only six surface presets exist"
+        );
+        assert!(parse_action("settings.color.taskbar.preset.0").is_err());
         assert!(matches!(
-            parse_action("settings.color.lockbackground.preset.8"),
+            parse_action("settings.color.lockbackground.preset.5"),
             Ok(SettingsAction::ColorSwatch { key: "lockBackgroundColor", value: "#9B59B6" })
         ));
         assert!(matches!(
@@ -2674,10 +2780,64 @@ mod value_text_tests {
             Ok(SettingsAction::TextSelect { key: "decoration", value: "rounded" })
         ));
         assert!(matches!(
-            parse_action("settings.decoration.ios"),
-            Ok(SettingsAction::TextSelect { key: "decoration", value: "ios" })
+            parse_action("settings.decoration.squared"),
+            Ok(SettingsAction::TextSelect { key: "decoration", value: "squared" })
         ));
+        assert!(parse_action("settings.decoration.ios").is_err());
         assert!(parse_action("settings.decoration.cycle").is_err());
+    }
+
+    #[test]
+    fn screensaver_preview_action_is_distinct_from_lock_preview() {
+        assert!(matches!(
+            parse_action("settings.screensaver.preview"),
+            Ok(SettingsAction::ScreensaverPreview)
+        ));
+        assert!(matches!(
+            parse_action("settings.lock.preview"),
+            Ok(SettingsAction::LockPreview)
+        ));
+    }
+
+    #[test]
+    fn accent_reset_and_start_icon_actions_parse_to_their_typed_targets() {
+        assert!(parse_action("settings.accent.reset").is_err());
+        assert!(matches!(
+            parse_action("settings.start-icon.clear"),
+            Ok(SettingsAction::StartIconClear)
+        ));
+        assert!(matches!(
+            parse_action("settings.start-icon.choose"),
+            Ok(SettingsAction::StartIconChoose)
+        ));
+        assert!(matches!(
+            parse_action("settings.page.surfaces"),
+            Ok(SettingsAction::AppearanceTab(AppearanceTab::Surfaces))
+        ));
+        assert!(matches!(
+            parse_action("settings.page.desktop"),
+            Ok(SettingsAction::Page(SettingsPage::Desktop))
+        ));
+    }
+
+    #[test]
+    fn start_icon_label_shows_file_name_or_built_in_default() {
+        assert_eq!(start_icon_label(""), "Built-in icon");
+        assert_eq!(
+            start_icon_label("/home/u/.local/share/flamewm/wallpapers/start-0123456789abcdef.webp"),
+            "start-0123456789abcdef.webp"
+        );
+    }
+
+    #[test]
+    fn remove_managed_media_ignores_empty_and_unmanaged_paths() {
+        assert!(remove_managed_media("").is_ok());
+        assert!(remove_managed_media("/etc/hostname").is_ok());
+        let unmanaged = std::env::temp_dir().join("flamewm-unmanaged-start-icon.png");
+        std::fs::write(&unmanaged, b"x").expect("write fixture");
+        assert!(remove_managed_media(unmanaged.to_str().expect("utf-8")).is_ok());
+        assert!(unmanaged.exists(), "unmanaged files are never deleted");
+        std::fs::remove_file(&unmanaged).expect("cleanup fixture");
     }
 
     #[test]
@@ -2704,9 +2864,15 @@ mod value_text_tests {
     #[test]
     fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
         assert!(matches!(
-            parse_action("settings.taskbar-blur.up"),
-            Ok(SettingsAction::PercentStep("taskbarBlurPercent", 1))
+            parse_action("settings.surface-blur.up"),
+            Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1))
         ));
+        assert!(matches!(
+            parse_action("settings.surface-opacity.down"),
+            Ok(SettingsAction::PercentStep("surfaceOpacity", -1))
+        ));
+        assert!(parse_action("settings.taskbar-blur.up").is_err());
+        assert!(parse_action("settings.taskbar-opacity.up").is_err());
         assert!(matches!(
             parse_action("settings.start-menu-blur.down"),
             Ok(SettingsAction::PercentStep("startMenuBlurPercent", -1))

@@ -399,7 +399,11 @@ impl NetworkManagerProvider {
             } => {
                 // Check the adapter's context before the controller consumes its pending
                 // secret, so a mismatched id leaves both records intact for the correct retry.
-                if self.secret_context.as_ref().map(|context| context.request_id) != Some(request_id)
+                if self
+                    .secret_context
+                    .as_ref()
+                    .map(|context| context.request_id)
+                    != Some(request_id)
                 {
                     return Err(FlameError::new(
                         ErrorCode::NotFound,
@@ -746,7 +750,9 @@ impl NetworkManagerProvider {
             .into_iter()
             .map(Ok::<_, FlameError>),
         )
-        .map_err(|_| FlameError::invalid("NetworkManager secure connection settings are invalid"))?;
+        .map_err(|_| {
+            FlameError::invalid("NetworkManager secure connection settings are invalid")
+        })?;
         let settings = MessageItem::new_dict(vec![
             (MessageItem::Str("connection".to_owned()), connection),
             (MessageItem::Str("802-11-wireless".to_owned()), wireless),
@@ -863,7 +869,7 @@ impl NetworkManagerProvider {
                     .find(|ap| ap.path == active)
             })
             .flatten();
-        self.status.snapshot.label = header_label(connected);
+        self.status.snapshot.label = header_label_for(connected, !active.is_empty());
         if let Some(ap) = connected {
             self.status.snapshot.strength_percent = ap.strength_percent;
         } else {
@@ -1041,7 +1047,10 @@ impl NetworkManagerProvider {
                 }
                 let properties = parse_device_properties(items.first())?;
                 if properties.is_wifi {
-                    let last_scan = self.wifi_devices.get(&device).and_then(|wifi| wifi.last_scan);
+                    let last_scan = self
+                        .wifi_devices
+                        .get(&device)
+                        .and_then(|wifi| wifi.last_scan);
                     self.wifi_devices.insert(
                         device.clone(),
                         WifiDevice {
@@ -1237,7 +1246,9 @@ fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
         .as_deref()
         != Some(SECRET_AGENT_INTERFACE)
     {
-        return Err(FlameError::invalid("NetworkManager SecretAgent interface is invalid"));
+        return Err(FlameError::invalid(
+            "NetworkManager SecretAgent interface is invalid",
+        ));
     }
     match message.member().map(|value| value.to_string()).as_deref() {
         Some(GET_SECRETS) => {
@@ -1267,7 +1278,9 @@ fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
                 reply: (!message.get_no_reply()).then(|| message.method_return()),
             })
         }
-        _ => Err(FlameError::invalid("NetworkManager SecretAgent method is unsupported")),
+        _ => Err(FlameError::invalid(
+            "NetworkManager SecretAgent method is unsupported",
+        )),
     }
 }
 
@@ -1305,7 +1318,9 @@ fn user_canceled_reply(reply: Message) -> FlameResult<Message> {
 
 fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, FlameError> {
     if items.len() != 3 {
-        return Err(FlameError::invalid("NetworkManager owner event has invalid arguments"));
+        return Err(FlameError::invalid(
+            "NetworkManager owner event has invalid arguments",
+        ));
     }
     Ok(Incoming::OwnerChanged {
         name: item_string(&items[0], "owner event name")?,
@@ -1329,7 +1344,9 @@ fn parse_properties_changed(items: Vec<MessageItem>, path: String) -> Result<Inc
 
 fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManagerProperties> {
     let Some(MessageItem::Dict(dict)) = item else {
-        return Err(FlameError::invalid("NetworkManager properties are not a dictionary"));
+        return Err(FlameError::invalid(
+            "NetworkManager properties are not a dictionary",
+        ));
     };
     let mut properties = NetworkManagerProperties::default();
     for (key, value) in dict.clone().into_vec() {
@@ -1551,8 +1568,20 @@ fn unwrap_variant(item: MessageItem) -> MessageItem {
 }
 
 /// Header label for the network snapshot: the connected SSID, or a neutral label when no AP is connected.
-fn header_label(connected: Option<&AccessPoint>) -> String {
-    connected.map_or_else(|| "Not connected".to_owned(), |ap| ap.ssid.clone())
+///
+/// An active AP missing from the scan has no name in this source, so the label stays empty
+/// (the shell shows "Hidden network") rather than claiming "Not connected".
+fn header_label_for(connected: Option<&AccessPoint>, active_path_set: bool) -> String {
+    connected.map_or_else(
+        || {
+            if active_path_set {
+                String::new()
+            } else {
+                "Not connected".to_owned()
+            }
+        },
+        |ap| ap.ssid.clone(),
+    )
 }
 
 fn unsupported(message: &str) -> FlameError {
@@ -1606,7 +1635,7 @@ mod tests {
 
     #[test]
     fn header_label_never_claims_connection_when_disconnected() {
-        assert_eq!(header_label(None), "Not connected");
+        assert_eq!(header_label_for(None, false), "Not connected");
         let connected = AccessPoint {
             path: "/nm/ap/1".to_owned(),
             ssid: "FlameNet".to_owned(),
@@ -1614,7 +1643,15 @@ mod tests {
             secured: true,
             known: true,
         };
-        assert_eq!(header_label(Some(&connected)), "FlameNet");
+        assert_eq!(header_label_for(Some(&connected), true), "FlameNet");
+    }
+
+    #[test]
+    fn header_label_keeps_placeholder_free_when_active_ap_absent_from_scan() {
+        // Active AP path set but no matching scan entry: no name is known, so the
+        // header must not claim "Not connected" (the shell shows "Hidden network").
+        assert_eq!(header_label_for(None, true), "");
+        assert_eq!(header_label_for(None, false), "Not connected");
     }
 
     #[test]
@@ -1706,7 +1743,9 @@ mod tests {
         controller.service_appeared();
         assert!(matches!(
             controller.request_scan(),
-            Ok(Some(flamewm_integrations_core::network::NetworkIntent::Scan))
+            Ok(Some(
+                flamewm_integrations_core::network::NetworkIntent::Scan
+            ))
         ));
         let devices = vec!["/org/freedesktop/NetworkManager/Devices/1".to_owned()];
         let result = queue_scan_requests(&mut controller, &devices, |_| {
@@ -1715,7 +1754,9 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             controller.request_scan(),
-            Ok(Some(flamewm_integrations_core::network::NetworkIntent::Scan))
+            Ok(Some(
+                flamewm_integrations_core::network::NetworkIntent::Scan
+            ))
         ));
     }
 
@@ -1728,13 +1769,17 @@ mod tests {
                     (
                         "ActiveConnection".to_owned(),
                         MessageItem::ObjectPath(
-                            object_path("/org/freedesktop/NetworkManager/ActiveConnection/3".to_owned())
-                                .expect("valid path"),
+                            object_path(
+                                "/org/freedesktop/NetworkManager/ActiveConnection/3".to_owned(),
+                            )
+                            .expect("valid path"),
                         ),
                     ),
                     (
                         "ActiveAccessPoint".to_owned(),
-                        MessageItem::ObjectPath(object_path(active_ap.to_owned()).expect("valid path")),
+                        MessageItem::ObjectPath(
+                            object_path(active_ap.to_owned()).expect("valid path"),
+                        ),
                     ),
                 ]
                 .into_iter()

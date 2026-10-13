@@ -36,7 +36,9 @@ mod tests {
         "display-selected-scale",
         "selection-opacity-value",
         "snap-opacity-value",
-        "taskbar-blur-value",
+        "surface-blur-value",
+        "surface-opacity-value",
+        "start-icon-value",
         "start-menu-blur-value",
         "taskbar-floating-margin-value",
         "taskbar-floating-radius-value",
@@ -72,7 +74,6 @@ mod tests {
         "titlebar-minimize-style-value",
         "titlebar-maximize-style-value",
         "titlebar-close-style-value",
-        "taskbar-opacity-value",
         "taskbar-size-value",
         "color-picker-hex",
         "color-picker-error",
@@ -131,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn taskbar_colour_is_one_modern_control_on_the_taskbar_page() {
+    fn surface_colour_is_one_control_on_the_surfaces_page() {
         let html = include_str!("../../../ui/settings.html");
         let section = |id: &str, next: &str| {
             html.split_once(&format!("id=\"{id}\""))
@@ -139,15 +140,101 @@ mod tests {
                 .map(|(body, _)| body)
                 .unwrap_or_else(|| panic!("settings page {id} must precede {next}"))
         };
-        let appearance = section("page-appearance", "page-desktop");
+        let surfaces = section("page-surfaces", "page-animations");
         let taskbar = section("page-taskbar", "page-displays");
-        assert!(taskbar.contains("id=\"color-taskbar-wheel\""));
-        assert!(taskbar.contains("data-action=\"settings.picker.open.taskbar\""));
-        assert!(!appearance.contains("color-taskbar-"), "taskbar picker row left Appearance");
-        assert!(appearance.contains("id=\"color-startmenu-wheel\""));
+        assert!(surfaces.contains("id=\"color-surface-wheel\""));
+        assert!(surfaces.contains("data-action=\"settings.picker.open.surface\""));
+        assert!(surfaces.contains("id=\"surface-opacity-value\""));
+        assert!(surfaces.contains("id=\"surface-blur-value\""));
+        assert!(
+            !taskbar.contains("color-taskbar-"),
+            "taskbar colour must not be exposed"
+        );
+        assert!(!taskbar.contains("taskbar-opacity-value"));
+        assert!(!taskbar.contains("taskbar-blur-value"));
         assert!(!html.contains("taskbar-color-value"));
         assert!(!html.contains("settings.taskbar.color"));
-        assert_eq!(html.matches("id=\"color-taskbar-wheel\"").count(), 1);
+        assert!(!html.contains("settings.taskbar-blur"));
+        assert!(!html.contains("settings.taskbar-opacity"));
+        assert_eq!(html.matches("id=\"color-surface-wheel\"").count(), 1);
+    }
+
+    #[test]
+    fn appearance_tabs_are_six_pages_in_nav_order_with_unique_ids() {
+        let html = include_str!("../../../ui/settings.html");
+        let nav: Vec<&str> = html
+            .split("data-action=\"settings.page.")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        assert_eq!(
+            nav,
+            [
+                "theme",
+                "start-menu",
+                "surfaces",
+                "animations",
+                "lock-screen",
+                "screensaver",
+                "desktop",
+                "taskbar",
+                "displays",
+                "fonts",
+                "hotkeys",
+                "about",
+            ]
+        );
+        for page in nav {
+            let id = format!("id=\"page-{page}\"");
+            assert_eq!(html.matches(&id).count(), 1, "one section for nav {page}");
+        }
+        assert!(!html.contains("id=\"page-appearance\""));
+    }
+
+    #[test]
+    fn appearance_sub_pages_have_no_duplicate_controls() {
+        let html = include_str!("../../../ui/settings.html");
+        let mut ids: Vec<&str> = html
+            .split("id=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            total,
+            "every element id must be unique in settings.html"
+        );
+        assert!(!html.contains("id=\"accent-reset\""));
+        assert!(!html.contains("settings.accent.reset"));
+        assert!(!html.contains("Accent preset"));
+    }
+
+    #[test]
+    fn screensaver_preview_is_labelled_and_uses_the_screensaver_action() {
+        let html = include_str!("../../../ui/settings.html");
+        assert!(html.contains(
+            "id=\"screensaver-preview\" data-action=\"settings.screensaver.preview\">Preview</button>"
+        ));
+    }
+
+    #[test]
+    fn start_icon_controls_are_on_the_start_menu_page() {
+        let html = include_str!("../../../ui/settings.html");
+        let start = html
+            .split_once("id=\"page-start-menu\"")
+            .and_then(|(_, rest)| rest.split_once("id=\"page-surfaces\""))
+            .map(|(body, _)| body)
+            .expect("start menu page");
+        assert!(
+            start.contains("id=\"start-icon-choose\" data-action=\"settings.start-icon.choose\"")
+        );
+        assert!(
+            start.contains("id=\"start-icon-clear\" data-action=\"settings.start-icon.clear\"")
+        );
+        assert!(start.contains("id=\"start-icon-value\""));
     }
 
     #[test]
@@ -155,7 +242,12 @@ mod tests {
         let html = include_str!("../../../ui/settings.html");
         let css = include_str!("../../../ui/settings.css");
         for page in [
-            "appearance",
+            "theme",
+            "start-menu",
+            "surfaces",
+            "animations",
+            "lock-screen",
+            "screensaver",
             "desktop",
             "taskbar",
             "displays",
@@ -298,7 +390,10 @@ mod tests {
             let (x, y, width, height) = document
                 .layout_box_by_id(&selected_dot, viewport)
                 .unwrap_or_else(|| panic!("compiled accent target {selected_dot} is missing"));
-            assert!(width > 0.0 && height > 0.0, "{selected_dot} must be hit-testable");
+            assert!(
+                width > 0.0 && height > 0.0,
+                "{selected_dot} must be hit-testable"
+            );
             let center = (x + width / 2.0, y + height / 2.0);
             assert!(center.0 >= 0.0 && center.0 < viewport.0);
             assert!(center.1 >= 0.0 && center.1 < viewport.1);
@@ -310,10 +405,9 @@ mod tests {
             );
         }
 
-        assert!(html.contains("<button class=\"settings-button\" data-action=\"settings.accent.reset\">Reset</button>"));
         assert!(
-            !html.contains("id=\"accent-reset\""),
-            "reset currently has no compiled id, so UiDocument's public layout query cannot independently measure its hit box"
+            !html.contains("settings.accent.reset"),
+            "the accent preset reset is removed; the saved accent stays"
         );
     }
 
@@ -380,7 +474,9 @@ mod tests {
             });
         for action in markup_actions {
             assert!(
-                PAGER_CONTROLS.iter().any(|(_, expected)| *expected == action),
+                PAGER_CONTROLS
+                    .iter()
+                    .any(|(_, expected)| *expected == action),
                 "markup paging action {action} is not in the frozen contract"
             );
         }

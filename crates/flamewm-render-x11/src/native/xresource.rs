@@ -163,6 +163,10 @@ impl X11ResourceAllocator {
             .unwrap_or_else(|poison| poison.into_inner());
         TRAP_FIRED.store(false, Ordering::SeqCst);
         let previous = unsafe { XSetErrorHandler(Some(trap_handler)) };
+        // Drain earlier queued requests first: their async errors would otherwise be
+        // reported by this call's XSync and misattributed to this pixmap.
+        unsafe { XSync(display, 0 as Bool) };
+        TRAP_FIRED.store(false, Ordering::SeqCst);
         // SAFETY: display/drawable are live per the caller contract.
         let pixmap = unsafe { XCreatePixmap(display, drawable, width, height, depth) };
         unsafe { XSync(display, 0 as Bool) };
@@ -209,6 +213,38 @@ mod tests {
     fn checked_bytes_never_wrap() {
         assert_eq!(pixmap_byte_estimate(u32::MAX, u32::MAX, 32), usize::MAX);
         assert!(validate_pixmap_dims(u32::MAX, u32::MAX, 32, u32::MAX, u32::MAX).is_err());
+    }
+
+    /// A failed request on an earlier, unsynced call (here a `XDeleteProperty` on a
+    /// destroyed window) must not be attributed to a later, valid `XCreatePixmap`.
+    /// Needs a live X server (`FLAMEWM_TEST_DISPLAY`); skipped otherwise.
+    #[test]
+    fn stale_async_error_is_not_attributed_to_later_pixmap() {
+        let Some(name) = std::env::var_os("FLAMEWM_TEST_DISPLAY") else {
+            return;
+        };
+        let name = std::ffi::CString::new(name.to_string_lossy().as_bytes()).unwrap();
+        let display = unsafe { super::super::super::xlib::XOpenDisplay(name.as_ptr()) };
+        assert!(!display.is_null(), "XOpenDisplay failed");
+        unsafe {
+            let screen = super::super::super::xlib::XDefaultScreen(display);
+            let root = super::super::super::xlib::XRootWindow(display, screen);
+            let window = super::super::super::xlib::XCreateSimpleWindow(
+                display, root, 0, 0, 8, 8, 0, 0, 0,
+            );
+            super::super::super::xlib::XSync(display, 0);
+            super::super::super::xlib::XDestroyWindow(display, window);
+            let atom_name = std::ffi::CString::new("FLAMEWM_STALE_ERROR_TEST").unwrap();
+            let atom = super::super::super::xlib::XInternAtom(display, atom_name.as_ptr(), 0);
+            // Async BadWindow: queued on a destroyed window, not yet synced.
+            super::super::super::xlib::XDeleteProperty(display, window, atom);
+            let mut alloc = X11ResourceAllocator::new();
+            let (root_w, root_h) = (1280, 800);
+            let result = alloc.create_pixmap(display, root, 25, 25, 32, root_w, root_h);
+            super::super::super::xlib::XCloseDisplay(display);
+            assert!(result.is_ok(), "stale error misattributed: {result:?}");
+            assert_eq!(alloc.ledger().failures, 0);
+        }
     }
 
     #[test]

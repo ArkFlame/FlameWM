@@ -196,8 +196,14 @@ mod tests {
         let mut document = ProbeDocument::default();
         let result = application.handle_action(&release("settings.bogus.action"), &mut document);
         assert!(result.is_err());
-        assert!(requests.borrow().is_empty(), "unknown action must not call the service");
-        assert!(document.texts.is_empty() && document.visible.is_empty(), "unknown action must not sync");
+        assert!(
+            requests.borrow().is_empty(),
+            "unknown action must not call the service"
+        );
+        assert!(
+            document.texts.is_empty() && document.visible.is_empty(),
+            "unknown action must not sync"
+        );
         application.report_error(&mut document, result.unwrap_err());
         assert!(document.texts["settings-error"].contains("settings.bogus.action"));
     }
@@ -216,18 +222,26 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(initial)));
-        transport.responses.push_back(Err(flamewm_control_core::ControlError {
-            name: "com.arkflame.FlameWM1.Error.Unavailable",
-            code: flamewm_api::ErrorCode::Unavailable,
-            message: "service busy".to_owned(),
-        }));
+        transport
+            .responses
+            .push_back(Err(flamewm_control_core::ControlError {
+                name: "com.arkflame.FlameWM1.Error.Unavailable",
+                code: flamewm_api::ErrorCode::Unavailable,
+                message: "service busy".to_owned(),
+            }));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("settings snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("settings snapshot");
         let mut document = ProbeDocument::default();
         let result = application.handle_action(&release("settings.toggle.fontBold"), &mut document);
         assert!(result.is_err());
         assert_eq!(
-            application.client().settings().and_then(|s| s.values.get("fontBold")),
+            application
+                .client()
+                .settings()
+                .and_then(|s| s.values.get("fontBold")),
             Some(&SettingValue::Boolean(false)),
             "failed write must leave the previous authoritative value"
         );
@@ -248,7 +262,7 @@ mod tests {
         for action in [
             "settings.taskbar.position",
             "settings.taskbar.size",
-            "settings.taskbar-opacity.up",
+            "settings.surface-opacity.up",
             "settings.font-size.up",
             "settings.display.select.0",
             "settings.display.keep",
@@ -257,7 +271,10 @@ mod tests {
             // Each must fail before any service call, because the transport queue is empty.
             let _ = application.handle_action(&release(action), &mut document);
         }
-        assert!(requests.borrow().is_empty(), "empty snapshots must not reach the service");
+        assert!(
+            requests.borrow().is_empty(),
+            "empty snapshots must not reach the service"
+        );
         // A page change with no snapshots loaded still syncs without panicking.
         application
             .handle_action(&release("settings.page.about"), &mut document)
@@ -272,7 +289,10 @@ mod tests {
             .responses
             .push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_displays().expect("display snapshot");
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.select.1"), &mut document)
@@ -292,47 +312,75 @@ mod tests {
             .values
             .insert("taskbarHeight".to_owned(), SettingValue::Integer(52));
         let mut transport = RecordingTransport::default();
-        transport.responses.push_back(Ok(ControlResponse::Settings(settings)));
-        transport.responses.push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
-            revision: 1,
-            bindings: BTreeMap::new(),
-        })));
-        transport.responses.push_back(Ok(ControlResponse::Panels(flamewm_api::panels::PanelsSnapshot {
-            revision: 1,
-            panels: Vec::new(),
-            tasks: Vec::new(),
-            pinned_apps: Vec::new(),
-        })));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(settings)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                revision: 1,
+                bindings: BTreeMap::new(),
+            })));
+        transport.responses.push_back(Ok(ControlResponse::Panels(
+            flamewm_api::panels::PanelsSnapshot {
+                revision: 1,
+                panels: Vec::new(),
+                tasks: Vec::new(),
+                pinned_apps: Vec::new(),
+            },
+        )));
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
         application.refresh(&mut document).expect("refresh");
         assert_eq!(document.texts["taskbar-size-value"], "52 px (all outputs)");
-        assert_eq!(document.texts["about-version"], format!("Version {}", env!("FLAMEWM_SETTINGS_VERSION")));
+        assert_eq!(
+            document.texts["about-version"],
+            format!("Version {}", env!("FLAMEWM_SETTINGS_VERSION"))
+        );
     }
 
     #[test]
     fn about_version_text_is_exact_flamewm_version() {
         let version = include_str!("../../../FLAMEWM_VERSION").trim();
         let mut transport = RecordingTransport::default();
-        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(2))));
-        transport.responses.push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
-            revision: 1,
-            bindings: BTreeMap::new(),
-        })));
-        transport.responses.push_back(Ok(ControlResponse::Panels(flamewm_api::panels::PanelsSnapshot {
-            revision: 1,
-            panels: Vec::new(),
-            tasks: Vec::new(),
-            pinned_apps: Vec::new(),
-        })));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(2))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                revision: 1,
+                bindings: BTreeMap::new(),
+            })));
+        transport.responses.push_back(Ok(ControlResponse::Panels(
+            flamewm_api::panels::PanelsSnapshot {
+                revision: 1,
+                panels: Vec::new(),
+                tasks: Vec::new(),
+                pinned_apps: Vec::new(),
+            },
+        )));
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
-        assert!(!document.texts.contains_key("about-version"), "no runtime about version before refresh");
+        assert!(
+            !document.texts.contains_key("about-version"),
+            "no runtime about version before refresh"
+        );
         application.refresh(&mut document).expect("refresh");
-        assert_eq!(document.texts["about-version"], format!("Version {version}"));
-        assert_ne!(document.texts["about-version"], version, "bare version must not match");
+        assert_eq!(
+            document.texts["about-version"],
+            format!("Version {version}")
+        );
+        assert_ne!(
+            document.texts["about-version"], version,
+            "bare version must not match"
+        );
         assert_ne!(document.texts["about-version"], "Version 0.0.0-wrong");
     }
 
@@ -340,7 +388,9 @@ mod tests {
     fn about_links_map_to_the_fixed_product_uris_only() {
         assert!(matches!(
             crate::parse_action("about.source"),
-            Ok(crate::SettingsAction::OpenUri("https://github.com/ArkFlame/flamewm"))
+            Ok(crate::SettingsAction::OpenUri(
+                "https://github.com/ArkFlame/flamewm"
+            ))
         ));
         assert!(crate::parse_action("about.other").is_err());
     }
@@ -352,6 +402,15 @@ mod tests {
             Ok(crate::SettingsAction::LockPreview)
         ));
         assert!(crate::parse_action("settings.lock.preview.extra").is_err());
+    }
+
+    #[test]
+    fn screensaver_preview_action_parses_separately_from_lock_preview() {
+        assert!(matches!(
+            crate::parse_action("settings.screensaver.preview"),
+            Ok(crate::SettingsAction::ScreensaverPreview)
+        ));
+        assert!(crate::parse_action("settings.screensaver.preview.extra").is_err());
     }
 
     fn shortcut_snapshot_with(bindings: &[(&str, &str)]) -> ShortcutSnapshot {
@@ -376,14 +435,21 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
-            ("WorkspaceLeft", "Ctrl+Super+Left"),
-            ("ToggleStartMenu", "Super"),
-        ]))));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(12)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
+                ("WorkspaceLeft", "Ctrl+Super+Left"),
+                ("ToggleStartMenu", "Super"),
+            ]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::CaptureLease(12)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -397,9 +463,21 @@ mod tests {
         let result = application.handle_key_event(&key, &mut document);
         assert!(result.is_err(), "duplicate binding must be rejected");
         assert!(result.unwrap_err().contains("Desktop left"));
-        assert_eq!(requests.borrow().len(), 2, "capture lease begins, but duplicate sends no shortcut write");
-        assert!(!requests.borrow().iter().any(|request| matches!(request, ControlRequest::SetShortcut { .. })));
-        application.client_mut().cancel_hotkey_capture().expect("release duplicate capture lease");
+        assert_eq!(
+            requests.borrow().len(),
+            2,
+            "capture lease begins, but duplicate sends no shortcut write"
+        );
+        assert!(
+            !requests
+                .borrow()
+                .iter()
+                .any(|request| matches!(request, ControlRequest::SetShortcut { .. }))
+        );
+        application
+            .client_mut()
+            .cancel_hotkey_capture()
+            .expect("release duplicate capture lease");
     }
 
     #[test]
@@ -409,16 +487,28 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
-            ("ToggleStartMenu", "Super"),
-        ]))));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(7)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+                "ToggleStartMenu",
+                "Super",
+            )]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::CaptureLease(7)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -432,8 +522,13 @@ mod tests {
         application
             .handle_key_event(&backspace, &mut document)
             .expect("backspace resets");
-        assert!(matches!(requests.borrow().get(2), Some(ControlRequest::EndHotkeyCapture { lease: 7 })));
-        assert!(matches!(requests.borrow().get(3), Some(ControlRequest::ResetShortcut { action, .. }) if action == "ToggleStartMenu"));
+        assert!(matches!(
+            requests.borrow().get(2),
+            Some(ControlRequest::EndHotkeyCapture { lease: 7 })
+        ));
+        assert!(
+            matches!(requests.borrow().get(3), Some(ControlRequest::ResetShortcut { action, .. }) if action == "ToggleStartMenu")
+        );
         // Capture is over: a later stray key release must not write anything.
         let stray = flamewm_ui_x11::UiKeyEvent {
             phase: flamewm_ui_x11::UiKeyPhase::Release,
@@ -441,8 +536,14 @@ mod tests {
             modifiers: Vec::new(),
             text: None,
         };
-        application.handle_key_event(&stray, &mut document).expect("stray key ignored");
-        assert_eq!(requests.borrow().len(), 6, "stray key must not reach the service");
+        application
+            .handle_key_event(&stray, &mut document)
+            .expect("stray key ignored");
+        assert_eq!(
+            requests.borrow().len(),
+            6,
+            "stray key must not reach the service"
+        );
     }
 
     #[test]
@@ -453,11 +554,18 @@ mod tests {
             ..RecordingTransport::default()
         };
         transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut application = SettingsApplication::new(transport);
         application
-            .handle_action(&release("settings.hotkey.left.reset"), &mut ProbeDocument::default())
+            .handle_action(
+                &release("settings.hotkey.left.reset"),
+                &mut ProbeDocument::default(),
+            )
             .expect("reset left");
         assert!(matches!(
             requests.borrow().first(),
@@ -468,38 +576,63 @@ mod tests {
     #[test]
     fn hotkey_row_projects_its_binding_and_capture_prompt() {
         let mut transport = RecordingTransport::default();
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
-            ("WorkspaceUp", "Ctrl+Super+Up"),
-        ]))));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(13)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+                "WorkspaceUp",
+                "Ctrl+Super+Up",
+            )]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::CaptureLease(13)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
-        application.handle_action(&release("settings.hotkey.up"), &mut document).expect("begin capture");
+        application
+            .handle_action(&release("settings.hotkey.up"), &mut document)
+            .expect("begin capture");
         assert_eq!(document.texts["hotkey-key-up"], "Press a key...");
-        assert!(!document.texts.contains_key("hotkey-key-left"), "unbound rows without a snapshot entry are untouched");
+        assert!(
+            !document.texts.contains_key("hotkey-key-left"),
+            "unbound rows without a snapshot entry are untouched"
+        );
     }
 
     #[test]
     fn switching_page_ends_capture_lease_before_disarming_prompt() {
         let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport { requests: requests.clone(), ..RecordingTransport::default() };
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
         transport.responses.extend([
             Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))),
             Ok(ControlResponse::CaptureLease(31)),
             Ok(ControlResponse::Unit),
         ]);
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
-        application.handle_action(&release("settings.hotkey.start"), &mut document).expect("begin capture");
-        application.handle_action(&release("settings.page.about"), &mut document).expect("switch page");
+        application
+            .handle_action(&release("settings.hotkey.start"), &mut document)
+            .expect("begin capture");
+        application
+            .handle_action(&release("settings.page.about"), &mut document)
+            .expect("switch page");
         assert_eq!(application.client().ui().hotkey_capture, None);
         assert_eq!(application.client().ui().hotkey_capture_lease, None);
-        assert!(matches!(requests.borrow().get(2), Some(ControlRequest::EndHotkeyCapture { lease: 31 })));
+        assert!(matches!(
+            requests.borrow().get(2),
+            Some(ControlRequest::EndHotkeyCapture { lease: 31 })
+        ));
     }
-
 
     #[test]
     fn hotkey_row_markup_ids_parse_to_their_capture_action() {
@@ -524,7 +657,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("hotkey row {slot} missing from markup"))
                 + marker.len();
             let id = html[start..].split('"').next().unwrap_or_default();
-            assert_eq!(id, format!("settings.hotkey.{slot}"), "markup id for row {slot}");
+            assert_eq!(
+                id,
+                format!("settings.hotkey.{slot}"),
+                "markup id for row {slot}"
+            );
             assert!(
                 matches!(
                     crate::parse_action(id),
@@ -551,7 +688,10 @@ mod tests {
             Ok(ControlResponse::Unit),
         ]);
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -571,7 +711,10 @@ mod tests {
         flamewm_ui_x11::UiKeyEvent {
             phase: flamewm_ui_x11::UiKeyPhase::Release,
             key: key.to_owned(),
-            modifiers: modifiers.iter().map(|modifier| (*modifier).to_owned()).collect(),
+            modifiers: modifiers
+                .iter()
+                .map(|modifier| (*modifier).to_owned())
+                .collect(),
             text: None,
         }
     }
@@ -583,16 +726,28 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(20)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::CaptureLease(20)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
-            ("ToggleStartMenu", "Super"),
-        ]))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+                "ToggleStartMenu",
+                "Super",
+            )]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -623,11 +778,18 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(21)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::CaptureLease(21)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_shortcuts().expect("shortcut snapshot");
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -636,11 +798,20 @@ mod tests {
             .handle_key_event(&key_release("Super_L", &["Ctrl", "Super"]), &mut document)
             .expect("chord release is not a commit");
         let requests = requests.borrow();
-        assert_eq!(requests.len(), 2, "initial snapshot plus capture lease; no shortcut write for a Ctrl+Super release");
+        assert_eq!(
+            requests.len(),
+            2,
+            "initial snapshot plus capture lease; no shortcut write for a Ctrl+Super release"
+        );
         assert!(matches!(requests[0], ControlRequest::GetShortcuts));
-        assert!(matches!(&requests[1], ControlRequest::BeginHotkeyCapture { action, .. } if action == "ToggleStartMenu"));
-        assert!(!requests.iter().any(|request| matches!(request,
-            ControlRequest::SetShortcut { .. } | ControlRequest::ClearShortcut { .. } | ControlRequest::ResetShortcut { .. }
+        assert!(
+            matches!(&requests[1], ControlRequest::BeginHotkeyCapture { action, .. } if action == "ToggleStartMenu")
+        );
+        assert!(!requests.iter().any(|request| matches!(
+            request,
+            ControlRequest::SetShortcut { .. }
+                | ControlRequest::ClearShortcut { .. }
+                | ControlRequest::ResetShortcut { .. }
         )));
         assert_eq!(
             document.texts.get("hotkey-key-start").map(String::as_str),
@@ -651,12 +822,14 @@ mod tests {
 
     fn decoration_snapshot(revision: u64, decoration: &str) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(revision);
-        snapshot
-            .values
-            .insert("accent".to_owned(), SettingValue::Text("#EF4048".to_owned()));
-        snapshot
-            .values
-            .insert("decoration".to_owned(), SettingValue::Text(decoration.to_owned()));
+        snapshot.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text("#EF4048".to_owned()),
+        );
+        snapshot.values.insert(
+            "decoration".to_owned(),
+            SettingValue::Text(decoration.to_owned()),
+        );
         snapshot
     }
 
@@ -667,41 +840,72 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(1, "rounded"))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(2, "ios"))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(3, "rounded"))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
+                1, "rounded",
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
+                2, "squared",
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
+                3, "rounded",
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         application
-            .handle_action(&release("settings.decoration.ios"), &mut document)
-            .expect("ios option");
-        assert!(document.highlighted["decoration-ios"], "ios is highlighted after its write");
-        assert!(!document.highlighted["decoration-rounded"], "rounded is cleared after ios write");
+            .handle_action(&release("settings.decoration.squared"), &mut document)
+            .expect("squared option");
+        assert!(
+            document.highlighted["decoration-squared"],
+            "squared is highlighted after its write"
+        );
+        assert!(
+            !document.highlighted["decoration-rounded"],
+            "rounded is cleared after squared write"
+        );
 
         application
             .handle_action(&release("settings.decoration.rounded"), &mut document)
             .expect("rounded option");
         assert!(document.highlighted["decoration-rounded"]);
-        assert!(!document.highlighted["decoration-ios"]);
+        assert!(!document.highlighted["decoration-squared"]);
 
         let writes: Vec<(String, SettingValue)> = requests
             .borrow()
             .iter()
             .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .and_then(|change| change.value.clone().map(|value| (change.key.clone(), value))),
+                ControlRequest::ApplySettings(transaction) => {
+                    transaction.changes.first().and_then(|change| {
+                        change
+                            .value
+                            .clone()
+                            .map(|value| (change.key.clone(), value))
+                    })
+                }
                 _ => None,
             })
             .collect();
         assert_eq!(
             writes,
             vec![
-                ("decoration".to_owned(), SettingValue::Text("ios".to_owned())),
-                ("decoration".to_owned(), SettingValue::Text("rounded".to_owned())),
+                (
+                    "decoration".to_owned(),
+                    SettingValue::Text("squared".to_owned())
+                ),
+                (
+                    "decoration".to_owned(),
+                    SettingValue::Text("rounded".to_owned())
+                ),
             ],
         );
     }
@@ -713,26 +917,52 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(1, "rounded"))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(decoration_snapshot(2, "ios"))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
+                1, "rounded",
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
+                2, "squared",
+            ))));
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
-        application.client_mut().refresh_settings().expect("initial snapshot");
-        application.sync(&mut document).expect("sync initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        application
+            .sync(&mut document)
+            .expect("sync initial snapshot");
         assert!(document.highlighted["decoration-rounded"]);
-        application.client_mut().refresh_settings().expect("external snapshot");
-        application.sync(&mut document).expect("sync external snapshot");
-        assert!(document.highlighted["decoration-ios"], "external ios snapshot moves the highlight");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("external snapshot");
+        application
+            .sync(&mut document)
+            .expect("sync external snapshot");
+        assert!(
+            document.highlighted["decoration-squared"],
+            "external squared snapshot moves the highlight"
+        );
         assert!(!document.highlighted["decoration-rounded"]);
         assert!(
-            requests.borrow().iter().all(|request| !matches!(request, ControlRequest::ApplySettings(_))),
+            requests
+                .borrow()
+                .iter()
+                .all(|request| !matches!(request, ControlRequest::ApplySettings(_))),
             "external sync must not write"
         );
     }
 
     fn animation_snapshot(revision: u64, key: &str, value: &str) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(revision);
-        snapshot.values.insert(key.to_owned(), SettingValue::Text(value.to_owned()));
+        snapshot
+            .values
+            .insert(key.to_owned(), SettingValue::Text(value.to_owned()));
         snapshot
     }
 
@@ -744,23 +974,36 @@ mod tests {
             ..RecordingTransport::default()
         };
         let mut revision = 1;
-        transport.responses.push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(revision))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(
+                revision,
+            ))));
         let mut writes = Vec::new();
         for (key, values) in crate::ANIMATION_STYLE_ROWS {
             for value in values {
                 revision += 1;
                 transport
                     .responses
-                    .push_back(Ok(ControlResponse::Settings(animation_snapshot(revision, key, value))));
+                    .push_back(Ok(ControlResponse::Settings(animation_snapshot(
+                        revision, key, value,
+                    ))));
                 writes.push((key, *value));
             }
         }
         revision += 1;
         transport
             .responses
-            .push_back(Ok(ControlResponse::Settings(animation_snapshot(revision, "startAnimation", "fade"))));
+            .push_back(Ok(ControlResponse::Settings(animation_snapshot(
+                revision,
+                "startAnimation",
+                "fade",
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         for (key, value) in &writes {
@@ -784,10 +1027,14 @@ mod tests {
             .borrow()
             .iter()
             .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .and_then(|change| change.value.clone().map(|value| (change.key.clone(), value))),
+                ControlRequest::ApplySettings(transaction) => {
+                    transaction.changes.first().and_then(|change| {
+                        change
+                            .value
+                            .clone()
+                            .map(|value| (change.key.clone(), value))
+                    })
+                }
                 _ => None,
             })
             .collect();
@@ -795,10 +1042,18 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), SettingValue::Text((*value).to_owned())))
             .collect();
-        assert_eq!(written, expected, "each segment writes its exact key and value");
+        assert_eq!(
+            written, expected,
+            "each segment writes its exact key and value"
+        );
 
-        application.client_mut().refresh_settings().expect("external snapshot");
-        application.sync(&mut document).expect("sync external snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("external snapshot");
+        application
+            .sync(&mut document)
+            .expect("sync external snapshot");
         assert!(document.highlighted[&crate::animation_style_node("startAnimation", "fade")]);
         assert!(!document.highlighted[&crate::animation_style_node("startAnimation", "none")]);
     }
@@ -821,19 +1076,27 @@ mod tests {
             .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(1))));
         let minutes_options = [0_i64, 5, 10, 15, 30];
         for (index, minutes) in minutes_options.iter().enumerate() {
-            transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-                index as u64 + 2,
-                "lockTimeoutMinutes",
-                SettingValue::Integer(*minutes),
-            ))));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                    index as u64 + 2,
+                    "lockTimeoutMinutes",
+                    SettingValue::Integer(*minutes),
+                ))));
         }
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         for minutes in minutes_options {
             application
-                .handle_action(&release(&format!("settings.lock.timeout.{minutes}")), &mut document)
+                .handle_action(
+                    &release(&format!("settings.lock.timeout.{minutes}")),
+                    &mut document,
+                )
                 .expect("lock timeout option");
             for option in minutes_options {
                 assert_eq!(
@@ -860,7 +1123,10 @@ mod tests {
             .iter()
             .map(|minutes| SettingValue::Integer(*minutes))
             .collect();
-        assert_eq!(written, expected, "each timeout segment writes its exact minutes");
+        assert_eq!(
+            written, expected,
+            "each timeout segment writes its exact minutes"
+        );
     }
 
     #[test]
@@ -876,6 +1142,8 @@ mod tests {
             ("settings.lock.background.clear", true),
             ("settings.avatar.choose", true),
             ("settings.avatar.clear", true),
+            ("settings.start-icon.choose", true),
+            ("settings.start-icon.clear", true),
             ("settings.toggle.lockShowDate", true),
             ("settings.toggle.lockShowUsername", true),
             ("settings.toggle.lockOnSuspend", true),
@@ -930,8 +1198,8 @@ mod tests {
             ("settings.wallpaper.fit", true),
             ("settings.screensaver.mode.none", true),
             ("settings.screensaver.mode.off", false),
-            ("settings.taskbar-blur.up", true),
-            ("settings.taskbar-blur.sideways", false),
+            ("settings.surface-blur.up", true),
+            ("settings.surface-blur.sideways", false),
             ("settings.start-menu-blur.down", true),
             ("settings.taskbar-floating-margin.up", true),
             ("settings.taskbar-floating-radius.down", true),
@@ -956,10 +1224,41 @@ mod tests {
     #[test]
     fn blur_steppers_write_percent_steps_clamped_and_show_the_label() {
         for (action, key, label_id, start, expected) in [
-            ("settings.taskbar-blur.up", "taskbarBlurPercent", "taskbar-blur-value", 80, 85),
-            ("settings.taskbar-blur.down", "taskbarBlurPercent", "taskbar-blur-value", 80, 75),
-            ("settings.taskbar-blur.up", "taskbarBlurPercent", "taskbar-blur-value", 98, 100),
-            ("settings.start-menu-blur.down", "startMenuBlurPercent", "start-menu-blur-value", 3, 0),
+            (
+                "settings.surface-blur.up",
+                "surfaceBlurPercent",
+                "surface-blur-value",
+                80,
+                85,
+            ),
+            (
+                "settings.surface-blur.down",
+                "surfaceBlurPercent",
+                "surface-blur-value",
+                80,
+                75,
+            ),
+            (
+                "settings.surface-blur.up",
+                "surfaceBlurPercent",
+                "surface-blur-value",
+                98,
+                100,
+            ),
+            (
+                "settings.surface-opacity.down",
+                "surfaceOpacity",
+                "surface-opacity-value",
+                2,
+                0,
+            ),
+            (
+                "settings.start-menu-blur.down",
+                "startMenuBlurPercent",
+                "start-menu-blur-value",
+                3,
+                0,
+            ),
         ] {
             let requests = Rc::new(RefCell::new(Vec::new()));
             let mut transport = RecordingTransport {
@@ -967,13 +1266,24 @@ mod tests {
                 ..RecordingTransport::default()
             };
             let mut before = SettingsSnapshot::new(1);
-            before.values.insert(key.to_owned(), SettingValue::Percent(start));
+            before
+                .values
+                .insert(key.to_owned(), SettingValue::Percent(start));
             let mut after = SettingsSnapshot::new(2);
-            after.values.insert(key.to_owned(), SettingValue::Percent(expected));
-            transport.responses.push_back(Ok(ControlResponse::Settings(before)));
-            transport.responses.push_back(Ok(ControlResponse::Settings(after)));
+            after
+                .values
+                .insert(key.to_owned(), SettingValue::Percent(expected));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(before)));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(after)));
             let mut application = SettingsApplication::new(transport);
-            application.client_mut().refresh_settings().expect("initial snapshot");
+            application
+                .client_mut()
+                .refresh_settings()
+                .expect("initial snapshot");
             let mut document = ProbeDocument::default();
 
             application
@@ -993,7 +1303,11 @@ mod tests {
                 })
                 .collect();
             assert_eq!(written, vec![SettingValue::Percent(expected)], "{action}");
-            assert_eq!(document.texts[label_id], format!("{expected}%"), "{action} label");
+            assert_eq!(
+                document.texts[label_id],
+                format!("{expected}%"),
+                "{action} label"
+            );
         }
     }
 
@@ -1004,18 +1318,25 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "avatarImage",
-            SettingValue::Text("/home/u/avatar-0123456789abcdef.png".to_owned()),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "avatarImage",
-            SettingValue::Text(String::new()),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "avatarImage",
+                SettingValue::Text("/home/u/avatar-0123456789abcdef.png".to_owned()),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "avatarImage",
+                SettingValue::Text(String::new()),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         application
@@ -1035,33 +1356,53 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            vec![("avatarImage".to_owned(), Some(SettingValue::Text(String::new())))]
+            vec![(
+                "avatarImage".to_owned(),
+                Some(SettingValue::Text(String::new()))
+            )]
         );
     }
 
     #[test]
     fn lock_background_steppers_clamp_at_their_maximums() {
         for (action, key, start, expected) in [
-            ("settings.lock-bg-blur.up", "lockBackgroundBlurPercent", 98, 100),
-            ("settings.lock-bg-dim.up", "lockBackgroundDimPercent", 78, 80),
+            (
+                "settings.lock-bg-blur.up",
+                "lockBackgroundBlurPercent",
+                98,
+                100,
+            ),
+            (
+                "settings.lock-bg-dim.up",
+                "lockBackgroundDimPercent",
+                78,
+                80,
+            ),
         ] {
             let requests = Rc::new(RefCell::new(Vec::new()));
             let mut transport = RecordingTransport {
                 requests: requests.clone(),
                 ..RecordingTransport::default()
             };
-            transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-                1,
-                key,
-                SettingValue::Integer(start),
-            ))));
-            transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-                2,
-                key,
-                SettingValue::Integer(expected),
-            ))));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                    1,
+                    key,
+                    SettingValue::Integer(start),
+                ))));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                    2,
+                    key,
+                    SettingValue::Integer(expected),
+                ))));
             let mut application = SettingsApplication::new(transport);
-            application.client_mut().refresh_settings().expect("initial snapshot");
+            application
+                .client_mut()
+                .refresh_settings()
+                .expect("initial snapshot");
             let mut document = ProbeDocument::default();
 
             application
@@ -1080,7 +1421,11 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(written, vec![SettingValue::Integer(expected)], "{action} clamps, never exceeds maximum");
+            assert_eq!(
+                written,
+                vec![SettingValue::Integer(expected)],
+                "{action} clamps, never exceeds maximum"
+            );
         }
     }
 
@@ -1091,22 +1436,32 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "taskbarFloatingMargin",
-            SettingValue::Integer(32),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "taskbarFloatingMargin",
-            SettingValue::Integer(32),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "taskbarFloatingMargin",
+                SettingValue::Integer(32),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "taskbarFloatingMargin",
+                SettingValue::Integer(32),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         application
-            .handle_action(&release("settings.taskbar-floating-margin.up"), &mut document)
+            .handle_action(
+                &release("settings.taskbar-floating-margin.up"),
+                &mut document,
+            )
             .expect("margin up at maximum");
 
         let written: Vec<SettingValue> = requests
@@ -1121,7 +1476,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(written, vec![SettingValue::Integer(32)], "32 is the maximum, never 33");
+        assert_eq!(
+            written,
+            vec![SettingValue::Integer(32)],
+            "32 is the maximum, never 33"
+        );
         assert_eq!(document.texts["taskbar-floating-margin-value"], "32");
     }
 
@@ -1132,31 +1491,46 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "screensaverRibbonWidthTenths",
-            SettingValue::Integer(110),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "screensaverRibbonWidthTenths",
-            SettingValue::Integer(105),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            3,
-            "screensaverRibbonWidthTenths",
-            SettingValue::Integer(110),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "screensaverRibbonWidthTenths",
+                SettingValue::Integer(110),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "screensaverRibbonWidthTenths",
+                SettingValue::Integer(105),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                3,
+                "screensaverRibbonWidthTenths",
+                SettingValue::Integer(110),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         application
-            .handle_action(&release("settings.screensaver-ribbon-width.down"), &mut document)
+            .handle_action(
+                &release("settings.screensaver-ribbon-width.down"),
+                &mut document,
+            )
             .expect("ribbon width down");
         assert_eq!(document.texts["screensaver-ribbon-width-value"], "10.5 px");
         application
-            .handle_action(&release("settings.screensaver-ribbon-width.up"), &mut document)
+            .handle_action(
+                &release("settings.screensaver-ribbon-width.up"),
+                &mut document,
+            )
             .expect("ribbon width up");
 
         let written: Vec<SettingValue> = requests
@@ -1185,22 +1559,34 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "taskbarStyle",
-            SettingValue::Text("classic".to_owned()),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "taskbarStyle",
-            SettingValue::Text("floating".to_owned()),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "taskbarStyle",
+                SettingValue::Text("classic".to_owned()),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "taskbarStyle",
+                SettingValue::Text("floating".to_owned()),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
-        application.sync(&mut document).expect("sync classic snapshot");
+        application
+            .sync(&mut document)
+            .expect("sync classic snapshot");
         assert!(document.highlighted["taskbar-style-classic"]);
-        assert!(!document.visible["taskbar-floating-margin-row"], "classic hides floating steppers");
+        assert!(
+            !document.visible["taskbar-floating-margin-row"],
+            "classic hides floating steppers"
+        );
         assert!(!document.visible["taskbar-floating-radius-row"]);
 
         application
@@ -1209,8 +1595,14 @@ mod tests {
 
         assert!(document.highlighted["taskbar-style-floating"]);
         assert!(!document.highlighted["taskbar-style-classic"]);
-        assert!(document.visible["taskbar-floating-margin-row"], "floating shows margin");
-        assert!(document.visible["taskbar-floating-radius-row"], "floating shows radius");
+        assert!(
+            document.visible["taskbar-floating-margin-row"],
+            "floating shows margin"
+        );
+        assert!(
+            document.visible["taskbar-floating-radius-row"],
+            "floating shows radius"
+        );
         let written: Vec<SettingValue> = requests
             .borrow()
             .iter()
@@ -1233,20 +1625,29 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "cursorSize",
-            SettingValue::Integer(32),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "cursorSize",
-            SettingValue::Integer(64),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "cursorSize",
+                SettingValue::Integer(32),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "cursorSize",
+                SettingValue::Integer(64),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
-        application.sync(&mut document).expect("sync initial snapshot");
+        application
+            .sync(&mut document)
+            .expect("sync initial snapshot");
         assert!(document.highlighted["cursor-size-32"]);
         assert!(!document.highlighted["cursor-size-64"]);
 
@@ -1278,18 +1679,25 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "wallpaperFit",
-            SettingValue::Text("fill".to_owned()),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "wallpaperFit",
-            SettingValue::Text("fit".to_owned()),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "wallpaperFit",
+                SettingValue::Text("fill".to_owned()),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "wallpaperFit",
+                SettingValue::Text("fit".to_owned()),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
 
         application
@@ -1319,20 +1727,29 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            1,
-            "focusFollowsMouse",
-            SettingValue::Boolean(false),
-        ))));
-        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
-            2,
-            "focusFollowsMouse",
-            SettingValue::Boolean(true),
-        ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "focusFollowsMouse",
+                SettingValue::Boolean(false),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "focusFollowsMouse",
+                SettingValue::Boolean(true),
+            ))));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         let mut document = ProbeDocument::default();
-        application.sync(&mut document).expect("sync initial snapshot");
+        application
+            .sync(&mut document)
+            .expect("sync initial snapshot");
         assert!(document.visible["focus-mouse-off"]);
         assert!(!document.visible["focus-mouse-on"]);
 
@@ -1470,50 +1887,28 @@ mod tests {
     }
 
     #[test]
-    fn accent_reset_release_sends_exact_revisioned_change_and_refreshes_snapshot() {
+    fn accent_reset_is_retired_and_writes_nothing() {
         let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut initial = SettingsSnapshot::new(1);
-        initial.values.insert(
-            "accent".to_owned(),
-            SettingValue::Text("#2185D5".to_owned()),
-        );
-        let mut reset = SettingsSnapshot::new(2);
-        reset.values.insert(
-            "accent".to_owned(),
-            SettingValue::Text("#EF4048".to_owned()),
-        );
-        let mut transport = RecordingTransport {
+        let transport = RecordingTransport {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(initial)));
-        transport.responses.push_back(Ok(ControlResponse::Settings(reset.clone())));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
-
-        application
-            .handle_action(
-                &release("settings.accent.reset"),
-                &mut ProbeDocument::default(),
-            )
-            .expect("accent reset release");
-
-        assert_eq!(
-            *requests.borrow(),
-            vec![
-                ControlRequest::GetSettings,
-                ControlRequest::ApplySettings(SettingsTransaction {
-                    expected_revision: 1,
-                    changes: vec![SettingsChange {
-                        key: "accent".to_owned(),
-                        value: Some(SettingValue::Text("#EF4048".to_owned())),
-                    }],
-                    reset_section: None,
-                }),
-            ],
-            "reset is an explicit accent change at the snapshot revision, not a broad section reset"
+        assert!(
+            application
+                .handle_action(
+                    &release("settings.accent.reset"),
+                    &mut ProbeDocument::default()
+                )
+                .is_err()
         );
-        assert_eq!(application.client().settings(), Some(&reset));
+        assert!(
+            requests
+                .borrow()
+                .iter()
+                .all(|request| !matches!(request, ControlRequest::ApplySettings(_))),
+            "a retired accent reset must not write any setting"
+        );
     }
 
     /// A session whose snapshot holds `initial` for the surface colours. One queued
@@ -1521,10 +1916,19 @@ mod tests {
     fn color_session(
         initial: &str,
         applies: usize,
-    ) -> (SettingsApplication<RecordingTransport>, Rc<RefCell<Vec<ControlRequest>>>) {
+    ) -> (
+        SettingsApplication<RecordingTransport>,
+        Rc<RefCell<Vec<ControlRequest>>>,
+    ) {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut snapshot = SettingsSnapshot::new(7);
-        for key in ["taskbarColor", "startMenuColor", "titlebarColor", "lockBackgroundColor", "accent"] {
+        for key in [
+            "surfaceColor",
+            "startMenuColor",
+            "titlebarColor",
+            "lockBackgroundColor",
+            "accent",
+        ] {
             snapshot
                 .values
                 .insert(key.to_owned(), SettingValue::Text(initial.to_owned()));
@@ -1534,10 +1938,15 @@ mod tests {
             ..RecordingTransport::default()
         };
         for _ in 0..=applies {
-            transport.responses.push_back(Ok(ControlResponse::Settings(snapshot.clone())));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(snapshot.clone())));
         }
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
         (application, requests)
     }
 
@@ -1566,20 +1975,27 @@ mod tests {
     fn surface_preset_circle_writes_its_exact_hex_in_one_transaction() {
         let (mut application, requests) = color_session("#191B1D", 1);
         application
-            .handle_action(&release("settings.color.taskbar.preset.5"), &mut ProbeDocument::default())
+            .handle_action(
+                &release("settings.color.surface.preset.2"),
+                &mut ProbeDocument::default(),
+            )
             .expect("preset release");
         assert_eq!(
             requests.borrow().last(),
             Some(&ControlRequest::ApplySettings(SettingsTransaction {
                 expected_revision: 7,
                 changes: vec![SettingsChange {
-                    key: "taskbarColor".to_owned(),
+                    key: "surfaceColor".to_owned(),
                     value: Some(SettingValue::Text("#3DAEE9".to_owned())),
                 }],
                 reset_section: None,
             })),
         );
-        assert_eq!(requests.borrow().len(), 2, "one GetSettings and one ApplySettings only");
+        assert_eq!(
+            requests.borrow().len(),
+            2,
+            "one GetSettings and one ApplySettings only"
+        );
     }
 
     #[test]
@@ -1594,11 +2010,17 @@ mod tests {
         application
             .handle_action(&release("settings.picker.pick.0.5"), &mut document)
             .expect("red cell");
-        assert_eq!(last_apply(&requests, "startMenuColor").as_deref(), Some("#3E0909"));
+        assert_eq!(
+            last_apply(&requests, "startMenuColor").as_deref(),
+            Some("#3E0909")
+        );
         application
             .handle_action(&release("settings.picker.pick.grey.5"), &mut document)
             .expect("white cell");
-        assert_eq!(last_apply(&requests, "startMenuColor").as_deref(), Some("#FFFFFF"));
+        assert_eq!(
+            last_apply(&requests, "startMenuColor").as_deref(),
+            Some("#FFFFFF")
+        );
     }
 
     #[test]
@@ -1609,22 +2031,46 @@ mod tests {
             .handle_action(&release("settings.picker.open.titlebar"), &mut document)
             .expect("open picker");
         for text in ["#", "3", "d", "A", "e", "E", "9"] {
-            application.handle_action(&typed(text), &mut document).expect("typed digit");
+            application
+                .handle_action(&typed(text), &mut document)
+                .expect("typed digit");
         }
-        application.handle_action(&typed("\n"), &mut document).expect("enter");
-        assert_eq!(last_apply(&requests, "titlebarColor").as_deref(), Some("#3DAEE9"));
+        application
+            .handle_action(&typed("\n"), &mut document)
+            .expect("enter");
+        assert_eq!(
+            last_apply(&requests, "titlebarColor").as_deref(),
+            Some("#3DAEE9")
+        );
 
         let before = requests.borrow().len();
-        application.handle_action(&release("settings.picker.hex.focus"), &mut document).expect("focus");
-        application.handle_action(&release("settings.picker.close"), &mut document).expect("close");
-        application.handle_action(&release("settings.picker.open.titlebar"), &mut document).expect("reopen");
+        application
+            .handle_action(&release("settings.picker.hex.focus"), &mut document)
+            .expect("focus");
+        application
+            .handle_action(&release("settings.picker.close"), &mut document)
+            .expect("close");
+        application
+            .handle_action(&release("settings.picker.open.titlebar"), &mut document)
+            .expect("reopen");
         for text in ["1", "2", "3", "4", "5"] {
-            application.handle_action(&typed(text), &mut document).expect("typed digit");
+            application
+                .handle_action(&typed(text), &mut document)
+                .expect("typed digit");
         }
-        application.handle_action(&typed("\n"), &mut document).expect("enter invalid");
-        assert_eq!(requests.borrow().len(), before, "invalid #RRGGBB writes nothing");
+        application
+            .handle_action(&typed("\n"), &mut document)
+            .expect("enter invalid");
+        assert_eq!(
+            requests.borrow().len(),
+            before,
+            "invalid #RRGGBB writes nothing"
+        );
         assert!(
-            document.texts.get("color-picker-error").is_some_and(|text| text.contains("#RRGGBB")),
+            document
+                .texts
+                .get("color-picker-error")
+                .is_some_and(|text| text.contains("#RRGGBB")),
             "invalid buffer is shown inline"
         );
     }
@@ -1634,7 +2080,10 @@ mod tests {
         let (mut application, requests) = color_session("#191B1D", 0);
         let mut document = ProbeDocument::default();
         application
-            .handle_action(&release("settings.picker.open.lockbackground"), &mut document)
+            .handle_action(
+                &release("settings.picker.open.lockbackground"),
+                &mut document,
+            )
             .expect("open picker");
         // Apply with an empty buffer is inline-invalid and writes nothing, and it
         // moves focus off the hex field.
@@ -1642,11 +2091,21 @@ mod tests {
             .handle_action(&release("settings.picker.apply"), &mut document)
             .expect("empty apply");
         let writes = requests.borrow().len();
-        application.handle_action(&typed("7"), &mut document).expect("unfocused digit");
-        application.handle_action(&typed("\n"), &mut document).expect("enter empty buffer");
-        assert_eq!(requests.borrow().len(), writes, "unfocused digits are not buffered");
+        application
+            .handle_action(&typed("7"), &mut document)
+            .expect("unfocused digit");
+        application
+            .handle_action(&typed("\n"), &mut document)
+            .expect("enter empty buffer");
+        assert_eq!(
+            requests.borrow().len(),
+            writes,
+            "unfocused digits are not buffered"
+        );
         assert_eq!(document.visible.get("color-picker"), Some(&true));
-        application.handle_action(&typed("\u{1b}"), &mut document).expect("escape");
+        application
+            .handle_action(&typed("\u{1b}"), &mut document)
+            .expect("escape");
         assert_eq!(document.visible.get("color-picker"), Some(&false));
     }
 
@@ -1668,11 +2127,20 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Settings(initial)));
-        transport.responses.push_back(Ok(ControlResponse::Settings(blue)));
-        transport.responses.push_back(Ok(ControlResponse::Settings(teal)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(initial)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(blue)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(teal)));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_settings().expect("initial snapshot");
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
 
         let mut press = release("settings.accent.blue");
         press.phase = UiActionPhase::Press;
@@ -1684,7 +2152,11 @@ mod tests {
         application
             .handle_action(&outside, &mut ProbeDocument::default())
             .expect("release outside does not dispatch an accent mutation");
-        assert_eq!(requests.borrow().len(), 1, "only the initial snapshot was requested");
+        assert_eq!(
+            requests.borrow().len(),
+            1,
+            "only the initial snapshot was requested"
+        );
 
         application
             .handle_action(
@@ -1737,10 +2209,15 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
-            ("ToggleStartMenu", "Super"),
-        ]))));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(7)));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+                "ToggleStartMenu",
+                "Super",
+            )]))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::CaptureLease(7)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport
@@ -1753,8 +2230,12 @@ mod tests {
             .responses
             .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
         let mut client = SettingsClient::new(transport);
-        client.refresh_shortcuts().expect("initial shortcut snapshot");
-        client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
+        client
+            .refresh_shortcuts()
+            .expect("initial shortcut snapshot");
+        client
+            .begin_hotkey_capture("ToggleStartMenu")
+            .expect("begin lease");
         assert!(client.capture_hotkey("Escape"));
         client.commit_hotkey_capture().expect("clear hotkey");
         assert!(matches!(
@@ -1765,8 +2246,13 @@ mod tests {
             })
                 if action == "ToggleStartMenu" && *expected_revision == 7
         ));
-        assert!(matches!(requests.borrow().get(2), Some(ControlRequest::EndHotkeyCapture { lease: 7 })));
-        assert!(matches!(requests.borrow().get(3), Some(ControlRequest::ClearShortcut { action, .. }) if action == "ToggleStartMenu"));
+        assert!(matches!(
+            requests.borrow().get(2),
+            Some(ControlRequest::EndHotkeyCapture { lease: 7 })
+        ));
+        assert!(
+            matches!(requests.borrow().get(3), Some(ControlRequest::ClearShortcut { action, .. }) if action == "ToggleStartMenu")
+        );
     }
 
     #[test]
@@ -1832,8 +2318,14 @@ mod tests {
         assert_eq!(document.visible.get("display-mode-slot-0"), Some(&true));
         assert_eq!(document.visible.get("display-mode-slot-1"), Some(&true));
         assert_eq!(document.visible.get("display-mode-slot-2"), Some(&false));
-        let first = document.texts.get("display-mode-slot-0").expect("slot 0 label");
-        let second = document.texts.get("display-mode-slot-1").expect("slot 1 label");
+        let first = document
+            .texts
+            .get("display-mode-slot-0")
+            .expect("slot 0 label");
+        let second = document
+            .texts
+            .get("display-mode-slot-1")
+            .expect("slot 1 label");
         assert!(first.contains("1920 x 1080"), "slot 0 label: {first}");
         assert!(second.contains("1280 x 720"), "slot 1 label: {second}");
         assert_ne!(first, second);
@@ -1851,9 +2343,9 @@ mod tests {
             .push_back(Ok(ControlResponse::Displays(two_mode_display_snapshot())));
         transport
             .responses
-            .push_back(Ok(ControlResponse::Transaction(flamewm_api::TransactionId(
-                11,
-            ))));
+            .push_back(Ok(ControlResponse::Transaction(
+                flamewm_api::TransactionId(11),
+            )));
         let mut application = SettingsApplication::new(transport);
         application
             .client_mut()
@@ -1885,15 +2377,30 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport.responses.push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
-        transport.responses.push_back(Ok(ControlResponse::Transaction(flamewm_api::TransactionId(12))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Transaction(
+                flamewm_api::TransactionId(12),
+            )));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_displays().expect("display snapshot");
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
         let mut document = ProbeDocument::default();
-        application.handle_action(&release("settings.display.select.1"), &mut document).expect("select DP-1");
+        application
+            .handle_action(&release("settings.display.select.1"), &mut document)
+            .expect("select DP-1");
         assert!(document.texts["display-mode-slot-0"].contains("1920 x 1080"));
-        application.handle_action(&release("settings.display.slot.1"), &mut document).expect("begin DP-1 mode");
-        assert!(matches!(requests.borrow().last(), Some(ControlRequest::BeginDisplayMode { output, mode: ModeId(8), .. }) if output == &OutputId::new("DP-1")));
+        application
+            .handle_action(&release("settings.display.slot.1"), &mut document)
+            .expect("begin DP-1 mode");
+        assert!(
+            matches!(requests.borrow().last(), Some(ControlRequest::BeginDisplayMode { output, mode: ModeId(8), .. }) if output == &OutputId::new("DP-1"))
+        );
     }
 
     #[test]
@@ -1901,10 +2408,21 @@ mod tests {
         for (action, response, expected_pending) in [
             ("settings.display.keep", Ok(ControlResponse::Unit), false),
             ("settings.display.revert", Ok(ControlResponse::Unit), false),
-            ("settings.display.keep", Err(flamewm_control_core::ControlError { name: "com.arkflame.FlameWM1.Error.StaleRevision", code: flamewm_api::ErrorCode::StaleRevision, message: "stale transaction".to_owned() }), true),
+            (
+                "settings.display.keep",
+                Err(flamewm_control_core::ControlError {
+                    name: "com.arkflame.FlameWM1.Error.StaleRevision",
+                    code: flamewm_api::ErrorCode::StaleRevision,
+                    message: "stale transaction".to_owned(),
+                }),
+                true,
+            ),
         ] {
             let requests = Rc::new(RefCell::new(Vec::new()));
-            let mut transport = RecordingTransport { requests: requests.clone(), ..RecordingTransport::default() };
+            let mut transport = RecordingTransport {
+                requests: requests.clone(),
+                ..RecordingTransport::default()
+            };
             let mut pending = two_mode_display_snapshot();
             pending.pending = Some(flamewm_api::display::PendingModeChange {
                 transaction: flamewm_api::TransactionId(21),
@@ -1912,27 +2430,48 @@ mod tests {
                 mode: ModeId(8),
                 deadline_ms: 5000,
             });
-            transport.responses.push_back(Ok(ControlResponse::Displays(pending)));
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Displays(pending)));
             if !expected_pending {
                 let mut settled = two_mode_display_snapshot();
-                settled.outputs[0].current_mode = if action.ends_with("keep") { ModeId(8) } else { ModeId(7) };
+                settled.outputs[0].current_mode = if action.ends_with("keep") {
+                    ModeId(8)
+                } else {
+                    ModeId(7)
+                };
                 transport.responses.push_back(response);
-                transport.responses.push_back(Ok(ControlResponse::Displays(settled)));
+                transport
+                    .responses
+                    .push_back(Ok(ControlResponse::Displays(settled)));
             } else {
                 transport.responses.push_back(response);
             }
             let mut application = SettingsApplication::new(transport);
-            application.client_mut().refresh_displays().expect("pending display snapshot");
+            application
+                .client_mut()
+                .refresh_displays()
+                .expect("pending display snapshot");
             let mut document = ProbeDocument::default();
             let before = crate::monotonic_now_ms();
             let result = application.handle_action(&release(action), &mut document);
             let after = crate::monotonic_now_ms();
             assert_eq!(result.is_err(), expected_pending);
-            assert_eq!(application.client().ui().pending_display_transaction.is_some(), expected_pending);
+            assert_eq!(
+                application
+                    .client()
+                    .ui()
+                    .pending_display_transaction
+                    .is_some(),
+                expected_pending
+            );
             if !expected_pending {
                 assert_eq!(document.visible.get("display-confirm"), Some(&false));
             }
-            assert!(matches!(requests.borrow().get(1), Some(ControlRequest::KeepDisplayMode { transaction: flamewm_api::TransactionId(21), now_ms }) if action.ends_with("keep") && *now_ms >= before && *now_ms <= after) || matches!(requests.borrow().get(1), Some(ControlRequest::RevertDisplayMode { transaction: flamewm_api::TransactionId(21) }) if action.ends_with("revert")));
+            assert!(
+                matches!(requests.borrow().get(1), Some(ControlRequest::KeepDisplayMode { transaction: flamewm_api::TransactionId(21), now_ms }) if action.ends_with("keep") && *now_ms >= before && *now_ms <= after)
+                    || matches!(requests.borrow().get(1), Some(ControlRequest::RevertDisplayMode { transaction: flamewm_api::TransactionId(21) }) if action.ends_with("revert"))
+            );
         }
     }
 
@@ -1986,14 +2525,19 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
+        transport.responses.push_back(Ok(
+            ControlResponse::Displays(twelve_mode_display_snapshot()),
+        ));
         transport
             .responses
-            .push_back(Ok(ControlResponse::Displays(twelve_mode_display_snapshot())));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Transaction(flamewm_api::TransactionId(31))));
+            .push_back(Ok(ControlResponse::Transaction(
+                flamewm_api::TransactionId(31),
+            )));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_displays().expect("display snapshot");
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.modes.next"), &mut document)
@@ -2008,11 +2552,14 @@ mod tests {
     #[test]
     fn display_output_page_one_slot_zero_selects_absolute_output_four() {
         let mut transport = RecordingTransport::default();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(five_output_display_snapshot())));
+        transport.responses.push_back(Ok(
+            ControlResponse::Displays(five_output_display_snapshot()),
+        ));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_displays().expect("display snapshot");
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.outputs.next"), &mut document)
@@ -2043,11 +2590,14 @@ mod tests {
             requests: requests.clone(),
             ..RecordingTransport::default()
         };
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(twelve_mode_display_snapshot())));
+        transport.responses.push_back(Ok(
+            ControlResponse::Displays(twelve_mode_display_snapshot()),
+        ));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_displays().expect("display snapshot");
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.modes.next"), &mut document)
@@ -2056,23 +2606,35 @@ mod tests {
         let past_end = application
             .handle_action(&release("settings.display.slot.7"), &mut document)
             .expect_err("index 15 has no mode");
-        assert!(past_end.contains("index 15"), "legible range error: {past_end}");
+        assert!(
+            past_end.contains("index 15"),
+            "legible range error: {past_end}"
+        );
         // Slot 9 is outside the 8-slot page.
         let outside = application
             .handle_action(&release("settings.display.slot.9"), &mut document)
             .expect_err("slot 9 is outside the page");
-        assert!(outside.contains("outside the page"), "legible slot error: {outside}");
-        assert!(begun_modes(&requests).is_empty(), "rejected slots must not begin a mode");
+        assert!(
+            outside.contains("outside the page"),
+            "legible slot error: {outside}"
+        );
+        assert!(
+            begun_modes(&requests).is_empty(),
+            "rejected slots must not begin a mode"
+        );
     }
 
     #[test]
     fn pager_steps_clamp_at_the_first_and_last_page() {
         let mut transport = RecordingTransport::default();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(twelve_mode_display_snapshot())));
+        transport.responses.push_back(Ok(
+            ControlResponse::Displays(twelve_mode_display_snapshot()),
+        ));
         let mut application = SettingsApplication::new(transport);
-        application.client_mut().refresh_displays().expect("display snapshot");
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.modes.prev"), &mut document)
