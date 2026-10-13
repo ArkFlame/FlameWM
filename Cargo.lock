@@ -421,7 +421,6 @@ dependencies = [
  "flamewm-profiler",
  "flamewm-reactor",
  "flamewm-render-compiler",
- "flamewm-render-x11",
  "flamewm-shell-core",
  "flamewm-ui-core",
  "flamewm-ui-x11",
