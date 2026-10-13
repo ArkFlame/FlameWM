@@ -344,6 +344,23 @@ impl X11App {
         Ok(())
     }
 
+    /// Single source of the popup mask spans for the settled and slide paths: a retained
+    /// backdrop uses the rounded rect of `backdrop_radius`, otherwise paint coverage.
+    fn mask_spans(
+        &self,
+        commands: &[PaintCommand],
+        scale: f32,
+        backdrop_radius: u32,
+    ) -> Vec<(u32, u32, u32)> {
+        popup_mask_spans(
+            commands,
+            self.width,
+            self.height,
+            scale,
+            self.surface_backdrop.is_some().then_some(backdrop_radius),
+        )
+    }
+
     /// Scale-aware shape refresh: coverage matches the paint path for
     /// rect/radius/stroke/clip in device pixels; text stays skipped.
     /// `backdrop_radius` (device px) rounds the retained-backdrop mask.
@@ -377,18 +394,11 @@ impl X11App {
         // A retained backdrop is composited under translucent fills, so the snapshot must stay
         // visible across the whole rounded shape; coverage would drop the translucent area and
         // show the live desktop (unblurred) instead. Corners outside the radius stay transparent.
-        let spans = if self.surface_backdrop.is_some() {
-            crate::xshape::rounded_mask_spans(self.width, self.height, backdrop_radius)
-        } else if scale == 1.0 {
-            build_coverage(commands, self.width, self.height, 0.0)
-        } else {
-            build_coverage_scaled(commands, self.width, self.height, 0.0, scale)
-        };
-        let rects: Vec<(u32, u32, u32)> = spans;
-        if rects.is_empty() {
+        let spans = self.mask_spans(commands, scale, backdrop_radius);
+        if spans.is_empty() {
             return;
         }
-        if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &rects) } {
+        if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
     }
@@ -396,11 +406,12 @@ impl X11App {
     /// Rounded popup mask intersected with `clip` (window-local). Used while a slide keeps the
     /// popup on the screen side of the panel edge; the base mask is restored with
     /// `refresh_shape_mask` once the slide lands.
-    pub(crate) unsafe fn refresh_shape_mask_clipped(&self, clip: ClipRect) {
+    pub(crate) unsafe fn refresh_shape_mask_clipped(&self, document: &RuntimeDocument, clip: ClipRect) {
         let (Some(cached), Some(bridge)) = (self.cached_paint.as_ref(), self.xshape.as_ref()) else {
             return;
         };
-        let spans = build_coverage(&cached.commands, self.width, self.height, 0.0);
+        let backdrop_radius = backdrop_corner_radius_px(document, self.width, self.height);
+        let spans = self.mask_spans(&cached.commands, 1.0, backdrop_radius);
         if let Err(error) = unsafe { bridge.apply_clipped_mask(self.window, &spans, clip) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
@@ -645,6 +656,22 @@ impl X11App {
     }
 }
 
+/// Pure row spans for a popup mask: `backdrop_radius` (device px) rounds the rect when a backdrop
+/// is retained, otherwise coverage of `commands` at `scale`.
+pub(crate) fn popup_mask_spans(
+    commands: &[PaintCommand],
+    width: u32,
+    height: u32,
+    scale: f32,
+    backdrop_radius: Option<u32>,
+) -> Vec<(u32, u32, u32)> {
+    match backdrop_radius {
+        Some(radius) => crate::xshape::rounded_mask_spans(width, height, radius),
+        None if scale == 1.0 => build_coverage(commands, width, height, 0.0),
+        None => build_coverage_scaled(commands, width, height, 0.0, scale),
+    }
+}
+
 /// Device-pixel corner radius for the retained-backdrop shape mask, derived from the document's
 /// root corner radius (logical px) scaled like the paint path, clamped to the surface size.
 pub(crate) fn backdrop_corner_radius_px(
@@ -659,8 +686,8 @@ pub(crate) fn backdrop_corner_radius_px(
 
 #[cfg(test)]
 mod tests {
-    use super::background_bind_plan;
-    use crate::xshape::rounded_mask_spans;
+    use super::{background_bind_plan, popup_mask_spans};
+    use crate::xshape::{clip_spans, rounded_mask_spans};
 
     fn row_span(spans: &[(u32, u32, u32)], row: u32) -> (u32, u32) {
         let &(_, start, end) = spans
@@ -685,6 +712,25 @@ mod tests {
             top_start,
             "bottom corners mirror top"
         );
+    }
+
+    #[test]
+    fn slide_mask_matches_settled_mask_clipped_and_keeps_corners() {
+        let clip = (0, 0, 40, 10);
+        let settled = popup_mask_spans(&[], 40, 20, 1.0, Some(8));
+        let slide = clip_spans(&settled, clip);
+        assert_eq!(slide, clip_spans(&popup_mask_spans(&[], 40, 20, 1.0, Some(8)), clip));
+        let (top_start, top_end) = row_span(&slide, 0);
+        assert!(top_start > 0 && top_end < 40, "slide corners must stay transparent");
+        assert_eq!(row_span(&slide, 5), (0, 40));
+    }
+
+    #[test]
+    fn slide_mask_radius_zero_stays_rectangular() {
+        let clip = (0, 0, 40, 10);
+        let slide = clip_spans(&popup_mask_spans(&[], 40, 20, 1.0, Some(0)), clip);
+        assert_eq!(slide.len(), 10);
+        assert!(slide.iter().all(|&(_, start, end)| start == 0 && end == 40));
     }
 
     #[test]

@@ -1037,7 +1037,9 @@ impl SurfaceController {
         match emerging {
             Some(edge) => unsafe {
                 let start = slide_origin(origin, size, edge, 0.0);
-                instance.app.refresh_shape_mask_clipped(panel_clip(dock, start, size, edge));
+                instance
+                    .app
+                    .refresh_shape_mask_clipped(&instance.document, panel_clip(dock, start, size, edge));
             },
             None => unsafe { instance.app.refresh_shape_mask(&instance.document) },
         }
@@ -1370,7 +1372,7 @@ impl SurfaceController {
                 instance.slide_drawn = Some((x, y));
                 // Keep the popup on the screen side of the panel edge while it moves.
                 let clip = panel_clip(dock, (x, y), size, active.edge);
-                unsafe { instance.app.refresh_shape_mask_clipped(clip) };
+                unsafe { instance.app.refresh_shape_mask_clipped(&instance.document, clip) };
             }
             if !finished {
                 continue;
