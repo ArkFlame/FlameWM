@@ -461,4 +461,57 @@ mod network_template_tests {
         assert_eq!(recorder.visible.get("network-wifi-toggle"), Some(&true));
         assert_eq!(recorder.toggles.get("network-wifi-track"), Some(&false));
     }
+
+    // REGRESSION: the Wi-Fi switch is a data-action button whose track and knob are
+    // children. Hit-testing only resolves the button rect, so the track and knob must
+    // lie inside the button, and the button must not cover the Connected row.
+    // MUTATION: a button without a row layout (children stacked below its box) fails.
+    #[test]
+    fn wifi_switch_geometry_is_inside_button_and_clear_of_connected_row() {
+        const POPUP: (f32, f32) = (461.0, 453.0);
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
+        {
+            let mut recorder = NetworkRecorder {
+                document: &mut document,
+                texts: std::collections::HashMap::new(),
+                visible: std::collections::HashMap::new(),
+                toggles: std::collections::HashMap::new(),
+            };
+            project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        }
+        let rect = |id: &str| {
+            document
+                .layout_box_by_id(id, POPUP)
+                .unwrap_or_else(|| panic!("layout box for '{id}' missing"))
+        };
+        let button = rect("network-wifi-toggle");
+        let track = rect("network-wifi-track");
+        let knob = rect("network-wifi-knob");
+        let connected = rect("network-connected-row");
+        let contains = |outer: (f32, f32, f32, f32), inner: (f32, f32, f32, f32)| {
+            inner.0 >= outer.0
+                && inner.1 >= outer.1
+                && inner.0 + inner.2 <= outer.0 + outer.2
+                && inner.1 + inner.3 <= outer.1 + outer.3
+        };
+        let center = |r: (f32, f32, f32, f32)| (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+        let inside = |outer: (f32, f32, f32, f32), point: (f32, f32)| {
+            point.0 >= outer.0
+                && point.0 < outer.0 + outer.2
+                && point.1 >= outer.1
+                && point.1 < outer.1 + outer.3
+        };
+        assert!(inside(button, center(track)), "track centre {track:?} outside button {button:?}");
+        assert!(inside(button, center(knob)), "knob centre {knob:?} outside button {button:?}");
+        assert!(contains(button, track), "track {track:?} not inside button {button:?}");
+        let intersects = |a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)| {
+            a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+        };
+        assert!(
+            !intersects(button, connected),
+            "wifi button {button:?} overlaps connected row {connected:?}"
+        );
+    }
 }
