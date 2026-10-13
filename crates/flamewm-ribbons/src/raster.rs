@@ -394,7 +394,12 @@ mod tests {
 
     #[test]
     fn rgba_render_is_bgra_render_with_swapped_channels() {
-        let rect = crate::config::Rect { x: 0, y: 0, w: 640, h: 360 };
+        let rect = crate::config::Rect {
+            x: 0,
+            y: 0,
+            w: 640,
+            h: 360,
+        };
         for quality in [Quality::Half, Quality::Full] {
             for seed in [21u64, 4, 13] {
                 let config = Config {

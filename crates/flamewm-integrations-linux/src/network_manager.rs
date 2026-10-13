@@ -1617,9 +1617,15 @@ mod tests {
     #[test]
     fn register_with_capabilities_uses_identifier_and_capabilities_only() {
         let message = secret_agent_registration_message().expect("valid registration message");
-        assert_eq!(message.member().map(|m| m.to_string()).as_deref(), Some(REGISTER_WITH_CAPABILITIES));
+        assert_eq!(
+            message.member().map(|m| m.to_string()).as_deref(),
+            Some(REGISTER_WITH_CAPABILITIES)
+        );
         let items = message.get_items();
-        let signature: String = items.iter().map(|item| item.signature().to_string()).collect();
+        let signature: String = items
+            .iter()
+            .map(|item| item.signature().to_string())
+            .collect();
         assert_eq!(signature, "su");
         assert!(matches!(&items[0], MessageItem::Str(s) if s == SECRET_AGENT_IDENTIFIER));
         assert!(matches!(&items[1], MessageItem::UInt32(0)));

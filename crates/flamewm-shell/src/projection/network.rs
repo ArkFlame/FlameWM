@@ -503,9 +503,18 @@ mod network_template_tests {
                 && point.1 >= outer.1
                 && point.1 < outer.1 + outer.3
         };
-        assert!(inside(button, center(track)), "track centre {track:?} outside button {button:?}");
-        assert!(inside(button, center(knob)), "knob centre {knob:?} outside button {button:?}");
-        assert!(contains(button, track), "track {track:?} not inside button {button:?}");
+        assert!(
+            inside(button, center(track)),
+            "track centre {track:?} outside button {button:?}"
+        );
+        assert!(
+            inside(button, center(knob)),
+            "knob centre {knob:?} outside button {button:?}"
+        );
+        assert!(
+            contains(button, track),
+            "track {track:?} not inside button {button:?}"
+        );
         let intersects = |a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)| {
             a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
         };
