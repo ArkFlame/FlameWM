@@ -13,6 +13,8 @@ use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_control_wire::ControlSignal;
+use flamewm_image_core::RgbaImage;
+use crate::surface_backdrop::{CaptureKey, CaptureStep, blurred_argb, capture_step};
 use flamewm_shell_core::popup::{
     anchor_popover_rect, context_menu_rect, context_menu_size, panel_anchor, work_area_for_panel,
     PopupRefusal,
@@ -424,6 +426,17 @@ impl ShellRuntime {
         )
     }
 
+    /// Reorder request moving the task entry at `from` to final index `to`.
+    #[must_use]
+    pub fn task_reorder_request(&self, from: usize, to: usize) -> Option<ControlRequest> {
+        let entry = self.snapshot.panels.tasks.get(from)?;
+        (to < self.snapshot.panels.tasks.len()).then(|| ControlRequest::ReorderTask {
+            entry_id: entry.id.clone(),
+            index: to,
+            expected_revision: self.snapshot.panels.revision,
+        })
+    }
+
     #[must_use]
     pub fn task_click_requests_for_slot(&self, slot: usize) -> Option<Vec<ControlRequest>> {
         let task_visual_states = flamewm_shell_core::task_visual_states(
@@ -670,19 +683,26 @@ pub fn panel_surface_outputs_to_remove(
         .collect()
 }
 
+/// Largest floating margin the settings accept, in logical px (`taskbarFloatingMargin`).
+const FLOATING_MARGIN_MAX_LOGICAL: i32 = 32;
+
 /// F10: pure edge/geometry consistency predicate shared by
-/// `check_edge_consistent` and unit tests.
+/// `check_edge_consistent` and unit tests. A floating bar sits `max_inset` device px
+/// inside its output edge, so the edge-axis check accepts `0..=max_inset` of inset.
 #[must_use]
 pub fn edge_geometry_consistent(
     edge: flamewm_api::PanelEdge,
     panel: flamewm_api::Rect,
     output: flamewm_api::Rect,
+    max_inset: i32,
 ) -> bool {
     match edge {
-        flamewm_api::PanelEdge::Bottom => panel.bottom() == output.bottom(),
-        flamewm_api::PanelEdge::Top => panel.y == output.y,
-        flamewm_api::PanelEdge::Left => panel.x == output.x,
-        flamewm_api::PanelEdge::Right => panel.right() == output.right(),
+        flamewm_api::PanelEdge::Bottom => {
+            (0..=max_inset).contains(&(output.bottom() - panel.bottom()))
+        }
+        flamewm_api::PanelEdge::Top => (0..=max_inset).contains(&(panel.y - output.y)),
+        flamewm_api::PanelEdge::Left => (0..=max_inset).contains(&(panel.x - output.x)),
+        flamewm_api::PanelEdge::Right => (0..=max_inset).contains(&(output.right() - panel.right())),
     }
 }
 
@@ -727,6 +747,18 @@ pub struct ShellSurfaces {
     transient: Option<Transient>,
     /// A Start slide, fade, or Magic Lamp is configured, so Start toggles close through `hide`.
     start_motion: bool,
+    /// Root pixels under the primary panel, captured before its first map (see `surface_backdrop`).
+    panel_snapshot: Option<RgbaImage>,
+    /// Key and outcome of the last panel capture attempt (see `refresh_panel_backdrop`).
+    panel_capture: Option<PanelCapture>,
+}
+
+/// One panel capture attempt: the key it was taken for, attempts so far, and whether it is final.
+#[derive(Debug, Clone)]
+struct PanelCapture {
+    key: CaptureKey,
+    attempts: u8,
+    settled: bool,
 }
 
 /// Whether a Start toggle-close animates out through `hide` (a configured motion) instead of
@@ -823,6 +855,110 @@ impl ShellSurfaces {
         self.panels.iter().map(|record| record.panel).collect()
     }
 
+    /// Captures the root under the primary panel. Call before the panel's first map so the bar's
+    /// own translucent pixels never enter the snapshot. Static: never recaptured on settings.
+    pub fn capture_panel_backdrop(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        runtime.watch_root_changes();
+        let panel = self.panel();
+        let raw = runtime.capture_root_under_unmapped(panel).map_err(ui_error)?;
+        self.panel_snapshot = Some(RgbaImage {
+            width: raw.width,
+            height: raw.height,
+            pixels: raw.pixels,
+        });
+        Ok(())
+    }
+
+    /// Re-opens a settled-but-blank panel capture (after our own panel Map), so the next refresh
+    /// captures again. A non-uniform capture that already installed is left alone.
+    pub fn reopen_panel_capture(&mut self) {
+        if let Some(capture) = self.panel_capture.as_mut().filter(|capture| capture.settled && self.panel_snapshot.is_none()) {
+            capture.attempts = 0;
+            capture.settled = false;
+        }
+    }
+
+    /// Whether the panel snapshot is still unsettled (never captured, or a blank root awaiting retry).
+    #[must_use]
+    pub fn panel_capture_pending(&self) -> bool {
+        self.panel_capture.as_ref().is_none_or(|capture| !capture.settled)
+    }
+
+    /// Recaptures the panel snapshot when its key changed (wallpaper, fit, or bar rect). A blank
+    /// root is retried on the next call, up to `MAX_CAPTURE_ATTEMPTS`; the bar stays solid meanwhile.
+    /// Each call is driven by a settings or panel event, so no timer is involved.
+    pub fn refresh_panel_backdrop(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        key: CaptureKey,
+    ) -> Result<(), String> {
+        runtime.watch_root_changes();
+        let attempts_so_far = match &self.panel_capture {
+            Some(capture) if capture.key == key && capture.settled => return Ok(()),
+            Some(capture) if capture.key == key => capture.attempts,
+            _ => 0,
+        };
+        let panel = self.panel();
+        let raw = runtime.capture_root_under_unmapped(panel).map_err(ui_error)?;
+        let attempts = attempts_so_far.saturating_add(1);
+        let ready = flamewm_render_x11::backdrop::capture_is_ready(&raw.pixels);
+        let step = capture_step(ready, attempts);
+        crate::surface_backdrop::backdrop_trace(format_args!(
+            "capture rect={:?} size={}x{} ready={ready} attempts={attempts} step={step:?} centre_rgba={:?}",
+            key.rect,
+            raw.width,
+            raw.height,
+            raw.pixels
+                .chunks_exact(4)
+                .nth((raw.width as usize * raw.height as usize) / 2)
+                .map(|p| (p[0], p[1], p[2]))
+        ));
+        self.panel_snapshot = (step == CaptureStep::Use).then(|| RgbaImage {
+            width: raw.width,
+            height: raw.height,
+            pixels: raw.pixels,
+        });
+        self.panel_capture = Some(PanelCapture {
+            key,
+            attempts,
+            settled: step != CaptureStep::Retry,
+        });
+        Ok(())
+    }
+
+    /// Installs the blurred snapshot under the primary panel. Opaque bars, missing snapshots and
+    /// a bar resized since capture get no backdrop (solid colour, no stale pixels).
+    pub fn apply_panel_backdrop(
+        &self,
+        runtime: &mut SurfaceRuntime,
+        opacity_percent: u8,
+        blur_percent: u8,
+    ) -> Result<(), String> {
+        let panel = self.panel();
+        let rect = runtime.surface_device_rect(panel).map_err(ui_error)?;
+        let fitting = self.panel_snapshot.as_ref().filter(|snapshot| {
+            opacity_percent < 100
+                && flamewm_render_x11::backdrop::capture_is_ready(&snapshot.pixels)
+                && snapshot.width as f32 == rect.width
+                && snapshot.height as f32 == rect.height
+        });
+        crate::surface_backdrop::backdrop_trace(format_args!(
+            "apply rect={}x{}@{},{} opacity={opacity_percent} blur={blur_percent} snapshot={:?} install={}",
+            rect.width, rect.height, rect.x, rect.y,
+            self.panel_snapshot.as_ref().map(|s| (s.width, s.height)),
+            fitting.is_some()
+        ));
+        match fitting {
+            Some(snapshot) => {
+                let words = blurred_argb(snapshot, opacity_percent, blur_percent);
+                runtime
+                    .set_surface_backdrop(panel, Some((&words, snapshot.width, snapshot.height)))
+                    .map_err(ui_error)
+            }
+            None => runtime.set_surface_backdrop(panel, None).map_err(ui_error),
+        }
+    }
+
     /// Every panel record as (native handle, output id), primary first.
     #[must_use]
     pub fn panel_outputs(&self) -> Vec<(SurfaceHandle, flamewm_api::OutputId)> {
@@ -897,6 +1033,8 @@ impl ShellSurfaces {
             panels,
             transient: None,
             start_motion: false,
+            panel_snapshot: None,
+            panel_capture: None,
         })
     }
 
@@ -1242,7 +1380,10 @@ impl ShellSurfaces {
             let panel = record.placement.panel.geometry;
             let output = record.placement.output.geometry;
             let edge = record.placement.panel.edge;
-            let consistent = edge_geometry_consistent(edge, panel, output);
+            let max_inset = (FLOATING_MARGIN_MAX_LOGICAL * i32::from(record.placement.output.shell_scale_percent)
+                + 99)
+                / 100;
+            let consistent = edge_geometry_consistent(edge, panel, output, max_inset);
             debug_assert!(
                 consistent,
                 "panel edge {edge:?} inconsistent: panel={panel:?} output={output:?}"
@@ -1615,6 +1756,35 @@ mod tests {
     }
 
     #[test]
+    fn floating_bottom_bar_inset_is_consistent_and_start_popover_stays_above_it() {
+        use flamewm_api::Rect;
+        let output = Rect::new(0, 0, 1350, 641);
+        // Floating bottom bar: 8 px margin below it, so bottom != output.bottom().
+        let floating = Rect::new(8, 589, 1334, 44);
+        assert!(edge_geometry_consistent(PanelEdge::Bottom, floating, output, FLOATING_MARGIN_MAX_LOGICAL));
+        // A stale Top edge against floating Bottom geometry is still refused.
+        assert!(!edge_geometry_consistent(PanelEdge::Top, floating, output, FLOATING_MARGIN_MAX_LOGICAL));
+        // A bar that does not sit on the edge is refused.
+        assert!(!edge_geometry_consistent(PanelEdge::Bottom, Rect::new(8, 500, 1334, 44), output, FLOATING_MARGIN_MAX_LOGICAL));
+
+        // Start popover anchored to the floating bar's Start button lands above the bar,
+        // fully inside the work area.
+        let work = work_area_for_panel(output, floating, PanelEdge::Bottom);
+        let anchor = Rect::new(16, 597, 32, 28);
+        let placed = crate::popup_controller::fit_start(
+            anchor,
+            flamewm_api::Size::new(550, 349),
+            PanelEdge::Bottom,
+            work,
+            8,
+        )
+        .expect("floating start placement");
+        assert!(placed.bottom() <= anchor.y - 8);
+        assert!(placed.x >= work.x && placed.right() <= work.right());
+        assert!(placed.y >= work.y);
+    }
+
+    #[test]
     fn panel_ui_scale_matches_platform_physical_thickness() {
         // 44 logical px * scale must equal the document's laid-out bar height.
         for percent in [100u16, 125, 150, 175, 200] {
@@ -1984,12 +2154,14 @@ mod tests {
         assert!(!edge_geometry_consistent(
             PanelEdge::Top,
             synced.panel.geometry,
-            synced.output.geometry
+            synced.output.geometry,
+            FLOATING_MARGIN_MAX_LOGICAL
         ));
         assert!(edge_geometry_consistent(
             PanelEdge::Bottom,
             synced.panel.geometry,
-            synced.output.geometry
+            synced.output.geometry,
+            0
         ));
     }
 

@@ -83,6 +83,7 @@ pub(crate) struct ShellLoop {
     pub(crate) dispatcher: Option<std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
     pub(crate) start_category: StartCategory,
     pub(crate) start_query: String,
+    pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
     pub(crate) start_open: bool,
     /// Start error line for a failed launch; cleared on success or reopen.
     pub(crate) start_error: Option<String>,
@@ -131,6 +132,7 @@ impl ShellLoop {
             dispatcher,
             start_category: StartCategory::All,
             start_query: String::new(),
+            task_drag: None,
             start_open: false,
             start_error: None,
             active_start_launch: None,
@@ -243,6 +245,7 @@ impl ShellLoop {
                         let _measure = shell_stage!("shell.start.open.measure");
                         let _place = shell_stage!("shell.start.open.place");
                         let _prepare = shell_stage!("shell.start.open.prepare");
+                        self.apply_start_backdrop(runtime);
                         self.apply_start_slide(runtime);
                         let opened = self.surfaces.toggle_start(runtime);
                         let _present = shell_stage!("shell.start.open.present");
@@ -284,6 +287,7 @@ impl ShellLoop {
                     let _measure = shell_stage!("shell.start.open.measure");
                     let _place = shell_stage!("shell.start.open.place");
                     let _prepare = shell_stage!("shell.start.open.prepare");
+                    self.apply_start_backdrop(runtime);
                     self.apply_start_slide(runtime);
                     let opened = self.surfaces.open_start_group(runtime);
                     let _present = shell_stage!("shell.start.open.present");
@@ -753,7 +757,7 @@ impl ShellLoop {
                 DependentSurface::Panel => {
                     for handle in self.surfaces.panel_handles() {
                         let applied = runtime.with_document(handle, |document| {
-                            async_projection::apply_icon_result(
+                            match async_projection::apply_icon_result(
                                 document,
                                 res.target,
                                 &res.name,
@@ -761,7 +765,10 @@ impl ShellLoop {
                                 res.height,
                                 res.generation,
                                 image.clone(),
-                            )
+                            )? {
+                                true => Ok(true),
+                                false => async_projection::apply_cached_binding(document, res.target),
+                            }
                         });
                         if matches!(applied, Ok(true)) {
                             need_panel = true;
@@ -1095,6 +1102,7 @@ impl ShellLoop {
         if let Err(error) = self.surfaces.move_panel_to_synced(runtime) {
             eprintln!("flamewm-shell: panel move_resize failed (nonfatal): {error}");
         }
+        self.apply_taskbar_backdrop(runtime);
         let loader = &mut self.icon_loader;
         let changed = flamewm_shell::runtime::ChangedDomains {
             panels: true,
@@ -1179,6 +1187,10 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         clock_due: &std::sync::atomic::AtomicBool,
     ) -> Result<(), UiBackendError> {
+        // Event-driven retry: a blank taskbar snapshot is recaptured when root children change.
+        if runtime.take_root_changed() && self.surfaces.panel_capture_pending() {
+            self.apply_taskbar_backdrop(runtime);
+        }
         // Startup panel projection runs with no loader (main.rs
         // project_panel_critical), so task-slot icons were recorded as empty
         // placeholders with no request. Re-project task slots once with the
@@ -1309,6 +1321,43 @@ impl ShellLoop {
         }
     }
 
+    /// Installs the taskbar pseudo-transparency backdrop from the current opacity and blur.
+    fn apply_taskbar_backdrop(&mut self, runtime: &mut SurfaceRuntime) {
+        let Some(settings) = self.settings_cache.as_ref() else {
+            return;
+        };
+        let (opacity, blur) = crate::settings_projection::taskbar_backdrop_percents(settings);
+        let text = |key: &str| settings.values.get(key).map(|value| format!("{value:?}")).unwrap_or_default();
+        let key = match runtime.surface_device_rect(self.surfaces.panel()) {
+            Ok(rect) => flamewm_shell::surface_backdrop::CaptureKey {
+                wallpaper: text("wallpaper"),
+                fit: text("wallpaperFit"),
+                rect: (rect.x as i32, rect.y as i32, rect.width as u32, rect.height as u32),
+            },
+            Err(error) => {
+                eprintln!("flamewm-shell: taskbar backdrop rect unavailable (nonfatal): {error:?}");
+                return;
+            }
+        };
+        if let Err(error) = self.surfaces.refresh_panel_backdrop(runtime, key) {
+            eprintln!("flamewm-shell: taskbar backdrop capture failed (nonfatal): {error}");
+        }
+        if let Err(error) = self.surfaces.apply_panel_backdrop(runtime, opacity, blur) {
+            eprintln!("flamewm-shell: taskbar backdrop failed (nonfatal): {error}");
+        }
+    }
+
+    /// Installs the Start popup backdrop percents; the snapshot itself is captured on each first show.
+    fn apply_start_backdrop(&self, runtime: &mut SurfaceRuntime) {
+        let Some(settings) = self.settings_cache.as_ref() else {
+            return;
+        };
+        let percents = crate::settings_projection::start_backdrop_percents(settings);
+        if let Err(error) = runtime.set_popup_backdrop(self.surfaces.start, Some(percents)) {
+            eprintln!("flamewm-shell: start backdrop failed (nonfatal): {error:?}");
+        }
+    }
+
     /// Publishes the taskbar dock frame (strut edge and corner radius); a no-op while unchanged.
     fn apply_taskbar_frame(&self, runtime: &mut SurfaceRuntime) {
         let Some(settings) = self.settings_cache.as_ref() else {
@@ -1354,7 +1403,26 @@ impl ShellLoop {
                 crate::settings_projection::project(document, &snapshot, kind)
             })?;
         }
+        // The focused task underline takes its colour from the settings accent; re-project the task slots
+        // now so a settings change (or a first settings arrival after the last task update) cannot leave it stale.
+        let shell_snapshot = self.shell.snapshot();
+        let task_changed = flamewm_shell::runtime::ChangedDomains {
+            windows: true,
+            ..Default::default()
+        };
+        let loader = &mut self.icon_loader;
+        let _ = projection::for_each_panel_record(
+            &shell_snapshot,
+            self.surfaces.panel_outputs(),
+            |handle, view| {
+                runtime.with_document(handle, |document| {
+                    async_projection::project_panel_for_changed(document, view, loader.as_mut(), task_changed)
+                })
+            },
+        );
+        self.apply_start_backdrop(runtime);
         self.apply_start_slide(runtime);
+        self.apply_taskbar_backdrop(runtime);
         let _ = runtime.redraw(self.surfaces.panel());
         if self.surfaces.is_start_group_open() {
             let _ = runtime.redraw(self.surfaces.start);

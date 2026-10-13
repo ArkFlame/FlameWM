@@ -1,6 +1,6 @@
 mod app;
 mod event_router;
-mod settings_projection;
+use flamewm_shell::settings_projection;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -80,7 +80,7 @@ fn execute() -> Result<(), String> {
         let _s = scope.start();
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?
     };
-    let surfaces = {
+    let mut surfaces = {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.surface_create");
         let _s = scope.start();
         ShellSurfaces::create(&mut runtime, &snapshot)?
@@ -91,6 +91,10 @@ fn execute() -> Result<(), String> {
         let _s = scope.start();
         project_panel_critical(&mut runtime, &surfaces, &snapshot, &start_model)?;
     }
+    // Snapshot before the first map: the bar's own translucent pixels must not be captured.
+    if let Err(error) = surfaces.capture_panel_backdrop(&mut runtime) {
+        eprintln!("flamewm-shell: taskbar backdrop capture skipped: {error}");
+    }
     {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.panel_show");
         let _s = scope.start();
@@ -99,6 +103,8 @@ fn execute() -> Result<(), String> {
                 .show(panel)
                 .map_err(|e| format!("show panel: {e:?}"))?;
         }
+        // Our own Map changes the root under the bar: a blank earlier capture gets a fresh attempt.
+        surfaces.reopen_panel_capture();
     }
     let loader_root = packaged_root();
 

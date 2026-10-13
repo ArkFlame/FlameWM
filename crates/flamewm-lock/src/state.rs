@@ -12,6 +12,8 @@ pub enum Key {
     Backspace,
     Escape,
     Enter,
+    /// F1..F4: keyboard access to the power row (1 = Sleep .. 4 = Other).
+    Function(u8),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,6 +90,7 @@ impl LockState {
             }
             Key::Enter if self.password.is_empty() => Effect::None,
             Key::Enter => Effect::Submit,
+            Key::Function(_) => Effect::None,
         }
     }
 

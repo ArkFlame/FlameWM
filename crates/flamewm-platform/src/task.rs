@@ -149,6 +149,43 @@ impl TaskStrip {
         }
     }
 
+    /// Reconcile against the live window list in any order. Identity is the X window id:
+    /// a generation bump (focus, restore) refreshes the stored reference in place, and
+    /// existing entries never move. Closed ids are removed; new ids are appended in list order.
+    pub fn reconcile_live(&mut self, live: &[(DesktopAppId, WindowRef)]) -> bool {
+        let before = self.clone();
+        let stale: Vec<WindowRef> = self
+            .entries
+            .iter()
+            .filter_map(TaskEntry::represented_window)
+            .filter(|window| !live.iter().any(|(_, current)| current.id == window.id))
+            .collect();
+        for window in stale {
+            if std::env::var_os("FLAMEWM_DEBUG_TASKS").is_some() {
+                eprintln!("flamewm-task: remove window={} gen={} (absent from live list)", window.id, window.generation);
+            }
+            self.remove_window(window);
+        }
+        for entry in &mut self.entries {
+            let Some(window) = entry.represented_window() else {
+                continue;
+            };
+            let Some((_, current)) = live.iter().find(|(_, current)| current.id == window.id)
+            else {
+                continue;
+            };
+            match &mut entry.kind {
+                TaskEntryKind::Pinned { window: Some(slot) } => *slot = *current,
+                TaskEntryKind::Window { window: slot } => *slot = *current,
+                TaskEntryKind::Pinned { window: None } => {}
+            }
+        }
+        for (app, window) in live {
+            self.add_window(app.clone(), *window);
+        }
+        *self != before
+    }
+
     pub fn add_window(&mut self, app: DesktopAppId, window: WindowRef) -> bool {
         if self.window_index(window).is_some() {
             return false;
@@ -502,5 +539,90 @@ mod tests {
             assert!(strip.remove_window(snap.reference));
         }
         assert!(strip.entries().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod order_invariant_tests {
+    use super::*;
+
+    fn app(value: &str) -> DesktopAppId {
+        DesktopAppId::new(value)
+    }
+
+    fn live(list: &[(&str, u64, u64)]) -> Vec<(DesktopAppId, WindowRef)> {
+        list.iter()
+            .map(|(name, id, generation)| (app(name), WindowRef::new(*id, *generation)))
+            .collect()
+    }
+
+    fn order(strip: &TaskStrip) -> Vec<u64> {
+        strip
+            .entries()
+            .iter()
+            .filter_map(|entry| entry.represented_window().map(|window| window.id))
+            .collect()
+    }
+
+    fn abc() -> TaskStrip {
+        let mut strip = TaskStrip::default();
+        strip.reconcile_live(&live(&[("a", 1, 1), ("b", 2, 1), ("c", 3, 1)]));
+        strip
+    }
+
+    #[test]
+    fn stacking_permutation_does_not_reorder() {
+        let mut strip = abc();
+        strip.reconcile_live(&live(&[("c", 3, 1), ("a", 1, 1), ("b", 2, 1)]));
+        assert_eq!(order(&strip), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn generation_bump_on_restore_keeps_slot() {
+        // Minimize/restore and focus bump the engine generation; the slot must not move.
+        let mut strip = abc();
+        strip.reconcile_live(&live(&[("a", 1, 1), ("b", 2, 5), ("c", 3, 1)]));
+        assert_eq!(order(&strip), vec![1, 2, 3]);
+        assert_eq!(strip.entries()[1].represented_window(), Some(WindowRef::new(2, 5)));
+    }
+
+    #[test]
+    fn minimized_window_that_stays_listed_keeps_slot() {
+        let mut strip = abc();
+        // Minimized b stays in the live list (state change only), possibly with a new generation.
+        strip.reconcile_live(&live(&[("a", 1, 1), ("b", 2, 2), ("c", 3, 1)]));
+        strip.reconcile_live(&live(&[("c", 3, 1), ("b", 2, 2), ("a", 1, 1)]));
+        assert_eq!(order(&strip), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn new_window_is_appended_right() {
+        let mut strip = abc();
+        strip.reconcile_live(&live(&[("c", 3, 1), ("a", 1, 1), ("b", 2, 1), ("d", 4, 1)]));
+        assert_eq!(order(&strip), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn closed_window_is_removed_and_others_keep_order() {
+        let mut strip = abc();
+        strip.reconcile_live(&live(&[("c", 3, 1), ("b", 2, 1)]));
+        assert_eq!(order(&strip), vec![2, 3]);
+    }
+
+    #[test]
+    fn explicit_move_survives_permuted_lists() {
+        let mut strip = abc();
+        assert!(strip.reorder_on_release(2, 0));
+        assert_eq!(order(&strip), vec![3, 1, 2]);
+        strip.reconcile_live(&live(&[("a", 1, 1), ("b", 2, 1), ("c", 3, 1)]));
+        assert_eq!(order(&strip), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn negative_control_resort_by_list_order_is_rejected() {
+        // A rebuild-from-list fix would yield [3, 1, 2] here instead of the stable [1, 2, 3].
+        let mut strip = abc();
+        strip.reconcile_live(&live(&[("c", 3, 1), ("a", 1, 1), ("b", 2, 1)]));
+        assert_ne!(order(&strip), vec![3, 1, 2]);
     }
 }

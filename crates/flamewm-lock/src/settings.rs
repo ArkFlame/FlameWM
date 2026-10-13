@@ -8,11 +8,56 @@ use crate::clock::ClockFormat;
 pub struct LockSettings {
     pub background_color: [u8; 3],
     pub background_image: Option<PathBuf>,
+    /// Avatar picture inside the avatar ring (`avatarImage`); `None` shows the default icon.
+    pub avatar_image: Option<PathBuf>,
     pub clock_format: ClockFormat,
     pub show_date: bool,
     pub show_username: bool,
     pub accent: String,
     pub font_family: String,
+    pub saver: SaverConfig,
+    /// Background blur, 0..=100 (`lockBackgroundBlurPercent`).
+    pub blur_percent: u8,
+    /// Background darkening, 0..=80 (`lockBackgroundDimPercent`).
+    pub dim_percent: u8,
+}
+
+/// Idle policy after the lock is shown (`screensaver*` keys). Minutes of `0` mean never.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaverConfig {
+    pub mode: SaverMode,
+    pub after_lock_minutes: u32,
+    pub num_ribbons: usize,
+    /// Ribbon width in tenths of a pixel (px = tenths / 10).
+    pub ribbon_width_tenths: u32,
+    pub span_monitors: bool,
+    pub display_off_minutes: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaverMode {
+    Ribbons,
+    /// No animation: the display is turned off after the idle timer.
+    None,
+}
+
+impl SaverConfig {
+    pub fn ribbons(&self) -> bool {
+        self.mode == SaverMode::Ribbons
+    }
+}
+
+impl Default for SaverConfig {
+    fn default() -> Self {
+        Self {
+            mode: SaverMode::Ribbons,
+            after_lock_minutes: 1,
+            num_ribbons: 6,
+            ribbon_width_tenths: 110,
+            span_monitors: false,
+            display_off_minutes: 20,
+        }
+    }
 }
 
 pub const DEFAULT_BACKGROUND: [u8; 3] = [0x23, 0x26, 0x29];
@@ -24,11 +69,15 @@ impl Default for LockSettings {
         Self {
             background_color: DEFAULT_BACKGROUND,
             background_image: None,
+            avatar_image: None,
             clock_format: ClockFormat::H24,
             show_date: true,
             show_username: true,
             accent: DEFAULT_ACCENT.to_string(),
             font_family: DEFAULT_FONT_FAMILY.to_string(),
+            saver: SaverConfig::default(),
+            blur_percent: DEFAULT_BLUR_PERCENT,
+            dim_percent: DEFAULT_DIM_PERCENT,
         }
     }
 }
@@ -42,6 +91,10 @@ impl LockSettings {
                 .and_then(parse_hex_color)
                 .unwrap_or(defaults.background_color),
             background_image: lookup("lockBackgroundImage")
+                .map(str::trim)
+                .filter(|path| path.starts_with('/'))
+                .map(PathBuf::from),
+            avatar_image: lookup("avatarImage")
                 .map(str::trim)
                 .filter(|path| path.starts_with('/'))
                 .map(PathBuf::from),
@@ -61,7 +114,41 @@ impl LockSettings {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map_or(defaults.font_family, str::to_string),
+            saver: saver_from_lookup(&lookup),
+            blur_percent: percent_from_lookup(&lookup, "lockBackgroundBlurPercent", 100, DEFAULT_BLUR_PERCENT),
+            dim_percent: percent_from_lookup(&lookup, "lockBackgroundDimPercent", 80, DEFAULT_DIM_PERCENT),
         }
+    }
+}
+
+pub const DEFAULT_BLUR_PERCENT: u8 = 40;
+pub const DEFAULT_DIM_PERCENT: u8 = 25;
+
+/// Integer percentage clamped to `0..=max`; missing or unparsable values give `default`.
+fn percent_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str, max: u8, default: u8) -> u8 {
+    lookup(key)
+        .and_then(|text| text.trim().parse::<i64>().ok())
+        .map_or(default, |value| value.clamp(0, i64::from(max)) as u8)
+}
+
+fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConfig {
+    let defaults = SaverConfig::default();
+    let number = |key: &str| lookup(key).and_then(|text| text.trim().parse::<u32>().ok());
+    SaverConfig {
+        mode: match lookup("screensaverMode").map(str::trim) {
+            Some("none") => SaverMode::None,
+            Some("ribbons") => SaverMode::Ribbons,
+            _ => defaults.mode,
+        },
+        after_lock_minutes: number("screensaverAfterLockMinutes").unwrap_or(defaults.after_lock_minutes),
+        num_ribbons: number("screensaverNumRibbons").map_or(defaults.num_ribbons, |n| n as usize),
+        ribbon_width_tenths: number("screensaverRibbonWidthTenths")
+            .unwrap_or(defaults.ribbon_width_tenths),
+        span_monitors: lookup("screensaverSpanMonitors")
+            .and_then(parse_bool)
+            .unwrap_or(defaults.span_monitors),
+        display_off_minutes: number("screensaverDisplayOffMinutes")
+            .unwrap_or(defaults.display_off_minutes),
     }
 }
 
@@ -101,6 +188,63 @@ mod tests {
         assert_eq!(settings.clock_format, ClockFormat::H24);
         assert!(settings.show_date && settings.show_username);
         assert_eq!(settings.background_image, None);
+        assert_eq!(settings.avatar_image, None);
+        assert_eq!(settings.saver, SaverConfig::default());
+    }
+
+    #[test]
+    fn screensaver_keys_parse_and_zero_means_never() {
+        static PAIRS: &[(&str, &str)] = &[
+            ("screensaverMode", "none"),
+            ("screensaverAfterLockMinutes", "0"),
+            ("screensaverNumRibbons", "9"),
+            ("screensaverRibbonWidthTenths", "250"),
+            ("screensaverSpanMonitors", "true"),
+            ("screensaverDisplayOffMinutes", "0"),
+        ];
+        let saver = LockSettings::from_lookup(lookup_from(PAIRS)).saver;
+        assert_eq!(saver.mode, SaverMode::None);
+        assert_eq!(saver.after_lock_minutes, 0);
+        assert_eq!(saver.num_ribbons, 9);
+        assert_eq!(saver.ribbon_width_tenths, 250);
+        assert!(saver.span_monitors);
+        assert_eq!(saver.display_off_minutes, 0);
+        assert!(!saver.ribbons());
+    }
+
+    #[test]
+    fn background_percentages_parse_clamp_and_default() {
+        let defaults = LockSettings::default();
+        assert_eq!((defaults.blur_percent, defaults.dim_percent), (40, 25));
+        static PAIRS: &[(&str, &str)] = &[("lockBackgroundBlurPercent", "250"), ("lockBackgroundDimPercent", "-4")];
+        let clamped = LockSettings::from_lookup(lookup_from(PAIRS));
+        assert_eq!((clamped.blur_percent, clamped.dim_percent), (100, 0));
+        static DIM: &[(&str, &str)] = &[("lockBackgroundDimPercent", "99")];
+        assert_eq!(LockSettings::from_lookup(lookup_from(DIM)).dim_percent, 80);
+        static JUNK: &[(&str, &str)] = &[("lockBackgroundBlurPercent", "soft")];
+        assert_eq!(LockSettings::from_lookup(lookup_from(JUNK)).blur_percent, 40);
+    }
+
+    #[test]
+    fn avatar_image_must_be_an_absolute_path() {
+        static ABS: &[(&str, &str)] = &[("avatarImage", " /home/u/face.png ")];
+        assert_eq!(
+            LockSettings::from_lookup(lookup_from(ABS)).avatar_image,
+            Some(PathBuf::from("/home/u/face.png"))
+        );
+        static REL: &[(&str, &str)] = &[("avatarImage", "face.png")];
+        assert_eq!(LockSettings::from_lookup(lookup_from(REL)).avatar_image, None);
+    }
+
+    #[test]
+    fn invalid_screensaver_values_fall_back_to_defaults() {
+        static PAIRS: &[(&str, &str)] = &[
+            ("screensaverMode", "fireworks"),
+            ("screensaverAfterLockMinutes", "-1"),
+            ("screensaverDisplayOffMinutes", "soon"),
+        ];
+        let saver = LockSettings::from_lookup(lookup_from(PAIRS)).saver;
+        assert_eq!(saver, SaverConfig::default());
     }
 
     #[test]

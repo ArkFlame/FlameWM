@@ -992,7 +992,7 @@ mod tests {
             "flamewm-host-startup-panel-scale-test-{}.conf",
             std::process::id()
         ));
-        std::fs::write(&path, "scale.default=125\ntaskbarHeight=72\n")
+        std::fs::write(&path, "scale.default=125\ntaskbarHeight=72\ntaskbarStyle=classic\n")
             .expect("write settings fixture");
         let mut display = fake_display(100);
         display.outputs[0].geometry = Rect {

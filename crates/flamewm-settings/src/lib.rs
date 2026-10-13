@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -18,7 +19,8 @@ mod projection;
 use flamewm_api::panels::PanelEdge;
 use flamewm_api::settings::SettingValue;
 use flamewm_api::{ModeId, OutputId};
-use flamewm_control_core::ControlError;
+use flamewm_api::session::SessionAction;
+use flamewm_control_core::{ControlError, ControlRequest};
 use flamewm_integrations_linux::media_store::{MediaKind, import_for_setting};
 use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS, SettingsClient, SettingsPage};
 use flamewm_ui_x11::{
@@ -269,6 +271,18 @@ enum HotkeyOperation {
 enum ChooserTarget {
     Wallpaper,
     LockBackground,
+    Avatar,
+}
+
+impl ChooserTarget {
+    /// The managed media family the selected file is copied into.
+    fn media_kind(self) -> MediaKind {
+        match self {
+            Self::Wallpaper => MediaKind::DesktopWallpaper,
+            Self::LockBackground => MediaKind::LockWallpaper,
+            Self::Avatar => MediaKind::Avatar,
+        }
+    }
 }
 
 /// Every control action the Settings markup may emit. Parsing is pure, so the
@@ -290,6 +304,11 @@ enum SettingsAction {
     /// Opens the shared file chooser for the lock-screen background image.
     LockBackgroundChoose,
     LockBackgroundClear,
+    /// Opens the shared file chooser for the lock-screen profile picture.
+    AvatarChoose,
+    AvatarClear,
+    /// Starts the lock screen in preview mode through the desktop control bus.
+    LockPreview,
     /// Writes one fixed integer value to a setting, from an explicit option button.
     IntegerSelect {
         key: &'static str,
@@ -302,7 +321,6 @@ enum SettingsAction {
     FontSize(i8),
     TaskbarEdgeCycle,
     TaskbarEdge(PanelEdge),
-    TaskbarColorCycle,
     TaskbarSizeCycle,
     FontFamilyCycle,
     Hotkey(&'static str, HotkeyOperation),
@@ -500,11 +518,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let mut wallpaper_changed = false;
             match result {
                 Ok(Some(path)) => {
-                    let kind = match self.chooser_target {
-                        ChooserTarget::Wallpaper => MediaKind::DesktopWallpaper,
-                        ChooserTarget::LockBackground => MediaKind::LockWallpaper,
-                    };
-                    let applied = match import_for_setting(kind, &path) {
+                    let applied = match import_for_setting(self.chooser_target.media_kind(), &path) {
                         Ok(managed) => match self.chooser_target {
                             ChooserTarget::Wallpaper => {
                                 self.client.set_wallpaper(managed).map_err(control_error)
@@ -512,6 +526,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                             ChooserTarget::LockBackground => {
                                 self.apply_text("lockBackgroundImage", managed)
                             }
+                            ChooserTarget::Avatar => self.apply_text("avatarImage", managed),
                         },
                         Err(error) => Err(error),
                     };
@@ -641,6 +656,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::LockBackgroundClear => {
                 self.apply_text("lockBackgroundImage", String::new())?;
             }
+            SettingsAction::AvatarChoose => {
+                self.start_file_chooser(ChooserTarget::Avatar)?;
+            }
+            SettingsAction::AvatarClear => {
+                self.apply_text("avatarImage", String::new())?;
+            }
+            SettingsAction::LockPreview => start_lock_preview()?,
             SettingsAction::IntegerSelect { key, value } => {
                 self.client
                     .apply_setting(key, SettingValue::Integer(value))
@@ -694,7 +716,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     .set_panel_edge(output, edge)
                     .map_err(control_error)?;
             }
-            SettingsAction::TaskbarColorCycle => self.cycle_taskbar_color()?,
             // Size is the global `taskbarHeight` service setting, shared by all outputs.
             SettingsAction::TaskbarSizeCycle => self.set_taskbar_value("size", 1)?,
             SettingsAction::FontFamilyCycle => self.cycle_font_family()?,
@@ -1119,13 +1140,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .map_err(control_error)
     }
 
-    fn cycle_taskbar_color(&mut self) -> Result<(), String> {
-        const COLORS: [&str; 3] = ["#191B1D", "#25282B", "#3D4145"];
-        let current = self.text_setting("taskbarColor")?;
-        let next = cycle_text(&COLORS, &current);
-        self.apply_text("taskbarColor", next.to_owned())
-    }
-
     fn cycle_font_family(&mut self) -> Result<(), String> {
         const FAMILIES: [&str; 3] = ["IBM Plex Sans", "Noto Sans", "DejaVu Sans"];
         let current = self.text_setting("fontFamily")?;
@@ -1471,6 +1485,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let label = if path.is_empty() { "None".to_owned() } else { path };
             document.text("lock-background-image-value", label)?;
         }
+        if let Ok(path) = self.text_setting("avatarImage") {
+            document.text("avatar-value", avatar_label(&path))?;
+        }
         let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
         let clock = self.text_setting("lockClockFormat").ok();
         for (value, id) in [("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")] {
@@ -1691,9 +1708,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 format!("{value} px (all outputs)"),
             )?;
         }
-        if let Some(value) = text("taskbarColor") {
-            document.text("taskbar-color-value", taskbar_color_label(&value))?;
-        }
         if let Some(value) = text("fontFamily") {
             document.text("font-family-value", value)?;
         }
@@ -1839,13 +1853,15 @@ struct IntegerStepper {
     maximum: i64,
 }
 
-const INTEGER_STEPPERS: [IntegerStepper; 6] = [
+const INTEGER_STEPPERS: [IntegerStepper; 8] = [
     IntegerStepper { slug: "taskbar-floating-margin", key: "taskbarFloatingMargin", step: 1, minimum: 0, maximum: 32 },
     IntegerStepper { slug: "taskbar-floating-radius", key: "taskbarFloatingRadius", step: 1, minimum: 0, maximum: 24 },
     IntegerStepper { slug: "screensaver-after-lock", key: "screensaverAfterLockMinutes", step: 1, minimum: 0, maximum: 60 },
     IntegerStepper { slug: "screensaver-ribbons", key: "screensaverNumRibbons", step: 1, minimum: 1, maximum: 12 },
     IntegerStepper { slug: "screensaver-ribbon-width", key: "screensaverRibbonWidthTenths", step: 5, minimum: 20, maximum: 280 },
     IntegerStepper { slug: "screensaver-display-off", key: "screensaverDisplayOffMinutes", step: 5, minimum: 0, maximum: 240 },
+    IntegerStepper { slug: "lock-bg-blur", key: "lockBackgroundBlurPercent", step: 5, minimum: 0, maximum: 100 },
+    IntegerStepper { slug: "lock-bg-dim", key: "lockBackgroundDimPercent", step: 5, minimum: 0, maximum: 80 },
 ];
 
 /// Preset circles offered beside each surface color row; `preset.<index>` selects one.
@@ -1974,18 +1990,18 @@ fn parse_hex_color(text: &str) -> Result<String, String> {
 fn picker_grid_color(hue: usize, shade: usize) -> String {
     const LIGHTNESS: [f64; PICKER_SHADES] = [0.88, 0.72, 0.56, 0.42, 0.28, 0.14];
     let lightness = LIGHTNESS[shade];
-    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * 0.75;
+    let spread = (1.0 - (2.0 * lightness - 1.0).abs()) * 0.75;
     let sector = hue as f64 / 2.0;
-    let x = chroma * (1.0 - ((sector % 2.0) - 1.0).abs());
+    let x = spread * (1.0 - ((sector % 2.0) - 1.0).abs());
     let (r, g, b) = match sector.floor() as usize {
-        0 => (chroma, x, 0.0),
-        1 => (x, chroma, 0.0),
-        2 => (0.0, chroma, x),
-        3 => (0.0, x, chroma),
-        4 => (x, 0.0, chroma),
-        _ => (chroma, 0.0, x),
+        0 => (spread, x, 0.0),
+        1 => (x, spread, 0.0),
+        2 => (0.0, spread, x),
+        3 => (0.0, x, spread),
+        4 => (x, 0.0, spread),
+        _ => (spread, 0.0, x),
     };
-    let offset = lightness - chroma / 2.0;
+    let offset = lightness - spread / 2.0;
     let channel = |value: f64| ((value + offset) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", channel(r), channel(g), channel(b))
 }
@@ -2107,6 +2123,17 @@ fn page(value: &str) -> Option<SettingsPage> {
 
 fn control_error(error: ControlError) -> String {
     format!("{}: {}", error.name, error.message)
+}
+
+/// Asks the desktop to start the lock screen in preview mode over the control bus.
+/// The desktop owns the lock process; Settings only sends the typed request.
+fn start_lock_preview() -> Result<(), String> {
+    let mut control = control::SettingsControl::connect_session()
+        .map_err(|error| format!("could not reach the desktop: {error}"))?;
+    control
+        .call(ControlRequest::SessionAction(SessionAction::LockPreview))
+        .map(|_| ())
+        .map_err(control_error)
 }
 
 fn about_uri(action: &str) -> Option<&'static str> {
@@ -2356,10 +2383,12 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         }),
         "settings.lock.background.choose" => Ok(SettingsAction::LockBackgroundChoose),
         "settings.lock.background.clear" => Ok(SettingsAction::LockBackgroundClear),
+        "settings.avatar.choose" => Ok(SettingsAction::AvatarChoose),
+        "settings.avatar.clear" => Ok(SettingsAction::AvatarClear),
+        "settings.lock.preview" => Ok(SettingsAction::LockPreview),
         "settings.wallpaper.choose" => Ok(SettingsAction::WallpaperChoose),
         "settings.wallpaper.reset" => Ok(SettingsAction::WallpaperReset),
         "settings.taskbar.position" => Ok(SettingsAction::TaskbarEdgeCycle),
-        "settings.taskbar.color" => Ok(SettingsAction::TaskbarColorCycle),
         "settings.taskbar.size" => Ok(SettingsAction::TaskbarSizeCycle),
         "settings.font.family" => Ok(SettingsAction::FontFamilyCycle),
         "settings.decoration.rounded" => Ok(SettingsAction::TextSelect {
@@ -2390,15 +2419,6 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         "settings.display.modes.prev" => Ok(SettingsAction::ModePage(PageStep::Prev)),
         "settings.display.modes.next" => Ok(SettingsAction::ModePage(PageStep::Next)),
         _ => Err(format!("unknown settings action '{action}'")),
-    }
-}
-
-#[must_use]
-pub fn taskbar_color_label(value: &str) -> String {
-    if value.eq_ignore_ascii_case("#191B1D") {
-        "Pitch black".to_owned()
-    } else {
-        value.to_owned()
     }
 }
 
@@ -2438,9 +2458,44 @@ pub fn font_size_label(offset: i64) -> String {
     }
 }
 
+/// Profile picture label: the managed file name, or `Default` for the built-in ring icon.
+fn avatar_label(path: &str) -> String {
+    if path.is_empty() {
+        return "Default".to_owned();
+    }
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_owned()
+}
+
 #[cfg(test)]
 mod value_text_tests {
     use super::*;
+
+    #[test]
+    fn avatar_chooser_targets_avatar_media_and_setting() {
+        assert_eq!(ChooserTarget::Avatar.media_kind(), MediaKind::Avatar);
+        assert_eq!(ChooserTarget::LockBackground.media_kind(), MediaKind::LockWallpaper);
+        assert_eq!(ChooserTarget::Wallpaper.media_kind(), MediaKind::DesktopWallpaper);
+    }
+
+    #[test]
+    fn avatar_actions_parse_to_choose_and_clear() {
+        assert!(matches!(parse_action("settings.avatar.choose"), Ok(SettingsAction::AvatarChoose)));
+        assert!(matches!(parse_action("settings.avatar.clear"), Ok(SettingsAction::AvatarClear)));
+        assert!(parse_action("settings.avatar.reset").is_err());
+    }
+
+    #[test]
+    fn avatar_label_shows_file_name_or_default() {
+        assert_eq!(avatar_label(""), "Default");
+        assert_eq!(
+            avatar_label("/home/u/.local/share/flamewm/wallpapers/avatar-0123456789abcdef.png"),
+            "avatar-0123456789abcdef.png"
+        );
+    }
 
     #[test]
     fn theme_picker_actions_parse_to_typed_targets() {
@@ -2545,8 +2600,6 @@ mod value_text_tests {
 
     #[test]
     fn value_text_mapping_is_authoritative() {
-        assert_eq!(taskbar_color_label("#191b1d"), "Pitch black");
-        assert_eq!(taskbar_color_label("#3D4145"), "#3D4145");
         assert_eq!(panel_edge_label(PanelEdge::Right), "Right");
         assert_eq!(font_size_label(0), "Default");
         assert_eq!(font_size_label(2), "+2");
@@ -2625,6 +2678,27 @@ mod value_text_tests {
             Ok(SettingsAction::TextSelect { key: "decoration", value: "ios" })
         ));
         assert!(parse_action("settings.decoration.cycle").is_err());
+    }
+
+    #[test]
+    fn lock_background_steppers_parse_to_their_exact_typed_targets() {
+        assert!(matches!(
+            parse_action("settings.lock-bg-blur.up"),
+            Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: 5, minimum: 0, maximum: 100 })
+        ));
+        assert!(matches!(
+            parse_action("settings.lock-bg-blur.down"),
+            Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: -5, minimum: 0, maximum: 100 })
+        ));
+        assert!(matches!(
+            parse_action("settings.lock-bg-dim.up"),
+            Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: 5, minimum: 0, maximum: 80 })
+        ));
+        assert!(matches!(
+            parse_action("settings.lock-bg-dim.down"),
+            Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: -5, minimum: 0, maximum: 80 })
+        ));
+        assert!(parse_action("settings.lock-bg-dim.sideways").is_err());
     }
 
     #[test]

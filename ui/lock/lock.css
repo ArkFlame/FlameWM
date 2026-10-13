@@ -45,28 +45,43 @@ body.lock-body {
   align-items: center;
   white-space: nowrap;
 }
+/* Liquid glass: translucent white over the blurred background, pill-shaped (radius clamps to half height). */
 .lock-field {
-  background-color: #F5F7FA;
-  border: 1px solid #CCD6EB;
-  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.18);
+  border-width: 1px;
+  border-color: rgba(255, 255, 255, 0.38);
+  border-radius: 999px;
+}
+.lock-field-shade {
+  background-color: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
 }
 .lock-dots {
-  color: #232629;
+  color: #FFFFFF;
   display: flex;
   align-items: center;
   overflow: hidden;
   white-space: nowrap;
 }
 .lock-caret {
-  background-color: #232629;
+  background-color: #FFFFFF;
 }
-.lock-submit {
-  background-color: #F5F7FA;
-  color: #232629;
+/* Circular glass button with a white chevron, same layering as the field. */
+.lock-submit-glyph {
+  color: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 3px;
+}
+.lock-submit {
+  background-color: rgba(255, 255, 255, 0.18);
+  border-width: 1px;
+  border-color: rgba(255, 255, 255, 0.38);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
 }
 .lock-message {
   color: #E4E9FC;
@@ -80,6 +95,26 @@ body.lock-body {
   display: flex;
   justify-content: center;
   align-items: center;
+  white-space: nowrap;
+}
+.lock-strip {
+  background-color: #2A2E32;
+  border: 1px solid #CCD6EB;
+  border-radius: 4px;
+}
+.lock-strip-text {
+  color: #E4E9FC;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+.lock-action {
+  background-color: #F5F7FA;
+  color: #232629;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
   white-space: nowrap;
 }
 .lock-footer {

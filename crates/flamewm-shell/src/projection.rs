@@ -23,6 +23,30 @@ const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
 /// A zero logical size falls back to the stylesheet default so 100% output
 /// stays identical to the 44px layout.
 #[must_use]
+/// Accent used for the focused task underline (ARGB), fed by the settings projection so the
+/// underline follows `accent`/`accentOpacity` instead of a fixed colour.
+static TASK_ACCENT_ARGB: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0xFFEF_4048);
+
+/// Records the accent colour the focused task underline uses from the next task projection on.
+pub fn set_task_accent(color: UiColor) {
+    let packed = (u32::from(color.a) << 24)
+        | (u32::from(color.r) << 16)
+        | (u32::from(color.g) << 8)
+        | u32::from(color.b);
+    TASK_ACCENT_ARGB.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn task_accent() -> UiColor {
+    let packed = TASK_ACCENT_ARGB.load(std::sync::atomic::Ordering::Relaxed);
+    UiColor {
+        a: (packed >> 24) as u8,
+        r: (packed >> 16) as u8,
+        g: (packed >> 8) as u8,
+        b: packed as u8,
+    }
+}
+
 pub fn taskbar_css_height(logical_size: u16) -> f32 {
     if logical_size == 0 {
         TASKBAR_DEFAULT_HEIGHT
@@ -152,34 +176,10 @@ pub fn project_panel(
             document.text(&label_id, label.to_owned())?;
             document.visible(&line_id, state.running)?;
             if state.focused {
-                document.background(
-                    &slot_id,
-                    UiColor {
-                        r: 239,
-                        g: 64,
-                        b: 72,
-                        a: 56,
-                    },
-                )?;
-                document.background(
-                    &line_id,
-                    UiColor {
-                        r: 239,
-                        g: 64,
-                        b: 72,
-                        a: 255,
-                    },
-                )?;
+                document.background_clear(&slot_id)?;
+                document.background(&line_id, task_accent())?;
             } else if state.minimized {
-                document.background(
-                    &slot_id,
-                    UiColor {
-                        r: 36,
-                        g: 39,
-                        b: 42,
-                        a: 255,
-                    },
-                )?;
+                document.background_clear(&slot_id)?;
                 document.background(
                     &line_id,
                     UiColor {

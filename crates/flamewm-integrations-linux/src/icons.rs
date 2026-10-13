@@ -15,6 +15,11 @@ use crate::icon_theme::{configured_icon_theme, unique_paths};
 use crate::icon_theme::IconThemeCaches as ThemeLookupCaches;
 
 const GENERIC_FALLBACK: &str = "assets/web/flamewm-icon.svg";
+/// Theme-independent generic application glyph bundled with the product.
+/// Used when no installed theme resolves an application icon.
+// Lives outside assets/themes: scripts/package strips that tree from the
+// installed assets copy, and the glyph must survive packaging.
+const GENERIC_APPLICATION_GLYPH: &str = "assets/web/application-x-executable.svg";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IconLookupPurpose {
@@ -657,6 +662,20 @@ impl IconResolver {
         })
     }
 
+    /// Bundled generic application glyph; never depends on installed themes.
+    pub fn prepare_generic_application(
+        &mut self,
+        size: IconSize,
+    ) -> Result<Rgba8Raster, IconError> {
+        let path = self.packaged_root.join(GENERIC_APPLICATION_GLYPH);
+        self.cached_rasterize(&path, size, IconOrigin::PackagedFallback)
+            .map_err(|error| IconError::FallbackUnavailable {
+                fallback: path,
+                fallback_error: Box::new(error),
+                candidate_error: None,
+            })
+    }
+
     /// Semantic purpose: packaged override -> packaged breeze -> system theme
     /// -> generic fallback.
     pub fn prepare_semantic(
@@ -1087,7 +1106,7 @@ fn decode_webp(
             &natural,
             size.physical,
             size.physical,
-            flamewm_image_core::scale::ScaleFilter::Bilinear,
+            flamewm_image_core::scale::ScaleFilter::Area,
         )
         .ok_or_else(|| invalid_raster_error(path, "WebP", "requested dimensions overflow"))?
     };
@@ -1144,7 +1163,7 @@ fn decode_png(
             &natural,
             size.physical,
             size.physical,
-            flamewm_image_core::scale::ScaleFilter::Bilinear,
+            flamewm_image_core::scale::ScaleFilter::Area,
         )
         .ok_or_else(|| invalid_raster_error(path, "PNG", "requested dimensions overflow"))?
     };
@@ -1232,7 +1251,7 @@ fn decode_xpm(
             &natural,
             size.physical,
             size.physical,
-            flamewm_image_core::scale::ScaleFilter::Bilinear,
+            flamewm_image_core::scale::ScaleFilter::Area,
         )
         .ok_or_else(|| invalid_raster_error(path, "XPM", "requested dimensions overflow"))?
     };
@@ -1249,6 +1268,9 @@ fn decode_xpm(
 fn valid_icon_name(name: &str) -> bool {
     !name.is_empty() && !name.bytes().any(|byte| matches!(byte, b'/' | b'\\' | 0))
 }
+
+/// Product default icon theme, searched after the configured theme and before Breeze.
+pub const DEFAULT_ICON_THEME: &str = "PlagueSur";
 
 /// Theme search chain: `FLAMEWM_ICON_THEME`, the Flame `iconTheme`
 /// preference, the desktop's configured theme (kdeglobals, then GTK), then
@@ -1269,6 +1291,10 @@ fn theme_chain(preferred: Option<&str>) -> Vec<String> {
             theme_names.push(configured);
         }
     }
+    theme_names.push(DEFAULT_ICON_THEME.to_owned());
+    // Bridge while PlagueSur is being integrated: the previous bundled default keeps icons
+    // resolving; once McMojave-circle is removed from the bundle this entry simply misses.
+    theme_names.push("McMojave-circle".to_owned());
     theme_names.push("Breeze".to_owned());
     unique_strings(theme_names)
 }
@@ -1894,6 +1920,31 @@ mod tests {
     }
 
     #[test]
+    fn generic_application_glyph_ships_outside_stripped_theme_tree() {
+        assert!(
+            !GENERIC_APPLICATION_GLYPH.contains("/themes/"),
+            "glyph under assets/themes is stripped by scripts/package"
+        );
+        let root = workspace_root();
+        assert!(root.join(GENERIC_APPLICATION_GLYPH).is_file());
+    }
+
+    #[test]
+    fn generic_application_glyph_is_bundled_and_theme_independent() {
+        let dir = test_dir("generic-app-glyph");
+        let mut resolver = IconResolver::new(workspace_root(), Vec::new(), vec![dir], 0);
+        let raster = resolver
+            .prepare_generic_application(IconSize::new(25, 25))
+            .expect("bundled generic application glyph");
+        assert_eq!((raster.width, raster.height), (25, 25));
+        assert!(
+            raster.source.ends_with("application-x-executable.svg"),
+            "unexpected glyph source: {}",
+            raster.source
+        );
+    }
+
+    #[test]
     fn application_miss_never_returns_brand_logo() {
         let dir = test_dir("app-miss");
         let mut resolver = IconResolver::new(workspace_root(), Vec::new(), vec![dir], 0);
@@ -1977,6 +2028,16 @@ mod tests {
         let hicolor = chain.iter().position(|name| name == "hicolor");
         assert!(breeze.is_some(), "Breeze must stay in the chain: {chain:?}");
         assert!(breeze < hicolor, "Breeze precedes hicolor: {chain:?}");
+    }
+
+    #[test]
+    fn plaguesur_default_sits_between_configured_and_breeze() {
+        let chain = theme_chain(Some("Papirus"));
+        let papirus = chain.iter().position(|name| name == "Papirus");
+        let default = chain.iter().position(|name| name == DEFAULT_ICON_THEME);
+        let breeze = chain.iter().position(|name| name == "Breeze");
+        assert!(papirus < default && default < breeze, "chain order: {chain:?}");
+        assert!(theme_chain(None).iter().any(|name| name == DEFAULT_ICON_THEME));
     }
 
     #[test]

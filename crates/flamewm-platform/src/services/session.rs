@@ -15,6 +15,7 @@ impl SessionService {
         let caps = port.session_capabilities();
         let available = match action {
             SessionAction::Lock => caps.lock,
+            SessionAction::LockPreview => caps.lock,
             SessionAction::Logout => caps.logout,
             SessionAction::Suspend => caps.suspend,
             SessionAction::Reboot => caps.reboot,

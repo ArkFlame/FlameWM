@@ -408,11 +408,13 @@ fn main() -> Result<(), String> {
     fs::create_dir_all(&directory).map_err(|error| format!("create desktop directory: {error}"))?;
 
     let work_area = resolve_work_area()?;
+    let (root_width, root_height) = root_geometry()?;
+    let surface = desktop_surface_rect(root_width, root_height);
     let grid = GridConfig::compute(work_area, 100);
     let settings = query_settings();
     let mut wallpaper_loader = wallpaper_loader::WallpaperLoader::new(
-        work_area.width.max(1) as u32,
-        work_area.height.max(1) as u32,
+        surface.width as u32,
+        surface.height as u32,
         packaged_root(),
     )?;
     wallpaper_loader
@@ -701,20 +703,15 @@ fn main() -> Result<(), String> {
     }
     // Known outer rect of the desktop window (created at the work area); updated
     // whenever a geometry request is issued. Read back by the resize decision.
-    let mut window_rect = Rect::new(
-        work_area.x,
-        work_area.y,
-        work_area.width.max(1),
-        work_area.height.max(1),
-    );
+    let mut window_rect = surface;
     let geometry_slot = WindowGeometrySlot::default();
     run_with_controller_events_role_with_reactor_geometry(
         document,
         UiWindowConfig {
-            width: work_area.width.max(1) as u32,
-            height: work_area.height.max(1) as u32,
-            x: work_area.x,
-            y: work_area.y,
+            width: surface.width as u32,
+            height: surface.height as u32,
+            x: surface.x,
+            y: surface.y,
             title: "FlameWM Desktop".to_owned(),
             identity: None,
         },
@@ -751,6 +748,7 @@ fn main() -> Result<(), String> {
                         &mut current_work_area,
                         &mut window_rect,
                         &geometry_out,
+                        surface,
                     );
                 }
                 let state_cell = &flush_cell;
@@ -934,6 +932,12 @@ fn flush_sticky_now(state: &DesktopState) {
 /// Root geometry comes from the actual X root through the X11 runtime owner.
 /// Panel struts are subtracted when Control GetPanels answers; otherwise the
 /// full root rect is used with exactly one degraded warning. No constant size.
+/// The desktop surface spans the whole root at origin 0,0 so the wallpaper paints under panels
+/// and struts. Icon layout and selection stay in the work area (`GridConfig::work_area`).
+fn desktop_surface_rect(root_width: u32, root_height: u32) -> Rect {
+    Rect::new(0, 0, root_width.max(1) as i32, root_height.max(1) as i32)
+}
+
 fn resolve_work_area() -> Result<Rect, String> {
     let (width, height) = root_geometry()?;
     let root = Rect::new(0, 0, width as i32, height as i32);
@@ -974,6 +978,7 @@ fn refresh_work_area_after_panel_change(
     current: &mut Rect,
     window: &mut Rect,
     geometry: &WindowGeometrySlot,
+    surface: Rect,
 ) {
     let next = match resolve_work_area() {
         Ok(next) => next,
@@ -986,7 +991,7 @@ fn refresh_work_area_after_panel_change(
         return;
     };
     *current = area;
-    let Some(target) = window_resize_request(*window, area) else {
+    let Some(target) = window_resize_request(*window, surface) else {
         return;
     };
     geometry.set(Some(WindowGeometry {
@@ -2767,8 +2772,57 @@ fn installed_data_root(executable: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod work_area_tests {
-    use super::{changed_work_area, subtract_panel_strip, window_resize_request};
+    use super::{
+        changed_work_area, desktop_surface_rect, subtract_panel_strip, window_resize_request,
+    };
     use flamewm_api::Rect;
+    use flamewm_desktop_core::layout::GridConfig;
+
+    #[test]
+    fn desktop_surface_covers_full_root_under_bottom_strut() {
+        let work_area = Rect::new(0, 0, 1280, 756);
+        let surface = desktop_surface_rect(1280, 800);
+
+        assert_eq!(surface, Rect::new(0, 0, 1280, 800));
+        assert_eq!((surface.width as u32, surface.height as u32), (1280, 800));
+        assert!(surface.width >= work_area.width && surface.height > work_area.height);
+    }
+
+    #[test]
+    fn panel_edges_keep_icons_in_work_area_with_surface_origin_at_root() {
+        // The surface sits at root origin, so window-local == screen. Cells must map inside the
+        // work area for top, left, bottom and right struts, and hit-testing must invert them.
+        let surface = desktop_surface_rect(1280, 800);
+        assert_eq!(surface.origin(), flamewm_api::Point::new(0, 0));
+        for work_area in [
+            Rect::new(0, 44, 1280, 756),
+            Rect::new(44, 0, 1236, 800),
+            Rect::new(0, 0, 1280, 756),
+            Rect::new(0, 0, 1236, 800),
+        ] {
+            let grid = GridConfig::compute(work_area, 100);
+            for column in 0..grid.columns {
+                for row in 0..grid.rows {
+                    let cell = flamewm_desktop_core::layout::Cell::new(column, row);
+                    let point = grid.cell_to_pixel(cell);
+                    assert!(work_area.contains(point), "{point:?} outside {work_area:?}");
+                    assert!(surface.contains(point));
+                    assert_eq!(grid.pixel_to_cell(point), cell);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn icon_grid_stays_inside_work_area_while_surface_is_root() {
+        let work_area = Rect::new(0, 0, 1280, 756);
+        let grid = GridConfig::compute(work_area, 100);
+        let last = grid.clamp_cell(flamewm_desktop_core::layout::Cell::new(i32::MAX, i32::MAX));
+        let point = grid.cell_to_pixel(last);
+
+        assert!(work_area.contains(point));
+        assert_eq!(grid.work_area, work_area);
+    }
 
     #[test]
     fn window_already_matching_work_area_requests_no_resize() {

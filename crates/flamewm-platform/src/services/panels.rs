@@ -184,25 +184,9 @@ impl PanelService {
     pub fn reconcile_windows(&mut self, windows: &[WindowSnapshot]) -> bool {
         let live = windows
             .iter()
-            .map(|window| window.reference)
-            .collect::<BTreeSet<_>>();
-        let before = self.tasks.clone();
-        let existing = self
-            .tasks
-            .entries()
-            .iter()
-            .filter_map(|entry| entry.represented_window())
+            .map(|window| (window.app_id.clone(), window.reference))
             .collect::<Vec<_>>();
-        for window in existing {
-            if !live.contains(&window) {
-                self.tasks.remove_window(window);
-            }
-        }
-        for window in windows {
-            self.tasks
-                .add_window(window.app_id.clone(), window.reference);
-        }
-        let changed = self.tasks != before;
+        let changed = self.tasks.reconcile_live(&live);
         if changed {
             self.bump_revision();
         }

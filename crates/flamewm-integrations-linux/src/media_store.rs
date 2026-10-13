@@ -25,6 +25,8 @@ const SHORT_HASH_LEN: usize = 16;
 pub enum MediaKind {
     DesktopWallpaper,
     LockWallpaper,
+    /// Lock-screen profile picture.
+    Avatar,
 }
 
 impl MediaKind {
@@ -32,6 +34,7 @@ impl MediaKind {
         match self {
             Self::DesktopWallpaper => "desktop",
             Self::LockWallpaper => "lock",
+            Self::Avatar => "avatar",
         }
     }
 }
@@ -286,7 +289,7 @@ fn is_managed_name(name: &str) -> bool {
     let Some((prefix, hash)) = stem.split_once('-') else {
         return false;
     };
-    matches!(prefix, "desktop" | "lock")
+    matches!(prefix, "desktop" | "lock" | "avatar")
         && matches!(extension, "png" | "webp" | "jpg" | "gif")
         && hash.len() == SHORT_HASH_LEN
         && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -504,6 +507,40 @@ mod tests {
         write_file(&src, &png_bytes(2, 2));
         let imported = store_in(&dir).import(&src, MediaKind::LockWallpaper).unwrap();
         assert!(imported.path.file_name().unwrap().to_str().unwrap().starts_with("lock-"));
+    }
+
+    #[test]
+    fn avatar_kind_uses_distinct_avatar_prefix() {
+        let dir = TempDir::new();
+        let src = dir.0.join("face.png");
+        write_file(&src, &png_bytes(2, 2));
+        let store = store_in(&dir);
+        let avatar = store.import(&src, MediaKind::Avatar).unwrap();
+        let lock = store.import(&src, MediaKind::LockWallpaper).unwrap();
+        let name = avatar.path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("avatar-"), "{name}");
+        assert!(name.ends_with(".png"), "{name}");
+        assert_ne!(avatar.path, lock.path, "avatar and lock copies must not share a name");
+        assert!(store.is_managed(&avatar.path));
+    }
+
+    #[test]
+    fn avatar_imports_jpeg_and_gif_by_content() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        let jpeg = include_bytes!("../../flamewm-image-core/tests/fixtures/baseline-16x16.jpg");
+        let src = dir.0.join("face.bin");
+        write_file(&src, jpeg);
+        let imported = store.import(&src, MediaKind::Avatar).unwrap();
+        assert_eq!((imported.width, imported.height), (16, 16));
+        assert!(imported.path.to_str().unwrap().ends_with(".jpg"));
+        assert_eq!(fs::read(&imported.path).unwrap(), jpeg);
+
+        let gif = include_bytes!("../../flamewm-image-core/tests/fixtures/first-frame-4x4.gif");
+        write_file(&src, gif);
+        let imported = store.import(&src, MediaKind::Avatar).unwrap();
+        assert_eq!((imported.width, imported.height), (4, 4));
+        assert!(imported.path.to_str().unwrap().ends_with(".gif"));
     }
 
     #[test]
@@ -748,6 +785,8 @@ mod tests {
         assert!(!store.is_managed(&store.root.join("lock-0123456789abcdef.bmp")));
         assert!(!store.is_managed(&dir.0.join("lock-0123456789abcdef.png")));
         assert!(!store.is_managed(&store.root.join("sub/desktop-0123456789abcdef.png")));
+        assert!(store.is_managed(&store.root.join("avatar-0123456789abcdef.webp")));
+        assert!(!store.is_managed(&store.root.join("avatar-0123456789ABCDEF.webp")));
     }
 
     #[test]

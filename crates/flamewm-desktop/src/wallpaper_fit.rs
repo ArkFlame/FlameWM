@@ -89,7 +89,7 @@ fn resize(source: &RgbaImage, width: u32, height: u32) -> Option<RgbaImage> {
     if source.width == width && source.height == height {
         return Some(source.clone());
     }
-    scale_rgba(source, width, height, ScaleFilter::Bilinear)
+    scale_rgba(source, width, height, ScaleFilter::Area)
 }
 
 fn solid(width: u32, height: u32, colour: [u8; 4]) -> Option<RgbaImage> {

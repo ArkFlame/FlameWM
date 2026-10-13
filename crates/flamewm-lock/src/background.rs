@@ -1,5 +1,7 @@
 //! Procedural navy background for the lock screen, RGBA8, fully opaque.
 
+use flamewm_image_core::gaussian_blur_rgba;
+
 use crate::layout;
 
 /// Vertical gradient stops as (position, rgb).
@@ -82,6 +84,28 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Blur radius at 1080p for a 100% blur, scaled by output height.
+const BLUR_RADIUS_1080P: f32 = 24.0;
+
+/// Blurs and darkens an opaque RGBA8 background in place, once, at build time.
+/// `blur_percent` 0..=100 scales a 24 px radius at 1080p; `dim_percent` 0..=80 multiplies
+/// RGB by `1 - dim/100`. 0/0 leaves the pixels untouched, bit for bit.
+pub fn post_process(pixels: &mut [u8], w: u32, h: u32, blur_percent: u8, dim_percent: u8) -> Result<(), String> {
+    if blur_percent > 0 && w > 0 && h > 0 {
+        let radius = f32::from(blur_percent.min(100)) / 100.0 * BLUR_RADIUS_1080P * h as f32 / 1080.0;
+        gaussian_blur_rgba(pixels, w, h, radius).map_err(|error| format!("background blur: {error:?}"))?;
+    }
+    if dim_percent > 0 {
+        let keep = 1.0 - f64::from(dim_percent.min(80)) / 100.0;
+        for pixel in pixels.chunks_exact_mut(4) {
+            for channel in &mut pixel[..3] {
+                *channel = (f64::from(*channel) * keep).round() as u8;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Solid RGBA8 fill of `w`x`h`.
@@ -169,6 +193,61 @@ mod tests {
         let buf = flat(3, 2, [10, 20, 30]);
         assert_eq!(buf.len(), 24);
         assert!(buf.chunks(4).all(|p| p == [10, 20, 30, 255]));
+    }
+
+    fn checker(w: u32, h: u32) -> Vec<u8> {
+        (0..w * h).flat_map(|i| {
+            let v = if (i % w + i / w) % 2 == 0 { 40 } else { 220 };
+            [v, v, v, 255]
+        }).collect()
+    }
+
+    fn high_frequency(buf: &[u8], w: u32) -> f64 {
+        let mut sum = 0.0;
+        for y in 0..(buf.len() / 4 / w as usize) {
+            for x in 1..w as usize {
+                let a = buf[(y * w as usize + x - 1) * 4] as f64;
+                let b = buf[(y * w as usize + x) * 4] as f64;
+                sum += (a - b).abs();
+            }
+        }
+        sum
+    }
+
+    #[test]
+    fn zero_zero_is_bit_identical() {
+        let original = checker(32, 18);
+        let mut buf = original.clone();
+        post_process(&mut buf, 32, 18, 0, 0).expect("process");
+        assert_eq!(buf, original);
+    }
+
+    #[test]
+    fn dim_50_halves_luminance_and_keeps_alpha() {
+        let mut buf = vec![200, 100, 50, 255];
+        post_process(&mut buf, 1, 1, 0, 50).expect("process");
+        assert_eq!(buf, vec![100, 50, 25, 255]);
+    }
+
+    #[test]
+    fn blur_reduces_high_frequency_energy() {
+        // 1080 rows so the radius is the full 24 px; a short image would blur under one pixel.
+        let original = checker(64, 1080);
+        let mut blurred = original.clone();
+        post_process(&mut blurred, 64, 1080, 100, 0).expect("process");
+        assert!(high_frequency(&blurred, 64) < high_frequency(&original, 64) * 0.5);
+    }
+
+    #[test]
+    fn percentages_are_clamped() {
+        let mut dim = vec![200, 200, 200, 255];
+        post_process(&mut dim, 1, 1, 0, 255).expect("process");
+        assert_eq!(dim[0], 40, "dim clamps to 80%: 200 * 0.2");
+        let mut blur_a = checker(16, 9);
+        let mut blur_b = checker(16, 9);
+        post_process(&mut blur_a, 16, 9, 100, 0).expect("process");
+        post_process(&mut blur_b, 16, 9, 250, 0).expect("process");
+        assert_eq!(blur_a, blur_b, "blur above 100 behaves as 100");
     }
 
     #[test]

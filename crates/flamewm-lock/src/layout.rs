@@ -71,9 +71,18 @@ pub struct Placed {
 }
 
 const CLOCK_FONT: f64 = 31.0;
+/// The clock text sits low in its box: the renderer has no line-height control, so the
+/// digits' centre lands about 0.17 em under the line box centre (measured, LK12). The text
+/// box is lifted by this share of the font size; the reference anchor itself is unchanged.
+pub const CLOCK_TEXT_LIFT_EM: f64 = 0.17;
+/// The clock digits also sit right of the box centre: the ink centre of "HH:MM" measured
+/// +5.9..6.4 px at scale 1.826 across five timezone samples (LK12, 4 different hours), so the
+/// box moves left by this share of the font size. Digit-to-digit spread is under 0.5 px.
+pub const CLOCK_TEXT_SHIFT_X_EM: f64 = -0.106;
 const DATE_FONT: f64 = 15.0;
 const USERNAME_FONT: f64 = 12.0;
-const LABEL_FONT: f64 = 9.0;
+/// Font size of the power labels, confirm strip, and Other list.
+pub const LABEL_FONT: f64 = 9.0;
 const FOOTER_FONT: f64 = 8.0;
 
 /// Reference-canvas geometry of every lock screen element.
@@ -88,8 +97,32 @@ pub const POWER_CENTRE_Y: f64 = 348.0;
 pub const POWER_ICON: f64 = 23.0;
 pub const POWER_LABEL_BASELINE: f64 = 375.0;
 pub const POWER_LABEL_W: f64 = 80.0;
+/// Confirm strip under the power row (Restart / Shut Down): container, prompt, and buttons.
+pub const CONFIRM: RefRect = RefRect::new(215.0, 392.0, 271.0, 22.0);
+pub const CONFIRM_TEXT: RefRect = RefRect::new(223.0, 396.0, 120.0, 14.0);
+pub const CONFIRM_OK: RefRect = RefRect::new(350.0, 395.0, 66.0, 16.0);
+pub const CONFIRM_CANCEL: RefRect = RefRect::new(425.0, 395.0, 56.0, 16.0);
+/// Other list above the Other button (Log out, Cancel).
+pub const OTHER_LIST: RefRect = RefRect::new(395.0, 296.0, 120.0, 36.0);
+pub const OTHER_LOGOUT: RefRect = RefRect::new(401.0, 300.0, 108.0, 14.0);
+pub const OTHER_CANCEL: RefRect = RefRect::new(401.0, 316.0, 108.0, 14.0);
 pub const FOOTER_BASELINE: f64 = 432.0;
 pub const FOOTER: RefRect = RefRect::new(4.0, FOOTER_BASELINE - FOOTER_FONT, 300.0, 10.0);
+
+/// The chevron glyph's ink centre sits 0.17 em below and 0.07 em left of its line box centre
+/// (measured on the submit circle, LK12, scale 1.826): the glyph box moves up and right by these.
+pub const CHEVRON_LIFT_EM: f64 = 0.17;
+pub const CHEVRON_SHIFT_X_EM: f64 = 0.07;
+
+/// The chevron glyph box: the submit circle moved so the glyph ink centre lands on the circle centre.
+pub fn chevron_box(circle: RefRect, font_px: f64) -> RefRect {
+    shifted_x(lifted(circle, font_px * CHEVRON_LIFT_EM), font_px * CHEVRON_SHIFT_X_EM)
+}
+
+/// The clock text box: the reference box moved by the measured lift and horizontal bias.
+fn clock_text_box() -> RefRect {
+    shifted_x(lifted(CLOCK, CLOCK_FONT * CLOCK_TEXT_LIFT_EM), CLOCK_FONT * CLOCK_TEXT_SHIFT_X_EM)
+}
 
 /// Lock screen elements in output pixels.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,7 +157,7 @@ impl LockLayout {
         };
         Self {
             fit,
-            clock: place(CLOCK, CLOCK_FONT),
+            clock: place(clock_text_box(), CLOCK_FONT),
             date: place(DATE, DATE_FONT),
             avatar: place(AVATAR, 0.0),
             username: place(USERNAME, USERNAME_FONT),
@@ -135,6 +168,16 @@ impl LockLayout {
             footer: place(FOOTER, FOOTER_FONT),
         }
     }
+}
+
+/// `rect` moved up by `dy` reference px.
+pub fn lifted(rect: RefRect, dy: f64) -> RefRect {
+    RefRect { y: rect.y - dy, ..rect }
+}
+
+/// Moves a rect horizontally by `dx` output pixels.
+pub fn shifted_x(rect: RefRect, dx: f64) -> RefRect {
+    RefRect { x: rect.x + dx, ..rect }
 }
 
 fn scaled_font(reference_px: f64, s: f64) -> u32 {
@@ -200,7 +243,7 @@ mod tests {
         assert_eq!(f.s, 1.0);
         assert_eq!((f.ox, f.oy), (0.0, 0.0));
         let l = LockLayout::for_output(701, 438);
-        assert_eq!(l.clock.rect, CLOCK);
+        assert_eq!(l.clock.rect, clock_text_box());
         assert_eq!(l.password.rect, PASSWORD);
         assert_eq!(l.clock.font_px, 31);
         assert_eq!(l.footer.font_px, 8);
@@ -250,10 +293,14 @@ mod tests {
             let l = LockLayout::for_output(w, h);
             let centre = f64::from(w) / 2.0;
             let tolerance = l.fit.s; // one reference pixel
-            for p in [l.clock, l.date, l.avatar, l.username] {
+            for p in [l.date, l.avatar, l.username] {
                 let cx = p.rect.x + p.rect.w / 2.0;
                 assert!((cx - centre).abs() <= tolerance + 1e-6, "{cx} vs {centre} at {w}x{h}");
             }
+            // The clock box carries the measured horizontal bias, scaled with the output.
+            let clock_cx = l.clock.rect.x + l.clock.rect.w / 2.0;
+            let bias = CLOCK_FONT * CLOCK_TEXT_SHIFT_X_EM * l.fit.s;
+            assert!((clock_cx - centre - bias).abs() <= tolerance + 1e-6, "{clock_cx} vs {centre} at {w}x{h}");
         }
     }
 
@@ -264,6 +311,33 @@ mod tests {
         assert!((gap_avatar_to_username() - 17.0).abs() <= 3.0);
         assert!((gap_username_to_password() - 15.0).abs() <= 2.0);
         assert!((gap_password_to_power_row() - 68.0).abs() <= 3.0);
+    }
+
+    #[test]
+    fn chevron_box_moves_the_glyph_onto_the_circle_centre() {
+        let circle = RefRect::new(10.0, 20.0, 17.0, 17.0);
+        let font = 16.0;
+        let b = chevron_box(circle, font);
+        // Ink centre offsets measured in the native screenshot: dx = +2.1 px, dy = -4.9 px at font 29 px.
+        assert!(((b.x - circle.x) - 0.07 * font).abs() < 1e-9, "shift right by 0.07 em");
+        assert!(((circle.y - b.y) - 0.17 * font).abs() < 1e-9, "lift up by 0.17 em");
+        assert_eq!((b.w, b.h), (circle.w, circle.h), "only the position moves");
+        // The circle centre is unchanged; the glyph box is the one that moves.
+        assert_eq!(chevron_box(circle, 0.0), circle);
+    }
+
+    #[test]
+    fn clock_text_box_is_lifted_and_shifted_by_the_measured_bias() {
+        let lift = CLOCK_FONT * CLOCK_TEXT_LIFT_EM;
+        assert!((lift - 5.27).abs() < 0.01, "0.17 em of 31 px");
+        let shift = CLOCK_FONT * CLOCK_TEXT_SHIFT_X_EM;
+        assert!((shift + 3.286).abs() < 0.01, "-0.106 em of 31 px");
+        let l = LockLayout::for_output(701, 438);
+        assert!((l.clock.rect.y - (CLOCK.y - lift)).abs() < 1e-9);
+        assert!((l.clock.rect.x - (CLOCK.x + shift)).abs() < 1e-9);
+        assert_eq!(l.clock.rect.h, CLOCK.h, "only the position moves, not the size");
+        // The reference anchor and the spacing invariants still use the unlifted CLOCK.
+        assert_eq!(CLOCK.y, 46.0);
     }
 
     #[test]

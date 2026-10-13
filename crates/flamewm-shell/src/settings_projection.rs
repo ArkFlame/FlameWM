@@ -11,15 +11,17 @@ const DEFAULT_ACCENT: u32 = 0xef4048;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
 const DEFAULT_TASKBAR_COLOR: u32 = 0x191b1d;
-const DEFAULT_TASKBAR_OPACITY: u8 = 80;
+const DEFAULT_TASKBAR_OPACITY: u8 = 50;
+const DEFAULT_TASKBAR_BLUR_PERCENT: u8 = 80;
 const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
-const DEFAULT_START_MENU_OPACITY: u8 = 80;
+const DEFAULT_START_MENU_OPACITY: u8 = 50;
+const DEFAULT_START_MENU_BLUR_PERCENT: u8 = 80;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;
 const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
 const DEFAULT_FONT_SIZE: f32 = 13.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SurfaceKind {
+pub enum SurfaceKind {
     Panel,
     Start,
     TaskMenu,
@@ -28,7 +30,7 @@ pub(crate) enum SurfaceKind {
 
 /// Settings are presentation input only. Panel placement, edge, and size are
 /// deliberately absent from this projection and remain service-owned.
-pub(crate) fn project(
+pub fn project(
     document: &mut impl UiDocumentAccess,
     snapshot: &SettingsSnapshot,
     surface: SurfaceKind,
@@ -65,20 +67,18 @@ pub(crate) fn project(
                     a: opacity_alpha(opacity),
                 },
             )?;
-            // Stable presentation node; this never changes panel geometry.
-            document.background("taskbar-line", accent)?;
+            crate::projection::set_task_accent(accent);
             project_clock_at(document, Local::now(), clock_display(snapshot))?;
         }
         SurfaceKind::Start => {
-            let color = color_setting(snapshot, "startMenuColor", DEFAULT_START_MENU_COLOR);
+            project_menu_background(document, snapshot, root)?;
             let opacity =
                 percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
+            // The search field fill follows the same alpha as the menu root so every Start layer
+            // (category column, app list, search, footer) fades together.
             document.background(
-                root,
-                UiColor {
-                    a: opacity_alpha(opacity),
-                    ..color
-                },
+                "start-search-box",
+                UiColor { r: 0x14, g: 0x16, b: 0x18, a: opacity_alpha(opacity) },
             )?;
             // No accent outline: the menu's rounded panes cover the border on three sides, so an
             // accent-coloured border only ever showed as a red line down the left edge.
@@ -90,10 +90,30 @@ pub(crate) fn project(
     Ok(())
 }
 
+/// Shared menu background for the Start menu and the audio, Wi-Fi and calendar popups: the
+/// `startMenuColor` / `startMenuOpacity` pair on the popup root. Layers inside stay transparent.
+pub fn project_menu_background(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+    root: &str,
+) -> Result<(), String> {
+    document.background(root, menu_background(snapshot))
+}
+
+/// Menu background colour with the `startMenuOpacity` alpha.
+pub fn menu_background(snapshot: &SettingsSnapshot) -> UiColor {
+    let color = color_setting(snapshot, "startMenuColor", DEFAULT_START_MENU_COLOR);
+    let opacity = percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
+    UiColor {
+        a: opacity_alpha(opacity),
+        ..color
+    }
+}
+
 /// Start presentation for the panel edge hosting Start. `start_button` is the Start button's root
 /// device rect `(x, y, width, height)`, which Magic Lamp folds into. `None` keeps the immediate
 /// show: animations disabled, `none`, an unknown style, or Magic Lamp before the button has layout.
-pub(crate) fn start_slide(
+pub fn start_slide(
     snapshot: &SettingsSnapshot,
     edge: PanelEdge,
     start_button: Option<(i32, i32, u32, u32)>,
@@ -120,7 +140,7 @@ pub(crate) fn start_slide(
 
 /// Accent carries `accentOpacity` as alpha for every accent consumer.
 /// Clock presentation keys; unknown or missing values fall back to the product defaults.
-pub(crate) fn clock_display(snapshot: &SettingsSnapshot) -> ClockDisplay {
+pub fn clock_display(snapshot: &SettingsSnapshot) -> ClockDisplay {
     let defaults = ClockDisplay::default();
     let format = ClockFormat::parse(&text_setting(snapshot, "taskbarClockFormat", "24h"))
         .unwrap_or(defaults.format);
@@ -186,6 +206,22 @@ fn integer_setting(snapshot: &SettingsSnapshot, key: &str, default: i64) -> i64 
         Some(SettingValue::Integer(value)) => *value,
         _ => default,
     }
+}
+
+/// Taskbar `(opacity, blur)` percents for the pseudo-transparency backdrop.
+pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
+    (
+        percent_setting(snapshot, "taskbarOpacity", DEFAULT_TASKBAR_OPACITY),
+        percent_setting(snapshot, "taskbarBlurPercent", DEFAULT_TASKBAR_BLUR_PERCENT),
+    )
+}
+
+/// Start popup `(opacity, blur)` percents for its pseudo-transparency backdrop.
+pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
+    (
+        percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY),
+        percent_setting(snapshot, "startMenuBlurPercent", DEFAULT_START_MENU_BLUR_PERCENT),
+    )
 }
 
 fn percent_setting(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
@@ -315,6 +351,16 @@ mod tests {
     }
 
     #[test]
+    fn start_projection_fades_search_field_with_menu_opacity() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+        let mut doc = RecordingDocument::default();
+        project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
+        assert_eq!(doc.backgrounds["start-menu"].a, 0);
+        assert_eq!(doc.backgrounds["start-search-box"].a, 0);
+    }
+
+    #[test]
     fn default_projection_keeps_accent_tokens_at_stylesheet_values() {
         let mut doc = RecordingDocument::default();
         project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
@@ -324,8 +370,20 @@ mod tests {
         assert_eq!(doc.variables["--accent-strong"], UiColor { a: 0xdd, ..accent });
         assert_eq!(
             doc.backgrounds["start-menu"],
-            UiColor { r: 0x19, g: 0x1b, b: 0x1d, a: 204 }
+            UiColor { r: 0x19, g: 0x1b, b: 0x1d, a: 127 }
         );
+    }
+
+    #[test]
+    fn start_backdrop_percents_read_flat_keys_with_defaults() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        assert_eq!(
+            start_backdrop_percents(&snapshot),
+            (DEFAULT_START_MENU_OPACITY, DEFAULT_START_MENU_BLUR_PERCENT)
+        );
+        snapshot.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
+        snapshot.values.insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
+        assert_eq!(start_backdrop_percents(&snapshot), (50, 30));
     }
 
     fn snapshot_with(key: &str, value: &str) -> SettingsSnapshot {
@@ -362,7 +420,7 @@ mod tests {
     fn opacity_percent_maps_to_alpha_bounds() {
         assert_eq!(opacity_alpha(0), 0);
         assert_eq!(opacity_alpha(100), 255);
-        assert_eq!(opacity_alpha(DEFAULT_TASKBAR_OPACITY), 204);
+        assert_eq!(opacity_alpha(DEFAULT_TASKBAR_OPACITY), 127);
     }
 
     #[test]
@@ -389,7 +447,7 @@ mod tests {
             DEFAULT_START_MENU_COLOR,
         );
         assert_eq!((color.r, color.g, color.b), (0x19, 0x1b, 0x1d));
-        assert_eq!(opacity_alpha(DEFAULT_START_MENU_OPACITY), 204);
+        assert_eq!(opacity_alpha(DEFAULT_START_MENU_OPACITY), 127);
     }
 
     #[test]
@@ -506,8 +564,8 @@ mod tests {
     fn icon_theme_name_prefers_snapshot_then_product_default() {
         let set = snapshot_with("iconTheme", "ThemeX");
         assert_eq!(icon_theme_name(Some(&set)), "ThemeX");
-        assert_eq!(icon_theme_name(None), "McMojave-circle");
-        assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "McMojave-circle");
+        assert_eq!(icon_theme_name(None), "PlagueSur");
+        assert_eq!(icon_theme_name(Some(&SettingsSnapshot::new(1))), "PlagueSur");
     }
 }
 

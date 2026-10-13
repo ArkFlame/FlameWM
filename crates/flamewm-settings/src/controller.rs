@@ -345,6 +345,15 @@ mod tests {
         assert!(crate::parse_action("about.other").is_err());
     }
 
+    #[test]
+    fn lock_preview_action_parses_to_the_preview_request() {
+        assert!(matches!(
+            crate::parse_action("settings.lock.preview"),
+            Ok(crate::SettingsAction::LockPreview)
+        ));
+        assert!(crate::parse_action("settings.lock.preview.extra").is_err());
+    }
+
     fn shortcut_snapshot_with(bindings: &[(&str, &str)]) -> ShortcutSnapshot {
         ShortcutSnapshot {
             revision: 7,
@@ -865,6 +874,8 @@ mod tests {
             ("settings.lock.clock.13h", false),
             ("settings.lock.background.choose", true),
             ("settings.lock.background.clear", true),
+            ("settings.avatar.choose", true),
+            ("settings.avatar.clear", true),
             ("settings.toggle.lockShowDate", true),
             ("settings.toggle.lockShowUsername", true),
             ("settings.toggle.lockOnSuspend", true),
@@ -928,6 +939,9 @@ mod tests {
             ("settings.screensaver-ribbons.down", true),
             ("settings.screensaver-ribbon-width.up", true),
             ("settings.screensaver-display-off.down", true),
+            ("settings.lock-bg-blur.up", true),
+            ("settings.lock-bg-dim.down", true),
+            ("settings.lock-bg-dim.sideways", false),
             ("settings.screensaver-ribbons.sideways", false),
             ("settings.toggle.taskbarShowSeconds", true),
             ("settings.toggle.taskbarShowDate", true),
@@ -936,6 +950,137 @@ mod tests {
             ("settings.toggle.screensaverSpanMonitors", true),
         ] {
             assert_eq!(crate::parse_action(action).is_ok(), ok, "{action}");
+        }
+    }
+
+    #[test]
+    fn blur_steppers_write_percent_steps_clamped_and_show_the_label() {
+        for (action, key, label_id, start, expected) in [
+            ("settings.taskbar-blur.up", "taskbarBlurPercent", "taskbar-blur-value", 80, 85),
+            ("settings.taskbar-blur.down", "taskbarBlurPercent", "taskbar-blur-value", 80, 75),
+            ("settings.taskbar-blur.up", "taskbarBlurPercent", "taskbar-blur-value", 98, 100),
+            ("settings.start-menu-blur.down", "startMenuBlurPercent", "start-menu-blur-value", 3, 0),
+        ] {
+            let requests = Rc::new(RefCell::new(Vec::new()));
+            let mut transport = RecordingTransport {
+                requests: requests.clone(),
+                ..RecordingTransport::default()
+            };
+            let mut before = SettingsSnapshot::new(1);
+            before.values.insert(key.to_owned(), SettingValue::Percent(start));
+            let mut after = SettingsSnapshot::new(2);
+            after.values.insert(key.to_owned(), SettingValue::Percent(expected));
+            transport.responses.push_back(Ok(ControlResponse::Settings(before)));
+            transport.responses.push_back(Ok(ControlResponse::Settings(after)));
+            let mut application = SettingsApplication::new(transport);
+            application.client_mut().refresh_settings().expect("initial snapshot");
+            let mut document = ProbeDocument::default();
+
+            application
+                .handle_action(&release(action), &mut document)
+                .expect("blur step");
+
+            let written: Vec<SettingValue> = requests
+                .borrow()
+                .iter()
+                .filter_map(|request| match request {
+                    ControlRequest::ApplySettings(transaction) => transaction
+                        .changes
+                        .first()
+                        .filter(|change| change.key == key)
+                        .and_then(|change| change.value.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(written, vec![SettingValue::Percent(expected)], "{action}");
+            assert_eq!(document.texts[label_id], format!("{expected}%"), "{action} label");
+        }
+    }
+
+    #[test]
+    fn avatar_clear_writes_empty_default_and_never_touches_background() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            1,
+            "avatarImage",
+            SettingValue::Text("/home/u/avatar-0123456789abcdef.png".to_owned()),
+        ))));
+        transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            2,
+            "avatarImage",
+            SettingValue::Text(String::new()),
+        ))));
+        let mut application = SettingsApplication::new(transport);
+        application.client_mut().refresh_settings().expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+
+        application
+            .handle_action(&release("settings.avatar.clear"), &mut document)
+            .expect("avatar clear");
+
+        let keys: Vec<(String, Option<SettingValue>)> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .map(|change| (change.key.clone(), change.value.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![("avatarImage".to_owned(), Some(SettingValue::Text(String::new())))]
+        );
+    }
+
+    #[test]
+    fn lock_background_steppers_clamp_at_their_maximums() {
+        for (action, key, start, expected) in [
+            ("settings.lock-bg-blur.up", "lockBackgroundBlurPercent", 98, 100),
+            ("settings.lock-bg-dim.up", "lockBackgroundDimPercent", 78, 80),
+        ] {
+            let requests = Rc::new(RefCell::new(Vec::new()));
+            let mut transport = RecordingTransport {
+                requests: requests.clone(),
+                ..RecordingTransport::default()
+            };
+            transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                key,
+                SettingValue::Integer(start),
+            ))));
+            transport.responses.push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                key,
+                SettingValue::Integer(expected),
+            ))));
+            let mut application = SettingsApplication::new(transport);
+            application.client_mut().refresh_settings().expect("initial snapshot");
+            let mut document = ProbeDocument::default();
+
+            application
+                .handle_action(&release(action), &mut document)
+                .expect("lock background step");
+
+            let written: Vec<SettingValue> = requests
+                .borrow()
+                .iter()
+                .filter_map(|request| match request {
+                    ControlRequest::ApplySettings(transaction) => transaction
+                        .changes
+                        .first()
+                        .filter(|change| change.key == key)
+                        .and_then(|change| change.value.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(written, vec![SettingValue::Integer(expected)], "{action} clamps, never exceeds maximum");
         }
     }
 

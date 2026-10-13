@@ -293,9 +293,90 @@ pub fn capture_drawable_rect(
     })
 }
 
+/// Blur radius at 100 percent (`blur / 100 * 24`), shared by every pseudo-transparency surface.
+pub const MAX_BLUR_RADIUS_PX: f32 = 24.0;
+
+/// Radius for a blur percent. Blur only applies below 100% opacity, so 100% never blurs.
+#[must_use]
+pub fn blur_radius_px(opacity_percent: u8, blur_percent: u8) -> f32 {
+    if opacity_percent >= 100 {
+        return 0.0;
+    }
+    f32::from(blur_percent.min(100)) / 100.0 * MAX_BLUR_RADIUS_PX
+}
+
+/// Whether a root capture holds real content. An empty or single-colour capture (all black
+/// included) means the root was not painted yet, so the caller must not install it.
+#[must_use]
+pub fn capture_is_ready(rgba: &[u8]) -> bool {
+    let mut pixels = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]);
+    let Some(first) = pixels.next() else {
+        return false;
+    };
+    pixels.any(|pixel| pixel != first)
+}
+
+/// Opaque ARGB32 words (0xFFRRGGBB) for a straight RGBA8 snapshot, blurred per
+/// [`blur_radius_px`]. Blur failure keeps the unblurred pixels.
+#[must_use]
+pub fn blurred_argb_words(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    opacity_percent: u8,
+    blur_percent: u8,
+) -> Vec<u32> {
+    let mut pixels = rgba.to_vec();
+    let radius = blur_radius_px(opacity_percent, blur_percent);
+    if radius > 0.0 {
+        if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut pixels, width, height, radius) {
+            eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
+        }
+    }
+    pixels
+        .chunks_exact(4)
+        .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uniform_and_black_captures_are_not_ready() {
+        assert!(!capture_is_ready(&[]));
+        assert!(!capture_is_ready(&[0, 0, 0, 255].repeat(16)));
+        assert!(!capture_is_ready(&[0x40, 0x80, 0xc0, 255].repeat(16)));
+    }
+
+    #[test]
+    fn one_differing_pixel_makes_capture_ready() {
+        let mut pixels = [0x40, 0x80, 0xc0, 255].repeat(16);
+        pixels[4 * 7] = 0x41;
+        assert!(capture_is_ready(&pixels));
+        assert!(capture_is_ready(&[0, 0, 0, 255, 0, 0, 1, 255]));
+    }
+
+    #[test]
+    fn full_opacity_and_zero_blur_never_blur() {
+        assert_eq!(blur_radius_px(100, 80), 0.0);
+        assert_eq!(blur_radius_px(80, 0), 0.0);
+        assert!((blur_radius_px(80, 100) - 24.0).abs() < f32::EPSILON);
+        assert!((blur_radius_px(80, 250) - 24.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn unblurred_words_are_opaque_argb_in_rgb_order() {
+        let words = blurred_argb_words(2, 1, &[0x11, 0x22, 0x33, 0x00, 0x11, 0x22, 0x33, 0x00], 100, 80);
+        assert_eq!(words, vec![0xff11_2233, 0xff11_2233]);
+    }
+
+    #[test]
+    fn blur_of_uniform_snapshot_keeps_colour() {
+        let words = blurred_argb_words(8, 8, &[0x40, 0x80, 0xc0, 0xff].repeat(64), 40, 100);
+        assert!(words.iter().all(|&w| w == 0xff40_80c0));
+    }
 
     #[test]
     fn pixmap_zero_masks_fall_back_to_truecolor_layout() {

@@ -182,6 +182,8 @@ struct SurfaceInstance {
     dock_edge: Option<DockEdge>,
     /// Corner radius (window px) last published by `set_dock_frame`; zero means rectangular.
     dock_radius: u32,
+    /// `(opacity, blur)` percents for a pseudo-transparency backdrop captured before each first map.
+    popup_backdrop: Option<(u8, u8)>,
 }
 
 /// Pure mask decision for a dock window: keep the current shape, round it to `radius`, or
@@ -653,6 +655,13 @@ impl PresentCycle {
     }
 }
 
+/// Core X event types and SubstructureNotifyMask, defined here because `xlib.rs` is pinned.
+const ROOT_CHILD_DESTROY_NOTIFY: std::os::raw::c_int = 17;
+const ROOT_CHILD_UNMAP_NOTIFY: std::os::raw::c_int = 18;
+const ROOT_CHILD_MAP_NOTIFY: std::os::raw::c_int = 19;
+const ROOT_CHILD_CONFIGURE_NOTIFY: std::os::raw::c_int = 22;
+const ROOT_SUBSTRUCTURE_NOTIFY_MASK: std::ffi::c_long = 1 << 19;
+
 pub struct SurfaceController {
     display: *mut Display,
     screen: i32,
@@ -667,6 +676,8 @@ pub struct SurfaceController {
     icon_geometry_atom: Atom,
     /// Active slide transitions keyed by surface id. Empty when idle (no frame wakeups).
     slides: Timeline<SlideKind>,
+    /// A root child was mapped, unmapped, configured or destroyed since the last `take_root_changed`.
+    root_changed: bool,
 }
 
 impl SurfaceController {
@@ -687,6 +698,7 @@ impl SurfaceController {
                 deferred_native_libraries: Vec::new(),
                 icon_geometry_atom: 0,
                 slides: Timeline::new(),
+                root_changed: false,
             })
         }
     }
@@ -744,6 +756,30 @@ impl SurfaceController {
         Ok(())
     }
 
+    /// Publishes a border-only ring bounding mask (`border_px` ring, outer `radius_px`) and
+    /// applies it at the current window size. Paint refreshes keep the ring, so the interior is
+    /// absent and shows what is behind the window.
+    pub fn set_ring_mask(
+        &mut self,
+        id: SurfaceId,
+        border_px: u32,
+        radius_px: u32,
+    ) -> Result<(), String> {
+        let display = self.display;
+        let instance = self.instance_mut(id)?;
+        instance.app.ring_mask = Some((border_px, radius_px));
+        let (w, h) = (instance.app.width, instance.app.height);
+        let spans = crate::xshape::ring_mask_spans(w, h, border_px, radius_px);
+        let bridge = instance
+            .app
+            .xshape
+            .as_ref()
+            .ok_or_else(|| "ring mask requires XShape (unavailable)".to_string())?;
+        unsafe { bridge.apply_rounded_mask(instance.app.window, &spans) }?;
+        unsafe { XFlush(display) };
+        Ok(())
+    }
+
     pub fn create_surface(
         &mut self,
         document: RuntimeDocument,
@@ -769,6 +805,7 @@ impl SurfaceController {
             grab_pending: false,
             dock_edge: None,
             dock_radius: 0,
+            popup_backdrop: None,
         };
         // Overlay/passthrough surfaces are excluded from WM client
         // management: override-redirect + empty input region + no grab/focus.
@@ -939,6 +976,12 @@ impl SurfaceController {
                 instance.app.window,
             )
         };
+        if !shown {
+            // Before any paint or map: the root under the unmapped popup is still clean.
+            if let Err(error) = self.install_popup_backdrop(id) {
+                eprintln!("flamewm-render-x11: popup backdrop skipped (nonfatal): {error}");
+            }
+        }
         if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide) {
             if self.begin_overlay_show(id, config, shown, now)? {
                 return Ok(());
@@ -1074,6 +1117,8 @@ impl SurfaceController {
         }
         instance.shown = false;
         instance.slide_drawn = None;
+        // The snapshot is recaptured on the next show, so a closed popup keeps no stale pixels.
+        instance.app.clear_surface_backdrop();
         Ok(())
     }
 
@@ -1671,6 +1716,116 @@ impl SurfaceController {
         }
     }
 
+    /// Sets (or clears with `None`) the `(opacity, blur)` percents of the backdrop captured for
+    /// the popup's next first show. Opaque popups (`opacity >= 100`) never capture.
+    pub fn set_popup_backdrop(&mut self, id: SurfaceId, percents: Option<(u8, u8)>) -> Result<(), String> {
+        self.instance_mut(id)?.popup_backdrop = percents;
+        Ok(())
+    }
+
+    /// Captures the root under an unmapped popup, blurs it, and installs it beneath the translucent
+    /// fills. A blank or uniform capture (root not painted yet) installs nothing: solid colour.
+    fn install_popup_backdrop(&mut self, id: SurfaceId) -> Result<(), String> {
+        let Some((opacity, blur)) = self.instance_mut(id)?.popup_backdrop else {
+            return Ok(());
+        };
+        let snapshot = if opacity < 100 {
+            self.capture_root_under(id)
+                .ok()
+                .filter(|capture| crate::backdrop::capture_is_ready(&capture.pixels))
+        } else {
+            None
+        };
+        let instance = self.instance_mut(id)?;
+        let Some(capture) = snapshot else {
+            instance.app.clear_surface_backdrop();
+            return Ok(());
+        };
+        let words = crate::backdrop::blurred_argb_words(
+            capture.width,
+            capture.height,
+            &capture.pixels,
+            opacity,
+            blur,
+        );
+        // SAFETY: the popup's display and backbuffer are live and the window is still unmapped.
+        let installed = unsafe { instance.app.set_surface_backdrop(&words, capture.width, capture.height) };
+        if installed.is_err() {
+            instance.app.clear_surface_backdrop();
+        }
+        installed?;
+        self.redraw(id)
+    }
+
+    /// Root pixels under the surface's current device rect, as straight RGBA8. Feeds the
+    /// pseudo-transparency snapshot; the caller owns blur and refresh policy.
+    pub fn capture_root_under(&self, id: SurfaceId) -> Result<crate::backdrop::BackdropCapture, String> {
+        let rect = self.surface_device_rect(id)?;
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        crate::backdrop::capture_drawable_rect(
+            self.display,
+            root as u64,
+            (rect.x as i32, rect.y as i32, rect.width as u32, rect.height as u32),
+        )
+    }
+
+    /// Subscribes to root child map/unmap/configure/destroy (SubstructureNotify is shared, so the
+    /// window manager's redirect is unaffected). Idempotent.
+    pub fn watch_root_changes(&self) {
+        // SAFETY: the display is live; the root window is the screen's root.
+        unsafe {
+            XSelectInput(self.display, XRootWindow(self.display, self.screen), ROOT_SUBSTRUCTURE_NOTIFY_MASK);
+        }
+    }
+
+    /// Whether root children changed since the last call, then clears the flag.
+    pub fn take_root_changed(&mut self) -> bool {
+        std::mem::take(&mut self.root_changed)
+    }
+
+    /// Root pixels under a mapped surface, read with the surface unmapped so its own translucent
+    /// fills never enter the snapshot. A surface that was mapped is mapped again before returning.
+    pub fn capture_root_under_unmapped(&mut self, id: SurfaceId) -> Result<crate::backdrop::BackdropCapture, String> {
+        let display = self.display;
+        let instance = self.instance_mut(id)?;
+        let (window, was_shown) = (instance.app.window, instance.shown);
+        if was_shown {
+            // SAFETY: display and window are live; the pending unmap is flushed before the read.
+            unsafe {
+                XUnmapWindow(display, window);
+                XSync(display, 0);
+            }
+        }
+        let captured = self.capture_root_under(id);
+        if was_shown {
+            // SAFETY: display and window are live; the window repaints on the Expose that follows.
+            unsafe {
+                XMapWindow(display, window);
+                XFlush(display);
+            }
+        }
+        captured
+    }
+
+    /// Installs a static ARGB snapshot (row-major 0xAARRGGBB) under the surface's translucent
+    /// fills, then repaints. `None` removes it.
+    pub fn set_surface_backdrop(
+        &mut self,
+        id: SurfaceId,
+        backdrop: Option<(&[u32], u32, u32)>,
+    ) -> Result<(), String> {
+        {
+            let instance = self.instance_mut(id)?;
+            match backdrop {
+                Some((argb, width, height)) => unsafe {
+                    instance.app.set_surface_backdrop(argb, width, height)?
+                },
+                None => instance.app.clear_surface_backdrop(),
+            }
+        }
+        self.redraw(id)
+    }
+
     pub fn redraw_dirty(&mut self) -> Result<(), String> {
         let _guard = flamewm_profiler::start("render.present");
         let ids: Vec<SurfaceId> = self.surfaces.keys().copied().collect();
@@ -1733,6 +1888,15 @@ impl SurfaceController {
                 XNextEvent(self.display, event.as_mut_ptr());
             }
             let event = unsafe { event.assume_init() };
+            if unsafe { event.xany.window } == unsafe { XRootWindow(self.display, self.screen) } {
+                // Other root children coming and going change what lies under a pseudo-transparency
+                // bar. Our own surfaces are excluded: a capture unmaps and remaps them itself.
+                let kind = unsafe { event.type_ };
+                let child = unsafe { event.xmap.window };
+                self.root_changed |= matches!(kind, ROOT_CHILD_MAP_NOTIFY | ROOT_CHILD_UNMAP_NOTIFY | ROOT_CHILD_CONFIGURE_NOTIFY | ROOT_CHILD_DESTROY_NOTIFY)
+                    && !self.windows.contains_key(&child);
+                continue;
+            }
             let Some(id) = self.windows.get(&unsafe { event.xany.window }).copied() else {
                 continue;
             };

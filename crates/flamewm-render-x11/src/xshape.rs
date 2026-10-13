@@ -234,9 +234,108 @@ pub(crate) fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u
     spans
 }
 
+/// Row spans for a border-only ring: the rounded outer rect of `width`x`height` (corner radius
+/// `radius_px`) minus the inner rounded rect inset by `border_px` (at least 2 px so the ring is
+/// visible). Interior pixels are absent from the bounding region, so the window is see-through.
+/// Spans stay row-major and YX-sorted for `XShapeCombineRectangles`.
+pub(crate) fn ring_mask_spans(
+    width: u32,
+    height: u32,
+    border_px: u32,
+    radius_px: u32,
+) -> Vec<(u32, u32, u32)> {
+    let border = border_px.max(2);
+    let outer = rounded_mask_spans(width, height, radius_px);
+    let inner_w = width.saturating_sub(border.saturating_mul(2));
+    let inner_h = height.saturating_sub(border.saturating_mul(2));
+    let inner = if inner_w == 0 || inner_h == 0 {
+        Vec::new()
+    } else {
+        rounded_mask_spans(inner_w, inner_h, radius_px.saturating_sub(border))
+    };
+    let mut spans = Vec::with_capacity(outer.len() * 2);
+    for (row, start, end) in outer {
+        let inner_row = row
+            .checked_sub(border)
+            .and_then(|index| inner.get(index as usize));
+        let (cut_start, cut_end) = match inner_row {
+            Some(&(_, is, ie)) => (is + border, ie + border),
+            None => (end, end),
+        };
+        let left = (start, end.min(cut_start));
+        let right = (start.max(cut_end), end);
+        for (from, to) in [left, right] {
+            if to > from {
+                spans.push((row, from, to));
+            }
+        }
+    }
+    spans
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ring_mask_keeps_border_and_cuts_interior() {
+        let spans = ring_mask_spans(10, 10, 2, 0);
+        assert_eq!(spans[0], (0, 0, 10));
+        assert_eq!(spans[1], (1, 0, 10));
+        assert_eq!(spans[2], (2, 0, 2));
+        assert_eq!(spans[3], (2, 8, 10));
+        assert_eq!(spans.last(), Some(&(9, 0, 10)));
+        let covered = |x: u32, y: u32| {
+            spans
+                .iter()
+                .any(|&(row, s, e)| row == y && x >= s && x < e)
+        };
+        assert!(!covered(5, 5), "interior must be absent");
+        assert!(covered(0, 5) && covered(1, 5) && covered(8, 5) && covered(9, 5));
+        assert!(!covered(2, 5) && !covered(7, 5));
+    }
+
+    #[test]
+    fn ring_mask_border_is_at_least_two_pixels() {
+        assert_eq!(ring_mask_spans(10, 10, 0, 0), ring_mask_spans(10, 10, 2, 0));
+        assert_eq!(ring_mask_spans(10, 10, 1, 0), ring_mask_spans(10, 10, 2, 0));
+    }
+
+    #[test]
+    fn ring_mask_small_window_is_all_border() {
+        assert_eq!(
+            ring_mask_spans(3, 3, 2, 0),
+            vec![(0, 0, 3), (1, 0, 3), (2, 0, 3)]
+        );
+    }
+
+    #[test]
+    fn ring_mask_honours_outer_corner_radius() {
+        let spans = ring_mask_spans(8, 8, 2, 4);
+        // Outer corner row 0 cut to 2..6 by the radius-4 rounded rect; its ring row keeps only the
+        // border columns that remain inside the outer shape.
+        assert_eq!(spans[0], (0, 2, 6));
+        assert_eq!(spans.last(), Some(&(7, 2, 6)));
+        let covered = |x: u32, y: u32| {
+            spans
+                .iter()
+                .any(|&(row, s, e)| row == y && x >= s && x < e)
+        };
+        assert!(!covered(0, 0), "rounded outer corner pixel must be absent");
+        assert!(!covered(4, 4), "interior must be absent");
+        assert!(covered(0, 4) && covered(7, 4) && covered(4, 0) && covered(4, 7));
+    }
+
+    #[test]
+    fn ring_mask_spans_are_yx_sorted_and_non_overlapping() {
+        for (w, h, b, r) in [(20, 12, 2, 0), (30, 30, 3, 8), (9, 40, 4, 3)] {
+            let spans = ring_mask_spans(w, h, b, r);
+            for pair in spans.windows(2) {
+                let (a, c) = (pair[0], pair[1]);
+                assert!(a.0 < c.0 || (a.0 == c.0 && a.2 <= c.1), "order {a:?} {c:?}");
+            }
+        }
+    }
 
     #[test]
     fn rounded_mask_geometry_matches_quarter_circle_cut() {

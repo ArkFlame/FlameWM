@@ -160,6 +160,18 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
+    /// Border-only ring bounding mask for one surface (see `SurfaceController::set_ring_mask`).
+    pub fn set_surface_ring_mask(
+        &mut self,
+        surface: SurfaceHandle,
+        border_px: u32,
+        radius_px: u32,
+    ) -> Result<(), UiBackendError> {
+        self.controller
+            .set_ring_mask(surface.0, border_px, radius_px)
+            .map_err(UiBackendError::Renderer)
+    }
+
     /// Apply the consumer-selected output scale to one retained surface.
     /// Call before first presentation and again when output assignment or
     /// output scale changes. Invalid scales fall back to 1.0; the document
@@ -193,6 +205,15 @@ impl SurfaceRuntime {
         slide: Option<SlideConfig>,
     ) -> Result<(), UiBackendError> {
         self.controller.set_slide(surface.0, slide).map_err(Into::into)
+    }
+
+    /// Opt-in `(opacity, blur)` pseudo-transparency backdrop, captured before each first show.
+    pub fn set_popup_backdrop(
+        &mut self,
+        surface: SurfaceHandle,
+        percents: Option<(u8, u8)>,
+    ) -> Result<(), UiBackendError> {
+        self.controller.set_popup_backdrop(surface.0, percents).map_err(Into::into)
     }
 
     pub fn raise(&self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
@@ -289,6 +310,43 @@ impl SurfaceRuntime {
 
     pub fn redraw_dirty(&mut self) -> Result<(), UiBackendError> {
         self.controller.redraw_dirty().map_err(Into::into)
+    }
+
+    /// Straight RGBA8 root pixels under the surface's device rect (pseudo-transparency source).
+    pub fn capture_root_under(
+        &self,
+        surface: SurfaceHandle,
+    ) -> Result<flamewm_render_x11::backdrop::BackdropCapture, UiBackendError> {
+        self.controller.capture_root_under(surface.0).map_err(Into::into)
+    }
+
+    /// Subscribes to root child map/unmap/configure changes (see the controller method).
+    pub fn watch_root_changes(&self) {
+        self.controller.watch_root_changes();
+    }
+
+    /// Whether root children changed since the last call.
+    pub fn take_root_changed(&mut self) -> bool {
+        self.controller.take_root_changed()
+    }
+
+    /// Root pixels under a surface read with the surface unmapped (see the controller method).
+    pub fn capture_root_under_unmapped(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> Result<flamewm_render_x11::backdrop::BackdropCapture, UiBackendError> {
+        self.controller.capture_root_under_unmapped(surface.0).map_err(Into::into)
+    }
+
+    /// Installs or removes the static ARGB backdrop under a surface's translucent fills.
+    pub fn set_surface_backdrop(
+        &mut self,
+        surface: SurfaceHandle,
+        backdrop: Option<(&[u32], u32, u32)>,
+    ) -> Result<(), UiBackendError> {
+        self.controller
+            .set_surface_backdrop(surface.0, backdrop)
+            .map_err(Into::into)
     }
 
     /// Mark damage on one surface (merged max-coverage latch consumed by

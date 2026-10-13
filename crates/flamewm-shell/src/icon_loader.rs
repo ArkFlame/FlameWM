@@ -25,6 +25,42 @@ fn refresh_icon_index(resolver: &mut IconResolver, rebuilder: &ThemeRebuilder) -
     true
 }
 
+/// Resolves one shell icon raster: the requested name, then the generic
+/// application role, then the bundled theme-independent glyph. Brand rasters
+/// are never returned, and a miss is never cached as final by the caller.
+fn resolve_icon_raster(
+    resolver: &mut IconResolver,
+    name: &str,
+    size: IconSize,
+) -> Option<Rgb8Raster> {
+    let accept = |raster: &Rgb8Raster| !is_brand_fallback(raster);
+    icon_name_candidates(name)
+        .iter()
+        .find_map(|candidate| resolver.prepare_name(candidate.as_str(), size).ok().filter(accept))
+        .or_else(|| resolver.prepare_name(GENERIC_APP_ICON, size).ok().filter(accept))
+        .or_else(|| resolver.prepare_generic_application(size).ok().filter(accept))
+}
+
+/// Lookup names for one task or Start name, most specific first: the raw
+/// name, its lowercase, then the segment after the last `.` (WM_CLASS
+/// `mini.xterm` yields `xterm`), lowercased. Empty and duplicate names drop.
+pub fn icon_name_candidates(name: &str) -> Vec<String> {
+    let raw = name.trim();
+    let class_segment = raw.rsplit('.').next().unwrap_or(raw);
+    let mut out: Vec<String> = Vec::new();
+    for candidate in [
+        raw.to_owned(),
+        raw.to_ascii_lowercase(),
+        class_segment.to_owned(),
+        class_segment.to_ascii_lowercase(),
+    ] {
+        if !candidate.is_empty() && !out.contains(&candidate) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
 /// Generic application glyph used when an application name misses. Brand
 /// artwork is still rejected by `is_brand_fallback`.
 const GENERIC_APP_ICON: &str = "application-x-executable";
@@ -135,18 +171,7 @@ impl IconLoader {
                     // transparent empty placeholder. Applies to every
                     // request type/role uniformly.
                     let size = IconSize::new(req.width, req.height);
-                    let accept = |raster: &Rgb8Raster| !is_brand_fallback(raster);
-                    let raster = resolver
-                        .prepare_name(&req.name, size)
-                        .ok()
-                        .filter(accept)
-                        .or_else(|| {
-                            // Miss -> generic application role, never brand.
-                            resolver
-                                .prepare_name(GENERIC_APP_ICON, size)
-                                .ok()
-                                .filter(accept)
-                        });
+                    let raster = resolve_icon_raster(&mut resolver, &req.name, size);
                     let res = IconResult {
                         target: req.target,
                         generation: req.generation,
@@ -352,6 +377,70 @@ fn is_brand_fallback(raster: &Rgb8Raster) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_name_candidates_try_raw_then_lowercase_then_class_segment() {
+        assert_eq!(
+            icon_name_candidates("mini.xterm"),
+            vec!["mini.xterm".to_owned(), "xterm".to_owned()]
+        );
+        assert_eq!(icon_name_candidates("XTerm"), vec!["XTerm".to_owned(), "xterm".to_owned()]);
+        assert_eq!(icon_name_candidates("  "), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wm_class_segment_resolves_to_installed_theme_icon() {
+        let themes = std::env::temp_dir().join(format!(
+            "flamewm-wmclass-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&themes);
+        let icons = themes.join("icons/breeze/16x16/apps");
+        std::fs::create_dir_all(&icons).expect("theme dir");
+        std::fs::write(
+            themes.join("icons/breeze/index.theme"),
+            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
+        )
+        .expect("index.theme");
+        let mut bytes = b"P6\n1 1\n255\n".to_vec();
+        bytes.extend_from_slice(&[10, 200, 10]);
+        std::fs::write(icons.join("xterm.ppm"), bytes).expect("xterm icon");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root")
+            .to_path_buf();
+        let mut resolver = IconResolver::new(root, vec!["Breeze".to_owned()], vec![themes.clone()], 0);
+        let raster = resolve_icon_raster(&mut resolver, "mini.xterm", IconSize::new(16, 16))
+            .expect("WM_CLASS segment must resolve");
+        let _ = std::fs::remove_dir_all(&themes);
+        assert!(raster.source.ends_with("xterm.ppm"), "got {}", raster.source);
+    }
+
+    #[test]
+    fn task_icon_miss_with_empty_theme_still_yields_bundled_glyph() {
+        let themes = std::env::temp_dir().join(format!(
+            "flamewm-empty-theme-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&themes).expect("empty theme dir");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root")
+            .to_path_buf();
+        let mut resolver = IconResolver::new(root, Vec::new(), vec![themes], 0);
+        let size = IconSize::new(25, 25);
+        for _ in 0..2 {
+            let raster = resolve_icon_raster(&mut resolver, "mini.xterm", size)
+                .expect("task miss must resolve to the bundled glyph, not stay empty");
+            assert!(
+                raster.source.ends_with("application-x-executable.svg"),
+                "bundled generic glyph expected, got {}",
+                raster.source
+            );
+        }
+    }
 
     #[test]
     fn refresh_icon_index_advances_generation_when_watch_mtime_is_stale() {

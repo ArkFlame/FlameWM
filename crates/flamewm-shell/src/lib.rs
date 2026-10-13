@@ -11,7 +11,10 @@ pub mod popup_role;
 pub mod projection;
 pub mod quick_controls;
 pub mod runtime;
+#[path = "settings_projection.rs"]
+pub mod settings_projection;
 pub mod start;
+pub mod surface_backdrop;
 pub mod status;
 
 /// The active taskbar status projection is compiled without activating stale

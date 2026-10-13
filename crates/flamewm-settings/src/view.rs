@@ -66,12 +66,14 @@ mod tests {
         "accent-opacity-value",
         "animation-speed-value",
         "lock-background-image-value",
+        "avatar-value",
+        "lock-bg-blur-value",
+        "lock-bg-dim-value",
         "titlebar-minimize-style-value",
         "titlebar-maximize-style-value",
         "titlebar-close-style-value",
         "taskbar-opacity-value",
         "taskbar-size-value",
-        "taskbar-color-value",
         "color-picker-hex",
         "color-picker-error",
         "taskbar-edge-value",
@@ -118,6 +120,34 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("compiled display name slot {slot}: {error}"));
         }
+    }
+
+    #[test]
+    fn lock_preview_button_is_in_the_lock_screen_card() {
+        let html = include_str!("../../../ui/settings.html");
+        assert!(html.contains(
+            "id=\"lock-preview\" data-action=\"settings.lock.preview\">Preview lock screen</button>"
+        ));
+    }
+
+    #[test]
+    fn taskbar_colour_is_one_modern_control_on_the_taskbar_page() {
+        let html = include_str!("../../../ui/settings.html");
+        let section = |id: &str, next: &str| {
+            html.split_once(&format!("id=\"{id}\""))
+                .and_then(|(_, rest)| rest.split_once(&format!("id=\"{next}\"")))
+                .map(|(body, _)| body)
+                .unwrap_or_else(|| panic!("settings page {id} must precede {next}"))
+        };
+        let appearance = section("page-appearance", "page-desktop");
+        let taskbar = section("page-taskbar", "page-displays");
+        assert!(taskbar.contains("id=\"color-taskbar-wheel\""));
+        assert!(taskbar.contains("data-action=\"settings.picker.open.taskbar\""));
+        assert!(!appearance.contains("color-taskbar-"), "taskbar picker row left Appearance");
+        assert!(appearance.contains("id=\"color-startmenu-wheel\""));
+        assert!(!html.contains("taskbar-color-value"));
+        assert!(!html.contains("settings.taskbar.color"));
+        assert_eq!(html.matches("id=\"color-taskbar-wheel\"").count(), 1);
     }
 
     #[test]

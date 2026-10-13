@@ -270,6 +270,10 @@ pub struct ProductSettings {
     pub maximize_animation_enabled: bool,
     pub lock_background_color: String,
     pub lock_background_image: String,
+    pub lock_background_blur_percent: u16,
+    pub lock_background_dim_percent: u16,
+    /// Lock-screen profile picture path; empty selects the built-in ring icon.
+    pub avatar_image: String,
     pub lock_clock_format: LockClockFormat,
     pub lock_show_date: bool,
     pub lock_show_username: bool,
@@ -292,21 +296,21 @@ impl Default for ProductSettings {
         Self {
             revision: 1,
             accent: "#EF4048".to_owned(),
-            icon_theme: "McMojave-circle".to_owned(),
+            icon_theme: "PlagueSur".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
             wallpaper_fit: WallpaperFit::Fill,
             desktop_selection_fill_opacity: 20,
             window_snap_preview_fill_opacity: 20,
             snap_preview_enabled: true,
-            focus_follows_mouse: true,
+            focus_follows_mouse: false,
             font_family: "IBM Plex Sans".to_owned(),
             font_bold: false,
             font_size_offset: 0,
             taskbar_color: "#191b1d".to_owned(),
-            taskbar_opacity: 80,
+            taskbar_opacity: 50,
             taskbar_height: 44,
-            taskbar_style: TaskbarStyle::Classic,
+            taskbar_style: TaskbarStyle::Floating,
             taskbar_floating_margin: 8,
             taskbar_floating_radius: 12,
             taskbar_blur_percent: 80,
@@ -317,10 +321,10 @@ impl Default for ProductSettings {
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
             start_menu_color: "#191b1d".to_owned(),
-            start_menu_opacity: 80,
+            start_menu_opacity: 50,
             start_menu_blur_percent: 80,
             accent_opacity: 100,
-            decoration: "rounded".to_owned(),
+            decoration: "ios".to_owned(),
             titlebar_color: "#1b1e20".to_owned(),
             titlebar_minimize_style: "default".to_owned(),
             titlebar_maximize_style: "default".to_owned(),
@@ -348,6 +352,9 @@ impl Default for ProductSettings {
             maximize_animation_enabled: true,
             lock_background_color: "#232629".to_owned(),
             lock_background_image: String::new(),
+            lock_background_blur_percent: 40,
+            lock_background_dim_percent: 25,
+            avatar_image: String::new(),
             lock_clock_format: LockClockFormat::TwentyFour,
             lock_show_date: true,
             lock_show_username: true,
@@ -533,13 +540,13 @@ impl ProductSettings {
             return invalid("animationSpeed must be 25..200");
         }
         validate_color(&self.lock_background_color, false, "lockBackgroundColor")?;
-        if self.lock_background_image.len() > 4096
-            || !(self.lock_background_image.is_empty() || self.lock_background_image.starts_with('/'))
-            || self.lock_background_image.chars().any(char::is_control)
-        {
-            return invalid(
-                "lockBackgroundImage must be empty or an absolute path of at most 4096 bytes",
-            );
+        validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
+        validate_lock_image_path(&self.avatar_image, "avatarImage")?;
+        if self.lock_background_blur_percent > 100 {
+            return invalid("lockBackgroundBlurPercent must be 0..100");
+        }
+        if self.lock_background_dim_percent > 80 {
+            return invalid("lockBackgroundDimPercent must be 0..80");
         }
         if self.lock_timeout_minutes > 240 {
             return invalid("lockTimeoutMinutes must be 0..240");
@@ -1051,6 +1058,9 @@ stable_settings! {
     (false, windows, "maximizeAnimationEnabled", maximize_animation_enabled),
     (false, lock, "lockBackgroundColor", lock_background_color),
     (false, lock, "lockBackgroundImage", lock_background_image),
+    (false, lock, "lockBackgroundBlurPercent", lock_background_blur_percent),
+    (false, lock, "lockBackgroundDimPercent", lock_background_dim_percent),
+    (false, appearance, "avatarImage", avatar_image),
     (false, lock, "lockClockFormat", lock_clock_format),
     (false, lock, "lockShowDate", lock_show_date),
     (false, lock, "lockShowUsername", lock_show_username),
@@ -1131,6 +1141,17 @@ fn validate_color(value: &str, allow_empty: bool, name: &str) -> FlameResult<()>
     ))
 }
 
+/// Empty (built-in default) or an absolute path of at most 4096 bytes without control characters.
+fn validate_lock_image_path(value: &str, name: &str) -> FlameResult<()> {
+    if value.len() > 4096
+        || !(value.is_empty() || value.starts_with('/'))
+        || value.chars().any(char::is_control)
+    {
+        return invalid_owned(format!("{name} must be empty or an absolute path of at most 4096 bytes"));
+    }
+    Ok(())
+}
+
 fn is_stable_key(key: &str) -> bool {
     key == "revision"
         || stable_setting(key).is_some()
@@ -1171,11 +1192,21 @@ mod tests {
     }
 
     #[test]
-    fn unset_icon_theme_defaults_to_mcmojave_and_writes_nothing() {
+    fn unset_icon_theme_defaults_to_plaguesur_and_writes_nothing() {
         let store = ConfigStore::default();
         let parsed = store.parse_snapshot("revision=2\n").expect("valid snapshot");
-        assert_eq!(parsed.icon_theme, "McMojave-circle");
+        assert_eq!(parsed.icon_theme, "PlagueSur");
         assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
+    }
+
+    #[test]
+    fn legacy_explicit_mcmojave_icon_theme_is_kept_verbatim() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\niconTheme=McMojave-circle\n")
+            .expect("legacy icon theme");
+        assert_eq!(parsed.icon_theme, "McMojave-circle");
+        assert!(ConfigStore::serialize(&parsed).contains("iconTheme=McMojave-circle\n"));
     }
 
     #[test]
@@ -1249,6 +1280,106 @@ mod tests {
             settings.validate().expect_err("invalid scale").code,
             ErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn avatar_image_defaults_empty_and_round_trips() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.avatar_image, "");
+        assert!(!ConfigStore::serialize(&defaults).contains("avatarImage"));
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\navatarImage=/home/u/.local/share/flamewm/wallpapers/avatar-0123456789abcdef.png\n")
+            .expect("absolute avatar path");
+        assert_eq!(
+            parsed.avatar_image,
+            "/home/u/.local/share/flamewm/wallpapers/avatar-0123456789abcdef.png"
+        );
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("avatarImage=/home/u/"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
+    fn invalid_avatar_image_paths_are_rejected() {
+        let store = ConfigStore::default();
+        let long_path = format!("/{}", "a".repeat(4096));
+        for line in [
+            "avatarImage=face.png".to_owned(),
+            "avatarImage=images/face.png".to_owned(),
+            "avatarImage=/tmp/a\tb.png".to_owned(),
+            format!("avatarImage={long_path}"),
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err("invalid avatar value")
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn lock_background_blur_and_dim_defaults_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert_eq!(defaults.lock_background_blur_percent, 40);
+        assert_eq!(defaults.lock_background_dim_percent, 25);
+        let text = ConfigStore::serialize(&defaults);
+        assert!(!text.contains("lockBackgroundBlurPercent"));
+        assert!(!text.contains("lockBackgroundDimPercent"));
+    }
+
+    #[test]
+    fn lock_background_blur_and_dim_legacy_file_loads_defaults() {
+        let parsed = ConfigStore::default()
+            .parse_snapshot("revision=1\nlockBackgroundColor=#102030\n")
+            .expect("legacy lock file");
+        assert_eq!(parsed.lock_background_blur_percent, 40);
+        assert_eq!(parsed.lock_background_dim_percent, 25);
+    }
+
+    #[test]
+    fn lock_background_blur_and_dim_round_trip_bounds() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n")
+            .expect("bounds are valid");
+        assert_eq!(parsed.lock_background_blur_percent, 100);
+        assert_eq!(parsed.lock_background_dim_percent, 80);
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("lockBackgroundBlurPercent=100\n"));
+        assert!(text.contains("lockBackgroundDimPercent=80\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+
+        let zero = store
+            .parse_snapshot("revision=2\nlockBackgroundBlurPercent=0\nlockBackgroundDimPercent=0\n")
+            .expect("zero is valid");
+        assert_eq!(zero.lock_background_blur_percent, 0);
+        assert_eq!(zero.lock_background_dim_percent, 0);
+    }
+
+    #[test]
+    fn invalid_lock_background_blur_and_dim_values_are_rejected() {
+        let store = ConfigStore::default();
+        for line in [
+            "lockBackgroundBlurPercent=101",
+            "lockBackgroundBlurPercent=-1",
+            "lockBackgroundBlurPercent=40.5",
+            "lockBackgroundDimPercent=81",
+            "lockBackgroundDimPercent=-1",
+            "lockBackgroundDimPercent=25%",
+        ] {
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err("invalid lock background value")
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -1329,17 +1460,17 @@ mod tests {
     #[test]
     fn taskbar_style_and_backdrop_defaults_write_nothing() {
         let defaults = ProductSettings::default();
-        assert_eq!(defaults.taskbar_style, TaskbarStyle::Classic);
+        assert_eq!(defaults.taskbar_style, TaskbarStyle::Floating);
         assert_eq!(defaults.taskbar_floating_margin, 8);
         assert_eq!(defaults.taskbar_floating_radius, 12);
         assert_eq!(defaults.taskbar_blur_percent, 80);
         assert_eq!(defaults.start_menu_blur_percent, 80);
         let taskbar = defaults.taskbar_backdrop();
-        assert_eq!(taskbar.opacity_percent, 80);
+        assert_eq!(taskbar.opacity_percent, 50);
         assert_eq!(taskbar.blur_percent, 80);
         assert!((taskbar.radius_px - 19.2).abs() < 1e-4);
         let start = defaults.start_menu_backdrop();
-        assert_eq!(start.opacity_percent, 80);
+        assert_eq!(start.opacity_percent, 50);
         assert!((start.radius_px - 19.2).abs() < 1e-4);
         let text = ConfigStore::serialize(&defaults);
         assert!(!text.contains("taskbarStyle"));
@@ -1353,18 +1484,18 @@ mod tests {
         let store = ConfigStore::default();
         let parsed = store
             .parse_snapshot(
-                "revision=2\ntaskbarStyle=floating\ntaskbarFloatingMargin=32\n\
+                "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
                  taskbarFloatingRadius=0\ntaskbarBlurPercent=100\ntaskbarOpacity=100\n\
                  startMenuBlurPercent=0\nstartMenuOpacity=50\n",
             )
             .expect("valid taskbar settings");
-        assert_eq!(parsed.taskbar_style, TaskbarStyle::Floating);
+        assert_eq!(parsed.taskbar_style, TaskbarStyle::Classic);
         assert_eq!(parsed.taskbar_floating_margin, 32);
         assert_eq!(parsed.taskbar_floating_radius, 0);
         assert!((parsed.taskbar_backdrop().radius_px - 0.0).abs() < 1e-6);
         assert!((parsed.start_menu_backdrop().radius_px - 0.0).abs() < 1e-6);
         let text = ConfigStore::serialize(&parsed);
-        assert!(text.contains("taskbarStyle=floating\n"));
+        assert!(text.contains("taskbarStyle=classic\n"));
         assert!(text.contains("taskbarBlurPercent=100\n"));
         assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
     }
@@ -1490,10 +1621,10 @@ mod tests {
     fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
         let defaults = ProductSettings::default();
         assert_eq!(defaults.start_menu_color, "#191b1d");
-        assert_eq!(defaults.start_menu_opacity, 80);
-        assert_eq!(defaults.taskbar_opacity, 80);
+        assert_eq!(defaults.start_menu_opacity, 50);
+        assert_eq!(defaults.taskbar_opacity, 50);
         assert_eq!(defaults.accent_opacity, 100);
-        assert_eq!(defaults.decoration, "rounded");
+        assert_eq!(defaults.decoration, "ios");
         assert_eq!(defaults.titlebar_color, "#1b1e20");
         assert_eq!(defaults.titlebar_close_style, "default");
         assert!(defaults.titlebar_close_color.is_empty());
@@ -1737,7 +1868,7 @@ mod tests {
         assert!(!defaults.taskbar_show_seconds);
         assert!(defaults.taskbar_show_date);
         assert!(defaults.snap_preview_enabled);
-        assert!(defaults.focus_follows_mouse);
+        assert!(!defaults.focus_follows_mouse);
         let text = ConfigStore::serialize(&defaults);
         for key in [
             "wallpaperFit",
@@ -1817,17 +1948,17 @@ mod tests {
         assert_eq!(parsed.cursor_size, 24);
         assert_eq!(parsed.taskbar_clock_format, ClockFormat::TwentyFour);
         assert!(parsed.snap_preview_enabled);
-        assert!(parsed.focus_follows_mouse);
+        assert!(!parsed.focus_follows_mouse);
     }
 
     #[test]
-    fn focus_follows_mouse_writes_only_false() {
+    fn focus_follows_mouse_writes_only_true() {
         let mut settings = ProductSettings::default();
-        settings.focus_follows_mouse = false;
+        settings.focus_follows_mouse = true;
         let text = ConfigStore::serialize(&settings);
-        assert!(text.contains("focusFollowsMouse=false\n"));
+        assert!(text.contains("focusFollowsMouse=true\n"));
         let store = ConfigStore::default();
-        assert!(!store.parse_snapshot(&text).expect("round trip").focus_follows_mouse);
+        assert!(store.parse_snapshot(&text).expect("round trip").focus_follows_mouse);
     }
 
     #[test]

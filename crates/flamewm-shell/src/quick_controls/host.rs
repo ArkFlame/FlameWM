@@ -114,6 +114,8 @@ pub struct QuickControlSnapshot {
     pub network_filter_focused: bool,
     pub network_secret_error: bool,
     pub network_secret_submit_id: Option<u64>,
+    /// Presentation settings for the shared menu background and popup backdrop.
+    pub settings: SettingsSnapshot,
 }
 
 impl QuickControlSnapshot {
@@ -132,6 +134,7 @@ impl QuickControlSnapshot {
                 network_filter_focused: false,
                 network_secret_error: false,
                 network_secret_submit_id: None,
+                settings: SettingsSnapshot::new(0),
             }),
             Ok(response) => Err(HostError::Control(format!(
                 "GetSystem returned {response:?}"
@@ -147,8 +150,15 @@ impl QuickControlSnapshot {
         if let Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) =
             client.call(&ControlRequest::GetSettings)
         {
-            apply_settings(snapshot, &mut self.audio_settings);
+            self.store_settings(snapshot);
         }
+    }
+
+    /// Stores one settings snapshot: presentation for the shared menu background and the
+    /// audio tab/settings projection.
+    pub fn store_settings(&mut self, snapshot: SettingsSnapshot) {
+        self.settings = snapshot.clone();
+        apply_settings(snapshot, &mut self.audio_settings);
     }
 }
 
@@ -487,6 +497,15 @@ fn coalesce_commands(queue: &mut VecDeque<Command>) -> VecDeque<Command> {
     out
 }
 
+/// Fetches the current settings over the control session for one popup open. A failed connect
+/// or call keeps the last snapshot (nonfatal: the popup still opens with the previous values).
+fn refresh_settings_for_open(state: &std::rc::Rc<std::cell::RefCell<HostState>>) {
+    match ControlClient::connect(BusKind::Session) {
+        Ok(client) => state.borrow_mut().snapshot.refresh_settings(&client),
+        Err(error) => eprintln!("flamewm-quick-control: settings refresh skipped: {}", error.message),
+    }
+}
+
 /// Tick: drain queued parent commands; OPEN closes the current helper
 /// popup then projects/fits/shows/grabs; CLOSE closes; SHUTDOWN stops.
 fn tick_host(
@@ -515,6 +534,8 @@ fn tick_host(
                 guard.surfaces.close(runtime);
             }
             Command::Open(request) => {
+                // Live menu settings: re-read the current settings on every open (no timers).
+                refresh_settings_for_open(state);
                 let snapshot = state.borrow().snapshot.clone();
                 let mut guard = state.borrow_mut();
                 // One helper popup at a time: close the current one first,
@@ -675,6 +696,11 @@ fn open_request(
     prepare_commit(runtime, surface, rect).map_err(|error| error.to_string())?;
     let prepare_elapsed = prepare_start.elapsed();
     drop(_prepare);
+    // Same frosted backdrop as the Start menu, captured at the first show.
+    let backdrop = crate::settings_projection::start_backdrop_percents(&snapshot.settings);
+    if let Err(error) = runtime.set_popup_backdrop(surface, Some(backdrop)) {
+        eprintln!("flamewm-quick-control: popup backdrop skipped (nonfatal): {error:?}");
+    }
     let present_start = std::time::Instant::now();
     let _present = crate::runtime::shell_span("shell.quick.present").start();
     present(runtime, surface).map_err(|error| error.to_string())?;
@@ -780,7 +806,14 @@ fn project_snapshot(
         system: snapshot.system.clone(),
     };
     runtime
-        .with_document(surface, |document| match kind {
+        .with_document(surface, |document| {
+            let root = match kind {
+                QuickControlKind::Audio => "audio-popup",
+                QuickControlKind::Network => "wifi-popup",
+                QuickControlKind::Calendar => "clock-popup",
+            };
+            crate::settings_projection::project_menu_background(document, &snapshot.settings, root)?;
+            match kind {
             QuickControlKind::Audio => crate::projection::project_audio_full(
                 document,
                 &shell,
@@ -813,6 +846,7 @@ fn project_snapshot(
                 let grid = crate::projection::current_calendar()
                     .ok_or_else(|| "invalid local calendar date".to_owned())?;
                 crate::projection::project_calendar(document, &grid)
+            }
             }
         })
         .map_err(|error| format!("{error:?}"))
@@ -1208,6 +1242,7 @@ mod tests {
             network_filter_focused: false,
             network_secret_error: false,
             network_secret_submit_id: None,
+            settings: SettingsSnapshot::new(0),
         };
         let debug = format!("{snapshot:?}");
         assert!(
@@ -1238,6 +1273,7 @@ mod tests {
             network_filter_focused: false,
             network_secret_error: false,
             network_secret_submit_id: None,
+            settings: SettingsSnapshot::new(0),
         };
         let mut next = quick.system.clone();
         next.revision = 7;
@@ -1282,6 +1318,7 @@ mod tests {
             network_filter_focused: false,
             network_secret_error: false,
             network_secret_submit_id: None,
+            settings: SettingsSnapshot::new(0),
         };
 
         // Filtering leaves five rows; connected-first ordering moves provider
@@ -1558,5 +1595,62 @@ mod tests {
             after_grab.contains("surfaces.open = None"),
             "grab refusal must not leave stale open state"
         );
+    }
+
+    /// Wi-Fi open with NetworkManager absent (`ServiceAvailability::Unavailable`) must project
+    /// through the real network artifact without a refusal, so the popup maps and shows the
+    /// truthful unavailable state. The secret-error node is written on every open (even empty);
+    /// it needs a text child in `network.html`, otherwise `document.text` refuses the whole open.
+    /// Settings change between two opens: the second stored snapshot drives the shared menu
+    /// background colour, alpha and backdrop percents, so the next open uses the new values.
+    #[test]
+    fn settings_change_between_opens_changes_menu_background() {
+        let mut snapshot = QuickControlSnapshot {
+            system: flamewm_api::system::SystemSnapshot::default(),
+            audio_tab: AudioTab::default(),
+            audio_settings: AudioSettings::default(),
+            network_query: NetworkQuery::default(),
+            network_scroll_offset: 0,
+            network_secret_masked_len: 0,
+            network_secret: String::new(),
+            network_secret_request: None,
+            network_secret_focused: false,
+            network_filter_focused: false,
+            network_secret_error: false,
+            network_secret_submit_id: None,
+            settings: SettingsSnapshot::new(0),
+        };
+        let first = background_for(&snapshot.settings);
+        let mut changed = SettingsSnapshot::new(1);
+        changed.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+        changed.values.insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
+        changed.values.insert("startMenuColor".to_owned(), SettingValue::Text("#102030".to_owned()));
+        snapshot.store_settings(changed);
+        let second = background_for(&snapshot.settings);
+        assert_ne!(first, second, "a new settings snapshot must change the open's background");
+        assert_eq!(second.0.a, 0, "opacity 0 gives a transparent menu root");
+        assert_eq!((second.0.r, second.0.g, second.0.b), (0x10, 0x20, 0x30));
+        assert_eq!(second.1, (0, 30), "backdrop percents follow the new opacity and blur");
+    }
+
+    /// Background colour and backdrop percents the helper projects for one settings snapshot.
+    fn background_for(settings: &SettingsSnapshot) -> (flamewm_ui_x11::UiColor, (u8, u8)) {
+        (
+            crate::settings_projection::menu_background(settings),
+            crate::settings_projection::start_backdrop_percents(settings),
+        )
+    }
+
+    #[test]
+    fn network_open_projects_unavailable_backend_without_refusal() {
+        let mut document = decode_document(NETWORK_ARTIFACT).expect("network artifact must decode");
+        let mut shell = crate::ShellSnapshot::default();
+        shell.system.network.availability = flamewm_api::system::ServiceAvailability::Unavailable;
+        crate::projection::project_network_full(&mut document, &shell, &NetworkQuery::default(), 0)
+            .expect("unavailable network projects");
+        crate::projection::project_network_secret(&mut document, "").expect("secret prompt projects");
+        document
+            .text("network-secret-error", String::new())
+            .expect("empty secret error projects");
     }
 }

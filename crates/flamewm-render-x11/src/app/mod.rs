@@ -37,6 +37,7 @@ mod layout_helpers;
 mod primitives;
 mod render;
 mod scroll;
+mod surface_backdrop;
 
 pub(crate) use input::{pointer_button_from_raw, slider_value_from_pointer, wheel_scroll_delta};
 
@@ -144,6 +145,9 @@ pub(crate) struct X11App {
     /// Floating dock corner radius in window px. Non-zero keeps the coverage refresh from
     /// replacing the rounded dock mask; zero leaves the coverage mask in charge.
     pub(crate) dock_corner_radius: u32,
+    /// Border-only ring (`border_px`, `radius_px`) in window px. When set, the coverage refresh
+    /// keeps only the ring so the interior stays see-through.
+    pub(crate) ring_mask: Option<(u32, u32)>,
     #[allow(dead_code)]
     pub(crate) visual: *mut Visual,
     pub(crate) alpha_mode: SurfaceAlphaMode,
@@ -167,6 +171,8 @@ pub(crate) struct X11App {
     /// Stale backbuffer kept alive across resize until the replacement is
     /// painted and bound. (pixmap, bytes).
     pub(crate) retired_backbuffer: Option<(Pixmap, usize)>,
+    /// Pseudo-transparency snapshot laid under translucent fills (None = transparent clear).
+    pub(crate) surface_backdrop: Option<surface_backdrop::SurfaceBackdrop>,
     pub(crate) pointer_button: Option<u32>,
     pub(crate) pointer_grabbed: bool,
     /// Input focus displaced when this popup took it (window, revert_to).
@@ -528,6 +534,7 @@ impl X11App {
             xrender,
             xshape,
             dock_corner_radius: 0,
+            ring_mask: None,
             visual,
             alpha_mode,
             surface: Some(surface),
@@ -544,6 +551,7 @@ impl X11App {
             pending_damage: SurfaceDamage::Full,
             background_bound: 0,
             retired_backbuffer: None,
+            surface_backdrop: None,
             pointer_button: None,
             pointer_grabbed: false,
             saved_input_focus: None,
@@ -861,6 +869,7 @@ impl Drop for X11App {
         // display owners call `take_deferred_native_libraries` first and keep
         // its dynamic handles alive through XCloseDisplay.
         let _deferred = unsafe { self.take_deferred_native_libraries() };
+        self.clear_surface_backdrop();
         unsafe {
             if self.pointer_grabbed {
                 XUngrabPointer(self.display, CURRENT_TIME);

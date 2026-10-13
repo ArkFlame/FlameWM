@@ -1,7 +1,7 @@
 :root { --accent:#ef4048; --accent-soft:#ef404838; --accent-strong:#ef4048dd; --desktop-hover:#ef404826; --desktop-hover-border:#ef40484d; --desktop-selected:#ef404847; --desktop-selected-border:#ef4048a6; --selection-fill:#ef404833; --snap-fill:#ef404833; --sticky-bg:#ffe56b; --sticky-fg:#171717; --desktop:#000000; --panel:#1b1e20; --surface:#202326; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#aeb4bb; }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; background:transparent; color:var(--text); font-size:13px; position:relative; overflow:hidden; }
-.panel-body { background:var(--panel); }
+.panel-body { background:transparent; }
 .popup-body { background:transparent; }
 button { padding:0; border-width:0px; border-color:transparent; background:transparent; color:var(--text); font-size:13px; cursor:default; }
 input { cursor:text; }
@@ -83,7 +83,7 @@ input { cursor:text; }
 .terminal-body { height:359px; display:flex; flex-direction:column; gap:8px; padding:18px; background:#0c0d0e; color:#d5d8da; font-size:13px; border-radius:6px; }
 .start-menu { position:absolute; left:0px; top:0px; width:550px; min-height:349px; display:flex; flex-direction:row; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:18px; }
 .start-left-pane { width:292px; min-height:349px; display:flex; flex-direction:column; }
-.start-content-pane { border-radius:18px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); overflow-x:hidden; overflow-y:auto; }
+.start-content-pane { border-radius:18px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:transparent; color:var(--text); overflow-x:hidden; overflow-y:auto; }
 .start-categories { padding:6px 5px 5px 5px; flex-grow:1; display:flex; flex-direction:column; }
 .start-category { width:280px; height:37px; padding:0px 9px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
 .start-category:hover { background:var(--accent-soft); }
@@ -92,7 +92,7 @@ input { cursor:text; }
 .start-category .chevron { width:12px; height:12px; }
 /* Just the bar: no outer card behind or around the search field. */
 .start-search { height:45px; margin:0px 6px 6px 6px; padding:0px 7px; display:flex; align-items:center; background:transparent; color:var(--text); border:0px solid transparent; cursor:default; }
-.start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:#141618; border:1px solid #454a4f; border-radius:8px; }
+.start-search-field { flex-grow:1; height:32px; padding-left:10px; display:flex; align-items:center; gap:8px; color:#9ca3a9; background:transparent; border:1px solid #454a4f; border-radius:8px; }
 .start-search-field img { width:15px; height:15px; }
 .start-search-field div { flex-grow:1; display:flex; align-items:center; }
 .start-submenu { position:absolute; left:0px; top:0px; width:258px; min-height:0px; max-height:420px; padding:5px; display:flex; flex-direction:column; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:12px; overflow-x:hidden; overflow-y:auto; }
@@ -109,13 +109,12 @@ input { cursor:text; }
 .menu-row img { width:16px; height:16px; }
 .menu-separator { width:185px; height:1px; margin:5px; background:#3a3d40; }
 .taskbar { position:absolute; left:0px; top:0px; width:100%; height:44px; display:flex; align-items:center; padding:0px 2px; background:var(--panel); }
-.taskbar-line { position:absolute; left:0px; top:0px; width:100%; height:1px; background:#212121; }
 .task-button { width:42px; height:44px; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; }
 .task-button:hover { background:#131415; }
 .task-button img { width:25px; height:25px; }
-.task-slots { height:44px; display:flex; background:transparent; }
+.task-slots { height:44px; display:flex; background:transparent; position:relative; }
+.task-slot-insert { position:absolute; left:0px; top:6px; width:0px; height:0px; background:var(--accent); }
 .task-slot { width:42px; height:44px; position:relative; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); cursor:default; }
-.task-slot:hover { background:#131415; }
 .task-slot-icon { width:25px; height:25px; display:block; }
 .task-slot-label { position:absolute; left:0px; top:0px; width:0px; height:0px; overflow:hidden; }
 .task-slot .underline { background:transparent; }
@@ -137,7 +136,7 @@ input { cursor:text; }
    from the intrinsic document extent (single measured show). These rules
    only bound the content (max-height + scroll); they never fix the popup
    size, so no blank or 0,0 frame is mapped before measurement. */
-.tray-popup { position:absolute; left:0px; top:0px; width:310px; padding:13px; display:flex; flex-direction:column; gap:10px; background:#1e2123; color:var(--text); border:1px solid #474b4f; border-radius:6px; }
+.tray-popup { position:absolute; left:0px; top:0px; width:310px; padding:13px; display:flex; flex-direction:column; gap:10px; background:transparent; color:var(--text); border:1px solid #474b4f; border-radius:6px; }
 .media-popup { left:0px; top:0px; right:auto; bottom:auto; }
 .audio-popup { left:0px; top:0px; right:auto; bottom:auto; }
 .wifi-popup { left:0px; top:0px; right:auto; bottom:auto; }
@@ -154,15 +153,15 @@ input { cursor:text; }
 .media-control img { width:20px; height:20px; }
 .volume-line { height:34px; display:flex; align-items:center; gap:8px; }
 .volume-icon-button { width:30px; height:30px; display:flex; align-items:center; justify-content:center; background:transparent; border-radius:3px; }
-.volume-icon-button:hover { background:#303438; }
+.volume-icon-button:hover { background:var(--accent-soft); }
 .volume-icon-button img { width:20px; height:20px; }
-.volume-step { width:32px; height:30px; display:flex; align-items:center; justify-content:center; border:1px solid #51575c; border-radius:3px; background:#2c3033; color:#f0f2f3; font-size:16px; }
+.volume-step { width:32px; height:30px; display:flex; align-items:center; justify-content:center; border:1px solid #51575c; border-radius:3px; background:transparent; color:#f0f2f3; font-size:16px; }
 .volume-step:hover { border-color:var(--accent); }
-.volume-value { flex-grow:1; height:30px; display:flex; align-items:center; justify-content:center; background:#17191b; border:1px solid #454a4f; border-radius:3px; }
+.volume-value { flex-grow:1; height:30px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid #454a4f; border-radius:3px; }
 .volume-track { width:100%; height:7px; background:#42474b; border-radius:3px; }
 .volume-track-fill { width:0%; height:7px; background:var(--accent); border-radius:3px; }
 .wifi-row { width:100%; min-height:42px; padding:4px 7px; display:flex; align-items:center; gap:10px; background:transparent; color:var(--text); border-radius:3px; cursor:default; }
-.wifi-row:hover { background:#303438; }
+.wifi-row:hover { background:var(--accent-soft); }
 .wifi-row img { width:20px; height:20px; }
 .wifi-status { color:#9fa6ac; font-size:10px; margin-top:2px; }
 .network-slots { width:100%; display:flex; flex-direction:column; gap:2px; }
@@ -174,7 +173,7 @@ input { cursor:text; }
 .start-list { width:100%; max-height:320px; display:flex; flex-direction:column; overflow-x:hidden; overflow-y:auto; }
 .audio-slot-label { flex-grow:1; }
 .network-secret { display:flex; align-items:center; gap:6px; }
-.network-secret-value { flex-grow:1; min-height:20px; padding:0px 6px; background:#17191b; border:1px solid #454a4f; border-radius:3px; }
+.network-secret-value { flex-grow:1; min-height:20px; padding:0px 6px; background:transparent; border:1px solid #454a4f; border-radius:3px; }
 .calendar-head { display:flex; align-items:center; justify-content:space-between; }
 .calendar-year { color:#aeb4ba; }
 .calendar-week, .calendar-row { width:100%; height:29px; display:flex; align-items:center; }

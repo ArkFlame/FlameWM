@@ -10,6 +10,7 @@ description = "Minimal native X11 backend for FlameWM Render"
 flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-profiler = { path = "../flamewm-profiler" }
+flamewm-image-core = { path = "../flamewm-image-core" }
 calloop.workspace = true
 
 [lib]

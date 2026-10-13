@@ -1,6 +1,8 @@
 //! Power buttons on the lock screen: a capability-gated reducer plus the
 //! control-plane port that performs the session actions.
 
+use std::sync::mpsc::Sender;
+use std::thread;
 use std::time::Duration;
 
 use flamewm_api::session::{SessionAction, SessionCapabilities};
@@ -71,6 +73,34 @@ impl PowerPort for ControlPower {
     }
 }
 
+/// Runs `action` on a fresh worker thread and reports the outcome as
+/// [`PowerEvent::Result`]. The UI thread never waits on the control bus. A failed
+/// action or a thread that cannot start is reported as an error; the lock stays up.
+pub fn perform_on_worker(action: SessionAction, events: Sender<PowerEvent>) {
+    let fallback = events.clone();
+    let spawned = thread::Builder::new()
+        .name("flamewm-lock-power".to_string())
+        .spawn(move || {
+            let outcome = ControlPower::connect(BusKind::Session).perform(action);
+            // The receiver lives as long as the lock loop; a send error means it is gone.
+            let _ = events.send(PowerEvent::Result(outcome));
+        });
+    if spawned.is_err() {
+        let _ = fallback.send(PowerEvent::Result(Err("cannot start power action".to_string())));
+    }
+}
+
+/// Reads the session capabilities on a worker thread. Until the answer arrives the
+/// lock assumes none, so every power action stays disabled (fail closed).
+pub fn fetch_capabilities_on_worker(events: Sender<PowerEvent>) {
+    let _ = thread::Builder::new()
+        .name("flamewm-lock-caps".to_string())
+        .spawn(move || {
+            let capabilities = ControlPower::connect(BusKind::Session).capabilities();
+            let _ = events.send(PowerEvent::Capabilities(capabilities));
+        });
+}
+
 /// Power button on the lock screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerButton {
@@ -108,6 +138,31 @@ pub enum Confirmable {
     Shutdown,
 }
 
+impl Confirmable {
+    /// Label of the confirm button.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Restart => "Restart",
+            Self::Shutdown => "Shut Down",
+        }
+    }
+}
+
+/// Maps a lock UI action name to the power event it means. Only the power row,
+/// the confirm strip, and the Other list use these names; unknown names map to `None`.
+pub fn ui_action(name: &str) -> Option<PowerEvent> {
+    match name {
+        "lock.power.0" => Some(PowerEvent::Click(POWER_ORDER[0])),
+        "lock.power.1" => Some(PowerEvent::Click(POWER_ORDER[1])),
+        "lock.power.2" => Some(PowerEvent::Click(POWER_ORDER[2])),
+        "lock.power.3" => Some(PowerEvent::Click(POWER_ORDER[3])),
+        "lock.confirm" => Some(PowerEvent::Confirm),
+        "lock.cancel" => Some(PowerEvent::Cancel),
+        "lock.logout" => Some(PowerEvent::ClickLogout),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PowerState {
     Idle,
@@ -119,6 +174,7 @@ pub enum PowerState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PowerEvent {
+    Capabilities(SessionCapabilities),
     Click(PowerButton),
     Confirm,
     Cancel,
@@ -158,6 +214,10 @@ impl PowerUi {
 
     pub fn handle(&mut self, event: PowerEvent) -> Effect {
         match event {
+            PowerEvent::Capabilities(capabilities) => {
+                self.capabilities = capabilities;
+                Effect::None
+            }
             PowerEvent::Click(button) => self.click(button),
             PowerEvent::Confirm => self.confirm(),
             PowerEvent::Cancel | PowerEvent::Escape => {
@@ -245,6 +305,39 @@ impl PowerUi {
         self.state = state;
         self.error_age = Duration::ZERO;
     }
+
+    /// What the power row shows: enabled icons, the open confirm strip or list, and any error.
+    pub fn view(&self) -> PowerView {
+        PowerView {
+            enabled: POWER_ORDER.map(|button| button.enabled(self.capabilities)),
+            confirm: match self.state {
+                PowerState::Confirm(action) => Some(action),
+                _ => None,
+            },
+            other_open: self.state == PowerState::OtherOpen,
+            message: match &self.state {
+                PowerState::Error(message) => message.clone(),
+                _ => String::new(),
+            },
+        }
+    }
+}
+
+/// Button order of the power row, left to right.
+pub const POWER_ORDER: [PowerButton; 4] = [
+    PowerButton::Sleep,
+    PowerButton::Restart,
+    PowerButton::Shutdown,
+    PowerButton::Other,
+];
+
+/// Projection of [`PowerUi`] for the document layer; compared to skip redundant repaints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PowerView {
+    pub enabled: [bool; 4],
+    pub confirm: Option<Confirmable>,
+    pub other_open: bool,
+    pub message: String,
 }
 
 #[cfg(test)]
@@ -439,6 +532,48 @@ mod tests {
         assert_eq!(fake.capabilities(), all_caps());
         assert_eq!(fake.perform(SessionAction::Reboot), Ok(()));
         assert_eq!(fake.calls, vec![SessionAction::Reboot]);
+    }
+
+    #[test]
+    fn capabilities_event_replaces_the_fail_closed_default() {
+        let mut p = PowerUi::new(SessionCapabilities::default());
+        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::None);
+        assert_eq!(p.handle(PowerEvent::Capabilities(all_caps())), Effect::None);
+        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::Perform(SessionAction::Suspend));
+    }
+
+    #[test]
+    fn view_marks_disabled_buttons_and_open_strips() {
+        let mut p = ui(SessionCapabilities { reboot: true, ..Default::default() });
+        let idle = p.view();
+        assert_eq!(idle.enabled, [false, true, false, false]);
+        assert_eq!(idle.confirm, None);
+        assert!(!idle.other_open && idle.message.is_empty());
+        p.handle(PowerEvent::Click(PowerButton::Restart));
+        assert_eq!(p.view().confirm, Some(Confirmable::Restart));
+        p.handle(PowerEvent::Cancel);
+        p.handle(PowerEvent::Result(Err("bus down".into())));
+        assert_eq!(p.view().message, "");
+        p.handle(PowerEvent::Click(PowerButton::Restart));
+        p.handle(PowerEvent::Confirm);
+        p.handle(PowerEvent::Result(Err("bus down".into())));
+        assert_eq!(p.view().message, "bus down");
+    }
+
+    #[test]
+    fn ui_actions_map_to_power_events_and_unknown_names_do_nothing() {
+        assert_eq!(ui_action("lock.power.2"), Some(PowerEvent::Click(PowerButton::Shutdown)));
+        assert_eq!(ui_action("lock.confirm"), Some(PowerEvent::Confirm));
+        assert_eq!(ui_action("lock.cancel"), Some(PowerEvent::Cancel));
+        assert_eq!(ui_action("lock.logout"), Some(PowerEvent::ClickLogout));
+        assert_eq!(ui_action("lock.switch-user"), None);
+        assert_eq!(ui_action("lock.power.4"), None);
+    }
+
+    #[test]
+    fn confirm_labels_match_the_buttons() {
+        assert_eq!(Confirmable::Restart.label(), "Restart");
+        assert_eq!(Confirmable::Shutdown.label(), "Shut Down");
     }
 
     #[test]

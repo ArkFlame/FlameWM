@@ -1,6 +1,7 @@
 //! Termination signals are ignored, never handled: the lock screen only ends
 //! through a successful authentication.
 use std::ffi::c_int;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const SIGHUP: c_int = 1;
 const SIGINT: c_int = 2;
@@ -21,4 +22,24 @@ pub fn ignore_unlock_signals() {
             signal(signum, SIG_IGN);
         }
     }
+}
+
+/// Set by the preview's SIGTERM handler; the preview loop closes when it sees this.
+static PREVIEW_TERMINATE: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_preview_terminate(_signum: c_int) {
+    PREVIEW_TERMINATE.store(true, Ordering::SeqCst);
+}
+
+/// Routes SIGTERM to the preview's exit flag. The preview never ignores it.
+pub fn install_preview_terminate() {
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+    unsafe {
+        signal(SIGTERM, on_preview_terminate as extern "C" fn(c_int) as usize);
+    }
+}
+
+/// `true` once SIGTERM arrived after [`install_preview_terminate`].
+pub fn preview_terminate_requested() -> bool {
+    PREVIEW_TERMINATE.load(Ordering::SeqCst)
 }

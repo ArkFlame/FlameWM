@@ -119,6 +119,24 @@ impl ThemeRegistry {
     }
 }
 
+/// Icon themes shipped with FlameWM. They are always listed, even when discovery
+/// finds no installed copy, so a cleared or stale setting can still be re-chosen.
+pub const BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "candy-icons"];
+
+/// Adds every bundled icon theme that discovery did not list, keeping discovered rows first.
+pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
+    for id in BUNDLED_ICON_THEMES {
+        if !icon.iter().any(|item| item.id == id) {
+            icon.push(ThemeItem {
+                id: id.to_owned(),
+                name: id.to_owned(),
+                preview: None,
+            });
+        }
+    }
+    icon
+}
+
 /// Scans the catalog and loads one preview per valid theme. Runs off the UI thread.
 pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
     let catalog = ThemeCatalog::discover(data_dirs);
@@ -139,6 +157,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
             }),
         }
     }
+    registry.icon = with_bundled_icon_themes(registry.icon);
     registry
 }
 
@@ -287,6 +306,23 @@ mod tests {
         registry.icon.push(item("breeze-dark", "Installed Breeze"));
         assert_eq!(registry.label(PickerKind::Icon, "breeze-dark"), "Installed Breeze");
         assert_eq!(registry.label(PickerKind::Icon, "*:-HighContrast"), "FlameWM Breeze");
+    }
+
+    #[test]
+    fn bundled_icon_themes_are_listed_in_every_state() {
+        let ids = |items: &[ThemeItem]| items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+        // Empty discovery (nothing installed) still lists every bundled theme once.
+        let empty = with_bundled_icon_themes(Vec::new());
+        assert_eq!(ids(&empty), ["PlagueSur", "candy-icons"]);
+        // A stale stored value does not change the list.
+        let mut registry = ThemeRegistry::default();
+        registry.icon = with_bundled_icon_themes(Vec::new());
+        assert_eq!(registry.label(PickerKind::Icon, "McMojave-circle"), "McMojave-circle");
+        assert_eq!(ids(&registry.icon), ["PlagueSur", "candy-icons"]);
+        // Discovered rows keep their installed name and are not duplicated.
+        let found = with_bundled_icon_themes(vec![item("PlagueSur", "Installed PlagueSur")]);
+        assert_eq!(ids(&found), ["PlagueSur", "candy-icons"]);
+        assert_eq!(found[0].name, "Installed PlagueSur");
     }
 
     #[test]

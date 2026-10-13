@@ -14,6 +14,21 @@ fn main() -> ExitCode {
             }
         };
     }
+    if std::env::args().any(|arg| arg == "--preview") {
+        // Settings preview: no single-instance guard (the spawner owns it), no grabs, no PAM.
+        let Some(username) = session::username() else {
+            eprintln!("flamewm-lock: cannot determine the session user; no preview");
+            return ExitCode::FAILURE;
+        };
+        let settings = session::load_settings();
+        return match run::run_preview(&settings, &username) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("flamewm-lock: preview: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     // Ignore before any lock work so a stray SIGTERM/SIGINT/SIGHUP never unlocks.
     signals::ignore_unlock_signals();
     let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") else {

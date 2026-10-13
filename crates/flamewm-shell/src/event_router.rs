@@ -1,6 +1,8 @@
 use std::time::Instant;
 
-use flamewm_ui_x11::{ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError};
+use flamewm_ui_x11::{
+    ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
+};
 
 use crate::app::{is_popup_refusal, shell_slow_note, ShellLoop};
 
@@ -71,6 +73,9 @@ impl ShellLoop {
         let release_inside = event.action.phase == ActionPhase::Release && event.action.inside;
         if release_inside && matches!(button, PointerButton::Secondary) {
             return self.route_secondary(&event, runtime);
+        }
+        if self.route_task_drag(&event, runtime) {
+            return Ok(());
         }
         // ESC-V3: keyboard events carry button 0; gating them as
         // non-primary pointer releases drops every real Escape press
@@ -315,6 +320,87 @@ impl ShellLoop {
             self.apply_controls(runtime)?;
         }
         Ok(())
+    }
+
+    /// Task-slot drag gesture. Returns true when the event is consumed; a
+    /// short press returns false so the normal release click still runs.
+    fn route_task_drag(&mut self, event: &SurfaceEvent, runtime: &mut SurfaceRuntime) -> bool {
+        use flamewm_shell::taskbar::tasks::drag::{TaskDrag, TaskDragRelease};
+        let action = event.action.action.as_str();
+        if self.task_drag.is_some()
+            && action == "keyboard.input"
+            && event.action.text.as_deref() == Some("\u{1b}")
+        {
+            self.task_drag = None;
+            self.set_task_insert_marker(runtime, None);
+            return true;
+        }
+        let slot = action
+            .strip_prefix("task.slot.")
+            .and_then(|value| value.parse::<usize>().ok())
+            .and_then(|slot| slot.checked_sub(1));
+        match event.action.phase {
+            ActionPhase::Press => {
+                let primary = matches!(
+                    PointerButton::from_raw_x(event.action.button),
+                    PointerButton::Primary
+                );
+                self.task_drag = slot
+                    .filter(|_| primary)
+                    .map(|slot| TaskDrag::press(slot, event.action.x));
+                false
+            }
+            ActionPhase::Motion => {
+                let count = self.shell.snapshot().panels.tasks.len();
+                let Some(drag) = self.task_drag.as_mut() else {
+                    return false;
+                };
+                if drag.motion(event.action.x) {
+                    let target = drag.target(event.action.x, count);
+                    self.set_task_insert_marker(runtime, Some(target));
+                }
+                true
+            }
+            ActionPhase::Release => {
+                let Some(drag) = self.task_drag.take() else {
+                    return false;
+                };
+                self.set_task_insert_marker(runtime, None);
+                let count = self.shell.snapshot().panels.tasks.len();
+                match drag.release_on_strip(event.action.x, event.action.y, count) {
+                    TaskDragRelease::Click => false,
+                    TaskDragRelease::Noop => true,
+                    TaskDragRelease::Reorder { from, to } => {
+                        if let Some(request) = self.shell.task_reorder_request(from, to) {
+                            self.submit(request);
+                        }
+                        true
+                    }
+                }
+            }
+            ActionPhase::Hover => false,
+        }
+    }
+
+    /// Show the 2 px accent insertion marker before slot `target`, or hide it
+    /// (`None`). Only the marker node is written, so the panel repaints once.
+    fn set_task_insert_marker(&mut self, runtime: &mut SurfaceRuntime, target: Option<usize>) {
+        use flamewm_shell::taskbar::tasks::drag::insertion_marker_left;
+        let panel = self.surfaces.panel();
+        let result = runtime.with_document(panel, |document| match target {
+            Some(index) => {
+                document.position(
+                    "task-slot-insert",
+                    insertion_marker_left(index),
+                    6.0,
+                )?;
+                document.size("task-slot-insert", 2.0, 32.0)
+            }
+            None => document.size("task-slot-insert", 0.0, 0.0),
+        });
+        if let Err(error) = result {
+            eprintln!("flamewm-shell: task insertion marker projection failed: {error:?}");
+        }
     }
 
     fn route_secondary(

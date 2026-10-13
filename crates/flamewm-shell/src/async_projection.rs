@@ -242,6 +242,38 @@ pub fn apply_icon_result(
     Ok(true)
 }
 
+/// Repaints one target's node from the view-independent cache when its live
+/// binding names a key whose raster is already cached. Covers a completion
+/// dropped as stale after an epoch bump: the raster is cached, so the node
+/// must be repainted without waiting for another projection.
+pub fn apply_cached_binding(
+    document: &mut impl UiDocumentAccess,
+    target: IconTarget,
+) -> Result<bool, String> {
+    let slot = match target {
+        IconTarget::StartSlot(n) | IconTarget::TaskSlot(n) => u32::from(n),
+    };
+    let range = match target {
+        IconTarget::StartSlot(_) => START_APP_SLOT_COUNT as u32,
+        IconTarget::TaskSlot(_) => TASK_SLOT_COUNT as u32,
+    };
+    if slot >= range {
+        return Ok(false);
+    }
+    let bound = bindings()
+        .lock()
+        .ok()
+        .and_then(|bindings| bindings.get(&target).map(|binding| binding.key.clone()));
+    let Some((name, w, h)) = bound else {
+        return Ok(false);
+    };
+    let Some(image) = cached_image(&name, w, h) else {
+        return Ok(false);
+    };
+    document.image_rgb8(&icon_node_id_for_target(target), image)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 pub fn test_record_binding(target: IconTarget, name: &str, w: u32, h: u32, generation: u64) {
     record_binding(target, name, w, h, generation);
@@ -340,6 +372,11 @@ fn schedule_visible(
 ) -> Result<(), String> {
     if let Some(hit) = cached_image(name, w, h) {
         document.image_rgb8(icon_id, hit)?;
+        // The node now shows this key: bind it so a late completion for an
+        // earlier key cannot overwrite it.
+        if let Some(loader) = loader.as_deref_mut() {
+            record_binding(target, name, w, h, loader.generation());
+        }
         return Ok(());
     }
     // Miss: last-valid is absent (caller cache missed); pending worker
@@ -357,6 +394,42 @@ fn schedule_visible(
         record_binding(target, name, w, h, generation);
     }
     Ok(())
+}
+
+/// Icon lookup name for one task slot. A window with no desktop entry of
+/// its own resolves through a desktop entry whose `StartupWMClass` matches
+/// its WM_CLASS-derived name; otherwise the state's name is used unchanged.
+fn task_icon_name(
+    state: &flamewm_shell_core::TaskVisualState,
+    applications: &[flamewm_api::applications::DesktopApplication],
+) -> String {
+    let has_own_entry = applications
+        .iter()
+        .any(|application| application.id == state.app_id);
+    if has_own_entry {
+        return state.icon_name.clone();
+    }
+    desktop_icon_for_wm_class(applications, &state.icon_name)
+        .unwrap_or_else(|| state.icon_name.clone())
+}
+
+/// Desktop-entry `Icon=` whose `StartupWMClass` equals one lookup candidate
+/// of `name` (case-insensitive). Non-empty icons only.
+pub fn desktop_icon_for_wm_class(
+    applications: &[flamewm_api::applications::DesktopApplication],
+    name: &str,
+) -> Option<String> {
+    crate::icon_loader::icon_name_candidates(name)
+        .iter()
+        .find_map(|candidate| {
+            applications
+                .iter()
+                .find(|application| {
+                    !application.icon_name.is_empty()
+                        && application.startup_wm_class.eq_ignore_ascii_case(candidate)
+                })
+                .map(|application| application.icon_name.clone())
+        })
 }
 
 /// Empty transparent placeholder applied synchronously on a visible-row
@@ -522,40 +595,16 @@ pub fn project_task_slots_async(
                 &icon_id,
                 &mut loader.as_deref_mut(),
                 IconTarget::TaskSlot(index as u8),
-                &state.icon_name,
+                &task_icon_name(state, &snapshot.applications),
                 25,
                 25,
             )?;
             document.visible(&line_id, state.running)?;
             if state.focused {
-                document.background(
-                    &slot_id,
-                    UiColor {
-                        r: 239,
-                        g: 64,
-                        b: 72,
-                        a: 56,
-                    },
-                )?;
-                document.background(
-                    &line_id,
-                    UiColor {
-                        r: 239,
-                        g: 64,
-                        b: 72,
-                        a: 255,
-                    },
-                )?;
+                document.background_clear(&slot_id)?;
+                document.background(&line_id, crate::projection::task_accent())?;
             } else if state.minimized {
-                document.background(
-                    &slot_id,
-                    UiColor {
-                        r: 36,
-                        g: 39,
-                        b: 42,
-                        a: 255,
-                    },
-                )?;
+                document.background_clear(&slot_id)?;
                 document.background(
                     &line_id,
                     UiColor {
@@ -1131,6 +1180,55 @@ mod tests {
         .expect("stale check ok");
         assert!(!wrong_gen, "generation mismatch must stale");
         assert!(doc.images.is_empty(), "stale drops touch no node");
+    }
+
+    #[test]
+    fn icon_ready_after_epoch_bump_repaints_bound_node() {
+        use crate::icon_loader::IconTarget;
+        let _guard = icon_test_lock().lock();
+        test_reset_icon_bindings();
+        let mut doc = FakeDoc::default();
+        test_record_binding(IconTarget::TaskSlot(1), "icon-a", 25, 25, 3);
+        // A projection bumps the task epoch without re-binding this slot.
+        bump_task_view_epoch();
+        note_icon_result("icon-a", 25, 25, icon_image("a"));
+        let completed = apply_icon_result(
+            &mut doc,
+            IconTarget::TaskSlot(1),
+            "icon-a",
+            25,
+            25,
+            3,
+            icon_image("a"),
+        )
+        .expect("stale check ok");
+        assert!(!completed, "epoch bump stales the late completion");
+        assert!(doc.images.is_empty());
+        let repainted = apply_cached_binding(&mut doc, IconTarget::TaskSlot(1))
+            .expect("cached repaint ok");
+        assert!(repainted, "cached raster for the bound key must repaint");
+        assert_eq!(doc.images, vec!["task-slot-2-icon".to_owned()]);
+    }
+
+    #[test]
+    fn wm_class_matches_desktop_entry_icon_before_fallback() {
+        use flamewm_api::applications::DesktopApplication;
+        let app = DesktopApplication {
+            id: flamewm_api::DesktopAppId::new("xterm-desktop"),
+            name: "XTerm".to_owned(),
+            generic_name: String::new(),
+            comment: String::new(),
+            startup_wm_class: "XTerm".to_owned(),
+            argv: Vec::new(),
+            keywords: Vec::new(),
+            icon_name: "utilities-terminal".to_owned(),
+            categories: Vec::new(),
+        };
+        assert_eq!(
+            desktop_icon_for_wm_class(std::slice::from_ref(&app), "mini.xterm").as_deref(),
+            Some("utilities-terminal")
+        );
+        assert_eq!(desktop_icon_for_wm_class(std::slice::from_ref(&app), "gimp"), None);
     }
 
     #[test]

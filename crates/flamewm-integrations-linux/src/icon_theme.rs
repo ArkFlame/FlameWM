@@ -560,6 +560,20 @@ pub(crate) fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
 /// Search roots: `$HOME/.icons`, `$XDG_DATA_HOME/icons`, each
 /// `$XDG_DATA_DIRS/icons`. Returned roots may not exist; callers skip missing.
 #[must_use]
+/// Theme directory under one icon root. Exact name first, then a
+/// case-insensitive match so `Breeze` finds an installed `breeze`.
+fn theme_dir(root: &Path, theme: &str) -> Option<PathBuf> {
+    let exact = root.join(theme);
+    if exact.is_dir() {
+        return Some(exact);
+    }
+    fs::read_dir(root).ok()?.flatten().find_map(|entry| {
+        let name = entry.file_name();
+        (name.to_string_lossy().eq_ignore_ascii_case(theme) && entry.path().is_dir())
+            .then(|| entry.path())
+    })
+}
+
 pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -704,7 +718,9 @@ impl IconLookupIndex {
             }
             let mut found = None;
             for root in &roots {
-                let dir = root.join(theme);
+                let Some(dir) = theme_dir(root, theme) else {
+                    continue;
+                };
                 if dir.join("index.theme").is_file() {
                     if let Ok(text) = fs::read_to_string(dir.join("index.theme")) {
                         found = Some(IconThemeIndex::parse(theme, &text));
@@ -721,7 +737,9 @@ impl IconLookupIndex {
             // over a local loader that reads from disk directly.
             let loader = |theme: &str| -> Option<IconThemeIndex> {
                 for root in search_roots(data_dirs) {
-                    let dir = root.join(theme);
+                    let Some(dir) = theme_dir(&root, theme) else {
+                        continue;
+                    };
                     if dir.join("index.theme").is_file() {
                         if let Ok(text) = fs::read_to_string(dir.join("index.theme")) {
                             return Some(IconThemeIndex::parse(theme, &text));
@@ -753,7 +771,7 @@ impl IconLookupIndex {
         for theme in &ordered {
             let mut truth = Vec::new();
             for root in &roots {
-                if root.join(theme).is_dir() && !truth.contains(root) {
+                if theme_dir(root, theme).is_some() && !truth.contains(root) {
                     truth.push(root.clone());
                 }
             }
@@ -774,7 +792,10 @@ impl IconLookupIndex {
                     continue;
                 };
                 for root in roots_for_theme {
-                    let dir_path = root.join(theme).join(dir);
+                    let Some(theme_path) = theme_dir(root, theme) else {
+                        continue;
+                    };
+                    let dir_path = theme_path.join(dir);
                     let Ok(read) = fs::read_dir(&dir_path) else {
                         continue;
                     };
@@ -1212,6 +1233,24 @@ mod tests {
         assert_eq!(index.ordered_themes.first().map(String::as_str), Some("McMojave-circle"));
         // Inherited Numix must outrank Breeze, which the old ordering put first.
         assert!(paths[0].ends_with("Numix-Circle-Light/16x16/apps/chain-app.png"));
+    }
+
+    #[test]
+    fn theme_dir_lookup_is_case_insensitive_for_breeze() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-case-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        // Host ships lowercase `breeze`; the chain names `Breeze`.
+        theme_fixture(&data, "breeze", FIXED_16, Some("case-app.png"));
+        let names = vec!["Breeze".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let _ = fs::remove_dir_all(&data);
+        let (paths, hit) = index.lookup("case-app", 16);
+        assert!(hit, "Breeze must resolve to the installed breeze directory");
+        assert!(paths[0].ends_with("breeze/16x16/apps/case-app.png"));
     }
 
     #[test]

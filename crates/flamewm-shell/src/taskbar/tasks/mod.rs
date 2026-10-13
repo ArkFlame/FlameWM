@@ -1,3 +1,4 @@
+pub mod drag;
 pub mod icon_geometry;
 
 use super::intent::TaskbarIntent;

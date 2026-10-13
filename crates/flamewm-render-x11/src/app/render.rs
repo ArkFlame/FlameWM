@@ -138,6 +138,7 @@ impl X11App {
         {
             let _clear_guard = flamewm_profiler::start("render.clear");
             self.clear_scene()?;
+            unsafe { self.paint_surface_backdrop()? };
         }
         // Borrow retained commands by index: build fresh only when cache
         // invalid; single coverage/shape per frame; no clone path.
@@ -353,6 +354,13 @@ impl X11App {
         let Some(bridge) = self.xshape.as_ref() else {
             return;
         };
+        if let Some((border, radius)) = self.ring_mask {
+            let spans = crate::xshape::ring_mask_spans(self.width, self.height, border, radius);
+            if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
+                eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
+            }
+            return;
+        }
         if self.dock_corner_radius > 0 {
             let spans = crate::xshape::rounded_mask_spans(
                 self.width,
@@ -364,7 +372,12 @@ impl X11App {
             }
             return;
         }
-        let spans = if scale == 1.0 {
+        // A retained backdrop is composited under translucent fills, so the whole snapshot
+        // must stay visible; coverage would drop the translucent area and show the live desktop
+        // (unblurred) instead.
+        let spans = if self.surface_backdrop.is_some() {
+            crate::xshape::rounded_mask_spans(self.width, self.height, 0)
+        } else if scale == 1.0 {
             build_coverage(commands, self.width, self.height, 0.0)
         } else {
             build_coverage_scaled(commands, self.width, self.height, 0.0, scale)

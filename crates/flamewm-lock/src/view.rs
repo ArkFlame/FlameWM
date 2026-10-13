@@ -15,6 +15,8 @@ pub struct LockView {
     pub initial: String,
     pub mask: String,
     pub status: &'static str,
+    /// The last attempt failed: the password field takes the red-tinted glass.
+    pub failed: bool,
 }
 
 impl LockView {
@@ -41,6 +43,7 @@ impl LockView {
             initial: initial_of(username),
             mask: password.masked(),
             status: status.text(),
+            failed: status == Status::Failed,
         }
     }
 }
