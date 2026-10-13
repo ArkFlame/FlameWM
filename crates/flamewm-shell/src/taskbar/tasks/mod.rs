@@ -115,7 +115,19 @@ pub fn intent_for_click(
     let entry = panels.tasks.iter().find(|entry| &entry.id == id)?;
     Some(match task_click_action(entry, windows) {
         TaskClickAction::Launch(app) => TaskbarIntent::Launch(app),
-        TaskClickAction::RestoreAndActivate(window) => TaskbarIntent::RestoreAndActivate(window),
+        TaskClickAction::RestoreAndActivate(window) => {
+            flamewm_debug::emit(
+                flamewm_debug::DebugEventId("restore.trace.shell.click"),
+                std::time::Duration::ZERO,
+                || {
+                    let ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis());
+                    format!("t_ms={ms} window={window:?} intent=RestoreAndActivate")
+                },
+            );
+            TaskbarIntent::RestoreAndActivate(window)
+        }
         TaskClickAction::Minimize(window) => TaskbarIntent::Minimize(window),
         TaskClickAction::Activate(window) => TaskbarIntent::Activate(window),
     })

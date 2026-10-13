@@ -463,6 +463,16 @@ impl ShellRuntime {
                 // Restore maps the frame and focuses it, and bumps the window generation: a second
                 // ActivateWindow carrying the pre-restore reference would fail with StaleRevision.
                 flamewm_shell_core::TaskClickAction::RestoreAndActivate(window) => {
+                    flamewm_debug::emit(
+                        flamewm_debug::DebugEventId("restore.trace.shell.send"),
+                        std::time::Duration::ZERO,
+                        || {
+                            let ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.as_millis());
+                            format!("t_ms={ms} window={window:?} request=RestoreWindow")
+                        },
+                    );
                     vec![ControlRequest::RestoreWindow(window)]
                 }
                 flamewm_shell_core::TaskClickAction::Minimize(window) => {

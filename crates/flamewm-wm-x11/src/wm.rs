@@ -3919,6 +3919,16 @@ impl<'a, C: Connection> Wm<'a, C> {
     fn handle_client_message(&mut self, event: ClientMessageEvent) -> Result<(), ReplyError> {
         if event.type_ == self.atoms.wm_change_state && self.clients.contains_key(&event.window) {
             let data = event.data.as_data32();
+            flamewm_debug::emit(
+                flamewm_debug::DebugEventId("restore.trace.wm.change_state"),
+                std::time::Duration::ZERO,
+                || {
+                    let ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis());
+                    format!("t_ms={ms} window={} state={}", event.window, data[0])
+                },
+            );
             if data[0] == WM_STATE_ICONIC {
                 return self.minimize(event.window);
             }
@@ -4003,6 +4013,16 @@ impl<'a, C: Connection> Wm<'a, C> {
         let wants_fullscreen = atoms.contains(&self.atoms.net_wm_state_fullscreen);
         let wants_hidden = atoms.contains(&self.atoms.net_wm_state_hidden);
         if wants_hidden {
+            flamewm_debug::emit(
+                flamewm_debug::DebugEventId("restore.trace.wm.net_wm_state_hidden"),
+                std::time::Duration::ZERO,
+                || {
+                    let ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis());
+                    format!("t_ms={ms} window={client} action={action}")
+                },
+            );
             // Add/toggle hides; Remove (the control plane's RestoreWindow) un-minimizes.
             return if action == 0 {
                 self.restore_minimized(client)
@@ -4197,19 +4217,55 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn restore_minimized(&mut self, client: Window) -> Result<(), ReplyError> {
+        flamewm_debug::emit(
+            flamewm_debug::DebugEventId("restore.trace.wm.restore_minimized"),
+            std::time::Duration::ZERO,
+            || {
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis());
+                format!(
+                    "t_ms={ms} window={client} known={} minimized={:?} animator_running={:?}",
+                    self.clients.contains_key(&client),
+                    self.clients.get(&client).map(|state| state.minimized),
+                    self.animator.running(client)
+                )
+            },
+        );
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
         };
         if !state.minimized && self.animator.running(client).is_none() {
             return Ok(());
         }
-        if self.begin_transition(client, Effect::Restore)? {
+        let owned_by_flight = self.begin_transition(client, Effect::Restore)?;
+        flamewm_debug::emit(
+            flamewm_debug::DebugEventId("restore.trace.wm.begin_transition"),
+            std::time::Duration::ZERO,
+            || {
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis());
+                format!("t_ms={ms} window={client} owned_by_flight={owned_by_flight}")
+            },
+        );
+        if owned_by_flight {
             return Ok(());
         }
         self.commit_restore(client)
     }
 
     fn commit_restore(&mut self, client: Window) -> Result<(), ReplyError> {
+        flamewm_debug::emit(
+            flamewm_debug::DebugEventId("restore.trace.wm.commit_restore"),
+            std::time::Duration::ZERO,
+            || {
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis());
+                format!("t_ms={ms} window={client}")
+            },
+        );
         let frame = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());
@@ -4238,6 +4294,16 @@ impl<'a, C: Connection> Wm<'a, C> {
         let now = std::time::Instant::now();
         if let Some(current) = self.animator.running(client) {
             if current == effect {
+                flamewm_debug::emit(
+                    flamewm_debug::DebugEventId("restore.trace.wm.transition_absorbed"),
+                    std::time::Duration::ZERO,
+                    || {
+                        let ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis());
+                        format!("t_ms={ms} window={client} effect={effect:?} reason=repeat")
+                    },
+                );
                 return Ok(true);
             }
             if matches!(
@@ -4245,6 +4311,18 @@ impl<'a, C: Connection> Wm<'a, C> {
                 (Effect::Minimize, Effect::Restore) | (Effect::Restore, Effect::Minimize)
             ) {
                 self.animator.start(client, effect, now);
+                flamewm_debug::emit(
+                    flamewm_debug::DebugEventId("restore.trace.wm.transition_absorbed"),
+                    std::time::Duration::ZERO,
+                    || {
+                        let ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis());
+                        format!(
+                            "t_ms={ms} window={client} effect={effect:?} current={current:?} reason=opposite"
+                        )
+                    },
+                );
                 return Ok(true);
             }
             if let Some(running) = self.animator.cancel(client) {
@@ -4526,7 +4604,21 @@ impl<'a, C: Connection> Wm<'a, C> {
                         }
                     }
                 }
-                Tick::Complete { client, effect } => self.finish_transition(client, effect)?,
+                Tick::Complete { client, effect } => {
+                    if effect == Effect::Restore {
+                        flamewm_debug::emit(
+                            flamewm_debug::DebugEventId("restore.trace.wm.pump_complete"),
+                            std::time::Duration::ZERO,
+                            || {
+                                let ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(0, |d| d.as_millis());
+                                format!("t_ms={ms} window={client} effect={effect:?}")
+                            },
+                        );
+                    }
+                    self.finish_transition(client, effect)?
+                }
             }
         }
         Ok(())
