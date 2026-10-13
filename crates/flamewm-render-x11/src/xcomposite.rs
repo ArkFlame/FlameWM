@@ -118,7 +118,9 @@ fn premultiply(channel: u8, alpha: u8) -> u32 {
 }
 
 /// Converts straight RGBA8 (`BackdropCapture` layout) to premultiplied ARGB32.
-pub fn rgba_to_argb(width: u32, height: u32, rgba: &[u8]) -> Result<CapturedImage, String> {
+/// Test oracle for the borrowed entry point; production callers use [`rgba_to_argb_owned`].
+#[cfg(test)]
+fn rgba_to_argb(width: u32, height: u32, rgba: &[u8]) -> Result<CapturedImage, String> {
     rgba_to_argb_owned(width, height, rgba.to_vec())
 }
 
@@ -222,13 +224,29 @@ fn capture_clipped(display: *mut Display, window: Window, width: u32, height: u3
         height: ch,
         pixels,
     } = capture_drawable_rect(display, window, (vx, vy, vw, vh)).ok()?;
+    let full = embed_subrect(width, height, (vx as u32, vy as u32), (cw, ch), pixels)?;
+    rgba_to_argb_owned(width, height, full).ok()
+}
+
+/// Places a `cw x ch` RGBA capture at `(vx, vy)` inside a zeroed `width x height` frame.
+/// A capture that already covers the whole frame is returned without copying.
+fn embed_subrect(
+    width: u32,
+    height: u32,
+    (vx, vy): (u32, u32),
+    (cw, ch): (u32, u32),
+    pixels: Vec<u8>,
+) -> Option<Vec<u8>> {
+    if (vx, vy) == (0, 0) && (cw, ch) == (width, height) {
+        return Some(pixels);
+    }
     let mut full = vec![0u8; width as usize * height as usize * 4];
     for row in 0..ch as usize {
         let src = row * cw as usize * 4;
         let dst = ((vy as usize + row) * width as usize + vx as usize) * 4;
         full[dst..dst + cw as usize * 4].copy_from_slice(pixels.get(src..src + cw as usize * 4)?);
     }
-    rgba_to_argb_owned(width, height, full).ok()
+    Some(full)
 }
 
 /// Uploads `capture` into a new depth-32 pixmap on the default screen.
@@ -345,6 +363,35 @@ mod tests {
         let second = u32::from_ne_bytes(image.argb[4..8].try_into().unwrap());
         assert_eq!(first, 0xff_ff_00_00);
         assert_eq!(second, 0x80_00_80_00);
+    }
+
+    #[test]
+    fn embed_subrect_full_frame_fast_path_matches_copy() {
+        let (width, height) = (5u32, 3u32);
+        let frame: Vec<u8> = (0..(width * height * 4)).map(|i| (i * 7 % 251) as u8).collect();
+        // Slow path oracle: the zeroed-frame copy, applied to a full-frame capture.
+        let mut slow = vec![0u8; frame.len()];
+        for row in 0..height as usize {
+            let at = row * width as usize * 4;
+            slow[at..at + width as usize * 4].copy_from_slice(&frame[at..at + width as usize * 4]);
+        }
+        let fast = embed_subrect(width, height, (0, 0), (width, height), frame.clone())
+            .expect("full frame");
+        assert_eq!(fast, slow);
+        assert_eq!(fast, frame);
+    }
+
+    #[test]
+    fn embed_subrect_partial_matches_zeroed_frame_copy() {
+        // 2x2 capture placed at (1, 1) inside a 4x3 frame; the rest stays zero.
+        let capture = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let out = embed_subrect(4, 3, (1, 1), (2, 2), capture).expect("in range");
+        assert_eq!(out.len(), 4 * 3 * 4);
+        assert_eq!(&out[..20], &[0u8; 20]);
+        assert_eq!(&out[20..28], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&out[36..44], &[9, 10, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(&out[44..], &[0u8; 4]);
+        assert!(embed_subrect(4, 3, (1, 1), (2, 2), vec![0; 4]).is_none());
     }
 
     #[test]

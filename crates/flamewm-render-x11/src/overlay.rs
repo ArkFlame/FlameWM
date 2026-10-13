@@ -22,7 +22,7 @@ use std::os::raw::c_ulong;
 use crate::backdrop::capture_drawable_rect;
 use crate::lamp::{self, LampBand, PanelEdge};
 use crate::warp::{self, WarpRect, WarpSource};
-use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb, upload_argb_pixmap};
+use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb_owned, upload_argb_pixmap};
 use crate::xlib::{
     CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
     Pixmap, TRANSPARENT_CLEAR_PIXEL, TRUE_COLOR_CLASS, Window, XCreateColormap, XCreateWindow,
@@ -726,7 +726,7 @@ unsafe fn capture_backdrop(
     // SAFETY: live display; a zero-status sync only flushes and waits for the server.
     unsafe { XSync(display, 0) };
     let shot = capture_drawable_rect(display, root, (x, y, width, height))?;
-    let captured = rgba_to_argb(shot.width, shot.height, &shot.pixels)?;
+    let captured = rgba_to_argb_owned(shot.width, shot.height, shot.pixels)?;
     // SAFETY: live display; the pixmap is freed below if the picture cannot be made.
     let pixmap = unsafe { upload_argb_pixmap(display, &captured) }?;
     // SAFETY: `pixmap` is live.

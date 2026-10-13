@@ -1145,7 +1145,7 @@ impl SurfaceController {
             instance.app.backbuffer as u64,
             (0, 0, width, height),
         )?;
-        crate::xcomposite::rgba_to_argb(backdrop.width, backdrop.height, &backdrop.pixels)
+        crate::xcomposite::rgba_to_argb_owned(backdrop.width, backdrop.height, backdrop.pixels)
     }
 
     /// Opens an overlay transition for `config` over the popup's final rect. `Ok(false)` leaves

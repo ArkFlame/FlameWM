@@ -99,62 +99,6 @@ pub fn selection_material(opacity_percent: u8) -> ((u8, u8, u8, u8), (u8, u8, u8
     )
 }
 
-/// Alpha-over blend of a translucent source over an opaque backdrop pixel.
-/// Integer math, rounded.
-fn blend_over(src: (u8, u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
-    let a = u32::from(src.3);
-    let inv = 255 - a;
-    let mix = |s: u8, d: u8| ((u32::from(s) * a + u32::from(d) * inv + 127) / 255) as u8;
-    (mix(src.0, dst.0), mix(src.1, dst.1), mix(src.2, dst.2))
-}
-
-/// Composite the desktop-selection material over a captured backdrop:
-/// translucent accent fill everywhere, strong accent border ring at
-/// `BACKDROP_BORDER_WIDTH_PX`. Pure; caller uploads the result as the
-/// retained preview background. Border-only failure path is expressed by
-/// passing `fill=None`.
-#[must_use]
-pub fn composite_selection_material(
-    backdrop: &BackdropCapture,
-    fill: Option<(u8, u8, u8, u8)>,
-    border: (u8, u8, u8, u8),
-) -> Vec<u8> {
-    let mut out = backdrop.pixels.clone();
-    let (w, h) = (backdrop.width as usize, backdrop.height as usize);
-    if w == 0 || h == 0 || out.len() != w * h * 4 {
-        return out;
-    }
-    if let Some(fill) = fill {
-        for pixel in out.chunks_exact_mut(4) {
-            let (r, g, b) = blend_over(fill, (pixel[0], pixel[1], pixel[2]));
-            pixel[0] = r;
-            pixel[1] = g;
-            pixel[2] = b;
-            pixel[3] = 255;
-        }
-    }
-    let bw = BACKDROP_BORDER_WIDTH_PX as usize;
-    let ba = border.3;
-    for y in 0..h {
-        for x in 0..w {
-            let on_border = x < bw || y < bw || x + bw >= w || y + bw >= h;
-            if !on_border {
-                continue;
-            }
-            let off = (y * w + x) * 4;
-            let (r, g, b) = blend_over(
-                (border.0, border.1, border.2, ba),
-                (out[off], out[off + 1], out[off + 2]),
-            );
-            out[off] = r;
-            out[off + 1] = g;
-            out[off + 2] = b;
-            out[off + 3] = 255;
-        }
-    }
-    out
-}
-
 /// Capture root content under `rect` via XGetImage (ZPixmap, all planes).
 /// Converts with the live `XImage` masks/byte order; rejects depths other
 /// than 24/32 and empty geometry. `Err` means caller falls back to the
@@ -448,31 +392,6 @@ mod tests {
             selection_material(20),
             ((0xef, 0x40, 0x48, 51), (0xef, 0x40, 0x48, 0xdd))
         );
-    }
-
-    #[test]
-    fn composite_paints_fill_and_border_ring() {
-        let backdrop = BackdropCapture {
-            width: 6,
-            height: 6,
-            pixels: vec![0, 0, 0, 255].repeat(36),
-        };
-        let out = composite_selection_material(
-            &backdrop,
-            Some((0xef, 0x40, 0x48, 51)),
-            (0xef, 0x40, 0x48, 0xdd),
-        );
-        assert_eq!(out.len(), 36 * 4);
-        // Border pixel (0,0) is strong accent; interior (3,3) is 20% fill.
-        let border = &out[0..4];
-        assert!(border[0] > 200, "border red {border:?}");
-        let inner = &out[(3 * 6 + 3) * 4..][..4];
-        assert_eq!((inner[0], inner[1], inner[2]), (48, 13, 14));
-        // Border-only failure path keeps content, still rings the border.
-        let ring_only = composite_selection_material(&backdrop, None, (0xef, 0x40, 0x48, 0xdd));
-        let inner2 = &ring_only[(3 * 6 + 3) * 4..][..4];
-        assert_eq!((inner2[0], inner2[1], inner2[2]), (0, 0, 0));
-        assert!(ring_only[0] > 200);
     }
 
     #[test]
