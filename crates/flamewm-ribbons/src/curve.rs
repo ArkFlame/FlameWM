@@ -1,4 +1,4 @@
-use crate::profile::{coverage, ribbon_width};
+use crate::profile::{coverage, ribbon_width, smoothstep};
 use crate::sim::History;
 
 /// Max chord deviation as a multiple of the screen scale `S` (px).
@@ -9,6 +9,14 @@ const MAX_PIECES: usize = 16;
 const KNOT_STRIDE: usize = 8;
 /// Tangent length below which the last tangent is retained.
 const TANGENT_EPS: f64 = 1e-9;
+/// Taper length at the tail, in local widths: alpha and width ramp up over `3 w` of arclength.
+const TAIL_TAPER_WIDTHS: f64 = 3.0;
+/// Taper length at the head, in local widths: alpha and width ramp down over `1.5 w` of arclength.
+const HEAD_TAPER_WIDTHS: f64 = 1.5;
+/// Tail taper is capped to this fraction of the strip length, so a plateau always exists.
+const TAIL_TAPER_MAX_FRAC: f64 = 0.4;
+/// Head taper is capped to this fraction of the strip length, so a plateau always exists.
+const HEAD_TAPER_MAX_FRAC: f64 = 0.2;
 
 /// Point on the ribbon centreline with its local width (px) and coverage.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -93,6 +101,9 @@ pub fn build_strip(
     }
 
     let tol = TOLERANCE_SCALE * scale;
+    // A trail within one knot span (e.g. the first catch-up frame) needs an interior point,
+    // otherwise both taper-zeroed endpoints leave nothing to draw.
+    let min_pieces = if n <= KNOT_STRIDE + 1 { 2 } else { 1 };
     let mut j = 0;
     while j < n - 1 {
         // Knot span from sample `j` to `k`; the Hermite parameter runs over the span's intervals.
@@ -103,7 +114,7 @@ pub fn build_strip(
         let (m0, m1) = (scale2(tangents[j], span), scale2(tangents[k], span));
         let curvature = norm(hermite_second(p0, p1, m0, m1, 0.0))
             .max(norm(hermite_second(p0, p1, m0, m1, 1.0)));
-        let mut pieces = 1usize;
+        let mut pieces = min_pieces;
         while pieces < MAX_PIECES && curvature / (8.0 * (pieces * pieces) as f64) > tol {
             pieces *= 2;
         }
@@ -130,6 +141,44 @@ pub fn build_strip(
         w: ribbon_width(last_sample.z, last_sample.beta, scale, width_px) as f32,
         a: coverage(now - last_sample.t, last_sample.z) as f32,
     });
+    taper(out);
+}
+
+/// Arclength taper `T = smoothstep(0, L_tail, s) * smoothstep(0, L_head, L - s)`, applied to the
+/// width and coverage of each point. Both ends reach zero, so no bright terminal dot is left at the
+/// head; the core and glow terms scale with coverage in the rasterizer. Zero-length segments add no
+/// arclength, so a stationary head yields `s = L` and simply tapers to zero.
+fn taper(out: &mut [StripPoint]) {
+    let total: f64 = out
+        .windows(2)
+        .map(|p| {
+            norm(sub(
+                [f64::from(p[1].x), f64::from(p[1].y)],
+                [f64::from(p[0].x), f64::from(p[0].y)],
+            ))
+        })
+        .sum();
+    let mut s = 0.0;
+    for i in 0..out.len() {
+        if i > 0 {
+            let (a, b) = (out[i - 1], out[i]);
+            s += norm(sub(
+                [f64::from(b.x), f64::from(b.y)],
+                [f64::from(a.x), f64::from(a.y)],
+            ));
+        }
+        let w = f64::from(out[i].w);
+        let tail = (TAIL_TAPER_WIDTHS * w).min(TAIL_TAPER_MAX_FRAC * total);
+        let head = (HEAD_TAPER_WIDTHS * w).min(HEAD_TAPER_MAX_FRAC * total);
+        // A zero-length strip has no arclength to taper over; its points stay invisible.
+        let t = if tail > 0.0 && head > 0.0 {
+            smoothstep(0.0, tail, s) * smoothstep(0.0, head, total - s)
+        } else {
+            0.0
+        };
+        out[i].w = (w * t) as f32;
+        out[i].a = (f64::from(out[i].a) * t) as f32;
+    }
 }
 
 fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
@@ -201,7 +250,10 @@ mod tests {
         assert_eq!((out[0].x, out[0].y), (0.0, 10.0));
         let last = out.last().unwrap();
         assert!((last.x - 38.0).abs() < 1e-4 && (last.y - 10.0).abs() < 1e-4);
-        assert!(out.iter().all(|p| (p.y - 10.0).abs() < 1e-4), "straight stays straight");
+        assert!(
+            out.iter().all(|p| (p.y - 10.0).abs() < 1e-4),
+            "straight stays straight"
+        );
         assert!(out.iter().all(|p| p.w.is_finite() && p.a.is_finite()));
     }
 
@@ -217,11 +269,52 @@ mod tests {
     fn stationary_samples_retain_finite_tangents() {
         let mut h = History::new();
         for k in 0..5 {
-            h.push(Sample { pos: [5.0, 5.0], z: 0.2, beta: 0.1, t: k as f64 / 60.0 });
+            h.push(Sample {
+                pos: [5.0, 5.0],
+                z: 0.2,
+                beta: 0.1,
+                t: k as f64 / 60.0,
+            });
         }
         let (mut tangents, mut out) = (Vec::new(), Vec::new());
         build_strip(&h, 0.1, 1.0, 11.0, &mut tangents, &mut out);
-        assert!(tangents.iter().all(|t| t[0].is_finite() && t[1].is_finite()));
+        assert!(
+            tangents
+                .iter()
+                .all(|t| t[0].is_finite() && t[1].is_finite())
+        );
         assert!(out.iter().all(|p| p.x == 5.0 && p.y == 5.0));
+    }
+}
+
+#[cfg(test)]
+mod taper_tests {
+    use super::*;
+    use crate::sim::Sample;
+
+    #[test]
+    fn taper_is_zero_at_both_ends_and_monotone_up_to_plateau() {
+        let mut h = History::new();
+        for k in 0..40 {
+            h.push(Sample {
+                pos: [k as f64 * 3.0, 10.0],
+                z: 0.5,
+                beta: 0.0,
+                t: k as f64 / 60.0,
+            });
+        }
+        let (mut tangents, mut out) = (Vec::new(), Vec::new());
+        build_strip(&h, 40.0 / 60.0, 1.0, 11.0, &mut tangents, &mut out);
+        let first = out[0];
+        let last = *out.last().unwrap();
+        assert_eq!(first.a, 0.0, "tail must start at zero alpha");
+        assert_eq!(first.w, 0.0, "tail must start at zero width");
+        assert_eq!(last.a, 0.0, "head must end at zero alpha");
+        assert_eq!(last.w, 0.0, "head must end at zero width");
+        let mut prev = 0.0f32;
+        for p in out.iter().take_while(|p| p.x < 60.0) {
+            assert!(p.a + 1e-6 >= prev, "tail alpha must not decrease");
+            prev = p.a;
+        }
     }
 }
