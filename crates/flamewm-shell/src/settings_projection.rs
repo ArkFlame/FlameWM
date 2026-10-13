@@ -5,7 +5,7 @@ use flamewm_image_core::scale::ScaleFilter;
 use flamewm_image_core::{decode_bytes_at, ImageSourceFormat};
 use flamewm_platform::chrome::{parse_hex_rgb, ACCENT_SOFT_ALPHA};
 use flamewm_platform::settings::ClockFormat;
-use flamewm_ui_core::context_menu::shape_radius;
+use flamewm_ui_core::context_menu::{shape_radius, surface_fill};
 use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
 use crate::projection::{project_clock_at, ClockDisplay};
@@ -20,7 +20,6 @@ const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 const DEFAULT_ACCENT: u32 = 0xef4048;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
-const DEFAULT_SURFACE_COLOR: u32 = 0x191b1d;
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
@@ -126,12 +125,14 @@ pub fn menu_background(snapshot: &SettingsSnapshot) -> UiColor {
 }
 
 /// Shared surface colour with the `surfaceOpacity` alpha (taskbar, popups, desktop menus).
+/// The mapping is owned by `flamewm_ui_core::context_menu::surface_fill`.
 pub fn surface_background(snapshot: &SettingsSnapshot) -> UiColor {
-    let color = color_setting(snapshot, "surfaceColor", DEFAULT_SURFACE_COLOR);
-    let opacity = percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY);
+    let fill = surface_fill(snapshot);
     UiColor {
-        a: opacity_alpha(opacity),
-        ..color
+        r: (fill.rgb >> 16) as u8,
+        g: (fill.rgb >> 8) as u8,
+        b: fill.rgb as u8,
+        a: fill.alpha,
     }
 }
 
@@ -814,11 +815,7 @@ mod tests {
                 DEFAULT_ACCENT as u8
             )
         );
-        let missing = color_setting(
-            &SettingsSnapshot::new(1),
-            "surfaceColor",
-            DEFAULT_SURFACE_COLOR,
-        );
+        let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x191b1d);
         assert_eq!(missing.r, 0x19);
     }
 
