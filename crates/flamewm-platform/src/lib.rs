@@ -11,7 +11,6 @@ pub mod identity;
 pub mod panel;
 pub mod product;
 pub mod scale;
-pub mod search;
 pub mod services;
 pub mod settings;
 pub mod shortcuts;

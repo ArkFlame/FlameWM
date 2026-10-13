@@ -30,12 +30,6 @@ impl ScaleManager {
         scale_value(logical, self.scale_for(output))
     }
 
-    #[must_use]
-    pub fn to_logical(&self, physical: i32, output: &OutputId) -> i32 {
-        let scale = i32::from(self.scale_for(output));
-        (physical.saturating_mul(100) + scale / 2) / scale
-    }
-
     pub fn cached_physical_size(&mut self, logical: i32, requested_scale: u16) -> i32 {
         let scale = nearest_supported_scale(requested_scale);
         let key = (logical, scale, self.theme_generation);
@@ -57,6 +51,7 @@ impl ScaleManager {
         self.theme_generation
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn cache_size(&self) -> usize {
         self.cache.len()
