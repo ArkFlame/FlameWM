@@ -162,10 +162,11 @@ fn device_signal_refresh(
             access_points: false,
         };
     };
-    let active_access_point = signal
-        .active_access_point
-        .as_deref()
-        .map(|path| if path == "/" { "" } else { path });
+    let active_access_point =
+        signal
+            .active_access_point
+            .as_deref()
+            .map(|path| if path == "/" { "" } else { path });
     let access_point_changed =
         active_access_point.is_some_and(|path| path != cached.active_access_point);
     let connection_changed = signal
@@ -284,13 +285,12 @@ impl NetworkManagerProvider {
         match action {
             SystemAction::SetWifiEnabled(enabled) => {
                 let _ = self.controller.request_set_wifi_enabled(enabled)?;
-                let mut message = Message::new_method_call(
+                let mut message = method_call(
                     NETWORK_MANAGER_SERVICE,
                     NETWORK_MANAGER_ROOT,
                     PROPERTIES_INTERFACE,
                     SET,
-                )
-                .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+                )?;
                 message.append_items(&[
                     MessageItem::Str(NETWORK_MANAGER_INTERFACE.to_owned()),
                     MessageItem::Str("WirelessEnabled".to_owned()),
@@ -303,13 +303,12 @@ impl NetworkManagerProvider {
                 if snapshot.active_path.is_empty() {
                     return Err(unsupported("no active NetworkManager connection"));
                 }
-                let message = Message::new_method_call(
+                let message = method_call(
                     NETWORK_MANAGER_SERVICE,
                     NETWORK_MANAGER_ROOT,
                     NETWORK_MANAGER_INTERFACE,
                     DEACTIVATE_CONNECTION,
-                )
-                .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+                )?
                 .append1(
                     dbus::Path::new(snapshot.active_path.clone())
                         .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?,
@@ -459,13 +458,12 @@ impl NetworkManagerProvider {
                 let pending = &mut self.pending;
                 let generation = controller.generation();
                 queue_scan_requests(controller, &devices, |device| {
-                    let message = Message::new_method_call(
+                    let message = method_call(
                         NETWORK_MANAGER_SERVICE,
                         device,
                         "org.freedesktop.NetworkManager.Device.Wireless",
                         REQUEST_SCAN,
-                    )
-                    .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+                    )?
                     .append1(empty_dict());
                     let serial = pump.send(message)?;
                     pending.insert(serial, PendingRequest::Scan { generation });
@@ -486,14 +484,11 @@ impl NetworkManagerProvider {
             return Ok(false);
         }
         let generation = self.controller.generation();
-        let message = Message::new_method_call(
+        let message = get_all_message(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
-            PROPERTIES_INTERFACE,
-            GET_ALL,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-        .append1(NETWORK_MANAGER_INTERFACE.to_owned());
+            NETWORK_MANAGER_INTERFACE,
+        )?;
         self.queue(message, PendingRequest::RootProperties { generation })?;
         self.queue_devices(generation)?;
         self.queue_profiles(generation)?;
@@ -538,17 +533,14 @@ impl NetworkManagerProvider {
     }
 
     fn add_match(&mut self, rule: &str) -> FlameResult<()> {
-        let message = Message::new_method_call(DBUS_SERVICE, DBUS_ROOT, DBUS_INTERFACE, ADD_MATCH)
-            .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+        let message = method_call(DBUS_SERVICE, DBUS_ROOT, DBUS_INTERFACE, ADD_MATCH)?
             .append1(rule.to_owned());
         self.queue(message, PendingRequest::AddMatch)
     }
 
     fn queue_service_owner_request(&mut self) -> FlameResult<()> {
-        let message =
-            Message::new_method_call(DBUS_SERVICE, DBUS_ROOT, DBUS_INTERFACE, "GetNameOwner")
-                .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-                .append1(NETWORK_MANAGER_SERVICE.to_owned());
+        let message = method_call(DBUS_SERVICE, DBUS_ROOT, DBUS_INTERFACE, "GetNameOwner")?
+            .append1(NETWORK_MANAGER_SERVICE.to_owned());
         self.queue(message, PendingRequest::ServiceOwner)
     }
 
@@ -558,25 +550,21 @@ impl NetworkManagerProvider {
     }
 
     fn queue_devices(&mut self, generation: u64) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
             NETWORK_MANAGER_INTERFACE,
             GET_DEVICES,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+        )?;
         self.queue(message, PendingRequest::Devices { generation })
     }
 
     fn queue_device_properties(&mut self, generation: u64, device: String) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = get_all_message(
             NETWORK_MANAGER_SERVICE,
             &device,
-            PROPERTIES_INTERFACE,
-            GET_ALL,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-        .append1("org.freedesktop.NetworkManager.Device".to_owned());
+            "org.freedesktop.NetworkManager.Device",
+        )?;
         self.queue(
             message,
             PendingRequest::DeviceProperties { generation, device },
@@ -584,13 +572,12 @@ impl NetworkManagerProvider {
     }
 
     fn queue_access_points(&mut self, generation: u64, device: String) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             &device,
             "org.freedesktop.NetworkManager.Device.Wireless",
             GET_ACCESS_POINTS,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+        )?;
         self.queue(message, PendingRequest::AccessPoints { generation })
     }
 
@@ -599,14 +586,11 @@ impl NetworkManagerProvider {
         generation: u64,
         access_point: String,
     ) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = get_all_message(
             NETWORK_MANAGER_SERVICE,
             &access_point,
-            PROPERTIES_INTERFACE,
-            GET_ALL,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-        .append1("org.freedesktop.NetworkManager.AccessPoint".to_owned());
+            "org.freedesktop.NetworkManager.AccessPoint",
+        )?;
         self.queue(
             message,
             PendingRequest::AccessPointProperties {
@@ -617,24 +601,22 @@ impl NetworkManagerProvider {
     }
 
     fn queue_profiles(&mut self, generation: u64) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             "/org/freedesktop/NetworkManager/Settings",
             "org.freedesktop.NetworkManager.Settings",
             LIST_CONNECTIONS,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+        )?;
         self.queue(message, PendingRequest::Profiles { generation })
     }
 
     fn queue_profile_settings(&mut self, generation: u64, profile: String) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             &profile,
             "org.freedesktop.NetworkManager.Settings.Connection",
             "GetSettings",
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+        )?;
         self.queue(
             message,
             PendingRequest::ProfileSettings {
@@ -650,13 +632,12 @@ impl NetworkManagerProvider {
         device: String,
         access_point: String,
     ) -> FlameResult<()> {
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
             NETWORK_MANAGER_INTERFACE,
             ACTIVATE_CONNECTION,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+        )?
         .append3(
             object_path(profile)?,
             object_path(device)?,
@@ -694,13 +675,12 @@ impl NetworkManagerProvider {
             (MessageItem::Str("802-11-wireless".to_owned()), wireless),
         ])
         .map_err(|_| FlameError::invalid("NetworkManager open settings are invalid"))?;
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
             NETWORK_MANAGER_INTERFACE,
             ADD_AND_ACTIVATE_CONNECTION,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+        )?
         .append3(settings, object_path(device)?, object_path(access_point)?);
         self.queue(message, PendingRequest::Action)
     }
@@ -751,13 +731,12 @@ impl NetworkManagerProvider {
             ),
         ])
         .map_err(|_| FlameError::invalid("NetworkManager secure settings are invalid"))?;
-        let message = Message::new_method_call(
+        let message = method_call(
             NETWORK_MANAGER_SERVICE,
             NETWORK_MANAGER_ROOT,
             NETWORK_MANAGER_INTERFACE,
             ADD_AND_ACTIVATE_CONNECTION,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+        )?
         .append3(settings, object_path(device)?, object_path(access_point)?);
         self.queue(message, PendingRequest::Action)
     }
@@ -1472,6 +1451,16 @@ fn empty_dict() -> MessageItem {
         .unwrap_or_else(|_| unreachable!())
 }
 
+fn method_call(service: &str, path: &str, interface: &str, member: &str) -> FlameResult<Message> {
+    Message::new_method_call(service, path, interface, member)
+        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
+}
+
+/// `org.freedesktop.DBus.Properties.GetAll(s interface)` on one NetworkManager object.
+fn get_all_message(service: &str, path: &str, interface: &str) -> FlameResult<Message> {
+    Ok(method_call(service, path, PROPERTIES_INTERFACE, GET_ALL)?.append1(interface.to_owned()))
+}
+
 fn object_path(value: String) -> FlameResult<dbus::Path<'static>> {
     dbus::Path::new(value).map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
 }
@@ -1600,13 +1589,12 @@ where
 /// `RegisterWithCapabilities(s identifier, u capabilities)`. The agent object path is not an
 /// argument: NetworkManager calls back on the caller's unique name at SECRET_AGENT_PATH.
 fn secret_agent_registration_message() -> FlameResult<Message> {
-    Message::new_method_call(
+    method_call(
         NETWORK_MANAGER_SERVICE,
         SECRET_AGENT_MANAGER_PATH,
         SECRET_AGENT_MANAGER_INTERFACE,
         REGISTER_WITH_CAPABILITIES,
     )
-    .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
     .map(|message| message.append2(SECRET_AGENT_IDENTIFIER.to_owned(), 0_u32))
 }
 
@@ -1629,6 +1617,50 @@ mod tests {
         assert_eq!(signature, "su");
         assert!(matches!(&items[0], MessageItem::Str(s) if s == SECRET_AGENT_IDENTIFIER));
         assert!(matches!(&items[1], MessageItem::UInt32(0)));
+    }
+
+    #[test]
+    fn method_call_helpers_match_direct_construction() {
+        let helper = get_all_message(
+            NETWORK_MANAGER_SERVICE,
+            NETWORK_MANAGER_ROOT,
+            NETWORK_MANAGER_INTERFACE,
+        )
+        .expect("valid GetAll message");
+        let direct = Message::new_method_call(
+            NETWORK_MANAGER_SERVICE,
+            NETWORK_MANAGER_ROOT,
+            PROPERTIES_INTERFACE,
+            GET_ALL,
+        )
+        .expect("valid GetAll message")
+        .append1(NETWORK_MANAGER_INTERFACE.to_owned());
+        assert_eq!(helper.destination(), direct.destination());
+        assert_eq!(helper.path(), direct.path());
+        assert_eq!(helper.interface(), direct.interface());
+        assert_eq!(helper.member(), direct.member());
+        assert_eq!(helper.get_items(), direct.get_items());
+        assert_eq!(
+            helper.member().map(|m| m.to_string()).as_deref(),
+            Some(GET_ALL)
+        );
+
+        let devices = method_call(
+            NETWORK_MANAGER_SERVICE,
+            NETWORK_MANAGER_ROOT,
+            NETWORK_MANAGER_INTERFACE,
+            GET_DEVICES,
+        )
+        .expect("valid GetDevices message");
+        assert_eq!(
+            devices.member().map(|m| m.to_string()).as_deref(),
+            Some(GET_DEVICES)
+        );
+        assert_eq!(
+            devices.interface().map(|i| i.to_string()).as_deref(),
+            Some(NETWORK_MANAGER_INTERFACE)
+        );
+        assert!(devices.get_items().is_empty());
     }
 
     #[test]
