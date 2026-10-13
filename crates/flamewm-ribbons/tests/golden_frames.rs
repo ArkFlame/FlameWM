@@ -37,22 +37,37 @@ fn fnv1a64(buf: &[u8]) -> u64 {
     })
 }
 
-fn hashes() -> Vec<u64> {
+fn span_config(seed: u64) -> Config {
+    Config {
+        num: 6,
+        width_px: 11.0,
+        span_rects: vec![Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        }],
+        seed,
+    }
+}
+
+/// Renders one frame at `t_seconds` after stepping from 0 at 60 Hz.
+fn frame_hash(mut state: Ribbons, quality: Quality, t_seconds: u64) -> u64 {
+    let mut rast = Rasterizer::new(quality);
+    for frame in 1..=t_seconds * 60 {
+        state.step_to(frame as f64 / 60.0);
+    }
+    let mut buf = vec![0u8; (W * H * 4) as usize];
+    rast.render(&state, &mut buf);
+    fnv1a64(&buf)
+}
+
+/// Hashes built at an explicit speed factor. The pins were recorded at factor 1.0.
+fn hashes_with_factor(factor: f64) -> Vec<u64> {
     let mut out = Vec::new();
     for &quality in &QUALITIES {
         for &seed in &SEEDS {
-            let config = Config {
-                num: 6,
-                width_px: 11.0,
-                span_rects: vec![Rect {
-                    x: 0,
-                    y: 0,
-                    w: W,
-                    h: H,
-                }],
-                seed,
-            };
-            let mut state = Ribbons::new(config, 0.0);
+            let mut state = Ribbons::new_with_speed_factor(span_config(seed), 0.0, factor);
             let mut rast = Rasterizer::new(quality);
             let mut frame = 1u64;
             let mut buf = vec![0u8; (W * H * 4) as usize];
@@ -68,6 +83,26 @@ fn hashes() -> Vec<u64> {
         }
     }
     out
+}
+
+fn hashes() -> Vec<u64> {
+    hashes_with_factor(1.0)
+}
+
+#[test]
+fn default_speed_differs_from_unit_factor_at_3s() {
+    // Half quality, seed 21, t=3s: index 1 in the pinned order (quality, seed, time).
+    let unit = frame_hash(
+        Ribbons::new_with_speed_factor(span_config(21), 0.0, 1.0),
+        Quality::Half,
+        3,
+    );
+    let default = frame_hash(Ribbons::new(span_config(21), 0.0), Quality::Half, 3);
+    assert_eq!(unit, GOLDEN[1], "factor 1.0 must reproduce the pinned hash");
+    assert_ne!(
+        default, unit,
+        "default speed must differ from factor 1.0 at t=3s"
+    );
 }
 
 #[test]

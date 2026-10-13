@@ -20,6 +20,10 @@ pub const AUDIO_LIST_VIEWPORT: u32 = AUDIO_ROW_HEIGHT * AUDIO_POPUP_ROWS as u32;
 /// Slider track left edge and width in popup coordinates (see audio.html).
 pub const AUDIO_TRACK_X: f32 = 58.0;
 pub const AUDIO_TRACK_WIDTH: f32 = 350.0;
+/// Thumb diameter; must match `.audio-thumb` in ui/shell/audio.html. Kept at 12
+/// so the thumb at 150% ends at popup x=414, where the percent label starts.
+pub const AUDIO_TRACK_HEIGHT: f32 = 6.0;
+pub const AUDIO_THUMB_DIAMETER: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioRowKind {

@@ -343,6 +343,49 @@ pub fn set_background<V: UiDocumentAccess>(view: &mut V, image: RuntimeImage) ->
     view.image_rgba8(BACKGROUND_ID, image)
 }
 
+/// Every lock UI node except the root and the background. Hidden nodes are neither drawn
+/// nor hit-testable, so the Ribbons screensaver shows no widget and takes no click.
+const LOCK_UI_IDS: [&str; 29] = [
+    "lock-avatar",
+    "lock-avatar-initial",
+    "lock-caret",
+    "lock-clock",
+    "lock-confirm",
+    "lock-confirm-cancel",
+    "lock-confirm-ok",
+    "lock-confirm-text",
+    "lock-date",
+    "lock-dots",
+    "lock-field",
+    "lock-field-shade",
+    "lock-footer",
+    "lock-message",
+    "lock-other",
+    "lock-other-cancel",
+    "lock-other-logout",
+    "lock-power-0",
+    "lock-power-1",
+    "lock-power-2",
+    "lock-power-3",
+    "lock-power-label-0",
+    "lock-power-label-1",
+    "lock-power-label-2",
+    "lock-power-label-3",
+    "lock-power-message",
+    "lock-submit",
+    "lock-submit-glyph",
+    "lock-username",
+];
+
+/// Shows or hides every lock UI node. Restoring is followed by a full [`apply_view`] and
+/// [`apply_power`], which re-apply the per-state visibility of dates, power rows and dialogs.
+pub fn set_lock_ui_shown<V: UiDocumentAccess>(view: &mut V, shown: bool) -> Result<(), String> {
+    for id in LOCK_UI_IDS {
+        view.visible(id, shown)?;
+    }
+    Ok(())
+}
+
 /// Writes the per-second content: clock, date, avatar, name, mask and status.
 pub fn apply_view<V: UiDocumentAccess>(view: &mut V, lock: &LockView) -> Result<(), String> {
     view.text("lock-clock", lock.clock.clone())?;
@@ -804,6 +847,24 @@ mod tests {
             }
         }
         RgbaImage::from_rgba8(width, height, pixels).expect("valid image")
+    }
+
+    /// Every `lock-*` node in the template must be hidden by the saver, or a widget stays
+    /// visible and clickable during Ribbons. Only the root and background stay shown.
+    #[test]
+    fn saver_hides_every_lock_widget_except_root_and_background() {
+        let html = include_str!("../../../ui/lock/lock.html");
+        let mut ids: Vec<&str> = html
+            .split("id=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .filter(|id| id.starts_with("lock-") && *id != "lock-root" && *id != "lock-bg")
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut hidden = LOCK_UI_IDS.to_vec();
+        hidden.sort_unstable();
+        assert_eq!(hidden, ids);
     }
 
     #[test]

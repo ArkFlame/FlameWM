@@ -36,8 +36,8 @@ pub fn project_network_full(
     // truncation. Secured/known/connected flags and the masked secret prompt
     // are encoded into the row status text; the secret value itself is never
     // projected. Wifi toggle / scan / disconnect state is carried in the
-    // popover view for the control layer; the compiled template exposes no
-    // dedicated nodes for those affordances, so none are fabricated here.
+    // popover view for the control layer; the Wi-Fi switch projects the real
+    // snapshot wifi_enabled state, and no other dedicated nodes are fabricated here.
     // Full-snapshot filter + Connected/Available grouping: rows come from
     // the snapshot AP list in model order with stable path identity, never
     // truncated. Secure connect travels via the SecretAgent snapshot; the
@@ -73,6 +73,11 @@ pub fn project_network_full(
             },
         )?;
         document.visible("network-wifi-toggle", true)?;
+        document.toggle(
+            "network-wifi-track",
+            "network-wifi-knob",
+            snapshot.system.network.wifi_enabled,
+        )?;
         document.visible("network-scan", popover.can_scan)?;
         document.visible("network-disconnect", popover.can_disconnect)?;
         document.visible("network-secret", popover.secret_masked)?;
@@ -164,6 +169,7 @@ mod network_template_tests {
         document: &'a mut flamewm_ui_x11::UiDocument,
         texts: std::collections::HashMap<String, String>,
         visible: std::collections::HashMap<String, bool>,
+        toggles: std::collections::HashMap<String, bool>,
     }
 
     macro_rules! forward {
@@ -183,10 +189,13 @@ mod network_template_tests {
             self.visible.insert(id.to_owned(), visible);
             UiDocumentAccess::visible(self.document, id, visible)
         }
+        fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
+            self.toggles.insert(track_id.to_owned(), checked);
+            UiDocumentAccess::toggle(self.document, track_id, knob_id, checked)
+        }
         forward!(
             image_rgb8(id: &str, image: RuntimeImage),
             image_rgba8(id: &str, image: RuntimeImage),
-            toggle(track_id: &str, knob_id: &str, checked: bool),
             position(id: &str, left: f32, top: f32),
             size(id: &str, width: f32, height: f32),
             background(id: &str, color: UiColor),
@@ -233,6 +242,7 @@ mod network_template_tests {
             document: &mut document,
             texts: std::collections::HashMap::new(),
             visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
         };
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert!(!recorder.texts["network-connected"].is_empty());
@@ -271,6 +281,7 @@ mod network_template_tests {
             document: &mut document,
             texts: std::collections::HashMap::new(),
             visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
         };
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
@@ -326,6 +337,7 @@ mod network_template_tests {
             document: &mut document,
             texts: std::collections::HashMap::new(),
             visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
         };
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(
@@ -346,6 +358,7 @@ mod network_template_tests {
             document: &mut document,
             texts: std::collections::HashMap::new(),
             visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
         };
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
@@ -369,6 +382,7 @@ mod network_template_tests {
             document: &mut document,
             texts: std::collections::HashMap::new(),
             visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
         };
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "FlameNet");
@@ -400,6 +414,7 @@ mod network_template_tests {
             document: &mut document,
             texts: std::collections::HashMap::new(),
             visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
         };
         project_network_full(&mut recorder, &snapshot, &query, 0)
             .expect("network projection must succeed");
@@ -407,5 +422,43 @@ mod network_template_tests {
         assert_eq!(recorder.texts["network-slot-1-name"], "StubNeighbor");
         assert_eq!(recorder.texts["network-slot-2-name"], "OtherStub");
         assert_eq!(recorder.visible.get("network-slot-3"), Some(&false));
+    }
+
+    // REGRESSION: the Wi-Fi control is the canonical switch. Its track reflects
+    // the real wifi_enabled state (on), with no optimistic local state.
+    // MUTATION: a hard-coded or inverted toggle state fails this assertion.
+    #[test]
+    fn wifi_toggle_projects_enabled_state_as_on() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(recorder.visible.get("network-wifi-toggle"), Some(&true));
+        assert_eq!(recorder.toggles.get("network-wifi-track"), Some(&true));
+    }
+
+    // REGRESSION: wifi_enabled=false projects the switch as OFF, so a wrong fix that
+    // always projects ON (or ignores the snapshot) is rejected.
+    #[test]
+    fn wifi_toggle_projects_disabled_state_as_off() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let mut snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
+        snapshot.system.network.wifi_enabled = false;
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
+        };
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(recorder.visible.get("network-wifi-toggle"), Some(&true));
+        assert_eq!(recorder.toggles.get("network-wifi-track"), Some(&false));
     }
 }

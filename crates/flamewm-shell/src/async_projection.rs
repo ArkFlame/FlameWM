@@ -1445,6 +1445,26 @@ mod tests {
     }
 
     #[test]
+    fn start_content_pane_keeps_fixed_height_across_search_states() {
+        // Search hides the category rail, so the content pane is the only tall
+        // child left. Its min-height must equal its max-height (the shared
+        // 420px cap) or the Start outer height drops during search and
+        // zero-result states. The search bar stays bottom-anchored via auto top margin.
+        let css = include_str!("../../../ui/shell/flamewm.css");
+        let rule = |selector: &str| -> &str {
+            let start = css
+                .find(&format!("{selector} {{"))
+                .unwrap_or_else(|| panic!("missing rule {selector}"));
+            let end = css[start..].find('}').expect("rule end") + start;
+            &css[start..end]
+        };
+        let pane = rule(".start-content-pane");
+        assert!(pane.contains("min-height:420px"), "{pane}");
+        assert!(pane.contains("max-height:420px"), "{pane}");
+        assert!(rule(".start-left-pane").contains("justify-content:flex-end"));
+    }
+
+    #[test]
     fn start_view_note_gates_redundant_hover() {
         let mut note = StartViewNote::default();
         assert!(note.note_start_view(StartCategory::All, ""));

@@ -1,7 +1,7 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::colour::palette;
-use crate::config::{Config, Rect, union_bounds};
+use crate::config::{Config, RIBBON_DEFAULT_SPEED_FACTOR, Rect, union_bounds};
 use crate::profile::{LIFETIME_S, smoothstep};
 use crate::rng::SplitMix64;
 
@@ -106,9 +106,15 @@ pub struct Stream {
 }
 
 impl Stream {
-    fn new(rng: &mut SplitMix64, dims: (f64, f64), scale: f64, now: f64) -> Self {
+    fn new(
+        rng: &mut SplitMix64,
+        dims: (f64, f64),
+        scale: f64,
+        speed_factor: f64,
+        now: f64,
+    ) -> Self {
         let (w, h) = dims;
-        let speed = 145.0 * scale * (0.75 + 0.50 * rng.unit());
+        let speed = 145.0 * speed_factor * scale * (0.75 + 0.50 * rng.unit());
         let magnitude = 0.16 + 0.30 * rng.unit();
         let omega = if rng.unit() < 0.5 { -magnitude } else { magnitude };
         let phase = [TAU * rng.unit(), TAU * rng.unit(), TAU * rng.unit()];
@@ -216,6 +222,7 @@ pub struct Ribbons {
     width: u32,
     height: u32,
     scale: f64,
+    speed_factor: f64,
     /// Output rects in viewport-local coordinates; empty when unmasked.
     mask: Vec<Rect>,
     masked: bool,
@@ -233,6 +240,12 @@ impl Ribbons {
     /// With several `span_rects` the domain is their union bounds and `covers` masks the gaps;
     /// for independent outputs create one `Ribbons` per output instead.
     pub fn new(config: Config, now: f64) -> Self {
+        Self::new_with_speed_factor(config, now, RIBBON_DEFAULT_SPEED_FACTOR)
+    }
+
+    /// Like `new`, but multiplies the base ribbon speed by `factor` instead of the default.
+    /// `factor` does not change RNG draw order, so the same seed gives the same paths, scaled.
+    pub fn new_with_speed_factor(config: Config, now: f64, factor: f64) -> Self {
         let config = config.clamped();
         let bounds = union_bounds(&config.span_rects);
         let mask: Vec<Rect> = config
@@ -257,6 +270,7 @@ impl Ribbons {
             width,
             height,
             scale,
+            speed_factor: factor,
             mask,
             masked,
             colours,
@@ -281,7 +295,7 @@ impl Ribbons {
             .map(|i| {
                 let mix = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
                 let mut rng = SplitMix64::new(self.config.seed.wrapping_add(mix));
-                Stream::new(&mut rng, dims, self.scale, now)
+                Stream::new(&mut rng, dims, self.scale, self.speed_factor, now)
             })
             .collect();
     }
@@ -434,6 +448,15 @@ mod tests {
         }
         for s in r.streams() {
             assert!(s.heading().is_finite() && s.position().iter().all(|v| v.is_finite()));
+        }
+    }
+
+    #[test]
+    fn default_speed_is_the_base_times_the_default_factor() {
+        let r = Ribbons::new(cfg(12, 5), 0.0);
+        let base = 145.0 * RIBBON_DEFAULT_SPEED_FACTOR * r.scale();
+        for s in r.streams() {
+            assert!(s.speed() >= base * 0.75 && s.speed() <= base * 1.25, "speed {}", s.speed());
         }
     }
 

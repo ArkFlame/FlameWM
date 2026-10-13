@@ -710,8 +710,11 @@ impl X11App {
         let Some(cached) = self.cached_paint.as_ref() else {
             return;
         };
-        let _ = document.ui_scale();
-        unsafe { self.refresh_shape_mask_from_coverage(&cached.commands) };
+        let backdrop_radius =
+            super::render::backdrop_corner_radius_px(document, self.width, self.height);
+        unsafe {
+            self.refresh_shape_mask_from_coverage_scaled(&cached.commands, 1.0, backdrop_radius)
+        };
     }
 
     pub(crate) unsafe fn recreate_backbuffer(&mut self) -> Result<(), String> {

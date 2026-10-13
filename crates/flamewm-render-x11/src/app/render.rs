@@ -172,7 +172,14 @@ impl X11App {
         {
             let _shape_guard = flamewm_profiler::start("render.shape");
             let cached = self.cached_paint.as_ref().expect("paint cached above");
-            unsafe { self.refresh_shape_mask_from_coverage_scaled(&cached.commands, scale) };
+            let backdrop_radius = backdrop_corner_radius_px(document, self.width, self.height);
+            unsafe {
+                self.refresh_shape_mask_from_coverage_scaled(
+                    &cached.commands,
+                    scale,
+                    backdrop_radius,
+                )
+            };
         }
         Ok(())
     }
@@ -337,19 +344,14 @@ impl X11App {
         Ok(())
     }
 
-    /// Visual-coverage shape refresh from the coverage builder.
     /// Scale-aware shape refresh: coverage matches the paint path for
     /// rect/radius/stroke/clip in device pixels; text stays skipped.
-    pub(crate) unsafe fn refresh_shape_mask_from_coverage(&self, commands: &[PaintCommand]) {
-        unsafe { self.refresh_shape_mask_from_coverage_scaled(commands, 1.0) };
-    }
-
-    /// Scale-aware shape refresh: coverage matches the paint path for
-    /// rect/radius/stroke/clip in device pixels; text stays skipped.
+    /// `backdrop_radius` (device px) rounds the retained-backdrop mask.
     pub(crate) unsafe fn refresh_shape_mask_from_coverage_scaled(
         &self,
         commands: &[PaintCommand],
         scale: f32,
+        backdrop_radius: u32,
     ) {
         let Some(bridge) = self.xshape.as_ref() else {
             return;
@@ -372,11 +374,11 @@ impl X11App {
             }
             return;
         }
-        // A retained backdrop is composited under translucent fills, so the whole snapshot
-        // must stay visible; coverage would drop the translucent area and show the live desktop
-        // (unblurred) instead.
+        // A retained backdrop is composited under translucent fills, so the snapshot must stay
+        // visible across the whole rounded shape; coverage would drop the translucent area and
+        // show the live desktop (unblurred) instead. Corners outside the radius stay transparent.
         let spans = if self.surface_backdrop.is_some() {
-            crate::xshape::rounded_mask_spans(self.width, self.height, 0)
+            crate::xshape::rounded_mask_spans(self.width, self.height, backdrop_radius)
         } else if scale == 1.0 {
             build_coverage(commands, self.width, self.height, 0.0)
         } else {
@@ -643,9 +645,70 @@ impl X11App {
     }
 }
 
+/// Device-pixel corner radius for the retained-backdrop shape mask, derived from the document's
+/// root corner radius (logical px) scaled like the paint path, clamped to the surface size.
+pub(crate) fn backdrop_corner_radius_px(
+    document: &RuntimeDocument,
+    width: u32,
+    height: u32,
+) -> u32 {
+    let radius =
+        flamewm_render_core::paint::root_corner_radius(document, InteractionState::default());
+    flamewm_render_core::paint::surface_shape_pixels(width, height, radius * document.ui_scale()).2
+}
+
 #[cfg(test)]
 mod tests {
     use super::background_bind_plan;
+    use crate::xshape::rounded_mask_spans;
+
+    fn row_span(spans: &[(u32, u32, u32)], row: u32) -> (u32, u32) {
+        let &(_, start, end) = spans
+            .iter()
+            .find(|(r, _, _)| *r == row)
+            .expect("row present");
+        (start, end)
+    }
+
+    #[test]
+    fn backdrop_mask_rounds_corners_when_radius_positive() {
+        let spans = rounded_mask_spans(40, 20, 8);
+        let (top_start, top_end) = row_span(&spans, 0);
+        let (mid_start, mid_end) = row_span(&spans, 10);
+        assert!(
+            top_start > 0 && top_end < 40,
+            "top row must be cut at the corners"
+        );
+        assert_eq!((mid_start, mid_end), (0, 40));
+        assert_eq!(
+            row_span(&spans, 19).0,
+            top_start,
+            "bottom corners mirror top"
+        );
+    }
+
+    #[test]
+    fn backdrop_mask_radius_zero_is_full_rect() {
+        let spans = rounded_mask_spans(40, 20, 0);
+        assert_eq!(spans.len(), 20);
+        assert!(spans.iter().all(|&(_, start, end)| start == 0 && end == 40));
+    }
+
+    #[test]
+    fn backdrop_radius_follows_root_radius_and_clamps() {
+        use flamewm_render_core::paint::surface_shape_pixels;
+        assert_eq!(surface_shape_pixels(100, 60, 12.0).2, 12);
+        assert_eq!(
+            surface_shape_pixels(100, 60, 0.0).2,
+            0,
+            "squared stays full rect"
+        );
+        assert_eq!(
+            surface_shape_pixels(40, 20, 99.0).2,
+            10,
+            "clamped to half min side"
+        );
+    }
 
     #[test]
     fn never_binds_unpainted_replacement() {

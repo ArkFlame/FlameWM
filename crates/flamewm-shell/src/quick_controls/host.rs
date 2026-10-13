@@ -22,12 +22,12 @@ use flamewm_dbus_reactor::BusKind;
 use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_ui_x11::{
-    decode_document, ActionPhase, PointerButton, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
-    SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
+    ActionPhase, PointerButton, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
+    SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate, decode_document,
 };
 
 use self::popup::{close_helper, fit_helper, grab, measure_helper, prepare_commit, present};
-use super::protocol::{decode_line, Command, OpenRequest, QuickControlKind, MAX_LINE_LEN};
+use super::protocol::{Command, MAX_LINE_LEN, OpenRequest, QuickControlKind, decode_line};
 use super::supervisor::{QuickControlSupervisor, SupervisorError};
 
 #[path = "popup.rs"]
@@ -651,7 +651,14 @@ impl OpenStageTimings {
     pub fn render(&self, kind: QuickControlKind) -> String {
         format!(
             "flamewm-quick-control: slow open kind={kind:?} open.total={:?} project={:?} measure={:?} place={:?} prepare/commit_geometry={:?} present={:?} pointer_grab={:?} close/ungrab/unmap={:?}",
-            self.total, self.project, self.measure, self.place, self.prepare_commit, self.present, self.pointer_grab, self.close,
+            self.total,
+            self.project,
+            self.measure,
+            self.place,
+            self.prepare_commit,
+            self.present,
+            self.pointer_grab,
+            self.close,
         )
     }
 }
@@ -934,6 +941,7 @@ pub fn route_helper_event(
     let outside = event.action.phase == ActionPhase::Release
         && (action == OUTSIDE_RELEASE_ACTION || (surfaces.open.is_some() && !inside_active));
     if outside {
+        snapshot.audio_drag_slot = None;
         surfaces.close(runtime);
         return true;
     }
@@ -952,19 +960,26 @@ pub fn route_helper_event(
         }
         return true;
     }
-    if let Some((slot, "set")) = audio_slot_command(action) {
-        match event.action.phase {
-            ActionPhase::Press => snapshot.audio_drag_slot = Some(slot),
-            ActionPhase::Release => snapshot.audio_drag_slot = None,
-            _ => {}
-        }
-        if snapshot.audio_drag_slot == Some(slot)
-            && matches!(event.action.phase, ActionPhase::Press | ActionPhase::Motion)
-        {
-            if let Some(request) = audio_pointer_request(snapshot, slot, event.action.x) {
-                crate::control_actions::enqueue_action(dispatcher, request);
+    // A drag owns the pointer until release: motion keeps routing to the grabbed
+    // slot even when the pointer leaves its track; release or close ends it.
+    match event.action.phase {
+        ActionPhase::Press => {
+            if let Some((slot, "set")) = audio_slot_command(action) {
+                snapshot.audio_drag_slot = Some(slot);
+                if let Some(request) = audio_pointer_request(snapshot, slot, event.action.x) {
+                    crate::control_actions::enqueue_action(dispatcher, request);
+                }
             }
         }
+        ActionPhase::Motion => {
+            if let Some(slot) = snapshot.audio_drag_slot {
+                if let Some(request) = audio_pointer_request(snapshot, slot, event.action.x) {
+                    crate::control_actions::enqueue_action(dispatcher, request);
+                }
+            }
+        }
+        ActionPhase::Release => snapshot.audio_drag_slot = None,
+        _ => {}
     }
     if event.action.phase == ActionPhase::Release && event.action.inside {
         match action {
@@ -1951,6 +1966,41 @@ mod audio_routing_tests {
         assert_eq!(
             target_of(helper_control_request("audio.slot.1.mute", &apps)),
             Some(AudioTarget::Stream { id: 10 })
+        );
+    }
+
+    #[test]
+    fn pointer_on_thumb_centre_reads_back_its_value_and_drag_clamps_at_both_ends() {
+        use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
+        let percent = |raise: bool, x: f32| match audio_pointer_request(
+            &quick(AudioTab::Devices, raise),
+            0,
+            x,
+        ) {
+            Some(ControlRequest::SystemAction {
+                action: SystemAction::SetVolume(volume),
+                ..
+            }) => Some(volume.percent),
+            _ => None,
+        };
+        // Thumb centre for 120% under cap 150 is X + (120 / 150) * W; pointer there reads 120 back.
+        assert_eq!(
+            percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH * 120.0 / 150.0),
+            Some(120)
+        );
+        assert_eq!(
+            percent(false, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH * 0.5),
+            Some(50)
+        );
+        // Drag past either end clamps to 0 and to the active cap.
+        assert_eq!(percent(false, AUDIO_TRACK_X - 500.0), Some(0));
+        assert_eq!(
+            percent(false, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH + 500.0),
+            Some(100)
+        );
+        assert_eq!(
+            percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH + 500.0),
+            Some(150)
         );
     }
 

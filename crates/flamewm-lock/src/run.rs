@@ -66,6 +66,12 @@ pub fn run_screensaver_preview(settings: &LockSettings, username: &str) -> Resul
     preview_loop(settings, username, true)
 }
 
+/// The lock projection for a preview, built only for the non-Ribbons preview. Ribbons
+/// shows no lock UI, so `project` is never called for it.
+fn preview_lock_ui<T>(ribbons: bool, project: impl FnOnce() -> T) -> Option<T> {
+    (!ribbons).then(project)
+}
+
 /// Shared preview loop. `ribbons` selects the animated background and nothing else.
 fn preview_loop(settings: &LockSettings, username: &str, ribbons: bool) -> Result<(), String> {
     let (width, height) = flamewm_ui_x11::root_geometry()?;
@@ -99,19 +105,29 @@ fn preview_loop(settings: &LockSettings, username: &str, ribbons: bool) -> Resul
         None => document::background_image(settings, width, height),
     };
     let mut next_frame = started + FRAME_INTERVAL;
-    let power = PowerUi::new(SessionCapabilities::default()).view();
-    let view = LockView::project(
-        settings,
-        local_now(),
-        username,
-        &PasswordBuffer::default(),
-        Status::default(),
-    );
+    // Ribbons shows the background alone: its lock projection is never built.
+    let lock_ui = preview_lock_ui(ribbons, || {
+        (
+            LockView::project(
+                settings,
+                local_now(),
+                username,
+                &PasswordBuffer::default(),
+                Status::default(),
+            ),
+            PowerUi::new(SessionCapabilities::default()).view(),
+        )
+    });
     runtime
         .with_document(surface, |document_view| {
             document::apply_document(document_view, settings, width, height, background)?;
-            document::apply_view(document_view, &view)?;
-            document::apply_power(document_view, width, height, &power)
+            match &lock_ui {
+                Some((view, power)) => {
+                    document::apply_view(document_view, view)?;
+                    document::apply_power(document_view, width, height, power)
+                }
+                None => document::set_lock_ui_shown(document_view, false),
+            }
         })
         .map_err(|error| format!("theme preview surface: {error:?}"))?;
     runtime
@@ -420,6 +436,14 @@ impl LockLoop {
         if before == Phase::DisplayOff {
             self.session.borrow_mut().set_display_power(true);
         }
+        if before != Phase::Visible {
+            // Showing the widgets again; the repaint this turn re-applies their content.
+            runtime
+                .with_document(self.surface, |view| document::set_lock_ui_shown(view, true))
+                .map_err(|error| format!("show lock UI: {error:?}"))?;
+            self.shown = None;
+            self.shown_power = None;
+        }
         Ok(true)
     }
 
@@ -430,6 +454,13 @@ impl LockLoop {
         phase: Phase,
         now: Instant,
     ) -> Result<(), String> {
+        if phase != Phase::Visible {
+            runtime
+                .with_document(self.surface, |view| {
+                    document::set_lock_ui_shown(view, false)
+                })
+                .map_err(|error| format!("hide lock UI: {error:?}"))?;
+        }
         match phase {
             Phase::RibbonsActive => {
                 self.frames = Some(RibbonFrames::new(
@@ -528,6 +559,10 @@ impl LockLoop {
     }
 
     fn repaint(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        // While the screensaver runs the lock UI stays hidden: no content is projected.
+        if self.saver.phase() != Phase::Visible {
+            return Ok(());
+        }
         let mut view = LockView::project(
             &self.settings,
             local_now(),
@@ -650,6 +685,35 @@ mod tests {
                 "preview path reaches {forbidden}"
             );
         }
+    }
+
+    /// The Ribbons preview builds no lock projection; the lock preview builds exactly one.
+    #[test]
+    fn ribbons_preview_never_projects_the_lock_ui() {
+        let mut calls = 0;
+        assert_eq!(preview_lock_ui(true, || calls += 1), None);
+        assert_eq!(calls, 0, "ribbons preview called the lock projection");
+        assert_eq!(
+            preview_lock_ui(false, || {
+                calls += 1;
+                7
+            }),
+            Some(7)
+        );
+        assert_eq!(calls, 1);
+    }
+
+    /// Hiding on entry and restoring on wake must both exist, or the widgets stay hidden.
+    #[test]
+    fn saver_hides_lock_ui_on_entry_and_restores_on_wake() {
+        let source = include_str!("run.rs");
+        let body = |name: &str| {
+            let start = source.find(name).expect("function present");
+            let end = start + source[start..].find("\n    }\n").expect("function end");
+            &source[start..end]
+        };
+        assert!(body("fn enter(").contains("set_lock_ui_shown(view, false)"));
+        assert!(body("fn wake(").contains("set_lock_ui_shown(view, true)"));
     }
 
     /// Counts the frame wakes that arrive within `window`.

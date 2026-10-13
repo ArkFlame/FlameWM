@@ -20,6 +20,7 @@
     .audio-row-icon { position:absolute; left:16px; top:30px; width:20px; height:20px; }
     .audio-track { position:absolute; left:58px; top:34px; width:350px; height:6px; background:#42474b; border-radius:3px; }
     .audio-track-fill { position:absolute; left:0px; top:0px; width:0px; height:6px; background:var(--accent); border-radius:3px; }
+    .audio-thumb { position:absolute; left:0px; top:-3px; width:12px; height:12px; border-radius:6px; background:#ffffff; }
     .audio-row-value { position:absolute; left:414px; top:28px; width:40px; font-size:12px; color:var(--text); }
     .audio-mute { position:absolute; left:58px; top:48px; width:28px; height:28px; padding:0px; background:#333436; border-width:0px; border-radius:6px; }
     .audio-mute .symbolic-icon { position:absolute; left:6px; top:6px; width:16px; height:16px; }
@@ -50,7 +51,7 @@
         <img id="audio-slot-1-icon-out" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-volume-high.svg">
         <img id="audio-slot-1-icon-in" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-input-microphone.svg">
         <img id="audio-slot-1-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
-        <div id="audio-slot-1-track" class="audio-track" data-action="audio.slot.1.set"><div id="audio-slot-1-fill" class="audio-track-fill"></div></div>
+        <div id="audio-slot-1-track" class="audio-track" data-action="audio.slot.1.set"><div id="audio-slot-1-fill" class="audio-track-fill"></div><div id="audio-slot-1-thumb" class="audio-thumb"></div></div>
         <span id="audio-slot-1-value" class="audio-row-value">&#8203;</span>
         <button id="audio-slot-1-mute" class="audio-mute" data-action="audio.slot.1.mute" aria-label="Mute"><img id="audio-slot-1-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-1-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
@@ -60,7 +61,7 @@
         <img id="audio-slot-2-icon-out" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-volume-high.svg">
         <img id="audio-slot-2-icon-in" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-input-microphone.svg">
         <img id="audio-slot-2-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
-        <div id="audio-slot-2-track" class="audio-track" data-action="audio.slot.2.set"><div id="audio-slot-2-fill" class="audio-track-fill"></div></div>
+        <div id="audio-slot-2-track" class="audio-track" data-action="audio.slot.2.set"><div id="audio-slot-2-fill" class="audio-track-fill"></div><div id="audio-slot-2-thumb" class="audio-thumb"></div></div>
         <span id="audio-slot-2-value" class="audio-row-value">&#8203;</span>
         <button id="audio-slot-2-mute" class="audio-mute" data-action="audio.slot.2.mute" aria-label="Mute"><img id="audio-slot-2-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-2-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
@@ -70,7 +71,7 @@
         <img id="audio-slot-3-icon-out" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-volume-high.svg">
         <img id="audio-slot-3-icon-in" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-input-microphone.svg">
         <img id="audio-slot-3-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
-        <div id="audio-slot-3-track" class="audio-track" data-action="audio.slot.3.set"><div id="audio-slot-3-fill" class="audio-track-fill"></div></div>
+        <div id="audio-slot-3-track" class="audio-track" data-action="audio.slot.3.set"><div id="audio-slot-3-fill" class="audio-track-fill"></div><div id="audio-slot-3-thumb" class="audio-thumb"></div></div>
         <span id="audio-slot-3-value" class="audio-row-value">&#8203;</span>
         <button id="audio-slot-3-mute" class="audio-mute" data-action="audio.slot.3.mute" aria-label="Mute"><img id="audio-slot-3-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-3-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
@@ -80,7 +81,7 @@
         <img id="audio-slot-4-icon-out" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-volume-high.svg">
         <img id="audio-slot-4-icon-in" class="symbolic-icon audio-row-icon" src="assets/breeze/audio-input-microphone.svg">
         <img id="audio-slot-4-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
-        <div id="audio-slot-4-track" class="audio-track" data-action="audio.slot.4.set"><div id="audio-slot-4-fill" class="audio-track-fill"></div></div>
+        <div id="audio-slot-4-track" class="audio-track" data-action="audio.slot.4.set"><div id="audio-slot-4-fill" class="audio-track-fill"></div><div id="audio-slot-4-thumb" class="audio-thumb"></div></div>
         <span id="audio-slot-4-value" class="audio-row-value">&#8203;</span>
         <button id="audio-slot-4-mute" class="audio-mute" data-action="audio.slot.4.mute" aria-label="Mute"><img id="audio-slot-4-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-4-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>

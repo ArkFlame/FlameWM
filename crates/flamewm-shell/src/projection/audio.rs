@@ -1,4 +1,5 @@
 use super::*;
+use crate::taskbar::status::audio::{AUDIO_THUMB_DIAMETER, AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
 
 pub fn project_audio(
     document: &mut impl UiDocumentAccess,
@@ -77,6 +78,11 @@ pub fn project_audio_full(
             crate::taskbar::status::audio::AUDIO_TRACK_WIDTH * shown / spec.max,
             6.0,
         )?;
+        document.position(
+            &format!("audio-slot-{n}-thumb"),
+            audio_thumb_left(shown, spec.max),
+            (AUDIO_TRACK_HEIGHT - AUDIO_THUMB_DIAMETER) / 2.0,
+        )?;
         document.visible(&format!("audio-slot-{n}-icon-out"), !is_stream && !is_input)?;
         document.visible(&format!("audio-slot-{n}-icon-in"), !is_stream && is_input)?;
         document.visible(&format!("audio-slot-{n}-icon-app"), is_stream)?;
@@ -87,6 +93,13 @@ pub fn project_audio_full(
         settings.raise_maximum,
     )?;
     Ok(())
+}
+
+/// Thumb left edge relative to its track: centre = fraction * track width, so
+/// the thumb centre sits at `AUDIO_TRACK_X + fraction * AUDIO_TRACK_WIDTH` in
+/// popup space, the same mapping `value_from_pointer` inverts for drag.
+fn audio_thumb_left(shown: f32, max: f32) -> f32 {
+    AUDIO_TRACK_WIDTH * shown / max - AUDIO_THUMB_DIAMETER / 2.0
 }
 
 #[cfg(test)]
@@ -106,6 +119,7 @@ mod audio_template_tests {
         texts: std::collections::HashMap<String, String>,
         visible: std::collections::HashMap<String, bool>,
         widths: std::collections::HashMap<String, f32>,
+        positions: std::collections::HashMap<String, (f32, f32)>,
         toggles: std::collections::HashMap<String, bool>,
     }
 
@@ -135,6 +149,10 @@ mod audio_template_tests {
             self.recorded.widths.insert(id.to_owned(), width);
             UiDocumentAccess::size(self.document, id, width, height)
         }
+        fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
+            self.recorded.positions.insert(id.to_owned(), (left, top));
+            UiDocumentAccess::position(self.document, id, left, top)
+        }
         fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
             self.recorded.toggles.insert(track_id.to_owned(), checked);
             UiDocumentAccess::toggle(self.document, track_id, knob_id, checked)
@@ -142,7 +160,6 @@ mod audio_template_tests {
         forward!(
             image_rgb8(id: &str, image: RuntimeImage),
             image_rgba8(id: &str, image: RuntimeImage),
-            position(id: &str, left: f32, top: f32),
             background(id: &str, color: UiColor),
             border(id: &str, color: UiColor),
             foreground(id: &str, color: UiColor),
@@ -267,6 +284,27 @@ mod audio_template_tests {
             "got {headphones}"
         );
         assert_eq!(recorded.toggles.get("audio-raise-track"), Some(&true));
+    }
+
+    #[test]
+    fn thumb_centre_maps_fraction_of_track_at_0_100_and_150_caps() {
+        // 0% sits at the track start (thumb centre x = AUDIO_TRACK_X), 100% and 150%
+        // at the track end; the thumb left edge is the centre minus the radius.
+        assert_eq!(audio_thumb_left(0.0, 100.0), -6.0);
+        assert_eq!(audio_thumb_left(100.0, 100.0), 344.0);
+        assert_eq!(audio_thumb_left(150.0, 150.0), 344.0);
+        assert_eq!(audio_thumb_left(75.0, 150.0), 169.0);
+    }
+
+    #[test]
+    fn thumb_position_follows_snapped_fill_under_cap() {
+        // Cap 100: 120% snaps to the track end, so the thumb matches the fill end minus radius.
+        let capped = fixture(AudioTab::Devices, false);
+        assert_eq!(capped.positions.get("audio-slot-1-thumb"), Some(&(344.0, -3.0)));
+        assert_eq!(capped.positions.get("audio-slot-2-thumb"), Some(&(134.0, -3.0)));
+        // Raise maximum: 120% of 150 is 280 px of fill, so the thumb centre is 280.
+        let raised = fixture(AudioTab::Devices, true);
+        assert_eq!(raised.positions.get("audio-slot-1-thumb"), Some(&(274.0, -3.0)));
     }
 
     #[test]

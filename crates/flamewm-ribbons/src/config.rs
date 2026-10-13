@@ -1,6 +1,9 @@
 /// Viewport used when no span rects are given.
 pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 720);
 
+/// Multiplies the base ribbon speed (145 px/s at screen scale 1) for the default motion.
+pub const RIBBON_DEFAULT_SPEED_FACTOR: f64 = 1.35;
+
 /// Axis-aligned rectangle in global output coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
