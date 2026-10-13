@@ -5070,15 +5070,6 @@ impl<'a, C: Connection> Wm<'a, C> {
         parse_wm_class(&raw)
     }
 
-    fn icon_fallback_reason_with(&self, wm_instance: &str, wm_class: &str, reason: &str) -> String {
-        let class = format!("{wm_instance}\0{wm_class}");
-        if class.is_empty() {
-            format!("icon-fallback wm_class=unknown reason={reason}")
-        } else {
-            format!("icon-fallback wm_class={class} reason={reason}")
-        }
-    }
-
     fn read_title(&self, client: Window) -> Result<String, ReplyError> {
         let utf8 = self
             .conn

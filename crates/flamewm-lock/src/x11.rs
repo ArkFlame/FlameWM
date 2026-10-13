@@ -84,18 +84,6 @@ unsafe extern "C" {
         time: c_ulong,
     ) -> c_int;
     fn XUngrabKeyboard(display: *mut Display, time: c_ulong) -> c_int;
-    fn XGrabPointer(
-        display: *mut Display,
-        grab_window: c_ulong,
-        owner_events: c_int,
-        event_mask: c_uint,
-        pointer_mode: c_int,
-        keyboard_mode: c_int,
-        confine_to: c_ulong,
-        cursor: c_ulong,
-        time: c_ulong,
-    ) -> c_int;
-    fn XUngrabPointer(display: *mut Display, time: c_ulong) -> c_int;
     fn XFlush(display: *mut Display) -> c_int;
     fn XQueryKeymap(display: *mut Display, keys_return: *mut c_char) -> c_int;
     fn XQueryPointer(
