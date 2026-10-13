@@ -1,6 +1,6 @@
 //! Freedesktop `index.theme` parser and inheritance expansion (J2).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -297,6 +297,9 @@ fn split_icon_filename(name: &str) -> Option<(String, String)> {
     Some((base.to_owned(), ext.to_ascii_lowercase()))
 }
 
+/// Mirrors `themes::import::MAX_DEPTH`; bounds walks through symlinked dirs.
+const THEME_WALK_MAX_DEPTH: usize = 32;
+
 fn walk_theme_dir(
     base: &Path,
     files: &mut HashMap<String, Vec<IndexedIconFile>>,
@@ -304,15 +307,28 @@ fn walk_theme_dir(
     directory_rank: usize,
 ) {
     // One build-time walk per unindexed theme dir; lookup stays memory-only.
-    let mut stack = vec![base.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    // Symlinked dirs are followed, but each canonical dir is visited once and
+    // depth is capped, so a symlink loop cannot make the walk unbounded.
+    let mut visited = HashSet::new();
+    if let Ok(canonical) = fs::canonicalize(base) {
+        visited.insert(canonical);
+    }
+    let mut stack = vec![(base.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
         let Ok(read) = fs::read_dir(&dir) else {
             continue;
         };
         for item in read.flatten() {
             let path = item.path();
             if path.is_dir() {
-                stack.push(path);
+                if depth + 1 > THEME_WALK_MAX_DEPTH {
+                    continue;
+                }
+                if let Ok(canonical) = fs::canonicalize(&path) {
+                    if visited.insert(canonical) {
+                        stack.push((path, depth + 1));
+                    }
+                }
                 continue;
             }
             let name = item.file_name().to_string_lossy().into_owned();
@@ -1209,6 +1225,52 @@ mod tests {
     }
 
     const FIXED_16: &str = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+
+    #[cfg(unix)]
+    #[test]
+    fn unindexed_theme_symlink_loop_terminates() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-loop-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        // No index.theme: forces the build-time walk for this theme.
+        let apps = data.join("icons/loopy/16x16/apps");
+        fs::create_dir_all(&apps).expect("loop fixture dirs");
+        fs::write(apps.join("loop-app.png"), b"").expect("icon fixture");
+        std::os::unix::fs::symlink(data.join("icons/loopy"), apps.join("up")).expect("loop link");
+        std::os::unix::fs::symlink(&apps, apps.join("self")).expect("self link");
+        let names = vec!["loopy".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let _ = fs::remove_dir_all(&data);
+        let (paths, hit) = index.lookup("loop-app", 16);
+        assert!(hit);
+        assert!(paths[0].ends_with("loopy/16x16/apps/loop-app.png"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unindexed_theme_valid_symlinked_subdir_is_indexed() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-symlink-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        // Target lives outside the theme; only the in-theme symlink reaches it.
+        let real = data.join("shared/real");
+        fs::create_dir_all(&real).expect("symlink fixture dirs");
+        fs::create_dir_all(data.join("icons/linked")).expect("theme dir");
+        fs::write(real.join("linked-app.png"), b"").expect("icon fixture");
+        std::os::unix::fs::symlink(&real, data.join("icons/linked/alias")).expect("dir link");
+        let names = vec!["linked".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let _ = fs::remove_dir_all(&data);
+        let (paths, hit) = index.lookup("linked-app", 16);
+        assert!(hit, "valid symlinked subdir must stay indexed");
+        assert!(paths.iter().any(|p| p.ends_with("linked/alias/linked-app.png")));
+    }
 
     #[test]
     fn selected_theme_inherits_before_breeze_then_hicolor() {
