@@ -217,6 +217,7 @@
       <arg name="capabilities" type="as" direction="out"/>
     </method>
     <method name="Lock"/>
+    <method name="LockPreview"/>
     <method name="Logout"/>
     <method name="Suspend"/>
     <method name="Reboot"/>

@@ -28,15 +28,21 @@ pub(crate) fn set_live_opacity(_opacity_percent: u8) {}
 /// selection styling.
 pub const ACCENT_RGB: (u8, u8, u8) = backdrop::BACKDROP_ACCENT_RGB;
 
+/// Ring width matches the `.snap-preview` CSS border (2px); the preview has no corner radius.
+const RING_BORDER_PX: u32 = backdrop::BACKDROP_BORDER_WIDTH_PX;
+const RING_RADIUS_PX: u32 = 0;
+
 const FILL_NODE: &str = "snap-preview";
 const BACKDROP_NODE: &str = "snap-preview-backdrop";
 
+/// Opaque accent: with no compositor the ring is blended over the window's black backing, so a
+/// translucent alpha would render as a dark red instead of `#ef4048`.
 fn border_color() -> UiColor {
     UiColor {
         r: ACCENT_RGB.0,
         g: ACCENT_RGB.1,
         b: ACCENT_RGB.2,
-        a: backdrop::BACKDROP_BORDER_ALPHA,
+        a: 0xff,
     }
 }
 
@@ -129,6 +135,9 @@ impl SnapPreviewSurface {
         if runtime
             .move_resize(surface, geometry.x, geometry.y, width, height)
             .is_err()
+            || runtime
+                .set_surface_ring_mask(surface, RING_BORDER_PX, RING_RADIUS_PX)
+                .is_err()
         {
             self.hide();
             return;
@@ -183,6 +192,13 @@ impl SnapPreviewSurface {
         };
         match runtime.create_surface(UiTemplate::new(document), config) {
             Ok(handle) => {
+                // Ring mask before any paint or map: the first frame is never a black fill.
+                if runtime
+                    .set_surface_ring_mask(handle, RING_BORDER_PX, RING_RADIUS_PX)
+                    .is_err()
+                {
+                    return false;
+                }
                 self.runtime = Some(runtime);
                 self.surface = Some(handle);
                 true
@@ -275,7 +291,7 @@ mod tests {
                 r: ACCENT_RGB.0,
                 g: ACCENT_RGB.1,
                 b: ACCENT_RGB.2,
-                a: backdrop::BACKDROP_BORDER_ALPHA,
+                a: 0xff,
             }
         );
         assert_eq!(DEFAULT_PREVIEW_OPACITY_PERCENT, 20);

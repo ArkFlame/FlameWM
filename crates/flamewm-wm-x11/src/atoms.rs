@@ -37,6 +37,11 @@ pub struct Atoms {
     pub net_wm_window_type_desktop: Atom,
     pub net_wm_window_type_dock: Atom,
     pub net_wm_window_type_utility: Atom,
+    pub net_wm_window_type_splash: Atom,
+    /// Motif WM hints (`crate::decoration::policy`); read-only, not advertised.
+    pub motif_wm_hints: Atom,
+    /// GTK client-side frame extents; read-only, not advertised.
+    pub gtk_frame_extents: Atom,
     pub net_wm_window_type_popup_menu: Atom,
     pub net_wm_window_type_dropdown_menu: Atom,
     pub net_wm_window_type_tooltip: Atom,
@@ -95,6 +100,9 @@ impl Atoms {
             net_wm_window_type_desktop: atom(conn, "_NET_WM_WINDOW_TYPE_DESKTOP")?,
             net_wm_window_type_dock: atom(conn, "_NET_WM_WINDOW_TYPE_DOCK")?,
             net_wm_window_type_utility: atom(conn, "_NET_WM_WINDOW_TYPE_UTILITY")?,
+            net_wm_window_type_splash: atom(conn, "_NET_WM_WINDOW_TYPE_SPLASH")?,
+            motif_wm_hints: atom(conn, "_MOTIF_WM_HINTS")?,
+            gtk_frame_extents: atom(conn, "_GTK_FRAME_EXTENTS")?,
             net_wm_window_type_popup_menu: atom(conn, "_NET_WM_WINDOW_TYPE_POPUP_MENU")?,
             net_wm_window_type_dropdown_menu: atom(conn, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU")?,
             net_wm_window_type_tooltip: atom(conn, "_NET_WM_WINDOW_TYPE_TOOLTIP")?,

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 
 const DEFAULT_SNAP_PREVIEW_ENABLED: bool = true;
-const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = true;
+const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = false;
 
 static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_ENABLED);
 static FOCUS_FOLLOWS_MOUSE: AtomicBool = AtomicBool::new(DEFAULT_FOCUS_FOLLOWS_MOUSE);
@@ -58,7 +58,7 @@ mod tests {
     fn missing_keys_keep_defaults() {
         assert_eq!(
             window_behaviour_from_snapshot(&SettingsSnapshot::new(1)),
-            (true, true)
+            (true, false)
         );
     }
 
@@ -77,6 +77,6 @@ mod tests {
             ("snapPreviewEnabled", SettingValue::Integer(0)),
             ("focusFollowsMouse", SettingValue::Integer(1)),
         ]));
-        assert_eq!(mapped, (true, true));
+        assert_eq!(mapped, (true, false));
     }
 }

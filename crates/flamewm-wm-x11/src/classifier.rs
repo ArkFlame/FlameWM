@@ -18,6 +18,8 @@ pub fn classify(atoms: &Atoms, types: &[Atom], override_redirect: bool) -> Windo
                 || *atom == atoms.net_wm_window_type_dropdown_menu
                 || *atom == atoms.net_wm_window_type_tooltip
                 || *atom == atoms.net_wm_window_type_notification
+                // EWMH: splash windows are unframed and client-placed.
+                || *atom == atoms.net_wm_window_type_splash
         })
     {
         return WindowKind::Popup;

@@ -407,6 +407,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
             expect_arity(call, 0).map(|()| ControlRequest::GetSessionCapabilities)
         }
         (IFACE_SESSION, "Lock") => session_action(call, SessionAction::Lock),
+        (IFACE_SESSION, "LockPreview") => session_action(call, SessionAction::LockPreview),
         (IFACE_SESSION, "Logout") => session_action(call, SessionAction::Logout),
         (IFACE_SESSION, "Suspend") => session_action(call, SessionAction::Suspend),
         (IFACE_SESSION, "Reboot") => session_action(call, SessionAction::Reboot),
@@ -675,6 +676,7 @@ fn window_call(member: &str, window: WindowRef) -> WireCall {
 const fn session_method(action: SessionAction) -> &'static str {
     match action {
         SessionAction::Lock => "Lock",
+        SessionAction::LockPreview => "LockPreview",
         SessionAction::Logout => "Logout",
         SessionAction::Suspend => "Suspend",
         SessionAction::Reboot => "Reboot",
@@ -887,7 +889,7 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
         | (IFACE_DISPLAYS, "Keep" | "Revert" | "SetShellScale")
         | (IFACE_SHORTCUTS, "SetBinding" | "ClearBinding" | "ResetBinding" | "EndCapture")
         | (IFACE_PANELS, "SetEdge" | "SetSize" | "Pin" | "Unpin" | "Reorder")
-        | (IFACE_SESSION, "Lock" | "Logout" | "Suspend" | "Reboot" | "Shutdown")
+        | (IFACE_SESSION, "Lock" | "LockPreview" | "Logout" | "Suspend" | "Reboot" | "Shutdown")
         | (IFACE_WINDOWS, "ActivateWindow" | "MinimizeWindow" | "RestoreWindow" | "CloseWindow")
         | (IFACE_APPLICATIONS, "LaunchApplication") => {
             expect_reply_arity(reply, 0)?;
@@ -2306,6 +2308,8 @@ fn setting_value_for_key(key: &str, value: &WireValue) -> Result<SettingValue, C
         | "WindowSnapPreviewFillOpacity"
         | "taskbarOpacity"
         | "startMenuOpacity"
+        | "taskbarBlurPercent"
+        | "startMenuBlurPercent"
         | "accentOpacity" => {
             let percent = required_u32(value, key)?;
             Ok(SettingValue::Percent(
@@ -3010,6 +3014,18 @@ mod tests {
     }
 
     #[test]
+    fn lock_preview_session_action_round_trips_through_wire_dispatch() {
+        let request = ControlRequest::SessionAction(SessionAction::LockPreview);
+        let call = encode_call(&request).expect("encode");
+        assert_eq!(call.member, "LockPreview");
+        assert_eq!(decode_call(&call).expect("decode"), request);
+        assert_ne!(
+            decode_call(&WireCall::new(IFACE_SESSION, "Lock", Vec::new())).expect("decode lock"),
+            request
+        );
+    }
+
+    #[test]
     fn shell_snapshot_requests_round_trip_through_wire_mapping() {
         for request in [ControlRequest::GetWindows, ControlRequest::GetApplications] {
             let call = encode_call(&request).expect("encode");
@@ -3405,4 +3421,15 @@ mod hotkey_capture_lease_wire_tests {
         );
         assert!(decode_call(&end_wrong_type).is_err());
     }
+    #[test]
+    fn blur_percent_keys_decode_as_percent_like_the_opacities() {
+        for key in ["taskbarBlurPercent", "startMenuBlurPercent"] {
+            assert_eq!(
+                super::setting_value_for_key(key, &WireValue::U32(80)).expect("percent"),
+                SettingValue::Percent(80),
+                "{key}"
+            );
+        }
+    }
+
 }

@@ -26,6 +26,16 @@ fn log_once(once: &std::sync::Once, message: &str) {
 static TRANSITION_SKIP_LOG: std::sync::Once = std::sync::Once::new();
 static DESTROYED_WINDOW_RACE_LOG: std::sync::Once = std::sync::Once::new();
 
+/// Desktop-kind windows never raise: a configure from one is forced to the
+/// bottom of the root stack with no sibling. Other kinds keep their intent.
+fn desktop_stack_policy(mut aux: ConfigureWindowAux, kind: WindowKind) -> ConfigureWindowAux {
+    if kind == WindowKind::Desktop {
+        aux.sibling = None;
+        aux.stack_mode = Some(StackMode::BELOW);
+    }
+    aux
+}
+
 /// True for X errors that mean the target window/drawable no longer exists.
 fn is_destroyed_window_race(error: &ReplyOrIdError) -> bool {
     matches!(
@@ -87,6 +97,7 @@ use flamewm_window_core::{
 };
 use x11rb::connection::Connection;
 use x11rb::errors::{ReplyError, ReplyOrIdError};
+use x11rb::protocol::damage::{self};
 use x11rb::protocol::shape::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::{ErrorKind, Event};
@@ -99,6 +110,9 @@ use crate::chrome;
 use crate::classifier::{WindowKind, classify};
 use crate::client::ManagedClient;
 use crate::event_pump::WmEventPump;
+use crate::decoration::policy::{
+    decoration_policy, gtk_frame_extents, motif_decorations_field, Decoration, DecorationHints,
+};
 use crate::frame::controller::{ControllerState, FrameEffect, FrameEvent};
 use crate::frame::coords::{RootPoint, RootRect};
 use crate::frame::geometry::{
@@ -1057,6 +1071,10 @@ pub(crate) struct Wm<'a, C: Connection> {
     /// Timing owner for minimize/restore/maximize flights.
     animator: Animator,
     overlays: HashMap<Window, TransitionOverlay>,
+    /// Finished overlays kept above a remapped window until the client has had time to paint.
+    linger: animation::Linger<WarpOverlay>,
+    /// Damage objects on clients whose overlay lingers; the first damage releases the overlay.
+    damage_watch: HashMap<Window, u32>,
     /// Capture kept from a completed minimize so the matching restore can reuse it.
     minimized_captures: CaptureCache<CapturedImage>,
     /// Window-open effects armed at first map, waiting for a paintable capture on Expose.
@@ -1175,6 +1193,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             renderer,
             animator,
             overlays: HashMap::new(),
+            linger: animation::Linger::default(),
+            damage_watch: HashMap::new(),
             minimized_captures: CaptureCache::default(),
             open_gate: OpenGate::default(),
             current_workspace: 0,
@@ -1472,6 +1492,124 @@ impl<'a, C: Connection> Wm<'a, C> {
         FrameExtents::new(i32::from(self.config.titlebar_height), 1)
     }
 
+    /// Frame extents for a decoration owner. Only `Server` gets a Flame
+    /// titlebar and border; `ClientSide`/`None` frames equal the client.
+    fn extents_for_decoration(&self, decoration: Decoration) -> FrameExtents {
+        match decoration {
+            Decoration::Server => self.extents(),
+            Decoration::ClientSide | Decoration::None => FrameExtents::new(0, 0),
+        }
+    }
+
+    fn extents_for(&self, client: Window) -> FrameExtents {
+        let decoration = self
+            .clients
+            .get(&client)
+            .map_or(Decoration::Server, |state| state.decoration);
+        self.extents_for_decoration(decoration)
+    }
+
+    /// Reads `_MOTIF_WM_HINTS` and `_GTK_FRAME_EXTENTS` and decides who draws
+    /// the frame. Conventions: Motif (Qt frameless, OnlyOffice, Electron) and
+    /// GTK3/4 CSD (Firefox, GNOME apps) report client-drawn frames; Flame adds
+    /// no titlebar, border or resize handles for them.
+    fn read_decoration(&self, window: Window, kind: WindowKind) -> Decoration {
+        let motif = self.read_cardinals(window, self.atoms.motif_wm_hints, 5);
+        let gtk = self.read_cardinals(window, self.atoms.gtk_frame_extents, 4);
+        decoration_policy(&DecorationHints {
+            override_redirect: false,
+            kind,
+            motif_decorations: motif.as_deref().and_then(motif_decorations_field),
+            gtk_frame_extents: gtk.as_deref().and_then(gtk_frame_extents),
+        })
+    }
+
+    fn read_cardinals(&self, window: Window, atom: Atom, len: u32) -> Option<Vec<u32>> {
+        self.conn
+            .get_property(false, window, atom, AtomEnum::ANY, 0, len)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()
+            .map(|values| values.collect())
+    }
+
+    /// PropertyNotify on Motif/GTK hints: re-evaluate and rebuild in place.
+    /// The client area stays fixed; the frame grows or shrinks by the
+    /// titlebar, so nothing is unmapped or remapped.
+    fn refresh_decoration(&mut self, client: Window) -> Result<(), ReplyError> {
+        let Some(state) = self.clients.get(&client) else {
+            return Ok(());
+        };
+        let (old, kind) = (state.decoration, state.kind);
+        let new = self.read_decoration(client, kind);
+        if new == old {
+            return Ok(());
+        }
+        let old_ext = self.extents_for_decoration(old);
+        let new_ext = self.extents_for_decoration(new);
+        let Some(state) = self.clients.get_mut(&client) else {
+            return Ok(());
+        };
+        let outer = state.outer;
+        let y = outer.y + old_ext.titlebar_h - new_ext.titlebar_h;
+        let height = (outer.height as i32 - old_ext.titlebar_h + new_ext.titlebar_h).max(1);
+        state.decoration = new;
+        state.set_outer(Rect::new(outer.x, y, outer.width, height as u32));
+        if let Some(resources) = self.registry.lookup_by_client(client) {
+            for xid in resources.children() {
+                if new == Decoration::Server {
+                    self.conn.map_window(xid)?;
+                } else {
+                    self.conn.unmap_window(xid)?;
+                }
+            }
+        }
+        self.apply_frame_geometry(client)?;
+        self.layout_input_children(client)?;
+        self.set_frame_extents(client)?;
+        self.paint_chrome(client)?;
+        self.mark_windows();
+        Ok(())
+    }
+
+    /// `_NET_WM_MOVERESIZE` from the client's own header bar or edges.
+    /// Directions 0-7 are the edges/corners, 8 is move; keyboard (9-10) and
+    /// cancel (11) are not honoured. Starts the same frame reducer press that
+    /// a real button press would, so the existing pointer grab drives it.
+    fn begin_client_moveresize(
+        &mut self,
+        client: Window,
+        pointer: RootPoint,
+        direction: u32,
+    ) -> Result<(), ReplyError> {
+        const MOVERESIZE_MOVE: u32 = 8;
+        let want = match direction {
+            MOVERESIZE_MOVE => FrameRegion::TitleDrag,
+            0..=7 => FrameRegion::Resize(resize_edges_for_direction(direction)),
+            _ => return Ok(()),
+        };
+        if self
+            .sessions
+            .get(&client)
+            .is_some_and(|session| !session.session.is_idle())
+        {
+            return Ok(());
+        }
+        let Some(resources) = self.registry.lookup_by_client(client) else {
+            return Ok(());
+        };
+        let Some(source) = resources.children().into_iter().find(|xid| {
+            self.registry
+                .lookup_by_xid(*xid)
+                .is_some_and(|target| target.region == want)
+        }) else {
+            return Ok(());
+        };
+        self.focus(client)?;
+        self.reduce_and_execute(client, FrameEvent::Press { source, pointer })
+    }
+
     fn work_root(&self) -> RootRect {
         let work = self.work_area();
         RootRect::new(
@@ -1512,7 +1650,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             },
             screen_rect,
             state.hints,
-            self.extents(),
+            self.extents_for(client),
             session,
             region_map,
         ))
@@ -1998,6 +2136,13 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn paint_chrome(&mut self, client: Window) -> Result<(), ReplyError> {
+        if self
+            .clients
+            .get(&client)
+            .is_some_and(|state| state.decoration != Decoration::Server)
+        {
+            return Ok(());
+        }
         // Single chrome paint path: delegate scene build to chrome_runtime
         // (J08 paint_plan seam); this owner only bridges cached rasters.
         let Some((chrome_state, identity, icon, frame)) = self.clients.get(&client).map(|state| {
@@ -2054,7 +2199,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         for placement in &lifecycle::input_child_placements(
             state.outer.width.max(1) as i32,
             state.outer.height.max(1) as i32,
-            i32::from(self.config.titlebar_height),
+            self.extents_for(client).titlebar_h,
             ids,
         ) {
             let result = self.conn.configure_window(
@@ -2452,7 +2597,8 @@ impl<'a, C: Connection> Wm<'a, C> {
 
         let screen = self.screen();
         let frame = self.conn.generate_id()?;
-        let extents = self.extents();
+        let decoration = self.read_decoration(window, kind);
+        let extents = self.extents_for_decoration(decoration);
         let work_root = self.work_root();
         let start = crate::client::placement_floating(RootRect::new(0, 0, 1, 1));
         let initial_req = GeometryRequest {
@@ -2516,7 +2662,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         // (single geometry source); this owner performs the X calls.
         self.conn.grab_server()?;
         self.conn.change_save_set(SetMode::INSERT, window)?;
-        let (reparent_x, reparent_y) = lifecycle::reparent_offset(self.extents());
+        let (reparent_x, reparent_y) = lifecycle::reparent_offset(extents);
         self.conn
             .reparent_window(window, frame, reparent_x as i16, reparent_y as i16)?;
         self.conn.change_window_attributes(
@@ -2524,8 +2670,21 @@ impl<'a, C: Connection> Wm<'a, C> {
             &ChangeWindowAttributesAux::new()
                 .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
         )?;
+        // Click-to-focus: a sync passive grab sees presses inside the client area;
+        // handle_client_press focuses and then replays the press to the client.
+        self.conn.grab_button(
+            false,
+            window,
+            EventMask::BUTTON_PRESS,
+            GrabMode::SYNC,
+            GrabMode::ASYNC,
+            x11rb::NONE,
+            x11rb::NONE,
+            ButtonIndex::ANY,
+            ModMask::ANY,
+        )?;
         let (client_x, client_y, client_w, client_h) =
-            lifecycle::client_configure(crate::client::rect_to_root(outer), self.extents());
+            lifecycle::client_configure(crate::client::rect_to_root(outer), extents);
         self.conn.configure_window(
             window,
             &ConfigureWindowAux::new()
@@ -2558,7 +2717,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let placements = lifecycle::input_child_placements(
             outer.width.max(1) as i32,
             outer.height.max(1) as i32,
-            i32::from(self.config.titlebar_height),
+            extents.titlebar_h,
             lifecycle_ids,
         );
         for placement in &placements {
@@ -2605,6 +2764,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             ignore_unmap: 1,
             kind,
             hover_control: None,
+            decoration,
         };
         self.frame_to_client.insert(frame, window);
         for xid in resources.children() {
@@ -2625,7 +2785,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 crate::client::placement_floating(crate::client::rect_to_root(outer)),
                 self.work_root(),
                 hints,
-                self.extents(),
+                extents,
             )
             .with_screen_rect(crate::client::rect_to_root(Rect::new(
                 self.screen_rect.x,
@@ -2652,8 +2812,10 @@ impl<'a, C: Connection> Wm<'a, C> {
 
         // Map client + input children + frame (renderer flush above).
         self.conn.map_window(window)?;
-        for xid in resources.children() {
-            self.conn.map_window(xid)?;
+        if decoration == Decoration::Server {
+            for xid in resources.children() {
+                self.conn.map_window(xid)?;
+            }
         }
         self.conn.map_window(frame)?;
         self.mark_windows();
@@ -2672,6 +2834,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         // The client is leaving: drop its flight and overlay without applying an end state.
         self.animator.cancel(window);
         self.overlays.remove(&window);
+        self.linger.remove(window);
+        self.release_damage_watch(window);
         self.minimized_captures.remove(window);
         self.open_gate.clear(window);
         // Abort any in-progress interaction through the reducer so session
@@ -2756,6 +2920,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::UnmapNotify(event) => self.handle_unmap(event.window)?,
             Event::MapNotify(event) => self.handle_map_notify(event.window)?,
             Event::ConfigureNotify(event) => self.handle_configure_notify(event)?,
+            Event::DamageNotify(event) => self.handle_damage_notify(event.damage),
             Event::Expose(event) => {
                 if event.count == 0 {
                     if let Some(client) = self.client_for(event.window) {
@@ -2906,7 +3071,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             None => return Ok(()),
         };
         let _guard = flamewm_profiler::start("wm.configure.notify.observe");
-        let extents = self.extents();
+        let extents = self.extents_for(client_id);
         let class = configure::classify_notify(
             event.window,
             frame_id,
@@ -3036,9 +3201,15 @@ impl<'a, C: Connection> Wm<'a, C> {
     fn handle_configure_request(&mut self, event: ConfigureRequestEvent) -> Result<(), ReplyError> {
         let _guard = flamewm_profiler::start("wm.configure.request.total");
         let Some(client_id) = self.client_for(event.window) else {
+            let override_redirect = self
+                .conn
+                .get_window_attributes(event.window)?
+                .reply()?
+                .override_redirect;
+            let kind = self.window_kind(event.window, override_redirect)?;
             self.conn.configure_window(
                 event.window,
-                &ConfigureWindowAux::from_configure_request(&event),
+                &desktop_stack_policy(ConfigureWindowAux::from_configure_request(&event), kind),
             )?;
             return Ok(());
         };
@@ -3244,12 +3415,26 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.publish_workspace_metadata()?;
             return Ok(());
         }
-        if window == self.conn.setup().roots[self.screen_num].root
-            && (atom == self.atoms.net_current_desktop
-                || atom == self.atoms.net_number_of_desktops
-                || atom == self.atoms.net_desktop_names)
+        if window == self.conn.setup().roots[self.screen_num].root {
+            if atom == self.atoms.net_current_desktop {
+                // Our own publish echoes back here after the snapshot was already
+                // emitted; bumping for it would make the shell's revision stale.
+                let value = self
+                    .read_cardinals(window, atom, 1)
+                    .and_then(|values| values.first().copied());
+                if desktop_change_is_external(value, self.current_workspace) {
+                    crate::bump_workspace_generation();
+                }
+            } else if atom == self.atoms.net_number_of_desktops
+                || atom == self.atoms.net_desktop_names
+            {
+                crate::bump_workspace_generation();
+            }
+        }
+        if (atom == self.atoms.motif_wm_hints || atom == self.atoms.gtk_frame_extents)
+            && self.clients.contains_key(&window)
         {
-            crate::bump_workspace_generation();
+            return self.refresh_decoration(window);
         }
         let Some(client_id) = self.client_for(window) else {
             return Ok(());
@@ -3324,9 +3509,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         if active_session {
             return Ok(());
         }
-        // Default is focus-follows-mouse (true): pointer entry focuses unless focusFollowsMouse=false.
+        // Default is click-to-focus: pointer entry (title bar included) only focuses when the user
+        // opted in with focusFollowsMouse.
         if crate::live_settings::focus_follows_mouse() {
-            self.focus(client_id)?;
+            self.focus_hover(client_id)?;
         }
         let _ = self.reduce_and_execute(client_id, FrameEvent::Enter);
         Ok(())
@@ -3353,6 +3539,9 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn handle_button_press(&mut self, event: ButtonPressEvent) -> Result<(), ReplyError> {
+        if self.clients.contains_key(&event.event) {
+            return self.handle_client_press(event);
+        }
         let target = resolve_frame_event_source(&self.registry, event.event, event.child);
         if let Some(client) = self.client_for(target) {
             self.cancel_open_for(client)?;
@@ -3427,6 +3616,19 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
             Err(_) => Ok(()),
         }
+    }
+
+    /// Press inside a managed client (sync passive grab). Focus/raise when needed, then
+    /// always release the frozen pointer so the client receives the press.
+    fn handle_client_press(&mut self, event: ButtonPressEvent) -> Result<(), ReplyError> {
+        let client = event.event;
+        let focus = if matches!(event.detail, 1..=3) && should_focus_on_press(self.active, client) {
+            self.focus(client)
+        } else {
+            Ok(())
+        };
+        self.conn.allow_events(Allow::REPLAY_POINTER, event.time)?;
+        focus
     }
 
     fn handle_control_click(&mut self, client_id: Window) -> Result<(), ReplyError> {
@@ -3674,7 +3876,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let state = self.clients.get(&client_id)?;
                 crate::frame::input::frame_control_fallback(
                     state.outer.width,
-                    self.config.titlebar_height,
+                    u16::try_from(self.extents_for(client_id).titlebar_h).unwrap_or(0),
                     x,
                     y,
                     state.hover_control,
@@ -3704,6 +3906,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             if self.clients.contains_key(&event.window) {
                 self.focus(event.window)?;
             }
+        } else if event.type_ == self.atoms.net_wm_moveresize
+            && self.clients.contains_key(&event.window)
+        {
+            let pointer = RootPoint::new(data[0] as i32, data[1] as i32);
+            self.begin_client_moveresize(event.window, pointer, data[2])?;
         } else if event.type_ == self.atoms.net_close_window {
             if self.clients.contains_key(&event.window) {
                 self.close(event.window)?;
@@ -3804,6 +4011,16 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn focus(&mut self, client: Window) -> Result<(), ReplyError> {
+        self.focus_with_stacking(client, true)
+    }
+
+    /// Focus-follows-mouse entry: takes input focus but never restacks, so hovering a window
+    /// cannot raise it above the window the user is working in.
+    fn focus_hover(&mut self, client: Window) -> Result<(), ReplyError> {
+        self.focus_with_stacking(client, false)
+    }
+
+    fn focus_with_stacking(&mut self, client: Window, raise: bool) -> Result<(), ReplyError> {
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
         };
@@ -3812,7 +4029,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         self.conn
             .set_input_focus(FOCUS_REVERT_TO, client, CURRENT_TIME)?;
-        if state.kind != WindowKind::Utility || state.transient_for.is_some() {
+        if raise && (state.kind != WindowKind::Utility || state.transient_for.is_some()) {
             self.conn.configure_window(
                 state.frame,
                 &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
@@ -4106,7 +4323,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
             _ => renderer.borrow().open_warp_overlay(capture, source, warp_rect(target)),
         };
-        let overlay = match opened {
+        let mut overlay = match opened {
             Ok(overlay) => overlay,
             Err(error) => {
                 if hide {
@@ -4115,6 +4332,15 @@ impl<'a, C: Connection> Wm<'a, C> {
                 return Err(error);
             }
         };
+        // Map and paint the first frame before the caller hides the client, so the overlay
+        // takes over the window's pixels with no empty frame in between.
+        if let Err(error) = overlay.paint(animation::overlay_t(0.0, mirrored)) {
+            if hide {
+                let _ = self.conn.map_window(frame);
+            }
+            return Err(error);
+        }
+        self.linger.remove(client);
         self.overlays
             .insert(client, TransitionOverlay { overlay, mirrored, frame_hidden: hide });
         Ok(hide)
@@ -4219,6 +4445,13 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Advances flights once per loop turn: paints frames and applies each completed end state.
     pub(crate) fn pump_transitions(&mut self, now: std::time::Instant) -> Result<(), ReplyError> {
+        for client in self.linger.expire(now) {
+            // The bounded deadline released a client that never repainted (or was not watched).
+            self.release_damage_watch(client);
+            if std::env::var_os("FLAMEWM_LINGER_LOG").is_some() {
+                eprintln!("flamewm: linger released by deadline client={client}");
+            }
+        }
         for tick in self.animator.tick(now) {
             match tick {
                 Tick::Frame { client, progress } => {
@@ -4254,8 +4487,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 self.commit_minimize(client, true)
             }
             Effect::Restore => {
-                drop(flight);
-                self.commit_restore(client)
+                self.commit_restore(client)?;
+                self.linger_overlay(client, flight);
+                Ok(())
             }
             Effect::Maximize | Effect::Unmaximize => {
                 if hidden {
@@ -4264,8 +4498,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                         self.conn.map_window(frame)?;
                     }
                 }
-                drop(flight);
-                self.commit_maximize(client)
+                self.commit_maximize(client)?;
+                self.linger_overlay(client, flight);
+                Ok(())
             }
             Effect::Open => {
                 if hidden {
@@ -4274,9 +4509,60 @@ impl<'a, C: Connection> Wm<'a, C> {
                         self.conn.map_window(frame)?;
                     }
                 }
-                drop(flight);
+                self.linger_overlay(client, flight);
                 Ok(())
             }
+        }
+    }
+
+    /// Keeps a finished overlay on top of its remapped window for a bounded linger, so the client
+    /// repaints under it instead of showing an empty frame when the overlay is removed.
+    fn linger_overlay(&mut self, client: Window, flight: Option<TransitionOverlay>) {
+        if let Some(flight) = flight {
+            flight.overlay.raise();
+            self.linger.hold(client, flight.overlay, std::time::Instant::now());
+            self.watch_damage(client);
+        }
+    }
+
+    /// Watches `client` for its first repaint after remap. A failed damage request leaves the
+    /// bounded linger deadline as the only release, so errors are not fatal here.
+    fn watch_damage(&mut self, client: Window) {
+        if self.damage_watch.contains_key(&client) {
+            return;
+        }
+        let Ok(id) = self.conn.generate_id() else {
+            return;
+        };
+        let version_ok = damage::query_version(&self.conn, 1, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some();
+        if version_ok && damage::create(&self.conn, id, client, damage::ReportLevel::NON_EMPTY).is_ok() {
+            self.damage_watch.insert(client, id);
+        }
+    }
+
+    /// The client repainted after remap: release its lingering overlay and stop watching it.
+    fn handle_damage_notify(&mut self, damage_id: u32) {
+        let Some(client) = self
+            .damage_watch
+            .iter()
+            .find(|(_, id)| **id == damage_id)
+            .map(|(client, _)| *client)
+        else {
+            return;
+        };
+        self.release_damage_watch(client);
+        self.linger.remove(client);
+        if std::env::var_os("FLAMEWM_LINGER_LOG").is_some() {
+            eprintln!("flamewm: linger released by damage client={client}");
+        }
+    }
+
+    fn release_damage_watch(&mut self, client: Window) {
+        if let Some(id) = self.damage_watch.remove(&client) {
+            let _ = damage::destroy(&self.conn, id);
         }
     }
 
@@ -4301,7 +4587,7 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Caps the loop's wait at one frame while a flight runs, so frames are painted on time.
     pub(crate) fn transition_wait(&self, wait: Option<std::time::Duration>) -> Option<std::time::Duration> {
-        if self.animator.is_active() {
+        if self.animator.is_active() || !self.linger.is_empty() {
             Some(wait.map_or(TRANSITION_FRAME, |wait| wait.min(TRANSITION_FRAME)))
         } else {
             wait
@@ -4419,7 +4705,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         {
             let _guard = flamewm_profiler::start("wm.resize.frame_configure");
-            let titlebar = u32::from(self.config.titlebar_height);
+            let titlebar = u32::try_from(self.extents_for(client).titlebar_h).unwrap_or(0);
             self.conn.configure_window(
                 frame,
                 &ConfigureWindowAux::new()
@@ -4432,7 +4718,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         {
             let _guard = flamewm_profiler::start("wm.resize.client_configure");
             let (x, y, width, height) =
-                lifecycle::client_configure(crate::client::rect_to_root(outer), self.extents());
+                lifecycle::client_configure(
+                    crate::client::rect_to_root(outer),
+                    self.extents_for(client),
+                );
             self.conn.configure_window(
                 client,
                 &ConfigureWindowAux::new()
@@ -4653,18 +4942,23 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    /// `_NET_FRAME_EXTENTS` (EWMH: left, right, top, bottom). Client-drawn
+    /// frames publish zeros: Flame adds no frame, so the window is its own
+    /// visible area and GTK's `_GTK_FRAME_EXTENTS` stays client-owned.
     fn set_frame_extents(&self, client: Window) -> Result<(), ReplyError> {
+        let (border, titlebar) = match self.clients.get(&client).map(|state| state.decoration) {
+            None | Some(Decoration::Server) => (
+                u32::from(self.config.frame_border),
+                u32::from(self.config.titlebar_height),
+            ),
+            Some(Decoration::ClientSide | Decoration::None) => (0, 0),
+        };
         self.conn.change_property32(
             PropMode::REPLACE,
             client,
             self.atoms.net_frame_extents,
             AtomEnum::CARDINAL,
-            &[
-                u32::from(self.config.frame_border),
-                u32::from(self.config.frame_border),
-                u32::from(self.config.titlebar_height) + u32::from(self.config.frame_border),
-                u32::from(self.config.frame_border),
-            ],
+            &[border, border, titlebar + border, border],
         )?;
         Ok(())
     }
@@ -4891,6 +5185,11 @@ fn resolve_frame_event_source(registry: &FrameRegistry, event: Window, child: Wi
     registry.lookup_by_xid(child).map_or(event, |_| child)
 }
 
+/// A press on an already-active client is replayed without focus or restacking.
+fn should_focus_on_press(active: Option<Window>, client: Window) -> bool {
+    active != Some(client)
+}
+
 fn pointer_grab_target(requested: Window, resources: FrameResources) -> bool {
     requested == resources.frame || resources.children().contains(&requested)
 }
@@ -4944,6 +5243,12 @@ pub(crate) fn flamewm_workspace_root() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
+/// True when a `_NET_CURRENT_DESKTOP` value differs from the WM's own current
+/// workspace, i.e. the change came from another client rather than our publish.
+fn desktop_change_is_external(published: Option<u32>, own_current: usize) -> bool {
+    published.map_or(true, |value| value as usize != own_current)
+}
+
 /// Windows need re-publishing only when a client's visibility flipped across a
 /// workspace switch or the focused window changed; a plain workspace change
 /// emits workspace state only.
@@ -4953,6 +5258,39 @@ fn workspace_switch_touches_windows(visibility: &[(bool, bool)], focus_changed: 
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn desktop_configure_is_forced_to_bottom_and_keeps_geometry() {
+        let raise_request = ConfigureWindowAux::new()
+            .x(0)
+            .y(0)
+            .width(1350)
+            .height(641)
+            .sibling(0x200000)
+            .stack_mode(StackMode::ABOVE);
+        let aux = desktop_stack_policy(raise_request, WindowKind::Desktop);
+        assert_eq!(aux.stack_mode, Some(StackMode::BELOW));
+        assert_eq!(aux.sibling, None);
+        assert_eq!((aux.x, aux.y, aux.width, aux.height), (Some(0), Some(0), Some(1350), Some(641)));
+        // A desktop geometry-only request (no stack mask) still ends at the bottom.
+        let geometry_only = ConfigureWindowAux::new().width(1350).height(600);
+        assert_eq!(
+            desktop_stack_policy(geometry_only, WindowKind::Desktop).stack_mode,
+            Some(StackMode::BELOW)
+        );
+    }
+
+    #[test]
+    fn non_desktop_configure_keeps_stack_intent() {
+        let request = ConfigureWindowAux::new()
+            .sibling(0x200000)
+            .stack_mode(StackMode::ABOVE);
+        for kind in [WindowKind::Normal, WindowKind::Utility, WindowKind::Dock, WindowKind::Popup] {
+            let aux = desktop_stack_policy(request, kind);
+            assert_eq!(aux.stack_mode, Some(StackMode::ABOVE), "{kind:?}");
+            assert_eq!(aux.sibling, Some(0x200000), "{kind:?}");
+        }
+    }
 
     #[test]
     fn destroyed_window_races_are_not_fatal_but_other_errors_are() {
@@ -5131,6 +5469,17 @@ mod tests {
             anchor: MoveAnchor::new(20, 400, 30),
             grab_window: 99,
         })
+    }
+
+    #[test]
+    fn own_desktop_publish_echo_does_not_bump_workspace_revision() {
+        // Echo of our own _NET_CURRENT_DESKTOP write must not advance the fence.
+        assert!(!desktop_change_is_external(Some(2), 2));
+        assert!(!desktop_change_is_external(Some(0), 0));
+        // A foreign pager/client change must still advance the fence.
+        assert!(desktop_change_is_external(Some(1), 2));
+        // Unreadable property is treated as external (conservative fence advance).
+        assert!(desktop_change_is_external(None, 2));
     }
 
     #[test]
@@ -5647,5 +5996,52 @@ mod transition_fix_tests {
         assert_eq!(ignore_unmap, 0);
         // later: the client withdraws its own window; this unmap must not be swallowed.
         assert!(!consume_expected_unmap(&mut ignore_unmap), "client unmap is handled");
+    }
+}
+
+/// `_NET_WM_MOVERESIZE` direction (EWMH 0 = top-left, clockwise) to frame edges.
+fn resize_edges_for_direction(direction: u32) -> ResizeEdges {
+    match direction {
+        0 => ResizeEdges::top_left(),
+        1 => ResizeEdges::top(),
+        2 => ResizeEdges::top_right(),
+        3 => ResizeEdges::right(),
+        4 => ResizeEdges::bottom_right(),
+        5 => ResizeEdges::bottom(),
+        6 => ResizeEdges::bottom_left(),
+        _ => ResizeEdges::left(),
+    }
+}
+
+#[cfg(test)]
+mod csd_direction_tests {
+    use super::*;
+
+    #[test]
+    fn moveresize_directions_map_clockwise_from_top_left() {
+        // EWMH _NET_WM_MOVERESIZE: 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L.
+        assert_eq!(resize_edges_for_direction(0), ResizeEdges::top_left());
+        assert_eq!(resize_edges_for_direction(1), ResizeEdges::top());
+        assert_eq!(resize_edges_for_direction(2), ResizeEdges::top_right());
+        assert_eq!(resize_edges_for_direction(3), ResizeEdges::right());
+        assert_eq!(resize_edges_for_direction(4), ResizeEdges::bottom_right());
+        assert_eq!(resize_edges_for_direction(5), ResizeEdges::bottom());
+        assert_eq!(resize_edges_for_direction(6), ResizeEdges::bottom_left());
+        assert_eq!(resize_edges_for_direction(7), ResizeEdges::left());
+    }
+
+    #[test]
+    fn moveresize_edge_mapping_rejects_plain_move() {
+        // Negative control: direction 8 (move) must not be a resize edge.
+        assert_eq!(resize_edges_for_direction(8), ResizeEdges::left());
+    }
+
+    #[test]
+    fn click_on_inactive_client_requests_focus_and_active_client_does_not() {
+        let client: Window = 0x400002;
+        assert!(super::should_focus_on_press(None, client));
+        assert!(super::should_focus_on_press(Some(0x400001), client));
+        // Negative control: a plain click on the already-active window must not refocus/restack.
+        assert!(!super::should_focus_on_press(Some(client), client));
     }
 }

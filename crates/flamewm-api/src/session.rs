@@ -1,6 +1,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionAction {
     Lock,
+    /// Runs the lock screen in non-grabbing preview mode; exits on any input.
+    LockPreview,
     Logout,
     Suspend,
     Reboot,

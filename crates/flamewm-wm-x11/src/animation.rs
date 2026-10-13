@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_reactor::{Easing, Start, Timeline, TransitionId};
@@ -358,6 +358,54 @@ impl OpenGate {
 
 }
 
+/// How long a finished overlay stays above its remapped window, so the client's first repaint
+/// shows through instead of an unpainted frame.
+pub const LINGER_MS: u64 = 250;
+
+/// Finished overlays held above a remapped window until a deadline. Pure: callers inject `now`.
+#[derive(Debug)]
+pub struct Linger<T> {
+    held: HashMap<u32, (T, Instant)>,
+}
+
+impl<T> Default for Linger<T> {
+    fn default() -> Self {
+        Self { held: HashMap::new() }
+    }
+}
+
+impl<T> Linger<T> {
+    /// Holds `value` for `client` until `now` plus [`LINGER_MS`], replacing any earlier hold.
+    pub fn hold(&mut self, client: u32, value: T, now: Instant) {
+        self.held
+            .insert(client, (value, now + Duration::from_millis(LINGER_MS)));
+    }
+
+    /// Drops the hold for `client` at once (input to it, unmap, or destroy).
+    pub fn remove(&mut self, client: u32) {
+        self.held.remove(&client);
+    }
+
+    /// Drops every hold whose deadline is at or before `now` and returns those clients.
+    pub fn expire(&mut self, now: Instant) -> Vec<u32> {
+        let expired: Vec<u32> = self
+            .held
+            .iter()
+            .filter(|(_, (_, deadline))| now >= *deadline)
+            .map(|(client, _)| *client)
+            .collect();
+        for client in &expired {
+            self.held.remove(client);
+        }
+        expired
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.held.is_empty()
+    }
+}
+
 /// Owns all in-flight transitions on a single [`Timeline`].
 #[derive(Debug)]
 pub struct Animator {
@@ -700,6 +748,20 @@ mod tests {
         assert_eq!(mapped.maximize, Style::None);
         assert!(mapped.minimize != Style::None && mapped.open != Style::None, "missing keys keep the default");
         assert_eq!(settings_from_snapshot(&SettingsSnapshot::new(1)), Settings::DEFAULT);
+    }
+
+    #[test]
+    fn linger_holds_until_deadline_and_remove_drops_early() {
+        let t0 = Instant::now();
+        let mut linger = Linger::default();
+        linger.hold(7, "overlay", t0);
+        linger.expire(t0 + Duration::from_millis(LINGER_MS - 1));
+        assert!(!linger.is_empty(), "the overlay stays up until the client has had time to paint");
+        linger.expire(t0 + Duration::from_millis(LINGER_MS));
+        assert!(linger.is_empty(), "the hold ends at its deadline");
+        linger.hold(7, "overlay", t0);
+        linger.remove(7);
+        assert!(linger.is_empty(), "input, unmap or destroy drops the hold at once");
     }
 
     #[test]

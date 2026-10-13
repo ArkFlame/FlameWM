@@ -3,6 +3,7 @@ use x11rb::protocol::xproto::Window;
 use crate::chrome::IconImage;
 use flamewm_integrations_linux::icons::IconKey;
 use crate::classifier::WindowKind;
+use crate::decoration::policy::Decoration;
 use crate::frame::coords::RootRect;
 use crate::frame::model::{FrameControl, PlacementMode, PlacementState};
 use crate::geometry::Rect;
@@ -49,6 +50,9 @@ pub struct ManagedClient {
     /// titlebar over a control button, else `None`. Motion feeds it;
     /// the frame redraws only on change.
     pub hover_control: Option<FrameControl>,
+    /// Who draws the frame; `Server` unless the client draws its own (CSD)
+    /// or requested no decorations. Non-`Server` clients have no Flame frame.
+    pub decoration: Decoration,
 }
 
 /// Convert a legacy frame `Rect` (u32 size) to a placement `RootRect`.
@@ -160,6 +164,7 @@ mod tests {
             ignore_unmap: 0,
             kind: WindowKind::Normal,
             hover_control: None,
+            decoration: Decoration::Server,
         };
         assert!(!client.is_maximized());
         assert!(!client.is_fullscreen());

@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -303,8 +304,9 @@ fn decide(exit_status: ExitStatus, recent_restarts: usize) -> LockSupervision {
     }
 }
 
-fn spawn_lock_process(program: &Path) -> std::io::Result<Child> {
+fn spawn_lock_process(program: &Path, args: &[&str]) -> std::io::Result<Child> {
     Command::new(program)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -343,7 +345,7 @@ fn supervise_lock(program: PathBuf, mut child: Child) {
             LockSupervision::Respawn { delay } => {
                 thread::sleep(delay);
                 restarts.push_back(Instant::now());
-                match spawn_lock_process(&program) {
+                match spawn_lock_process(&program, &[]) {
                     Ok(next) => child = next,
                     Err(error) => {
                         eprintln!("flamewm: lock screen respawn failed: {error}");
@@ -358,13 +360,9 @@ fn supervise_lock(program: PathBuf, mut child: Child) {
 /// Starts the lock screen. The lock binary is spawned detached; a supervisor
 /// thread respawns it if it crashes so the screen cannot silently unlock.
 pub fn start_lock_screen() -> FlameResult<()> {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let path_var = std::env::var_os("PATH");
-    match resolve_lock_program(exe_dir.as_deref(), path_var.as_deref()) {
+    match current_lock_program() {
         LockProgram::Screen(program) => {
-            let child = spawn_lock_process(&program).map_err(io_error)?;
+            let child = spawn_lock_process(&program, &[]).map_err(io_error)?;
             thread::Builder::new()
                 .name("flamewm-lock-supervisor".to_owned())
                 .spawn(move || supervise_lock(program, child))
@@ -380,6 +378,153 @@ pub fn start_lock_screen() -> FlameResult<()> {
             .ok_or_else(|| {
                 FlameError::new(ErrorCode::PermissionDenied, "session action command failed")
             }),
+    }
+}
+
+fn current_lock_program() -> LockProgram {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let path_var = std::env::var_os("PATH");
+    resolve_lock_program(exe_dir.as_deref(), path_var.as_deref())
+}
+
+/// Argument vector for the preview lock: it takes no grabs and exits on any input.
+const LOCK_PREVIEW_ARGS: &[&str] = &["--preview"];
+
+/// The single live preview child. Reaped with `try_wait` before each spawn decision.
+static LOCK_PREVIEW: Mutex<Option<Child>> = Mutex::new(None);
+
+/// Spawns a preview unless `slot` still holds a running child. An exited child is reaped first.
+fn spawn_preview_once(slot: &mut Option<Child>, program: &Path) -> std::io::Result<()> {
+    if let Some(child) = slot.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return Ok(());
+        }
+    }
+    *slot = Some(spawn_lock_process(program, LOCK_PREVIEW_ARGS)?);
+    Ok(())
+}
+
+/// Starts the lock screen in preview mode. At most one preview runs at a time.
+pub fn start_lock_preview() -> FlameResult<()> {
+    match current_lock_program() {
+        LockProgram::Screen(program) => {
+            let mut slot = LOCK_PREVIEW.lock().unwrap_or_else(PoisonError::into_inner);
+            spawn_preview_once(&mut slot, &program).map_err(io_error)
+        }
+        LockProgram::Loginctl => Err(FlameError::new(
+            ErrorCode::NotFound,
+            "flamewm-lock binary not found; lock preview unavailable",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod lock_preview_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "flamewm-lock-preview-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// Fake lock binary: logs its argv once per launch, then runs until killed.
+    fn fake_lock(dir: &Path) -> PathBuf {
+        let program = dir.join(LOCK_SCREEN_BINARY);
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nexec sleep 30\n",
+            dir.join("launches.log").display()
+        );
+        std::fs::write(&program, body).expect("write fake lock");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake lock");
+        program
+    }
+
+    fn launches(dir: &Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("launches.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn wait_for_launches(dir: &Path, count: usize) {
+        // 10 s: the fake lock is a shell script and the workspace suite runs under heavy load.
+        for _ in 0..1000 {
+            if launches(dir).len() >= count {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("expected {count} launches, saw {:?}", launches(dir));
+    }
+
+    /// Spawns the preview, retrying `ETXTBSY`: exec of a just-written script races with a fork
+    /// in a parallel test thread that still holds the write fd.
+    fn spawn_retrying(slot: &mut Option<Child>, program: &Path) -> std::io::Result<()> {
+        let mut last = None;
+        for _ in 0..100 {
+            match spawn_preview_once(slot, program) {
+                Err(error) if error.raw_os_error() == Some(26) => {
+                    last = Some(error);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                other => return other,
+            }
+        }
+        Err(last.expect("retried at least once"))
+    }
+
+    #[test]
+    fn preview_argument_vector_is_exactly_preview_flag() {
+        assert_eq!(LOCK_PREVIEW_ARGS, ["--preview"]);
+    }
+
+    #[test]
+    fn preview_spawns_fake_lock_with_only_the_preview_flag() {
+        let dir = temp_dir("argv");
+        let program = fake_lock(&dir);
+        let mut slot = None;
+        spawn_retrying(&mut slot, &program).expect("spawn preview");
+        wait_for_launches(&dir, 1);
+        assert_eq!(launches(&dir), ["--preview"]);
+        let _ = slot.expect("child tracked").kill();
+    }
+
+    #[test]
+    fn second_preview_is_refused_while_first_is_running() {
+        let dir = temp_dir("single");
+        let program = fake_lock(&dir);
+        let mut slot = None;
+        spawn_retrying(&mut slot, &program).expect("first preview");
+        spawn_retrying(&mut slot, &program).expect("second call is a no-op");
+        wait_for_launches(&dir, 1);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(launches(&dir).len(), 1, "a second preview spawned while one runs");
+        let _ = slot.expect("child tracked").kill();
+    }
+
+    #[test]
+    fn exited_preview_is_reaped_and_a_new_one_starts() {
+        let dir = temp_dir("reap");
+        let program = fake_lock(&dir);
+        let mut slot = None;
+        spawn_retrying(&mut slot, &program).expect("first preview");
+        wait_for_launches(&dir, 1);
+        let child = slot.as_mut().expect("child tracked");
+        child.kill().expect("kill preview");
+        child.wait().expect("reap preview");
+        spawn_retrying(&mut slot, &program).expect("preview after exit");
+        wait_for_launches(&dir, 2);
+        let _ = slot.expect("child tracked").kill();
     }
 }
 
@@ -790,6 +935,7 @@ impl SessionPort for X11Desktop {
     fn perform_session_action(&mut self, action: SessionAction) -> FlameResult<()> {
         let (program, args): (&str, &[&str]) = match action {
             SessionAction::Lock => return start_lock_screen(),
+            SessionAction::LockPreview => return start_lock_preview(),
             SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),

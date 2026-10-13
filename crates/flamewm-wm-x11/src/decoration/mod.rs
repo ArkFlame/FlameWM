@@ -7,5 +7,4 @@
 //! caches) and `policy` (test-only decoration-policy decision) remain.
 
 pub mod cache;
-#[cfg(test)]
 pub mod policy;
