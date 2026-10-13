@@ -1,5 +1,6 @@
 //! Typed product-facing boundary between FlameWM UI and the X11 renderer.
 
+pub mod backdrop;
 mod event_source;
 mod input;
 mod popup;

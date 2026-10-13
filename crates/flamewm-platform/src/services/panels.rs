@@ -44,11 +44,6 @@ impl PanelService {
         self.revision.max(1)
     }
 
-    #[must_use]
-    pub fn start_output(&self) -> Option<&OutputId> {
-        self.start.open_output()
-    }
-
     pub fn sync_outputs(&mut self, displays: &DisplaySnapshot) -> bool {
         let before_manager = self.manager.clone();
         let connected = displays

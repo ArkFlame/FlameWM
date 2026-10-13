@@ -1,6 +1,6 @@
 use flamewm_api::system::{
-    AudioSnapshot, MediaSnapshot, NetworkKind, NetworkSnapshot, PlaybackState, ServiceAvailability,
-    SystemAction, SystemSnapshot,
+    AudioSnapshot, MediaSnapshot, NetworkSnapshot, ServiceAvailability, SystemAction,
+    SystemSnapshot,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -92,34 +92,6 @@ impl SystemService {
         self.snapshot.audio = update;
         self.bump_revision();
         true
-    }
-
-    pub fn network_owner_lost(&mut self) {
-        let generation = self.snapshot.network.generation.saturating_add(1);
-        let update = NetworkSnapshot {
-            availability: ServiceAvailability::Unavailable,
-            generation,
-            kind: NetworkKind::Unavailable,
-            ..NetworkSnapshot::default()
-        };
-        if update != self.snapshot.network {
-            self.snapshot.network = update;
-            self.bump_revision();
-        }
-    }
-
-    pub fn mpris_owner_lost(&mut self) {
-        let generation = self.snapshot.media.generation.saturating_add(1);
-        let update = MediaSnapshot {
-            availability: ServiceAvailability::Unavailable,
-            generation,
-            playback: PlaybackState::Unavailable,
-            ..MediaSnapshot::default()
-        };
-        if update != self.snapshot.media {
-            self.snapshot.media = update;
-            self.bump_revision();
-        }
     }
 
     pub fn pulse_disconnected(&mut self) -> u64 {

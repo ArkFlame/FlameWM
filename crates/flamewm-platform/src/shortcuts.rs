@@ -94,10 +94,6 @@ impl ShortcutRegistry {
         Ok(())
     }
 
-    pub fn reset_all(&mut self) {
-        self.bindings = self.defaults.clone();
-    }
-
     pub fn set(&mut self, action: &str, raw: &str) -> FlameResult<()> {
         self.require_action(action)?;
         let normalized = normalize(raw);

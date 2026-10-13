@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 pub mod start_surface;
 pub mod status_surface;
+use crate::popup_controller::POPUP_GAP;
 use crate::start::{self, StartCategory};
 use crate::surface_backdrop::{blurred_argb, capture_step, CaptureKey, CaptureStep};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
@@ -908,7 +909,7 @@ impl ShellSurfaces {
                 let capture = runtime
                     .capture_root_under_unmapped(panel)
                     .map_err(ui_error)?;
-                let ready = flamewm_render_x11::backdrop::capture_is_ready(&capture.pixels);
+                let ready = flamewm_ui_x11::backdrop::capture_is_ready(&capture.pixels);
                 let image = RgbaImage {
                     width: capture.width,
                     height: capture.height,
@@ -1118,7 +1119,7 @@ impl ShellSurfaces {
             self.start,
             work_area,
             edge,
-            8,
+            POPUP_GAP,
         )
         .map_err(|error| error.to_string())?;
         self.map_raise(runtime, self.start, rect)
@@ -1132,11 +1133,6 @@ impl ShellSurfaces {
     #[must_use]
     pub fn is_media_open(&self) -> bool {
         self.transient == Some(Transient::Media)
-    }
-
-    #[must_use]
-    pub fn is_audio_open(&self) -> bool {
-        false
     }
 
     #[must_use]
@@ -1198,26 +1194,6 @@ impl ShellSurfaces {
         )?;
         self.transient = Some(transient);
         Ok(())
-    }
-
-    /// Re-measure the open popup after content changed via the shared
-    /// `status_surface::refit` (anchor -> measure -> fit). No-op when
-    /// nothing is open. Transactional: a refused measurement leaves the
-    /// currently mapped rect untouched.
-    pub fn remeasure_open_popup(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        let surface = match self.transient {
-            Some(Transient::Media) => self.media,
-            _ => return Ok(()),
-        };
-        let rect = status_surface::refit(
-            runtime,
-            self.primary().panel,
-            surface,
-            self.primary().placement.work_area,
-            self.primary().placement.panel.edge,
-        )
-        .map_err(|error| error.to_string())?;
-        self.map_raise(runtime, surface, rect)
     }
 
     pub fn open_context_menu(
@@ -1677,16 +1653,12 @@ pub fn shell_span(label: &'static str) -> flamewm_profiler::ProfilePoint {
                 | "shell.popup.request"
                 | "shell.quick_control.open_request"
                 | "shell.quick_control.restart"
-                | "shell.quick.snapshot"
                 | "shell.quick.project"
                 | "shell.quick.measure"
                 | "shell.quick.place"
-                | "shell.quick.prepare"
                 | "shell.quick.prepare/commit_geometry"
                 | "shell.quick.present"
-                | "shell.quick.grab"
                 | "shell.quick.pointer_grab"
-                | "shell.quick.close"
                 | "shell.quick.close/ungrab/unmap"
                 | "shell.quick.open.total"
                 | "shell.signal_to_visual.windows"

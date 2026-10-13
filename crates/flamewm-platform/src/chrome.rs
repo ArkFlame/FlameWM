@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_api::{ErrorCode, FlameError, FlameResult, OutputId, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,33 +113,6 @@ impl ChromePolicy {
             corner_size_x: (8 * scale + 50) / 100,
             corner_size_y: (8 * scale + 50) / 100,
         }
-    }
-
-    #[must_use]
-    pub fn chrome_for(&self, window: &WindowSnapshot) -> WindowChrome {
-        if matches!(window.state, WindowState::Fullscreen) {
-            return WindowChrome {
-                decorated: false,
-                titlebar: false,
-                border: false,
-                minimize_button: false,
-                maximize_button: false,
-                close_button: false,
-                resizable: false,
-                rollover_buttons: true,
-            };
-        }
-        let mut chrome = WindowChrome::default();
-        if matches!(window.state, WindowState::Maximized) {
-            if self.hide_title_when_maximized || self.hide_decor_when_maximized {
-                chrome.titlebar = false;
-            }
-            if self.hide_decor_when_maximized {
-                chrome.border = false;
-            }
-            chrome.decorated = chrome.titlebar || chrome.border;
-        }
-        chrome
     }
 
     #[must_use]

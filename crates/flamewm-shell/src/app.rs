@@ -1373,7 +1373,7 @@ impl ShellLoop {
         };
         let rect = key.rect;
         let wallpaper = || {
-            let (width, height) = flamewm_render_x11::root_geometry().ok()?;
+            let (width, height) = flamewm_ui_x11::backdrop::root_geometry().ok()?;
             flamewm_shell::surface_backdrop::wallpaper_source(
                 &wallpaper_path,
                 flamewm_image_core::wallpaper::parse(&fit_name),

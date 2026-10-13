@@ -15,7 +15,6 @@ pub mod search;
 pub mod services;
 pub mod settings;
 pub mod shortcuts;
-pub mod snap;
 pub mod system;
 pub mod task;
 pub mod workspace;

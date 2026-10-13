@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use flamewm_api::background::WallpaperFit;
 use flamewm_image_core::wallpaper::{self, DEFAULT_WALLPAPER_PATH};
 use flamewm_image_core::RgbaImage;
-pub use flamewm_render_x11::backdrop::{blur_radius_px, MAX_BLUR_RADIUS_PX};
+pub use flamewm_ui_x11::backdrop::{blur_radius_px, MAX_BLUR_RADIUS_PX};
 
 /// Fitted wallpaper pixels under `rect` (root-space device px): the wallpaper placed on the root
 /// canvas exactly as the desktop owner does, computed for `rect` only. Pure: reads no root pixels,
@@ -54,10 +54,10 @@ pub fn wallpaper_source(
 /// Opaque ARGB32 words (0xFFRRGGBB) for the snapshot, blurred per [`blur_radius_px`].
 #[must_use]
 pub fn blurred_argb(snapshot: &RgbaImage, opacity_percent: u8, blur_percent: u8) -> Vec<u32> {
-    flamewm_render_x11::backdrop::blurred_argb_words(
+    flamewm_ui_x11::backdrop::blurred_argb_words(
         snapshot.width,
         snapshot.height,
-        &snapshot.pixels,
+        snapshot.pixels.clone(),
         opacity_percent,
         blur_percent,
     )
