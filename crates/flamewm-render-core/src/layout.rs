@@ -257,14 +257,17 @@ impl<'a> Engine<'a> {
         self.document.runtime_style(index, self.interaction)
     }
 
-    fn children(&self, index: u32) -> Vec<u32> {
-        let mut result = Vec::new();
-        let mut cursor = self.document.document.nodes[index as usize].first_child;
-        while let Some(child) = cursor {
-            result.push(child);
-            cursor = self.document.document.nodes[child as usize].next_sibling;
-        }
-        result
+    /// Sibling-link walk in document order. Borrows the document (`'a`), not
+    /// `self`, so callers may mutate boxes while iterating.
+    fn children(&self, index: u32) -> impl Iterator<Item = u32> + 'a {
+        let document: &'a RuntimeDocument = self.document;
+        let nodes = &document.document.nodes;
+        let mut cursor = nodes[index as usize].first_child;
+        std::iter::from_fn(move || {
+            let child = cursor?;
+            cursor = nodes[child as usize].next_sibling;
+            Some(child)
+        })
     }
 
     fn measure_node(&self, index: u32, avail_w: f32, avail_h: f32) -> (f32, f32) {
@@ -436,11 +439,11 @@ impl<'a> Engine<'a> {
         let consumed = match style.display {
             Display::None => (0.0, 0.0),
             Display::Block => self.layout_block(
-                &children, content_x, content_y, content_w, content_h, style.gap,
+                children, content_x, content_y, content_w, content_h, style.gap,
             ),
-            Display::Flex => self.layout_flex(
-                &children, content_x, content_y, content_w, content_h, &style,
-            ),
+            Display::Flex => {
+                self.layout_flex(children, content_x, content_y, content_w, content_h, &style)
+            }
         };
 
         if height.is_none() {
@@ -466,7 +469,7 @@ impl<'a> Engine<'a> {
 
     fn layout_block(
         &mut self,
-        children: &[u32],
+        children: impl Iterator<Item = u32>,
         x: f32,
         y: f32,
         width: f32,
@@ -476,7 +479,7 @@ impl<'a> Engine<'a> {
         let mut cursor_y = y;
         let mut max_w: f32 = 0.0;
         let mut count = 0usize;
-        for &child in children {
+        for child in children {
             let child_style = self.style(child);
             if child_style.position == Position::Absolute || child_style.display == Display::None {
                 continue;
@@ -501,16 +504,15 @@ impl<'a> Engine<'a> {
 
     fn layout_flex(
         &mut self,
-        children: &[u32],
+        children: impl Iterator<Item = u32>,
         x: f32,
         y: f32,
         width: f32,
         height: f32,
         style: &Style,
     ) -> (f32, f32) {
+        // Collected: `flow.len()` and two ordered passes need the set up front.
         let flow: Vec<u32> = children
-            .iter()
-            .copied()
             .filter(|child| {
                 let child_style = self.style(*child);
                 child_style.position == Position::Flow && child_style.display != Display::None
@@ -1021,6 +1023,143 @@ mod tests {
             .expect("wrapper root measures");
         assert_eq!((popup_size.width, popup_size.height), (200.0, 100.0));
         assert_eq!((root_size.width, root_size.height), (800.0, 600.0));
+    }
+
+    /// Nested flow/flex/absolute/display:none/scroll fixture. Child order is
+    /// the sibling-link order, including absolute and display:none children.
+    fn traversal_fixture() -> RuntimeDocument {
+        let node = |parent: Option<u32>,
+                    first_child: Option<u32>,
+                    next_sibling: Option<u32>,
+                    kind: NodeKind,
+                    text: &str,
+                    style: Style| CompiledNode {
+            kind,
+            parent,
+            first_child,
+            next_sibling,
+            id: String::new(),
+            action: String::new(),
+            text: text.into(),
+            image: None,
+            style,
+            hover_style: None,
+            active_style: None,
+        };
+        let px = |w: f32, h: f32| {
+            let mut s = Style::default();
+            s.width = Length::Px(w);
+            s.height = Length::Px(h);
+            s
+        };
+        let mut root = px(300.0, 200.0);
+        root.overflow_y = Overflow::Auto;
+        let mut row = px(120.0, 40.0);
+        row.display = Display::Flex;
+        row.flex_direction = FlexDirection::Row;
+        let mut abs = px(50.0, 30.0);
+        abs.position = Position::Absolute;
+        abs.right = Length::Px(0.0);
+        abs.top = Length::Px(0.0);
+        let mut hidden = px(10.0, 10.0);
+        hidden.display = Display::None;
+        let mut hidden_leaf = Style::default();
+        hidden_leaf.display = Display::None;
+        let mut col = Style::default();
+        col.display = Display::Flex;
+        col.flex_direction = FlexDirection::Column;
+        col.height = Length::Px(60.0);
+        let mut grow = Style::default();
+        grow.flex_grow = 1.0;
+        let mut inner_abs = px(15.0, 15.0);
+        inner_abs.position = Position::Absolute;
+        inner_abs.left = Length::Px(10.0);
+        inner_abs.top = Length::Px(5.0);
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![
+                // 0 root (scroll container): children 1, 2, 3, 4
+                node(None, Some(1), None, NodeKind::Element, "", root),
+                // 1 flex row: children 5, 6, 7
+                node(Some(0), Some(5), Some(2), NodeKind::Element, "", row),
+                // 2 absolute: no children, sibling 3
+                node(Some(0), None, Some(3), NodeKind::Element, "", abs),
+                // 3 display:none with a child
+                node(Some(0), Some(8), Some(4), NodeKind::Element, "", hidden),
+                // 4 flex column: children 9, 10
+                node(Some(0), Some(9), None, NodeKind::Element, "", col),
+                // 5 flow leaf
+                node(
+                    Some(1),
+                    None,
+                    Some(6),
+                    NodeKind::Element,
+                    "",
+                    px(30.0, 20.0),
+                ),
+                // 6 absolute child of flex row
+                node(Some(1), None, Some(7), NodeKind::Element, "", inner_abs),
+                // 7 display:none in flex row
+                node(Some(1), None, None, NodeKind::Element, "", hidden_leaf),
+                // 8 child of display:none
+                node(
+                    Some(3),
+                    None,
+                    None,
+                    NodeKind::Text,
+                    "hidden",
+                    Style::default(),
+                ),
+                // 9 grow child
+                node(Some(4), None, Some(10), NodeKind::Element, "", grow),
+                // 10 text
+                node(Some(4), None, None, NodeKind::Text, "hi", Style::default()),
+            ],
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn traversal_order_and_boxes_match_fixture() {
+        let doc = traversal_fixture();
+        let engine = Engine {
+            document: &doc,
+            interaction: InteractionState::default(),
+            boxes: &mut [],
+        };
+        assert_eq!(engine.children(0).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+        assert_eq!(engine.children(1).collect::<Vec<_>>(), vec![5, 6, 7]);
+        assert_eq!(engine.children(3).collect::<Vec<_>>(), vec![8]);
+        assert_eq!(engine.children(5).collect::<Vec<_>>(), Vec::<u32>::new());
+        let layout = LayoutEngine::compute(&doc, 300.0, 200.0, InteractionState::default());
+        let rects: Vec<Rect> = layout.boxes.iter().map(|b| b.rect).collect();
+        // Recorded from the pre-optimisation Vec-returning traversal.
+        let expected: [(f32, f32, f32, f32); 11] = [
+            (0.0, 0.0, 300.0, 200.0),
+            (0.0, 0.0, 120.0, 40.0),
+            (250.0, 0.0, 50.0, 30.0),
+            (0.0, 0.0, 0.0, 0.0),
+            (0.0, 40.0, 300.0, 60.0),
+            (0.0, 0.0, 30.0, 20.0),
+            (10.0, 5.0, 15.0, 15.0),
+            (0.0, 0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 0.0),
+            (0.0, 40.0, 300.0, 41.8),
+            (0.0, 81.8, 300.0, 18.2),
+        ];
+        assert_eq!(rects.len(), expected.len());
+        for (index, (rect, (x, y, w, h))) in rects.iter().zip(expected).enumerate() {
+            assert!(
+                (rect.x - x).abs() < 0.01
+                    && (rect.y - y).abs() < 0.01
+                    && (rect.width - w).abs() < 0.01
+                    && (rect.height - h).abs() < 0.01,
+                "node {index}: got {rect:?}, expected ({x},{y},{w},{h})"
+            );
+        }
     }
 
     #[test]
