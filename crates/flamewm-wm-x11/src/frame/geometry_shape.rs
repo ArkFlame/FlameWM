@@ -65,6 +65,50 @@ pub fn bounding_rectangles(outer: Rect, floating: bool, style: DecorationStyle) 
 mod tests {
     use super::*;
 
+    fn covers(rects: &[Rectangle], x: i32, y: i32) -> bool {
+        rects.iter().any(|r| {
+            x >= i32::from(r.x)
+                && x < i32::from(r.x) + i32::from(r.width)
+                && y >= i32::from(r.y)
+                && y < i32::from(r.y) + i32::from(r.height)
+        })
+    }
+
+    #[test]
+    fn rounded_floating_shape_has_no_corner_hit_leak() {
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        };
+        let rects = bounding_rectangles(outer, true, DecorationStyle::Rounded);
+        for (x, y) in [(0, 0), (399, 0), (0, 299), (399, 299)] {
+            assert!(!covers(&rects, x, y), "corner ({x},{y}) must be clipped");
+        }
+        assert!(covers(&rects, 200, 0), "top edge middle stays");
+        assert!(covers(&rects, 0, 150), "left edge middle stays");
+    }
+
+    #[test]
+    fn squared_and_unfloating_shapes_are_full_rectangles() {
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        };
+        for (floating, style) in [
+            (true, DecorationStyle::Squared),
+            (false, DecorationStyle::Rounded),
+            (true, DecorationStyle::Squared),
+        ] {
+            let rects = bounding_rectangles(outer, floating, style);
+            assert_eq!(rects.len(), 1);
+            assert!(covers(&rects, 0, 0) && covers(&rects, 399, 299));
+        }
+    }
+
     #[test]
     fn t26_shape_spans_match_canonical_mask() {
         assert_eq!(

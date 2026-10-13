@@ -504,6 +504,7 @@ pub struct RuntimeStyleOverride {
     pub background: Option<ColorValue>,
     pub color: Option<ColorValue>,
     pub border_color: Option<ColorValue>,
+    pub border_radius: Option<f32>,
     pub opacity: Option<f32>,
     pub flex_direction: Option<FlexDirection>,
     pub font_size: Option<f32>,
@@ -752,6 +753,17 @@ impl RuntimeDocument {
         Ok(())
     }
 
+    /// Drops a node-local image override so the node falls back to its compiled asset.
+    pub fn clear_image_for_node(&mut self, node_id: &str) -> Result<(), String> {
+        let index = self
+            .node_by_id(node_id)
+            .ok_or_else(|| format!("no node with id '{node_id}'"))?;
+        if self.node_image_overrides.remove(&index).is_some() {
+            self.touch();
+        }
+        Ok(())
+    }
+
     /// Node-local override pixels (no per-call copies beyond borrow).
     pub fn node_image_override(&self, index: u32) -> Option<&RuntimeImageOverride> {
         self.node_image_overrides.get(&index)
@@ -873,6 +885,19 @@ impl RuntimeDocument {
             .ok_or_else(|| format!("no node with id '{id}'"))?;
         self.style_overrides.entry(index).or_default().background =
             Some(ColorValue::Literal(color));
+        self.touch();
+        Ok(())
+    }
+
+    /// Runtime corner radius in px for a node (popup/menu shape follows the decoration setting).
+    pub fn set_border_radius(&mut self, id: &str, radius: f32) -> Result<(), String> {
+        if !radius.is_finite() || radius < 0.0 {
+            return Err("runtime border radius must be finite and non-negative".to_string());
+        }
+        let index = self
+            .node_by_id(id)
+            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        self.style_overrides.entry(index).or_default().border_radius = Some(radius);
         self.touch();
         Ok(())
     }
@@ -1089,6 +1114,9 @@ impl RuntimeDocument {
             if let Some(border_color) = override_style.border_color {
                 style.border_color = border_color;
             }
+            if let Some(border_radius) = override_style.border_radius {
+                style.border_radius = border_radius;
+            }
             if let Some(opacity) = override_style.opacity {
                 style.opacity = opacity;
             }
@@ -1181,18 +1209,20 @@ mod ui_scale_tests {
     }
 
     fn labelled_document() -> RuntimeDocument {
-        let node = |kind, parent: Option<u32>, first_child: Option<u32>, id: &str, text: &str| CompiledNode {
-            kind,
-            parent,
-            first_child,
-            next_sibling: None,
-            id: id.to_string(),
-            action: String::new(),
-            text: text.to_string(),
-            image: None,
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
+        let node = |kind, parent: Option<u32>, first_child: Option<u32>, id: &str, text: &str| {
+            CompiledNode {
+                kind,
+                parent,
+                first_child,
+                next_sibling: None,
+                id: id.to_string(),
+                action: String::new(),
+                text: text.to_string(),
+                image: None,
+                style: Style::default(),
+                hover_style: None,
+                active_style: None,
+            }
         };
         RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
@@ -1218,7 +1248,10 @@ mod ui_scale_tests {
             .expect("text child");
         for index in [element, text] {
             let style = document.runtime_style(index, InteractionState::default());
-            assert_eq!(style.font_size, 51.0, "node {index} must carry the override");
+            assert_eq!(
+                style.font_size, 51.0,
+                "node {index} must carry the override"
+            );
         }
     }
 
@@ -1235,7 +1268,10 @@ mod ui_scale_tests {
         assert_eq!(document.revision(), revision.wrapping_add(1));
         assert_eq!(document.peek_damage(), SurfaceDamage::Full);
         let style = document.runtime_style(button, InteractionState::default());
-        assert_eq!(document.resolve_color(style.background), Color::rgb(255, 0, 0));
+        assert_eq!(
+            document.resolve_color(style.background),
+            Color::rgb(255, 0, 0)
+        );
 
         let revision = document.revision();
         let _ = document.take_damage();

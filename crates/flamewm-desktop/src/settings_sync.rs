@@ -89,3 +89,23 @@ fn t10_settings_projection_applies_sticky_selection_and_wallpaper_together() {
         "settings presentation must stay separate from filesystem refresh"
     );
 }
+
+#[test]
+fn t10_settings_projection_retints_desktop_menus_from_surfaces() {
+    // CONTRACT: live surfaceColor/surfaceOpacity changes reach every desktop menu root
+    // through the settings projection, not only on the next menu open.
+    // FAILURE MUTATION: drop the MENU_SURFACE_IDS loop or read the stale hardcoded CSS
+    // fill; this regression must turn red.
+    let source = include_str!("main.rs");
+    let projection = source_between(
+        source,
+        "fn refresh_settings_projection",
+        "fn refresh_if_changed",
+    );
+    assert!(
+        projection.contains("for id in projection::MENU_SURFACE_IDS")
+            && projection
+                .contains("projection::project_menu_surface(document, id, &state.settings)"),
+        "settings projection must re-tint every desktop menu root from the snapshot"
+    );
+}

@@ -38,12 +38,22 @@ pub trait UiDocumentAccess {
     fn text(&mut self, id: &str, text: String) -> Result<(), String>;
     fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String>;
     fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String>;
+    /// Restores the node's compiled (packaged) image. Documents without image overrides ignore it.
+    fn image_reset(&mut self, id: &str) -> Result<(), String> {
+        let _ = id;
+        Ok(())
+    }
     fn visible(&mut self, id: &str, visible: bool) -> Result<(), String>;
     fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String>;
     fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String>;
     fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String>;
     fn background(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     fn border(&mut self, id: &str, color: UiColor) -> Result<(), String>;
+    /// Corner radius in px for a surface root. Documents without shape support ignore it.
+    fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
+        let _ = (id, radius_px);
+        Ok(())
+    }
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     fn background_clear(&mut self, id: &str) -> Result<(), String>;
     fn border_clear(&mut self, id: &str) -> Result<(), String>;
@@ -191,6 +201,10 @@ impl UiDocumentAccess for UiDocument {
         self.image_rgba8(id, image)
     }
 
+    fn image_reset(&mut self, id: &str) -> Result<(), String> {
+        self.document.clear_image_for_node(id)
+    }
+
     fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
         self.visible(id, visible)
     }
@@ -213,6 +227,10 @@ impl UiDocumentAccess for UiDocument {
 
     fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
         self.border(id, color)
+    }
+
+    fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
+        self.document.set_border_radius(id, radius_px)
     }
 
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
@@ -288,6 +306,10 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
         )
     }
 
+    fn image_reset(&mut self, id: &str) -> Result<(), String> {
+        self.document.clear_image_for_node(id)
+    }
+
     fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
         self.document.set_visible(id, visible)
     }
@@ -318,6 +340,10 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
 
     fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
         self.document.set_border_color(id, color.into())
+    }
+
+    fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
+        self.document.set_border_radius(id, radius_px)
     }
 
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
@@ -907,10 +933,35 @@ mod tests {
         UiDocumentAccess::color_variable(
             &mut doc,
             "--accent",
-            UiColor { r: 1, g: 2, b: 3, a: 77 },
+            UiColor {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 77,
+            },
         )
         .expect("variable projection");
-        assert_eq!(doc.document.variable_values[0], flamewm_render_core::Color { r: 1, g: 2, b: 3, a: 77 });
-        assert!(UiDocumentAccess::color_variable(&mut doc, "--missing", UiColor { r: 0, g: 0, b: 0, a: 0 }).is_err());
+        assert_eq!(
+            doc.document.variable_values[0],
+            flamewm_render_core::Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 77
+            }
+        );
+        assert!(
+            UiDocumentAccess::color_variable(
+                &mut doc,
+                "--missing",
+                UiColor {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 0
+                }
+            )
+            .is_err()
+        );
     }
 }

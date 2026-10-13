@@ -6,7 +6,7 @@
 //! plans skin-exact values (J06 freeze) and describes effects.
 
 use flamewm_skin::palette::{Rgb, TEXT};
-use flamewm_skin::recipes::decoration::{ChromeTokens, corner_radius, glass_enabled, glass_tints};
+use flamewm_skin::recipes::decoration::{ChromeTokens, corner_radius};
 use flamewm_skin::recipes::window_chrome::WINDOW_CHROME;
 use flamewm_skin::typography::{FontWeight, Typography};
 
@@ -49,12 +49,11 @@ pub struct ChromeScene {
     pub fullscreen: bool,
     pub floating: bool,
     pub radius: u16,
-    pub glass: bool,
     pub tokens: ChromeTokens,
 }
 
 /// Plan a chrome scene from frame inputs using SKIN values and style tokens.
-/// Only a `floating` window gets the rounded mask (and iOS glass).
+/// Only a `floating` window gets the rounded mask.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn plan_scene(
@@ -104,7 +103,6 @@ pub fn plan_scene(
         fullscreen,
         floating,
         radius,
-        glass: glass_enabled(floating, tokens.style),
         tokens: *tokens,
     }
 }
@@ -233,50 +231,6 @@ pub fn render(
             a: 255,
         },
     );
-    // iOS glass: opaque 1px top highlight and inner side edges, confined to
-    // the titlebar strip (the client surface covers the rest of the frame).
-    let glass_result = if scene.glass && scene.frame_w >= 2 {
-        let (top, edge) = glass_tints(scene.tokens.titlebar_bg);
-        let mut fill = |rect: Rect, color: Rgb| {
-            let (r, g, b) = rgb_channels(color);
-            renderer.fill_rect(rect, Color { r, g, b, a: 255 })
-        };
-        let w = scene.frame_w as f32;
-        let bar_h = titlebar_h;
-        fill(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: w,
-                height: 1.0,
-            },
-            top,
-        )
-        .and_then(|()| {
-            fill(
-                Rect {
-                    x: 0.0,
-                    y: 1.0,
-                    width: 1.0,
-                    height: bar_h - 1.0,
-                },
-                edge,
-            )
-        })
-        .and_then(|()| {
-            fill(
-                Rect {
-                    x: w - 1.0,
-                    y: 1.0,
-                    width: 1.0,
-                    height: bar_h - 1.0,
-                },
-                edge,
-            )
-        })
-    } else {
-        Ok(())
-    };
     let icon_result = match (&scene.icon, scene.icon_dest) {
         (Some(icon), Some((dest_x, dest_y, dest_edge))) => {
             match crate::chrome::native_icon_rgba(icon, u32::from(scene.icon_edge)) {
@@ -343,7 +297,6 @@ pub fn render(
     renderer.flush();
     retarget_result?;
     fill_result?;
-    glass_result?;
     icon_result?;
     draw_result?;
     controls_result?;
@@ -384,8 +337,7 @@ mod tests {
         assert_eq!(scene.icon_edge, 13);
         assert_eq!(scene.icon_edge, WINDOW_CHROME.metrics.icon);
         assert_eq!(scene.baseline, 20.0);
-        assert_eq!(scene.radius, 6);
-        assert_eq!(scene.radius, WINDOW_CHROME.metrics.radius);
+        assert_eq!(scene.radius, 12);
     }
 
     #[test]
@@ -477,7 +429,29 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        assert_eq!(floating.radius, 6);
+        assert_eq!(floating.radius, 12);
+    }
+
+    #[test]
+    fn squared_style_is_rectangular_in_every_state() {
+        let squared = flamewm_skin::recipes::decoration::ChromeTokens {
+            style: flamewm_skin::recipes::decoration::DecorationStyle::Squared,
+            ..Default::default()
+        };
+        for (floating, maximized, fullscreen) in [
+            (true, false, false),
+            (false, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let scene = plan_scene(
+                400, 300, "a", true, None, None, maximized, fullscreen, floating, &squared,
+            );
+            assert_eq!(
+                scene.radius, 0,
+                "floating={floating} max={maximized} full={fullscreen}"
+            );
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::palette::{ACCENT_SOFT, Rgb};
+use crate::palette::ACCENT_SOFT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuRecipe {
@@ -9,7 +9,6 @@ pub struct MenuRecipe {
     pub padding: u16,
     pub radius: u16,
     pub hover: crate::palette::AlphaColor,
-    pub surface: Rgb,
 }
 
 /// CSS `.context-menu`, `.menu-row`, and `.menu-separator` exact geometry.
@@ -21,5 +20,4 @@ pub const CONTEXT_MENU: MenuRecipe = MenuRecipe {
     padding: 5,
     radius: 4,
     hover: ACCENT_SOFT,
-    surface: Rgb(0x1e2123),
 };

@@ -4,9 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_skin::icons::IconRole;
 use flamewm_skin::palette::Rgb;
-use flamewm_skin::recipes::decoration::{
-    ButtonShape, ButtonTokens, ChromeTokens, DecorationStyle,
-};
+use flamewm_skin::recipes::decoration::{ButtonShape, ButtonTokens, ChromeTokens, DecorationStyle};
 use flamewm_skin::recipes::window_chrome::{self as recipe, WINDOW_CHROME, WindowControlRole};
 
 /// Skin-owned titlebar height (flamewm-skin RWR 0.0.9 chrome titlebar).
@@ -300,11 +298,7 @@ enum FillMask {
 
 /// Fills the glyph-edge mask with `fill` (opaque) and composites the
 /// straight-alpha glyph over it. Pixels outside a circle mask are untouched.
-fn paint_fill_behind(
-    raster: &mut flamewm_image_core::RgbaImage,
-    fill: [u8; 4],
-    mask: FillMask,
-) {
+fn paint_fill_behind(raster: &mut flamewm_image_core::RgbaImage, fill: [u8; 4], mask: FillMask) {
     let radius = raster.width as f32 / 2.0;
     for y in 0..raster.height {
         for x in 0..raster.width {
@@ -571,12 +565,13 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         Some(SettingValue::Text(value)) => value.as_str(),
         _ => "",
     };
+    // Legacy "ios" (and "rounded", empty or malformed) is Rounded.
     let style = match text("decoration") {
-        "ios" => DecorationStyle::Ios,
+        "squared" => DecorationStyle::Squared,
         _ => DecorationStyle::Rounded,
     };
-    let titlebar_bg = parse_settings_color(text("titlebarColor"))
-        .unwrap_or(ChromeTokens::default().titlebar_bg);
+    let titlebar_bg =
+        parse_settings_color(text("titlebarColor")).unwrap_or(ChromeTokens::default().titlebar_bg);
     let button = |name: &str| ButtonTokens {
         shape: match text(&format!("titlebar{name}Style")) {
             "flat" => ButtonShape::Flat,
@@ -672,16 +667,31 @@ mod tests {
     #[test]
     fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
         let mut snapshot = SettingsSnapshot::new(1);
-        assert_eq!(chrome_tokens_from_settings(&snapshot), ChromeTokens::default());
+        assert_eq!(
+            chrome_tokens_from_settings(&snapshot),
+            ChromeTokens::default()
+        );
         let text = |value: &str| SettingValue::Text(value.to_owned());
-        snapshot.values.insert("decoration".to_owned(), text("ios"));
-        snapshot.values.insert("titlebarColor".to_owned(), text("#202326"));
-        snapshot.values.insert("titlebarCloseStyle".to_owned(), text("circle"));
-        snapshot.values.insert("titlebarCloseHoverColor".to_owned(), text("#00ff00"));
-        snapshot.values.insert("titlebarMinimizeColor".to_owned(), text("#zz"));
-        snapshot.values.insert("titlebarMaximizeStyle".to_owned(), text("bogus"));
+        snapshot
+            .values
+            .insert("decoration".to_owned(), text("squared"));
+        snapshot
+            .values
+            .insert("titlebarColor".to_owned(), text("#202326"));
+        snapshot
+            .values
+            .insert("titlebarCloseStyle".to_owned(), text("circle"));
+        snapshot
+            .values
+            .insert("titlebarCloseHoverColor".to_owned(), text("#00ff00"));
+        snapshot
+            .values
+            .insert("titlebarMinimizeColor".to_owned(), text("#zz"));
+        snapshot
+            .values
+            .insert("titlebarMaximizeStyle".to_owned(), text("bogus"));
         let tokens = chrome_tokens_from_settings(&snapshot);
-        assert_eq!(tokens.style, DecorationStyle::Ios);
+        assert_eq!(tokens.style, DecorationStyle::Squared);
         assert_eq!(tokens.titlebar_bg, Rgb(0x202326));
         assert_eq!(tokens.buttons[2].shape, ButtonShape::Circle);
         assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x00ff00)));
@@ -701,22 +711,23 @@ mod tests {
             },
             titlebar: WINDOW_CHROME.titlebar_background,
         };
-        let default = control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Hover, ControlLook::default())
-            .expect("close hover raster");
-        let explicit = control_glyph_raster(
+        let default = control_glyph_raster(
             ControlRole::Close,
             edge,
             ControlMaterial::Hover,
-            explicit,
+            ControlLook::default(),
         )
-        .expect("explicit close hover raster");
+        .expect("close hover raster");
+        let explicit =
+            control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Hover, explicit)
+                .expect("explicit close hover raster");
         assert_eq!(default.pixels, explicit.pixels);
     }
 
     #[test]
     fn style_tokens_never_move_control_hit_geometry() {
         let mut tokens = ChromeTokens::default();
-        tokens.style = DecorationStyle::Ios;
+        tokens.style = DecorationStyle::Squared;
         for button in tokens.buttons.iter_mut() {
             button.shape = ButtonShape::Square;
         }
@@ -741,11 +752,24 @@ mod tests {
             ControlPolicy::for_state(false, false).roles[1],
             ControlRole::Maximize
         );
-        assert_eq!(
-            corner_radius(true, DecorationStyle::Rounded),
-            WINDOW_CHROME.metrics.radius
-        );
+        assert_eq!(corner_radius(true, DecorationStyle::Rounded), 12);
         assert_eq!(corner_radius(false, DecorationStyle::Rounded), 0);
+    }
+
+    #[test]
+    fn decoration_setting_parses_rounded_squared_and_legacy_ios() {
+        let style_of = |value: &str| {
+            let mut snapshot = SettingsSnapshot::new(1);
+            snapshot.values.insert(
+                "decoration".to_owned(),
+                SettingValue::Text(value.to_owned()),
+            );
+            chrome_tokens_from_settings(&snapshot).style
+        };
+        assert_eq!(style_of("ios"), DecorationStyle::Rounded);
+        assert_eq!(style_of("rounded"), DecorationStyle::Rounded);
+        assert_eq!(style_of("squared"), DecorationStyle::Squared);
+        assert_eq!(style_of("bogus"), DecorationStyle::Rounded);
     }
 
     #[test]
@@ -776,11 +800,20 @@ mod tests {
             ControlRole::Close,
         ] {
             let image =
-                control_glyph_raster(role, 16, ControlMaterial::Rest, ControlLook::default()).expect("breeze control svg");
+                control_glyph_raster(role, 16, ControlMaterial::Rest, ControlLook::default())
+                    .expect("breeze control svg");
             assert_eq!((image.width, image.height), (16, 16));
             assert!(image.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
         }
-        assert!(control_glyph_raster(ControlRole::Close, 0, ControlMaterial::Rest, ControlLook::default()).is_none());
+        assert!(
+            control_glyph_raster(
+                ControlRole::Close,
+                0,
+                ControlMaterial::Rest,
+                ControlLook::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -789,8 +822,14 @@ mod tests {
         let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
         // Blits carry no material field, so the material each control was
         // rendered with is observed through its cached glyph raster.
-        assert_eq!(ControlMaterial::for_pointer(false, false), ControlMaterial::Rest);
-        assert_eq!(ControlMaterial::for_pointer(true, false), ControlMaterial::Hover);
+        assert_eq!(
+            ControlMaterial::for_pointer(false, false),
+            ControlMaterial::Rest
+        );
+        assert_eq!(
+            ControlMaterial::for_pointer(true, false),
+            ControlMaterial::Hover
+        );
         let rest = control_blits_for(400, false, false, None, None, &ChromeTokens::default());
         let hovered = control_blits_for(
             400,
@@ -809,8 +848,9 @@ mod tests {
         ];
         for (index, (control, material)) in expected.iter().enumerate() {
             assert_eq!(hovered[index].control, *control);
-            let raster = control_glyph_raster(hovered[index].role, edge, *material, ControlLook::default())
-                .expect("control raster");
+            let raster =
+                control_glyph_raster(hovered[index].role, edge, *material, ControlLook::default())
+                    .expect("control raster");
             assert_eq!(
                 hovered[index].raster, raster,
                 "{control:?} must use {material:?} material on close hover"
@@ -823,9 +863,17 @@ mod tests {
             );
         }
         for (index, blit) in rest.iter().enumerate() {
-            let raster = control_glyph_raster(blit.role, edge, ControlMaterial::Rest, ControlLook::default())
-                .expect("control raster");
-            assert_eq!(blit.raster, raster, "no hover must select Rest material for every control");
+            let raster = control_glyph_raster(
+                blit.role,
+                edge,
+                ControlMaterial::Rest,
+                ControlLook::default(),
+            )
+            .expect("control raster");
+            assert_eq!(
+                blit.raster, raster,
+                "no hover must select Rest material for every control"
+            );
             assert_eq!(blit.control, hovered[index].control);
         }
     }
@@ -833,11 +881,17 @@ mod tests {
     #[test]
     fn close_hover_and_pressed_rasters_differ_from_rest() {
         let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
-        let rest = control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Rest, ControlLook::default())
-            .expect("close rest raster");
+        let rest = control_glyph_raster(
+            ControlRole::Close,
+            edge,
+            ControlMaterial::Rest,
+            ControlLook::default(),
+        )
+        .expect("close rest raster");
         for material in [ControlMaterial::Hover, ControlMaterial::Pressed] {
-            let raster = control_glyph_raster(ControlRole::Close, edge, material, ControlLook::default())
-                .expect("close material raster");
+            let raster =
+                control_glyph_raster(ControlRole::Close, edge, material, ControlLook::default())
+                    .expect("close material raster");
             assert_ne!(
                 raster.pixels, rest.pixels,
                 "close {material:?} must not be byte-identical to rest"
@@ -848,8 +902,13 @@ mod tests {
     #[test]
     fn close_hover_paints_skin_red_disk_behind_glyph() {
         let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
-        let raster = control_glyph_raster(ControlRole::Close, edge, ControlMaterial::Hover, ControlLook::default())
-            .expect("close hover raster");
+        let raster = control_glyph_raster(
+            ControlRole::Close,
+            edge,
+            ControlMaterial::Hover,
+            ControlLook::default(),
+        )
+        .expect("close hover raster");
         // (1, 8) is inside the edge disk and clear of the glyph strokes.
         let offset = ((8 * edge + 1) * 4) as usize;
         let red = WINDOW_CHROME.close_hover.0;
@@ -862,8 +921,13 @@ mod tests {
     #[test]
     fn minimize_rest_raster_keeps_flame_default_scheme() {
         let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
-        let raster = control_glyph_raster(ControlRole::Minimize, edge, ControlMaterial::Rest, ControlLook::default())
-            .expect("minimize rest raster");
+        let raster = control_glyph_raster(
+            ControlRole::Minimize,
+            edge,
+            ControlMaterial::Rest,
+            ControlLook::default(),
+        )
+        .expect("minimize rest raster");
         let bytes = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../")

@@ -1,11 +1,12 @@
 use flamewm_api::Point;
-use flamewm_api::settings::SettingValue;
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_desktop_core::model::DesktopItemKind;
 use flamewm_desktop_core::presentation::desktop_label_lines;
 use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconService};
 use flamewm_integrations_linux::icons::{
     IconKey, IconLookupPurpose, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
+use flamewm_ui_core::context_menu::surface_fill;
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
@@ -59,6 +60,32 @@ pub fn project_background(
 
 /// Semantic layer assignment, run once at document init. Static ids plus the
 /// generated item slots; never called per-frame so visibility math stays raw.
+/// Desktop context-menu roots whose surface follows the Surfaces settings.
+pub const MENU_SURFACE_IDS: [&str; 4] = [
+    "desktop-menu",
+    "desktop-entry-menu",
+    "sticky-menu",
+    "desktop-confirm",
+];
+
+/// Projects `surfaceColor` / `surfaceOpacity` onto one desktop menu root.
+pub fn project_menu_surface(
+    document: &mut impl UiDocumentAccess,
+    id: &str,
+    snapshot: &SettingsSnapshot,
+) -> Result<(), String> {
+    let fill = surface_fill(snapshot);
+    document.background(
+        id,
+        UiColor {
+            r: (fill.rgb >> 16) as u8,
+            g: (fill.rgb >> 8) as u8,
+            b: fill.rgb as u8,
+            a: fill.alpha,
+        },
+    )
+}
+
 pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<(), String> {
     document.layer("desktop", UiLayer::SurfaceBackground)?;
     document.layer("desktop-wallpaper-selection", UiLayer::Background)?;
@@ -479,7 +506,9 @@ mod tests {
             raster.origin,
             flamewm_integrations_linux::icons::IconOrigin::PackagedBreeze
         );
-        let expected = packaged_root.join("assets/web/breeze").join(format!("{name}.svg"));
+        let expected = packaged_root
+            .join("assets/web/breeze")
+            .join(format!("{name}.svg"));
         assert!(
             expected.is_file(),
             "packaged document icon missing on disk: {}",

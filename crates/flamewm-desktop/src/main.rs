@@ -872,6 +872,9 @@ fn refresh_settings_projection(
     )?;
     sync_selection_visuals(document, state)?;
     sync_sticky(document, state)?;
+    for id in projection::MENU_SURFACE_IDS {
+        projection::project_menu_surface(document, id, &state.settings)?;
+    }
     state.settings_visual_dirty = false;
     Ok(())
 }
@@ -2189,6 +2192,7 @@ fn show_confirm(document: &mut impl UiDocumentAccess, state: &DesktopState) -> R
     );
     document.position("desktop-confirm", placed.x as f32, placed.y as f32)?;
     document.size("desktop-confirm", placed.width as f32, placed.height as f32)?;
+    projection::project_menu_surface(document, "desktop-confirm", &state.settings)?;
     document.visible("desktop-confirm", true)
 }
 
@@ -2270,6 +2274,10 @@ fn place_menu_parts(
     };
     document.position(id, placed.x as f32, placed.y as f32)?;
     document.size(id, placed.width as f32, placed.height as f32)?;
+    // Shape follows the decoration setting (Rounded 12 / Squared 0), same source as shell popups.
+    let rounded = setting_text(&state.settings, "decoration") != "squared";
+    document.corner_radius(id, flamewm_ui_core::context_menu::shape_radius(rounded) as f32)?;
+    projection::project_menu_surface(document, id, &state.settings)?;
     context_open_counter().increment();
     let _present = context_open_present_point().start();
     document.visible(id, true)
