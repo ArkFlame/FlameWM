@@ -363,5 +363,62 @@ class AccentLineAbsenceTests(unittest.TestCase):
         self.assertEqual(ap.accent_match_count(strip, self.ACCENT), 0)
 
 
+class OpenFadeSamplingTests(unittest.TestCase):
+    RECT_BOX = (0, 0, 1, 1)
+
+    def series(self, values: list[float]) -> list:
+        return [(self.RECT_BOX, v) for v in values]
+
+    def test_fade_with_mid_frames_inside_10_to_90_percent_passes(self) -> None:
+        self.assertEqual(ap.open_style_fails("t", "fade", self.series([0, 95, 160, 228, 228, 228])), [])
+
+    def test_fade_plateau_only_still_fails_without_retry(self) -> None:
+        self.assertEqual(len(ap.open_style_fails("t", "fade", self.series([0, 228, 228]))), 1)
+
+    def test_none_branch_rejects_intermediate_brightness(self) -> None:
+        self.assertEqual(ap.open_style_fails("t", "none", self.series([228, 228, 228])), [])
+        self.assertEqual(len(ap.open_style_fails("t", "none", self.series([0, 150, 228]))), 1)
+
+    def test_open_fade_path_calls_native_sampler_not_screenshots(self) -> None:
+        import inspect
+
+        source = inspect.getsource(ap.style_matrix_checks)
+        self.assertIn("sample_flight(s, 2.0, lambda img: (bright_bbox_pil(img), rect_brightness(img, open_rect)))", source)
+        self.assertNotIn("timed_samples(s, tag, 4.0, open_rect)", source)
+
+
+class FlightSamplingTests(unittest.TestCase):
+    OVERLAY_TREE = TREE_FIXTURE.replace(
+        "     0x400030 (has no name)",
+        "     0x400040 (has no name): ()  120x60+400+300  +400+300\n     0x400030 (has no name)")
+
+    def test_overlay_nodes_picks_new_nameless_top_level_not_frame(self) -> None:
+        nodes = ap.parse_tree(self.OVERLAY_TREE)
+        before = {"0x400002", "0x400010", "0x400020"}
+        self.assertEqual([n["id"] for n in ap.overlay_nodes(nodes, before)], ["0x400040"])
+
+    def test_overlay_nodes_ignores_windows_present_before_and_one_pixel_helpers(self) -> None:
+        nodes = ap.parse_tree(self.OVERLAY_TREE)
+        self.assertEqual(ap.overlay_nodes(nodes, {"0x400040"}), [])
+        self.assertEqual(ap.overlay_nodes(ap.parse_tree(TREE_FIXTURE), set()), [])
+
+    def test_flight_finished_needs_an_earlier_sighting_then_absence(self) -> None:
+        self.assertFalse(ap.flight_finished(set(), set()))
+        self.assertFalse(ap.flight_finished(set(), {"0x1"}))
+        self.assertFalse(ap.flight_finished({"0x1"}, {"0x1"}))
+        self.assertTrue(ap.flight_finished({"0x1"}, set()))
+
+    def test_leftover_clients_flags_xclock_and_nameless_overlay_only(self) -> None:
+        clean = "\n".join(line for line in TREE_FIXTURE.splitlines()
+                          if "0x400010" not in line and "0x400011" not in line)
+        self.assertEqual(ap.leftover_clients(ap.parse_tree(clean)), [])
+        self.assertEqual([n["id"] for n in ap.leftover_clients(ap.parse_tree(TREE_FIXTURE))],
+                         ["0x400010", "0x400011"])
+        leftovers = ap.leftover_clients(ap.parse_tree(self.OVERLAY_TREE))
+        self.assertEqual([n["id"] for n in leftovers], ["0x400010", "0x400011", "0x400040"])
+        self.assertEqual([n["id"] for n in ap.leftover_clients(ap.parse_tree(clean.replace(
+            '0x400020 "FlameWM start"', '0x400020 "xclock"')))], ["0x400020"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -827,20 +827,6 @@ def nonblack_bbox(pixels: list[tuple[int, int, int]], width: int, y_limit: int) 
     return (min(xs), ys[0], max(xs), ys[-1]) if xs else None
 
 
-def sample_bright_boxes(s: Session, seconds: float, label: str) -> list:
-    """Bright-pixel (client) bounding boxes above the taskbar over `seconds` of repeated screenshots."""
-    strip_y = s.args.screen_h - TASKBAR_HEIGHT
-    boxes: list = []
-    deadline = time.monotonic() + seconds
-    n = 0
-    while time.monotonic() < deadline:
-        _, px = s.shot(f"{label}-{n}")
-        n += 1
-        if px is not None:
-            boxes.append(nonblack_bbox(px, s.args.screen_w, strip_y))
-    return boxes
-
-
 def grab_flight(s: Session, seconds: float, measure) -> list:
     """measure(img) for each in-process root grab of the strip above the taskbar, one per START_SAMPLE_PERIOD.
 
@@ -861,6 +847,70 @@ def grab_flight(s: Session, seconds: float, measure) -> list:
     return out
 
 
+def overlay_nodes(nodes: list[dict], top_before: set[str]) -> list[dict]:
+    """Transient override-redirect overlays: nameless top-level windows new since `top_before`, not the
+    client's frame, and wider than 1 px (xwininfo helper windows)."""
+    client = find_named(nodes, "xclock")
+    owner = parent_of(nodes, client) if client else None
+    return [n for n in nodes if n.get("parent") is None and n["id"] not in top_before and not n.get("name")
+            and (owner is None or n["id"] != owner["id"]) and n["w"] > 1]
+
+
+def flight_finished(seen_before: set[str], now: set[str]) -> bool:
+    """True once an overlay that was seen earlier is no longer present."""
+    return bool(seen_before) and not now
+
+
+def leftover_clients(nodes: list[dict]) -> list[dict]:
+    """Windows a clean desktop must not have before a measurement: an xclock or a nameless top-level overlay."""
+    return [n for n in nodes if n.get("name") == "xclock"
+            or (n.get("parent") is None and not n.get("name") and n["w"] > 1)]
+
+
+def overlay_observer(s: Session, label: str, top_before: set[str]):
+    """observe() callable for sample_flight: overlay nodes from a fresh X tree each call."""
+    ticks = iter(range(10 ** 9))
+
+    def observe() -> list[dict]:
+        return overlay_nodes(s.tree(f"{label}-{next(ticks)}"), top_before)
+
+    return observe
+
+
+def sample_flight(s: Session, seconds: float, measure, observe=None, done=None) -> tuple[list, list[list[dict]]]:
+    """measure(img) per in-process root grab of the strip above the taskbar, one per START_SAMPLE_PERIOD.
+
+    Stops one grab after either `done(sample)` is true or an overlay reported by observe() has appeared and
+    disappeared, and never later than `seconds`. Returns (samples, overlay nodes per observe tick)."""
+    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
+
+    strip_y = s.args.screen_h - TASKBAR_HEIGHT
+    samples: list = []
+    ticks: list[list[dict]] = []
+    seen: set[str] = set()
+    grab = lamp.RootGrab(s.ctx.display)
+    try:
+        deadline = time.monotonic() + seconds
+        finished = False
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            samples.append(measure(grab.grab(0, 0, s.args.screen_w, strip_y)))
+            if finished:
+                break
+            if done is not None and done(samples[-1]):
+                finished = True
+            if observe is not None:
+                now = observe()
+                ticks.append(now)
+                ids = {n["id"] for n in now}
+                finished = finished or flight_finished(seen, ids)
+                seen |= ids
+            time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
+    finally:
+        grab.close()
+    return samples, ticks
+
+
 def bright_bbox_pil(img) -> tuple[int, int, int, int] | None:
     """PIL form of nonblack_bbox: inclusive (x0, y0, x1, y1) of all-channel >= 200 pixels, or None."""
     from PIL import ImageChops
@@ -874,6 +924,13 @@ def bright_bbox_pil(img) -> tuple[int, int, int, int] | None:
 def flight_bright_boxes(s: Session, seconds: float) -> list:
     """In-process equivalent of sample_bright_boxes: bright bbox per grab."""
     return grab_flight(s, seconds, bright_bbox_pil)
+
+
+def rect_brightness(img, rect: tuple[int, int, int, int]) -> float:
+    """Mean channel value of a PIL image over rect (x0, y0, x1, y1), as grab_samples measures it."""
+    from PIL import ImageStat
+
+    return sum(ImageStat.Stat(img.crop(rect)).mean) / 3
 
 
 def grab_samples(s: Session, seconds: float, rect: tuple[int, int, int, int]) -> list:
@@ -926,23 +983,18 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     s.ctx.stop(s.client)
     s.client = s.ctx.spawn("client-xclock-open", [s.args.client_bin, "-geometry", "300x200+300+200"],
                            s.ctx.app_env)
-    # Screenshots are slower than the 0.25x open flight start, so also poll the cheap X tree for the
-    # transient overlay window (a nameless top-level that does not contain the client).
+    # The open flight starts after Expose (~60-120 ms after map) and lasts ~640 ms at 0.25x, so sample the
+    # in-process root grab until the transient overlay window (nameless, new, not the client frame) has
+    # appeared and gone, rather than a fixed short window; the overlay's own geometry is recorded per tick.
     top_before = {n["id"] for n in s.tree("AP07-open-before") if n.get("parent") is None}
-    transient: set[str] = set()
-    for poll in range(10):
-        nodes = s.tree(f"AP07-open-poll-{poll}")
-        client = find_named(nodes, "xclock")
-        owner = parent_of(nodes, client) if client else None
-        for node in nodes:
-            if (node.get("parent") is None and node["id"] not in top_before and not node.get("name")
-                    and (owner is None or node["id"] != owner["id"]) and node["w"] > 1):
-                transient.add(node["id"])
-    boxes = sample_bright_boxes(s, 2.0, "AP07-open")
-    widths = [width(b) for b in boxes]
+    samples, ticks = sample_flight(s, 3.0, bright_bbox_pil, overlay_observer(s, "AP07-open-tree", top_before))
+    widths = [width(b) for b in samples]
+    transient = {n["id"] for tick in ticks for n in tick}
+    overlay_geoms = [(n["x"], n["y"], n["w"], n["h"]) for tick in ticks for n in tick]
     settled = max(widths) if widths else 0
     smaller = [w for w in widths if 0 < w < settled * 0.9]
-    ev += [f"open_widths={widths}", f"open_transient_windows={sorted(transient)}"]
+    ev += [f"open_widths={widths}", f"open_transient_windows={sorted(transient)}",
+           f"open_overlay_geoms={overlay_geoms}"]
     if settled == 0 or not (smaller or transient):
         fails.append(f"window open did not animate (widths {widths}, transient windows {sorted(transient)})")
     rf, rev = respawn_after_minimize_check(s)
@@ -999,7 +1051,15 @@ def style_matrix_checks(s: Session) -> tuple[list[str], list[str]]:
                 continue
             rest_b = region_brightness(pre, s.args.screen_w, rest)
             s.input(click=click(frame))
-            samples = grab_samples(s, 4.0, rest) if effect == "maximize" else timed_samples(s, tag, 4.0, rest)
+            if effect == "maximize":
+                samples = grab_samples(s, 4.0, rest)
+            elif style == "fade":
+                # The fade is ~1.04 s at 0.25x: sample the in-process grab at native rate until the client has
+                # faded out (bright bbox gone and brightness under 10% of rest), instead of ~0.3 s screenshots.
+                samples, _ = sample_flight(s, 4.0, lambda img: (bright_bbox_pil(img), rect_brightness(img, rest)),
+                                           done=lambda sm: sm[0] is None and sm[1] < 0.1 * rest_b)
+            else:
+                samples = timed_samples(s, tag, 4.0, rest)
             present = [(b, l) for b, l in samples if b is not None]
             widths = [width(b) for b, _ in present]
             rest_w = width(rest)
@@ -1031,17 +1091,25 @@ def style_matrix_checks(s: Session) -> tuple[list[str], list[str]]:
         s.ctx.stop(s.client)
         s.client = s.ctx.spawn("client-xclock-style", [s.args.client_bin, "-geometry", "300x200+300+200"],
                                s.ctx.app_env)
-        samples = timed_samples(s, tag, 4.0, open_rect)
+        # Native grabs at 50 ms: the 0.25x open flight is ~640 ms, while ~0.3-1.3 s screenshots land after it.
+        samples, _ = sample_flight(s, 2.0, lambda img: (bright_bbox_pil(img), rect_brightness(img, open_rect)))
         settled = samples[-1][1] if samples else 0.0
         ev.append(f"{tag}: brightness={[round(l) for _, l in samples]} settled={settled:.0f}")
-        if settled < 50:
-            fails.append(f"{tag}: client never appeared (settled brightness {settled:.0f})")
-        elif style == "fade":
-            if not any(0.1 * settled < l < 0.9 * settled for _, l in samples):
-                fails.append(f"{tag}: no mid-open frame between 10% and 90% of settled brightness")
-        elif any(b is not None and abs(l - settled) > settled * 0.1 for b, l in samples):
-            fails.append(f"{tag}: none showed intermediate brightness")
+        fails += open_style_fails(tag, style, samples)
     return fails, ev
+
+
+def open_style_fails(tag: str, style: str, samples: list) -> list[str]:
+    """Verdict for one window-open series of (bbox, brightness); the settled level is the last sample."""
+    settled = samples[-1][1] if samples else 0.0
+    if settled < 50:
+        return [f"{tag}: client never appeared (settled brightness {settled:.0f})"]
+    if style == "fade":
+        if not any(0.1 * settled < l < 0.9 * settled for _, l in samples):
+            return [f"{tag}: no mid-open frame between 10% and 90% of settled brightness"]
+    elif any(b is not None and abs(l - settled) > settled * 0.1 for b, l in samples):
+        return [f"{tag}: none showed intermediate brightness"]
+    return []
 
 
 RESPAWN_CYCLES = 10
@@ -1112,14 +1180,21 @@ def respawn_after_minimize_check(s: Session) -> tuple[list[str], list[str]]:
 
 
 def ap07(s: Session) -> dict:
-    # Slowed to 0.25x so the ~100 ms screenshots land inside the flight; the measurement is the painted
-    # client pixels (bounding box of non-black content above the taskbar), not an overlay window's size.
+    # The minimize flight is ~1.04 s at 0.25x; in-process root grabs (~50 ms apart) sample it until the
+    # transient overlay has appeared and gone. The measurement is the painted client pixels (bounding box of
+    # bright content above the taskbar), not an overlay window's size.
     if not s.restart({"animationsEnabled": "true", "minimizeAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
                       "surfaceOpacity": "100"}):
         return entry("AP07", FAIL, "WM or shell exited during restart")
     capability = "32-bit ARGB visual" if "depth 32" in subprocess.run(
         ["xdpyinfo", "-display", s.ctx.display], env=s.ctx.host_env, capture_output=True, text=True,
         timeout=20, check=False).stdout else "root-visual fallback (no 32-bit visual reported)"
+    # Clean-desktop precheck: a leftover xclock or overlay from an earlier phase would be measured as the
+    # client, so refuse to measure instead of producing an odd-geometry box0.
+    leftovers = leftover_clients(s.tree("AP07-clean"))
+    if leftovers:
+        return entry("AP07", FAIL, f"desktop not clean before the minimize measurement: {leftovers}")
+    precheck_ev = ["clean_desktop_precheck=passed (no xclock or nameless overlay before spawn)"]
     s.spawn_client()
     _, frame = s.client_frame(s.tree("AP07-frame"))
     client = find_named(s.tree("AP07-client"), "xclock")
@@ -1128,16 +1203,9 @@ def ap07(s: Session) -> dict:
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
     _, pre = s.shot("AP07-pre")
     box0 = nonblack_bbox(pre, s.args.screen_w, strip_y) if pre else None
+    top_before = {n["id"] for n in s.tree("AP07-mid-before") if n.get("parent") is None}
     s.input(click=f"{frame['x'] + frame['w'] - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2},{frame['y'] + 15}")  # Minimize
-    boxes: list = []
-    deadline = time.monotonic() + 3.0
-    n = 0
-    while time.monotonic() < deadline:
-        _, px = s.shot(f"AP07-mid-{n}")
-        s.tree(f"AP07-mid-{n}")
-        n += 1
-        if px is not None:
-            boxes.append(nonblack_bbox(px, s.args.screen_w, strip_y))
+    boxes, _ = sample_flight(s, 3.0, bright_bbox_pil, overlay_observer(s, "AP07-mid-tree", top_before))
     wm_state = subprocess.run(["xwininfo", "-display", s.ctx.display, "-id", client["id"]], env=s.ctx.host_env,
                               capture_output=True, text=True, timeout=20, check=False).stdout
     icon = subprocess.run(["xprop", "-display", s.ctx.display, "-id", client["id"], "_NET_WM_ICON_GEOMETRY"],
@@ -1152,7 +1220,6 @@ def ap07(s: Session) -> dict:
         # The lamp flies toward the icon: mid frames differ from the rest bbox, their centres approach
         # _NET_WM_ICON_GEOMETRY step over step, and the last visible centre is within 60% of the first's
         # distance. The bend itself is proven by scripts/lamp-acceptance (LAMP01-03).
-        mids = [b for b in boxes if b is not None and b != box0]
         centres = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in mids]
         if rect is not None:
             icon_c = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2)
@@ -1187,11 +1254,11 @@ def ap07(s: Session) -> dict:
     style_fails, style_ev = style_matrix_checks(s)
     extra_ev += style_ev
     fails += style_fails
-    ev = [f"capability={capability}", f"rest_bbox={box0}", f"frame_bboxes={boxes}",
-          f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"] + extra_ev
+    ev = precheck_ev + [f"capability={capability}", f"rest_bbox={box0}", f"frame_bboxes={boxes}",
+                        f"map_state={map_state(wm_state)}", f"icon_geometry={rect}"] + extra_ev
     if fails:
-        return entry("AP07", FAIL, "; ".join(fails), ev, ["import -window root polling", "xprop _NET_WM_ICON_GEOMETRY"])
-    return entry("AP07", PASS, "", ev, ["import -window root polling", "xprop _NET_WM_ICON_GEOMETRY"])
+        return entry("AP07", FAIL, "; ".join(fails), ev, ["in-process XGetImage root grab", "xprop _NET_WM_ICON_GEOMETRY"])
+    return entry("AP07", PASS, "", ev, ["in-process XGetImage root grab", "xprop _NET_WM_ICON_GEOMETRY"])
 
 
 def ap08(s: Session) -> dict:
