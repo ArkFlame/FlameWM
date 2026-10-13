@@ -814,9 +814,8 @@ pub fn prewarm_start_tail(
         return;
     };
     let applications = crate::projection::start_visible_results(model, category, query);
-    let (first, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
-    for (position, application) in applications.iter().enumerate().skip(last).take(8) {
-        let _ = position;
+    let (_, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
+    for application in applications.iter().skip(last).take(8) {
         if cached_image(&application.icon_name, 20, 20).is_some() {
             continue;
         }
@@ -827,7 +826,6 @@ pub fn prewarm_start_tail(
             20,
         );
     }
-    let _ = first;
     prewarm_counter().increment();
 }
 
@@ -870,18 +868,15 @@ pub fn project_start_unified(
     let applications = crate::projection::start_visible_results(model, category, query);
     document.visible("start-applications", !applications.is_empty())?;
     let (first, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
+    let window = applications
+        .get(first..last.min(applications.len()))
+        .unwrap_or_default();
     for index in 0..START_APP_SLOT_COUNT {
         let slot = index + 1;
         let button_id = format!("start-app-slot-{slot}");
         let label_id = format!("start-app-slot-{slot}-label");
         let icon_id = format!("start-app-slot-{slot}-icon");
-        if let Some(application) = applications
-            .iter()
-            .enumerate()
-            .filter(|(position, _)| *position >= first && *position < last)
-            .map(|(_, application)| application)
-            .nth(index)
-        {
+        if let Some(application) = window.get(index) {
             document.text(&label_id, application.name.clone())?;
             document.visible(&button_id, true)?;
             document.visible(&icon_id, true)?;
@@ -902,11 +897,7 @@ pub fn project_start_unified(
     }
     let show_session = query.trim().is_empty()
         && category == StartCategory::Power
-        && (session.lock
-            || session.logout
-            || session.suspend
-            || session.reboot
-            || session.shutdown);
+        && crate::projection::session_available(session);
     document.visible("start-group-power", show_session)?;
     document.visible("start-session-lock", show_session && session.lock)?;
     document.visible("start-session-logout", show_session && session.logout)?;

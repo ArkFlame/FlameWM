@@ -1262,6 +1262,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
+    /// The configured accent, falling back to `DEFAULT_ACCENT` when the setting is absent.
+    fn accent(&self) -> Result<UiColor, String> {
+        accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))
+    }
+
     fn text_setting(&self, key: &str) -> Result<String, String> {
         match self
             .client
@@ -1537,18 +1542,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync_animation_styles(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        let accent = self.accent()?;
         for (key, values) in ANIMATION_STYLE_ROWS {
             let Ok(current) = self.text_setting(key) else {
                 continue;
             };
             for value in values {
                 let id = animation_style_node(key, value);
-                if current == *value {
-                    document.background(&id, accent)?;
-                } else {
-                    document.background_clear(&id)?;
-                }
+                highlight_segment(document, &id, current == *value, accent)?;
             }
         }
         Ok(())
@@ -1563,7 +1564,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Ok(path) = self.text_setting("avatarImage") {
             document.text("avatar-value", avatar_label(&path))?;
         }
-        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        let accent = self.accent()?;
         let clock = self.text_setting("lockClockFormat").ok();
         for (value, id) in [("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")] {
             highlight_segment(document, id, clock.as_deref() == Some(value), accent)?;
@@ -1579,7 +1580,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Highlights the segment rows (taskbar layout, clock, cursor size, screensaver mode) and shows
     /// the floating-only taskbar steppers only while `taskbarStyle` is `floating`.
     fn sync_segment_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        let accent = self.accent()?;
         let style = self.text_setting("taskbarStyle").ok();
         for (value, id) in [("classic", "taskbar-style-classic"), ("floating", "taskbar-style-floating")] {
             highlight_segment(document, id, style.as_deref() == Some(value), accent)?;
@@ -1607,7 +1608,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let Ok(current) = self.text_setting("decoration") else {
             return Ok(());
         };
-        let accent = accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))?;
+        let accent = self.accent()?;
         for (value, id) in [("rounded", "decoration-rounded"), ("squared", "decoration-squared")] {
             if current == value {
                 document.background(id, accent)?;
@@ -1966,6 +1967,8 @@ struct ColorPicker {
 
 /// Animation style rows in the Animations card: stable key and the values its segments write.
 /// Each segment's node id is `animation_style_node(key, value)`.
+/// Animation style rows in the Animations card: stable key and the values its segments write.
+/// Each segment's node id is `animation_style_node(key, value)`.
 const ANIMATION_STYLE_ROWS: [(&str, &[&str]); 5] = [
     ("startAnimation", &["none", "slide", "fade", "magic-lamp"]),
     ("minimizeAnimation", &["none", "fade", "magic-lamp"]),
@@ -2265,6 +2268,20 @@ fn parse_theme_action(rest: &str) -> Result<SettingsAction, String> {
     }
 }
 
+/// Parses a numeric action suffix that must be one of `choices`; `label` names the setting in errors.
+fn integer_choice_action(
+    key: &'static str,
+    choices: &[i64],
+    raw: &str,
+    label: &str,
+) -> Result<SettingsAction, String> {
+    raw.parse::<i64>()
+        .ok()
+        .filter(|value| choices.contains(value))
+        .map(|value| SettingsAction::IntegerSelect { key, value })
+        .ok_or_else(|| format!("unknown {label} '{raw}'"))
+}
+
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
 fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if action.starts_with("keyboard.") {
@@ -2416,20 +2433,10 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         }
     }
     if let Some(size) = action.strip_prefix("settings.cursor.size.") {
-        return size
-            .parse::<i64>()
-            .ok()
-            .filter(|value| CURSOR_SIZE_CHOICES.contains(value))
-            .map(|value| SettingsAction::IntegerSelect { key: "cursorSize", value })
-            .ok_or_else(|| format!("unknown cursor size '{size}'"));
+        return integer_choice_action("cursorSize", &CURSOR_SIZE_CHOICES, size, "cursor size");
     }
     if let Some(minutes) = action.strip_prefix("settings.lock.timeout.") {
-        return minutes
-            .parse::<i64>()
-            .ok()
-            .filter(|value| LOCK_TIMEOUT_CHOICES.contains(value))
-            .map(|value| SettingsAction::IntegerSelect { key: "lockTimeoutMinutes", value })
-            .ok_or_else(|| format!("unknown lock timeout '{minutes}'"));
+        return integer_choice_action("lockTimeoutMinutes", &LOCK_TIMEOUT_CHOICES, minutes, "lock timeout");
     }
     match action {
         "settings.lock.clock.24h" => Ok(SettingsAction::TextSelect {

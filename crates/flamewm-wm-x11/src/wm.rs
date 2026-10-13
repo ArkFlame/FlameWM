@@ -2452,14 +2452,15 @@ impl<'a, C: Connection> Wm<'a, C> {
                 continue;
             };
             if attrs.map_state != MapState::UNMAPPED {
-                match self.window_kind(window, attrs.override_redirect)? {
+                let kind = self.window_kind(window, attrs.override_redirect)?;
+                match kind {
                     WindowKind::Popup => {
                         self.conn.map_window(window)?;
                     }
                     WindowKind::Desktop => self.map_unframed(window, StackMode::BELOW)?,
                     WindowKind::Dock => self.map_dock(window)?,
                     WindowKind::Normal | WindowKind::Utility => {
-                        self.manage(window, &geometry, true)?;
+                        self.manage(window, &geometry, true, kind)?;
                     }
                 }
             }
@@ -2563,8 +2564,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         window: Window,
         geometry: &GetGeometryReply,
         adopt: bool,
+        kind: WindowKind,
     ) -> Result<(), ReplyOrIdError> {
-        let kind = self.window_kind(window, false)?;
         if self.clients.contains_key(&window) {
             self.conn.map_window(window)?;
             return Ok(());
@@ -3196,7 +3197,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             WindowKind::Normal | WindowKind::Utility => {}
         }
         let geometry = self.conn.get_geometry(event.window)?.reply()?;
-        self.manage(event.window, &geometry, false)
+        self.manage(event.window, &geometry, false, kind)
     }
 
     fn handle_configure_request(&mut self, event: ConfigureRequestEvent) -> Result<(), ReplyError> {
@@ -3378,10 +3379,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         {
             return Ok(());
         }
-        match self.window_kind(window, false)? {
+        let kind = self.window_kind(window, false)?;
+        match kind {
             WindowKind::Normal | WindowKind::Utility => {
                 let geometry = self.conn.get_geometry(window)?.reply()?;
-                return self.manage(window, &geometry, false);
+                return self.manage(window, &geometry, false, kind);
             }
             _ => {}
         }

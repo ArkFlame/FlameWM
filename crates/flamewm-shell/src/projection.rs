@@ -11,6 +11,7 @@ use crate::taskbar::workspaces::{
     project as project_workspaces, slot_position, visible_page, WorkspaceView, PAGE_SIZE,
 };
 use crate::ShellSnapshot;
+use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
 use flamewm_shell_core::{task_visual_states, StartModel};
 
 mod audio;
@@ -320,16 +321,18 @@ pub fn project_start(
     // Search mode hides the whole category rail (incl. Power) and searches all.
     let searching = !query.trim().is_empty();
     document.visible("start-categories", !searching)?;
+    // A search ignores the category, so one query serves every rail check and the count.
+    let results = start_visible_results(model, category, query);
     for (name, value) in PRESENTATION_CATEGORIES {
-        document.visible(
-            &format!("start-category-{name}"),
-            match value {
-                StartCategory::Power => session_available(session),
-                _ => value == category || !start_visible_results(model, value, query).is_empty(),
-            },
-        )?;
+        let visible = match value {
+            StartCategory::Power => session_available(session),
+            _ if value == category => true,
+            _ if searching => !results.is_empty(),
+            _ => !start_visible_results(model, value, query).is_empty(),
+        };
+        document.visible(&format!("start-category-{name}"), visible)?;
     }
-    let count = start_visible_results(model, category, query).len();
+    let count = results.len();
     document.text(
         "start-search-label",
         if query.trim().is_empty() {
@@ -529,41 +532,23 @@ fn month_name(month: u8) -> &'static str {
 }
 
 #[must_use]
-fn session_available(session: &SessionCapabilities) -> bool {
+pub(crate) fn session_available(session: &SessionCapabilities) -> bool {
     session.lock || session.logout || session.suspend || session.reboot || session.shutdown
 }
 
 fn application_matches_category(application: &DesktopApplication, category: StartCategory) -> bool {
-    if category == StartCategory::All {
-        return true;
-    }
-    let low_level = application
-        .categories
-        .iter()
-        .find_map(|value| match value.to_ascii_lowercase().as_str() {
-            "accessories" | "utility" => Some("utilities"),
-            "development" => Some("development"),
-            "education" => Some("utilities"),
-            "game" | "games" => Some("games"),
-            "graphics" => Some("graphics"),
-            "network" | "internet" => Some("internet"),
-            "audiovideo" | "audio" | "video" | "multimedia" => Some("multimedia"),
-            "office" => Some("utilities"),
-            "science" => Some("utilities"),
-            "settings" | "system" => Some("system"),
-            _ => None,
-        })
-        .unwrap_or("utilities");
-    match category {
-        StartCategory::Development => low_level == "development",
-        StartCategory::Games => low_level == "games",
-        StartCategory::Graphics => low_level == "graphics",
-        StartCategory::Internet => low_level == "internet",
-        StartCategory::Multimedia => low_level == "multimedia",
-        StartCategory::System => low_level == "system",
-        StartCategory::Utilities => low_level == "utilities",
-        StartCategory::Power | StartCategory::All => false,
-    }
+    let bucket = match category {
+        StartCategory::All => return true,
+        StartCategory::Power => return false,
+        StartCategory::Development => StartBucket::Development,
+        StartCategory::Games => StartBucket::Games,
+        StartCategory::Graphics => StartBucket::Graphics,
+        StartCategory::Internet => StartBucket::Internet,
+        StartCategory::Multimedia => StartBucket::Multimedia,
+        StartCategory::System => StartBucket::System,
+        StartCategory::Utilities => StartBucket::Utilities,
+    };
+    bucket_for_application(application) == bucket
 }
 
 fn resolve_icon(
@@ -889,5 +874,78 @@ mod clock_display_tests {
         assert_eq!(defaults.format, ClockFormat::TwentyFour);
         assert!(!defaults.show_seconds);
         assert!(defaults.show_date);
+    }
+}
+
+#[cfg(test)]
+mod start_category_table_tests {
+    use super::*;
+    use flamewm_api::DesktopAppId;
+
+    fn application(categories: &[&str]) -> DesktopApplication {
+        DesktopApplication {
+            id: DesktopAppId::new("org.example.app"),
+            name: "App".to_owned(),
+            generic_name: String::new(),
+            comment: String::new(),
+            startup_wm_class: String::new(),
+            argv: Vec::new(),
+            keywords: Vec::new(),
+            icon_name: String::new(),
+            categories: categories.iter().map(|value| (*value).to_owned()).collect(),
+        }
+    }
+
+    /// Literal oracle: the presentation bucket each application set must land in.
+    /// Unmatched or empty category sets fall to Utilities.
+    const ORACLE: &[(&[&str], StartCategory)] = &[
+        (&["Accessories"], StartCategory::Utilities),
+        (&["utility"], StartCategory::Utilities),
+        (&["Education"], StartCategory::Utilities),
+        (&["Game"], StartCategory::Games),
+        (&["GAMES"], StartCategory::Games),
+        (&["Graphics"], StartCategory::Graphics),
+        (&["Network"], StartCategory::Internet),
+        (&["Internet"], StartCategory::Internet),
+        (&["AudioVideo"], StartCategory::Multimedia),
+        (&["Audio"], StartCategory::Multimedia),
+        (&["Video"], StartCategory::Multimedia),
+        (&["Multimedia"], StartCategory::Multimedia),
+        (&["Development"], StartCategory::Development),
+        (&["Office"], StartCategory::Utilities),
+        (&["Science"], StartCategory::Utilities),
+        (&["Settings"], StartCategory::System),
+        (&["System"], StartCategory::System),
+        (&["Unknown"], StartCategory::Utilities),
+        (&[""], StartCategory::Utilities),
+        (&[], StartCategory::Utilities),
+        (&["Unknown", "Games"], StartCategory::Games),
+        (&["Office", "Games"], StartCategory::Utilities),
+        (&["Unknown", "Development"], StartCategory::Development),
+    ];
+
+    #[test]
+    fn application_matches_category_is_the_oracle_table_for_every_selectable_category() {
+        let rows = [
+            (StartCategory::Development, StartCategory::Development),
+            (StartCategory::Games, StartCategory::Games),
+            (StartCategory::Graphics, StartCategory::Graphics),
+            (StartCategory::Internet, StartCategory::Internet),
+            (StartCategory::Multimedia, StartCategory::Multimedia),
+            (StartCategory::System, StartCategory::System),
+            (StartCategory::Utilities, StartCategory::Utilities),
+        ];
+        for (categories, bucket) in ORACLE {
+            let app = application(categories);
+            for (selected, expected_bucket) in rows {
+                assert_eq!(
+                    application_matches_category(&app, selected),
+                    expected_bucket == *bucket,
+                    "categories {categories:?} vs {selected:?}"
+                );
+            }
+            assert!(application_matches_category(&app, StartCategory::All));
+            assert!(!application_matches_category(&app, StartCategory::Power));
+        }
     }
 }
