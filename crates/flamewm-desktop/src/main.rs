@@ -2277,12 +2277,7 @@ fn place_menu_parts(
     };
     document.position(id, placed.x as f32, placed.y as f32)?;
     document.size(id, placed.width as f32, placed.height as f32)?;
-    // Shape follows the decoration setting (Rounded 12 / Squared 0), same source as shell popups.
-    let rounded = setting_text(&state.settings, "decoration") != "squared";
-    document.corner_radius(
-        id,
-        flamewm_ui_core::context_menu::shape_radius(rounded) as f32,
-    )?;
+    // Fill and decoration shape (Rounded 12 / Squared 0) land together in project_menu_surface.
     projection::project_menu_surface(document, id, &state.settings)?;
     context_open_counter().increment();
     let _present = context_open_present_point().start();

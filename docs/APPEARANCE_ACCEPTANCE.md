@@ -9,7 +9,7 @@ parsing and schema functions; no display is touched).
 | ID | Observation |
 |----|-------------|
 | AP01 | Taskbar strip pixels (bottom 44 px) match `taskbarColor` at `taskbarOpacity=100` (>=50% of pixels). |
-| AP02 | Start popup (`FlameWM start` window) interior matches `startMenuColor`; taskbar strip unchanged. |
+| AP02 | Start popup (`FlameWM start` window) interior matches `surfaceColor` (Start shares the surface pair); taskbar strip unchanged. |
 | AP03 | Accent pixels on the taskbar equal `accent` at `accentOpacity=100`; at 40 they equal the alpha blend. |
 | AP04 | Frame top-left corner is cut in Rounded and not cut when maximized or snapped left; iOS top row differs from the title row. Fullscreen is not driven, so AP04 is never PASS. |
 | AP05 | Titlebar pixel equals `titlebarColor`; close hover equals `#e81123` by default and the custom `titlebarCloseHoverColor`; minimize button unchanged by close hover. |

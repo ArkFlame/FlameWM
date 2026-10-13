@@ -5,7 +5,7 @@ For each popup: click its tray button with XTest, confirm the popup window is ma
 (`xwininfo -id`), then sample its left padding strip in a root screenshot and check the
 menu background:
 - opacity 0: the strip is not one solid colour (frosted wallpaper shows through);
-- opacity 100: every sample equals the menu colour (startMenuColor) within tolerance.
+- opacity 100: every sample equals the menu colour (surfaceColor) within tolerance.
 
 Only the given display is touched; displays :97 and :123-:133 are refused. Pure checks
 (`parse_geometry`, `parse_map_state`, `strip_points`, `check_popup`) are unit tested in
@@ -118,8 +118,8 @@ def parse_point(text: str) -> tuple[int, int]:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--display", required=True)
-    parser.add_argument("--opacity", type=int, required=True, help="startMenuOpacity in effect (0 or 100)")
-    parser.add_argument("--menu-color", required=True, help="startMenuColor as #RRGGBB")
+    parser.add_argument("--opacity", type=int, required=True, help="surfaceOpacity in effect (0 or 100)")
+    parser.add_argument("--menu-color", required=True, help="surfaceColor as #RRGGBB")
     parser.add_argument("--wifi-button", required=True, help="x,y of the tray Wi-Fi icon")
     parser.add_argument("--audio-button", required=True, help="x,y of the tray volume icon")
     parser.add_argument("--calendar-button", required=True, help="x,y of the clock")

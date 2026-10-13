@@ -6,7 +6,7 @@ use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconServic
 use flamewm_integrations_linux::icons::{
     IconKey, IconLookupPurpose, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
-use flamewm_ui_core::context_menu::surface_fill;
+use flamewm_ui_core::context_menu::{shape_radius, surface_fill};
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
@@ -68,7 +68,9 @@ pub const MENU_SURFACE_IDS: [&str; 4] = [
     "desktop-confirm",
 ];
 
-/// Projects `surfaceColor` / `surfaceOpacity` onto one desktop menu root.
+/// Projects `surfaceColor` / `surfaceOpacity` fill and the `decoration` corner radius
+/// (Rounded 12 / Squared 0) onto one desktop menu root. Every menu open, confirm and
+/// live settings sync goes through here, so shape and fill stay in step with the shell.
 pub fn project_menu_surface(
     document: &mut impl UiDocumentAccess,
     id: &str,
@@ -83,7 +85,12 @@ pub fn project_menu_surface(
             b: fill.rgb as u8,
             a: fill.alpha,
         },
-    )
+    )?;
+    let squared = matches!(
+        snapshot.values.get("decoration"),
+        Some(SettingValue::Text(value)) if value == "squared"
+    );
+    document.corner_radius(id, shape_radius(!squared) as f32)
 }
 
 pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -653,6 +660,116 @@ mod tests {
         fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
             self.layers.push((id.to_owned(), layer.z_index()));
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct MenuShapeProbe {
+        corners: Vec<(String, f32)>,
+        fills: Vec<(String, UiColor)>,
+    }
+
+    impl UiDocumentAccess for MenuShapeProbe {
+        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.fills.push((id.to_owned(), color));
+            Ok(())
+        }
+        fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
+            self.corners.push((id.to_owned(), radius_px));
+            Ok(())
+        }
+        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn background_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn border_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn overflow(
+            &mut self,
+            _: &str,
+            _: flamewm_ui_x11::Overflow,
+            _: flamewm_ui_x11::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
+            Ok(())
+        }
+        fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn menu_snapshot(decoration: Option<&str>, opacity: Option<u8>) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        if let Some(value) = decoration {
+            snapshot
+                .values
+                .insert("decoration".into(), SettingValue::Text(value.into()));
+        }
+        if let Some(percent) = opacity {
+            snapshot
+                .values
+                .insert("surfaceOpacity".into(), SettingValue::Percent(percent));
+        }
+        snapshot
+    }
+
+    #[test]
+    fn every_desktop_menu_root_takes_decoration_radius_and_surface_fill() {
+        let snapshot = menu_snapshot(Some("squared"), Some(50));
+        let mut probe = MenuShapeProbe::default();
+        for id in MENU_SURFACE_IDS {
+            project_menu_surface(&mut probe, id, &snapshot).expect("project menu");
+        }
+        assert_eq!(probe.corners.len(), MENU_SURFACE_IDS.len());
+        for (id, radius) in &probe.corners {
+            assert_eq!(*radius, 0.0, "squared decoration must square {id}");
+        }
+        for (id, color) in &probe.fills {
+            assert_eq!(color.a, 127, "surfaceOpacity 50% must reach {id}");
+        }
+    }
+
+    #[test]
+    fn desktop_menu_radius_defaults_to_rounded_twelve() {
+        for snapshot in [menu_snapshot(None, None), menu_snapshot(Some("rounded"), None)] {
+            let mut probe = MenuShapeProbe::default();
+            project_menu_surface(&mut probe, "desktop-menu", &snapshot).expect("project menu");
+            assert_eq!(probe.corners, vec![("desktop-menu".to_owned(), 12.0)]);
         }
     }
 

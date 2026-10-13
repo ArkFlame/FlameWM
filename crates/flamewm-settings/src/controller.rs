@@ -1200,7 +1200,6 @@ mod tests {
             ("settings.screensaver.mode.off", false),
             ("settings.surface-blur.up", true),
             ("settings.surface-blur.sideways", false),
-            ("settings.start-menu-blur.down", true),
             ("settings.taskbar-floating-margin.up", true),
             ("settings.taskbar-floating-radius.down", true),
             ("settings.screensaver-after-lock.up", true),
@@ -1250,13 +1249,6 @@ mod tests {
                 "surfaceOpacity",
                 "surface-opacity-value",
                 2,
-                0,
-            ),
-            (
-                "settings.start-menu-blur.down",
-                "startMenuBlurPercent",
-                "start-menu-blur-value",
-                3,
                 0,
             ),
         ] {
@@ -1924,7 +1916,6 @@ mod tests {
         let mut snapshot = SettingsSnapshot::new(7);
         for key in [
             "surfaceColor",
-            "startMenuColor",
             "titlebarColor",
             "lockBackgroundColor",
             "accent",
@@ -2003,7 +1994,7 @@ mod tests {
         let (mut application, requests) = color_session("#191B1D", 2);
         let mut document = ProbeDocument::default();
         application
-            .handle_action(&release("settings.picker.open.startmenu"), &mut document)
+            .handle_action(&release("settings.picker.open.surface"), &mut document)
             .expect("open picker");
         assert_eq!(document.visible.get("color-picker"), Some(&true));
         // Hue 0 (red) at the darkest shade is #3E0909; greys step from black to white.
@@ -2011,14 +2002,14 @@ mod tests {
             .handle_action(&release("settings.picker.pick.0.5"), &mut document)
             .expect("red cell");
         assert_eq!(
-            last_apply(&requests, "startMenuColor").as_deref(),
+            last_apply(&requests, "surfaceColor").as_deref(),
             Some("#3E0909")
         );
         application
             .handle_action(&release("settings.picker.pick.grey.5"), &mut document)
             .expect("white cell");
         assert_eq!(
-            last_apply(&requests, "startMenuColor").as_deref(),
+            last_apply(&requests, "surfaceColor").as_deref(),
             Some("#FFFFFF")
         );
     }

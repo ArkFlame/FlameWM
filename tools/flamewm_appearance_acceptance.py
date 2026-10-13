@@ -302,8 +302,8 @@ def ap01(s: Session) -> dict:
 
 
 def ap02(s: Session) -> dict:
-    tb, sm = "#336699", "#884422"
-    if not s.restart({"surfaceColor":tb, "surfaceOpacity": "100", "startMenuColor": sm, "startMenuOpacity": "100"}):
+    tb = "#336699"
+    if not s.restart({"surfaceColor":tb, "surfaceOpacity": "100"}):
         return entry("AP02", FAIL, "WM or shell exited during restart")
     _, before = s.shot("AP02-taskbar-before")
     tb_before = dominant_color(s.pixels(before, s.taskbar_rect())) if before else None
@@ -318,10 +318,10 @@ def ap02(s: Session) -> dict:
     inner = (popup["x"] + 6, popup["y"] + 6, popup["w"] - 12, popup["h"] - 12)
     popup_dom = dominant_color(s.pixels(px, inner))
     tb_after = dominant_color(s.pixels(px, s.taskbar_rect()))
-    ok = close_enough(popup_dom, base.accent_rgb(sm), 3) and close_enough(tb_after, tb_before, 2) \
+    ok = close_enough(popup_dom, base.accent_rgb(tb), 3) and close_enough(tb_after, tb_before, 2) \
         and tb_before is not None and close_enough(tb_before, base.accent_rgb(tb), 3)
     return entry("AP02", PASS if ok else FAIL,
-                 "" if ok else f"popup dominant {popup_dom} vs {sm}; taskbar {tb_before} -> {tb_after}",
+                 "" if ok else f"popup dominant {popup_dom} vs {tb}; taskbar {tb_before} -> {tb_after}",
                  [str(path), f"popup={popup}", f"popup_dominant={popup_dom}", f"taskbar_before={tb_before}",
                   f"taskbar_after={tb_after}"], ["xwininfo -root -tree", "import -window root", "XTEST key Super_L"])
 
@@ -674,7 +674,7 @@ def ap05(s: Session) -> dict:
 
 
 def _ap06_slide(s: Session) -> dict:
-    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": "slide-up", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": "slide-up", "taskbarStyle": "classic", "surfaceOpacity": "100"}):
         return entry("AP06", FAIL, "WM or shell exited during restart")
     ys: list[int] = []
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
@@ -712,7 +712,7 @@ def _ap06_slide(s: Session) -> dict:
             res = entry("AP06", FAIL, f"open #{cycle + 1} did not slide (y samples {seen}, rest y {rest_y})",
                         [f"y_samples={ys}", f"repeat_{cycle}={seen}"], ["xwininfo -root -tree polling"])
             break
-    if not s.restart({"animationsEnabled": "false", "startAnimationEnabled": "false", "startAnimation": "slide-up", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "false", "startAnimationEnabled": "false", "startAnimation": "slide-up", "taskbarStyle": "classic", "surfaceOpacity": "100"}):
         return entry("AP06", FAIL, "WM or shell exited during disabled restart")
     ys2: list[int] = []
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
@@ -731,7 +731,7 @@ def _ap06_slide(s: Session) -> dict:
 def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
     """Drag the real Settings animation speed slider to its far end and read animationSpeed back."""
     ev: list[str] = []
-    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "surfaceOpacity": "100", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "surfaceOpacity": "100", "taskbarStyle": "classic"}):
         return ["WM or shell exited before the slider check"], ev
     s.ctx.stop(s.client)  # a leftover client window would sit above Settings and swallow the wheel
     settings = s.ctx.spawn("settings-ap06", [s.args.settings_bin, "--page", "animations"], s.ctx.app_env)
@@ -1560,7 +1560,7 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
     ev: list[str] = []
     tag = f"AP06-{style}"
     if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style, "taskbarStyle": "classic",
-                      "animationSpeed": "25", "surfaceOpacity": "100", "startMenuOpacity": "100"}):
+                      "animationSpeed": "25", "surfaceOpacity": "100"}):
         return [f"{style}: WM or shell exited before the Start style check"], ev
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
     time.sleep(s.args.settle_seconds)
@@ -1706,7 +1706,7 @@ def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[s
     ev: list[str] = []
     tag = f"AP06-above-{style}"
     if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style, "taskbarStyle": "classic",
-                      "animationSpeed": "25", "surfaceOpacity": "100", "startMenuOpacity": "100"}):
+                      "animationSpeed": "25", "surfaceOpacity": "100"}):
         return [f"{style}: WM or shell exited before the stacking check"], ev
     s.ctx.stop(s.client)
     s.client = None
@@ -1865,7 +1865,7 @@ def color_picker_check(s: Session) -> tuple[list, list]:
     """AP04 colour picker: presets, wheel, palette cell and typed hex, read back from the snapshot."""
     ev: list = []
     fails: list = []
-    if not s.restart({"surfaceColor": "#336699", "startMenuColor": "#191B1D", "surfaceOpacity": "100"}):
+    if not s.restart({"surfaceColor": "#336699", "surfaceOpacity": "100"}):
         return ev, ["WM or shell exited before the colour picker check"]
     settings = s.ctx.spawn("settings-ap04-picker", [s.args.settings_bin, "--page", "surfaces"], s.ctx.app_env)
     try:

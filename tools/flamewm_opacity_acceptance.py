@@ -139,10 +139,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--bar-rect", required=True, help="x,y,width,height of the taskbar in device pixels")
     parser.add_argument("--solid", default="25,27,29", help="taskbarColor r,g,b (default #191b1d)")
     parser.add_argument("--start-open-check", action="store_true",
-                        help="click Start and sample app-list pixels (use with startMenuOpacity 0)")
+                        help="click Start and sample app-list pixels (use with surfaceOpacity 0)")
     parser.add_argument("--start-button", default="22,620", help="x,y of the Start button")
     parser.add_argument("--start-sample", default="400,300", help="x,y inside the app list")
-    parser.add_argument("--start-solid", default="25,27,29", help="startMenuColor r,g,b (default #191b1d)")
+    parser.add_argument("--start-solid", default="25,27,29", help="surfaceColor r,g,b (default #191b1d)")
     parser.add_argument("--shell-log", help="shell.log with the FLAMEWM_DEBUG_BACKDROP capture trace; "
                         "its snapshot centre is the exact backdrop reference (blur 0)")
     parser.add_argument("--heights-sweep", action="store_true",

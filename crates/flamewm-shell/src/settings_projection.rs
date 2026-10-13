@@ -22,9 +22,6 @@ const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
-const DEFAULT_START_MENU_COLOR: u32 = 0x191b1d;
-const DEFAULT_START_MENU_OPACITY: u8 = 50;
-const DEFAULT_START_MENU_BLUR_PERCENT: u8 = 80;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;
 const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
 const DEFAULT_FONT_SIZE: f32 = 13.0;
@@ -71,19 +68,18 @@ pub fn project(
             project_start_icon(document, custom_start_icon(snapshot))?;
         }
         SurfaceKind::Start => {
-            // Start keeps its own startMenu* override; popups use the shared surface* pair.
-            document.background(root, menu_background(snapshot))?;
+            // Start shares the surfaceColor/surfaceOpacity pair with the taskbar and popups.
+            document.background(root, surface_background(snapshot))?;
             document.corner_radius(root, popup_corner_radius(snapshot))?;
-            let opacity = percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
-            // The search field fill follows the same alpha as the menu root so every Start layer
-            // (category column, app list, search, footer) fades together.
+            // Opaque interior token: the menu root already carries the surface alpha, so the
+            // search field must not apply surfaceOpacity a second time.
             document.background(
                 "start-search-box",
                 UiColor {
                     r: 0x14,
                     g: 0x16,
                     b: 0x18,
-                    a: opacity_alpha(opacity),
+                    a: 0xff,
                 },
             )?;
             // No accent outline: the menu's rounded panes cover the border on three sides, so an
@@ -97,8 +93,7 @@ pub fn project(
 }
 
 /// Shared surface background for the audio, Wi-Fi and calendar popups: the `surfaceColor` /
-/// `surfaceOpacity` pair on the popup root. Layers inside stay transparent. Start keeps its own
-/// `startMenu*` override via [`menu_background`].
+/// `surfaceOpacity` pair on the popup root. Layers inside stay transparent.
 pub fn project_menu_background(
     document: &mut impl UiDocumentAccess,
     snapshot: &SettingsSnapshot,
@@ -114,14 +109,9 @@ pub fn popup_corner_radius(snapshot: &SettingsSnapshot) -> f32 {
     shape_radius(rounded) as f32
 }
 
-/// Start menu background colour with the `startMenuOpacity` alpha.
+/// Start menu background colour: the shared surface pair, same as [`surface_background`].
 pub fn menu_background(snapshot: &SettingsSnapshot) -> UiColor {
-    let color = color_setting(snapshot, "startMenuColor", DEFAULT_START_MENU_COLOR);
-    let opacity = percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY);
-    UiColor {
-        a: opacity_alpha(opacity),
-        ..color
-    }
+    surface_background(snapshot)
 }
 
 /// Shared surface colour with the `surfaceOpacity` alpha (taskbar, popups, desktop menus).
@@ -291,15 +281,12 @@ pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     )
 }
 
-/// Start popup `(opacity, blur)` percents for its pseudo-transparency backdrop.
+/// Start popup `(opacity, blur)` percents for its pseudo-transparency backdrop: the shared
+/// `surfaceOpacity` / `surfaceBlurPercent` pair.
 pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
     (
-        percent_setting(snapshot, "startMenuOpacity", DEFAULT_START_MENU_OPACITY),
-        percent_setting(
-            snapshot,
-            "startMenuBlurPercent",
-            DEFAULT_START_MENU_BLUR_PERCENT,
-        ),
+        percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
+        percent_setting(snapshot, "surfaceBlurPercent", DEFAULT_SURFACE_BLUR_PERCENT),
     )
 }
 
@@ -427,12 +414,12 @@ mod tests {
     fn start_projection_applies_background_and_accent_tokens() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
-            "startMenuColor".to_owned(),
+            "surfaceColor".to_owned(),
             SettingValue::Text("#102030".to_owned()),
         );
         snapshot
             .values
-            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(50));
         snapshot.values.insert(
             "accent".to_owned(),
             SettingValue::Text("#00ff00".to_owned()),
@@ -465,15 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn start_projection_fades_search_field_with_menu_opacity() {
+    fn start_projection_search_field_does_not_reapply_surface_opacity() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
-            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(0));
         let mut doc = RecordingDocument::default();
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
         assert_eq!(doc.backgrounds["start-menu"].a, 0);
-        assert_eq!(doc.backgrounds["start-search-box"].a, 0);
+        assert_eq!(doc.backgrounds["start-search-box"].a, 255);
     }
 
     #[test]
@@ -570,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn popup_projection_uses_surface_pair_while_start_keeps_startmenu_pair() {
+    fn start_and_popups_share_surface_pair_and_ignore_legacy_startmenu_keys() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
             "surfaceColor".to_owned(),
@@ -598,15 +585,7 @@ mod tests {
             }
         );
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start");
-        assert_eq!(
-            doc.backgrounds["start-menu"],
-            UiColor {
-                r: 0x10,
-                g: 0x20,
-                b: 0x30,
-                a: 229
-            }
-        );
+        assert_eq!(doc.backgrounds["start-menu"], doc.backgrounds["audio-popup"]);
     }
 
     #[test]
@@ -705,15 +684,22 @@ mod tests {
         let mut snapshot = SettingsSnapshot::new(1);
         assert_eq!(
             start_backdrop_percents(&snapshot),
-            (DEFAULT_START_MENU_OPACITY, DEFAULT_START_MENU_BLUR_PERCENT)
+            (DEFAULT_SURFACE_OPACITY, DEFAULT_SURFACE_BLUR_PERCENT)
         );
         snapshot
             .values
-            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(50));
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(50));
         snapshot
             .values
-            .insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
+            .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(30));
         assert_eq!(start_backdrop_percents(&snapshot), (50, 30));
+        snapshot
+            .values
+            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+        snapshot
+            .values
+            .insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(0));
+        assert_eq!(start_backdrop_percents(&snapshot), (50, 30), "legacy startMenu* keys are inert");
     }
 
     fn snapshot_with(key: &str, value: &str) -> SettingsSnapshot {
@@ -777,17 +763,6 @@ mod tests {
             .insert("accentOpacity".to_owned(), SettingValue::Percent(100));
         assert_eq!(accent_color(&snapshot).a, 255);
         assert_eq!(accent_color(&SettingsSnapshot::new(1)).a, 255);
-    }
-
-    #[test]
-    fn start_menu_color_and_opacity_fall_back_when_invalid() {
-        let color = color_setting(
-            &snapshot_with("startMenuColor", "not-a-color"),
-            "startMenuColor",
-            DEFAULT_START_MENU_COLOR,
-        );
-        assert_eq!((color.r, color.g, color.b), (0x19, 0x1b, 0x1d));
-        assert_eq!(opacity_alpha(DEFAULT_START_MENU_OPACITY), 127);
     }
 
     #[test]

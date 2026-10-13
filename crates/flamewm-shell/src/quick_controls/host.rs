@@ -1802,12 +1802,12 @@ mod tests {
         let mut changed = SettingsSnapshot::new(1);
         changed
             .values
-            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(0));
         changed
             .values
-            .insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
+            .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(30));
         changed.values.insert(
-            "startMenuColor".to_owned(),
+            "surfaceColor".to_owned(),
             SettingValue::Text("#102030".to_owned()),
         );
         snapshot.store_settings(changed);

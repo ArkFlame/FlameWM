@@ -1449,8 +1449,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.sync_color_rows(document)?;
         self.sync_color_picker(document)?;
         for (key, id) in [
-            ("startMenuOpacity", "start-menu-opacity-value"),
-            ("startMenuBlurPercent", "start-menu-blur-value"),
             ("surfaceBlurPercent", "surface-blur-value"),
             ("accentOpacity", "accent-opacity-value"),
         ] {
@@ -1893,9 +1891,8 @@ fn step(value: &str) -> Option<i8> {
 }
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-const COLOR_TARGETS: [(&str, &str); 5] = [
+const COLOR_TARGETS: [(&str, &str); 4] = [
     ("surface", "surfaceColor"),
-    ("startmenu", "startMenuColor"),
     ("accent", "accent"),
     ("titlebar", "titlebarColor"),
     ("lockbackground", "lockBackgroundColor"),
@@ -1965,8 +1962,6 @@ struct ColorPicker {
     error: Option<String>,
 }
 
-/// Animation style rows in the Animations card: stable key and the values its segments write.
-/// Each segment's node id is `animation_style_node(key, value)`.
 /// Animation style rows in the Animations card: stable key and the values its segments write.
 /// Each segment's node id is `animation_style_node(key, value)`.
 const ANIMATION_STYLE_ROWS: [(&str, &[&str]); 5] = [
@@ -2333,17 +2328,11 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(rest) = action.strip_prefix("settings.picker.") {
         return parse_color_picker(rest);
     }
-    if let Some(direction) = action.strip_prefix("settings.start-menu-opacity.").and_then(step) {
-        return Ok(SettingsAction::PercentStep("startMenuOpacity", direction));
-    }
     if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
     }
     if let Some(direction) = action.strip_prefix("settings.surface-opacity.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceOpacity", direction));
-    }
-    if let Some(direction) = action.strip_prefix("settings.start-menu-blur.").and_then(step) {
-        return Ok(SettingsAction::PercentStep("startMenuBlurPercent", direction));
     }
     if let Some((slug, direction)) = action
         .strip_prefix("settings.")
@@ -2769,10 +2758,7 @@ mod value_text_tests {
 
     #[test]
     fn appearance_actions_parse_to_their_exact_typed_targets() {
-        assert!(matches!(
-            parse_action("settings.start-menu-opacity.up"),
-            Ok(SettingsAction::PercentStep("startMenuOpacity", 1))
-        ));
+        assert!(parse_action("settings.start-menu-opacity.up").is_err());
         assert!(matches!(
             parse_action("settings.accent-opacity.down"),
             Ok(SettingsAction::PercentStep("accentOpacity", -1))
@@ -2883,10 +2869,7 @@ mod value_text_tests {
         ));
         assert!(parse_action("settings.taskbar-blur.up").is_err());
         assert!(parse_action("settings.taskbar-opacity.up").is_err());
-        assert!(matches!(
-            parse_action("settings.start-menu-blur.down"),
-            Ok(SettingsAction::PercentStep("startMenuBlurPercent", -1))
-        ));
+        assert!(parse_action("settings.start-menu-blur.down").is_err());
         assert!(matches!(
             parse_action("settings.taskbar-floating-margin.up"),
             Ok(SettingsAction::IntegerStep { key: "taskbarFloatingMargin", delta: 1, minimum: 0, maximum: 32 })

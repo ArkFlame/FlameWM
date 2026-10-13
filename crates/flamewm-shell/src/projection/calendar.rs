@@ -1,26 +1,27 @@
 use super::*;
 
+// Today: neutral translucent white circle on its marker (or Months/Years tile). Selected: opaque
+// neutral gray rounded tile on the cell, so both can show together and stay distinguishable.
+const TODAY_NEUTRAL: UiColor = UiColor {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 56,
+};
+const SELECTED_TILE: UiColor = UiColor {
+    r: 64,
+    g: 68,
+    b: 72,
+    a: 255,
+};
+
 pub fn project_calendar(
     document: &mut impl UiDocumentAccess,
     state: &crate::calendar::CalendarState,
     today: (i32, u8, u8),
 ) -> Result<(), String> {
-    // Today: Flame accent (90% alpha) circle on its marker (or Months/Years tile). Selected:
-    // neutral rounded gray tile on the cell, so both can show together.
     // Adjacent-month cells render dim (cleared marker foreground).
     use crate::calendar::{year_page_start, CalendarView};
-    const TODAY_ACCENT_90: UiColor = UiColor {
-        r: 239,
-        g: 64,
-        b: 72,
-        a: 230,
-    };
-    const SELECTED_TILE: UiColor = UiColor {
-        r: 64,
-        g: 68,
-        b: 72,
-        a: 255,
-    };
     const ADJACENT_FG: UiColor = UiColor {
         r: 98,
         g: 104,
@@ -69,7 +70,7 @@ pub fn project_calendar(
                 }
                 let is_today = cell.today && cell.year == grid.year && cell.month == grid.month;
                 if is_today {
-                    document.background(&marker, TODAY_ACCENT_90)?;
+                    document.background(&marker, TODAY_NEUTRAL)?;
                 } else {
                     document.background_clear(&marker)?;
                 }
@@ -86,7 +87,7 @@ pub fn project_calendar(
                 document.text(&id, month_name(month).to_owned())?;
                 document.foreground(&id, CURRENT_FG)?;
                 if state.year == today.0 && month == today.1 {
-                    document.background(&id, TODAY_ACCENT_90)?;
+                    document.background(&id, TODAY_NEUTRAL)?;
                 } else if month == state.month {
                     document.background(&id, SELECTED_TILE)?;
                 } else {
@@ -102,7 +103,7 @@ pub fn project_calendar(
                 document.text(&id, year.to_string())?;
                 document.foreground(&id, CURRENT_FG)?;
                 if year == today.0 {
-                    document.background(&id, TODAY_ACCENT_90)?;
+                    document.background(&id, TODAY_NEUTRAL)?;
                 } else if year == state.year {
                     document.background(&id, SELECTED_TILE)?;
                 } else {
@@ -118,6 +119,14 @@ pub fn project_calendar(
 mod calendar_tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Flame accent red (#ef4048 family) that must not appear in any calendar projection.
+    const FLAME_RED: UiColor = UiColor {
+        r: 239,
+        g: 64,
+        b: 72,
+        a: 230,
+    };
 
     #[test]
     fn taskbar_css_height_follows_logical_size_with_44_default() {
@@ -203,20 +212,15 @@ mod calendar_tests {
         }
     }
 
-    const SELECTED_TILE: UiColor = UiColor {
-        r: 64,
-        g: 68,
-        b: 72,
-        a: 255,
-    };
-
-    // Flame ACCENT (#ef4048) at 90% alpha (230/255) for the today marker.
-    const TODAY_ACCENT_90: UiColor = UiColor {
-        r: 239,
-        g: 64,
-        b: 72,
-        a: 230,
-    };
+    /// Every color the projection wrote, across backgrounds and foregrounds.
+    fn all_colors(document: &FakeDocument) -> Vec<UiColor> {
+        document
+            .backgrounds
+            .values()
+            .chain(document.foregrounds.values())
+            .copied()
+            .collect()
+    }
 
     /// CSS rule body for a `#clock-popup .<class>` selector in calendar.html.
     fn css_rule(class: &str) -> &'static str {
@@ -241,7 +245,7 @@ mod calendar_tests {
     }
 
     #[test]
-    fn today_marker_is_accent_ninety_percent_fill() {
+    fn today_marker_is_neutral_translucent_fill() {
         let today = (2026, 9, 7);
         let state = crate::calendar::CalendarState::for_today(today);
         let grid = state.grid(today).expect("valid grid");
@@ -253,7 +257,50 @@ mod calendar_tests {
         let mut document = FakeDocument::default();
         project_calendar(&mut document, &state, today).expect("projection succeeds");
         let marker = format!("calendar-day-{}-marker", today_index + 1);
-        assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_ACCENT_90));
+        assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
+        assert_eq!(TODAY_NEUTRAL.r, TODAY_NEUTRAL.g);
+        assert_eq!(TODAY_NEUTRAL.g, TODAY_NEUTRAL.b);
+        assert!(TODAY_NEUTRAL.a < 255, "today fill is translucent, not solid");
+    }
+
+    #[test]
+    fn no_flame_red_in_any_calendar_view() {
+        let today = (2026, 10, 13);
+        for view in ["calendar.view.days", "calendar.view.months", "calendar.view.years"] {
+            let mut state = crate::calendar::CalendarState::for_today(today);
+            state.apply(view, today);
+            let mut document = FakeDocument::default();
+            project_calendar(&mut document, &state, today).expect("projection succeeds");
+            let colors = all_colors(&document);
+            assert!(!colors.is_empty(), "{view} projects colors");
+            assert!(
+                !colors.contains(&FLAME_RED),
+                "{view} must not project Flame red"
+            );
+            assert!(
+                colors.iter().all(|c| !(c.r > 200 && c.g < 100)),
+                "{view} must not project any red-dominant color"
+            );
+        }
+    }
+
+    #[test]
+    fn today_and_selected_are_distinct_in_days_months_years() {
+        let today = (2026, 10, 13);
+        for view in ["calendar.view.months", "calendar.view.years"] {
+            let mut state = crate::calendar::CalendarState::for_today(today);
+            state.apply(view, today);
+            let mut document = FakeDocument::default();
+            project_calendar(&mut document, &state, today).expect("projection succeeds");
+            let today_fill = if view == "calendar.view.months" {
+                document.backgrounds.get("calendar-pick-month-10")
+            } else {
+                let slot = today.0 - crate::calendar::year_page_start(today.0) + 1;
+                document.backgrounds.get(&format!("calendar-pick-year-{slot}"))
+            };
+            assert!(today_fill.is_some(), "{view} marks today");
+            assert_ne!(today_fill, Some(&SELECTED_TILE));
+        }
     }
 
     #[test]
@@ -274,11 +321,11 @@ mod calendar_tests {
             css_px(tile, "border-radius"),
             "today circle is not the selected rounded tile",
         );
-        assert_ne!(TODAY_ACCENT_90, SELECTED_TILE);
+        assert_ne!(TODAY_NEUTRAL, SELECTED_TILE);
     }
 
     #[test]
-    fn today_marker_and_selected_tile_show_together() {
+    fn today_marker_and_selected_tile_show_together_without_red() {
         let today = (2026, 9, 7);
         let state = crate::calendar::CalendarState::for_today(today);
         let grid = state.grid(today).expect("valid grid");
@@ -291,12 +338,12 @@ mod calendar_tests {
         project_calendar(&mut document, &state, today).expect("projection succeeds");
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         let tile = format!("calendar-day-{}", today_index + 1);
-        assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_ACCENT_90));
+        assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
         assert_eq!(document.backgrounds.get(&tile), Some(&SELECTED_TILE));
         let red_markers = document
             .backgrounds
             .iter()
-            .filter(|(id, color)| id.ends_with("-marker") && **color == TODAY_ACCENT_90)
+            .filter(|(id, color)| id.ends_with("-marker") && **color == TODAY_NEUTRAL)
             .count();
         assert_eq!(red_markers, 1, "exactly one today marker");
         for (index, cell) in grid.cells.iter().enumerate() {
@@ -342,7 +389,7 @@ mod calendar_tests {
         );
         assert_eq!(
             document.backgrounds.get("calendar-day-9-marker"),
-            Some(&TODAY_ACCENT_90),
+            Some(&TODAY_NEUTRAL),
         );
         assert_eq!(
             document.backgrounds.get("calendar-day-9"),
@@ -351,7 +398,7 @@ mod calendar_tests {
     }
 
     #[test]
-    fn months_view_marks_current_month_in_accent() {
+    fn months_view_marks_current_month_neutral() {
         let today = (2026, 10, 13);
         let mut state = crate::calendar::CalendarState::for_today(today);
         state.apply("calendar.view.months", today);
@@ -366,7 +413,7 @@ mod calendar_tests {
         );
         assert_eq!(
             document.backgrounds.get("calendar-pick-month-10"),
-            Some(&TODAY_ACCENT_90),
+            Some(&TODAY_NEUTRAL),
         );
     }
 }
