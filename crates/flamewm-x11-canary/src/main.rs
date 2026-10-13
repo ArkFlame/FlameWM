@@ -528,7 +528,7 @@ fn usage() -> ! {
            j13 [--scenario ws-latency|task-activate|status-popup|black-frame|resize-cursors|fixed-size|motif-initial|motif-late|title-maximize|sticky-create|multi-resolution|all] [--json]\n  \
           j06 [--scenario postreg-calendar-300|postreg-start-single-surface|postreg-start-app-click|postreg-desktop-icon-wake|postreg-filemanager-map-latency|postreg-title-centered|postreg-resize-8|postreg-fixed-size|postreg-pixmap-ledger|all] [--json]\n  \
           interaction-perf [--cycles <n>] [--json]
-          j07 [--scenario popup|move|resize|chrome|max-snap|workspaces|retention|all] [--json] [--name <substr>] [--window <id>] [--source <substr>] [--repeats <n>] [--run a|b --digest-of <hex> --digest <path>] [--cycles <n>]"
+          j07 [--scenario popup|move|resize|chrome|max-snap|workspaces|retention|snap-border|s1|s2|s3|s4|all] [--json] [--name <substr>] [--window <id>] [--source <substr>] [--repeats <n>] [--run a|b --digest-of <hex> --digest <path>] [--cycles <n>]"
     );
     std::process::exit(2);
 }

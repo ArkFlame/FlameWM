@@ -10,6 +10,7 @@ pub mod debug_retention;
 pub mod interaction_regressions;
 pub mod popup_lifecycle;
 pub mod reactor_presentation;
+pub mod snap_border;
 pub mod t15_t18;
 pub mod window_chrome;
 pub mod window_interaction;
@@ -290,9 +291,25 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         let (pass, detail) = reactor_presentation::run(canary, args);
         results.push(run("t18-t20-reactor-presentation-admission", pass, detail));
     }
+    if scenario == "snap-border" || scenario == "s1" {
+        let (pass, detail) = snap_border::run_s1(canary, args);
+        results.push(run("s1-physical-corner-quarters", pass, detail));
+    }
+    if scenario == "snap-border" || scenario == "s2" {
+        let (pass, detail) = snap_border::run_s2(canary, args);
+        results.push(run("s2-snapped-border-zero", pass, detail));
+    }
+    if scenario == "snap-border" || scenario == "s3" {
+        let (pass, detail) = snap_border::run_s3(canary, args);
+        results.push(run("s3-frame-extents-per-mode", pass, detail));
+    }
+    if scenario == "snap-border" || scenario == "s4" {
+        let (pass, detail) = snap_border::run_s4(canary, args);
+        results.push(run("s4-fixed-hints-client-stable", pass, detail));
+    }
     if results.is_empty() {
         crate::fail(
-            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|xtest-self-check|all)",
+            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|snap-border|s1|s2|s3|s4|xtest-self-check|all)",
         );
     }
     let pass = results.iter().all(|(_, ok, _)| *ok);
