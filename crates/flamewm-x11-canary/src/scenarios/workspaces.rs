@@ -522,7 +522,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 /// visibility (viewable on current or sticky-listed), then restore.
 pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(cur_atom) = canary.intern("_NET_CURRENT_DESKTOP") else {
-        return (false, "no EWMH workspaces path=real-pointer".to_owned());
+        return (false, "no EWMH workspaces path=ewmh-client-message".to_owned());
     };
     let num: u32 = canary
         .prop_u32(canary.root, "_NET_NUMBER_OF_DESKTOPS")
@@ -530,7 +530,7 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .copied()
         .unwrap_or(1);
     if num < 2 {
-        return (false, format!("single desktop num={num} path=real-pointer"));
+        return (false, format!("single desktop num={num} path=ewmh-client-message"));
     }
     let cycles: u32 = crate::arg(args, "--cycles")
         .and_then(|v| v.parse().ok())
@@ -600,7 +600,7 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     (
         pass,
         format!(
-            "desktops={num} legs={legs}/{cycles} visible={visible} restored={orig} path=real-pointer"
+            "desktops={num} legs={legs}/{cycles} visible={visible} restored={orig} path=ewmh-client-message"
         ),
     )
 }

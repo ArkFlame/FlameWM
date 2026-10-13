@@ -1679,6 +1679,15 @@ mod tests {
     }
 
     #[test]
+    fn stage_labels_pass_shell_span_allow_list() {
+        // Every label the open/close turns actually pass to shell_span must
+        // be in its debug allow-list; an unlisted label panics the helper.
+        for label in QUICK_STAGE_LABELS {
+            let _span = crate::runtime::shell_span(label);
+        }
+    }
+
+    #[test]
     fn slow_open_gate_and_stage_render_are_pure() {
         assert!(!is_slow_open(Duration::from_micros(16_669)));
         assert!(is_slow_open(Duration::from_micros(16_670)));

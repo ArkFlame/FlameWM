@@ -70,10 +70,8 @@ pub fn project_audio_full(
             &format!("audio-slot-{n}-value"),
             format!("{}%", row.volume_percent),
         )?;
-        document.text(
-            &format!("audio-slot-{n}-mute"),
-            if row.muted { "Unmute" } else { "Mute" }.to_owned(),
-        )?;
+        document.visible(&format!("audio-slot-{n}-mute-icon-on"), row.muted)?;
+        document.visible(&format!("audio-slot-{n}-mute-icon-off"), !row.muted)?;
         document.size(
             &format!("audio-slot-{n}-fill"),
             crate::taskbar::status::audio::AUDIO_TRACK_WIDTH * shown / spec.max,
@@ -240,8 +238,10 @@ mod audio_template_tests {
         assert_eq!(recorded.widths.get("audio-slot-1-fill"), Some(&350.0));
         assert_eq!(text(&recorded, "audio-slot-2-value"), "40%");
         assert_eq!(recorded.widths.get("audio-slot-2-fill"), Some(&140.0));
-        assert_eq!(text(&recorded, "audio-slot-2-mute"), "Unmute");
-        assert_eq!(text(&recorded, "audio-slot-1-mute"), "Mute");
+        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-on"), Some(&true));
+        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-off"), Some(&false));
+        assert_eq!(recorded.visible.get("audio-slot-1-mute-icon-on"), Some(&false));
+        assert_eq!(recorded.visible.get("audio-slot-1-mute-icon-off"), Some(&true));
         assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&false));
         // Output rows keep the volume icon; the source (microphone) row swaps to the input icon.
         assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&true));
@@ -274,7 +274,8 @@ mod audio_template_tests {
         let recorded = fixture(AudioTab::Applications, false);
         assert_eq!(text(&recorded, "audio-slot-1-label"), "Firefox");
         assert_eq!(text(&recorded, "audio-slot-2-label"), "Spotify");
-        assert_eq!(text(&recorded, "audio-slot-2-mute"), "Unmute");
+        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-on"), Some(&true));
+        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-off"), Some(&false));
         assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&true));
         assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&false));
         assert_eq!(recorded.visible.get("audio-slot-3"), Some(&false));

@@ -21,7 +21,8 @@
     .audio-track { position:absolute; left:58px; top:34px; width:350px; height:6px; background:#42474b; border-radius:3px; }
     .audio-track-fill { position:absolute; left:0px; top:0px; width:0px; height:6px; background:var(--accent); border-radius:3px; }
     .audio-row-value { position:absolute; left:414px; top:28px; width:40px; font-size:12px; color:var(--text); }
-    .audio-mute { position:absolute; left:58px; top:48px; width:64px; height:22px; background:#333436; border-width:0px; border-radius:6px; color:var(--text); font-size:12px; }
+    .audio-mute { position:absolute; left:58px; top:48px; width:28px; height:28px; padding:0px; background:#333436; border-width:0px; border-radius:6px; }
+    .audio-mute .symbolic-icon { position:absolute; left:6px; top:6px; width:16px; height:16px; }
     .audio-separator { position:absolute; left:14px; right:14px; bottom:0px; height:1px; background:#42474b; }
     .audio-empty { position:absolute; left:58px; top:24px; font-size:12px; color:var(--text); }
     .audio-footer { position:relative; height:32px; display:flex; flex-direction:row; align-items:center; padding:0px 14px; }
@@ -51,7 +52,7 @@
         <img id="audio-slot-1-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
         <div id="audio-slot-1-track" class="audio-track" data-action="audio.slot.1.set"><div id="audio-slot-1-fill" class="audio-track-fill"></div></div>
         <span id="audio-slot-1-value" class="audio-row-value">&#8203;</span>
-        <button id="audio-slot-1-mute" class="audio-mute" data-action="audio.slot.1.mute">Mute</button>
+        <button id="audio-slot-1-mute" class="audio-mute" data-action="audio.slot.1.mute" aria-label="Mute"><img id="audio-slot-1-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-1-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
       </div>
       <div id="audio-slot-2" class="audio-group">
@@ -61,7 +62,7 @@
         <img id="audio-slot-2-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
         <div id="audio-slot-2-track" class="audio-track" data-action="audio.slot.2.set"><div id="audio-slot-2-fill" class="audio-track-fill"></div></div>
         <span id="audio-slot-2-value" class="audio-row-value">&#8203;</span>
-        <button id="audio-slot-2-mute" class="audio-mute" data-action="audio.slot.2.mute">Mute</button>
+        <button id="audio-slot-2-mute" class="audio-mute" data-action="audio.slot.2.mute" aria-label="Mute"><img id="audio-slot-2-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-2-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
       </div>
       <div id="audio-slot-3" class="audio-group">
@@ -71,7 +72,7 @@
         <img id="audio-slot-3-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
         <div id="audio-slot-3-track" class="audio-track" data-action="audio.slot.3.set"><div id="audio-slot-3-fill" class="audio-track-fill"></div></div>
         <span id="audio-slot-3-value" class="audio-row-value">&#8203;</span>
-        <button id="audio-slot-3-mute" class="audio-mute" data-action="audio.slot.3.mute">Mute</button>
+        <button id="audio-slot-3-mute" class="audio-mute" data-action="audio.slot.3.mute" aria-label="Mute"><img id="audio-slot-3-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-3-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
       </div>
       <div id="audio-slot-4" class="audio-group">
@@ -81,7 +82,7 @@
         <img id="audio-slot-4-icon-app" class="symbolic-icon audio-row-icon" src="assets/breeze/applications-multimedia.svg">
         <div id="audio-slot-4-track" class="audio-track" data-action="audio.slot.4.set"><div id="audio-slot-4-fill" class="audio-track-fill"></div></div>
         <span id="audio-slot-4-value" class="audio-row-value">&#8203;</span>
-        <button id="audio-slot-4-mute" class="audio-mute" data-action="audio.slot.4.mute">Mute</button>
+        <button id="audio-slot-4-mute" class="audio-mute" data-action="audio.slot.4.mute" aria-label="Mute"><img id="audio-slot-4-mute-icon-off" class="symbolic-icon" src="assets/breeze/audio-volume-high.svg"><img id="audio-slot-4-mute-icon-on" class="symbolic-icon" src="assets/breeze/audio-volume-muted.svg"></button>
         <div class="audio-separator"></div>
       </div>
     </div>
