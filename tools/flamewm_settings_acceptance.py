@@ -547,15 +547,14 @@ def assess_ss12(observations: dict[str, bool | None]) -> tuple[str, str]:
 
 
 def assess_ss03(observations: dict[str, bool | None]) -> tuple[str, str]:
-    required = ("blue_snapshot", "teal_snapshot", "reset_snapshot", "selected_visuals",
-                "reset_persisted_after_restart")
+    required = ("blue_snapshot", "teal_snapshot", "selected_visuals", "reset_persisted_after_restart")
     failed = [key for key in required if observations.get(key) is False]
     if failed:
         return STATUS_FAIL, "measured accent contract failure: " + ", ".join(failed)
     missing = [key for key in required if observations.get(key) is not True]
     if missing:
         return STATUS_NOT_RUN, "partial accent evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "multiple palette choices, reset, visible selection and persisted value verified"
+    return STATUS_PASS, "palette choices, visible selection and persisted value verified"
 
 
 def ss05_wallpaper_matches_fixture(value: str | None, fixture: Path, run: Path) -> bool:
@@ -1322,9 +1321,12 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Exercise palette clicks, reset, selected visuals and private-state restart."""
     # Palette order is red, blue, purple, teal, then the colour-picker wheel (ui/settings.html);
     # the wheel moved to the fifth slot, so the old 685/762 points hit purple and the wheel.
+    # Accent row order (ui/settings.html, Theme page): red 610, blue 648, purple 686, teal 724, then the wheel.
+    # The Accent preset Reset was removed (settings.accent.reset is rejected), so the last palette choice
+    # is the value that must persist across a WM restart.
     choices = (("blue", "#3DAEE9", (648, 151)), ("teal", "#1ABC9C", (724, 151)))
     observations: dict[str, bool | None] = {
-        "blue_snapshot": None, "teal_snapshot": None, "reset_snapshot": None,
+        "blue_snapshot": None, "teal_snapshot": None,
         "selected_visuals": None, "reset_persisted_after_restart": None,
     }
     details: dict = {"observations": observations, "actions": [], "commands": [],
@@ -1395,50 +1397,31 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
         details["navigation_click_diagnostic"] = ss03_nav_click_diagnostic(ctx, geometry, ctx.run)
         details.setdefault("evidence", []).extend(str(ctx.run / "shots" / f"ss03-nav-diagnostic-{page}.png")
             for page in ("appearance_before", "desktop", "appearance_after"))
-    reset_point = (733, 203)
-    reset_click = settings_relative_point(ctx, geometry, reset_point)
-    reset_code, reset_command = send_input(ctx, reset_click, None)
-    details["commands"].append(reset_command)
-    details["actions"].append({"action": "reset", "coordinate": reset_click, "exit": reset_code})
-    time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
-    reset_move_code, reset_move_command = send_input(ctx, None, None, move="900,600")
-    details["commands"].append(reset_move_command)
-    reset_text, reset_query = dbus_settings_snapshot(ctx)
-    details["commands"].append(reset_query)
-    reset_revision = gvariant_field_u64(reset_text or "", "revision")
-    reset_value = gvariant_field_string(reset_text or "", "accent")
-    default_accent = "#EF4048"
-    reset_matches = (reset_code == 0 and reset_revision is not None and reset_revision > previous_revision
-                     and reset_value is not None and reset_value.lower() == default_accent.lower())
-    observations["reset_snapshot"] = reset_matches if reset_text is not None else None
-    reset_visual = capture_accent_visual(ctx, ctx.run, "reset", geometry, (610, 151), default_accent)
-    details.setdefault("visuals", {})["reset"] = reset_visual
-    details.setdefault("evidence", []).append(reset_visual["shot"])
-    observations["selected_visuals"] = (visuals_ok and reset_move_code == 0 and reset_visual["ok"])
-    details["reset_snapshot"] = {"revision": reset_revision, "accent": reset_value,
-                                 "expected": default_accent, "match": reset_matches}
     ctx.stop(settings)
+    observations["selected_visuals"] = visuals_ok
+    final_name, final_accent, final_point = choices[-1]
+    teal_persisted = observations["teal_snapshot"] is True
 
-    if reset_matches and restart_owned_wm(ctx, args, "wm-ss03-restart"):
+    if teal_persisted and restart_owned_wm(ctx, args, "wm-ss03-restart"):
         persisted_text, persisted_query = dbus_settings_snapshot(ctx)
         details["commands"].extend(["restart owned WM", persisted_query])
         persisted_value = gvariant_field_string(persisted_text or "", "accent")
         details["persisted_after_restart"] = {"accent": persisted_value, "snapshot_read": persisted_text is not None}
         observations["reset_persisted_after_restart"] = (
-            persisted_value is not None and persisted_value.lower() == default_accent.lower()
+            persisted_value is not None and persisted_value.lower() == final_accent.lower()
         ) if persisted_text is not None else None
         post = ctx.spawn("settings-ss03-after-restart", [args.settings_bin, "--page", "appearance"], ctx.app_env)
         time.sleep(min(max(args.settle_seconds, 0.25), 1.0))
         post_geometry = window_geometry(ctx, ctx.run / "logs" / "ss03-post-restart-tree.txt")
         if post.proc.poll() is None and post_geometry:
             post_visual = capture_accent_visual(ctx, ctx.run, "after-restart", post_geometry,
-                                                (610, 151), default_accent)
+                                                final_point, final_accent)
             details["visuals"]["after_restart"] = post_visual
             details["evidence"].append(post_visual["shot"])
             if observations["reset_persisted_after_restart"] is True:
                 observations["reset_persisted_after_restart"] = post_visual["ok"]
         ctx.stop(post)
-    elif reset_matches:
+    elif teal_persisted:
         observations["reset_persisted_after_restart"] = None
         details["reason"] = "owned WM could not be restarted to verify private-state persistence"
     else:
@@ -2448,8 +2431,8 @@ def ss04_gtk_consumer(ctx: Ctx, args: argparse.Namespace, details: dict, observa
     if revision is None:
         return
     # Negative control: unrelated setting must not move the consumer's icon theme.
-    opacity = gvariant_field_uint(snapshot or "", "taskbarOpacity")
-    applied = apply_and_read_settings(ctx, revision, {"taskbarOpacity": f"uint32 {67 if opacity != 67 else 68}"}, details)
+    opacity = gvariant_field_uint(snapshot or "", "surfaceOpacity")
+    applied = apply_and_read_settings(ctx, revision, {"surfaceOpacity": f"uint32 {67 if opacity != 67 else 68}"}, details)
     revision = (applied or {}).get("revision") or revision
     time.sleep(1.5)
     unrelated = gtk_consumer_latest(out)
@@ -3046,7 +3029,7 @@ def run_ss06_desktop(ctx: Ctx, args: argparse.Namespace) -> dict:
         visual["selection_red_unchanged_capture"] = ss06_selection_red(base_path, again)
         visual["expected_red_before"] = round(239 * selection / 100)
         unrelated = apply_and_read_settings(ctx, revision, {
-            "taskbarOpacity": "uint32 " + str(67 if gvariant_field_uint(initial, "taskbarOpacity") != 67 else 68)}, details)
+            "surfaceOpacity": "uint32 " + str(67 if gvariant_field_uint(initial, "surfaceOpacity") != 67 else 68)}, details)
         time.sleep(settle)
         after_unrelated = ss06_capture(ctx, "ss06-after-unrelated")
         visual["unrelated_applied"] = unrelated is not None
@@ -3137,7 +3120,7 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
         "taskbar_visual_consumer": None, "settings_persistence_after_restart": None,
     }
     details: dict = {"observations": observations,
-                     "paths_exercised": ["Settings.Apply(taskbarHeight/taskbarOpacity/taskbarColor)", "Panels.SetEdge/GetSnapshot"],
+                     "paths_exercised": ["Settings.Apply(taskbarHeight/surfaceOpacity/surfaceColor)", "Panels.SetEdge/GetSnapshot"],
                      "paths_not_exercised": [],
                      "commands": []}
     clients: dict[str, Owned] = {}
@@ -3164,10 +3147,10 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     panel = panels_before["panels"][0]
     output_key = panel["output"]
     current_height = gvariant_field_uint(settings_before, "taskbarHeight") or panel["size"]
-    current_opacity = gvariant_field_uint(settings_before, "taskbarOpacity")
+    current_opacity = gvariant_field_uint(settings_before, "surfaceOpacity")
     next_height = 53 if current_height != 53 else 54
     next_opacity = 67 if current_opacity != 67 else 68
-    color = "#284F77" if gvariant_field_string(settings_before, "taskbarColor") != "#284F77" else "#4A3828"
+    color = "#284F77" if gvariant_field_string(settings_before, "surfaceColor") != "#284F77" else "#4A3828"
     shell_ok = Image is not None and os.access(args.shell_bin, os.X_OK)
     if shell_ok:
         clients = start_session_clients(ctx, args, ("shell",), "ss07")
@@ -3192,24 +3175,24 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
     else:
         visual["reason"] = "Pillow or flamewm-shell binary unavailable"
     changes = {"taskbarHeight": f"uint32 {next_height}",
-               "taskbarOpacity": f"uint32 {next_opacity}",
-               "taskbarColor": "'" + color + "'"}
+               "surfaceOpacity": f"uint32 {next_opacity}",
+               "surfaceColor": "'" + color + "'"}
     applied = apply_and_read_settings(ctx, settings_revision, changes, details)
     text = (applied or {}).get("text") or ""
     new_settings_revision = (applied or {}).get("revision")
     settings_ok = (
         gvariant_field_uint(text, "taskbarHeight") == next_height
-        and gvariant_field_uint(text, "taskbarOpacity") == next_opacity
-        and gvariant_field_string(text, "taskbarColor") == color
+        and gvariant_field_uint(text, "surfaceOpacity") == next_opacity
+        and gvariant_field_string(text, "surfaceColor") == color
         and isinstance(new_settings_revision, int) and new_settings_revision > settings_revision
     ) if applied else False
     observations["settings_snapshot_values"] = settings_ok
     details["settings_after"] = {"revision": new_settings_revision, "taskbarHeight": gvariant_field_uint(text, "taskbarHeight"),
-                                 "taskbarOpacity": gvariant_field_uint(text, "taskbarOpacity"),
-                                 "taskbarColor": gvariant_field_string(text, "taskbarColor")}
+                                 "surfaceOpacity": gvariant_field_uint(text, "surfaceOpacity"),
+                                 "surfaceColor": gvariant_field_string(text, "surfaceColor")}
     if shell_ok and settings_ok:
-        time.sleep(min(args.settle_seconds, 1.5))
-        applied_measure = taskbar_measure(ctx, "ss07-after-apply")
+        applied_measure = taskbar_measure_settled(ctx, "ss07-after-apply", (visual.get("before") or {}).get("edge") or "bottom",
+                                                  next_height, color, next_opacity, max(10.0, args.settle_seconds * 4))
         visual["after_apply"] = applied_measure
         visual["expected"] = {"height": next_height, "color": color, "opacity": next_opacity}
         visual["after_apply_matches"] = taskbar_matches(
@@ -3278,8 +3261,8 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
                                             if item["output"] == output_key), None)
                     values_persisted = (
                         gvariant_field_uint(persisted_text or "", "taskbarHeight") == next_height
-                        and gvariant_field_uint(persisted_text or "", "taskbarOpacity") == next_opacity
-                        and gvariant_field_string(persisted_text or "", "taskbarColor") == color)
+                        and gvariant_field_uint(persisted_text or "", "surfaceOpacity") == next_opacity
+                        and gvariant_field_string(persisted_text or "", "surfaceColor") == color)
                     restarted_measure = taskbar_measure(ctx, "ss07-after-restart")
                     visual["after_restart"] = restarted_measure
                     visual["panel_after_restart"] = persisted_panel

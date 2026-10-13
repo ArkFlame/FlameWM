@@ -286,7 +286,7 @@ class Session:
 
 def ap01(s: Session) -> dict:
     color = "#336699"
-    if not s.restart({"taskbarColor": color, "taskbarOpacity": "100", "taskbarHeight": str(TASKBAR_HEIGHT)}):
+    if not s.restart({"surfaceColor":color, "surfaceOpacity": "100", "taskbarHeight": str(TASKBAR_HEIGHT)}):
         return entry("AP01", FAIL, "WM or shell exited during restart")
     path, px = s.shot("AP01-taskbar")
     if px is None:
@@ -303,7 +303,7 @@ def ap01(s: Session) -> dict:
 
 def ap02(s: Session) -> dict:
     tb, sm = "#336699", "#884422"
-    if not s.restart({"taskbarColor": tb, "taskbarOpacity": "100", "startMenuColor": sm, "startMenuOpacity": "100"}):
+    if not s.restart({"surfaceColor":tb, "surfaceOpacity": "100", "startMenuColor": sm, "startMenuOpacity": "100"}):
         return entry("AP02", FAIL, "WM or shell exited during restart")
     _, before = s.shot("AP02-taskbar-before")
     tb_before = dominant_color(s.pixels(before, s.taskbar_rect())) if before else None
@@ -342,7 +342,7 @@ def ap03(s: Session) -> dict:
     strip = s.taskbar_rect()
 
     def focused_client_shot(name: str, opacity: str) -> tuple[Path | None, list[tuple[int, int, int]] | None]:
-        if not s.restart({"taskbarColor": tb, "taskbarOpacity": "100", "accent": accent,
+        if not s.restart({"surfaceColor":tb, "surfaceOpacity": "100", "accent": accent,
                           "accentOpacity": opacity, "taskbarStyle": "classic"}):
             return None, None
         s.spawn_client()
@@ -454,11 +454,14 @@ def ocr_word_centres(png: Path, words: set[str]) -> list[tuple[str, int, int]]:
 
 
 def decoration_selector_check(s: Session, ev: list, fails: list) -> None:
-    """Click the real Settings Appearance selector and read the authoritative snapshot back."""
-    if not s.restart({"decoration": "rounded", "taskbarOpacity": "100"}):
+    """Click the real Settings Surfaces decoration selector and read the authoritative snapshot back.
+
+    The decoration selector moved from Appearance to the Surfaces page; its only segments are
+    rounded and squared (settings.decoration.ios is rejected by the markup parser)."""
+    if not s.restart({"decoration": "rounded", "surfaceOpacity": "100"}):
         fails.append("WM or shell exited before the selector check")
         return
-    settings = s.ctx.spawn("settings-ap04", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
+    settings = s.ctx.spawn("settings-ap04", [s.args.settings_bin, "--page", "surfaces"], s.ctx.app_env)
     try:
         time.sleep(s.args.settle_seconds)
         before, _ = base.dbus_settings_snapshot(s.ctx)
@@ -468,32 +471,26 @@ def decoration_selector_check(s: Session, ev: list, fails: list) -> None:
             if path is None or before is None:
                 fails.append("selector check could not capture the Settings page or the snapshot")
                 return
-            words = ocr_word_centres(path, {"ios", "i0s", "10s", "rounded"})
-            if any(w[0] != "rounded" for w in words) or sum(1 for w in words if w[0] == "rounded") >= 1:
+            words = ocr_word_centres(path, {"squared", "rounded"})
+            if any(w[0] == "squared" for w in words):
                 break
             s.input(move="500,300")
             s.input(wheel="down:4")
             time.sleep(0.6)
-        ios = [w for w in words if w[0] != "rounded"]
-        target = None
-        if ios:
-            target = (ios[0][1], ios[0][2])
-        else:
-            rounded = [w for w in words if w[0] == "rounded"]
-            if rounded:
-                target = (rounded[-1][1] + 84, rounded[-1][2])  # iOS segment: 80px + 4px gap to the right
-        if target is None:
-            fails.append("decoration selector text not found on the Appearance page")
+        squared = [w for w in words if w[0] == "squared"]
+        if not squared:
+            fails.append("decoration selector text 'squared' not found on the Surfaces page")
             return
+        target = (squared[0][1], squared[0][2])
         s.input(click=f"{target[0]},{target[1]}")
         time.sleep(1.5)
         after, _ = base.dbus_settings_snapshot(s.ctx)
         ev += [f"selector_click={target}", f"decoration_before_rounded={'<\'rounded\'>' in (before or '')}",
-               f"decoration_after_ios={'<\'ios\'>' in (after or '')}"]
+               f"decoration_after_squared={'<\'squared\'>' in (after or '')}"]
         if "'decoration': <'rounded'>" not in (before or ""):
             fails.append("selector negative control: decoration was not rounded before the click")
-        if "'decoration': <'ios'>" not in (after or ""):
-            fails.append("clicking the iOS segment did not set decoration=ios")
+        if "'decoration': <'squared'>" not in (after or ""):
+            fails.append("clicking the squared segment did not set decoration=squared")
     finally:
         s.ctx.stop(settings)
 
@@ -501,7 +498,7 @@ def decoration_selector_check(s: Session, ev: list, fails: list) -> None:
 def ap04(s: Session) -> dict:
     ev: list = []
     fails: list[str] = []
-    if not s.restart({"decoration": "rounded", "taskbarOpacity": "100"}):
+    if not s.restart({"decoration": "rounded", "surfaceOpacity": "100"}):
         return entry("AP04", FAIL, "WM or shell exited during restart")
     s.spawn_client()
     nodes = s.tree("AP04-rounded")
@@ -575,20 +572,20 @@ def ap04(s: Session) -> dict:
         request_fullscreen(s, client["id"], False)
     if not fullscreen_measured:
         ev.append("fullscreen: _NET_WM_STATE request not observed; NOT measured")
-    ios_ok = s.restart({"decoration": "ios", "taskbarOpacity": "100"})
-    if ios_ok:
-        _, frame_ios = s.client_frame(s.tree("AP04-ios"))
-        _, pios = s.shot("AP04-ios")
-        if frame_ios and pios:
-            hl = s.pixel(pios, frame_ios["x"] + frame_ios["w"] // 2, frame_ios["y"] + 1)
-            hl_title = s.pixel(pios, frame_ios["x"] + frame_ios["w"] // 2, frame_ios["y"] + 3)
-            ev.append(f"ios_top_row={hl} ios_title={hl_title}")
-            if close_enough(hl, hl_title, 2):
-                fails.append("iOS top highlight row not present")
+    squared_ok = s.restart({"decoration": "squared", "surfaceOpacity": "100"})
+    if squared_ok:
+        _, frame_sq = s.client_frame(s.tree("AP04-squared"))
+        _, psq = s.shot("AP04-squared")
+        if frame_sq and psq:
+            sq_title = s.pixel(psq, frame_sq["x"] + frame_sq["w"] // 2, frame_sq["y"] + 3)
+            sq_corner = s.pixel(psq, frame_sq["x"] + 2, frame_sq["y"] + 2)
+            ev.append(f"squared_corner={sq_corner} squared_title={sq_title}")
+            if not close_enough(sq_corner, sq_title, 24):
+                fails.append("squared decoration corner is cut (expected rectangular)")
         else:
-            fails.append("iOS frame not observed")
+            fails.append("squared frame not observed")
     else:
-        fails.append("WM or shell exited during iOS restart")
+        fails.append("WM or shell exited during squared restart")
     decoration_selector_check(s, ev, fails)
     picker_ev, picker_fails = color_picker_check(s)
     ev += picker_ev
@@ -603,7 +600,7 @@ def ap04(s: Session) -> dict:
 
 
 def ap05(s: Session) -> dict:
-    if not s.restart({"titlebarColor": "#1B1E20", "taskbarOpacity": "100"}):
+    if not s.restart({"titlebarColor": "#1B1E20", "surfaceOpacity": "100"}):
         return entry("AP05", FAIL, "WM or shell exited during restart")
     s.spawn_client()
     _, frame = s.client_frame(s.tree("AP05-start"))
@@ -657,7 +654,7 @@ def ap05(s: Session) -> dict:
             fails.append(f"{name} hover repainted a neighbouring button ({leaked}/{close_leak} px)")
 
     custom = "#00FF00"
-    if not s.restart({"titlebarColor": "#1B1E20", "taskbarOpacity": "100", "titlebarCloseHoverColor": custom}):
+    if not s.restart({"titlebarColor": "#1B1E20", "surfaceOpacity": "100", "titlebarCloseHoverColor": custom}):
         return entry("AP05", FAIL, "WM or shell exited during custom restart", [str(path)])
     _, frame2 = s.client_frame(s.tree("AP05-custom"))
     if frame2 is None:
@@ -734,10 +731,10 @@ def _ap06_slide(s: Session) -> dict:
 def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
     """Drag the real Settings animation speed slider to its far end and read animationSpeed back."""
     ev: list[str] = []
-    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "taskbarOpacity": "100", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "surfaceOpacity": "100", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
         return ["WM or shell exited before the slider check"], ev
     s.ctx.stop(s.client)  # a leftover client window would sit above Settings and swallow the wheel
-    settings = s.ctx.spawn("settings-ap06", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
+    settings = s.ctx.spawn("settings-ap06", [s.args.settings_bin, "--page", "animations"], s.ctx.app_env)
     fails: list[str] = []
     try:
         time.sleep(s.args.settle_seconds)
@@ -771,7 +768,7 @@ def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
         if before is None:
             return ["Settings snapshot unreadable before the slider drag"], ev
         if row is None:
-            return ["animation speed row not found on the Appearance page"], ev
+            return ["animation speed row not found on the Animations page"], ev
         # Track: 180px, then a 58px value pill after a 10px gap, right-aligned at the card edge (x ~ 776).
         right = 776 - 58 - 10
         left = right - 180
@@ -895,7 +892,7 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     ev: list[str] = []
     width = lambda b: (b[2] - b[0]) if b else 0  # noqa: E731
     if not s.restart({"animationsEnabled": "true", "maximizeAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
-                      "taskbarOpacity": "100"}):
+                      "surfaceOpacity": "100"}):
         return ["WM or shell exited before the maximize check"], ev
     s.spawn_client()
     _, frame = s.client_frame(s.tree("AP07-max-frame"))
@@ -924,7 +921,7 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
             fails.append(f"unmaximize did not shrink through intermediate sizes (widths {widths_u})")
     # Window open: the first frames after map are smaller than the settled window.
     if not s.restart({"animationsEnabled": "true", "windowOpenAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
-                      "taskbarOpacity": "100"}):
+                      "surfaceOpacity": "100"}):
         return fails + ["WM or shell exited before the window-open check"], ev
     s.ctx.stop(s.client)
     s.client = s.ctx.spawn("client-xclock-open", [s.args.client_bin, "-geometry", "300x200+300+200"],
@@ -982,7 +979,7 @@ def style_matrix_checks(s: Session) -> tuple[list[str], list[str]]:
     ev: list[str] = []
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
     width = lambda b: (b[2] - b[0]) if b else 0  # noqa: E731
-    base = {"animationsEnabled": "true", "animationSpeed": "25", "taskbarOpacity": "100", "taskbarStyle": "classic"}
+    base = {"animationsEnabled": "true", "animationSpeed": "25", "surfaceOpacity": "100", "taskbarStyle": "classic"}
     for effect, key, click in (
         ("minimize", "minimizeAnimation", lambda f: f"{f['x'] + f['w'] - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2},{f['y'] + 15}"),
         ("maximize", "maximizeAnimation", lambda f: f"{f['x'] + f['w'] - 57},{f['y'] + 15}"),
@@ -1085,7 +1082,7 @@ def respawn_after_minimize_check(s: Session) -> tuple[list[str], list[str]]:
     the new window still gets a frame parent (an unframed map means the old client was never unmanaged)."""
     fails: list[str] = []
     ev: list[str] = []
-    if not s.restart({"taskbarOpacity": "100"}):
+    if not s.restart({"surfaceOpacity": "100"}):
         return ["WM or shell exited before the respawn check"], ev
     framed = 0
     for n in range(RESPAWN_CYCLES):
@@ -1118,7 +1115,7 @@ def ap07(s: Session) -> dict:
     # Slowed to 0.25x so the ~100 ms screenshots land inside the flight; the measurement is the painted
     # client pixels (bounding box of non-black content above the taskbar), not an overlay window's size.
     if not s.restart({"animationsEnabled": "true", "minimizeAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
-                      "taskbarOpacity": "100"}):
+                      "surfaceOpacity": "100"}):
         return entry("AP07", FAIL, "WM or shell exited during restart")
     capability = "32-bit ARGB visual" if "depth 32" in subprocess.run(
         ["xdpyinfo", "-display", s.ctx.display], env=s.ctx.host_env, capture_output=True, text=True,
@@ -1207,7 +1204,7 @@ def ap08(s: Session) -> dict:
         "[Desktop Entry]\nType=Application\nName=AP08 Probe\nExec=true\nIcon=folder\nCategories=Utility;\n",
         encoding="utf-8")
 
-    if not s.restart({"iconTheme": "McMojave-circle", "taskbarOpacity": "100"}):
+    if not s.restart({"iconTheme": "McMojave-circle", "surfaceOpacity": "100"}):
         return entry("AP08", FAIL, "WM or shell exited during restart")
     def start_menu_shot(name: str):
         s.input(key=base.SHORTCUT_DEFAULT_BINDING)
@@ -1218,7 +1215,7 @@ def ap08(s: Session) -> dict:
         return result
 
     _, pa = start_menu_shot("AP08-icon-base")
-    if not s.restart({"iconTheme": s.args.icon_theme_alt, "taskbarOpacity": "100"}):
+    if not s.restart({"iconTheme": s.args.icon_theme_alt, "surfaceOpacity": "100"}):
         return entry("AP08", FAIL, "WM or shell exited during alt restart")
     _, pb = start_menu_shot("AP08-icon-alt")
     rect = (0, s.args.screen_h - TASKBAR_HEIGHT - 400, 560, 400)
@@ -1251,14 +1248,15 @@ def ap08(s: Session) -> dict:
         home_icons.symlink_to(icons)
     digests = {}
     for theme in (s.args.cursor_theme_base, s.args.cursor_theme_alt):
-        if not s.restart({"cursorTheme": theme, "taskbarOpacity": "100", "decoration": "rounded"}):
+        if not s.restart({"cursorTheme": theme, "surfaceOpacity": "100", "decoration": "rounded"}):
             return entry("AP08", FAIL, "WM or shell exited during cursor restart")
         # The WM defines themed cursors on frame resize handles; the bare root keeps the stock X cursor.
         s.spawn_client()
         _, frame = s.client_frame(s.tree("AP08-cursor"))
         if frame is None:
             return entry("AP08", FAIL, "client frame not found for the cursor probe")
-        s.input(move=f"{frame['x'] + 3},{frame['y'] + 3}")
+        # Edge-midpoint left resize handle: independent of the rounded corner shape.
+        s.input(move=f"{frame['x'] + 1},{frame['y'] + frame['h'] // 2}")
         time.sleep(1.0)
         digests[theme] = cursor_digest(s)
     ev.append(f"cursor_digests={digests}")
@@ -1359,7 +1357,7 @@ def xfixes_cursor_observable(s: Session) -> bool:
 
 
 def ap09(s: Session) -> dict:
-    if not s.restart({"taskbarOpacity": "100"}):
+    if not s.restart({"surfaceOpacity": "100"}):
         return entry("AP09", FAIL, "WM or shell exited during restart")
     time.sleep(s.args.settle_seconds)
     pids = {"flamewm": s.ctx.wm.pid, "flamewm-shell": s.shell.pid}
@@ -1562,7 +1560,7 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
     ev: list[str] = []
     tag = f"AP06-{style}"
     if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style, "taskbarStyle": "classic",
-                      "animationSpeed": "25", "taskbarOpacity": "100", "startMenuOpacity": "100"}):
+                      "animationSpeed": "25", "surfaceOpacity": "100", "startMenuOpacity": "100"}):
         return [f"{style}: WM or shell exited before the Start style check"], ev
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
     time.sleep(s.args.settle_seconds)
@@ -1708,7 +1706,7 @@ def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[s
     ev: list[str] = []
     tag = f"AP06-above-{style}"
     if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style, "taskbarStyle": "classic",
-                      "animationSpeed": "25", "taskbarOpacity": "100", "startMenuOpacity": "100"}):
+                      "animationSpeed": "25", "surfaceOpacity": "100", "startMenuOpacity": "100"}):
         return [f"{style}: WM or shell exited before the stacking check"], ev
     s.ctx.stop(s.client)
     s.client = None
@@ -1867,15 +1865,15 @@ def color_picker_check(s: Session) -> tuple[list, list]:
     """AP04 colour picker: presets, wheel, palette cell and typed hex, read back from the snapshot."""
     ev: list = []
     fails: list = []
-    if not s.restart({"taskbarColor": "#336699", "startMenuColor": "#191B1D", "taskbarOpacity": "100"}):
+    if not s.restart({"surfaceColor": "#336699", "startMenuColor": "#191B1D", "surfaceOpacity": "100"}):
         return ev, ["WM or shell exited before the colour picker check"]
-    settings = s.ctx.spawn("settings-ap04-picker", [s.args.settings_bin, "--page", "taskbar"], s.ctx.app_env)
+    settings = s.ctx.spawn("settings-ap04-picker", [s.args.settings_bin, "--page", "surfaces"], s.ctx.app_env)
     try:
         time.sleep(s.args.settle_seconds)
         s.input(click="400,16")  # title bar: raise Settings above the AP04 client window
         time.sleep(0.6)
         s.input(move="500,300")
-        time.sleep(0.8)  # Taskbar page opens with the Panel card, whose Color row is the modern picker row
+        time.sleep(0.8)  # Surfaces page opens with the surface colour row
         width = s.args.screen_w
         window = (0, 0, 830, 580)
         _, px = s.shot("AP04-picker-rows")
@@ -1884,21 +1882,21 @@ def color_picker_check(s: Session) -> tuple[list, list]:
         rows = preset_rows(px, width, window)
         ev.append(f"preset_rows={[(r['y'], len(r['circles'])) for r in rows]}")
         before, _ = base.dbus_settings_snapshot(s.ctx)
-        if snapshot_value(before, "taskbarColor") != "#336699":
-            fails.append("colour picker negative control: taskbarColor was not the seeded #336699")
+        if snapshot_value(before, "surfaceColor") != "#336699":
+            fails.append("colour picker negative control: surfaceColor was not the seeded #336699")
         target = dot_row(px, width, rows, "#336699")
         if target is None:
-            return ev, fails + ["no row shows the seeded #336699 as selected; the Taskbar row is not visible"]
+            return ev, fails + ["no row shows the seeded #336699 as selected; the Surfaces row is not visible"]
         blue = next((c for c in target["circles"] if c[1] == "#3DAEE9"), None)
         if blue is None:
-            return ev, fails + ["the Taskbar row has no #3DAEE9 circle"]
+            return ev, fails + ["the Surfaces row has no #3DAEE9 circle"]
         s.input(click=f"{blue[0]},{target['y']}")
         time.sleep(1.2)
         after, _ = base.dbus_settings_snapshot(s.ctx)
-        preset_value = snapshot_value(after, "taskbarColor")
-        ev.append(f"preset_click={blue[0]},{target['y']} taskbarColor={preset_value}")
+        preset_value = snapshot_value(after, "surfaceColor")
+        ev.append(f"preset_click={blue[0]},{target['y']} surfaceColor={preset_value}")
         if preset_value != "#3DAEE9":
-            fails.append(f"preset circle did not write taskbarColor=#3DAEE9 (got {preset_value})")
+            fails.append(f"preset circle did not write surfaceColor=#3DAEE9 (got {preset_value})")
         if target["circles"][-1][0] + 38 <= blue[0]:
             fails.append("wheel circle is not after the preset circles")
         wheel_x = target["circles"][-1][0] + 38
@@ -1932,9 +1930,9 @@ def color_picker_check(s: Session) -> tuple[list, list]:
         s.input(click=f"{cell_x},{cell_y}")
         time.sleep(1.2)
         picked, _ = base.dbus_settings_snapshot(s.ctx)
-        ev.append(f"palette_cell={cell_x},{cell_y} colour={cell_hex} taskbarColor={snapshot_value(picked, 'taskbarColor')}")
-        if snapshot_value(picked, "taskbarColor") != cell_hex:
-            fails.append(f"palette cell {cell_hex} did not write taskbarColor")
+        ev.append(f"palette_cell={cell_x},{cell_y} colour={cell_hex} surfaceColor={snapshot_value(picked, 'surfaceColor')}")
+        if snapshot_value(picked, "surfaceColor") != cell_hex:
+            fails.append(f"palette cell {cell_hex} did not write surfaceColor")
         _, px_applied = s.shot("AP04-picker-applied")
         previews = colour_blobs(px_applied, width, window, cell_hex, min_px=200)
         if not previews:
@@ -1949,9 +1947,9 @@ def color_picker_check(s: Session) -> tuple[list, list]:
             time.sleep(0.15)
         time.sleep(1.2)
         typed, _ = base.dbus_settings_snapshot(s.ctx)
-        ev.append(f"typed_hex taskbarColor={snapshot_value(typed, 'taskbarColor')}")
-        if snapshot_value(typed, "taskbarColor") != "#3DAEE9":
-            fails.append("typed #3DAEE9 + Enter did not write taskbarColor")
+        ev.append(f"typed_hex surfaceColor={snapshot_value(typed, 'surfaceColor')}")
+        if snapshot_value(typed, "surfaceColor") != "#3DAEE9":
+            fails.append("typed #3DAEE9 + Enter did not write surfaceColor")
         for key in ["BackSpace"] * 8 + ["1", "2", "3", "4", "5", "Return"]:
             s.input(key=key)
             time.sleep(0.15)
@@ -1959,9 +1957,9 @@ def color_picker_check(s: Session) -> tuple[list, list]:
         _, px_error = s.shot("AP04-picker-invalid")
         invalid, _ = base.dbus_settings_snapshot(s.ctx)
         error_changed = pixel_diff_count(px_applied, px_error, 8) if px_error else 0
-        ev.append(f"invalid_hex taskbarColor={snapshot_value(invalid, 'taskbarColor')} error_px={error_changed}")
-        if snapshot_value(invalid, "taskbarColor") != "#3DAEE9":
-            fails.append("invalid hex changed taskbarColor")
+        ev.append(f"invalid_hex surfaceColor={snapshot_value(invalid, 'surfaceColor')} error_px={error_changed}")
+        if snapshot_value(invalid, "surfaceColor") != "#3DAEE9":
+            fails.append("invalid hex changed surfaceColor")
         if error_changed < 20:
             fails.append("invalid hex showed no inline error pixels")
     finally:

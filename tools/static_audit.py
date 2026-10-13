@@ -200,7 +200,7 @@ PRODUCTION_SHELL_TEMPLATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ui/shell/media.html",
      ("popup.surface", "media.previous", "media.playpause", "media.next")),
     ("ui/shell/audio.html",
-     ("volume-mute", "volume-track-fill", "audio-list")),
+     ("audio-tab-devices", "audio-slot-1-fill", "audio-list")),
     ("ui/shell/network.html",
      ("network-slots", "network-secret", "network-scan")),
     ("ui/shell/calendar.html",

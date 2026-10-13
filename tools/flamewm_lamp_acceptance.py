@@ -65,6 +65,7 @@ ICON_END_TOLERANCE_PX = 80.0   # last visible frame centre to icon centre (LAMP0
 # sampled at a random phase), so comparing the endpoints measures sampling, not the deformation.
 MIRROR_PHASES = (0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875)
 MIRROR_MIN_FRAMES = 3  # fewer frames would resample into a trivially passing line
+TASKBAR_FLOATING_MARGIN = 4  # product default taskbarFloatingMargin: the bar floats above the bottom edge
 CHECKER_SQUARE = 40
 CHECKER_COLS, CHECKER_ROWS = 8, 6
 
@@ -341,7 +342,7 @@ def sample_flight(s: ap.Session, grab: RootGrab, label: str) -> list[dict]:
     """In-process captures every SAMPLE_PERIOD for FLIGHT_SECONDS; each frame keeps its time, bbox and row widths.
 
     Only the region above the taskbar strip is captured; visible frames keep a PNG crop of the bright bbox."""
-    strip_y = s.args.screen_h - ap.TASKBAR_HEIGHT
+    strip_y = s.args.screen_h - ap.TASKBAR_HEIGHT - TASKBAR_FLOATING_MARGIN
     frames: list[dict] = []
     deadline = time.monotonic() + FLIGHT_SECONDS
     n = 0
@@ -388,7 +389,7 @@ def run_lamp(s: ap.Session, grab: RootGrab) -> dict[str, dict]:
         time.sleep(0.25)
     if client is None or frame is None:
         return {sid: entry(sid, FAIL, "checker client/frame not found") for sid in IDS}
-    strip_y = s.args.screen_h - ap.TASKBAR_HEIGHT
+    strip_y = s.args.screen_h - ap.TASKBAR_HEIGHT - TASKBAR_FLOATING_MARGIN
     rest_img = grab.grab(0, 0, s.args.screen_w, strip_y)
     rest_path = s.ctx.run / "shots" / "LAMP-rest.png"
     rest_img.save(rest_path)

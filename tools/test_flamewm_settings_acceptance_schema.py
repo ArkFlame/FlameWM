@@ -294,7 +294,7 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
 
     def test_ss03_navigation_diagnostic_does_not_mask_missing_snapshot_effect(self) -> None:
         observations = {key: True for key in (
-            "blue_snapshot", "teal_snapshot", "reset_snapshot", "selected_visuals",
+            "blue_snapshot", "teal_snapshot", "selected_visuals",
             "reset_persisted_after_restart")}
         observations["blue_snapshot"] = False
         # Even proven navigation click delivery cannot turn the missing state mutation into PASS.
@@ -335,9 +335,9 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
                 object(), Path("/tmp"), "blue", {"x": 0, "y": 31}, (685, 151), "#3DAEE9", 1)
         self.assertFalse(report["passed"])
 
-    def test_ss03_requires_two_palette_values_visual_reset_and_restart(self) -> None:
+    def test_ss03_requires_two_palette_values_visual_selection_and_restart(self) -> None:
         complete = {key: True for key in (
-            "blue_snapshot", "teal_snapshot", "reset_snapshot", "selected_visuals",
+            "blue_snapshot", "teal_snapshot", "selected_visuals",
             "reset_persisted_after_restart")}
         self.assertEqual(acc.assess_ss03(complete)[0], "PASS")
         for missing in complete:
@@ -346,11 +346,11 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 self.assertEqual(acc.assess_ss03(partial)[0], "NOT_RUN")
 
-    def test_ss03_measured_wrong_reset_is_failure(self) -> None:
+    def test_ss03_measured_wrong_persisted_value_is_failure(self) -> None:
         complete = {key: True for key in (
-            "blue_snapshot", "teal_snapshot", "reset_snapshot", "selected_visuals",
+            "blue_snapshot", "teal_snapshot", "selected_visuals",
             "reset_persisted_after_restart")}
-        complete["reset_snapshot"] = False
+        complete["reset_persisted_after_restart"] = False
         self.assertEqual(acc.assess_ss03(complete)[0], "FAIL")
 
     def test_ss15_does_not_pass_with_snapshot_only_or_missing_escape(self) -> None:
