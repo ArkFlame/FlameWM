@@ -556,6 +556,23 @@ impl MoveCounterSet {
     }
 }
 
+/// `_NET_FRAME_EXTENTS` for a server-decorated frame in `mode`: the effective
+/// border (configured only while floating) on left/right/bottom, and
+/// titlebar plus border on top.
+fn frame_extents_for_mode(mode: PlacementMode, configured_border: u16, titlebar: u16) -> [u32; 4] {
+    let border = u32::from(frame_border_for_mode(mode, configured_border));
+    [border, border, u32::from(titlebar) + border, border]
+}
+
+/// True unless `client` already has exactly `extents` published (first publish always true).
+fn frame_extents_needs_publish(
+    published: &HashMap<Window, [u32; 4]>,
+    client: Window,
+    extents: [u32; 4],
+) -> bool {
+    published.get(&client) != Some(&extents)
+}
+
 fn snap_target_bits(target: SnapTarget) -> u64 {
     match target {
         SnapTarget::None => 0,
@@ -655,7 +672,7 @@ fn emit_pointer_trace(
     commit: Option<&interaction::PointerCommit>,
     placement: Option<PlacementMode>,
     post_placement: Option<PlacementMode>,
-    snap_target: Option<String>,
+    snap_target: Option<&dyn std::fmt::Debug>,
     preview: Option<bool>,
 ) {
     let pointer = match event {
@@ -693,6 +710,8 @@ fn emit_pointer_trace(
         std::time::Duration::from_millis(100)
     };
     flamewm_debug::emit(id, cooldown, || {
+        // Formatted only when tracing is enabled; keeps the `Some("Target")` text shape.
+        let snap_target = snap_target.map(|target| format!("{target:?}"));
         format!(
             "phase={phase} client={client} source={source} region={region:?} event={event:?} pointer={pointer:?} delta={delta:?} pre={pre:?} post={post:?} placement={placement:?} post_placement={post_placement:?} snap_target={snap_target:?} preview={preview:?} commit={commit:?}"
         )
@@ -1066,6 +1085,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     clients: HashMap<Window, ManagedClient>,
     managed_order: Vec<Window>,
     frame_to_client: HashMap<Window, Window>,
+    /// Last `_NET_FRAME_EXTENTS` value published per client; skips identical re-publishes.
+    frame_extents_published: HashMap<Window, [u32; 4]>,
     registry: FrameRegistry,
     sessions: HashMap<Window, ControllerState>,
     // Declared before `renderer`: overlays must drop while the renderer's display is open.
@@ -1189,6 +1210,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             clients: HashMap::new(),
             managed_order: Vec::new(),
             frame_to_client: HashMap::new(),
+            frame_extents_published: HashMap::new(),
             registry: FrameRegistry::new(),
             sessions: HashMap::new(),
             renderer,
@@ -1774,6 +1796,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                         );
                         result?;
                         self.commit_frame_rect(client, x, y, w, h);
+                        self.set_frame_extents(client)?;
                     }
                     // Move is position-only: frame .x/.y + placement x/y commit;
                     // w/h and floating_restore size are preserved exactly.
@@ -2104,7 +2127,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             Some(placement),
             Some(next.placement.mode),
             match event {
-                FrameEvent::Snap { target } => Some(format!("{target:?}")),
+                FrameEvent::Snap { ref target } => Some(target as &dyn std::fmt::Debug),
                 _ => None,
             },
             None,
@@ -2874,6 +2897,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         };
         self.deferred_icon_jobs.remove(&window);
+        self.frame_extents_published.remove(&window);
         for requesters in self.icon_requests.values_mut() {
             requesters.retain(|(id, _)| *id != window);
         }
@@ -3805,6 +3829,18 @@ impl<'a, C: Connection> Wm<'a, C> {
                 .sessions
                 .get(&client_id)
                 .map_or(InteractionSession::Idle, |session| session.session);
+            // One snap target per motion, shared by the trace and the preview.
+            let motion_snap = move_active.then(|| {
+                let _guard = flamewm_profiler::start("wm.move.snap_target");
+                let fallback = self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer);
+                let (output, work) = self.snap_zones_at(event.root_x, event.root_y, fallback);
+                let target = core_snap_target_in_output(
+                    flamewm_api::Point::new(i32::from(event.root_x), i32::from(event.root_y)),
+                    to_core_rect(output),
+                    to_core_rect(work),
+                );
+                (target, work)
+            });
             emit_pointer_trace(
                 flamewm_debug::WM_FRAME_EVENT_DISPATCH,
                 "motion",
@@ -3823,18 +3859,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .get(&client_id)
                     .map(|state| state.placement.mode),
                 None,
-                if move_active {
-                    let target = self.snap_target_at(event.root_x, event.root_y, self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer));
-                    Some(format!("{target:?}"))
-                } else {
-                    None
-                },
-                if move_active {
-                    let target = self.snap_target_at(event.root_x, event.root_y, self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer));
-                    Some(target != SnapTarget::None)
-                } else {
-                    None
-                },
+                motion_snap.as_ref().map(|(target, _)| target as &dyn std::fmt::Debug),
+                motion_snap.map(|(target, _)| target != SnapTarget::None),
             );
             {
                 let _guard = if move_active {
@@ -3853,9 +3879,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .get(&client_id)
                     .is_some_and(|state| state.placement.mode == PlacementMode::Floating);
             if preview_allowed {
-                let fallback = self.clients.get(&client_id).map_or(self.work_area(), |s| s.outer);
-                let (output, work) = self.snap_zones_at(event.root_x, event.root_y, fallback);
-                self.update_snap_preview(event.root_x, event.root_y, output, work, client_id);
+                if let Some((target, work)) = motion_snap {
+                    self.update_snap_preview(target, work, client_id);
+                }
             } else if move_active {
                 self.snap_preview.hide();
             }
@@ -4793,20 +4819,12 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Drag-motion preview: candidate from shared `snap_target`, geometry from
     /// shared `snap_geometry`. `None` hides. Skips redraw when unchanged.
     /// No new native renderer: the compiled snap-preview surface moves/shows.
-    fn update_snap_preview(&mut self, root_x: i16, root_y: i16, output: Rect, work: Rect, client: Window) {
+    fn update_snap_preview(&mut self, target: SnapTarget, work: Rect, client: Window) {
         // Preview is cosmetic only: snapping on release is decided by the frame controller.
         if !crate::live_settings::snap_preview_enabled() {
             self.snap_preview.hide();
             return;
         }
-        let target = {
-            let _guard = flamewm_profiler::start("wm.move.snap_target");
-            core_snap_target_in_output(
-                flamewm_api::Point::new(i32::from(root_x), i32::from(root_y)),
-                to_core_rect(output),
-                to_core_rect(work),
-            )
-        };
         move_counters().record_snap_target(snap_target_bits(target));
         if target == SnapTarget::None {
             self.snap_preview.hide();
@@ -5110,21 +5128,27 @@ impl<'a, C: Connection> Wm<'a, C> {
         })
     }
 
-    fn set_frame_extents(&self, client: Window) -> Result<(), ReplyError> {
-        let (border, titlebar) = match self.clients.get(&client).map(|state| state.decoration) {
-            None | Some(Decoration::Server) => (
-                u32::from(self.effective_frame_border(client)),
-                u32::from(self.config.titlebar_height),
+    fn set_frame_extents(&mut self, client: Window) -> Result<(), ReplyError> {
+        let mode = self.clients.get(&client).map_or(PlacementMode::Floating, |state| state.placement.mode);
+        let extents = match self.clients.get(&client).map(|state| state.decoration) {
+            None | Some(Decoration::Server) => frame_extents_for_mode(
+                mode,
+                self.config.frame_border,
+                self.config.titlebar_height,
             ),
-            Some(Decoration::ClientSide | Decoration::None) => (0, 0),
+            Some(Decoration::ClientSide | Decoration::None) => [0; 4],
         };
+        if !frame_extents_needs_publish(&self.frame_extents_published, client, extents) {
+            return Ok(());
+        }
         self.conn.change_property32(
             PropMode::REPLACE,
             client,
             self.atoms.net_frame_extents,
             AtomEnum::CARDINAL,
-            &[border, border, titlebar + border, border],
+            &extents,
         )?;
+        self.frame_extents_published.insert(client, extents);
         Ok(())
     }
 
@@ -6274,5 +6298,80 @@ mod csd_direction_tests {
         assert!(super::should_focus_on_press(Some(0x400001), client));
         // Negative control: a plain click on the already-active window must not refocus/restack.
         assert!(!super::should_focus_on_press(Some(client), client));
+    }
+}
+
+#[cfg(test)]
+mod frame_extents_publish_tests {
+    use super::*;
+
+    /// Mirrors `set_frame_extents`: a publish is sent only when the value differs.
+    fn publish_all(values: &[[u32; 4]]) -> usize {
+        let mut published = HashMap::new();
+        let mut sent = 0;
+        for &extents in values {
+            if frame_extents_needs_publish(&published, 7, extents) {
+                sent += 1;
+                published.insert(7, extents);
+            }
+        }
+        sent
+    }
+
+    #[test]
+    fn first_publish_always_sends_and_identical_repeats_are_suppressed() {
+        let floating = [1, 1, 25, 1];
+        let published: HashMap<Window, [u32; 4]> = HashMap::new();
+        assert!(frame_extents_needs_publish(&published, 7, floating));
+        assert_eq!(publish_all(&[floating, floating, floating, floating]), 1);
+    }
+
+    #[test]
+    fn any_change_republishes_including_border_mode_switch() {
+        let floating = [1, 1, 25, 1];
+        let snapped = [0, 0, 25, 0];
+        let client_side = [0, 0, 0, 0];
+        // Floating -> snapped (border 1 -> 0) -> floating -> client-side decoration.
+        assert_eq!(publish_all(&[floating, snapped, floating, client_side]), 4);
+        // Titlebar-only change must also be detected (no border-only shortcut).
+        assert_eq!(publish_all(&[floating, [1, 1, 0, 1], [1, 1, 0, 1]]), 2);
+    }
+
+    #[test]
+    fn frame_extents_follow_effective_border_per_mode() {
+        let (border, titlebar) = (1, 31);
+        let floating = [1, 1, 32, 1];
+        let snapped = [0, 0, 31, 0];
+        assert_eq!(frame_extents_for_mode(PlacementMode::Floating, border, titlebar), floating);
+        assert_eq!(
+            frame_extents_for_mode(PlacementMode::Snapped(crate::frame::model::SnapTarget::Left), border, titlebar),
+            snapped
+        );
+        assert_eq!(frame_extents_for_mode(PlacementMode::Maximized, border, titlebar), snapped);
+        assert_eq!(frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar), snapped);
+        // Unsnap returns to the floating border and titlebar extents.
+        assert_eq!(frame_extents_for_mode(PlacementMode::Floating, border, titlebar), floating);
+    }
+
+    /// The ConfigureFrameRoot arm commits the border/geometry, then publishes
+    /// the effective extents through the single owner, `set_frame_extents`.
+    #[test]
+    fn configure_frame_root_arm_publishes_extents_after_commit() {
+        let src = include_str!("wm.rs");
+        let start = src
+            .find("FrameEffect::ConfigureFrameRoot { x, y, w, h } => {")
+            .expect("ConfigureFrameRoot arm");
+        let end = start
+            + src[start..]
+                .find("FrameEffect::MoveFrameRoot")
+                .expect("arm following ConfigureFrameRoot");
+        let arm = &src[start..end];
+        let commit = arm
+            .find("self.commit_frame_rect(client, x, y, w, h);")
+            .expect("arm commits frame rect");
+        let publish = arm
+            .find("self.set_frame_extents(client)?;")
+            .expect("arm publishes frame extents");
+        assert!(publish > commit, "extents must publish after the rect is committed");
     }
 }
