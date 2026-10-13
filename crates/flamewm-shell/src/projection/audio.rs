@@ -1,5 +1,5 @@
 use super::*;
-use crate::taskbar::status::audio::{AUDIO_THUMB_DIAMETER, AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
+use crate::taskbar::status::audio::{AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
 
 pub fn project_audio(
     document: &mut impl UiDocumentAccess,
@@ -76,12 +76,12 @@ pub fn project_audio_full(
         document.size(
             &format!("audio-slot-{n}-fill"),
             crate::taskbar::status::audio::AUDIO_TRACK_WIDTH * shown / spec.max,
-            6.0,
+            AUDIO_TRACK_HEIGHT,
         )?;
         document.position(
             &format!("audio-slot-{n}-thumb"),
             audio_thumb_left(shown, spec.max),
-            (AUDIO_TRACK_HEIGHT - AUDIO_THUMB_DIAMETER) / 2.0,
+            0.0,
         )?;
         document.visible(&format!("audio-slot-{n}-icon-out"), !is_stream && !is_input)?;
         document.visible(&format!("audio-slot-{n}-icon-in"), !is_stream && is_input)?;
@@ -95,11 +95,13 @@ pub fn project_audio_full(
     Ok(())
 }
 
-/// Thumb left edge relative to its track: centre = fraction * track width, so
-/// the thumb centre sits at `AUDIO_TRACK_X + fraction * AUDIO_TRACK_WIDTH` in
-/// popup space, the same mapping `value_from_pointer` inverts for drag.
+/// Thumb left edge in lane coordinates (the `.audio-lane` starts 6px left of the
+/// track so every offset stays non-negative): the 12px thumb is centred on
+/// `fraction * AUDIO_TRACK_WIDTH`, so its centre sits at
+/// `AUDIO_TRACK_X + fraction * AUDIO_TRACK_WIDTH` in popup space, the same
+/// mapping `value_from_pointer` inverts for drag.
 fn audio_thumb_left(shown: f32, max: f32) -> f32 {
-    AUDIO_TRACK_WIDTH * shown / max - AUDIO_THUMB_DIAMETER / 2.0
+    AUDIO_TRACK_WIDTH * shown / max
 }
 
 #[cfg(test)]
@@ -109,6 +111,7 @@ mod audio_template_tests {
         AudioEndpointKind, AudioEndpointSnapshot, AudioStreamSnapshot, ServiceAvailability,
     };
     use flamewm_shell_core::status::{AudioSettings, AudioTab};
+    use crate::taskbar::status::audio::AUDIO_TRACK_X;
 
     const AUDIO_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-audio.rwr"));
 
@@ -290,21 +293,21 @@ mod audio_template_tests {
     fn thumb_centre_maps_fraction_of_track_at_0_100_and_150_caps() {
         // 0% sits at the track start (thumb centre x = AUDIO_TRACK_X), 100% and 150%
         // at the track end; the thumb left edge is the centre minus the radius.
-        assert_eq!(audio_thumb_left(0.0, 100.0), -6.0);
-        assert_eq!(audio_thumb_left(100.0, 100.0), 344.0);
-        assert_eq!(audio_thumb_left(150.0, 150.0), 344.0);
-        assert_eq!(audio_thumb_left(75.0, 150.0), 169.0);
+        assert_eq!(audio_thumb_left(0.0, 100.0), 0.0);
+        assert_eq!(audio_thumb_left(100.0, 100.0), 350.0);
+        assert_eq!(audio_thumb_left(150.0, 150.0), 350.0);
+        assert_eq!(audio_thumb_left(75.0, 150.0), 175.0);
     }
 
     #[test]
     fn thumb_position_follows_snapped_fill_under_cap() {
         // Cap 100: 120% snaps to the track end, so the thumb matches the fill end minus radius.
         let capped = fixture(AudioTab::Devices, false);
-        assert_eq!(capped.positions.get("audio-slot-1-thumb"), Some(&(344.0, -3.0)));
-        assert_eq!(capped.positions.get("audio-slot-2-thumb"), Some(&(134.0, -3.0)));
+        assert_eq!(capped.positions.get("audio-slot-1-thumb"), Some(&(350.0, 0.0)));
+        assert_eq!(capped.positions.get("audio-slot-2-thumb"), Some(&(140.0, 0.0)));
         // Raise maximum: 120% of 150 is 280 px of fill, so the thumb centre is 280.
         let raised = fixture(AudioTab::Devices, true);
-        assert_eq!(raised.positions.get("audio-slot-1-thumb"), Some(&(274.0, -3.0)));
+        assert_eq!(raised.positions.get("audio-slot-1-thumb"), Some(&(280.0, 0.0)));
     }
 
     #[test]
@@ -344,5 +347,144 @@ mod audio_template_tests {
             text(&recorder.recorded, "audio-empty"),
             "No active applications"
         );
+    }
+
+    const POPUP_VIEWPORT: (f32, f32) = (459.0, 460.0);
+
+    // Synthetic layout fixture: sink 0%, sink 100% and source 50% on Devices;
+    // an app stream at 150% on Applications. Raise-maximum is on, so the cap is 150.
+    fn layout_document(snapshot: &crate::ShellSnapshot, tab: AudioTab) -> flamewm_ui_x11::UiDocument {
+        let mut document =
+            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
+        {
+            let mut recorder = AudioRecorder {
+                document: &mut document,
+                recorded: Recorded::default(),
+            };
+            project_audio_full(
+                &mut recorder,
+                snapshot,
+                tab,
+                AudioSettings { raise_maximum: true },
+                0,
+            )
+            .expect("every projected audio id must be a valid target");
+        }
+        document
+    }
+
+    fn layout_rect(document: &flamewm_ui_x11::UiDocument, id: &str) -> (f32, f32, f32, f32) {
+        document
+            .layout_box_by_id(id, POPUP_VIEWPORT)
+            .unwrap_or_else(|| panic!("no layout box for {id}"))
+    }
+
+    fn overlaps(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+        a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+    }
+
+    fn inside(inner: (f32, f32, f32, f32), outer: (f32, f32, f32, f32)) -> bool {
+        inner.0 >= outer.0
+            && inner.1 >= outer.1
+            && inner.0 + inner.2 <= outer.0 + outer.2
+            && inner.1 + inner.3 <= outer.1 + outer.3
+    }
+
+    fn layout_snapshot() -> crate::ShellSnapshot {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        snapshot.system.audio.endpoints = vec![
+            AudioEndpointSnapshot {
+                id: 1,
+                kind: AudioEndpointKind::Sink,
+                name: "sink-zero".to_owned(),
+                description: "Sink Zero".to_owned(),
+                volume_percent: 0,
+                muted: false,
+                is_default: true,
+            },
+            AudioEndpointSnapshot {
+                id: 2,
+                kind: AudioEndpointKind::Sink,
+                name: "sink-full".to_owned(),
+                description: "Sink Full".to_owned(),
+                volume_percent: 100,
+                muted: false,
+                is_default: false,
+            },
+            AudioEndpointSnapshot {
+                id: 3,
+                kind: AudioEndpointKind::Source,
+                name: "source-half".to_owned(),
+                description: "Source Half".to_owned(),
+                volume_percent: 50,
+                muted: false,
+                is_default: false,
+            },
+        ];
+        snapshot.system.audio.streams = vec![AudioStreamSnapshot {
+            id: 10,
+            endpoint_id: 1,
+            name: "Loud App".to_owned(),
+            volume_percent: 150,
+            muted: false,
+        }];
+        snapshot
+    }
+
+    #[test]
+    fn layout_thumbs_centre_on_track_fraction_with_labels_clear() {
+        let snapshot = layout_snapshot();
+        let devices = layout_document(&snapshot, AudioTab::Devices);
+        let apps = layout_document(&snapshot, AudioTab::Applications);
+        // (document, slot, percent): fraction = percent / 150 under raise-maximum.
+        let rows = [
+            (&devices, 1, 0.0_f32),
+            (&devices, 2, 100.0),
+            (&devices, 3, 50.0),
+            (&apps, 1, 150.0),
+        ];
+        for (document, n, percent) in rows {
+            let track = layout_rect(document, &format!("audio-slot-{n}-track"));
+            let thumb = layout_rect(document, &format!("audio-slot-{n}-thumb"));
+            let value = layout_rect(document, &format!("audio-slot-{n}-value"));
+            let label = layout_rect(document, &format!("audio-slot-{n}-label"));
+            let mute = layout_rect(document, &format!("audio-slot-{n}-mute"));
+            let group = layout_rect(document, &format!("audio-slot-{n}"));
+
+            let expected_x = track.0 + (percent / 150.0) * track.2;
+            let thumb_cx = thumb.0 + thumb.2 / 2.0;
+            assert!(
+                (thumb_cx - expected_x).abs() <= 1.0,
+                "slot {n} ({percent}%): thumb centre x {thumb_cx} != expected {expected_x} (track {track:?} thumb {thumb:?} group {group:?})"
+            );
+            assert!(
+                ((track.0 - group.0) - AUDIO_TRACK_X).abs() <= 1.0
+                    && (track.2 - AUDIO_TRACK_WIDTH).abs() <= 1.0,
+                "slot {n}: track {track:?} is not at row x {AUDIO_TRACK_X} width {AUDIO_TRACK_WIDTH}"
+            );
+            let thumb_cy = thumb.1 + thumb.3 / 2.0;
+            let track_cy = track.1 + track.3 / 2.0;
+            assert!(
+                (thumb_cy - track_cy).abs() <= 1.0,
+                "slot {n}: thumb centre y {thumb_cy} != track centre y {track_cy}"
+            );
+            assert!(
+                thumb.0 >= 0.0 && thumb.0 + thumb.2 <= POPUP_VIEWPORT.0,
+                "slot {n}: thumb {thumb:?} leaves the popup width"
+            );
+            assert!(
+                !overlaps(value, thumb),
+                "slot {n} ({percent}%): percent label {value:?} intersects thumb {thumb:?}"
+            );
+            assert!(
+                !overlaps(value, label),
+                "slot {n}: value label {value:?} intersects name label {label:?}"
+            );
+            assert!(
+                inside(mute, group),
+                "slot {n}: mute button {mute:?} is outside row {group:?}"
+            );
+        }
     }
 }
