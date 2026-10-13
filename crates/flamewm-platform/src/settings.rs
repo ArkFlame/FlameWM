@@ -202,6 +202,7 @@ impl AnimationStyle {
             "startAnimation" => &[Self::None, Self::Slide, Self::Fade, Self::MagicLamp],
             "minimizeAnimation" | "maximizeAnimation" => &[Self::None, Self::Fade, Self::MagicLamp],
             "windowOpenAnimation" => &[Self::None, Self::Scale, Self::Fade],
+            "windowCloseAnimation" => &[Self::None, Self::Fade],
             _ => return None,
         };
         allowed.contains(&style).then_some(style)
@@ -269,6 +270,7 @@ pub struct ProductSettings {
     pub maximize_animation: AnimationStyle,
     pub window_open_animation: AnimationStyle,
     pub window_open_animation_enabled: bool,
+    pub window_close_animation: AnimationStyle,
     pub minimize_animation_enabled: bool,
     pub maximize_animation_enabled: bool,
     pub lock_background_color: String,
@@ -354,6 +356,7 @@ impl Default for ProductSettings {
             maximize_animation: AnimationStyle::MagicLamp,
             window_open_animation: AnimationStyle::Scale,
             window_open_animation_enabled: true,
+            window_close_animation: AnimationStyle::Fade,
             minimize_animation_enabled: true,
             maximize_animation_enabled: true,
             lock_background_color: "#232629".to_owned(),
@@ -1088,6 +1091,7 @@ stable_settings! {
     (false, windows, "maximizeAnimation", maximize_animation),
     (false, windows, "windowOpenAnimation", window_open_animation),
     (false, windows, "windowOpenAnimationEnabled", window_open_animation_enabled),
+    (false, windows, "windowCloseAnimation", window_close_animation),
     (false, windows, "minimizeAnimationEnabled", minimize_animation_enabled),
     (false, windows, "maximizeAnimationEnabled", maximize_animation_enabled),
     (false, lock, "lockBackgroundColor", lock_background_color),
@@ -1676,6 +1680,7 @@ mod tests {
         assert_eq!(defaults.minimize_animation, AnimationStyle::MagicLamp);
         assert_eq!(defaults.maximize_animation, AnimationStyle::MagicLamp);
         assert_eq!(defaults.window_open_animation, AnimationStyle::Scale);
+        assert_eq!(defaults.window_close_animation, AnimationStyle::Fade);
         assert!(defaults.maximize_animation_enabled);
 
         let text = ConfigStore::serialize(&defaults);
@@ -1906,6 +1911,8 @@ mod tests {
             "windowOpenAnimation=none",
             "windowOpenAnimation=scale",
             "windowOpenAnimation=fade",
+            "windowCloseAnimation=none",
+            "windowCloseAnimation=fade",
         ] {
             store
                 .parse_snapshot(&format!("revision=2\n{line}\n"))
@@ -1923,6 +1930,10 @@ mod tests {
             "windowOpenAnimation=slide",
             "windowOpenAnimation=magic-lamp",
             "windowOpenAnimation=Scale",
+            "windowCloseAnimation=scale",
+            "windowCloseAnimation=magic-lamp",
+            "windowCloseAnimation=Fade",
+            "windowCloseAnimation=slide",
         ] {
             assert_eq!(
                 store
@@ -1986,8 +1997,10 @@ mod tests {
     fn animation_style_keys_round_trip_when_set() {
         let store = ConfigStore::default();
         let text = "revision=2\nstartAnimation=fade\nminimizeAnimation=none\n\
-            maximizeAnimation=fade\nwindowOpenAnimation=fade\nwindowOpenAnimationEnabled=0\n";
+            maximizeAnimation=fade\nwindowOpenAnimation=fade\nwindowOpenAnimationEnabled=0\n\
+            windowCloseAnimation=none\n";
         let parsed = store.parse_snapshot(text).expect("valid animation styles");
+        assert_eq!(parsed.window_close_animation, AnimationStyle::None);
         assert_eq!(parsed.start_animation, AnimationStyle::Fade);
         assert_eq!(parsed.minimize_animation, AnimationStyle::None);
         assert_eq!(parsed.maximize_animation, AnimationStyle::Fade);
@@ -1997,6 +2010,7 @@ mod tests {
         assert!(serialized.contains("startAnimation=fade\n"));
         assert!(serialized.contains("minimizeAnimation=none\n"));
         assert!(serialized.contains("windowOpenAnimationEnabled=false\n"));
+        assert!(serialized.contains("windowCloseAnimation=none\n"));
         assert_eq!(
             store.parse_snapshot(&serialized).expect("round trip"),
             parsed

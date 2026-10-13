@@ -1966,11 +1966,12 @@ struct ColorPicker {
 
 /// Animation style rows in the Animations card: stable key and the values its segments write.
 /// Each segment's node id is `animation_style_node(key, value)`.
-const ANIMATION_STYLE_ROWS: [(&str, &[&str]); 4] = [
+const ANIMATION_STYLE_ROWS: [(&str, &[&str]); 5] = [
     ("startAnimation", &["none", "slide", "fade", "magic-lamp"]),
     ("minimizeAnimation", &["none", "fade", "magic-lamp"]),
     ("maximizeAnimation", &["none", "fade", "magic-lamp"]),
     ("windowOpenAnimation", &["none", "scale", "fade"]),
+    ("windowCloseAnimation", &["none", "fade"]),
 ];
 
 /// Node id of one animation style segment, e.g. `startAnimation` + `magic-lamp`.
@@ -1979,6 +1980,7 @@ fn animation_style_node(key: &str, value: &str) -> String {
         "startAnimation" => "start-style",
         "minimizeAnimation" => "minimize-style",
         "maximizeAnimation" => "maximize-style",
+        "windowCloseAnimation" => "window-close-style",
         _ => "window-open-style",
     };
     format!("{row}-{value}")
@@ -2755,6 +2757,7 @@ mod value_text_tests {
         }
         assert_eq!(animation_style_node("startAnimation", "magic-lamp"), "start-style-magic-lamp");
         assert_eq!(animation_style_node("windowOpenAnimation", "scale"), "window-open-style-scale");
+        assert_eq!(animation_style_node("windowCloseAnimation", "fade"), "window-close-style-fade");
     }
 
     #[test]

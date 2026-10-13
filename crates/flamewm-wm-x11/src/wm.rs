@@ -2350,12 +2350,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         )?;
         let mut viewport = Vec::with_capacity(self.workspace_count * 2);
         let mut workareas = Vec::with_capacity(self.workspace_count * 4);
-        let mut names = Vec::new();
-        for index in 0..self.workspace_count {
+        let names = desktop_names_payload(self.workspace_count);
+        for _ in 0..self.workspace_count {
             viewport.extend_from_slice(&[0, 0]);
             workareas.extend_from_slice(&[work.x as u32, work.y as u32, work.width, work.height]);
-            names.extend_from_slice(format!("Desktop {}", index + 1).as_bytes());
-            names.push(0);
         }
         self.conn.change_property32(
             PropMode::REPLACE,
@@ -2831,9 +2829,12 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     fn unmanage(&mut self, window: Window, restore_to_root: bool) -> Result<(), ReplyError> {
         self.snap_preview.hide();
-        // The client is leaving: drop its flight and overlay without applying an end state.
-        self.animator.cancel(window);
-        self.overlays.remove(&window);
+        // The client is leaving: drop its flight and overlay without applying an end state. A
+        // running close keeps its afterimage, which finishes on its own timeline.
+        if !animation::survives_unmanage(self.animator.running(window)) {
+            self.animator.cancel(window);
+            self.overlays.remove(&window);
+        }
         self.linger.remove(window);
         self.release_damage_watch(window);
         self.minimized_captures.remove(window);
@@ -2975,7 +2976,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         match action.as_str() {
             ACTION_WINDOW_CLOSE => {
                 if let Some(client) = self.active {
-                    self.close(client)?;
+                    self.request_close(client)?;
                 }
             }
             ACTION_WINDOW_MINIMIZE => {
@@ -3428,7 +3429,24 @@ impl<'a, C: Connection> Wm<'a, C> {
             } else if atom == self.atoms.net_number_of_desktops
                 || atom == self.atoms.net_desktop_names
             {
-                crate::bump_workspace_generation();
+                // Our own metadata publish echoes back here; only a value that
+                // differs from what we wrote is a real external change.
+                let count = self
+                    .read_cardinals(window, self.atoms.net_number_of_desktops, 1)
+                    .and_then(|values| values.first().copied());
+                let names = self
+                    .conn
+                    .get_property(false, window, self.atoms.net_desktop_names, AtomEnum::ANY, 0, u32::MAX)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .map(|reply| reply.value)
+                    .unwrap_or_default();
+                let own_names = desktop_names_payload(self.workspace_count);
+                if workspace_metadata_is_external(count, &names, self.workspace_count, &own_names)
+                {
+                    crate::bump_workspace_generation();
+                    self.mark_workspaces();
+                }
             }
         }
         if (atom == self.atoms.motif_wm_hints || atom == self.atoms.gtk_frame_extents)
@@ -3694,7 +3712,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         if let Some(control) = control {
             match control {
-                FrameControl::Close => self.close(client_id)?,
+                FrameControl::Close => self.request_close(client_id)?,
                 FrameControl::MaximizeRestore => {
                     move_counters().record_toggle_max();
                     self.mark_windows();
@@ -3913,7 +3931,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.begin_client_moveresize(event.window, pointer, data[2])?;
         } else if event.type_ == self.atoms.net_close_window {
             if self.clients.contains_key(&event.window) {
-                self.close(event.window)?;
+                self.request_close(event.window)?;
             }
         } else if event.type_ == self.atoms.net_wm_state && self.clients.contains_key(&event.window)
         {
@@ -4067,6 +4085,30 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(reply
             .value32()
             .is_some_and(|mut values| values.any(|atom| atom == protocol)))
+    }
+
+    /// Client close request from the keyboard, frame button or `_NET_CLOSE_WINDOW`. The afterimage
+    /// is captured first; the close request is sent right after and is never delayed by it.
+    fn request_close(&mut self, client: Window) -> Result<(), ReplyError> {
+        self.begin_close_overlay(client);
+        self.close(client)
+    }
+
+    /// Starts the close fade for `client` while its pixels still exist. Skipped without ARGB
+    /// (an opaque backdrop would show black) or when the effect is disabled or cannot start.
+    fn begin_close_overlay(&mut self, client: Window) {
+        let Some(renderer) = self.renderer.clone() else {
+            return;
+        };
+        if !renderer.borrow().warp_argb_usable() {
+            return;
+        }
+        if self.animator.start(client, Effect::Close, std::time::Instant::now()) != Begin::Started {
+            return;
+        }
+        if self.open_overlay(client, Effect::Close).is_err() {
+            self.animator.cancel(client);
+        }
     }
 
     fn close(&self, client: Window) -> Result<(), ReplyError> {
@@ -4252,6 +4294,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, true, animation::open_start_rect(anim_rect(outer)))
             }
+            Effect::Close => {
+                let capture = renderer.borrow().capture_window(u64::from(frame))?;
+                (capture, false, anim_rect(outer))
+            }
             _ => {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
                 (capture, false, self.minimize_target_for(client, outer))
@@ -4286,8 +4332,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         let mirrored = mirrored && style != animation::Style::Fade;
         let source = warp_rect(anim_rect(outer));
         let opened = match (effect, style) {
-            (Effect::Minimize | Effect::Restore | Effect::Open, animation::Style::Fade) => {
-                let direction = if effect == Effect::Minimize {
+            (Effect::Minimize | Effect::Restore | Effect::Open | Effect::Close, animation::Style::Fade) => {
+                let direction = if matches!(effect, Effect::Minimize | Effect::Close) {
                     TransitionDirection::Out
                 } else {
                     TransitionDirection::In
@@ -4512,6 +4558,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                 self.linger_overlay(client, flight);
                 Ok(())
             }
+            // The afterimage is dropped with its flight; nothing lingers over a closed window.
+            Effect::Close => Ok(()),
         }
     }
 
@@ -5240,6 +5288,27 @@ fn desktop_change_is_external(published: Option<u32>, own_current: usize) -> boo
     published.map_or(true, |value| value as usize != own_current)
 }
 
+/// Payload of `_NET_DESKTOP_NAMES` for `count` workspaces: NUL-terminated names.
+fn desktop_names_payload(count: usize) -> Vec<u8> {
+    let mut names = Vec::new();
+    for index in 0..count {
+        names.extend_from_slice(format!("Desktop {}", index + 1).as_bytes());
+        names.push(0);
+    }
+    names
+}
+
+/// True when `_NET_NUMBER_OF_DESKTOPS` or `_NET_DESKTOP_NAMES` differ from what
+/// we last published; an identical echo of our own write must not advance the fence.
+fn workspace_metadata_is_external(
+    count: Option<u32>,
+    names: &[u8],
+    own_count: usize,
+    own_names: &[u8],
+) -> bool {
+    count.map_or(true, |value| value as usize != own_count) || names != own_names
+}
+
 /// Windows need re-publishing only when a client's visibility flipped across a
 /// workspace switch or the focused window changed; a plain workspace change
 /// emits workspace state only.
@@ -5508,6 +5577,23 @@ mod tests {
         assert!(desktop_change_is_external(Some(1), 2));
         // Unreadable property is treated as external (conservative fence advance).
         assert!(desktop_change_is_external(None, 2));
+    }
+
+    #[test]
+    fn own_workspace_metadata_publish_echo_does_not_bump_workspace_revision() {
+        let names = desktop_names_payload(2);
+        // Echo of our own publish (count + names) must not advance the fence.
+        assert!(!workspace_metadata_is_external(Some(2), &names, 2, &names));
+        // A foreign count or name change must still advance the fence.
+        assert!(workspace_metadata_is_external(Some(3), &names, 2, &names));
+        assert!(workspace_metadata_is_external(
+            Some(2),
+            b"Web\0Mail\0",
+            2,
+            &names
+        ));
+        // Unreadable count is treated as external (conservative fence advance).
+        assert!(workspace_metadata_is_external(None, &names, 2, &names));
     }
 
     #[test]

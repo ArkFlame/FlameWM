@@ -20,6 +20,7 @@ use flamewm_reactor::{Easing, Start, Timeline, TransitionId};
 pub const MINIMIZE_MS: u32 = 260;
 pub const MAXIMIZE_MS: u32 = 200;
 pub const OPEN_MS: u32 = 160;
+pub const CLOSE_MS: u32 = 160;
 
 /// Capture attempts a window-open effect makes while its window still paints blank.
 pub const OPEN_CAPTURE_ATTEMPTS: u8 = 3;
@@ -46,6 +47,9 @@ pub enum Effect {
     Maximize,
     Unmaximize,
     Open,
+    /// Visual afterimage of a window the client was asked to close. The close request is never
+    /// delayed by it, and the overlay outlives the window's unmanage until its timeline ends.
+    Close,
 }
 
 /// Bounded cache of captures keyed by client. Evicts the oldest entry while either the entry
@@ -132,6 +136,7 @@ pub struct Settings {
     pub minimize: Style,
     pub maximize: Style,
     pub open: Style,
+    pub close: Style,
 }
 
 impl Settings {
@@ -142,6 +147,7 @@ impl Settings {
         minimize: Style::MagicLamp,
         maximize: Style::MagicLamp,
         open: Style::Scale,
+        close: Style::Fade,
     };
 }
 
@@ -152,7 +158,15 @@ pub fn effect_style(settings: Settings, effect: Effect) -> Style {
         Effect::Minimize | Effect::Restore => settings.minimize,
         Effect::Maximize | Effect::Unmaximize => settings.maximize,
         Effect::Open => settings.open,
+        Effect::Close => settings.close,
     }
+}
+
+/// True when an overlay must survive its window's unmanage. Only a running close keeps its
+/// afterimage: the client is gone but the fade-out still has to finish on screen.
+#[must_use]
+pub fn survives_unmanage(running: Option<Effect>) -> bool {
+    running == Some(Effect::Close)
 }
 
 /// Parses one per-effect style key. Disabled (`enabled_key` false) or `none` gives `None`.
@@ -195,6 +209,15 @@ pub fn settings_from_snapshot(snapshot: &SettingsSnapshot) -> Settings {
     };
     let minimize_styles = [("none", Style::None), ("fade", Style::Fade), ("magic-lamp", Style::MagicLamp)];
     let open_styles = [("none", Style::None), ("scale", Style::Scale), ("fade", Style::Fade)];
+    // Close has no separate enabled toggle; the global `animationsEnabled` gate covers it.
+    let close = match snapshot.values.get("windowCloseAnimation") {
+        Some(SettingValue::Text(text)) => match text.as_str() {
+            "none" => Style::None,
+            "fade" => Style::Fade,
+            _ => Settings::DEFAULT.close,
+        },
+        _ => Settings::DEFAULT.close,
+    };
     Settings {
         enabled,
         speed,
@@ -216,6 +239,7 @@ pub fn settings_from_snapshot(snapshot: &SettingsSnapshot) -> Settings {
             Settings::DEFAULT.open,
             &open_styles,
         ),
+        close,
     }
 }
 
@@ -477,6 +501,7 @@ impl Animator {
             Effect::Minimize | Effect::Restore => MINIMIZE_MS,
             Effect::Maximize | Effect::Unmaximize => MAXIMIZE_MS,
             Effect::Open => OPEN_MS,
+            Effect::Close => CLOSE_MS,
         }
     }
 
@@ -598,6 +623,7 @@ mod tests {
         minimize: Style::MagicLamp,
         maximize: Style::MagicLamp,
         open: Style::Scale,
+        close: Style::Fade,
     };
 
     fn animator() -> Animator {
@@ -1009,6 +1035,65 @@ mod style_tests {
         assert_eq!(effect_style(settings, Effect::Maximize), Style::MagicLamp);
         assert_eq!(effect_style(settings, Effect::Unmaximize), Style::MagicLamp);
         assert_eq!(effect_style(settings, Effect::Open), Style::None);
+    }
+
+    #[test]
+    fn close_style_defaults_to_fade_and_accepts_only_none_or_fade() {
+        assert_eq!(settings_from_snapshot(&snapshot(&[])).close, Style::Fade);
+        let none = settings_from_snapshot(&snapshot(&[("windowCloseAnimation", text("none"))]));
+        assert_eq!(none.close, Style::None);
+        assert_eq!(effect_style(none, Effect::Close), Style::None);
+        let fade = settings_from_snapshot(&snapshot(&[("windowCloseAnimation", text("fade"))]));
+        assert_eq!(effect_style(fade, Effect::Close), Style::Fade);
+        for not_offered in ["scale", "magic-lamp", "Fade", ""] {
+            let mapped =
+                settings_from_snapshot(&snapshot(&[("windowCloseAnimation", text(not_offered))]));
+            assert_eq!(mapped.close, Style::Fade, "{not_offered} keeps the default");
+        }
+    }
+
+    #[test]
+    fn close_is_gated_by_global_flag_and_speed_only() {
+        let disabled = settings_from_snapshot(&snapshot(&[
+            ("animationsEnabled", SettingValue::Boolean(false)),
+            ("windowCloseAnimation", text("fade")),
+        ]));
+        let t0 = Instant::now();
+        let mut off = Animator::new(true, disabled);
+        assert!(!off.wants(Effect::Close));
+        assert_eq!(off.start(7, Effect::Close, t0), Begin::Immediate);
+
+        let none = settings_from_snapshot(&snapshot(&[("windowCloseAnimation", text("none"))]));
+        assert_eq!(Animator::new(true, none).start(7, Effect::Close, t0), Begin::Immediate);
+
+        assert_eq!(
+            Animator::new(false, Settings::DEFAULT).start(7, Effect::Close, t0),
+            Begin::Immediate
+        );
+
+        let slow = settings_from_snapshot(&snapshot(&[("animationSpeed", SettingValue::Integer(50))]));
+        let just_after_base = t0 + Duration::from_millis(u64::from(CLOSE_MS) + 1);
+        let mut slow_animator = Animator::new(true, slow);
+        assert_eq!(slow_animator.start(7, Effect::Close, t0), Begin::Started);
+        let slow_ticks = slow_animator.tick(just_after_base);
+        assert!(
+            !slow_ticks.iter().any(|tick| matches!(tick, Tick::Complete { .. })),
+            "0.5x runs longer"
+        );
+
+        let mut normal = Animator::new(true, Settings::DEFAULT);
+        assert_eq!(normal.start(7, Effect::Close, t0), Begin::Started);
+        assert_eq!(
+            normal.tick(just_after_base),
+            vec![Tick::Complete { client: 7, effect: Effect::Close }]
+        );
+    }
+
+    #[test]
+    fn only_a_running_close_survives_unmanage() {
+        assert!(survives_unmanage(Some(Effect::Close)));
+        assert!(!survives_unmanage(Some(Effect::Minimize)));
+        assert!(!survives_unmanage(None));
     }
 
     #[test]
