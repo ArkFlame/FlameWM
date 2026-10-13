@@ -6353,6 +6353,39 @@ mod frame_extents_publish_tests {
         assert_eq!(frame_extents_for_mode(PlacementMode::Floating, border, titlebar), floating);
     }
 
+    /// Client interior per mode: the published EWMH side/bottom extents equal
+    /// the effective X border (the only side inset), and the client rect sits
+    /// at (0, titlebar) spanning the full frame width. No side inset leaks
+    /// into the client for snapped/maximized/fullscreen frames.
+    #[test]
+    fn client_interior_matches_effective_border_per_mode() {
+        let outer = crate::frame::coords::RootRect { x: 10, y: 20, w: 800, h: 600 };
+        let titlebar: u16 = 31;
+        let configured: u16 = 1;
+        let modes = [
+            PlacementMode::Floating,
+            PlacementMode::Snapped(crate::frame::model::SnapTarget::TopLeft),
+            PlacementMode::Maximized,
+            PlacementMode::Fullscreen,
+        ];
+        for mode in modes {
+            let border = frame_border_for_mode(mode, configured);
+            let [left, right, top, bottom] = frame_extents_for_mode(mode, configured, titlebar);
+            assert_eq!(left, u32::from(border), "{mode:?} left extent");
+            assert_eq!(right, u32::from(border), "{mode:?} right extent");
+            assert_eq!(bottom, u32::from(border), "{mode:?} bottom extent");
+            assert_eq!(top, u32::from(titlebar) + u32::from(border), "{mode:?} top extent");
+            let ext = FrameExtents::new(i32::from(titlebar), i32::from(border));
+            let (x, y, w, h) = lifecycle::client_configure(outer, ext);
+            assert_eq!((x, y), (0, i32::from(titlebar)), "{mode:?} client origin");
+            assert_eq!(w, outer.w as u32, "{mode:?} client width equals frame width");
+            assert_eq!(h, (outer.h - i32::from(titlebar)) as u32, "{mode:?} client height");
+        }
+        // Client-drawn side insets must never appear for borderless modes.
+        let snapped = FrameExtents::new(i32::from(titlebar), 0);
+        assert_eq!(lifecycle::client_configure(outer, snapped).2, 800);
+    }
+
     /// The ConfigureFrameRoot arm commits the border/geometry, then publishes
     /// the effective extents through the single owner, `set_frame_extents`.
     #[test]
