@@ -10,6 +10,8 @@ const GLOW_LUT_SCALE: f32 = (GLOW_LUT_LEN as f32 - 1.0) / GLOW_Q_MAX;
 /// Maximum white mix on the core, reached where the narrow term is 1.
 const WHITE_MIX: f32 = 0.14;
 const ENCODE_LEN: usize = 4096;
+/// Pixels per block in the capsule splat inner loop.
+const LANES: usize = 8;
 
 /// Internal resolution: the frame is rendered at `1/factor` and bilinearly upsampled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -144,12 +146,11 @@ impl Rasterizer {
             for ((dst, a), b) in row.iter_mut().zip(src_a).zip(src_b) {
                 *dst = std::array::from_fn(|c| (1.0 - ty) * f32::from(a[c]) + ty * f32::from(b[c]));
             }
-            for (ox, px_out) in row_out.chunks_exact_mut(4).enumerate() {
+            for (ox, (px_out, &(xa, xb, tx))) in row_out.chunks_exact_mut(4).zip(&self.x_taps).enumerate() {
                 if masked && !state.covers(ox as u32, oy as u32) {
                     px_out.copy_from_slice(&[0, 0, 0, 255]);
                     continue;
                 }
-                let (xa, xb, tx) = self.x_taps[ox];
                 let (pa, pb) = (row[xa], row[xb]);
                 let rgb: [u8; 3] = std::array::from_fn(|c| ((1.0 - tx) * pa[c] + tx * pb[c] + 0.5) as u8);
                 px_out.copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
@@ -213,6 +214,9 @@ fn splat_stream(
 }
 
 /// Analytic capsule splat for one centreline segment with linearly varying width and coverage.
+///
+/// Only pixels whose row span lies inside the capsule of radius `reach` are visited; every other
+/// pixel fails the `d2 >= GLOW_Q_MAX * w2` cut-off anyway, so the output is unchanged.
 #[allow(clippy::too_many_arguments)]
 fn splat(
     alpha: &mut [f32],
@@ -235,9 +239,49 @@ fn splat(
     let y0 = ((ay.min(by) - reach).floor().max(ry0 as f32)) as usize;
     let x1 = ((ax.max(bx) + reach).ceil().min(rx1 as f32)).max(0.0) as usize;
     let y1 = ((ay.max(by) + reach).ceil().min(ry1 as f32)).max(0.0) as usize;
+    // Margin keeps the f64 span safely outside any pixel that f32 would accept.
+    let r = f64::from(reach) * (1.0 + 1e-3) + 1e-3;
+    let (a64, e64, len2_64) = ([f64::from(ax), f64::from(ay)], [f64::from(ex), f64::from(ey)], f64::from(len2));
     for y in y0..y1 {
         let py = y as f32 + 0.5;
-        for x in x0..x1 {
+        let (lo, hi) = capsule_row_span(a64, e64, len2_64, r, f64::from(py));
+        // Empty rows (`lo > hi`) and NaN spans fall back to the bounding box, never past it.
+        let xs = ((lo - 0.5).floor() - 1.0).max(x0 as f64);
+        let xe = ((hi - 0.5).ceil() + 2.0).min(x1 as f64);
+        if !(xs < xe) {
+            continue;
+        }
+        let (xs, xe) = (xs as usize, xe as usize);
+        let mut x = xs;
+        // Lane blocks: the geometry is pure per-lane f32 arithmetic (auto-vectorised, identical
+        // IEEE results to a scalar loop); only accepted lanes touch the LUT and the buffers.
+        while x + LANES <= xe {
+            let mut inside = [false; LANES];
+            let (mut q, mut tt) = ([0f32; LANES], [0f32; LANES]);
+            for l in 0..LANES {
+                let px = (x + l) as f32 + 0.5;
+                let t = (((px - ax) * ex + (py - ay) * ey) * inv_len2).clamp(0.0, 1.0);
+                tt[l] = t;
+                let dx = px - (ax + t * ex);
+                let dy = py - (ay + t * ey);
+                let w = wa + t * (wb - wa);
+                let (w2, d2) = (w * w, dx * dx + dy * dy);
+                inside[l] = d2 < GLOW_Q_MAX * w2;
+                q[l] = d2 / w2;
+            }
+            for l in (0..LANES).filter(|&l| inside[l]) {
+                let t = tt[l];
+                let (g, c) = glow[((q[l] * GLOW_LUT_SCALE) as usize).min(GLOW_LUT_LEN - 1)];
+                let v = ((a.a + t * (b.a - a.a)) * g).min(1.0);
+                let i = y * lw + x + l;
+                if v > alpha[i] {
+                    alpha[i] = v;
+                    core[i] = c;
+                }
+            }
+            x += LANES;
+        }
+        for x in x..xe {
             let px = x as f32 + 0.5;
             let t = (((px - ax) * ex + (py - ay) * ey) * inv_len2).clamp(0.0, 1.0);
             let dx = px - (ax + t * ex);
@@ -257,6 +301,46 @@ fn splat(
             }
         }
     }
+}
+
+/// Hull `[lo, hi]` of the x-values where the capsule of radius `r` around `a` to `a + e` meets the
+/// row `py`; `lo > hi` when the row misses it. The capsule is convex, so this is its exact row
+/// extent. The pieces are two end discs and the band `|n.(P-a)| <= r` clipped to `0 <= e.(P-a) <= |e|^2`.
+fn capsule_row_span(a: [f64; 2], e: [f64; 2], len2: f64, r: f64, py: f64) -> (f64, f64) {
+    let mut span = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut hull = |lo: f64, hi: f64| span = (span.0.min(lo), span.1.max(hi));
+    for c in [a, [a[0] + e[0], a[1] + e[1]]] {
+        let dy = py - c[1];
+        if dy.abs() <= r {
+            let h = (r * r - dy * dy).sqrt();
+            hull(c[0] - h, c[0] + h);
+        }
+    }
+    if len2 > 1e-12 {
+        let len = len2.sqrt();
+        let (nx, ny) = (-e[1] / len, e[0] / len);
+        let dy = py - a[1];
+        let (l1, h1) = lin_range(nx, ny * dy, -r, r);
+        let (l2, h2) = lin_range(e[0], e[1] * dy, 0.0, len2);
+        let (lo, hi) = (l1.max(l2), h1.min(h2));
+        if lo <= hi {
+            hull(a[0] + lo, a[0] + hi);
+        }
+    }
+    span
+}
+
+/// Offsets `d` with `lo <= coef * d + k <= hi`, as `(min, max)`; `lo > hi` when none.
+fn lin_range(coef: f64, k: f64, lo: f64, hi: f64) -> (f64, f64) {
+    if coef.abs() < 1e-12 {
+        return if (lo..=hi).contains(&k) {
+            (f64::NEG_INFINITY, f64::INFINITY)
+        } else {
+            (f64::INFINITY, f64::NEG_INFINITY)
+        };
+    }
+    let (p, q) = ((lo - k) / coef, (hi - k) / coef);
+    (p.min(q), p.max(q))
 }
 
 /// Bilinear taps mapping each output index to a pair of source indices and a weight.
