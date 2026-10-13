@@ -553,18 +553,7 @@ impl NetworkManagerProvider {
     }
 
     fn queue_register_secret_agent(&mut self) -> FlameResult<()> {
-        let message = Message::new_method_call(
-            NETWORK_MANAGER_SERVICE,
-            SECRET_AGENT_MANAGER_PATH,
-            SECRET_AGENT_MANAGER_INTERFACE,
-            REGISTER_WITH_CAPABILITIES,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-        .append3(
-            object_path(SECRET_AGENT_PATH.to_owned())?,
-            SECRET_AGENT_IDENTIFIER.to_owned(),
-            0_u32,
-        );
+        let message = secret_agent_registration_message()?;
         self.queue(message, PendingRequest::RegisterSecretAgent)
     }
 
@@ -1608,9 +1597,33 @@ where
     Ok(())
 }
 
+/// `RegisterWithCapabilities(s identifier, u capabilities)`. The agent object path is not an
+/// argument: NetworkManager calls back on the caller's unique name at SECRET_AGENT_PATH.
+fn secret_agent_registration_message() -> FlameResult<Message> {
+    Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        SECRET_AGENT_MANAGER_PATH,
+        SECRET_AGENT_MANAGER_INTERFACE,
+        REGISTER_WITH_CAPABILITIES,
+    )
+    .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
+    .map(|message| message.append2(SECRET_AGENT_IDENTIFIER.to_owned(), 0_u32))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn register_with_capabilities_uses_identifier_and_capabilities_only() {
+        let message = secret_agent_registration_message().expect("valid registration message");
+        assert_eq!(message.member().map(|m| m.to_string()).as_deref(), Some(REGISTER_WITH_CAPABILITIES));
+        let items = message.get_items();
+        let signature: String = items.iter().map(|item| item.signature().to_string()).collect();
+        assert_eq!(signature, "su");
+        assert!(matches!(&items[0], MessageItem::Str(s) if s == SECRET_AGENT_IDENTIFIER));
+        assert!(matches!(&items[1], MessageItem::UInt32(0)));
+    }
 
     #[test]
     fn access_point_parser_decodes_ssid_security_and_strength() {
