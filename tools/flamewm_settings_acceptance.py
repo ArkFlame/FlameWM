@@ -558,6 +558,22 @@ def assess_ss03(observations: dict[str, bool | None]) -> tuple[str, str]:
     return STATUS_PASS, "multiple palette choices, reset, visible selection and persisted value verified"
 
 
+def ss05_wallpaper_matches_fixture(value: str | None, fixture: Path, run: Path) -> bool:
+    """The product copies a chosen wallpaper into its managed store ($XDG_DATA_HOME/flamewm/wallpapers,
+    media_store.rs, commit a63a6908), so the authoritative value is the store copy, not the picked path.
+    Accept the picked path itself or a file inside that store with byte-identical contents."""
+    if not value:
+        return False
+    store = (run / "xdg-data" / "flamewm" / "wallpapers").resolve()
+    try:
+        candidate = Path(value).resolve()
+        if candidate == fixture.resolve():
+            return True
+        return candidate.is_relative_to(store) and candidate.read_bytes() == fixture.read_bytes()
+    except OSError:
+        return False
+
+
 def assess_ss05(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("success_applied_without_input", "cancel_preserved_without_error",
                 "error_preserved_and_visible")
@@ -669,8 +685,9 @@ def capture_accent_visual(ctx: Ctx, run: Path, name: str, geometry: dict,
     captured, command = capture(ctx, shot)
     expected_rgb = accent_rgb(expected)
     # Runtime positions nav-selection at x=8 and nav_top(Appearance)=72, with a
-    # 192x38 background; x=100,y=92 samples its interior, not the static stripe.
-    accent_pixel = image_pixel(shot, geometry["x"] + 100, geometry["y"] + 92) if captured else None
+    # 192x38 background; x=170,y=92 samples its interior. x=100 sat on the "Appearance"
+    # label glyphs (ui/settings.css nav label), so the sample read text antialiasing.
+    accent_pixel = image_pixel(shot, geometry["x"] + 170, geometry["y"] + 92) if captured else None
     # HTML/CSS defines a 30x30 button with a centered 9x9 white selected marker.
     # Count marker-colored pixels in that source-defined 9x9 region, not one assumed center pixel.
     marker = image_region_color_count(shot, (geometry["x"] + swatch_point[0] - 4,
@@ -1303,7 +1320,9 @@ def map_ss18(path: str | None) -> dict:
 
 def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Exercise palette clicks, reset, selected visuals and private-state restart."""
-    choices = (("blue", "#3DAEE9", (685, 151)), ("teal", "#1ABC9C", (762, 151)))
+    # Palette order is red, blue, purple, teal, then the colour-picker wheel (ui/settings.html);
+    # the wheel moved to the fifth slot, so the old 685/762 points hit purple and the wheel.
+    choices = (("blue", "#3DAEE9", (648, 151)), ("teal", "#1ABC9C", (724, 151)))
     observations: dict[str, bool | None] = {
         "blue_snapshot": None, "teal_snapshot": None, "reset_snapshot": None,
         "selected_visuals": None, "reset_persisted_after_restart": None,
@@ -1392,7 +1411,7 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
     reset_matches = (reset_code == 0 and reset_revision is not None and reset_revision > previous_revision
                      and reset_value is not None and reset_value.lower() == default_accent.lower())
     observations["reset_snapshot"] = reset_matches if reset_text is not None else None
-    reset_visual = capture_accent_visual(ctx, ctx.run, "reset", geometry, (648, 151), default_accent)
+    reset_visual = capture_accent_visual(ctx, ctx.run, "reset", geometry, (610, 151), default_accent)
     details.setdefault("visuals", {})["reset"] = reset_visual
     details.setdefault("evidence", []).append(reset_visual["shot"])
     observations["selected_visuals"] = (visuals_ok and reset_move_code == 0 and reset_visual["ok"])
@@ -1404,6 +1423,7 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
         persisted_text, persisted_query = dbus_settings_snapshot(ctx)
         details["commands"].extend(["restart owned WM", persisted_query])
         persisted_value = gvariant_field_string(persisted_text or "", "accent")
+        details["persisted_after_restart"] = {"accent": persisted_value, "snapshot_read": persisted_text is not None}
         observations["reset_persisted_after_restart"] = (
             persisted_value is not None and persisted_value.lower() == default_accent.lower()
         ) if persisted_text is not None else None
@@ -1412,7 +1432,7 @@ def run_ss03(ctx: Ctx, args: argparse.Namespace) -> dict:
         post_geometry = window_geometry(ctx, ctx.run / "logs" / "ss03-post-restart-tree.txt")
         if post.proc.poll() is None and post_geometry:
             post_visual = capture_accent_visual(ctx, ctx.run, "after-restart", post_geometry,
-                                                (648, 151), default_accent)
+                                                (610, 151), default_accent)
             details["visuals"]["after_restart"] = post_visual
             details["evidence"].append(post_visual["shot"])
             if observations["reset_persisted_after_restart"] is True:
@@ -2314,6 +2334,10 @@ def rgb_close(actual: tuple[int, int, int] | None, expected: tuple[int, int, int
             and max(abs(a - e) for a, e in zip(actual, expected)) <= tolerance)
 
 
+# Black rows tolerated before a floating Taskbar (default taskbarStyle floating, inset 8px).
+TASKBAR_EDGE_MARGIN = 16
+
+
 def taskbar_measure(ctx: Ctx, name: str) -> dict | None:
     """Real capture of the Shell taskbar: contiguous non-black extent at screen mid-column."""
     if Image is None:
@@ -2330,22 +2354,46 @@ def taskbar_measure(ctx: Ctx, name: str) -> dict | None:
     width, height = image.size
     column = width // 2
 
-    def extent(rows) -> int:
+    def extent(rows) -> tuple[int, int | None]:
+        """Contiguous lit run from the first lit row within TASKBAR_EDGE_MARGIN of the screen edge.
+        The default floating Taskbar is inset from the edge, so black rows before the bar are skipped."""
+        rows = list(rows)
+        start = next((index for index, row in enumerate(rows[:TASKBAR_EDGE_MARGIN + 1])
+                      if image.getpixel((column, row)) != (0, 0, 0)), None)
+        if start is None:
+            return 0, None
         count = 0
-        for row in rows:
+        for row in rows[start:]:
             if image.getpixel((column, row)) == (0, 0, 0):
                 break
             count += 1
-        return count
+        return count, rows[start]
 
-    top, bottom = extent(range(height)), extent(range(height - 1, -1, -1))
+    (top, top_row), (bottom, bottom_row) = extent(range(height)), extent(range(height - 1, -1, -1))
     if top == 0 and bottom == 0:
         return {"shot": str(path), "edge": None, "extent": 0, "inside": None, "band_digest": None}
     edge, size = ("bottom", bottom) if bottom >= top else ("top", top)
-    band_y = height - size if edge == "bottom" else 0
+    band_y = bottom_row - size + 1 if edge == "bottom" else top_row
     inside_y = band_y + size // 2
     return {"shot": str(path), "edge": edge, "extent": size, "inside": image.getpixel((column, inside_y)),
             "band_digest": image_region_digest(path, (100, band_y, max(1, width - 400), size))}
+
+
+def taskbar_measure_settled(ctx: Ctx, name: str, edge: str, height: int, color: str, opacity: int,
+                            timeout: float) -> dict | None:
+    """Re-capture until the Taskbar matches the expected edge/extent/colour or the timeout expires.
+    The Shell animates a Panels edge move, so the first frame after SetEdge can be mid-transition
+    (measured: top bar at ~88% opacity 1.5 s after the move, 67% once settled). The threshold is unchanged."""
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        measured = taskbar_measure(ctx, f"{name}-{attempt}")
+        if taskbar_matches(measured, edge, height, color, opacity) or time.monotonic() >= deadline:
+            if measured is not None:
+                measured["attempts"] = attempt
+            return measured
+        time.sleep(0.5)
 
 
 def taskbar_matches(measure: dict | None, edge: str, height: int, color: str, opacity: int) -> bool:
@@ -2671,7 +2719,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                     observed_text, query = dbus_settings_snapshot(ctx)
                     observed_value = gvariant_field_string(observed_text or "", "wallpaper")
                     observed_revision = gvariant_field_u64(observed_text or "", "revision")
-                    if observed_value == str(fixture) and observed_revision is not None and observed_revision > before_revision:
+                    if ss05_wallpaper_matches_fixture(observed_value, fixture, ctx.run) and observed_revision is not None and observed_revision > before_revision:
                         break
                     if settings.proc.poll() is not None:
                         break
@@ -2685,7 +2733,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                 case["commands"].append(after_capture_cmd)
                 details["commands"].append(after_capture_cmd)
                 case["after_capture"] = str(after_shot)
-                applied = (settings.proc.poll() is None and observed_value == str(fixture)
+                applied = (settings.proc.poll() is None and ss05_wallpaper_matches_fixture(observed_value, fixture, ctx.run)
                            and observed_revision is not None and observed_revision > before_revision
                            and captured_before and captured_after)
                 observations["success_applied_without_input"] = applied
@@ -3201,7 +3249,8 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
             details["expected_panel_edge"] = next_edge
             if shell_ok and observations["panel_edge_and_size_snapshot"] is True and settings_ok:
                 time.sleep(min(args.settle_seconds, 1.5))
-                moved = taskbar_measure(ctx, "ss07-after-edge")
+                moved = taskbar_measure_settled(ctx, "ss07-after-edge", next_edge, next_height, color, next_opacity,
+                                                max(4.0, args.settle_seconds * 2.0))
                 visual["after_edge"] = moved
                 visual["after_edge_matches"] = taskbar_matches(moved, next_edge, next_height, color, next_opacity)
                 controls = bool(visual.get("unchanged_capture_equal") and visual.get("unrelated_leaves_taskbar_unchanged")

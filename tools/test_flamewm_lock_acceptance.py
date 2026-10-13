@@ -38,10 +38,14 @@ class RespawnTests(unittest.TestCase):
         self.assertEqual(lk.respawned_pids([4001, 4002], 4001), [4002])
         self.assertEqual(lk.respawned_pids([4001], 4001), [])
 
-    def test_lk10_to_lk13_are_registered_in_order(self):
-        self.assertEqual(lk.IDS[-4:], ("LK10", "LK11", "LK12", "LK13"))
+    def test_lk10_to_lk15_are_registered_in_order(self):
+        self.assertEqual(lk.IDS[-7:], ("LK11", "LK12", "LK13", "LK14", "LK15", "LK16", "LK17"))
         self.assertEqual(len(lk.SCENARIOS), len(lk.IDS))
-        self.assertIn("LK13", lk.TITLES)
+        self.assertEqual([fn.__name__.upper() for fn in lk.SCENARIOS], list(lk.IDS))
+        self.assertIn("LK14", lk.TITLES)
+        self.assertIn("LK15", lk.TITLES)
+        self.assertIn("LK16", lk.TITLES)
+        self.assertIn("LK17", lk.TITLES)
         self.assertTrue(lk.FAKE_CONTROL_BIN.is_file())
 
 
@@ -72,10 +76,83 @@ class TextAndColourTests(unittest.TestCase):
         self.assertFalse(lk.failure_text_seen([("password", 1, 2)]))
         self.assertFalse(lk.failure_text_seen([]))
 
-    def test_background_must_be_breeze_dark(self):
-        self.assertTrue(lk.background_ok([(0x23, 0x26, 0x29)] * 50))
-        self.assertFalse(lk.background_ok([(0x00, 0x00, 0x00)] * 50))
-        self.assertFalse(lk.background_ok([]))
+    def test_background_must_match_the_builtin_image_mean(self):
+        expected = (40.0, 90.0, 120.0)
+        self.assertTrue(lk.background_matches([(42, 88, 118)] * 50, expected))
+        # The old Breeze dark background is no longer the lock background.
+        self.assertFalse(lk.background_matches([(0x23, 0x26, 0x29)] * 50, expected))
+        self.assertFalse(lk.background_matches([], expected))
+
+    def test_dpms_state_is_read_from_xset_query(self):
+        off = "DPMS is Enabled\n  Monitor is Off\n"
+        on = "DPMS is Enabled\n  Monitor is On\n"
+        self.assertEqual(lk.dpms_monitor_state(off), "off")
+        self.assertEqual(lk.dpms_monitor_state(on), "on")
+        self.assertIsNone(lk.dpms_monitor_state("keyboard auto repeat: on\n"))
+
+    def test_frames_differ_only_when_the_screen_moves(self):
+        still = [(10, 10, 10)] * 700
+        moved = [(10, 10, 10)] * 350 + [(200, 200, 200)] * 350
+        self.assertFalse(lk.frames_differ(still, list(still)))
+        self.assertTrue(lk.frames_differ(still, moved))
+
+    def test_chevron_centre_is_the_ink_bbox_centre_inside_the_circle(self):
+        w, h = 200, 200
+        circle = (100.0, 100.0, 40.0, 40.0)  # a 40 px circle box at scale 1 (inset 5 px)
+        pixels = [(0x30, 0x30, 0x30)] * (w * h)
+        # A 6x9 white mark, pixels x 112..117 and y 113..121 (edge coordinates centre 115.0, 117.5).
+        for y in range(113, 122):
+            for x in range(112, 118):
+                pixels[y * w + x] = (255, 255, 255)
+        centre = lk.measure_chevron_centre(pixels, w, h, circle, 1.0)
+        self.assertIsNotNone(centre)
+        self.assertAlmostEqual(centre[0], 115.0, places=6)
+        self.assertAlmostEqual(centre[1], 117.5, places=6)
+
+    def test_glass_predicate_matches_the_measured_two_layer_field(self):
+        # Calibration in the native run (lockBackgroundColor=#336699): outside (38,77,115), field (71,98,123).
+        background, measured = (38, 77, 115), (71, 98, 123)
+        self.assertTrue(lk.is_glass_over(measured, background))
+        # Negative controls: the bare background and a wrong (red) tint must not match.
+        self.assertFalse(lk.is_glass_over(background, background))
+        self.assertFalse(lk.is_glass_over((150, 60, 60), background))
+
+    def test_password_glass_is_found_only_when_the_two_layer_blend_is_present(self):
+        w, h = 701, 438
+        background = (38, 77, 115)
+        expected = lk.reference_anchors(w, h)["password"]
+        s = 1.0
+
+        def field(colour_for):
+            pixels = [background] * (w * h)
+            x0, y0, x1, y1 = (int(expected[0]), int(expected[1]), int(expected[0] + expected[2]),
+                              int(expected[1] + expected[3]))
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    pixels[y * w + x] = colour_for(background)
+            return pixels
+
+        glass = field(lambda bg: tuple(round(c) for c in lk.glass_over(bg)))
+        found = lk.measure_password(glass, w, h, expected, s)
+        self.assertIsNotNone(found)
+        self.assertLessEqual(lk.anchor_error(found, expected), lk.anchor_tolerance(w, h))
+        # Negative controls: no field at all, and a red-tinted field, must not be found as the glass.
+        self.assertIsNone(lk.measure_password([background] * (w * h), w, h, expected, s))
+        red = field(lambda bg: (150, 60, 60))
+        self.assertIsNone(lk.measure_password(red, w, h, expected, s))
+
+    def test_caret_white_fraction_tracks_the_empty_field(self):
+        w, h = 1280, 800
+        scale = lk.reference_fit(w, h)[0]
+        glass = [(0x6E, 0x72, 0x70)] * (w * h)  # translucent field over a mid-grey background
+        self.assertLess(lk.caret_white_fraction(glass, w, h), lk.CARET_HIDDEN)
+        field = lk.reference_anchors(w, h)["password"]
+        caret = (field[0] + 10 * scale, field[1] + field[3] * 0.25, max(1.5 * scale, 1.0), field[3] * 0.5)
+        x0, y0, x1, y1 = lk._box(w, h, caret)
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                glass[y * w + x] = (0xFF, 0xFF, 0xFF)
+        self.assertGreaterEqual(lk.caret_white_fraction(glass, w, h), lk.CARET_VISIBLE)
 
 
 class CustomisationTests(unittest.TestCase):
@@ -107,6 +184,12 @@ class CustomisationTests(unittest.TestCase):
                                                 (0, 100, 160, 200), (160, 100, 320, 200)]))
 
 
+class DimTests(unittest.TestCase):
+    def test_default_dim_scales_expected_colours(self):
+        self.assertEqual(lk.dimmed_colour((0x33, 0x66, 0x99)), (38, 76, 115))
+        self.assertEqual(lk.dimmed_colour((0, 0, 0)), (0, 0, 0))
+
+
 class DocumentTests(unittest.TestCase):
     def test_lk06_not_run_blocks_all_pass(self):
         results = {sid: lk.entry(sid, lk.PASS, "") for sid in lk.IDS if sid != "LK06"}
@@ -133,7 +216,8 @@ class DocumentTests(unittest.TestCase):
 
 def draw_reference_lock(width=701, height=438, clock_dy=0, skip=()):
     """Synthetic 701x438 unlocked lock: light field, white avatar ring, clock, four white power icons."""
-    background, white, light = (0x23, 0x26, 0x29), (255, 255, 255), lk.LIGHT_FIELD
+    background, white = (0x23, 0x26, 0x29), (255, 255, 255)
+    light = tuple(round(c) for c in lk.glass_over(background))
     pixels = [background] * (width * height)
 
     def put(x, y, colour):
@@ -228,12 +312,30 @@ class ReferenceLayoutTests(unittest.TestCase):
                     pixels[y * w + x] = red
         self.assertIsNone(lk.measure_avatar(pixels, w, h, lk.reference_anchors(w, h)["avatar"]))
 
-    def test_dimmed_icon_has_lower_peak_brightness(self):
-        pixels, w, h = draw_reference_lock()
+    def test_dimmed_icon_contrast_is_independent_of_the_background(self):
+        w, h = 1280, 800
         rect = lk.reference_anchors(w, h)["power_restart"]
-        enabled = lk.icon_peak(pixels, w, h, rect)
-        dimmed = [tuple(c // 3 for c in v) for v in pixels]
-        self.assertLessEqual(lk.icon_peak(dimmed, w, h, rect) / enabled, lk.ICON_DIM_RATIO)
+        background, icon = 120, 240
+        blend = round(0.38 * icon + 0.62 * background)   # what a 38% opaque icon draws over it
+
+        cx, cy = lk.anchor_centre(rect)
+        radius = rect[2] * 0.3   # a glyph covers a minority of its icon box, so the median is background
+
+        def frame(icon_value):
+            pixels = [(background,) * 3] * (w * h)
+            x0, y0, x1, y1 = lk._box(w, h, rect)
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    if math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= radius:
+                        pixels[y * w + x] = (icon_value,) * 3
+            return pixels
+
+        enabled = lk.icon_contrast(frame(icon), w, h, rect)
+        dimmed = lk.icon_contrast(frame(blend), w, h, rect)
+        self.assertGreater(enabled, 0)
+        self.assertLessEqual(dimmed / enabled, lk.ICON_DIM_RATIO)
+        # Negative control: an undimmed disabled icon is not accepted.
+        self.assertGreater(lk.icon_contrast(frame(icon), w, h, rect) / enabled, lk.ICON_DIM_RATIO)
 
 
 if __name__ == "__main__":

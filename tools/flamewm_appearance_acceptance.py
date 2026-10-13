@@ -268,7 +268,11 @@ class Session:
     def input(self, **kwargs) -> tuple[int, str]:
         kwargs.setdefault("click", None)
         kwargs.setdefault("key", None)
-        return base.send_input(self.ctx, **kwargs)
+        code, recorded = base.send_input(self.ctx, **kwargs)
+        if code != 0:
+            # A refused XTEST call means no input reached the WM; never let the scenario read stale pixels as results.
+            raise RuntimeError(f"XTEST input refused on {self.ctx.display} (exit {code}): {recorded}")
+        return code, recorded
 
     def client_frame(self, nodes: list[dict]) -> tuple[dict | None, dict | None]:
         client = find_named(nodes, "xclock")
@@ -322,31 +326,65 @@ def ap02(s: Session) -> dict:
                   f"taskbar_after={tb_after}"], ["xwininfo -root -tree", "import -window root", "XTEST key Super_L"])
 
 
+def accent_match_count(pixels: list[tuple[int, int, int]], rgb: tuple[int, int, int]) -> int:
+    """Pixels whose colour is the accent within a tolerance of 2 per channel."""
+    return sum(1 for p in pixels if close_enough(p, rgb, 2))
+
+
+FLAME_RED_RGB = (0xEF, 0x40, 0x48)
+
+
 def ap03(s: Session) -> dict:
+    # The accent line above the taskbar was removed from panel.html; the accent is now consumed by the focused
+    # task slot underline (.task-slot.focused .underline, 3px, projected with accentOpacity).
     tb, accent = "#336699", "#00AA00"
-    if not s.restart({"taskbarColor": tb, "taskbarOpacity": "100", "accent": accent, "accentOpacity": "100"}):
-        return entry("AP03", FAIL, "WM or shell exited during restart")
-    path, px = s.shot("AP03-accent-100")
     rgb = base.accent_rgb(accent)
     strip = s.taskbar_rect()
+
+    def focused_client_shot(name: str, opacity: str) -> tuple[Path | None, list[tuple[int, int, int]] | None]:
+        if not s.restart({"taskbarColor": tb, "taskbarOpacity": "100", "accent": accent,
+                          "accentOpacity": opacity, "taskbarStyle": "classic"}):
+            return None, None
+        s.spawn_client()
+        _, frame = s.client_frame(s.tree(f"{name}-client"))
+        if frame is None:
+            return None, None
+        s.input(click=f"{frame['x'] + frame['w'] // 2},{frame['y'] + 15}")  # focus the xclock via its titlebar
+        time.sleep(1.0)
+        return s.shot(name)
+
+    path, px = focused_client_shot("AP03-accent-100", "100")
+    if px is None:
+        return entry("AP03", FAIL, "WM or shell exited or client frame missing during the accent 100 probe")
+    top_rows = s.pixels(px, (0, strip[1], strip[2], 3))
+    line_pixels = accent_match_count(top_rows, rgb)
+    if line_pixels:
+        return entry("AP03", FAIL, f"accent-coloured pixels in the taskbar top rows ({line_pixels}): the removed "
+                     "accent line is back", [str(path), f"top_row_accent_pixels={line_pixels}"],
+                     ["import -window root"])
     coords = [(x, y) for y in range(strip[1], strip[1] + strip[3]) for x in range(strip[0], strip[0] + strip[2])
               if close_enough(s.pixel(px, x, y), rgb, 2)]
     if len(coords) < 8:
-        return entry("AP03", NOT_RUN, f"accent line not located on taskbar ({len(coords)} accent pixels)",
-                     [str(path)])
+        # projection.rs paints the focused underline with a fixed #ef4048 inline background, shadowing CSS var(--accent).
+        flame = accent_match_count(s.pixels(px, strip), FLAME_RED_RGB)
+        return entry("AP03", FAIL, f"focused task underline not accent-coloured ({len(coords)} accent pixels; "
+                     f"{flame} pixels of the fixed focused red #ef4048 in the strip)",
+                     [str(path), f"top_row_accent_pixels={line_pixels}", f"fixed_red_pixels={flame}"],
+                     ["import -window root"])
     bg = dominant_color(s.pixels(px, strip))
-    if not s.restart({"taskbarColor": tb, "taskbarOpacity": "100", "accent": accent, "accentOpacity": "40"}):
-        return entry("AP03", FAIL, "WM or shell exited during second restart")
-    path40, px40 = s.shot("AP03-accent-40")
+    path40, px40 = focused_client_shot("AP03-accent-40", "40")
+    if px40 is None:
+        return entry("AP03", FAIL, "WM or shell exited or client frame missing during the accent 40 probe")
     sampled = Counter(s.pixel(px40, x, y) for x, y in coords).most_common(1)[0][0]
     expected = blend(base.accent_rgb(tb), rgb, 40)
     between = all(min(a, b) <= c <= max(a, b) for a, b, c in zip(base.accent_rgb(tb), rgb, sampled))
     ok = close_enough(sampled, expected, 3) and between and bg is not None
     return entry("AP03", PASS if ok else FAIL,
-                 "" if ok else f"accent@40 pixel {sampled} vs blend {expected}",
-                 [str(path), str(path40), f"accent_pixels={len(coords)}", f"accent100_bg={bg}",
+                 "" if ok else f"underline accent@40 pixel {sampled} vs blend {expected}",
+                 [str(path), str(path40), f"top_row_accent_pixels={line_pixels}",
+                  f"underline_accent_pixels={len(coords)}", f"accent100_bg={bg}",
                   f"accent40_pixel={sampled}", f"expected_blend={expected}"],
-                 ["import -window root", "XTEST none; settings seeded accentOpacity=40"])
+                 ["import -window root", "XTEST click titlebar", "settings seeded accentOpacity=40"])
 
 
 class _XClientMessage(ctypes.Structure):
@@ -639,7 +677,7 @@ def ap05(s: Session) -> dict:
 
 
 def _ap06_slide(s: Session) -> dict:
-    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": "slide-up"}):
+    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": "slide-up", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
         return entry("AP06", FAIL, "WM or shell exited during restart")
     ys: list[int] = []
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
@@ -677,7 +715,7 @@ def _ap06_slide(s: Session) -> dict:
             res = entry("AP06", FAIL, f"open #{cycle + 1} did not slide (y samples {seen}, rest y {rest_y})",
                         [f"y_samples={ys}", f"repeat_{cycle}={seen}"], ["xwininfo -root -tree polling"])
             break
-    if not s.restart({"animationsEnabled": "false", "startAnimationEnabled": "false", "startAnimation": "slide-up"}):
+    if not s.restart({"animationsEnabled": "false", "startAnimationEnabled": "false", "startAnimation": "slide-up", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
         return entry("AP06", FAIL, "WM or shell exited during disabled restart")
     ys2: list[int] = []
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
@@ -696,7 +734,7 @@ def _ap06_slide(s: Session) -> dict:
 def animation_slider_check(s: Session) -> tuple[list[str], list[str]]:
     """Drag the real Settings animation speed slider to its far end and read animationSpeed back."""
     ev: list[str] = []
-    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "taskbarOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "true", "animationSpeed": "100", "taskbarOpacity": "100", "taskbarStyle": "classic", "startMenuOpacity": "100"}):
         return ["WM or shell exited before the slider check"], ev
     s.ctx.stop(s.client)  # a leftover client window would sit above Settings and swallow the wheel
     settings = s.ctx.spawn("settings-ap06", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
@@ -856,7 +894,7 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
     fails: list[str] = []
     ev: list[str] = []
     width = lambda b: (b[2] - b[0]) if b else 0  # noqa: E731
-    if not s.restart({"animationsEnabled": "true", "maximizeAnimationEnabled": "true", "animationSpeed": "25",
+    if not s.restart({"animationsEnabled": "true", "maximizeAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
                       "taskbarOpacity": "100"}):
         return ["WM or shell exited before the maximize check"], ev
     s.spawn_client()
@@ -885,7 +923,7 @@ def extra_effect_checks(s: Session) -> tuple[list[str], list[str]]:
         if not (0 < end_w < final_w * 0.5) or not middle_u:
             fails.append(f"unmaximize did not shrink through intermediate sizes (widths {widths_u})")
     # Window open: the first frames after map are smaller than the settled window.
-    if not s.restart({"animationsEnabled": "true", "windowOpenAnimationEnabled": "true", "animationSpeed": "25",
+    if not s.restart({"animationsEnabled": "true", "windowOpenAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
                       "taskbarOpacity": "100"}):
         return fails + ["WM or shell exited before the window-open check"], ev
     s.ctx.stop(s.client)
@@ -944,7 +982,7 @@ def style_matrix_checks(s: Session) -> tuple[list[str], list[str]]:
     ev: list[str] = []
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
     width = lambda b: (b[2] - b[0]) if b else 0  # noqa: E731
-    base = {"animationsEnabled": "true", "animationSpeed": "25", "taskbarOpacity": "100"}
+    base = {"animationsEnabled": "true", "animationSpeed": "25", "taskbarOpacity": "100", "taskbarStyle": "classic"}
     for effect, key, click in (
         ("minimize", "minimizeAnimation", lambda f: f"{f['x'] + f['w'] - 3 * BUTTON_WIDTH + BUTTON_WIDTH // 2},{f['y'] + 15}"),
         ("maximize", "maximizeAnimation", lambda f: f"{f['x'] + f['w'] - 57},{f['y'] + 15}"),
@@ -1079,7 +1117,7 @@ def respawn_after_minimize_check(s: Session) -> tuple[list[str], list[str]]:
 def ap07(s: Session) -> dict:
     # Slowed to 0.25x so the ~100 ms screenshots land inside the flight; the measurement is the painted
     # client pixels (bounding box of non-black content above the taskbar), not an overlay window's size.
-    if not s.restart({"animationsEnabled": "true", "minimizeAnimationEnabled": "true", "animationSpeed": "25",
+    if not s.restart({"animationsEnabled": "true", "minimizeAnimationEnabled": "true", "animationSpeed": "25", "taskbarStyle": "classic",
                       "taskbarOpacity": "100"}):
         return entry("AP07", FAIL, "WM or shell exited during restart")
     capability = "32-bit ARGB visual" if "depth 32" in subprocess.run(
@@ -1213,7 +1251,7 @@ def ap08(s: Session) -> dict:
         home_icons.symlink_to(icons)
     digests = {}
     for theme in (s.args.cursor_theme_base, s.args.cursor_theme_alt):
-        if not s.restart({"cursorTheme": theme, "taskbarOpacity": "100"}):
+        if not s.restart({"cursorTheme": theme, "taskbarOpacity": "100", "decoration": "rounded"}):
             return entry("AP08", FAIL, "WM or shell exited during cursor restart")
         # The WM defines themed cursors on frame resize handles; the bare root keeps the stock X cursor.
         s.spawn_client()
@@ -1355,11 +1393,16 @@ def utc_now() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
 
+def xtest_display_ok(display: str) -> bool:
+    """flamewm_xtest.py only accepts nested displays :97..:119; any other display silently drops all input."""
+    return re.fullmatch(r":\d+", display) is not None and int(display[1:]) in range(97, 120)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--run-dir", required=True)
     p.add_argument("--geometry", default="1280x800")
-    p.add_argument("--display", default=None)
+    p.add_argument("--display", default=None, help="nested display in :97..:119 (XTEST input range)")
     p.add_argument("--wm-bin", default=str(ROOT / ".target/release/flamewm"))
     p.add_argument("--shell-bin", default=str(ROOT / ".target/release/flamewm-shell"))
     p.add_argument("--settings-bin", default=str(ROOT / ".target/release/flamewm-settings"))
@@ -1375,6 +1418,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = p.parse_args(argv)
     if not re.fullmatch(r"\d+x\d+", args.geometry):
         p.error("--geometry must be WxH")
+    if args.display is not None and not xtest_display_ok(args.display):
+        p.error("--display must be in :97..:119 (XTEST input range); other displays cannot receive input")
     args.screen_w, args.screen_h = (int(v) for v in args.geometry.split("x"))
     return args
 
@@ -1403,6 +1448,8 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
         display = base.pick_display(args.display)
         if display is None:
             raise_block(results, "no free display in :90..:99")
+        elif not xtest_display_ok(display):
+            raise_block(results, f"auto-picked {display} is outside the XTEST input range :97..:119")
         else:
             ctx.display = display
             ctx.build_app_env()
@@ -1514,8 +1561,8 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
 
     ev: list[str] = []
     tag = f"AP06-{style}"
-    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style,
-                      "animationSpeed": "25", "taskbarOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style, "taskbarStyle": "classic",
+                      "animationSpeed": "25", "taskbarOpacity": "100", "startMenuOpacity": "100"}):
         return [f"{style}: WM or shell exited before the Start style check"], ev
     s.input(key=base.SHORTCUT_DEFAULT_BINDING)
     time.sleep(s.args.settle_seconds)
@@ -1660,8 +1707,8 @@ def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[s
 
     ev: list[str] = []
     tag = f"AP06-above-{style}"
-    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style,
-                      "animationSpeed": "25", "taskbarOpacity": "100"}):
+    if not s.restart({"animationsEnabled": "true", "startAnimationEnabled": "true", "startAnimation": style, "taskbarStyle": "classic",
+                      "animationSpeed": "25", "taskbarOpacity": "100", "startMenuOpacity": "100"}):
         return [f"{style}: WM or shell exited before the stacking check"], ev
     s.ctx.stop(s.client)
     s.client = None
@@ -1822,14 +1869,13 @@ def color_picker_check(s: Session) -> tuple[list, list]:
     fails: list = []
     if not s.restart({"taskbarColor": "#336699", "startMenuColor": "#191B1D", "taskbarOpacity": "100"}):
         return ev, ["WM or shell exited before the colour picker check"]
-    settings = s.ctx.spawn("settings-ap04-picker", [s.args.settings_bin, "--page", "appearance"], s.ctx.app_env)
+    settings = s.ctx.spawn("settings-ap04-picker", [s.args.settings_bin, "--page", "taskbar"], s.ctx.app_env)
     try:
         time.sleep(s.args.settle_seconds)
         s.input(click="400,16")  # title bar: raise Settings above the AP04 client window
         time.sleep(0.6)
         s.input(move="500,300")
-        s.input(wheel="down:12")  # Start menu and Accent rows scroll away; Taskbar color is next
-        time.sleep(0.8)
+        time.sleep(0.8)  # Taskbar page opens with the Panel card, whose Color row is the modern picker row
         width = s.args.screen_w
         window = (0, 0, 830, 580)
         _, px = s.shot("AP04-picker-rows")

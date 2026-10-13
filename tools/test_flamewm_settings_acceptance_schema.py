@@ -1454,5 +1454,37 @@ class KeyboardPreflightTests(unittest.TestCase):
         self.assertIn("stuck modifier Super_R", entry["reason"])
 
 
+class SS05ManagedWallpaperTests(unittest.TestCase):
+    def test_store_copy_with_identical_bytes_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            fixture = run / "fixtures" / "wallpaper.png"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_bytes(b"png-bytes")
+            store = run / "xdg-data" / "flamewm" / "wallpapers"
+            store.mkdir(parents=True)
+            copy = store / "desktop-0123.png"
+            copy.write_bytes(b"png-bytes")
+            self.assertTrue(acc.ss05_wallpaper_matches_fixture(str(copy), fixture, run))
+            self.assertTrue(acc.ss05_wallpaper_matches_fixture(str(fixture), fixture, run))
+
+    def test_store_copy_with_different_bytes_or_outside_store_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            fixture = run / "fixtures" / "wallpaper.png"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_bytes(b"png-bytes")
+            store = run / "xdg-data" / "flamewm" / "wallpapers"
+            store.mkdir(parents=True)
+            wrong = store / "desktop-wrong.png"
+            wrong.write_bytes(b"other-bytes")
+            outside = run / "elsewhere.png"
+            outside.write_bytes(b"png-bytes")
+            self.assertFalse(acc.ss05_wallpaper_matches_fixture(str(wrong), fixture, run))
+            self.assertFalse(acc.ss05_wallpaper_matches_fixture(str(outside), fixture, run))
+            self.assertFalse(acc.ss05_wallpaper_matches_fixture("", fixture, run))
+            self.assertFalse(acc.ss05_wallpaper_matches_fixture(None, fixture, run))
+
+
 if __name__ == "__main__":
     unittest.main()

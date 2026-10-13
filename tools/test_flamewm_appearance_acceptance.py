@@ -313,5 +313,55 @@ class ColourPickerMetricTests(unittest.TestCase):
         self.assertGreaterEqual(ap.hue_bins(wheel, self.W, (0, 0, 12, 10)), 6)
 
 
+class XtestDisplayGuardTests(unittest.TestCase):
+    """:94 is outside flamewm_xtest.py's :97..:119 range; the old harness ran it and every input was dropped."""
+
+    def test_xtest_range_accepts_only_97_to_119(self) -> None:
+        self.assertTrue(ap.xtest_display_ok(":97"))
+        self.assertTrue(ap.xtest_display_ok(":119"))
+        self.assertFalse(ap.xtest_display_ok(":94"))
+        self.assertFalse(ap.xtest_display_ok(":120"))
+        self.assertFalse(ap.xtest_display_ok("97"))
+        self.assertFalse(ap.xtest_display_ok(":9x"))
+
+    def test_parse_args_refuses_display_outside_xtest_range(self) -> None:
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ap.parse_args(["--run-dir", "/tmp/unused-ap-run", "--display", ":94"])
+        self.assertEqual(ap.parse_args(["--run-dir", "/tmp/unused-ap-run", "--display", ":97"]).display, ":97")
+
+    def test_refused_xtest_call_raises_instead_of_silent_pass_through(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+
+        session = ap.Session(SimpleNamespace(display=":97"), SimpleNamespace())
+        with mock.patch.object(ap.base, "send_input", return_value=(2, "shell line")):
+            with self.assertRaises(RuntimeError):
+                session.input(click="10,10")
+        with mock.patch.object(ap.base, "send_input", return_value=(0, "ok")):
+            self.assertEqual(session.input(key="Super_L"), (0, "ok"))
+
+
+class AccentLineAbsenceTests(unittest.TestCase):
+    """AP03 asserts the taskbar top rows carry no accent line; the negative control must flag a real line."""
+
+    ACCENT = (0x00, 0xAA, 0x00)
+    BAR = (0x33, 0x66, 0x99)
+
+    def test_top_rows_with_accent_line_are_flagged(self) -> None:
+        width = 40
+        strip = [self.BAR] * (width * 3)
+        for x in range(width):
+            strip[1 * width + x] = self.ACCENT  # a 1px accent line in row 1
+        self.assertGreaterEqual(ap.accent_match_count(strip, self.ACCENT), width)
+
+    def test_clean_top_rows_are_not_flagged(self) -> None:
+        width = 40
+        strip = [self.BAR] * (width * 3)
+        self.assertEqual(ap.accent_match_count(strip, self.ACCENT), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
