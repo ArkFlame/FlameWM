@@ -11,9 +11,9 @@ use flamewm_image_core::wallpaper::{self, DEFAULT_WALLPAPER_PATH};
 use flamewm_image_core::RgbaImage;
 pub use flamewm_render_x11::backdrop::{blur_radius_px, MAX_BLUR_RADIUS_PX};
 
-/// Fitted wallpaper pixels under `rect` (root-space device px): the wallpaper composed onto the
-/// root canvas exactly as the desktop owner does, then cropped. Pure: reads no root pixels, so a
-/// bar's own paint or a not-yet-painted desktop cannot leak into the snapshot.
+/// Fitted wallpaper pixels under `rect` (root-space device px): the wallpaper placed on the root
+/// canvas exactly as the desktop owner does, computed for `rect` only. Pure: reads no root pixels,
+/// so a bar's own paint or a not-yet-painted desktop cannot leak into the snapshot.
 #[must_use]
 pub fn wallpaper_backdrop(
     natural: &RgbaImage,
@@ -21,28 +21,7 @@ pub fn wallpaper_backdrop(
     fit: WallpaperFit,
     rect: (i32, i32, u32, u32),
 ) -> Option<RgbaImage> {
-    let (x, y, width, height) = rect;
-    let canvas = wallpaper::compose(natural, root.0, root.1, fit)?;
-    let x0 = u32::try_from(x).ok()?;
-    let y0 = u32::try_from(y).ok()?;
-    if width == 0
-        || height == 0
-        || x0.checked_add(width)? > canvas.width
-        || y0.checked_add(height)? > canvas.height
-    {
-        return None;
-    }
-    let row_bytes = width as usize * 4;
-    let mut pixels = Vec::with_capacity(row_bytes * height as usize);
-    for row in y0..y0 + height {
-        let start = (row as usize * canvas.width as usize + x0 as usize) * 4;
-        pixels.extend_from_slice(&canvas.pixels[start..start + row_bytes]);
-    }
-    Some(RgbaImage {
-        width,
-        height,
-        pixels,
-    })
+    wallpaper::compose_region(natural, root.0, root.1, fit, rect)
 }
 
 /// Fitted wallpaper pixels under `rect`, decoded from the `wallpaper` setting (empty means the

@@ -119,24 +119,33 @@ fn premultiply(channel: u8, alpha: u8) -> u32 {
 
 /// Converts straight RGBA8 (`BackdropCapture` layout) to premultiplied ARGB32.
 pub fn rgba_to_argb(width: u32, height: u32, rgba: &[u8]) -> Result<CapturedImage, String> {
+    rgba_to_argb_owned(width, height, rgba.to_vec())
+}
+
+/// Same conversion as [`rgba_to_argb`], reusing the caller's buffer instead of allocating
+/// a second one. Each pixel is rewritten from its own four bytes, so in-place is exact.
+pub fn rgba_to_argb_owned(
+    width: u32,
+    height: u32,
+    mut buf: Vec<u8>,
+) -> Result<CapturedImage, String> {
     check_capture_size(width, height)?;
     let pixel_count = width as usize * height as usize;
-    if rgba.len() != pixel_count * 4 {
+    if buf.len() != pixel_count * 4 {
         return Err("capture: RGBA buffer length mismatch".to_string());
     }
-    let mut argb = Vec::with_capacity(pixel_count * 4);
-    for px in rgba.chunks_exact(4) {
+    for px in buf.chunks_exact_mut(4) {
         let a = px[3];
         let packed = (u32::from(a) << 24)
             | (premultiply(px[0], a) << 16)
             | (premultiply(px[1], a) << 8)
             | premultiply(px[2], a);
-        argb.extend_from_slice(&packed.to_ne_bytes());
+        px.copy_from_slice(&packed.to_ne_bytes());
     }
     Ok(CapturedImage {
         width,
         height,
-        argb,
+        argb: buf,
     })
 }
 
@@ -178,7 +187,7 @@ pub fn capture_window(display: *mut Display, window: Window) -> Result<CapturedI
             width,
             height,
             pixels,
-        }) => rgba_to_argb(width, height, &pixels),
+        }) => rgba_to_argb_owned(width, height, pixels),
         // A window hanging past the screen edge (a maximized frame's border) is refused by the
         // server; capture what is on screen and pad the rest so the flight still has pixels.
         Err(first) => capture_clipped(display, window, width, height).ok_or(first),
@@ -219,7 +228,7 @@ fn capture_clipped(display: *mut Display, window: Window, width: u32, height: u3
         let dst = ((vy as usize + row) * width as usize + vx as usize) * 4;
         full[dst..dst + cw as usize * 4].copy_from_slice(pixels.get(src..src + cw as usize * 4)?);
     }
-    rgba_to_argb(width, height, &full).ok()
+    rgba_to_argb_owned(width, height, full).ok()
 }
 
 /// Uploads `capture` into a new depth-32 pixmap on the default screen.
@@ -341,6 +350,66 @@ mod tests {
     #[test]
     fn rgba_rejects_length_mismatch() {
         assert!(rgba_to_argb(2, 2, &[0; 4]).is_err());
+        assert!(rgba_to_argb_owned(2, 2, vec![0; 4]).is_err());
+    }
+
+    /// The pre-optimization conversion, kept as the bit-exact oracle.
+    fn reference_rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
+        let mut argb = Vec::with_capacity(rgba.len());
+        for px in rgba.chunks_exact(4) {
+            let a = px[3];
+            let packed = (u32::from(a) << 24)
+                | (premultiply(px[0], a) << 16)
+                | (premultiply(px[1], a) << 8)
+                | premultiply(px[2], a);
+            argb.extend_from_slice(&packed.to_ne_bytes());
+        }
+        argb
+    }
+
+    #[test]
+    fn owned_conversion_is_bit_identical_to_reference() {
+        const EDGES: [u8; 8] = [0, 1, 127, 128, 254, 255, 2, 253];
+        // Deterministic LCG so the random coverage is reproducible without a rand dependency.
+        let mut state: u32 = 0x1234_5678;
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        };
+        let mut rgba = Vec::new();
+        for i in 0..(64 * 64) {
+            for c in 0..4 {
+                let v = match c {
+                    3 => {
+                        if i % 3 == 0 {
+                            EDGES[i % EDGES.len()]
+                        } else {
+                            next()
+                        }
+                    }
+                    _ => {
+                        if i % 5 == 0 {
+                            EDGES[(i + c) % EDGES.len()]
+                        } else {
+                            next()
+                        }
+                    }
+                };
+                rgba.push(v);
+            }
+        }
+        // Every (channel, alpha) pair over the edge set, exhaustively.
+        for &a in &EDGES {
+            for &ch in &EDGES {
+                rgba.extend_from_slice(&[ch, 255 - ch, ch / 2, a]);
+            }
+        }
+        let expected = reference_rgba_to_argb(&rgba);
+        let copied = rgba_to_argb(rgba.len() as u32 / 4, 1, &rgba).expect("valid buffer");
+        assert_eq!(copied.argb, expected);
+        let owned =
+            rgba_to_argb_owned(rgba.len() as u32 / 4, 1, rgba.clone()).expect("valid buffer");
+        assert_eq!(owned.argb, expected);
     }
 
     #[test]

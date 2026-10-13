@@ -557,9 +557,6 @@ pub(crate) fn unique_paths(values: Vec<PathBuf>) -> Vec<PathBuf> {
     unique
 }
 
-/// Search roots: `$HOME/.icons`, `$XDG_DATA_HOME/icons`, each
-/// `$XDG_DATA_DIRS/icons`. Returned roots may not exist; callers skip missing.
-#[must_use]
 /// Theme directory under one icon root. Exact name first, then a
 /// case-insensitive match so `Breeze` finds an installed `breeze`.
 fn theme_dir(root: &Path, theme: &str) -> Option<PathBuf> {
@@ -574,6 +571,9 @@ fn theme_dir(root: &Path, theme: &str) -> Option<PathBuf> {
     })
 }
 
+/// Search roots: `$HOME/.icons`, `$XDG_DATA_HOME/icons`, each
+/// `$XDG_DATA_DIRS/icons`. Returned roots may not exist; callers skip missing.
+#[must_use]
 pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -635,6 +635,12 @@ pub struct IconLookupIndex {
     pub memo_cap: usize,
     hits: std::sync::atomic::AtomicU64,
     misses: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: `index.theme` reads performed by the current thread.
+    static INDEX_THEME_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Live count of [`IconLookupIndex::build`] calls (one-time index proof).
@@ -711,9 +717,10 @@ impl IconLookupIndex {
             seeds.push("hicolor".to_owned());
         }
         // Parse needed indexes on demand through the inheritance walk.
-        let mut parsed: HashMap<String, Option<IconThemeIndex>> = HashMap::new();
-        let mut load = |theme: &str| -> Option<IconThemeIndex> {
-            if let Some(hit) = parsed.get(theme) {
+        let parsed: std::cell::RefCell<HashMap<String, Option<IconThemeIndex>>> =
+            std::cell::RefCell::new(HashMap::new());
+        let load = |theme: &str| -> Option<IconThemeIndex> {
+            if let Some(hit) = parsed.borrow().get(theme) {
                 return hit.clone();
             }
             let mut found = None;
@@ -723,34 +730,21 @@ impl IconLookupIndex {
                 };
                 if dir.join("index.theme").is_file() {
                     if let Ok(text) = fs::read_to_string(dir.join("index.theme")) {
+                        #[cfg(test)]
+                        INDEX_THEME_READS.with(|c| c.set(c.get() + 1));
                         found = Some(IconThemeIndex::parse(theme, &text));
                         break;
                     }
                 }
             }
-            parsed.insert(theme.to_owned(), found.clone());
+            parsed.borrow_mut().insert(theme.to_owned(), found.clone());
             found
         };
         let mut ordered: Vec<String> = Vec::new();
         for seed in &seeds {
-            // Borrow dance: inheritance_chain needs &dyn Fn; use a closure
-            // over a local loader that reads from disk directly.
-            let loader = |theme: &str| -> Option<IconThemeIndex> {
-                for root in search_roots(data_dirs) {
-                    let Some(dir) = theme_dir(&root, theme) else {
-                        continue;
-                    };
-                    if dir.join("index.theme").is_file() {
-                        if let Ok(text) = fs::read_to_string(dir.join("index.theme")) {
-                            return Some(IconThemeIndex::parse(theme, &text));
-                        }
-                    }
-                }
-                None
-            };
-            for name in inheritance_chain(seed, &loader) {
+            for name in inheritance_chain(seed, &load) {
                 // Ensure parsed entry exists for every chained theme.
-                let _ = load(&name.clone());
+                let _ = load(&name);
                 if !ordered.contains(&name) {
                     ordered.push(name);
                 }
@@ -781,6 +775,7 @@ impl IconLookupIndex {
         // record actual supported files only.
         let mut files: HashMap<String, Vec<IndexedIconFile>> = HashMap::new();
         for (theme_rank, theme) in ordered.iter().enumerate() {
+            let parsed = parsed.borrow();
             let Some(Some(index)) = parsed.get(theme) else {
                 continue;
             };
@@ -817,12 +812,15 @@ impl IconLookupIndex {
                         });
                     }
                 }
-                let _ = directory_rank;
             }
         }
         // Store per-file distance lazily at lookup (size-dependent).
         for (theme_rank, theme) in ordered.iter().enumerate() {
-            if parsed.get(theme).is_some_and(|entry| entry.is_some()) {
+            if parsed
+                .borrow()
+                .get(theme)
+                .is_some_and(|entry| entry.is_some())
+            {
                 continue;
             }
             let Some(roots_for_theme) = theme_roots.get(theme) else {
@@ -871,7 +869,7 @@ impl IconLookupIndex {
         let mut index = Self::new_full(
             roots,
             ordered,
-            parsed,
+            parsed.into_inner(),
             theme_roots,
             files,
             pixmaps,
@@ -1270,5 +1268,34 @@ mod tests {
         assert!(hit, "Breeze must serve when the selected theme is absent");
         assert!(paths[0].ends_with("Breeze/16x16/apps/fallback-app.png"));
         assert!(missing.is_empty() && !missing_hit, "intentionally missing icon stays empty");
+    }
+
+    #[test]
+    fn build_parses_each_chained_index_theme_once() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-parse-once-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        theme_fixture(&data, "Breeze", FIXED_16, Some("once-app.png"));
+        let mine = data.join("icons").join("Mine");
+        fs::create_dir_all(&mine).expect("selected theme dir");
+        fs::write(
+            mine.join("index.theme"),
+            "[Icon Theme]\nName=Mine\nInherits=Breeze\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
+        )
+        .expect("selected index.theme");
+        let names = vec!["Mine".to_owned()];
+        INDEX_THEME_READS.with(|c| c.set(0));
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let reads = INDEX_THEME_READS.with(|c| c.get());
+        let (paths, hit) = index.lookup("once-app", 16);
+        let _ = fs::remove_dir_all(&data);
+        assert_eq!(
+            reads, 2,
+            "Mine and Breeze each parse index.theme once per build"
+        );
+        assert!(hit && paths[0].ends_with("Breeze/16x16/apps/once-app.png"));
     }
 }
