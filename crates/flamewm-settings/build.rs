@@ -25,9 +25,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", ui.display());
     println!("cargo:rerun-if-changed={}", css.display());
-    println!("cargo:rerun-if-changed={}", breeze.display());
-    println!("cargo:rerun-if-changed={}", branding.display());
-    println!("cargo:rerun-if-changed={}", web.join("color-wheel.png").display());
+    rerun_tree(&breeze);
+    rerun_tree(&branding);
+    for name in ["flamewm-icon.svg", "github.svg", "paypal.svg", "color-wheel.png"] {
+        println!("cargo:rerun-if-changed={}", web.join(name).display());
+    }
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let staged_ui = out_dir.join("settings");
@@ -63,5 +65,18 @@ fn stage_tree(source: &Path, dest: &Path) {
         if path.is_file() {
             fs::copy(&path, dest.join(entry.file_name())).expect("stage asset file");
         }
+    }
+}
+
+fn rerun_tree(dir: &Path) {
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut files = fs::read_dir(dir)
+        .expect("read tracked asset dir")
+        .map(|entry| entry.expect("read tracked asset entry").path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    files.sort();
+    for file in files {
+        println!("cargo:rerun-if-changed={}", file.display());
     }
 }

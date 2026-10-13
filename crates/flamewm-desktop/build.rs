@@ -19,7 +19,7 @@ fn main() {
     let breeze = root.join("assets/web/breeze");
     println!("cargo:rerun-if-changed={}", html_path.display());
     println!("cargo:rerun-if-changed={}", css_path.display());
-    println!("cargo:rerun-if-changed={}", breeze.display());
+    rerun_tree(&breeze);
     println!("cargo:rerun-if-changed={}", wallpaper.display());
     assert!(
         wallpaper.is_file(),
@@ -110,5 +110,18 @@ fn validate_text_targets(output: &CompileOutput) {
         {
             panic!("desktop UI text target '{id}' is not a single-text-node element");
         }
+    }
+}
+
+fn rerun_tree(dir: &Path) {
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut files = fs::read_dir(dir)
+        .expect("read tracked asset dir")
+        .map(|entry| entry.expect("read tracked asset entry").path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    files.sort();
+    for file in files {
+        println!("cargo:rerun-if-changed={}", file.display());
     }
 }

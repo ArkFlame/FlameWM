@@ -37,6 +37,9 @@ fn main() {
             root.join("ui/shell").join(source).display()
         );
     }
+    let shell_assets = root.join("ui/shell/assets");
+    rerun_tree(&shell_assets.join("web/breeze"));
+    rerun_tree(&shell_assets.join("branding"));
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let staged_ui = out_dir.join("shell");
@@ -49,7 +52,6 @@ fn main() {
     fs::copy(&css, staged_ui.join("flamewm.css")).expect("stage shell CSS");
     // Keyed PPM refs are retired: stage true-alpha SVG/Breeze + branding
     // paths so compiled templates resolve local build inputs only.
-    let shell_assets = root.join("ui/shell/assets");
     stage_tree(
         &shell_assets.join("web/breeze"),
         &staged_assets.join("breeze"),
@@ -79,4 +81,17 @@ fn compile_to(source: &Path, output: &Path) {
         .unwrap_or_else(|error| panic!("failed to compile {}: {error}", source.display()));
     let bytes = encode(&compiled.document).expect("compiled FlameWM UI must encode");
     fs::write(output, bytes).expect("write compiled FlameWM UI artifact");
+}
+
+fn rerun_tree(dir: &Path) {
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut files = fs::read_dir(dir)
+        .expect("read tracked asset dir")
+        .map(|entry| entry.expect("read tracked asset entry").path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    files.sort();
+    for file in files {
+        println!("cargo:rerun-if-changed={}", file.display());
+    }
 }
