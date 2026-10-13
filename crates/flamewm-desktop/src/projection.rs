@@ -96,7 +96,7 @@ pub fn project_menu_surface(
         Some(SettingValue::Percent(value)) => (*value).min(100),
         _ => DEFAULT_SURFACE_BLUR_PERCENT,
     };
-    document.set_node_backdrop(id, Some(blur))
+    document.node_backdrop(id, Some(blur))
 }
 
 /// Settings default for `surfaceBlurPercent` (shell `Settings::default`).
@@ -104,7 +104,7 @@ const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 
 /// Clears a desktop menu root's node backdrop (menu hidden).
 pub fn clear_menu_backdrop(document: &mut impl UiDocumentAccess, id: &str) -> Result<(), String> {
-    document.set_node_backdrop(id, None)
+    document.node_backdrop(id, None)
 }
 
 pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -714,7 +714,7 @@ mod tests {
             self.corners.push((id.to_owned(), radius_px));
             Ok(())
         }
-        fn set_node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+        fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
             self.backdrops.push((id.to_owned(), blur_percent));
             Ok(())
         }
@@ -819,7 +819,10 @@ mod tests {
 
     #[test]
     fn desktop_menu_radius_defaults_to_rounded_twelve() {
-        for snapshot in [menu_snapshot(None, None), menu_snapshot(Some("rounded"), None)] {
+        for snapshot in [
+            menu_snapshot(None, None),
+            menu_snapshot(Some("rounded"), None),
+        ] {
             let mut probe = MenuShapeProbe::default();
             project_menu_surface(&mut probe, "desktop-menu", &snapshot).expect("project menu");
             assert_eq!(probe.corners, vec![("desktop-menu".to_owned(), 12.0)]);
