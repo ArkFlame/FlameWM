@@ -122,8 +122,18 @@ impl OutputPanel {
                 out.width - 2 * inset,
                 thickness,
             ),
-            PanelEdge::Top => Rect::new(out.x + inset, out.y + inset, out.width - 2 * inset, thickness),
-            PanelEdge::Left => Rect::new(out.x + inset, out.y + inset, thickness, out.height - 2 * inset),
+            PanelEdge::Top => Rect::new(
+                out.x + inset,
+                out.y + inset,
+                out.width - 2 * inset,
+                thickness,
+            ),
+            PanelEdge::Left => Rect::new(
+                out.x + inset,
+                out.y + inset,
+                thickness,
+                out.height - 2 * inset,
+            ),
             PanelEdge::Right => Rect::new(
                 out.right() - inset - thickness,
                 out.y + inset,
@@ -399,12 +409,7 @@ mod tests {
     }
 
     fn floating_panel(edge: PanelEdge, margin: u16, radius: u16) -> OutputPanel {
-        let mut panel = OutputPanel::new(
-            id("eDP-1"),
-            Rect::new(0, 0, 1920, 1080),
-            edge,
-            100,
-        );
+        let mut panel = OutputPanel::new(id("eDP-1"), Rect::new(0, 0, 1920, 1080), edge, 100);
         panel.frame = TaskbarFrame {
             floating: true,
             margin,
@@ -429,7 +434,13 @@ mod tests {
         assert_eq!(panel.inset(), 0);
         assert_eq!(panel.corner_radius(), 0);
         assert_eq!(panel.panel_rect(), Rect::new(0, 1036, 1920, 44));
-        assert_eq!(panel.strut(), Strut { bottom: 44, ..Strut::default() });
+        assert_eq!(
+            panel.strut(),
+            Strut {
+                bottom: 44,
+                ..Strut::default()
+            }
+        );
         assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1036));
     }
 
@@ -437,7 +448,13 @@ mod tests {
     fn floating_bottom_insets_bar_and_reserves_thickness_plus_margin() {
         let panel = floating_panel(PanelEdge::Bottom, 8, 12);
         assert_eq!(panel.panel_rect(), Rect::new(8, 1028, 1904, 44));
-        assert_eq!(panel.strut(), Strut { bottom: 52, ..Strut::default() });
+        assert_eq!(
+            panel.strut(),
+            Strut {
+                bottom: 52,
+                ..Strut::default()
+            }
+        );
         assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1028));
         assert_eq!(panel.corner_radius(), 12);
     }
@@ -446,17 +463,35 @@ mod tests {
     fn floating_top_left_right_inset_and_reserve_per_edge() {
         let top = floating_panel(PanelEdge::Top, 8, 0);
         assert_eq!(top.panel_rect(), Rect::new(8, 8, 1904, 44));
-        assert_eq!(top.strut(), Strut { top: 52, ..Strut::default() });
+        assert_eq!(
+            top.strut(),
+            Strut {
+                top: 52,
+                ..Strut::default()
+            }
+        );
         assert_eq!(top.work_area(), Rect::new(0, 52, 1920, 1028));
 
         let left = floating_panel(PanelEdge::Left, 8, 0);
         assert_eq!(left.panel_rect(), Rect::new(8, 8, 44, 1064));
-        assert_eq!(left.strut(), Strut { left: 52, ..Strut::default() });
+        assert_eq!(
+            left.strut(),
+            Strut {
+                left: 52,
+                ..Strut::default()
+            }
+        );
         assert_eq!(left.work_area(), Rect::new(52, 0, 1868, 1080));
 
         let right = floating_panel(PanelEdge::Right, 8, 0);
         assert_eq!(right.panel_rect(), Rect::new(1868, 8, 44, 1064));
-        assert_eq!(right.strut(), Strut { right: 52, ..Strut::default() });
+        assert_eq!(
+            right.strut(),
+            Strut {
+                right: 52,
+                ..Strut::default()
+            }
+        );
         assert_eq!(right.work_area(), Rect::new(0, 0, 1868, 1080));
     }
 
@@ -503,8 +538,14 @@ mod tests {
             PanelEdge::Bottom,
             150,
         ));
-        assert_eq!(manager.panel(&id("L")).map(|p| p.strut().bottom), Some(t100));
-        assert_eq!(manager.panel(&id("R")).map(|p| p.strut().bottom), Some(t150));
+        assert_eq!(
+            manager.panel(&id("L")).map(|p| p.strut().bottom),
+            Some(t100)
+        );
+        assert_eq!(
+            manager.panel(&id("R")).map(|p| p.strut().bottom),
+            Some(t150)
+        );
         assert_eq!(
             manager.panel(&id("R")).map(OutputPanel::work_area),
             Some(Rect::new(1920, 180, 1280, 720 - t150))
@@ -518,12 +559,18 @@ mod tests {
             PanelEdge::Bottom,
             150,
         ));
-        assert_eq!(manager.panel(&id("R")).map(|p| p.strut().bottom), Some(t150));
+        assert_eq!(
+            manager.panel(&id("R")).map(|p| p.strut().bottom),
+            Some(t150)
+        );
         assert_eq!(
             manager.panel(&id("R")).map(OutputPanel::work_area),
             Some(Rect::new(-1280, 0, 1280, 720 - t150))
         );
-        assert_eq!(manager.panel(&id("L")).map(|p| p.strut().bottom), Some(t100));
+        assert_eq!(
+            manager.panel(&id("L")).map(|p| p.strut().bottom),
+            Some(t100)
+        );
     }
 
     #[test]

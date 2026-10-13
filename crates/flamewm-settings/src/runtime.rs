@@ -8,10 +8,10 @@ use flamewm_ui_x11::{
 };
 
 use crate::SettingsApplication;
-use crate::file_chooser::WallpaperChooserWake;
 use crate::control::{
     KnownRevisions, SettingsControl, SettingsScope, SettingsSignals, SettingsWake, reproject_scope,
 };
+use crate::file_chooser::WallpaperChooserWake;
 use crate::view;
 
 #[path = "launch.rs"]
@@ -40,7 +40,8 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
     let drain = {
         let signals = Rc::clone(&signals);
         let wakes = Rc::clone(&wakes);
-        move || match signals.drain(|signal| wakes.borrow_mut().push(SettingsWake::Signal(signal))) {
+        move || match signals.drain(|signal| wakes.borrow_mut().push(SettingsWake::Signal(signal)))
+        {
             Ok(_) => UiWakeDrain::Keep,
             Err(error) => {
                 wakes
@@ -68,10 +69,13 @@ pub fn run(options: SettingsLaunchOptions) -> Result<(), String> {
         UiWindowRole::Normal,
         signal_fd,
         drain,
-        Some((wallpaper_fd, Box::new(move || {
-            wallpaper_wake.drain();
-            UiWakeDrain::Keep
-        }))),
+        Some((
+            wallpaper_fd,
+            Box::new(move || {
+                wallpaper_wake.drain();
+                UiWakeDrain::Keep
+            }),
+        )),
         move |event, document| {
             let mut application = event_application.borrow_mut();
             // Request failures are shown inline and never end the window loop.

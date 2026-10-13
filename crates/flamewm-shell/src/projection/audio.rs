@@ -91,7 +91,6 @@ pub fn project_audio_full(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod audio_template_tests {
     use super::*;

@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 pub mod start_surface;
 pub mod status_surface;
 use crate::start::{self, StartCategory};
+use crate::surface_backdrop::{blurred_argb, capture_step, CaptureKey, CaptureStep};
 use flamewm_api::applications::{ApplicationLaunchOptions, DesktopApplication};
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::panels::PanelsSnapshot;
@@ -10,22 +11,21 @@ use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::system::{SystemAction, SystemSnapshot};
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
+use flamewm_api::PanelEdge;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_control_wire::ControlSignal;
 use flamewm_image_core::RgbaImage;
-use crate::surface_backdrop::{CaptureKey, CaptureStep, blurred_argb, capture_step};
+use flamewm_platform::panel::{OutputPanel, TaskbarFrame};
 use flamewm_shell_core::popup::{
     anchor_popover_rect, context_menu_rect, context_menu_size, panel_anchor, work_area_for_panel,
     PopupRefusal,
 };
 use flamewm_shell_core::start_surface_layout;
 use flamewm_ui_core::style::ShellMetrics;
-use flamewm_platform::panel::{OutputPanel, TaskbarFrame};
-use flamewm_api::PanelEdge;
 use flamewm_ui_x11::{
-    decode_document, DockEdge, GeometryTrace, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
-    SurfaceRuntime, UiBackendError, UiTemplate,
+    decode_document, DockEdge, GeometryTrace, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
+    SurfaceRole, SurfaceRuntime, UiBackendError, UiTemplate,
 };
 
 const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
@@ -702,7 +702,9 @@ pub fn edge_geometry_consistent(
         }
         flamewm_api::PanelEdge::Top => (0..=max_inset).contains(&(panel.y - output.y)),
         flamewm_api::PanelEdge::Left => (0..=max_inset).contains(&(panel.x - output.x)),
-        flamewm_api::PanelEdge::Right => (0..=max_inset).contains(&(output.right() - panel.right())),
+        flamewm_api::PanelEdge::Right => {
+            (0..=max_inset).contains(&(output.right() - panel.right()))
+        }
     }
 }
 
@@ -828,10 +830,7 @@ fn create_panel_surface(
     // laid out in CSS pixels; without the document scale the bar stops at
     // 44 device pixels and leaves an undrawn band at the bottom edge.
     runtime
-        .apply_output_scale(
-            panel,
-            panel_ui_scale(placement.output.shell_scale_percent),
-        )
+        .apply_output_scale(panel, panel_ui_scale(placement.output.shell_scale_percent))
         .map_err(|error| format!("panel ui scale: {error:?}"))?;
     Ok(panel)
 }
@@ -866,7 +865,11 @@ impl ShellSurfaces {
     /// Re-opens a settled-but-blank panel capture (after our own panel Map), so the next refresh
     /// captures again. A non-uniform capture that already installed is left alone.
     pub fn reopen_panel_capture(&mut self) {
-        if let Some(capture) = self.panel_capture.as_mut().filter(|capture| capture.settled && self.panel_snapshot.is_none()) {
+        if let Some(capture) = self
+            .panel_capture
+            .as_mut()
+            .filter(|capture| capture.settled && self.panel_snapshot.is_none())
+        {
             capture.attempts = 0;
             capture.settled = false;
         }
@@ -875,7 +878,9 @@ impl ShellSurfaces {
     /// Whether the panel snapshot is still unsettled (never captured, or a blank root awaiting retry).
     #[must_use]
     pub fn panel_capture_pending(&self) -> bool {
-        self.panel_capture.as_ref().is_none_or(|capture| !capture.settled)
+        self.panel_capture
+            .as_ref()
+            .is_none_or(|capture| !capture.settled)
     }
 
     /// Recomputes the panel snapshot when its key changed (wallpaper, fit, or bar rect). `wallpaper`
@@ -900,7 +905,9 @@ impl ShellSurfaces {
         let (step, raw) = match wallpaper() {
             Some(image) => (CaptureStep::Use, image),
             None => {
-                let capture = runtime.capture_root_under_unmapped(panel).map_err(ui_error)?;
+                let capture = runtime
+                    .capture_root_under_unmapped(panel)
+                    .map_err(ui_error)?;
                 let ready = flamewm_render_x11::backdrop::capture_is_ready(&capture.pixels);
                 let image = RgbaImage {
                     width: capture.width,
@@ -1105,8 +1112,15 @@ impl ShellSurfaces {
     fn resize_start_group_measured(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
         let work_area = self.primary().placement.work_area;
         let edge = self.primary().placement.panel.edge;
-        let rect = start_surface::refit(runtime, self.primary().panel, self.start, work_area, edge, 8)
-            .map_err(|error| error.to_string())?;
+        let rect = start_surface::refit(
+            runtime,
+            self.primary().panel,
+            self.start,
+            work_area,
+            edge,
+            8,
+        )
+        .map_err(|error| error.to_string())?;
         self.map_raise(runtime, self.start, rect)
     }
 
@@ -1240,7 +1254,8 @@ impl ShellSurfaces {
         fallback: &flamewm_api::Rect,
         source_id: &str,
     ) -> flamewm_api::Rect {
-        crate::runtime::retained_source_rect(runtime, self.primary().panel, source_id).unwrap_or(*fallback)
+        crate::runtime::retained_source_rect(runtime, self.primary().panel, source_id)
+            .unwrap_or(*fallback)
     }
 
     /// Recompute the panel placement records from a fresh snapshot. Updates
@@ -1356,7 +1371,11 @@ impl ShellSurfaces {
     pub fn output_scale_drifted(&self, snapshot: &ShellSnapshot) -> bool {
         self.panels.iter().any(|record| {
             let id = &record.placement.output.id;
-            snapshot.panels.panels.iter().any(|panel| panel.output == *id)
+            snapshot
+                .panels
+                .panels
+                .iter()
+                .any(|panel| panel.output == *id)
                 && snapshot
                     .displays
                     .outputs
@@ -1376,7 +1395,8 @@ impl ShellSurfaces {
             let panel = record.placement.panel.geometry;
             let output = record.placement.output.geometry;
             let edge = record.placement.panel.edge;
-            let max_inset = (FLOATING_MARGIN_MAX_LOGICAL * i32::from(record.placement.output.shell_scale_percent)
+            let max_inset = (FLOATING_MARGIN_MAX_LOGICAL
+                * i32::from(record.placement.output.shell_scale_percent)
                 + 99)
                 / 100;
             let consistent = edge_geometry_consistent(edge, panel, output, max_inset);
@@ -1757,11 +1777,26 @@ mod tests {
         let output = Rect::new(0, 0, 1350, 641);
         // Floating bottom bar: 8 px margin below it, so bottom != output.bottom().
         let floating = Rect::new(8, 589, 1334, 44);
-        assert!(edge_geometry_consistent(PanelEdge::Bottom, floating, output, FLOATING_MARGIN_MAX_LOGICAL));
+        assert!(edge_geometry_consistent(
+            PanelEdge::Bottom,
+            floating,
+            output,
+            FLOATING_MARGIN_MAX_LOGICAL
+        ));
         // A stale Top edge against floating Bottom geometry is still refused.
-        assert!(!edge_geometry_consistent(PanelEdge::Top, floating, output, FLOATING_MARGIN_MAX_LOGICAL));
+        assert!(!edge_geometry_consistent(
+            PanelEdge::Top,
+            floating,
+            output,
+            FLOATING_MARGIN_MAX_LOGICAL
+        ));
         // A bar that does not sit on the edge is refused.
-        assert!(!edge_geometry_consistent(PanelEdge::Bottom, Rect::new(8, 500, 1334, 44), output, FLOATING_MARGIN_MAX_LOGICAL));
+        assert!(!edge_geometry_consistent(
+            PanelEdge::Bottom,
+            Rect::new(8, 500, 1334, 44),
+            output,
+            FLOATING_MARGIN_MAX_LOGICAL
+        ));
 
         // Start popover anchored to the floating bar's Start button lands above the bar,
         // fully inside the work area.
@@ -2211,12 +2246,27 @@ mod tests {
         let contexts = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].output.id, flamewm_api::OutputId::new("HDMI-1"));
-        assert_eq!(contexts[0].output.geometry, flamewm_api::Rect::new(0, 0, 1920, 1080));
-        assert_eq!(contexts[0].work_area, flamewm_api::Rect::new(0, 0, 1920, 1036));
+        assert_eq!(
+            contexts[0].output.geometry,
+            flamewm_api::Rect::new(0, 0, 1920, 1080)
+        );
+        assert_eq!(
+            contexts[0].work_area,
+            flamewm_api::Rect::new(0, 0, 1920, 1036)
+        );
         assert_eq!(contexts[1].output.id, flamewm_api::OutputId::new("HDMI-2"));
-        assert_eq!(contexts[1].output.geometry, flamewm_api::Rect::new(1920, 0, 1280, 1024));
-        assert_eq!(contexts[1].panel.geometry, flamewm_api::Rect::new(1920, 980, 1280, 44));
-        assert_eq!(contexts[1].work_area, flamewm_api::Rect::new(1920, 0, 1280, 980));
+        assert_eq!(
+            contexts[1].output.geometry,
+            flamewm_api::Rect::new(1920, 0, 1280, 1024)
+        );
+        assert_eq!(
+            contexts[1].panel.geometry,
+            flamewm_api::Rect::new(1920, 980, 1280, 44)
+        );
+        assert_eq!(
+            contexts[1].work_area,
+            flamewm_api::Rect::new(1920, 0, 1280, 980)
+        );
         assert!(panel_contexts_for_snapshot(&snapshot, PanelEdge::Top).is_empty());
     }
 

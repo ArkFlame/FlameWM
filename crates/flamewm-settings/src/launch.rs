@@ -149,19 +149,32 @@ mod tests {
         ] {
             assert_eq!(parse_args(["--page", value]).unwrap().page, page, "{value}");
         }
-        assert!(parse_args(["--page", "start"]).unwrap_err().contains("unknown page"));
-        assert!(parse_args(["--page", "lock"]).unwrap_err().contains("unknown page"));
+        assert!(
+            parse_args(["--page", "start"])
+                .unwrap_err()
+                .contains("unknown page")
+        );
+        assert!(
+            parse_args(["--page", "lock"])
+                .unwrap_err()
+                .contains("unknown page")
+        );
     }
 
     #[test]
     fn parser_accepts_only_the_bounded_geometry_matrix() {
         assert_eq!(parse_args::<_, &str>([]).unwrap().window_size, None);
         for size in ["760x500", "820x540", "960x640"] {
-            assert_eq!(parse_args(["--window-size", size]).unwrap().window_size,
-                Some(parse_window_size(size).unwrap()));
+            assert_eq!(
+                parse_args(["--window-size", size]).unwrap().window_size,
+                Some(parse_window_size(size).unwrap())
+            );
         }
         for size in ["0x0", "761x500", "760", "960x641", "760X500"] {
-            assert!(parse_args(["--window-size", size]).is_err(), "accepted {size}");
+            assert!(
+                parse_args(["--window-size", size]).is_err(),
+                "accepted {size}"
+            );
         }
         assert!(parse_args(["--window-size", "760x500", "--window-size", "820x540"]).is_err());
     }

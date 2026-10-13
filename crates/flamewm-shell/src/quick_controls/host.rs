@@ -516,7 +516,10 @@ fn coalesce_commands(queue: &mut VecDeque<Command>) -> VecDeque<Command> {
 fn refresh_settings_for_open(state: &std::rc::Rc<std::cell::RefCell<HostState>>) {
     match ControlClient::connect(BusKind::Session) {
         Ok(client) => state.borrow_mut().snapshot.refresh_settings(&client),
-        Err(error) => eprintln!("flamewm-quick-control: settings refresh skipped: {}", error.message),
+        Err(error) => eprintln!(
+            "flamewm-quick-control: settings refresh skipped: {}",
+            error.message
+        ),
     }
 }
 
@@ -826,43 +829,45 @@ fn project_snapshot(
                 QuickControlKind::Network => "wifi-popup",
                 QuickControlKind::Calendar => "clock-popup",
             };
-            crate::settings_projection::project_menu_background(document, &snapshot.settings, root)?;
-            match kind {
-            QuickControlKind::Audio => crate::projection::project_audio_full(
+            crate::settings_projection::project_menu_background(
                 document,
-                &shell,
-                snapshot.audio_tab,
-                snapshot.audio_settings,
-                snapshot.audio_scroll_offset,
-            ),
-            QuickControlKind::Network => {
-                let query = snapshot.network_query.clone();
-                crate::projection::project_network_full(
+                &snapshot.settings,
+                root,
+            )?;
+            match kind {
+                QuickControlKind::Audio => crate::projection::project_audio_full(
                     document,
                     &shell,
-                    &query,
-                    snapshot.network_scroll_offset,
-                )?;
-                crate::projection::project_network_secret(
-                    document,
-                    &"*".repeat(snapshot.network_secret_masked_len),
-                )?;
-                document.text(
-                    "network-secret-error",
-                    if snapshot.network_secret_error {
-                        "Could not connect. Check the password and try again.".to_owned()
-                    } else {
-                        String::new()
-                    },
-                )
-            }
-            QuickControlKind::Calendar => {
-                crate::projection::project_calendar(
+                    snapshot.audio_tab,
+                    snapshot.audio_settings,
+                    snapshot.audio_scroll_offset,
+                ),
+                QuickControlKind::Network => {
+                    let query = snapshot.network_query.clone();
+                    crate::projection::project_network_full(
+                        document,
+                        &shell,
+                        &query,
+                        snapshot.network_scroll_offset,
+                    )?;
+                    crate::projection::project_network_secret(
+                        document,
+                        &"*".repeat(snapshot.network_secret_masked_len),
+                    )?;
+                    document.text(
+                        "network-secret-error",
+                        if snapshot.network_secret_error {
+                            "Could not connect. Check the password and try again.".to_owned()
+                        } else {
+                            String::new()
+                        },
+                    )
+                }
+                QuickControlKind::Calendar => crate::projection::project_calendar(
                     document,
                     &snapshot.calendar,
                     crate::projection::local_date(),
-                )
-            }
+                ),
             }
         })
         .map_err(|error| format!("{error:?}"))
@@ -889,15 +894,28 @@ pub fn route_helper_event(
             return true;
         }
     }
-    if action == "network.secret.focus" { snapshot.network_secret_focused = true; snapshot.network_filter_focused = false; }
-    if action == "network.filter.focus" { snapshot.network_filter_focused = true; snapshot.network_secret_focused = false; }
+    if action == "network.secret.focus" {
+        snapshot.network_secret_focused = true;
+        snapshot.network_filter_focused = false;
+    }
+    if action == "network.filter.focus" {
+        snapshot.network_filter_focused = true;
+        snapshot.network_secret_focused = false;
+    }
     if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
         if let Some(text) = event.action.text.as_deref() {
             if text == "\u{8}" || text == "\u{7f}" {
-                if snapshot.network_secret_focused { snapshot.network_secret.pop(); snapshot.network_secret_masked_len = snapshot.network_secret.chars().count(); }
-                else if snapshot.network_filter_focused { snapshot.network_query.filter.pop(); snapshot.network_scroll_offset = 0; }
+                if snapshot.network_secret_focused {
+                    snapshot.network_secret.pop();
+                    snapshot.network_secret_masked_len = snapshot.network_secret.chars().count();
+                } else if snapshot.network_filter_focused {
+                    snapshot.network_query.filter.pop();
+                    snapshot.network_scroll_offset = 0;
+                }
             } else if text == "\r" || text == "\n" {
-                if snapshot.network_secret_focused { return submit_network_secret(snapshot, dispatcher); }
+                if snapshot.network_secret_focused {
+                    return submit_network_secret(snapshot, dispatcher);
+                }
             } else if snapshot.network_secret_focused {
                 snapshot.network_secret.push_str(text);
                 snapshot.network_secret_masked_len = snapshot.network_secret.chars().count();
@@ -962,8 +980,8 @@ pub fn route_helper_event(
             "audio.raise.toggle" => {
                 snapshot.audio_settings.raise_maximum = !snapshot.audio_settings.raise_maximum;
                 if let Some(dispatcher) = dispatcher {
-                    let request = ControlRequest::ApplySettings(
-                        flamewm_api::settings::SettingsTransaction {
+                    let request =
+                        ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
                             expected_revision: snapshot.system.revision,
                             changes: vec![flamewm_api::settings::SettingsChange {
                                 key: AudioSettings::SETTINGS_KEY.to_owned(),
@@ -972,17 +990,19 @@ pub fn route_helper_event(
                                 )),
                             }],
                             reset_section: None,
-                        },
-                    );
+                        });
                     crate::control_actions::enqueue_action(Some(dispatcher), request);
                 }
             }
             "network.filter.clear" => snapshot.network_query.filter.clear(),
-            "network.filter.focus" | "network.secret.focus" => {},
+            "network.filter.focus" | "network.secret.focus" => {}
             "network.secret.cancel" => {
                 if let Some((request_id, generation)) = snapshot.network_secret_request {
                     let request = ControlRequest::SystemAction {
-                        action: flamewm_api::system::SystemAction::CancelNetworkSecret { request_id, generation },
+                        action: flamewm_api::system::SystemAction::CancelNetworkSecret {
+                            request_id,
+                            generation,
+                        },
                         expected_revision: snapshot.system.revision,
                     };
                     crate::control_actions::enqueue_action(dispatcher, request);
@@ -1005,7 +1025,9 @@ pub fn route_helper_event(
                 snapshot.network_scroll_offset = 0;
             }
             value if value.starts_with("calendar.") => {
-                snapshot.calendar.apply(value, crate::projection::local_date());
+                snapshot
+                    .calendar
+                    .apply(value, crate::projection::local_date());
             }
             _ => {}
         }
@@ -1025,21 +1047,36 @@ fn clear_network_secret(snapshot: &mut QuickControlSnapshot) {
     snapshot.network_secret_error = false;
 }
 
-fn submit_network_secret(snapshot: &mut QuickControlSnapshot, dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>) -> bool {
-    let Some(identity @ (request_id, generation)) = snapshot.network_secret_request else { return true; };
+fn submit_network_secret(
+    snapshot: &mut QuickControlSnapshot,
+    dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
+) -> bool {
+    let Some(identity @ (request_id, generation)) = snapshot.network_secret_request else {
+        return true;
+    };
     let request = ControlRequest::SystemAction {
-        action: flamewm_api::system::SystemAction::SubmitNetworkSecret { request_id, generation, secret: snapshot.network_secret.clone() },
+        action: flamewm_api::system::SystemAction::SubmitNetworkSecret {
+            request_id,
+            generation,
+            secret: snapshot.network_secret.clone(),
+        },
         expected_revision: snapshot.system.revision,
     };
-    snapshot.network_secret_submit_id = crate::control_actions::enqueue_network_secret(dispatcher, identity, request);
-    if snapshot.network_secret_submit_id.is_none() { snapshot.network_secret_error = true; }
+    snapshot.network_secret_submit_id =
+        crate::control_actions::enqueue_network_secret(dispatcher, identity, request);
+    if snapshot.network_secret_submit_id.is_none() {
+        snapshot.network_secret_error = true;
+    }
     true
 }
 
 fn sync_network_secret(snapshot: &mut QuickControlSnapshot) {
-    let key = snapshot.system.network.pending_secret.as_ref().map(|pending| {
-        (pending.request_id, snapshot.system.network.generation)
-    });
+    let key = snapshot
+        .system
+        .network
+        .pending_secret
+        .as_ref()
+        .map(|pending| (pending.request_id, snapshot.system.network.generation));
     if snapshot.network_secret_request != key {
         clear_network_secret(snapshot);
         snapshot.network_secret_focused = false;
@@ -1056,10 +1093,15 @@ fn scroll_audio_rows(snapshot: &mut QuickControlSnapshot, dy: f32) {
     if dy == 0.0 {
         return;
     }
-    let total = crate::taskbar::status::audio::tab_rows(&snapshot.system.audio, snapshot.audio_tab).len();
+    let total =
+        crate::taskbar::status::audio::tab_rows(&snapshot.system.audio, snapshot.audio_tab).len();
     let max_rows = total.saturating_sub(AUDIO_POPUP_ROWS);
     let row = (snapshot.audio_scroll_offset / AUDIO_ROW_HEIGHT) as usize;
-    let next = if dy > 0.0 { (row + 1).min(max_rows) } else { row.saturating_sub(1) };
+    let next = if dy > 0.0 {
+        (row + 1).min(max_rows)
+    } else {
+        row.saturating_sub(1)
+    };
     snapshot.audio_scroll_offset = (next as u32) * AUDIO_ROW_HEIGHT;
 }
 
@@ -1076,9 +1118,13 @@ fn audio_pointer_request(
     x: f32,
 ) -> Option<ControlRequest> {
     use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
-    let row = crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, snapshot.audio_tab, snapshot.audio_scroll_offset)
-        .into_iter()
-        .nth(slot)?;
+    let row = crate::taskbar::status::audio::visible_rows(
+        &snapshot.system.audio,
+        snapshot.audio_tab,
+        snapshot.audio_scroll_offset,
+    )
+    .into_iter()
+    .nth(slot)?;
     let spec = snapshot.audio_settings.slider_spec(row.volume_percent);
     let value = flamewm_ui_core::range::RangeState::value_from_pointer(
         spec,
@@ -1135,9 +1181,13 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
     {
         let (_, slot) = kind_slot.rsplit_once('.')?;
         let slot = slot.parse::<usize>().ok()?.checked_sub(1)?;
-        crate::taskbar::status::audio::visible_rows(&system.audio, snapshot.audio_tab, snapshot.audio_scroll_offset)
-            .into_iter()
-            .nth(slot)
+        crate::taskbar::status::audio::visible_rows(
+            &system.audio,
+            snapshot.audio_tab,
+            snapshot.audio_scroll_offset,
+        )
+        .into_iter()
+        .nth(slot)
     } else {
         None
     }?;
@@ -1726,15 +1776,29 @@ mod tests {
         };
         let first = background_for(&snapshot.settings);
         let mut changed = SettingsSnapshot::new(1);
-        changed.values.insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
-        changed.values.insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
-        changed.values.insert("startMenuColor".to_owned(), SettingValue::Text("#102030".to_owned()));
+        changed
+            .values
+            .insert("startMenuOpacity".to_owned(), SettingValue::Percent(0));
+        changed
+            .values
+            .insert("startMenuBlurPercent".to_owned(), SettingValue::Percent(30));
+        changed.values.insert(
+            "startMenuColor".to_owned(),
+            SettingValue::Text("#102030".to_owned()),
+        );
         snapshot.store_settings(changed);
         let second = background_for(&snapshot.settings);
-        assert_ne!(first, second, "a new settings snapshot must change the open's background");
+        assert_ne!(
+            first, second,
+            "a new settings snapshot must change the open's background"
+        );
         assert_eq!(second.0.a, 0, "opacity 0 gives a transparent menu root");
         assert_eq!((second.0.r, second.0.g, second.0.b), (0x10, 0x20, 0x30));
-        assert_eq!(second.1, (0, 30), "backdrop percents follow the new opacity and blur");
+        assert_eq!(
+            second.1,
+            (0, 30),
+            "backdrop percents follow the new opacity and blur"
+        );
     }
 
     /// Background colour and backdrop percents the helper projects for one settings snapshot.
@@ -1752,7 +1816,8 @@ mod tests {
         shell.system.network.availability = flamewm_api::system::ServiceAvailability::Unavailable;
         crate::projection::project_network_full(&mut document, &shell, &NetworkQuery::default(), 0)
             .expect("unavailable network projects");
-        crate::projection::project_network_secret(&mut document, "").expect("secret prompt projects");
+        crate::projection::project_network_secret(&mut document, "")
+            .expect("secret prompt projects");
         document
             .text("network-secret-error", String::new())
             .expect("empty secret error projects");
@@ -1839,7 +1904,13 @@ mod audio_routing_tests {
         );
         assert_eq!(rows[0].stable_id(), "endpoint:sink:2");
         let request = helper_control_request("audio.slot.1.mute", &quick);
-        assert_eq!(target_of(request), Some(AudioTarget::Endpoint { id: 2, kind: AudioEndpointKind::Sink }));
+        assert_eq!(
+            target_of(request),
+            Some(AudioTarget::Endpoint {
+                id: 2,
+                kind: AudioEndpointKind::Sink
+            })
+        );
     }
 
     fn target_of(request: Option<ControlRequest>) -> Option<AudioTarget> {
@@ -1892,6 +1963,9 @@ mod audio_routing_tests {
         assert_eq!(percent(false, end), Some(100));
         assert_eq!(percent(true, end), Some(150));
         assert_eq!(percent(false, AUDIO_TRACK_X), Some(0));
-        assert_eq!(percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH / 2.0), Some(75));
+        assert_eq!(
+            percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH / 2.0),
+            Some(75)
+        );
     }
 }

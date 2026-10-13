@@ -271,9 +271,9 @@ fn resolve_lock_program(exe_dir: Option<&Path>, path_var: Option<&OsStr>) -> Loc
         .into_iter()
         .chain(on_path)
         .find(|candidate| {
-            candidate.metadata().is_ok_and(|meta| {
-                meta.is_file() && meta.permissions().mode() & 0o111 != 0
-            })
+            candidate
+                .metadata()
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         })
         .map_or(LockProgram::Loginctl, LockProgram::Screen)
 }
@@ -493,7 +493,11 @@ mod lock_preview_tests {
         spawn_retrying_with(slot, program, LOCK_PREVIEW_ARGS)
     }
 
-    fn spawn_retrying_with(slot: &mut Option<Child>, program: &Path, args: &[&str]) -> std::io::Result<()> {
+    fn spawn_retrying_with(
+        slot: &mut Option<Child>,
+        program: &Path,
+        args: &[&str],
+    ) -> std::io::Result<()> {
         let mut last = None;
         for _ in 0..100 {
             match spawn_preview_once(slot, program, args) {
@@ -549,7 +553,11 @@ mod lock_preview_tests {
         spawn_retrying(&mut slot, &program).expect("second call is a no-op");
         wait_for_launches(&dir, 1);
         std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(launches(&dir).len(), 1, "a second preview spawned while one runs");
+        assert_eq!(
+            launches(&dir).len(),
+            1,
+            "a second preview spawned while one runs"
+        );
         let _ = slot.expect("child tracked").kill();
     }
 

@@ -229,9 +229,8 @@ mod tests {
         unsafe {
             let screen = super::super::super::xlib::XDefaultScreen(display);
             let root = super::super::super::xlib::XRootWindow(display, screen);
-            let window = super::super::super::xlib::XCreateSimpleWindow(
-                display, root, 0, 0, 8, 8, 0, 0, 0,
-            );
+            let window =
+                super::super::super::xlib::XCreateSimpleWindow(display, root, 0, 0, 8, 8, 0, 0, 0);
             super::super::super::xlib::XSync(display, 0);
             super::super::super::xlib::XDestroyWindow(display, window);
             let atom_name = std::ffi::CString::new("FLAMEWM_STALE_ERROR_TEST").unwrap();

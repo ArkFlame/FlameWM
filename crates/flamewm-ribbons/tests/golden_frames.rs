@@ -11,16 +11,30 @@ const QUALITIES: [Quality; 2] = [Quality::Half, Quality::Full];
 
 /// Expected hashes, ordered by quality, then seed, then time.
 const GOLDEN: [u64; 18] = [
-    0x3ebd_e9df_cc6e_e231, 0x638c_c5a3_2e95_dba7, 0x7b0d_cf5e_1371_dacc,
-    0x421c_02c1_892e_7485, 0x5cb6_1e0f_722e_d551, 0x16a6_a311_0251_8a27,
-    0x8149_1ab1_9cc8_ffe2, 0x9146_bbfc_f2ec_ab04, 0x4b23_f3e0_f866_c334,
-    0x0865_1d32_c299_890e, 0x18cb_6f68_cf81_c095, 0xb7ec_74be_2913_a97e,
-    0x35a7_d3e7_f6bf_6b38, 0x9e82_39ef_859e_71d6, 0xf1ea_5b2d_f5a3_c06d,
-    0x6808_abc4_f595_0c63, 0xa3f8_cf27_52df_a8d8, 0x06be_8bc7_d3b2_ef4d,
+    0x3ebd_e9df_cc6e_e231,
+    0x638c_c5a3_2e95_dba7,
+    0x7b0d_cf5e_1371_dacc,
+    0x421c_02c1_892e_7485,
+    0x5cb6_1e0f_722e_d551,
+    0x16a6_a311_0251_8a27,
+    0x8149_1ab1_9cc8_ffe2,
+    0x9146_bbfc_f2ec_ab04,
+    0x4b23_f3e0_f866_c334,
+    0x0865_1d32_c299_890e,
+    0x18cb_6f68_cf81_c095,
+    0xb7ec_74be_2913_a97e,
+    0x35a7_d3e7_f6bf_6b38,
+    0x9e82_39ef_859e_71d6,
+    0xf1ea_5b2d_f5a3_c06d,
+    0x6808_abc4_f595_0c63,
+    0xa3f8_cf27_52df_a8d8,
+    0x06be_8bc7_d3b2_ef4d,
 ];
 
 fn fnv1a64(buf: &[u8]) -> u64 {
-    buf.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+    buf.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 fn hashes() -> Vec<u64> {
@@ -30,7 +44,12 @@ fn hashes() -> Vec<u64> {
             let config = Config {
                 num: 6,
                 width_px: 11.0,
-                span_rects: vec![Rect { x: 0, y: 0, w: W, h: H }],
+                span_rects: vec![Rect {
+                    x: 0,
+                    y: 0,
+                    w: W,
+                    h: H,
+                }],
                 seed,
             };
             let mut state = Ribbons::new(config, 0.0);

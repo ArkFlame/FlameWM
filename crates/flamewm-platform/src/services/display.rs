@@ -1097,7 +1097,13 @@ mod tests {
     fn per_output_scales_survive_remove_readd_and_primary_change_independently() {
         let mut port = five_output_port();
         let mut service = DisplayService::default();
-        let scales = [("O0", 100), ("O1", 125), ("O2", 150), ("O3", 175), ("O4", 200)];
+        let scales = [
+            ("O0", 100),
+            ("O1", 125),
+            ("O2", 150),
+            ("O3", 175),
+            ("O4", 200),
+        ];
         for (output, scale) in scales {
             let generation = service.refresh(&mut port).expect("snapshot").generation;
             service
@@ -1113,20 +1119,32 @@ mod tests {
         let after_readd = service.refresh(&mut port).expect("snapshot after re-add");
         assert_eq!(scale_of(after_readd, "O1"), 125);
         for (output, scale) in scales {
-            assert_eq!(scale_of(after_readd, output), scale, "{output} after re-add");
+            assert_eq!(
+                scale_of(after_readd, output),
+                scale,
+                "{output} after re-add"
+            );
         }
 
         // Unplug the primary O0: O1 becomes primary but keeps its own scale; O0 keeps its scale on re-add.
         port.disconnect("O0");
-        let after_primary_loss = service.refresh(&mut port).expect("snapshot after primary loss");
+        let after_primary_loss = service
+            .refresh(&mut port)
+            .expect("snapshot after primary loss");
         assert_eq!(
-            after_primary_loss.outputs.iter().find(|o| o.primary).map(|o| o.id.as_str()),
+            after_primary_loss
+                .outputs
+                .iter()
+                .find(|o| o.primary)
+                .map(|o| o.id.as_str()),
             Some("O1")
         );
         assert_eq!(scale_of(after_primary_loss, "O1"), 125);
         port.outputs[0].connected = true;
         port.bump_generation(1);
-        let restored = service.refresh(&mut port).expect("snapshot after primary re-add");
+        let restored = service
+            .refresh(&mut port)
+            .expect("snapshot after primary re-add");
         assert_eq!(scale_of(restored, "O0"), 100);
         assert_eq!(scale_of(restored, "O1"), 125);
     }

@@ -130,7 +130,9 @@ impl Rasterizer {
 
         let encode = &self.encode;
         for (dst, t) in self.low.iter_mut().zip(&self.transmit) {
-            *dst = t.map(|v| encode[((1.0 - v).clamp(0.0, 1.0) * (ENCODE_LEN - 1) as f32 + 0.5) as usize]);
+            *dst = t.map(|v| {
+                encode[((1.0 - v).clamp(0.0, 1.0) * (ENCODE_LEN - 1) as f32 + 0.5) as usize]
+            });
         }
 
         taps(w, lw, k as f32, &mut self.x_taps);
@@ -146,13 +148,16 @@ impl Rasterizer {
             for ((dst, a), b) in row.iter_mut().zip(src_a).zip(src_b) {
                 *dst = std::array::from_fn(|c| (1.0 - ty) * f32::from(a[c]) + ty * f32::from(b[c]));
             }
-            for (ox, (px_out, &(xa, xb, tx))) in row_out.chunks_exact_mut(4).zip(&self.x_taps).enumerate() {
+            for (ox, (px_out, &(xa, xb, tx))) in
+                row_out.chunks_exact_mut(4).zip(&self.x_taps).enumerate()
+            {
                 if masked && !state.covers(ox as u32, oy as u32) {
                     px_out.copy_from_slice(&[0, 0, 0, 255]);
                     continue;
                 }
                 let (pa, pb) = (row[xa], row[xb]);
-                let rgb: [u8; 3] = std::array::from_fn(|c| ((1.0 - tx) * pa[c] + tx * pb[c] + 0.5) as u8);
+                let rgb: [u8; 3] =
+                    std::array::from_fn(|c| ((1.0 - tx) * pa[c] + tx * pb[c] + 0.5) as u8);
                 px_out.copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
             }
         }
@@ -172,7 +177,8 @@ fn splat_stream(
     inv: f32,
     col: [f32; 3],
 ) {
-    let (mut x0, mut y0, mut x1, mut y1, mut wmax) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN, 0.0f32);
+    let (mut x0, mut y0, mut x1, mut y1, mut wmax) =
+        (f32::MAX, f32::MAX, f32::MIN, f32::MIN, 0.0f32);
     for p in pts {
         x0 = x0.min(p.x);
         y0 = y0.min(p.y);
@@ -241,7 +247,11 @@ fn splat(
     let y1 = ((ay.max(by) + reach).ceil().min(ry1 as f32)).max(0.0) as usize;
     // Margin keeps the f64 span safely outside any pixel that f32 would accept.
     let r = f64::from(reach) * (1.0 + 1e-3) + 1e-3;
-    let (a64, e64, len2_64) = ([f64::from(ax), f64::from(ay)], [f64::from(ex), f64::from(ey)], f64::from(len2));
+    let (a64, e64, len2_64) = (
+        [f64::from(ax), f64::from(ay)],
+        [f64::from(ex), f64::from(ey)],
+        f64::from(len2),
+    );
     for y in y0..y1 {
         let py = y as f32 + 0.5;
         let (lo, hi) = capsule_row_span(a64, e64, len2_64, r, f64::from(py));
@@ -366,16 +376,26 @@ mod tests {
         state.clear_histories();
         let mut out = vec![9u8; 1280 * 720 * 4];
         Rasterizer::new(Quality::Half).render(&state, &mut out);
-        assert!(out.chunks_exact(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 255));
+        assert!(
+            out.chunks_exact(4)
+                .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 255)
+        );
     }
 
     #[test]
     fn taps_identity_at_full_quality_and_stay_in_range() {
         let mut t = Vec::new();
         taps(10, 10, 1.0, &mut t);
-        assert!(t.iter().enumerate().all(|(i, &(a, b, w))| a == i && w == 0.0 && b == (i + 1).min(9)));
+        assert!(
+            t.iter()
+                .enumerate()
+                .all(|(i, &(a, b, w))| a == i && w == 0.0 && b == (i + 1).min(9))
+        );
         taps(7, 4, 2.0, &mut t);
-        assert!(t.iter().all(|&(a, b, w)| a < 4 && b < 4 && (0.0..=1.0).contains(&w)));
+        assert!(
+            t.iter()
+                .all(|&(a, b, w)| a < 4 && b < 4 && (0.0..=1.0).contains(&w))
+        );
     }
 
     #[test]

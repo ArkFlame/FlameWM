@@ -45,8 +45,8 @@ use flamewm_ui_core::context_menu::MenuPart;
 use flamewm_ui_x11::PointerButton;
 use flamewm_ui_x11::{
     UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiWindowConfig,
-    UiWindowRole, decode_document, pointer_button_from_raw, root_geometry,
-    WindowGeometry, WindowGeometrySlot, run_with_controller_events_role_with_reactor_geometry,
+    UiWindowRole, WindowGeometry, WindowGeometrySlot, decode_document, pointer_button_from_raw,
+    root_geometry, run_with_controller_events_role_with_reactor_geometry,
 };
 
 mod projection;
@@ -571,7 +571,8 @@ fn main() -> Result<(), String> {
                                     _ => String::new(),
                                 };
                                 let mut state = state_cell.borrow_mut();
-                                let fit = wallpaper_fit::parse(&setting_text(&snapshot, "wallpaperFit"));
+                                let fit =
+                                    wallpaper_fit::parse(&setting_text(&snapshot, "wallpaperFit"));
                                 if let Err(error) = state.wallpaper_loader.request(wallpaper, fit) {
                                     eprintln!(
                                         "desktop: wallpaper settings request failed: {error:?}"
@@ -599,7 +600,9 @@ fn main() -> Result<(), String> {
                             signal if workspace_sync::is_legacy_workspace_signal(&signal) => {
                                 workspace_legacy_ignored_counter().increment();
                             }
-                            flamewm_control_wire::ControlSignal::PanelsSnapshotChanged { .. }
+                            flamewm_control_wire::ControlSignal::PanelsSnapshotChanged {
+                                ..
+                            }
                             | flamewm_control_wire::ControlSignal::PanelsChanged { .. } => {
                                 panels_flag.set(true);
                             }
@@ -2276,7 +2279,10 @@ fn place_menu_parts(
     document.size(id, placed.width as f32, placed.height as f32)?;
     // Shape follows the decoration setting (Rounded 12 / Squared 0), same source as shell popups.
     let rounded = setting_text(&state.settings, "decoration") != "squared";
-    document.corner_radius(id, flamewm_ui_core::context_menu::shape_radius(rounded) as f32)?;
+    document.corner_radius(
+        id,
+        flamewm_ui_core::context_menu::shape_radius(rounded) as f32,
+    )?;
     projection::project_menu_surface(document, id, &state.settings)?;
     context_open_counter().increment();
     let _present = context_open_present_point().start();
