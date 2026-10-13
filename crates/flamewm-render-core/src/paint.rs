@@ -336,3 +336,57 @@ mod shape_tests {
         assert_eq!(surface_shape_pixels(10, 6, -3.0), (10, 6, 0));
     }
 }
+
+#[cfg(test)]
+mod node_backdrop_tests {
+    use super::*;
+    use crate::layout::LayoutEngine;
+
+    fn node(id: &str, radius: f32, parent: Option<u32>, first_child: Option<u32>, next: Option<u32>) -> CompiledNode {
+        let mut style = Style::default();
+        style.background = ColorValue::Literal(Color { r: 30, g: 30, b: 30, a: 127 });
+        style.border_radius = radius;
+        CompiledNode {
+            kind: NodeKind::Element,
+            parent,
+            first_child,
+            next_sibling: next,
+            id: id.to_string(),
+            action: String::new(),
+            text: String::new(),
+            image: None,
+            style,
+            hover_style: None,
+            active_style: None,
+        }
+    }
+
+    #[test]
+    fn node_backdrop_radius_is_the_menu_node_radius_not_the_root() {
+        // Root (desktop window) radius 0; menu child radius 12, like project_menu_surface.
+        let mut root = node("desktop", 0.0, None, Some(1), None);
+        root.style.background = ColorValue::Literal(Color::TRANSPARENT);
+        let mut document = RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![root, node("menu", 12.0, Some(0), None, None)],
+        })
+        .expect("fixture validates");
+        document.set_size_px("menu", 200.0, 100.0).expect("size");
+        document.set_position_px("menu", 10.0, 10.0).expect("position");
+        document.set_node_backdrop("menu", Some(80)).expect("backdrop");
+        let layout = LayoutEngine::compute(&document, 800.0, 600.0, InteractionState::default());
+        let commands = build_paint_commands(&document, &layout, InteractionState::default());
+        let radii: Vec<f32> = commands
+            .iter()
+            .filter_map(|command| match command {
+                PaintCommand::NodeBackdrop { radius, .. } => Some(*radius),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(radii, vec![12.0]);
+    }
+}
+

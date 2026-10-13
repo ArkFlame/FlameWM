@@ -206,8 +206,9 @@ fn inside_rounded(px: i32, py: i32, node: (i32, i32, u32, u32), radius: u32) -> 
     (lx - cx).powi(2) + (ly - cy).powi(2) <= r * r
 }
 
-/// Blurred ARGB words for the clipped capture `rgba` (`clip` size), alpha-masked by the node's
-/// rounded rect. `None` for blur 0 (no backdrop).
+/// Blurred premultiplied ARGB words for the clipped capture `rgba` (`clip` size), masked by the
+/// node's rounded rect. Source is opaque, so premultiplied colour equals colour inside the shape
+/// and zero outside it (alpha and RGB masked together, once). `None` for blur 0 (no backdrop).
 pub(crate) fn node_backdrop_words(
     rgba: Vec<u8>,
     clip: (i32, i32, u32, u32),
@@ -223,8 +224,7 @@ pub(crate) fn node_backdrop_words(
     for (index, word) in words.iter_mut().enumerate() {
         let px = cx + (index as u32 % width) as i32;
         let py = cy + (index as u32 / width) as i32;
-        let alpha = if inside_rounded(px, py, node, radius) { 0xff } else { 0 };
-        *word = (alpha << 24) | (*word & 0x00ff_ffff);
+        *word = if inside_rounded(px, py, node, radius) { *word | 0xff00_0000 } else { 0 };
     }
     Some(words)
 }
@@ -332,8 +332,17 @@ mod tests {
         let rgba = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
         let words = node_backdrop_words(rgba, (0, 0, 12, 12), (0, 0, 12, 12), 6, 50)
             .expect("blur on");
-        assert_eq!(words[0] >> 24, 0, "corner pixel masked");
+        // Premultiplied ARGB: a masked corner must be zero in every channel, not only alpha.
+        for corner in [0, 11, 11 * 12, 11 * 12 + 11] {
+            assert_eq!(words[corner], 0x0000_0000, "corner {corner} fully transparent");
+        }
         assert_eq!(words[6 * 12 + 6] >> 24, 0xff, "centre kept");
+        for word in &words {
+            let alpha = word >> 24;
+            for shift in [0, 8, 16] {
+                assert!(((word >> shift) & 0xff) <= alpha, "premultiplied: {word:#010x}");
+            }
+        }
         let square = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
         let words = node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50)
             .expect("blur on");
