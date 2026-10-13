@@ -813,22 +813,7 @@ pub fn prewarm_start_tail(
     let Some(loader) = loader.as_deref_mut() else {
         return;
     };
-    let needle = query.trim();
-    let base: Vec<&flamewm_api::applications::DesktopApplication> = if needle.is_empty() {
-        model.results_view()
-    } else {
-        model.query_view(query)
-    };
-    let applications: Vec<&flamewm_api::applications::DesktopApplication> =
-        if category == StartCategory::All {
-            base
-        } else if category == StartCategory::Power {
-            return;
-        } else {
-            base.into_iter()
-                .filter(|application| application_matches(application, category))
-                .collect()
-        };
+    let applications = crate::projection::start_visible_results(model, category, query);
     let (first, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
     for (position, application) in applications.iter().enumerate().skip(last).take(8) {
         let _ = position;
@@ -882,22 +867,7 @@ pub fn project_start_unified(
                              // index, then the single presentation-bucket filter. No clone, no
                              // set_query-on-temporary. (Shell StartCategory is the presentation
                              // seam; core filter_view takes the core category type.)
-    let needle = query.trim();
-    let base: Vec<&flamewm_api::applications::DesktopApplication> = if needle.is_empty() {
-        model.results_view()
-    } else {
-        model.query_view(query)
-    };
-    let applications: Vec<&flamewm_api::applications::DesktopApplication> =
-        if category == StartCategory::All {
-            base
-        } else if category == StartCategory::Power {
-            Vec::new()
-        } else {
-            base.into_iter()
-                .filter(|application| application_matches(application, category))
-                .collect()
-        };
+    let applications = crate::projection::start_visible_results(model, category, query);
     document.visible("start-applications", !applications.is_empty())?;
     let (first, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
     for index in 0..START_APP_SLOT_COUNT {
@@ -949,45 +919,10 @@ pub fn project_start_unified(
     Ok(())
 }
 
-fn application_matches(
-    application: &flamewm_api::applications::DesktopApplication,
-    category: StartCategory,
-) -> bool {
-    if category == StartCategory::All {
-        return true;
-    }
-    let low = application
-        .categories
-        .iter()
-        .find_map(|value| match value.to_ascii_lowercase().as_str() {
-            "accessories" | "utility" => Some("utilities"),
-            "development" => Some("development"),
-            "education" => Some("utilities"),
-            "game" | "games" => Some("games"),
-            "graphics" => Some("graphics"),
-            "network" | "internet" => Some("internet"),
-            "audiovideo" | "audio" | "video" | "multimedia" => Some("multimedia"),
-            "office" => Some("utilities"),
-            "science" => Some("utilities"),
-            "settings" | "system" => Some("system"),
-            _ => None,
-        })
-        .unwrap_or("utilities");
-    match category {
-        StartCategory::Development => low == "development",
-        StartCategory::Games => low == "games",
-        StartCategory::Graphics => low == "graphics",
-        StartCategory::Internet => low == "internet",
-        StartCategory::Multimedia => low == "multimedia",
-        StartCategory::System => low == "system",
-        StartCategory::Utilities => low == "utilities",
-        StartCategory::Power | StartCategory::All => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_api::applications::DesktopApplication;
     use std::collections::HashMap;
 
     #[derive(Default)]
@@ -1424,6 +1359,98 @@ mod tests {
         project_start_submenu_async(&mut doc, &model, StartCategory::All, "", &session, None)
             .expect("projects");
         assert_eq!(doc.visible.get("start-app-slot-1"), Some(&false));
+    }
+
+    fn start_test_app(id: &str, name: &str, category: &str) -> DesktopApplication {
+        DesktopApplication {
+            id: flamewm_api::DesktopAppId::new(id),
+            name: name.to_owned(),
+            generic_name: String::new(),
+            comment: String::new(),
+            startup_wm_class: String::new(),
+            argv: Vec::new(),
+            keywords: Vec::new(),
+            icon_name: "missing-icon".to_owned(),
+            categories: vec![category.to_owned()],
+        }
+    }
+
+    #[test]
+    fn search_under_category_finds_other_categories_and_hides_rail() {
+        let _guard = icon_test_lock().lock();
+        let model = StartModel::new(vec![
+            start_test_app("org.example.calc", "Calculator", "Utility"),
+            start_test_app("org.example.chess", "Chess", "Game"),
+        ]);
+        let session = SessionCapabilities::default();
+        let mut doc = FakeDoc::default();
+        project_start_unified(
+            &mut doc,
+            &model,
+            StartCategory::Games,
+            "calc",
+            &session,
+            None,
+        )
+        .expect("projects");
+        assert_eq!(
+            doc.texts.get("start-app-slot-1-label").map(String::as_str),
+            Some("Calculator"),
+            "search ignores the selected category"
+        );
+        assert_eq!(doc.visible.get("start-app-slot-2"), Some(&false));
+        assert_eq!(doc.visible.get("start-categories"), Some(&false));
+        assert_eq!(doc.visible.get("start-group-power"), Some(&false));
+    }
+
+    #[test]
+    fn start_click_slot_maps_to_the_projected_row() {
+        let _guard = icon_test_lock().lock();
+        let model = StartModel::new(vec![
+            start_test_app("org.example.calc", "Calculator", "Utility"),
+            start_test_app("org.example.chess", "Chess", "Game"),
+        ]);
+        let session = SessionCapabilities::default();
+        let mut doc = FakeDoc::default();
+        project_start_unified(
+            &mut doc,
+            &model,
+            StartCategory::Games,
+            "calc",
+            &session,
+            None,
+        )
+        .expect("projects");
+        let projected = doc.texts.get("start-app-slot-1-label").cloned();
+        assert_eq!(
+            crate::projection::start_application_name_for_slot(
+                &model,
+                StartCategory::Games,
+                "calc",
+                0
+            ),
+            projected,
+            "click on slot 1 launches the row that was projected"
+        );
+    }
+
+    #[test]
+    fn empty_query_restores_selected_category_view() {
+        let _guard = icon_test_lock().lock();
+        let model = StartModel::new(vec![
+            start_test_app("org.example.calc", "Calculator", "Utility"),
+            start_test_app("org.example.chess", "Chess", "Game"),
+        ]);
+        let session = SessionCapabilities::default();
+        let mut doc = FakeDoc::default();
+        project_start_unified(&mut doc, &model, StartCategory::Games, "", &session, None)
+            .expect("projects");
+        assert_eq!(
+            doc.texts.get("start-app-slot-1-label").map(String::as_str),
+            Some("Chess")
+        );
+        assert_eq!(doc.visible.get("start-app-slot-2"), Some(&false));
+        assert_eq!(doc.visible.get("start-categories"), Some(&true));
     }
 
     #[test]

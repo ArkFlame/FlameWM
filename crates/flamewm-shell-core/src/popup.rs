@@ -203,13 +203,15 @@ pub fn fitted_start_placement(
     let area_h = work_area.height.max(0);
     match panel_edge {
         PanelEdge::Bottom => {
-            let available = anchor.y - work_area.y - gap;
+            // Work-area edge (live panel outer top), not the inset node top.
+            let limit = anchor.y.min(work_area.bottom());
+            let available = limit - work_area.y - gap;
             if available <= 0 {
                 return Err(PopupRefusal::PendingLayout);
             }
             let height = intrinsic.height.min(available);
             let width = intrinsic.width.min(area_w);
-            let y = anchor.y - gap - height;
+            let y = limit - gap - height;
             let x = clamp_start(anchor.x, width, work_area.x, work_area.right());
             Ok(StartPlacement {
                 rect: Rect::new(x, y, width, height),
@@ -217,13 +219,14 @@ pub fn fitted_start_placement(
             })
         }
         PanelEdge::Top => {
-            let available = work_area.bottom() - anchor.bottom() - gap;
+            let limit = anchor.bottom().max(work_area.y);
+            let available = work_area.bottom() - limit - gap;
             if available <= 0 {
                 return Err(PopupRefusal::PendingLayout);
             }
             let height = intrinsic.height.min(available);
             let width = intrinsic.width.min(area_w);
-            let y = anchor.bottom() + gap;
+            let y = limit + gap;
             let x = clamp_start(anchor.x, width, work_area.x, work_area.right());
             Ok(StartPlacement {
                 rect: Rect::new(x, y, width, height),
@@ -231,13 +234,14 @@ pub fn fitted_start_placement(
             })
         }
         PanelEdge::Left => {
-            let available = work_area.right() - anchor.right() - gap;
+            let limit = anchor.right().max(work_area.x);
+            let available = work_area.right() - limit - gap;
             if available <= 0 {
                 return Err(PopupRefusal::PendingLayout);
             }
             let width = intrinsic.width.min(available);
             let height = intrinsic.height.min(area_h);
-            let x = anchor.right() + gap;
+            let x = limit + gap;
             let y = clamp_start(anchor.y, height, work_area.y, work_area.bottom());
             Ok(StartPlacement {
                 rect: Rect::new(x, y, width, height),
@@ -245,13 +249,14 @@ pub fn fitted_start_placement(
             })
         }
         PanelEdge::Right => {
-            let available = anchor.x - work_area.x - gap;
+            let limit = anchor.x.min(work_area.right());
+            let available = limit - work_area.x - gap;
             if available <= 0 {
                 return Err(PopupRefusal::PendingLayout);
             }
             let width = intrinsic.width.min(available);
             let height = intrinsic.height.min(area_h);
-            let x = anchor.x - gap - width;
+            let x = limit - gap - width;
             let y = clamp_start(anchor.y, height, work_area.y, work_area.bottom());
             Ok(StartPlacement {
                 rect: Rect::new(x, y, width, height),
@@ -691,5 +696,48 @@ mod panel_popup_edge_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod start_panel_inset_tests {
+    use super::*;
+
+    // The task-start node sits inside the panel (inset below the outer top),
+    // so the node top is NOT the panel top. Start must still stop `gap` above
+    // the live panel outer top (= work-area edge), not `gap` above the node.
+    #[test]
+    fn bottom_start_bottom_is_gap_above_panel_top_when_node_is_inset() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        let panel = Rect::new(0, 1036, 1920, 44);
+        let work = work_area_for_panel(output, panel, PanelEdge::Bottom);
+        let node = Rect::new(1800, 1042, 30, 32);
+        let p = fitted_start_placement(node, Size::new(400, 600), PanelEdge::Bottom, work, 8)
+            .expect("placed");
+        assert_eq!(p.rect.bottom(), panel.y - 8, "{:?}", p.rect);
+    }
+
+    // Floating margin is already excluded from the work area; it must not be
+    // subtracted a second time.
+    #[test]
+    fn bottom_start_tracks_floating_panel_without_double_margin() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        let panel = Rect::new(8, 1028, 1904, 44);
+        let work = work_area_for_panel(output, panel, PanelEdge::Bottom);
+        let node = Rect::new(1800, 1034, 30, 32);
+        let p = fitted_start_placement(node, Size::new(400, 600), PanelEdge::Bottom, work, 8)
+            .expect("placed");
+        assert_eq!(p.rect.bottom(), panel.y - 8, "{:?}", p.rect);
+    }
+
+    #[test]
+    fn top_start_top_is_gap_below_panel_bottom_when_node_is_inset() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        let panel = Rect::new(0, 0, 1920, 44);
+        let work = work_area_for_panel(output, panel, PanelEdge::Top);
+        let node = Rect::new(1800, 6, 30, 32);
+        let p = fitted_start_placement(node, Size::new(400, 600), PanelEdge::Top, work, 8)
+            .expect("placed");
+        assert_eq!(p.rect.y, panel.bottom() + 8, "{:?}", p.rect);
     }
 }

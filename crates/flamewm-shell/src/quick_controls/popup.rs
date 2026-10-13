@@ -29,7 +29,7 @@ pub fn role_for_kind(kind: QuickControlKind) -> PopupRole {
 
 #[must_use]
 pub fn spec_for_kind(kind: QuickControlKind) -> PopupSpec {
-    PopupSpec::from_role(role_for_kind(kind), PopoverAlign::End)
+    PopupSpec::from_role(role_for_kind(kind), PopoverAlign::OutputEnd)
 }
 
 #[must_use]
@@ -54,13 +54,20 @@ pub fn measure_helper(
     popup_controller::measure_node(runtime, popup, spec.node_id, request.work_area)
 }
 
-/// Fit a measured intrinsic through the shared aligned engine.
+/// Fit a measured intrinsic through the shared aligned engine. `work_area`
+/// is the panel-aware work area of the owning output: the popup is pinned
+/// to its right edge, fitted vertically inside it, and capped to its size
+/// so it can never cover the panel strip.
 pub fn fit_helper(request: &OpenRequest, intrinsic: Size) -> Result<Rect, PopupError> {
+    let intrinsic = Size::new(
+        intrinsic.width.min(request.work_area.width),
+        intrinsic.height.min(request.work_area.height),
+    );
     popup_controller::fit_popup(
         request.anchor,
         intrinsic,
         edge_for_panel(request.panel_edge),
-        PopoverAlign::End,
+        PopoverAlign::OutputEnd,
         request.work_area,
         POPUP_GAP,
     )
@@ -99,4 +106,151 @@ pub fn grab(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), Po
 /// Shared close transaction over the existing single-turn close owner.
 pub fn close_helper(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), PopupError> {
     popup_controller::close_popup(runtime, popup)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flamewm_shell_core::popup::work_area_for_panel;
+
+    fn request(kind: QuickControlKind, anchor: Rect, output: Rect, edge: PanelEdge) -> OpenRequest {
+        OpenRequest {
+            kind,
+            anchor,
+            work_area: output,
+            panel_edge: edge,
+        }
+    }
+
+    #[test]
+    fn quick_popups_right_edge_equals_owning_output_for_every_kind() {
+        // Anchor sits far left of the output right edge; the popup must not follow it.
+        let output = Rect::new(0, 0, 1920, 1080);
+        let anchor = Rect::new(300, 1036, 30, 44);
+        for kind in [
+            QuickControlKind::Audio,
+            QuickControlKind::Network,
+            QuickControlKind::Calendar,
+        ] {
+            let req = request(kind, anchor, output, PanelEdge::Bottom);
+            let rect = fit_helper(&req, Size::new(310, 220)).expect("fit");
+            assert_eq!(rect.right(), output.right(), "{kind:?}");
+            assert_eq!(rect.width, 310);
+            assert!(rect.bottom() <= anchor.y, "{kind:?} {rect:?}");
+        }
+    }
+
+    #[test]
+    fn negative_origin_output_right_edge_is_its_own_right() {
+        // Secondary output left of primary: right edge is -1920 + 1920 = 0.
+        let output = Rect::new(-1920, 0, 1920, 1080);
+        let anchor = Rect::new(-400, 1036, 30, 44);
+        let req = request(QuickControlKind::Network, anchor, output, PanelEdge::Bottom);
+        let rect = fit_helper(&req, Size::new(310, 220)).expect("fit");
+        assert_eq!(rect.right(), 0);
+        assert!(rect.x >= output.x);
+    }
+
+    #[test]
+    fn scaled_device_output_right_edge_is_exact() {
+        // 125% scale: device-pixel output 2400 wide; no rounding drift at the edge.
+        let output = Rect::new(0, 0, 2400, 1500);
+        let anchor = Rect::new(2000, 1456, 40, 44);
+        let req = request(QuickControlKind::Calendar, anchor, output, PanelEdge::Bottom);
+        let rect = fit_helper(&req, Size::new(388, 275)).expect("fit");
+        assert_eq!(rect.right(), 2400);
+    }
+
+    #[test]
+    fn width_capped_to_output_and_pinned_to_its_left_edge() {
+        let output = Rect::new(-800, 0, 800, 600);
+        let anchor = Rect::new(-100, 556, 30, 44);
+        let req = request(QuickControlKind::Audio, anchor, output, PanelEdge::Bottom);
+        let rect = fit_helper(&req, Size::new(1000, 200)).expect("fit");
+        assert_eq!(rect.width, 800);
+        assert_eq!(rect.x, output.x);
+        assert_eq!(rect.right(), output.right());
+    }
+
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+    }
+
+    // Real caller shape: `OpenRequest.work_area` is the panel-aware work area
+    // of the owning output, never the raw output rect. Tall popup (taller than
+    // any work area) forces the fallback clamp; it must never cover the panel.
+    fn assert_clear_of_panel(edge: PanelEdge, output: Rect, panel: Rect, anchor: Rect) {
+        let work = work_area_for_panel(output, panel, edge);
+        let req = request(QuickControlKind::Calendar, anchor, work, edge);
+        let rect = fit_helper(&req, Size::new(310, 1040)).expect("fit");
+        assert!(
+            !overlaps(rect, panel),
+            "{edge:?} popup {rect:?} overlaps panel {panel:?}"
+        );
+        assert!(
+            rect.x >= work.x && rect.right() <= work.right(),
+            "{edge:?} {rect:?} outside work {work:?}"
+        );
+        assert!(
+            rect.y >= work.y && rect.bottom() <= work.bottom(),
+            "{edge:?} {rect:?} outside work {work:?}"
+        );
+    }
+
+    #[test]
+    fn bottom_panel_popup_never_overlaps_strip_44_or_72() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        for (height, panel) in [
+            (44, Rect::new(0, 1036, 1920, 44)),
+            (72, Rect::new(0, 1008, 1920, 72)),
+        ] {
+            let anchor = Rect::new(1800, panel.y, 30, height);
+            assert_clear_of_panel(PanelEdge::Bottom, output, panel, anchor);
+            let work = work_area_for_panel(output, panel, PanelEdge::Bottom);
+            let req = request(QuickControlKind::Calendar, anchor, work, PanelEdge::Bottom);
+            let rect = fit_helper(&req, Size::new(310, 1040)).expect("fit");
+            assert_eq!(rect.right(), output.right(), "panel {height}");
+        }
+    }
+
+    #[test]
+    fn top_panel_popup_never_overlaps_strip() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        for height in [44, 72] {
+            let panel = Rect::new(0, 0, 1920, height);
+            let anchor = Rect::new(1800, 0, 30, height);
+            assert_clear_of_panel(PanelEdge::Top, output, panel, anchor);
+            let work = work_area_for_panel(output, panel, PanelEdge::Top);
+            let req = request(QuickControlKind::Audio, anchor, work, PanelEdge::Top);
+            let rect = fit_helper(&req, Size::new(310, 1040)).expect("fit");
+            assert_eq!(rect.right(), output.right(), "top panel {height}");
+        }
+    }
+
+    #[test]
+    fn left_panel_popup_never_overlaps_strip_and_pins_output_right() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        let panel = Rect::new(0, 0, 44, 1080);
+        let anchor = Rect::new(0, 500, 44, 30);
+        assert_clear_of_panel(PanelEdge::Left, output, panel, anchor);
+        let work = work_area_for_panel(output, panel, PanelEdge::Left);
+        let req = request(QuickControlKind::Network, anchor, work, PanelEdge::Left);
+        let rect = fit_helper(&req, Size::new(310, 220)).expect("fit");
+        assert_eq!(rect.right(), output.right());
+    }
+
+    // RULING: a full-height right panel occupies the output's right strip, so
+    // a popup with right == output.right would sit on the panel. The panel
+    // wins: the popup is pinned to the panel-aware work-area right instead.
+    #[test]
+    fn right_panel_popup_never_overlaps_strip() {
+        let output = Rect::new(0, 0, 1920, 1080);
+        let panel = Rect::new(1876, 0, 44, 1080);
+        let anchor = Rect::new(1876, 500, 44, 30);
+        assert_clear_of_panel(PanelEdge::Right, output, panel, anchor);
+        let work = work_area_for_panel(output, panel, PanelEdge::Right);
+        let req = request(QuickControlKind::Audio, anchor, work, PanelEdge::Right);
+        let rect = fit_helper(&req, Size::new(310, 220)).expect("fit");
+        assert_eq!(rect.right(), work.right());
+    }
 }

@@ -1516,8 +1516,8 @@ mod tests {
 
     #[test]
     fn bottom_end_aligned_network_fixture_right_above() {
-        // Bottom panel network fixture: end-aligned above the anchor,
-        // right edge pinned to the anchor/work-area right.
+        // Bottom panel network fixture: output-end aligned above the anchor,
+        // right edge pinned to the output right (not the tray anchor).
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1830, 1036, 70, 44);
         let size = flamewm_api::Size::new(310, 220);
@@ -1525,12 +1525,12 @@ mod tests {
             Some(anchor),
             Some(size),
             PopoverEdge::Above,
-            PopoverAlign::End,
+            PopoverAlign::OutputEnd,
             area,
             8,
         )
         .expect("measured");
-        assert_eq!(rect.right(), anchor.right());
+        assert_eq!(rect.right(), area.right());
         assert!(rect.right() <= area.right());
         assert!(rect.bottom() <= anchor.y);
     }
@@ -1545,13 +1545,13 @@ mod tests {
             Some(anchor),
             Some(size),
             PopoverEdge::Below,
-            PopoverAlign::End,
+            PopoverAlign::OutputEnd,
             area,
             8,
         )
         .expect("measured");
         assert!(rect.y >= anchor.bottom());
-        assert_eq!(rect.right(), anchor.right());
+        assert_eq!(rect.right(), area.right());
     }
 
     #[test]
@@ -1595,7 +1595,7 @@ mod tests {
             Some(anchor),
             Some(size),
             PopoverEdge::Above,
-            PopoverAlign::End,
+            PopoverAlign::OutputEnd,
             area,
             8,
         )

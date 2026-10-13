@@ -216,7 +216,18 @@ impl ShellLoop {
     }
 
     fn clear_transient_state(&mut self) {
-        clear_transient_state_fields(&mut self.start_open, &mut self.context_menu);
+        clear_transient_state_fields(
+            &mut self.start_open,
+            &mut self.start_query,
+            &mut self.context_menu,
+        );
+    }
+
+    /// Single owner of the Start session end. Every Start close path routes
+    /// here so the search query never survives into the next open. Other
+    /// popups are left alone.
+    pub(crate) fn end_start_session(&mut self) {
+        end_start_session_fields(&mut self.start_open, &mut self.start_query);
     }
 
     pub(crate) fn apply_controls(
@@ -260,9 +271,7 @@ impl ShellLoop {
                     } else {
                         let _close = shell_stage!("shell.start.open.close");
                         match self.surfaces.toggle_start(runtime) {
-                            Ok(()) => {
-                                self.start_open = !was_open;
-                            }
+                            Ok(()) => self.end_start_session(),
                             Err(error) if is_popup_refusal(&error) => {}
                             Err(error) => return Err(UiBackendError::Renderer(error)),
                         }
@@ -303,7 +312,7 @@ impl ShellLoop {
                     // forward to the supervisor, then return immediately.
                     if matches!(name.as_str(), "volume" | "audio" | "network" | "clock") {
                         self.open_quick_control(runtime, &name);
-                        self.start_open = false;
+                        self.end_start_session();
                         continue;
                     }
                     self.close_quick_control_nonfatal();
@@ -319,7 +328,7 @@ impl ShellLoop {
                         Err(error) if is_popup_refusal(&error) => {}
                         Err(error) => return Err(UiBackendError::Renderer(error)),
                     }
-                    self.start_open = false;
+                    self.end_start_session();
                 }
                 ShellControl::SystemAction {
                     action,
@@ -374,7 +383,7 @@ impl ShellLoop {
                     self.surfaces
                         .close_transients(runtime)
                         .map_err(UiBackendError::Renderer)?;
-                    self.start_open = false;
+                    self.end_start_session();
                 }
                 ShellControl::Launch(_)
                 | ShellControl::ActivateWindow(_)
@@ -588,6 +597,8 @@ impl ShellLoop {
         let anchor =
             self.surfaces
                 .quick_anchor(runtime, &self.pending_anchor_fallback(), source_id);
+        // Panel-aware work area: quick popups pin right to the output and fit
+        // vertically inside it, so they never cover the panel strip.
         let work_area = self.surfaces.work_area();
         let panel_edge = self.surfaces.panel_edge();
         flamewm_shell::quick_controls::host::open_via_supervisor_nonfatal(
@@ -1084,7 +1095,7 @@ impl ShellLoop {
         // stale anchor while the context swaps underneath it.
         let _ = self.surfaces.close_transients(runtime);
         self.close_quick_control_nonfatal();
-        self.start_open = false;
+        self.end_start_session();
         self.context_menu = None;
         // Sync BEFORE next open/projection; refusal keeps old context.
         match self.surfaces.sync_panel_context(runtime, snapshot) {
@@ -1497,11 +1508,17 @@ fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {
     }
 }
 
+fn end_start_session_fields(start_open: &mut bool, start_query: &mut String) {
+    *start_open = false;
+    start_query.clear();
+}
+
 fn clear_transient_state_fields(
     start_open: &mut bool,
+    start_query: &mut String,
     context_menu: &mut Option<flamewm_shell::ContextMenuState>,
 ) {
-    *start_open = false;
+    end_start_session_fields(start_open, start_query);
     *context_menu = None;
 }
 
@@ -1571,15 +1588,17 @@ mod tests {
     #[test]
     fn escape_close_clears_start_and_transient_state() {
         let mut start_open = true;
+        let mut start_query = "fire".to_owned();
         let mut context_menu = Some(flamewm_shell::ContextMenuState {
             kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
             revision: 1,
             anchor: None,
         });
 
-        super::clear_transient_state_fields(&mut start_open, &mut context_menu);
+        super::clear_transient_state_fields(&mut start_open, &mut start_query, &mut context_menu);
 
         assert!(!start_open);
+        assert!(start_query.is_empty(), "close clears the search query");
         assert!(context_menu.is_none());
     }
 

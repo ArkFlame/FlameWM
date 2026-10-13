@@ -17,6 +17,9 @@ pub enum PopoverAlign {
     Start,
     End,
     Center,
+    /// Right edge pinned to the bounds' right edge (`work_area` passed to
+    /// `place_aligned`); used for output-anchored quick controls.
+    OutputEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +64,7 @@ impl PopoverGeometry {
             PopoverEdge::Above,
         ];
         for candidate in candidates {
-            let origin = Self::origin_for(source_rect, size, candidate, align, offset);
+            let origin = Self::origin_for(source_rect, size, candidate, align, offset, work_area);
             if Self::fits(origin, size, work_area) {
                 return Self {
                     origin: Self::clamp_to_work_area(origin, size, work_area),
@@ -71,7 +74,7 @@ impl PopoverGeometry {
         }
         // Nothing fits: clamp preferred origin into the work area.
         let origin = Self::clamp_to_work_area(
-            Self::origin_for(source_rect, size, edge, align, offset),
+            Self::origin_for(source_rect, size, edge, align, offset, work_area),
             size,
             work_area,
         );
@@ -93,13 +96,15 @@ impl PopoverGeometry {
         edge: PopoverEdge,
         align: PopoverAlign,
         offset: i32,
+        bounds: Rect,
     ) -> Point {
         match edge {
-            PopoverEdge::Below => {
-                Point::new(Self::align_x(source, size, align), source.bottom() + offset)
-            }
+            PopoverEdge::Below => Point::new(
+                Self::align_x(source, size, align, bounds),
+                source.bottom() + offset,
+            ),
             PopoverEdge::Above => Point::new(
-                Self::align_x(source, size, align),
+                Self::align_x(source, size, align, bounds),
                 source.y - size.height - offset,
             ),
             PopoverEdge::Right => {
@@ -112,11 +117,12 @@ impl PopoverGeometry {
         }
     }
 
-    const fn align_x(source: Rect, size: Size, align: PopoverAlign) -> i32 {
+    const fn align_x(source: Rect, size: Size, align: PopoverAlign, bounds: Rect) -> i32 {
         match align {
             PopoverAlign::Start => source.x,
             PopoverAlign::End => source.right() - size.width,
             PopoverAlign::Center => source.x + (source.width - size.width) / 2,
+            PopoverAlign::OutputEnd => bounds.right() - size.width,
         }
     }
 
@@ -125,6 +131,7 @@ impl PopoverGeometry {
             PopoverAlign::Start => source.y,
             PopoverAlign::End => source.bottom() - size.height,
             PopoverAlign::Center => source.y + (source.height - size.height) / 2,
+            PopoverAlign::OutputEnd => source.y,
         }
     }
 

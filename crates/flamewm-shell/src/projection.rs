@@ -287,30 +287,27 @@ pub fn project_panel(
     Ok(())
 }
 
-fn model_view<'a>(
+/// The single Start result owner: every projection and click path reads this.
+/// A non-empty query searches ALL categories (the category rail is hidden);
+/// an empty query shows the selected presentation category.
+#[must_use]
+pub fn start_visible_results<'a>(
     model: &'a StartModel,
     category: StartCategory,
     query: &str,
 ) -> Vec<&'a flamewm_api::applications::DesktopApplication> {
-    // Canonical indexed path: borrowed query view from the precomputed
-    // index, then the single presentation-bucket filter. No clone, no
-    // set_query-on-temporary. `set_query`/`results` stay as compat shims
-    // in core and are not used here.
-    let needle = query.trim();
-    let base: Vec<&'a flamewm_api::applications::DesktopApplication> = if needle.is_empty() {
-        model.results_view()
-    } else {
-        model.query_view(query)
-    };
-    if category == StartCategory::All {
-        return base;
+    if !query.trim().is_empty() {
+        return model.query_view(query);
     }
-    if category == StartCategory::Power {
-        return Vec::new();
+    let base = model.results_view();
+    match category {
+        StartCategory::All => base,
+        StartCategory::Power => Vec::new(),
+        _ => base
+            .into_iter()
+            .filter(|application| application_matches_category(application, category))
+            .collect(),
     }
-    base.into_iter()
-        .filter(|application| application_matches_category(application, category))
-        .collect()
 }
 
 pub fn project_start(
@@ -320,16 +317,19 @@ pub fn project_start(
     query: &str,
     session: &SessionCapabilities,
 ) -> Result<(), String> {
+    // Search mode hides the whole category rail (incl. Power) and searches all.
+    let searching = !query.trim().is_empty();
+    document.visible("start-categories", !searching)?;
     for (name, value) in PRESENTATION_CATEGORIES {
         document.visible(
             &format!("start-category-{name}"),
             match value {
                 StartCategory::Power => session_available(session),
-                _ => value == category || !model_view(model, value, query).is_empty(),
+                _ => value == category || !start_visible_results(model, value, query).is_empty(),
             },
         )?;
     }
-    let count = model_view(model, category, query).len();
+    let count = start_visible_results(model, category, query).len();
     document.text(
         "start-search-label",
         if query.trim().is_empty() {
@@ -365,7 +365,7 @@ pub fn start_application_for_slot(
     query: &str,
     slot: usize,
 ) -> Option<flamewm_api::DesktopAppId> {
-    model_view(model, category, query)
+    start_visible_results(model, category, query)
         .get(slot)
         .map(|application| application.id.clone())
 }
@@ -378,7 +378,7 @@ pub fn start_application_name_for_slot(
     query: &str,
     slot: usize,
 ) -> Option<String> {
-    model_view(model, category, query)
+    start_visible_results(model, category, query)
         .get(slot)
         .map(|application| application.name.clone())
 }

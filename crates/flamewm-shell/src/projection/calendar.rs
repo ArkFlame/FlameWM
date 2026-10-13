@@ -5,15 +5,15 @@ pub fn project_calendar(
     state: &crate::calendar::CalendarState,
     today: (i32, u8, u8),
 ) -> Result<(), String> {
-    // Today: accent red circle on its marker (or Months/Years tile). Selected:
+    // Today: Flame accent (90% alpha) circle on its marker (or Months/Years tile). Selected:
     // neutral rounded gray tile on the cell, so both can show together.
     // Adjacent-month cells render dim (cleared marker foreground).
     use crate::calendar::{year_page_start, CalendarView};
-    const FLAME_RED: UiColor = UiColor {
+    const TODAY_ACCENT_90: UiColor = UiColor {
         r: 239,
         g: 64,
         b: 72,
-        a: 255,
+        a: 230,
     };
     const SELECTED_TILE: UiColor = UiColor {
         r: 64,
@@ -69,7 +69,7 @@ pub fn project_calendar(
                 }
                 let is_today = cell.today && cell.year == grid.year && cell.month == grid.month;
                 if is_today {
-                    document.background(&marker, FLAME_RED)?;
+                    document.background(&marker, TODAY_ACCENT_90)?;
                 } else {
                     document.background_clear(&marker)?;
                 }
@@ -86,7 +86,7 @@ pub fn project_calendar(
                 document.text(&id, month_name(month).to_owned())?;
                 document.foreground(&id, CURRENT_FG)?;
                 if state.year == today.0 && month == today.1 {
-                    document.background(&id, FLAME_RED)?;
+                    document.background(&id, TODAY_ACCENT_90)?;
                 } else if month == state.month {
                     document.background(&id, SELECTED_TILE)?;
                 } else {
@@ -102,7 +102,7 @@ pub fn project_calendar(
                 document.text(&id, year.to_string())?;
                 document.foreground(&id, CURRENT_FG)?;
                 if year == today.0 {
-                    document.background(&id, FLAME_RED)?;
+                    document.background(&id, TODAY_ACCENT_90)?;
                 } else if year == state.year {
                     document.background(&id, SELECTED_TILE)?;
                 } else {
@@ -203,19 +203,79 @@ mod calendar_tests {
         }
     }
 
-    const FLAME_RED: UiColor = UiColor {
-        r: 239,
-        g: 64,
-        b: 72,
-        a: 255,
-    };
-
     const SELECTED_TILE: UiColor = UiColor {
         r: 64,
         g: 68,
         b: 72,
         a: 255,
     };
+
+    // Flame ACCENT (#ef4048) at 90% alpha (230/255) for the today marker.
+    const TODAY_ACCENT_90: UiColor = UiColor {
+        r: 239,
+        g: 64,
+        b: 72,
+        a: 230,
+    };
+
+    /// CSS rule body for a `#clock-popup .<class>` selector in calendar.html.
+    fn css_rule(class: &str) -> &'static str {
+        let source = include_str!("../../../../ui/shell/calendar.html");
+        let head = format!("#clock-popup .{class} {{");
+        let start = source
+            .find(&head)
+            .unwrap_or_else(|| panic!("missing rule {class}"))
+            + head.len();
+        let end = start + source[start..].find('}').expect("rule end");
+        &source[start..end]
+    }
+
+    fn css_px(rule: &str, property: &str) -> i32 {
+        let key = format!("{property}:");
+        let start = rule
+            .find(&key)
+            .unwrap_or_else(|| panic!("missing {property}"))
+            + key.len();
+        let value = rule[start..].split(';').next().expect("value").trim();
+        value.trim_end_matches("px").parse().expect("px value")
+    }
+
+    #[test]
+    fn today_marker_is_accent_ninety_percent_fill() {
+        let today = (2026, 9, 7);
+        let state = crate::calendar::CalendarState::for_today(today);
+        let grid = state.grid(today).expect("valid grid");
+        let today_index = grid
+            .cells
+            .iter()
+            .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
+            .expect("known date is a current-month cell");
+        let mut document = FakeDocument::default();
+        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let marker = format!("calendar-day-{}-marker", today_index + 1);
+        assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_ACCENT_90));
+    }
+
+    #[test]
+    fn today_marker_is_a_centered_equal_circle() {
+        let rule = css_rule("calendar-day-marker");
+        let width = css_px(rule, "width");
+        let height = css_px(rule, "height");
+        assert_eq!(width, height, "marker must be square");
+        assert_eq!(css_px(rule, "border-radius"), width / 2, "radius = w/2");
+    }
+
+    #[test]
+    fn today_marker_styling_differs_from_selected_tile() {
+        let marker = css_rule("calendar-day-marker");
+        let tile = css_rule("calendar-day");
+        assert_ne!(
+            css_px(marker, "border-radius"),
+            css_px(tile, "border-radius"),
+            "today circle is not the selected rounded tile",
+        );
+        assert_ne!(TODAY_ACCENT_90, SELECTED_TILE);
+    }
 
     #[test]
     fn today_marker_and_selected_tile_show_together() {
@@ -231,12 +291,12 @@ mod calendar_tests {
         project_calendar(&mut document, &state, today).expect("projection succeeds");
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         let tile = format!("calendar-day-{}", today_index + 1);
-        assert_eq!(document.backgrounds.get(&marker), Some(&FLAME_RED));
+        assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_ACCENT_90));
         assert_eq!(document.backgrounds.get(&tile), Some(&SELECTED_TILE));
         let red_markers = document
             .backgrounds
             .iter()
-            .filter(|(id, color)| id.ends_with("-marker") && **color == FLAME_RED)
+            .filter(|(id, color)| id.ends_with("-marker") && **color == TODAY_ACCENT_90)
             .count();
         assert_eq!(red_markers, 1, "exactly one today marker");
         for (index, cell) in grid.cells.iter().enumerate() {
@@ -282,7 +342,7 @@ mod calendar_tests {
         );
         assert_eq!(
             document.backgrounds.get("calendar-day-9-marker"),
-            Some(&FLAME_RED),
+            Some(&TODAY_ACCENT_90),
         );
         assert_eq!(
             document.backgrounds.get("calendar-day-9"),
@@ -306,7 +366,7 @@ mod calendar_tests {
         );
         assert_eq!(
             document.backgrounds.get("calendar-pick-month-10"),
-            Some(&FLAME_RED),
+            Some(&TODAY_ACCENT_90),
         );
     }
 }

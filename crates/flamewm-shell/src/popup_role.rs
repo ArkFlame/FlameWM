@@ -200,13 +200,14 @@ mod popup_contract_tests {
                 Some(anchor),
                 Some(expected_intrinsic(role)),
                 PopoverEdge::Above,
-                PopoverAlign::End,
+                PopoverAlign::OutputEnd,
                 work_area,
                 8,
             )
             .unwrap_or_else(|error| panic!("{role:?} placement must succeed: {error}"));
             assert!(rect.bottom() <= 597, "{role:?} {rect:?}");
             assert!(rect.x > midpoint, "{role:?} {rect:?}");
+            assert_eq!(rect.right(), output.right(), "{role:?} {rect:?}");
             rects.push(rect);
         }
         for rect in &rects {
