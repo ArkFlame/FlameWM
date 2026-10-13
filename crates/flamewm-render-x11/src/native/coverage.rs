@@ -89,7 +89,7 @@ pub fn build_coverage_scaled(
             }
             // Text glyph coverage is backend-owned (Xft); bound conservatively
             // by nothing here: text does not grow the shape mask.
-            PaintCommand::Text { .. } => {}
+            PaintCommand::Text { .. } | PaintCommand::NodeBackdrop { .. } => {}
             PaintCommand::PushClip { rect } => clips.push(scale_rect(*rect)),
             PaintCommand::PopClip => {
                 clips.pop();

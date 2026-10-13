@@ -2173,11 +2173,14 @@ fn hide_menus(document: &mut impl UiDocumentAccess) -> Result<(), String> {
     document.visible("desktop-menu", false)?;
     document.visible("desktop-entry-menu", false)?;
     document.visible("sticky-menu", false)?;
-    Ok(())
+    projection::clear_menu_backdrop(document, "desktop-menu")?;
+    projection::clear_menu_backdrop(document, "desktop-entry-menu")?;
+    projection::clear_menu_backdrop(document, "sticky-menu")
 }
 
 fn hide_confirm(document: &mut impl UiDocumentAccess) -> Result<(), String> {
-    document.visible("desktop-confirm", false)
+    document.visible("desktop-confirm", false)?;
+    projection::clear_menu_backdrop(document, "desktop-confirm")
 }
 
 fn show_confirm(document: &mut impl UiDocumentAccess, state: &DesktopState) -> Result<(), String> {

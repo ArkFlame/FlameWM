@@ -90,7 +90,21 @@ pub fn project_menu_surface(
         snapshot.values.get("decoration"),
         Some(SettingValue::Text(value)) if value == "squared"
     );
-    document.corner_radius(id, shape_radius(!squared) as f32)
+    document.corner_radius(id, shape_radius(!squared) as f32)?;
+    // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
+    let blur = match snapshot.values.get("surfaceBlurPercent") {
+        Some(SettingValue::Percent(value)) => (*value).min(100),
+        _ => DEFAULT_SURFACE_BLUR_PERCENT,
+    };
+    document.set_node_backdrop(id, Some(blur))
+}
+
+/// Settings default for `surfaceBlurPercent` (shell `Settings::default`).
+const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
+
+/// Clears a desktop menu root's node backdrop (menu hidden).
+pub fn clear_menu_backdrop(document: &mut impl UiDocumentAccess, id: &str) -> Result<(), String> {
+    document.set_node_backdrop(id, None)
 }
 
 pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -667,6 +681,7 @@ mod tests {
     struct MenuShapeProbe {
         corners: Vec<(String, f32)>,
         fills: Vec<(String, UiColor)>,
+        backdrops: Vec<(String, Option<u8>)>,
     }
 
     impl UiDocumentAccess for MenuShapeProbe {
@@ -697,6 +712,10 @@ mod tests {
         }
         fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
             self.corners.push((id.to_owned(), radius_px));
+            Ok(())
+        }
+        fn set_node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+            self.backdrops.push((id.to_owned(), blur_percent));
             Ok(())
         }
         fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
@@ -762,6 +781,40 @@ mod tests {
         for (id, color) in &probe.fills {
             assert_eq!(color.a, 127, "surfaceOpacity 50% must reach {id}");
         }
+    }
+
+    #[test]
+    fn every_desktop_menu_root_gets_node_backdrop_from_surface_blur() {
+        let mut snapshot = menu_snapshot(None, None);
+        snapshot
+            .values
+            .insert("surfaceBlurPercent".into(), SettingValue::Percent(40));
+        let mut probe = MenuShapeProbe::default();
+        for id in MENU_SURFACE_IDS {
+            project_menu_surface(&mut probe, id, &snapshot).expect("project menu");
+        }
+        assert_eq!(probe.backdrops.len(), MENU_SURFACE_IDS.len());
+        for (id, blur) in &probe.backdrops {
+            assert_eq!(*blur, Some(40), "surfaceBlurPercent must reach {id}");
+        }
+    }
+
+    #[test]
+    fn zero_surface_blur_and_hidden_menu_clear_node_backdrop() {
+        let mut snapshot = menu_snapshot(None, None);
+        snapshot
+            .values
+            .insert("surfaceBlurPercent".into(), SettingValue::Percent(0));
+        let mut probe = MenuShapeProbe::default();
+        project_menu_surface(&mut probe, "desktop-menu", &snapshot).expect("project menu");
+        clear_menu_backdrop(&mut probe, "sticky-menu").expect("clear");
+        assert_eq!(
+            probe.backdrops,
+            vec![
+                ("desktop-menu".to_owned(), Some(0)),
+                ("sticky-menu".to_owned(), None),
+            ]
+        );
     }
 
     #[test]

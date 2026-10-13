@@ -532,6 +532,7 @@ pub struct RuntimeDocument {
     node_image_overrides: HashMap<u32, RuntimeImageOverride>,
     geometry_overrides: HashMap<u32, GeometryOverride>,
     style_overrides: HashMap<u32, RuntimeStyleOverride>,
+    node_backdrops: HashMap<u32, u8>,
     z_index_overrides: HashMap<u32, i32>,
     scroll_offsets: HashMap<u32, ScrollState>,
     pending_damage: SurfaceDamage,
@@ -570,6 +571,7 @@ impl RuntimeDocument {
             node_image_overrides: HashMap::new(),
             geometry_overrides: HashMap::new(),
             style_overrides: HashMap::new(),
+            node_backdrops: HashMap::new(),
             z_index_overrides: HashMap::new(),
             scroll_offsets: HashMap::new(),
             pending_damage: SurfaceDamage::Full,
@@ -887,6 +889,32 @@ impl RuntimeDocument {
             Some(ColorValue::Literal(color));
         self.touch();
         Ok(())
+    }
+
+    /// Per-node backdrop request: the root pixels beneath a translucent node are captured,
+    /// blurred by `blur_percent` and laid under its fill. `None` or `Some(0)` clears it.
+    pub fn set_node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+        if blur_percent.is_some_and(|blur| blur > 100) {
+            return Err("node backdrop blur must be 0..=100".to_string());
+        }
+        let index = self
+            .node_by_id(id)
+            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        match blur_percent.filter(|blur| *blur > 0) {
+            Some(blur) => {
+                self.node_backdrops.insert(index, blur);
+            }
+            None => {
+                self.node_backdrops.remove(&index);
+            }
+        }
+        self.touch();
+        Ok(())
+    }
+
+    /// Blur percent requested for a node's backdrop, if any.
+    pub fn node_backdrop_blur(&self, index: u32) -> Option<u8> {
+        self.node_backdrops.get(&index).copied()
     }
 
     /// Runtime corner radius in px for a node (popup/menu shape follows the decoration setting).

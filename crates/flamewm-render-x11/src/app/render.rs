@@ -166,6 +166,7 @@ impl X11App {
                 unsafe { self.paint(command, document, scale)? };
             }
         }
+        self.finish_node_backdrops();
         unsafe { self.present_scene()? };
         unsafe { self.bind_presented_backbuffer_as_window_background()? };
         // Single shape per changed frame, from retained commands.
@@ -424,6 +425,31 @@ impl X11App {
         scale: f32,
     ) -> Result<(), String> {
         match command {
+            PaintCommand::NodeBackdrop {
+                rect,
+                radius,
+                blur_percent,
+                node,
+            } => {
+                let rect = scale_rect(*rect, scale);
+                let device = (
+                    rect.x.round() as i32,
+                    rect.y.round() as i32,
+                    rect.width.round().max(1.0) as u32,
+                    rect.height.round().max(1.0) as u32,
+                );
+                let radius = (*radius * scale).round().max(0.0) as u32;
+                // SAFETY: redraw is entered only with the app's initialized X11 resources.
+                unsafe {
+                    self.paint_node_backdrop(
+                        *node,
+                        device,
+                        radius,
+                        *blur_percent,
+                        document.revision(),
+                    )?
+                };
+            }
             PaintCommand::FillRect {
                 rect,
                 color,

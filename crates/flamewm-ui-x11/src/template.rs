@@ -54,6 +54,12 @@ pub trait UiDocumentAccess {
         let _ = (id, radius_px);
         Ok(())
     }
+    /// Blurred root backdrop under a translucent node (`Some(0)` or `None` clears). Documents
+    /// without node backdrop support ignore it.
+    fn set_node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+        let _ = (id, blur_percent);
+        Ok(())
+    }
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String>;
     fn background_clear(&mut self, id: &str) -> Result<(), String>;
     fn border_clear(&mut self, id: &str) -> Result<(), String>;
@@ -233,6 +239,10 @@ impl UiDocumentAccess for UiDocument {
         self.document.set_border_radius(id, radius_px)
     }
 
+    fn set_node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+        self.document.set_node_backdrop(id, blur_percent)
+    }
+
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
         self.foreground(id, color)
     }
@@ -344,6 +354,10 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
 
     fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
         self.document.set_border_radius(id, radius_px)
+    }
+
+    fn set_node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+        self.document.set_node_backdrop(id, blur_percent)
     }
 
     fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {

@@ -3,6 +3,13 @@ use crate::model::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaintCommand {
+    /// Blurred root pixels beneath a translucent node, painted before the node's fill.
+    NodeBackdrop {
+        rect: Rect,
+        radius: f32,
+        blur_percent: u8,
+        node: u32,
+    },
     FillRect {
         rect: Rect,
         color: Color,
@@ -105,6 +112,16 @@ pub fn build_paint_commands_with_scroll(
         if node.kind == NodeKind::Element || node.kind == NodeKind::Image {
             let background = apply_opacity(document.resolve_color(style.background), style.opacity);
             if background.a != 0 {
+                if let Some(blur_percent) = document.node_backdrop_blur(index as u32) {
+                    if background.a < 255 {
+                        commands.push(PaintCommand::NodeBackdrop {
+                            rect,
+                            radius: style.border_radius.max(0.0),
+                            blur_percent,
+                            node: index as u32,
+                        });
+                    }
+                }
                 commands.push(PaintCommand::FillRect {
                     rect,
                     color: background,

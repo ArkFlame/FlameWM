@@ -6,6 +6,8 @@
 //! over it. The snapshot is not live: the owner refreshes it on show, move, resize
 //! or wallpaper change. Without a backdrop the scene keeps its transparent clear.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::xlib::*;
 
 use super::X11App;
@@ -42,23 +44,7 @@ impl X11App {
         if width == 0 || height == 0 || argb.len() != width as usize * height as usize {
             return Err("surface backdrop: pixel count does not match size".to_string());
         }
-        let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
-        let matched =
-            unsafe { XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo) };
-        if matched == 0 || vinfo.visual.is_null() {
-            return Err("surface backdrop: no 32-bit TrueColor visual".to_string());
-        }
-        let root = unsafe { XRootWindow(self.display, self.screen) };
-        let pixmap = unsafe { XCreatePixmap(self.display, root, width, height, 32) };
-        if pixmap == 0 {
-            return Err("surface backdrop: XCreatePixmap failed".to_string());
-        }
-        if let Err(error) = unsafe {
-            self.upload_argb32_words(pixmap, vinfo.visual, argb, width, height)
-        } {
-            unsafe { XFreePixmap(self.display, pixmap) };
-            return Err(error);
-        }
+        let pixmap = unsafe { self.upload_argb_pixmap(argb, width, height)? };
         self.clear_surface_backdrop();
         self.surface_backdrop = Some(SurfaceBackdrop {
             pixmap,
@@ -66,6 +52,37 @@ impl X11App {
             height,
         });
         Ok(())
+    }
+
+    /// Uploads `argb` (0xAARRGGBB words, `width * height`) into a new 32-bit server pixmap.
+    ///
+    /// # Safety
+    ///
+    /// The app's display must be live and this app must own its drawables.
+    unsafe fn upload_argb_pixmap(
+        &mut self,
+        argb: &[u32],
+        width: u32,
+        height: u32,
+    ) -> Result<Pixmap, String> {
+        let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
+        let matched =
+            unsafe { XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo) };
+        if matched == 0 || vinfo.visual.is_null() {
+            return Err("backdrop: no 32-bit TrueColor visual".to_string());
+        }
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let pixmap = unsafe { XCreatePixmap(self.display, root, width, height, 32) };
+        if pixmap == 0 {
+            return Err("backdrop: XCreatePixmap failed".to_string());
+        }
+        if let Err(error) = unsafe {
+            self.upload_argb32_words(pixmap, vinfo.visual, argb, width, height)
+        } {
+            unsafe { XFreePixmap(self.display, pixmap) };
+            return Err(error);
+        }
+        Ok(pixmap)
     }
 
     /// Frees the retained backdrop, if any. Surfaces without backdrop keep the transparent clear.
@@ -100,5 +117,247 @@ impl X11App {
         };
         trace_paint(&format!("blit {}x{}", backdrop.width, backdrop.height));
         unsafe { xrender.blit_argb32_over(backdrop.pixmap, 0, 0, backdrop.width, backdrop.height) }
+    }
+}
+
+/// What produced a node backdrop. Any change misses the cache and recaptures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NodeBackdropKey {
+    pub(crate) rect: (i32, i32, u32, u32),
+    pub(crate) radius: u32,
+    pub(crate) blur_percent: u8,
+    pub(crate) revision: u64,
+}
+
+/// Retained blurred backdrops per node index, freed when a frame stops painting them.
+#[derive(Debug, Default)]
+pub(crate) struct NodeBackdropCache {
+    entries: HashMap<u32, (NodeBackdropKey, Pixmap)>,
+    used: HashSet<u32>,
+}
+
+impl NodeBackdropCache {
+    /// Pixmap for `node` when its entry was produced by exactly `key`.
+    pub(crate) fn hit(&mut self, node: u32, key: NodeBackdropKey) -> Option<Pixmap> {
+        self.used.insert(node);
+        self.entries
+            .get(&node)
+            .filter(|(cached, _)| *cached == key)
+            .map(|(_, pixmap)| *pixmap)
+    }
+
+    /// Stores `pixmap` for `node`; returns the replaced pixmap for the caller to free.
+    pub(crate) fn store(&mut self, node: u32, key: NodeBackdropKey, pixmap: Pixmap) -> Option<Pixmap> {
+        self.used.insert(node);
+        self.entries.insert(node, (key, pixmap)).map(|(_, old)| old)
+    }
+
+    /// Ends a frame: removes entries not touched this frame and returns their pixmaps to free.
+    pub(crate) fn finish_frame(&mut self) -> Vec<Pixmap> {
+        let used = std::mem::take(&mut self.used);
+        let stale: Vec<u32> = self
+            .entries
+            .keys()
+            .filter(|node| !used.contains(node))
+            .copied()
+            .collect();
+        stale
+            .into_iter()
+            .filter_map(|node| self.entries.remove(&node))
+            .map(|(_, pixmap)| pixmap)
+            .collect()
+    }
+
+    /// Removes every entry and returns the pixmaps to free.
+    pub(crate) fn drain(&mut self) -> Vec<Pixmap> {
+        self.used.clear();
+        self.entries.drain().map(|(_, (_, pixmap))| pixmap).collect()
+    }
+}
+
+/// Device rect clipped to a scene of `scene` size; `None` when nothing is visible.
+pub(crate) fn node_backdrop_clip(
+    rect: (i32, i32, u32, u32),
+    scene: (u32, u32),
+) -> Option<(i32, i32, u32, u32)> {
+    let (x, y, width, height) = rect;
+    let left = i64::from(x).max(0);
+    let top = i64::from(y).max(0);
+    let right = (i64::from(x) + i64::from(width)).min(i64::from(scene.0));
+    let bottom = (i64::from(y) + i64::from(height)).min(i64::from(scene.1));
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some((left as i32, top as i32, (right - left) as u32, (bottom - top) as u32))
+}
+
+/// Whether pixel `(px, py)` (device px) lies inside the node's rounded rect `node`.
+fn inside_rounded(px: i32, py: i32, node: (i32, i32, u32, u32), radius: u32) -> bool {
+    let (x, y, width, height) = node;
+    let lx = (px - x) as f32 + 0.5;
+    let ly = (py - y) as f32 + 0.5;
+    let (w, h) = (width as f32, height as f32);
+    if lx < 0.0 || ly < 0.0 || lx > w || ly > h {
+        return false;
+    }
+    let r = (radius as f32).min(w / 2.0).min(h / 2.0);
+    let cx = lx.clamp(r, w - r);
+    let cy = ly.clamp(r, h - r);
+    (lx - cx).powi(2) + (ly - cy).powi(2) <= r * r
+}
+
+/// Blurred ARGB words for the clipped capture `rgba` (`clip` size), alpha-masked by the node's
+/// rounded rect. `None` for blur 0 (no backdrop).
+pub(crate) fn node_backdrop_words(
+    rgba: Vec<u8>,
+    clip: (i32, i32, u32, u32),
+    node: (i32, i32, u32, u32),
+    radius: u32,
+    blur_percent: u8,
+) -> Option<Vec<u32>> {
+    if blur_percent == 0 {
+        return None;
+    }
+    let (cx, cy, width, height) = clip;
+    let mut words = crate::backdrop::blurred_argb_words(width, height, rgba, 0, blur_percent);
+    for (index, word) in words.iter_mut().enumerate() {
+        let px = cx + (index as u32 % width) as i32;
+        let py = cy + (index as u32 / width) as i32;
+        let alpha = if inside_rounded(px, py, node, radius) { 0xff } else { 0 };
+        *word = (alpha << 24) | (*word & 0x00ff_ffff);
+    }
+    Some(words)
+}
+
+impl X11App {
+    /// Paints the blurred root pixels under a translucent node's rect, clipped to its rounded
+    /// shape. The source is the scene painted so far (wallpaper layers below the node). Cached
+    /// per (rect, radius, blur, revision); capture failure keeps the plain fill.
+    ///
+    /// # Safety
+    ///
+    /// Must run on the app's display thread between `clear_scene` and `present_scene`.
+    pub(crate) unsafe fn paint_node_backdrop(
+        &mut self,
+        node: u32,
+        rect: (i32, i32, u32, u32),
+        radius: u32,
+        blur_percent: u8,
+        revision: u64,
+    ) -> Result<(), String> {
+        if self.xrender.is_none() {
+            return Ok(());
+        }
+        let Some(clip) = node_backdrop_clip(rect, (self.width, self.height)) else {
+            return Ok(());
+        };
+        let key = NodeBackdropKey {
+            rect,
+            radius,
+            blur_percent,
+            revision,
+        };
+        let pixmap = match self.node_backdrops.hit(node, key) {
+            Some(pixmap) => pixmap,
+            None => {
+                let Ok(capture) = crate::backdrop::capture_drawable_rect(
+                    self.display,
+                    self.backbuffer,
+                    clip,
+                ) else {
+                    return Ok(());
+                };
+                let Some(words) =
+                    node_backdrop_words(capture.pixels, clip, rect, radius, blur_percent)
+                else {
+                    return Ok(());
+                };
+                let pixmap = unsafe { self.upload_argb_pixmap(&words, clip.2, clip.3)? };
+                if let Some(old) = self.node_backdrops.store(node, key, pixmap) {
+                    unsafe { XFreePixmap(self.display, old) };
+                }
+                pixmap
+            }
+        };
+        let Some(xrender) = self.xrender.as_mut() else {
+            return Ok(());
+        };
+        unsafe { xrender.blit_argb32_over(pixmap, clip.0, clip.1, clip.2, clip.3) }
+    }
+
+    /// Frees node backdrops that the finished frame did not paint.
+    pub(crate) fn finish_node_backdrops(&mut self) {
+        for pixmap in self.node_backdrops.finish_frame() {
+            unsafe { XFreePixmap(self.display, pixmap) };
+        }
+    }
+
+    /// Frees every node backdrop pixmap (teardown).
+    pub(crate) fn clear_node_backdrops(&mut self) {
+        for pixmap in self.node_backdrops.drain() {
+            unsafe { XFreePixmap(self.display, pixmap) };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(blur: u8, revision: u64) -> NodeBackdropKey {
+        NodeBackdropKey {
+            rect: (10, 20, 40, 30),
+            radius: 6,
+            blur_percent: blur,
+            revision,
+        }
+    }
+
+    #[test]
+    fn blur_zero_is_no_backdrop() {
+        let rgba = [0x40, 0x80, 0xc0, 255].repeat(16 * 16);
+        assert!(node_backdrop_words(rgba, (0, 0, 16, 16), (0, 0, 16, 16), 0, 0).is_none());
+    }
+
+    #[test]
+    fn clip_crops_rect_to_scene_and_drops_offscreen() {
+        assert_eq!(node_backdrop_clip((-5, -3, 20, 10), (100, 100)), Some((0, 0, 15, 7)));
+        assert_eq!(node_backdrop_clip((95, 90, 20, 20), (100, 100)), Some((95, 90, 5, 10)));
+        assert_eq!(node_backdrop_clip((100, 0, 5, 5), (100, 100)), None);
+        assert_eq!(node_backdrop_clip((0, 0, 0, 5), (100, 100)), None);
+    }
+
+    #[test]
+    fn rounded_corners_stay_transparent_and_interior_opaque() {
+        let rgba = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
+        let words = node_backdrop_words(rgba, (0, 0, 12, 12), (0, 0, 12, 12), 6, 50)
+            .expect("blur on");
+        assert_eq!(words[0] >> 24, 0, "corner pixel masked");
+        assert_eq!(words[6 * 12 + 6] >> 24, 0xff, "centre kept");
+        let square = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
+        let words = node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50)
+            .expect("blur on");
+        assert!(words.iter().all(|word| word >> 24 == 0xff), "radius 0 is full rect");
+    }
+
+    #[test]
+    fn cache_hits_only_on_identical_key() {
+        let mut cache = NodeBackdropCache::default();
+        assert_eq!(cache.store(3, key(80, 1), 7), None);
+        assert_eq!(cache.hit(3, key(80, 1)), Some(7));
+        assert_eq!(cache.hit(3, key(80, 2)), None, "revision change misses");
+        assert_eq!(cache.hit(3, key(40, 1)), None, "blur change misses");
+        assert_eq!(cache.store(3, key(40, 1), 8), Some(7), "replaced pixmap returned");
+    }
+
+    #[test]
+    fn unpainted_nodes_are_pruned_per_frame() {
+        let mut cache = NodeBackdropCache::default();
+        cache.store(1, key(80, 1), 11);
+        cache.store(2, key(80, 1), 12);
+        cache.finish_frame();
+        assert_eq!(cache.hit(1, key(80, 1)), Some(11));
+        assert_eq!(cache.finish_frame(), vec![12]);
+        assert_eq!(cache.hit(2, key(80, 1)), None);
     }
 }

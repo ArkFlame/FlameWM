@@ -173,6 +173,7 @@ pub(crate) struct X11App {
     pub(crate) retired_backbuffer: Option<(Pixmap, usize)>,
     /// Pseudo-transparency snapshot laid under translucent fills (None = transparent clear).
     pub(crate) surface_backdrop: Option<surface_backdrop::SurfaceBackdrop>,
+    pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
     pub(crate) pointer_button: Option<u32>,
     pub(crate) pointer_grabbed: bool,
     /// Input focus displaced when this popup took it (window, revert_to).
@@ -552,6 +553,7 @@ impl X11App {
             background_bound: 0,
             retired_backbuffer: None,
             surface_backdrop: None,
+            node_backdrops: Default::default(),
             pointer_button: None,
             pointer_grabbed: false,
             saved_input_focus: None,
@@ -870,6 +872,7 @@ impl Drop for X11App {
         // its dynamic handles alive through XCloseDisplay.
         let _deferred = unsafe { self.take_deferred_native_libraries() };
         self.clear_surface_backdrop();
+        self.clear_node_backdrops();
         unsafe {
             if self.pointer_grabbed {
                 XUngrabPointer(self.display, CURRENT_TIME);
