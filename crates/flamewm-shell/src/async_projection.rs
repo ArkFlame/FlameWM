@@ -1346,7 +1346,7 @@ mod tests {
     // REGRESSION: a power-only SystemChanged reprojects through the tray
     // scope; the battery button must follow the power snapshot there, not
     // only on the sync projection path. A 45% discharge shows the 50 glyph,
-    // an 87% discharge hides the whole button.
+    // an 87% reading shows the whole button with the 90 glyph.
     // MUTATION: drop the project_battery_tray call from project_status_tray_async.
     #[test]
     fn system_scope_projects_battery_from_power_snapshot() {
@@ -1374,7 +1374,8 @@ mod tests {
         snapshot.system.power.state = PowerState::Unknown;
         let mut doc = FakeDoc::default();
         project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
-        assert_eq!(doc.visible.get("tray-battery"), Some(&false));
+        assert_eq!(doc.visible.get("tray-battery"), Some(&true));
+        assert_eq!(doc.visible.get("tray-battery-090"), Some(&true));
     }
 
     #[test]

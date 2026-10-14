@@ -3,9 +3,6 @@ use flamewm_api::system::{
 };
 use flamewm_control_core::ControlRequest;
 
-/// The tray battery shows only while discharging below this percent.
-pub const TRAY_HIDE_PERCENT: u8 = 80;
-
 /// Battery glyph: 0..=10% uses the Breeze caution asset, otherwise the fill
 /// level in 10% steps (Breeze `battery-NNN`), so every bucket has its own file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,14 +50,11 @@ impl BatteryGlyph {
     }
 }
 
-/// Tray visibility: service available, battery present, not charging, and
-/// below `TRAY_HIDE_PERCENT`. Unknown (UPower State 5/6) counts as not charging.
+/// Tray visibility: service available and a battery present. Charge state and
+/// percent never hide the icon, so the popup stays reachable.
 #[must_use]
 pub fn tray_visible(power: &PowerSnapshot) -> bool {
-    power.available == ServiceAvailability::Available
-        && power.present
-        && power.state != PowerState::Charging
-        && power.percent < TRAY_HIDE_PERCENT
+    power.available == ServiceAvailability::Available && power.present
 }
 
 /// Bucket rule: 0..=10 is Caution; above that the level rounds UP to the next
@@ -125,22 +119,19 @@ mod tests {
     }
 
     #[test]
-    fn tray_visible_only_when_discharging_below_80() {
-        assert!(tray_visible(&power(PowerState::Discharging, 79)));
-        assert!(!tray_visible(&power(PowerState::Discharging, 80)));
-        assert!(!tray_visible(&power(PowerState::Discharging, 100)));
+    fn tray_visible_for_any_present_battery_regardless_of_state_or_percent() {
         assert!(tray_visible(&power(PowerState::Discharging, 0)));
+        assert!(tray_visible(&power(PowerState::Discharging, 79)));
+        assert!(tray_visible(&power(PowerState::Discharging, 80)));
+        assert!(tray_visible(&power(PowerState::Discharging, 100)));
+        assert!(tray_visible(&power(PowerState::Charging, 40)));
+        assert!(tray_visible(&power(PowerState::Charging, 100)));
+        assert!(tray_visible(&power(PowerState::Full, 100)));
+        assert!(tray_visible(&power(PowerState::Unknown, 87)));
     }
 
     #[test]
-    fn tray_visible_for_unknown_not_charging_below_80() {
-        assert!(tray_visible(&power(PowerState::Unknown, 45)));
-        assert!(!tray_visible(&power(PowerState::Unknown, 87)));
-    }
-
-    #[test]
-    fn tray_hidden_when_charging_or_missing() {
-        assert!(!tray_visible(&power(PowerState::Charging, 40)));
+    fn tray_hidden_when_battery_missing_or_service_unavailable() {
         let mut absent = power(PowerState::Discharging, 40);
         absent.present = false;
         assert!(!tray_visible(&absent));

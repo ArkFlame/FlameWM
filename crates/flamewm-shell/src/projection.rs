@@ -819,8 +819,9 @@ mod panel_template_tests {
     // bucket on the compiled panel through every panel projection path: the
     // sync `project` pass, the full async refresh, and a power-only SystemChanged
     // scope. Visible = laid out with a non-zero box.
-    // OBSERVABLE: hidden for Unknown>=80, Charging, Unavailable, >=80; one glyph
-    // (Caution 0-10, otherwise the level rounded up to 10%) for not-charging < 80.
+    // OBSERVABLE: hidden only when the service is unavailable or no battery is
+    // present; charging and full batteries show one glyph (Caution 0-10,
+    // otherwise the level rounded up to 10%).
     // MUTATION: drop the battery projection from one path (default markup stays
     // hidden there, so that path's case fails) or skip the glyph bucket.
     #[test]
@@ -846,16 +847,17 @@ mod panel_template_tests {
             cpu_percent: None,
         };
         let avail = ServiceAvailability::Available;
-        let cases: [(PowerSnapshot, Option<&str>); 10] = [
-            (power(avail, true, 87, PowerState::Unknown), None),
+        let cases: [(PowerSnapshot, Option<&str>); 11] = [
+            (power(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
             (power(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
             (power(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
             (power(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
             (power(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
-            (power(avail, true, 30, PowerState::Charging), None),
+            (power(avail, true, 30, PowerState::Charging), Some("tray-battery-030")),
             (power(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
             (power(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
-            (power(avail, true, 80, PowerState::Discharging), None),
+            (power(avail, true, 80, PowerState::Discharging), Some("tray-battery-080")),
+            (power(avail, true, 100, PowerState::Full), Some("tray-battery-100")),
             (power(avail, false, 45, PowerState::Discharging), None),
         ];
         for (power, expected) in cases {

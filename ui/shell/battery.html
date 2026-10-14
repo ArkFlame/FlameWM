@@ -6,41 +6,38 @@
   <link rel="stylesheet" href="flamewm.css">
   <style>
     body { margin:0px; }
-    .tray-popup.battery-popup { position:absolute; left:0px; top:0px; width:300px; height:132px; box-sizing:border-box; padding:16px; gap:10px; display:flex; flex-direction:column; border-radius:8px; background:var(--surface); }
-    .battery-header { position:relative; height:24px; display:flex; flex-direction:row; align-items:center; gap:10px; }
-    .battery-icon { position:absolute; left:0px; top:0px; width:24px; height:24px; }
-    .battery-percent { position:absolute; left:34px; top:2px; font-size:16px; font-weight:700; color:var(--text); }
-    .battery-track { position:relative; width:268px; height:8px; border-radius:4px; background:#34373a; }
+    .tray-popup.battery-popup { position:absolute; left:0px; top:0px; width:300px; height:132px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:8px; background:var(--surface); }
+    .battery-icon { position:absolute; left:20px; top:20px; width:32px; height:32px; }
+    .battery-percent { position:absolute; left:64px; top:6px; height:52px; font-size:44px; font-weight:400; color:var(--text); }
+    .battery-track { position:absolute; left:20px; top:76px; width:260px; height:8px; border-radius:4px; background:#3a3d40; }
     .battery-progress-fill { position:absolute; left:0px; top:0px; width:0px; height:8px; border-radius:4px; background:var(--accent); }
-    .battery-state { position:relative; height:18px; font-size:13px; color:var(--text); }
-    .battery-cpu { position:relative; height:18px; font-size:13px; color:var(--muted); }
+    .battery-state { position:absolute; left:20px; top:92px; width:260px; height:18px; font-size:14px; color:var(--text); }
+    .battery-cpu { position:absolute; left:20px; top:112px; width:260px; height:16px; font-size:12px; color:var(--muted); }
   </style>
 </head>
 <body class="popup-body">
   <section id="battery-popup" class="tray-popup battery-popup" data-action="popup.surface">
-    <div class="battery-header">
-      <img class="symbolic-icon battery-icon" id="battery-icon-caution" src="assets/breeze/battery-caution.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-caution-charging" src="assets/breeze/battery-caution-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-020" src="assets/breeze/battery-020.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-020-charging" src="assets/breeze/battery-020-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-030" src="assets/breeze/battery-030.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-030-charging" src="assets/breeze/battery-030-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-040" src="assets/breeze/battery-040.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-040-charging" src="assets/breeze/battery-040-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-050" src="assets/breeze/battery-050.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-050-charging" src="assets/breeze/battery-050-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-060" src="assets/breeze/battery-060.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-060-charging" src="assets/breeze/battery-060-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-070" src="assets/breeze/battery-070.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-070-charging" src="assets/breeze/battery-070-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-080" src="assets/breeze/battery-080.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-080-charging" src="assets/breeze/battery-080-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-090" src="assets/breeze/battery-090.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-090-charging" src="assets/breeze/battery-090-charging.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-100" src="assets/breeze/battery-100.svg">
-      <img class="symbolic-icon battery-icon" id="battery-icon-100-charging" src="assets/breeze/battery-100-charging.svg">
-      <span id="battery-percent" class="battery-percent">&#8203;</span>
-    </div>
+    <img class="symbolic-icon battery-icon" id="battery-icon-caution" src="assets/breeze/battery-caution.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-caution-charging" src="assets/breeze/battery-caution-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-020" src="assets/breeze/battery-020.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-020-charging" src="assets/breeze/battery-020-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-030" src="assets/breeze/battery-030.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-030-charging" src="assets/breeze/battery-030-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-040" src="assets/breeze/battery-040.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-040-charging" src="assets/breeze/battery-040-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-050" src="assets/breeze/battery-050.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-050-charging" src="assets/breeze/battery-050-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-060" src="assets/breeze/battery-060.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-060-charging" src="assets/breeze/battery-060-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-070" src="assets/breeze/battery-070.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-070-charging" src="assets/breeze/battery-070-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-080" src="assets/breeze/battery-080.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-080-charging" src="assets/breeze/battery-080-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-090" src="assets/breeze/battery-090.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-090-charging" src="assets/breeze/battery-090-charging.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-100" src="assets/breeze/battery-100.svg">
+    <img class="symbolic-icon battery-icon" id="battery-icon-100-charging" src="assets/breeze/battery-100-charging.svg">
+    <span id="battery-percent" class="battery-percent">&#8203;</span>
     <div id="battery-progress-track" class="battery-track">
       <div id="battery-progress-fill" class="battery-progress-fill"></div>
     </div>
