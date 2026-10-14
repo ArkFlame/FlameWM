@@ -145,6 +145,24 @@ fn inherited_platform_theme(existing_env: &BTreeMap<String, String>) -> Option<&
         .filter(|value| !value.is_empty())
 }
 
+/// Full Breeze scheme file for a Dark/Light mode from `<data_root>/color-schemes`.
+/// The named `ColorScheme=` key alone does not color Dolphin's folder view
+/// (tools probe: view stayed white), so the owned file carries the scheme's role groups.
+fn breeze_color_scheme_file(paths: &SessionPaths, mode: AppearanceMode) -> Option<String> {
+    let name = if mode.prefers_dark() {
+        KDE_COLOR_SCHEME_DARK
+    } else {
+        KDE_COLOR_SCHEME_LIGHT
+    };
+    std::fs::read_to_string(
+        paths
+            .data_root
+            .join("color-schemes")
+            .join(format!("{name}.colors")),
+    )
+    .ok()
+}
+
 fn gtk3_theme_roots(existing_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
     let non_empty = |key: &str| existing_env.get(key).filter(|value| !value.is_empty());
     let mut roots = Vec::new();
@@ -196,6 +214,9 @@ pub fn plan_appearance(
         ),
     };
 
+    let color_scheme = matches!(mode, AppearanceMode::Dark | AppearanceMode::Light)
+        .then(|| breeze_color_scheme_file(paths, mode))
+        .flatten();
     let qt = match mode {
         AppearanceMode::System => {
             ToolkitStatus::Unsupported("system mode follows the host preference")
@@ -218,16 +239,13 @@ pub fn plan_appearance(
                 "inherited QT_QPA_PLATFORMTHEME wins; owned kdeglobals is not applied",
             )
         }
+        AppearanceMode::Dark | AppearanceMode::Light if color_scheme.is_none() => {
+            ToolkitStatus::Unsupported("Breeze color scheme file not installed")
+        }
         AppearanceMode::Dark | AppearanceMode::Light => {
-            let scheme = if mode.prefers_dark() {
-                KDE_COLOR_SCHEME_DARK
-            } else {
-                KDE_COLOR_SCHEME_LIGHT
-            };
-            owned_files.insert(
-                PathBuf::from("kdeglobals"),
-                format!("[General]\nColorScheme={scheme}\n"),
-            );
+            // The guard above ensures the scheme file was read.
+            let colors = color_scheme.unwrap_or_default();
+            owned_files.insert(PathBuf::from("kdeglobals"), colors);
             // Owned root is listed first; the user's ~/.config/kdeglobals still
             // wins per key, and an inherited XDG_CONFIG_DIRS is kept after it.
             let inherited = existing_env
@@ -304,11 +322,21 @@ mod tests {
         home
     }
 
+    const DARK_SCHEME: &str =
+        "[General]\nColorScheme=BreezeDark\n[Colors:View]\nBackgroundNormal=20,22,24\n";
+    const LIGHT_SCHEME: &str =
+        "[General]\nColorScheme=BreezeLight\n[Colors:View]\nBackgroundNormal=255,255,255\n";
+
     fn paths_for(home: &Path) -> SessionPaths {
+        let data_root = home.join("share");
+        let schemes = data_root.join("color-schemes");
+        std::fs::create_dir_all(&schemes).expect("schemes");
+        std::fs::write(schemes.join("BreezeDark.colors"), DARK_SCHEME).expect("dark");
+        std::fs::write(schemes.join("BreezeLight.colors"), LIGHT_SCHEME).expect("light");
         SessionPaths {
             bindir: "/usr/bin".into(),
             config_home: home.join(".config"),
-            data_root: "/usr/share".into(),
+            data_root,
         }
     }
 
@@ -339,7 +367,7 @@ mod tests {
             plan.owned_files
                 .get(Path::new("kdeglobals"))
                 .map(String::as_str),
-            Some("[General]\nColorScheme=BreezeDark\n")
+            Some(DARK_SCHEME)
         );
         let xdg = plan.environment.get("XDG_CONFIG_DIRS").expect("xdg");
         assert_eq!(
@@ -368,7 +396,7 @@ mod tests {
             plan.owned_files
                 .get(Path::new("kdeglobals"))
                 .map(String::as_str),
-            Some("[General]\nColorScheme=BreezeLight\n")
+            Some(LIGHT_SCHEME)
         );
         assert_eq!(
             plan.environment.get("XDG_CONFIG_DIRS").map(String::as_str),
@@ -522,6 +550,29 @@ mod tests {
     }
 
     #[test]
+    fn missing_breeze_scheme_file_disables_qt_channel_instead_of_named_only_write() {
+        let home = isolated_home("no-scheme");
+        let paths = SessionPaths {
+            bindir: "/usr/bin".into(),
+            config_home: home.join(".config"),
+            data_root: home.join("empty-share"),
+        };
+        let plan = plan_appearance(
+            &paths,
+            &BTreeMap::new(),
+            AppearanceMode::Dark,
+            QT_PLUGIN_PRESENT,
+        );
+        assert!(plan.owned_files.is_empty());
+        assert!(!plan.environment.contains_key("XDG_CONFIG_DIRS"));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unsupported(_)
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn colon_in_owned_root_disables_qt_channel() {
         let home = isolated_home("colon");
         let paths = SessionPaths {
@@ -557,7 +608,7 @@ mod tests {
         materialize_owned_files(&plan).expect("materialize");
         let written = std::fs::read_to_string(owned_appearance_root(&paths).join("kdeglobals"))
             .expect("owned file");
-        assert_eq!(written, "[General]\nColorScheme=BreezeDark\n");
+        assert_eq!(written, DARK_SCHEME);
         assert!(
             !paths.config_home.join("kdeglobals").exists(),
             "host kdeglobals must not be written"
@@ -619,7 +670,7 @@ mod tests {
         let root = owned_appearance_root(&paths);
         assert_eq!(
             std::fs::read_to_string(root.join("kdeglobals")).expect("owned"),
-            "[General]\nColorScheme=BreezeDark\n"
+            DARK_SCHEME
         );
         assert!(
             !root.join("kdeglobals.tmp").exists(),

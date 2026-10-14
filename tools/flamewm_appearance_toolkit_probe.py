@@ -10,9 +10,13 @@ the app's largest window, and samples a menubar pixel. Cases:
   dark       full plan (Dark): XDG_CONFIG_DIRS + QT_QPA_PLATFORMTHEME=kde
   light      full plan (Light)
 
-An app is SUPPORTED only when its dark pixel matches Breeze BackgroundNormal
-(32,35,38), its light pixel matches (239,240,241), and the two differ. Anything
-else is reported as observed-but-not-supported.
+Dolphin is sampled in its folder view (Breeze [Colors:View] BackgroundNormal
+20,22,24 dark / 255,255,255 light) instead of the menubar.
+
+An app is SUPPORTED only when its dark pixel matches its Breeze background
+(KCalc/System Settings: 32,35,38 dark, 239,240,241 light; Dolphin: view colors
+above), its light pixel matches, and the two differ. Anything else is reported
+as observed-but-not-supported.
 
 Usage: flamewm_appearance_toolkit_probe.py --plan-bin <appearance_plan> --work <dir>
 """
@@ -31,11 +35,15 @@ from pathlib import Path
 from PIL import Image
 
 BREEZE_BACKGROUND = {"dark": (32, 35, 38), "light": (239, 240, 241)}
+BREEZE_VIEW_BACKGROUND = {"dark": (20, 22, 24), "light": (255, 255, 255)}
 MENUBAR_SAMPLE = (320, 4)
 SETTLE_SECONDS = 8
+# app -> (binary, window title substring, sample (x, y) in window, expected Breeze colors)
 APPS = {
-    "kcalc": ("kcalc", "KCalc"),
-    "systemsettings": ("systemsettings", "System Settings"),
+    "kcalc": ("kcalc", "KCalc", MENUBAR_SAMPLE, BREEZE_BACKGROUND),
+    "systemsettings": ("systemsettings", "System Settings", MENUBAR_SAMPLE, BREEZE_BACKGROUND),
+    # Empty HOME gives an empty folder view; (500, 150) sits in the view below the infobar, above the centered text.
+    "dolphin": ("dolphin", "Dolphin", (500, 150), BREEZE_VIEW_BACKGROUND),
 }
 WINDOW_LINE = re.compile(r"(0x[0-9a-f]+) \"([^\"]*)\":.*?(\d+)x(\d+)\+")
 
@@ -67,7 +75,7 @@ def plan_environment(plan_bin: str, config_home: Path, mode: str) -> dict:
 
 
 def run_case(args, app: str, case: str, display: str) -> dict:
-    binary, title = APPS[app]
+    binary, title, sample, _expected = APPS[app]
     root = Path(args.work) / app / case
     shutil.rmtree(root, ignore_errors=True)
     config_home = root / ".config"
@@ -114,7 +122,7 @@ def run_case(args, app: str, case: str, display: str) -> dict:
             env=env,
         )
         image = Image.open(png).convert("RGB")
-        pixel = image.getpixel((min(MENUBAR_SAMPLE[0], image.width - 1), MENUBAR_SAMPLE[1]))
+        pixel = image.getpixel((min(sample[0], image.width - 1), min(sample[1], image.height - 1)))
     finally:
         os.killpg(proc.pid, signal.SIGTERM)
         try:
@@ -127,18 +135,19 @@ def run_case(args, app: str, case: str, display: str) -> dict:
         "case": case,
         "xdg_config_dirs": env.get("XDG_CONFIG_DIRS", ""),
         "qt_qpa_platformtheme": env.get("QT_QPA_PLATFORMTHEME", ""),
-        "menubar_rgb": list(pixel),
+        "sample_rgb": list(pixel),
     }
 
 
 def verdict(app: str, rows: dict) -> dict:
-    dark = rows.get("dark", {}).get("menubar_rgb")
-    light = rows.get("light", {}).get("menubar_rgb")
+    expected = APPS[app][3]
+    dark = rows.get("dark", {}).get("sample_rgb")
+    light = rows.get("light", {}).get("sample_rgb")
     supported = (
         dark is not None
         and light is not None
-        and tuple(dark) == BREEZE_BACKGROUND["dark"]
-        and tuple(light) == BREEZE_BACKGROUND["light"]
+        and tuple(dark) == expected["dark"]
+        and tuple(light) == expected["light"]
         and dark != light
     )
     return {"app": app, "supported": supported}

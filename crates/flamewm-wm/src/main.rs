@@ -596,27 +596,42 @@ mod tests {
         std::fs::create_dir_all(plugins.join("platformthemes")).expect("plugins");
         std::fs::write(plugins.join("platformthemes/KDEPlasmaPlatformTheme6.so"), b"")
             .expect("plugin");
+        let schemes = home.join("share/color-schemes");
+        std::fs::create_dir_all(&schemes).expect("schemes");
+        std::fs::write(
+            schemes.join("BreezeDark.colors"),
+            "[General]\nColorScheme=BreezeDark\n[Colors:View]\nBackgroundNormal=20,22,24\n",
+        )
+        .expect("dark scheme");
+        std::fs::write(
+            schemes.join("BreezeLight.colors"),
+            "[General]\nColorScheme=BreezeLight\n[Colors:View]\nBackgroundNormal=255,255,255\n",
+        )
+        .expect("light scheme");
         let inherited = BTreeMap::from([
             ("QT_PLUGIN_PATH".to_owned(), plugins.display().to_string()),
             ("XDG_DATA_DIRS".to_owned(), "/nonexistent-flame".to_owned()),
         ]);
-        let paths = || default_paths_from_home("/usr/bin", &home);
+        let paths = || {
+            let mut paths = default_paths_from_home("/usr/bin", &home);
+            paths.data_root = home.join("share");
+            paths
+        };
         let owned = owned_appearance_root(&paths()).join("kdeglobals");
         let mut sync = AppearanceSync::new(paths(), inherited, AppearanceMode::Dark, None);
         // The applied mode is not rewritten: the startup publish already wrote it.
         assert!(sync.change(AppearanceMode::Dark).is_none());
         let light = sync.change(AppearanceMode::Light).expect("light plan");
         assert_eq!(light.environment.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("light"));
-        assert_eq!(
-            std::fs::read_to_string(&owned).expect("light file"),
-            "[General]\nColorScheme=BreezeLight\n"
-        );
+        let light_file = std::fs::read_to_string(&owned).expect("light file");
+        assert!(light_file.contains("ColorScheme=BreezeLight\n"), "{light_file}");
+        assert!(light_file.contains("[Colors:View]\nBackgroundNormal=255,255,255\n"), "{light_file}");
         assert!(sync.change(AppearanceMode::Light).is_none());
         sync.change(AppearanceMode::Dark).expect("dark plan");
-        assert_eq!(
-            std::fs::read_to_string(&owned).expect("dark file"),
-            "[General]\nColorScheme=BreezeDark\n"
-        );
+        let dark_file = std::fs::read_to_string(&owned).expect("dark file");
+        assert!(dark_file.contains("ColorScheme=BreezeDark\n"), "{dark_file}");
+        assert!(dark_file.contains("[Colors:View]\nBackgroundNormal=20,22,24\n"), "{dark_file}");
+        assert!(!dark_file.contains("BreezeLight"), "{dark_file}");
         // System has no owned scheme: the stale owned file must go, not linger.
         sync.change(AppearanceMode::System).expect("system plan");
         assert!(!owned.exists());
