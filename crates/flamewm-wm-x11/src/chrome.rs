@@ -296,15 +296,36 @@ enum FillMask {
     Square,
 }
 
+/// Corner radius of the rounded-square backing, in glyph-edge pixels.
+const SQUARE_CORNER_RADIUS: f32 = 3.0;
+
+impl FillMask {
+    /// Whether the pixel center `(px, py)` lies inside the mask over a `size`-square glyph edge.
+    fn contains(self, px: f32, py: f32, size: f32) -> bool {
+        match self {
+            Self::Circle => {
+                let radius = size / 2.0;
+                let dx = px - radius;
+                let dy = py - radius;
+                dx * dx + dy * dy <= radius * radius
+            }
+            Self::Square => {
+                let radius = (size / 5.0).min(SQUARE_CORNER_RADIUS);
+                let dx = px - px.clamp(radius, size - radius);
+                let dy = py - py.clamp(radius, size - radius);
+                dx * dx + dy * dy <= radius * radius
+            }
+        }
+    }
+}
+
 /// Fills the glyph-edge mask with `fill` (opaque) and composites the
-/// straight-alpha glyph over it. Pixels outside a circle mask are untouched.
+/// straight-alpha glyph over it. Pixels outside the mask are untouched.
 fn paint_fill_behind(raster: &mut flamewm_image_core::RgbaImage, fill: [u8; 4], mask: FillMask) {
-    let radius = raster.width as f32 / 2.0;
+    let size = raster.width as f32;
     for y in 0..raster.height {
         for x in 0..raster.width {
-            let dx = x as f32 + 0.5 - radius;
-            let dy = y as f32 + 0.5 - radius;
-            if mask == FillMask::Circle && dx * dx + dy * dy > radius * radius {
+            if !mask.contains(x as f32 + 0.5, y as f32 + 0.5, size) {
                 continue;
             }
             let offset = ((y * raster.width + x) * 4) as usize;
@@ -557,8 +578,8 @@ pub fn live_chrome_tokens() -> ChromeTokens {
         .unwrap_or_default()
 }
 
-/// Map WM settings onto skin chrome tokens. Empty or malformed values keep
-/// the skin default (`#rrggbb` colors, `default|flat|circle|square` shapes).
+/// Map WM settings onto skin chrome tokens. Empty or malformed colors fall back
+/// to the skin default; an unset, empty, or unknown `titlebarButtonStyle` is `circle`.
 #[must_use]
 pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens {
     let text = |key: &str| match snapshot.values.get(key) {
@@ -572,13 +593,13 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
     };
     let titlebar_bg =
         parse_settings_color(text("titlebarColor")).unwrap_or(ChromeTokens::default().titlebar_bg);
+    // One shape for all three controls; anything but "square" is the circle default.
+    let shape = match text("titlebarButtonStyle") {
+        "square" => ButtonShape::Square,
+        _ => ButtonShape::Circle,
+    };
     let button = |name: &str| ButtonTokens {
-        shape: match text(&format!("titlebar{name}Style")) {
-            "flat" => ButtonShape::Flat,
-            "circle" => ButtonShape::Circle,
-            "square" => ButtonShape::Square,
-            _ => ButtonShape::Default,
-        },
+        shape,
         glyph: parse_settings_color(text(&format!("titlebar{name}Color"))),
         hover: parse_settings_color(text(&format!("titlebar{name}HoverColor"))),
         pressed: parse_settings_color(text(&format!("titlebar{name}PressedColor"))),
@@ -667,9 +688,16 @@ mod tests {
     #[test]
     fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
         let mut snapshot = SettingsSnapshot::new(1);
-        assert_eq!(
-            chrome_tokens_from_settings(&snapshot),
-            ChromeTokens::default()
+        let unset = chrome_tokens_from_settings(&snapshot);
+        assert!(unset.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
+        snapshot
+            .values
+            .insert("titlebarButtonStyle".to_owned(), SettingValue::Text(String::new()));
+        assert!(
+            chrome_tokens_from_settings(&snapshot)
+                .buttons
+                .iter()
+                .all(|button| button.shape == ButtonShape::Circle)
         );
         let text = |value: &str| SettingValue::Text(value.to_owned());
         snapshot
@@ -680,23 +708,61 @@ mod tests {
             .insert("titlebarColor".to_owned(), text("#202326"));
         snapshot
             .values
-            .insert("titlebarCloseStyle".to_owned(), text("circle"));
+            .insert("titlebarButtonStyle".to_owned(), text("square"));
         snapshot
             .values
             .insert("titlebarCloseHoverColor".to_owned(), text("#00ff00"));
         snapshot
             .values
             .insert("titlebarMinimizeColor".to_owned(), text("#zz"));
-        snapshot
-            .values
-            .insert("titlebarMaximizeStyle".to_owned(), text("bogus"));
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(tokens.style, DecorationStyle::Squared);
         assert_eq!(tokens.titlebar_bg, Rgb(0x202326));
-        assert_eq!(tokens.buttons[2].shape, ButtonShape::Circle);
+        assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Square));
         assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x00ff00)));
         assert_eq!(tokens.buttons[0].glyph, None);
-        assert_eq!(tokens.buttons[1].shape, ButtonShape::Default);
+        snapshot
+            .values
+            .insert("titlebarButtonStyle".to_owned(), text("bogus"));
+        let tokens = chrome_tokens_from_settings(&snapshot);
+        assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
+    }
+
+    #[test]
+    fn square_backing_is_rounded_not_sharp_and_circle_stays_round() {
+        let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
+        let look = |shape| ControlLook {
+            button: ButtonTokens {
+                shape,
+                ..ButtonTokens::default()
+            },
+            titlebar: WINDOW_CHROME.titlebar_background,
+        };
+        let alpha_at = |raster: &flamewm_image_core::RgbaImage, x: u32, y: u32| {
+            raster.pixels[((y * raster.width + x) * 4 + 3) as usize]
+        };
+        let square = control_glyph_raster(
+            ControlRole::Close,
+            edge,
+            ControlMaterial::Hover,
+            look(ButtonShape::Square),
+        )
+        .expect("square raster");
+        let mid = edge / 2;
+        // The corner is outside the rounded mask, so a sharp (zero-radius) square would fail here.
+        assert_eq!(alpha_at(&square, 0, 0), 0);
+        // Inside the rounded corner but outside a circle: only the rounded square fills it.
+        assert_eq!(alpha_at(&square, 1, 1), 255);
+        assert_eq!(alpha_at(&square, 0, mid), 255);
+        let circle = control_glyph_raster(
+            ControlRole::Close,
+            edge,
+            ControlMaterial::Hover,
+            look(ButtonShape::Circle),
+        )
+        .expect("circle raster");
+        assert_eq!(alpha_at(&circle, 1, 1), 0);
+        assert_eq!(alpha_at(&circle, 0, mid), 255);
     }
 
     #[test]

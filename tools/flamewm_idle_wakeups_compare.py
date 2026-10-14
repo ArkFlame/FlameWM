@@ -136,7 +136,7 @@ def run_once(label: str, target: Path, index: int, args: argparse.Namespace) -> 
     if args.taskbar_opacity is not None:
         config = run_dir / "xdg-config" / "flamewm"
         config.mkdir(parents=True, exist_ok=True)
-        (config / "settings.toml").write_text(f"[taskbar]\ntaskbarOpacity = {args.taskbar_opacity}\n", encoding="utf-8")
+        (config / "settings.toml").write_text(f"surfaceOpacity={args.taskbar_opacity}\n", encoding="utf-8")
     env = dict(os.environ)
     env.update(
         {
@@ -250,7 +250,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--startup-timeout", type=float, default=90.0)
     p.add_argument("--settle-seconds", type=float, default=20.0)
     p.add_argument("--window-seconds", type=float, default=30.0)
-    p.add_argument("--taskbar-opacity", type=int, default=None, help="seed [taskbar] taskbarOpacity in settings.toml")
+    p.add_argument("--taskbar-opacity", type=int, default=None, help="seed surfaceOpacity in settings.toml (taskbar uses the surface policy)")
     return p.parse_args(argv)
 
 

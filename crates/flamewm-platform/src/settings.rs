@@ -281,9 +281,7 @@ pub struct ProductSettings {
     pub accent_opacity: u8,
     pub decoration: String,
     pub titlebar_color: String,
-    pub titlebar_minimize_style: String,
-    pub titlebar_maximize_style: String,
-    pub titlebar_close_style: String,
+    pub titlebar_button_style: String,
     pub titlebar_minimize_color: String,
     pub titlebar_minimize_hover_color: String,
     pub titlebar_minimize_pressed_color: String,
@@ -372,9 +370,7 @@ impl Default for ProductSettings {
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
             titlebar_color: "#1b1e20".to_owned(),
-            titlebar_minimize_style: "default".to_owned(),
-            titlebar_maximize_style: "default".to_owned(),
-            titlebar_close_style: "default".to_owned(),
+            titlebar_button_style: "circle".to_owned(),
             titlebar_minimize_color: String::new(),
             titlebar_minimize_hover_color: String::new(),
             titlebar_minimize_pressed_color: String::new(),
@@ -463,10 +459,10 @@ impl ProductSettings {
         }
     }
 
-    /// Taskbar backdrop. See [`Backdrop`] for the blur-to-radius mapping.
+    /// Taskbar backdrop from the shared surface policy. See [`Backdrop`] for the blur-to-radius mapping.
     #[must_use]
     pub fn taskbar_backdrop(&self) -> Backdrop {
-        backdrop(self.taskbar_opacity, self.taskbar_blur_percent)
+        backdrop(self.surface_opacity, self.surface_blur_percent)
     }
 
     /// Start menu backdrop. See [`Backdrop`] for the blur-to-radius mapping.
@@ -574,14 +570,8 @@ impl ProductSettings {
         if !matches!(self.decoration.as_str(), "rounded" | "squared") {
             return invalid("decoration must be rounded or squared");
         }
-        for style in [
-            &self.titlebar_minimize_style,
-            &self.titlebar_maximize_style,
-            &self.titlebar_close_style,
-        ] {
-            if !matches!(style.as_str(), "default" | "flat" | "circle" | "square") {
-                return invalid("titlebar button style must be default/flat/circle/square");
-            }
+        if !matches!(self.titlebar_button_style.as_str(), "circle" | "square") {
+            return invalid("titlebarButtonStyle must be circle or square");
         }
         if self.cursor_theme.len() > 64
             || self
@@ -679,6 +669,9 @@ impl ConfigStore {
         let mut has_legacy_taskbar_surface_key = false;
         let mut has_wallpaper_mode = false;
         let mut has_lock_background_mode = false;
+        let mut has_button_style = false;
+        // Legacy per-button styles: read only, each reduced to "is square".
+        let mut legacy_square_flags = Vec::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -699,12 +692,23 @@ impl ConfigStore {
             );
             has_wallpaper_mode |= key == "wallpaperMode";
             has_lock_background_mode |= key == "lockBackgroundMode";
+            has_button_style |= key == "titlebarButtonStyle";
             if let Some(row) = stable_setting(key) {
                 (row.parse)(&mut snapshot, value, key)?;
                 continue;
             }
             match key {
                 "revision" => snapshot.revision = parse(value, "revision")?,
+                // Legacy titlebar button styles: read only, never kept as unknown keys.
+                "titlebarMinimizeStyle" | "titlebarMaximizeStyle" | "titlebarCloseStyle" => {
+                    legacy_square_flags.push(legacy_button_style_is_square(value)?);
+                }
+                // Legacy taskbar surface keys: read only, promoted to surface* below.
+                "taskbarColor" => snapshot.taskbar_color = Slot::from_text(value, key)?,
+                "taskbarOpacity" => snapshot.taskbar_opacity = Slot::from_text(value, key)?,
+                "taskbarBlurPercent" => {
+                    snapshot.taskbar_blur_percent = Slot::from_text(value, key)?;
+                }
                 _ if key.starts_with("scale.") => {
                     let output = key.trim_start_matches("scale.");
                     snapshot
@@ -740,6 +744,11 @@ impl ConfigStore {
         }
         if !has_lock_background_mode {
             snapshot.lock_background_mode = legacy_lock_background_mode(&snapshot);
+        }
+        // One shared shape: square only when every present legacy button agrees; otherwise circle.
+        if !has_button_style && !legacy_square_flags.is_empty() {
+            let all_square = legacy_square_flags.iter().all(|square| *square);
+            snapshot.titlebar_button_style = if all_square { "square" } else { "circle" }.to_owned();
         }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
@@ -1127,13 +1136,10 @@ stable_settings! {
     (true, fonts, "fontFamily", font_family),
     (true, fonts, "fontBold", font_bold),
     (true, fonts, "fontSizeOffset", font_size_offset),
-    (true, taskbar, "taskbarColor", taskbar_color),
-    (true, taskbar, "taskbarOpacity", taskbar_opacity),
     (true, taskbar, "taskbarHeight", taskbar_height),
     (false, taskbar, "taskbarStyle", taskbar_style),
     (false, taskbar, "taskbarFloatingMargin", taskbar_floating_margin),
     (false, taskbar, "taskbarFloatingRadius", taskbar_floating_radius),
-    (false, taskbar, "taskbarBlurPercent", taskbar_blur_percent),
     (false, taskbar, "surfaceColor", surface_color),
     (false, taskbar, "surfaceOpacity", surface_opacity),
     (false, taskbar, "surfaceBlurPercent", surface_blur_percent),
@@ -1154,9 +1160,7 @@ stable_settings! {
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
     (false, windows, "titlebarColor", titlebar_color),
-    (false, windows, "titlebarMinimizeStyle", titlebar_minimize_style),
-    (false, windows, "titlebarMaximizeStyle", titlebar_maximize_style),
-    (false, windows, "titlebarCloseStyle", titlebar_close_style),
+    (false, windows, "titlebarButtonStyle", titlebar_button_style),
     (false, windows, "titlebarMinimizeColor", titlebar_minimize_color),
     (false, windows, "titlebarMinimizeHoverColor", titlebar_minimize_hover_color),
     (false, windows, "titlebarMinimizePressedColor", titlebar_minimize_pressed_color),
@@ -1278,6 +1282,15 @@ fn validate_lock_image_path(value: &str, name: &str) -> FlameResult<()> {
 }
 
 /// Desktop mode implied by saved values alone: a saved path means custom, otherwise bundled.
+/// Old per-button style values: `square` is square, `default|flat|circle` are circle.
+fn legacy_button_style_is_square(value: &str) -> FlameResult<bool> {
+    match value {
+        "square" => Ok(true),
+        "default" | "flat" | "circle" => Ok(false),
+        _ => invalid("titlebar button style must be default/flat/circle/square"),
+    }
+}
+
 fn legacy_wallpaper_mode(snapshot: &ProductSettings) -> BackgroundMode {
     if snapshot.wallpaper.is_empty() {
         BackgroundMode::Default
@@ -1710,7 +1723,7 @@ mod tests {
         let parsed = store
             .parse_snapshot(
                 "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
-                 taskbarFloatingRadius=0\ntaskbarBlurPercent=100\ntaskbarOpacity=100\n\
+                 taskbarFloatingRadius=0\nsurfaceBlurPercent=100\nsurfaceOpacity=100\n\
                  startMenuBlurPercent=0\nstartMenuOpacity=50\n",
             )
             .expect("valid taskbar settings");
@@ -1721,7 +1734,7 @@ mod tests {
         assert!((parsed.start_menu_backdrop().radius_px - 0.0).abs() < 1e-6);
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("taskbarStyle=classic\n"));
-        assert!(text.contains("taskbarBlurPercent=100\n"));
+        assert!(text.contains("surfaceBlurPercent=100\n"));
         assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
     }
 
@@ -1853,7 +1866,7 @@ mod tests {
         assert_eq!(defaults.accent_opacity, 100);
         assert_eq!(defaults.decoration, "rounded");
         assert_eq!(defaults.titlebar_color, "#1b1e20");
-        assert_eq!(defaults.titlebar_close_style, "default");
+        assert_eq!(defaults.titlebar_button_style, "circle");
         assert!(defaults.titlebar_close_color.is_empty());
         assert!(defaults.cursor_theme.is_empty());
         assert_eq!(defaults.animation_speed, 100);
@@ -1887,15 +1900,16 @@ mod tests {
     fn new_appearance_keys_round_trip_when_set() {
         let store = ConfigStore::default();
         let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\naccentOpacity=40\n\
-            decoration=ios\ntitlebarColor=#A0B0C0\ntitlebarCloseStyle=circle\n\
+            decoration=ios\ntitlebarColor=#A0B0C0\n\
             titlebarMinimizeHoverColor=#FFFFFF\ncursorTheme=Adwaita\nanimationsEnabled=false\n\
+            titlebarButtonStyle=square\n\
             animationSpeed=150\nstartAnimationEnabled=0\nfutureFeature=kept\n";
         let parsed = store.parse_snapshot(text).expect("valid new keys");
         assert_eq!(parsed.start_menu_color, "#112233");
         assert_eq!(parsed.start_menu_opacity, 80);
         assert_eq!(parsed.accent_opacity, 40);
         assert_eq!(parsed.decoration, "rounded");
-        assert_eq!(parsed.titlebar_close_style, "circle");
+        assert_eq!(parsed.titlebar_button_style, "square");
         assert_eq!(parsed.titlebar_minimize_hover_color, "#FFFFFF");
         assert_eq!(parsed.cursor_theme, "Adwaita");
         assert!(!parsed.animations_enabled);
@@ -1936,14 +1950,44 @@ mod tests {
 
         let explicit = store
             .parse_snapshot(
-                "revision=3\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n\
-                 surfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
+                "revision=3\nsurfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
             )
-            .expect("explicit surface wins");
+            .expect("explicit surface");
         assert_eq!(explicit.surface_color, "#445566");
         assert_eq!(explicit.surface_opacity, 10);
         assert_eq!(explicit.surface_blur_percent, 5);
-        assert_eq!(explicit.taskbar_opacity, 70);
+
+        // Legacy taskbar* keys alongside surface* are tolerated on read and ignored for surface values.
+        let tolerated = store
+            .parse_snapshot(
+                "revision=3\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n\
+                 surfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
+            )
+            .expect("legacy taskbar keys tolerated");
+        assert_eq!(tolerated.surface_color, "#445566");
+        assert_eq!(tolerated.surface_opacity, 10);
+        assert_eq!(tolerated.surface_blur_percent, 5);
+
+        // Live taskbar backdrop follows surface*, never the legacy taskbar* fields.
+        let split = store
+            .parse_snapshot("revision=5\ntaskbarOpacity=100\ntaskbarBlurPercent=100\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n")
+            .expect("surface keys win over legacy taskbar keys");
+        let backdrop = split.taskbar_backdrop();
+        assert_eq!(backdrop.opacity_percent, 10);
+        assert_eq!(backdrop.blur_percent, 5);
+
+        // Legacy keys are read but never written; the surface pair carries the value forward.
+        let migrated = store
+            .parse_snapshot("revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n")
+            .expect("legacy taskbar surface");
+        let text = ConfigStore::serialize(&migrated);
+        assert!(!text.contains("taskbarColor"));
+        assert!(!text.contains("taskbarOpacity"));
+        assert!(!text.contains("taskbarBlurPercent"));
+        assert!(text.contains("surfaceColor=#112233\n"));
+        assert!(text.contains("surfaceOpacity=70\n"));
+        assert!(text.contains("surfaceBlurPercent=30\n"));
+        assert!(stable_setting("taskbarOpacity").is_none());
 
         let round = store
             .parse_snapshot(&ConfigStore::serialize(&explicit))
@@ -2001,6 +2045,40 @@ mod tests {
     }
 
     #[test]
+    fn legacy_titlebar_button_styles_map_to_one_shape_and_are_never_written() {
+        let store = ConfigStore::default();
+        let parse = |body: &str| {
+            store
+                .parse_snapshot(&format!("revision=2\n{body}\n"))
+                .expect("legacy titlebar styles parse")
+        };
+        let all_square = "titlebarMinimizeStyle=square\ntitlebarMaximizeStyle=square\n\
+            titlebarCloseStyle=square";
+        let parsed = parse(all_square);
+        assert_eq!(parsed.titlebar_button_style, "square");
+        assert_eq!(
+            parse("titlebarMinimizeStyle=default\ntitlebarMaximizeStyle=flat\ntitlebarCloseStyle=circle")
+                .titlebar_button_style,
+            "circle"
+        );
+        assert_eq!(
+            parse("titlebarCloseStyle=square\ntitlebarMinimizeStyle=circle").titlebar_button_style,
+            "circle"
+        );
+        assert_eq!(parse("titlebarCloseStyle=square").titlebar_button_style, "square");
+        assert_eq!(
+            parse("titlebarButtonStyle=circle\ntitlebarCloseStyle=square").titlebar_button_style,
+            "circle"
+        );
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("titlebarButtonStyle=square\n"));
+        assert!(!text.contains("titlebarMinimizeStyle"));
+        assert!(!text.contains("titlebarCloseStyle"));
+        assert!(!text.contains("titlebarMaximizeStyle"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+    }
+
+    #[test]
     fn invalid_new_appearance_values_are_rejected() {
         let store = ConfigStore::default();
         for line in [
@@ -2011,6 +2089,7 @@ mod tests {
             "accentOpacity=101",
             "decoration=neon",
             "titlebarMinimizeStyle=round",
+            "titlebarButtonStyle=round",
             "cursorTheme=../evil",
             "cursorTheme=a\\b",
             "animationSpeed=24",

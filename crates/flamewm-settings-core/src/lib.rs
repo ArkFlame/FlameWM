@@ -357,26 +357,8 @@ impl<T: ControlTransport> SettingsClient<T> {
         self.apply_setting("wallpaper", SettingValue::Text(path.into()))
     }
 
-    pub fn set_taskbar_appearance(
-        &mut self,
-        color: impl Into<String>,
-        opacity: u8,
-        height: u16,
-    ) -> Result<(), ControlError> {
-        self.apply_changes(vec![
-            SettingsChange {
-                key: "taskbarColor".to_owned(),
-                value: Some(SettingValue::Text(color.into())),
-            },
-            SettingsChange {
-                key: "taskbarOpacity".to_owned(),
-                value: Some(SettingValue::Percent(opacity)),
-            },
-            SettingsChange {
-                key: "taskbarHeight".to_owned(),
-                value: Some(SettingValue::Integer(i64::from(height))),
-            },
-        ])
+    pub fn set_taskbar_height(&mut self, height: u16) -> Result<(), ControlError> {
+        self.apply_setting("taskbarHeight", SettingValue::Integer(i64::from(height)))
     }
 
     pub fn set_fonts(

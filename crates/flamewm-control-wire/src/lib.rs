@@ -2405,9 +2405,7 @@ fn setting_value_for_key(key: &str, value: &WireValue) -> Result<SettingValue, C
     match key {
         "DesktopSelectionFillOpacity"
         | "WindowSnapPreviewFillOpacity"
-        | "taskbarOpacity"
         | "startMenuOpacity"
-        | "taskbarBlurPercent"
         | "surfaceOpacity"
         | "surfaceBlurPercent"
         | "startMenuBlurPercent"
@@ -2785,7 +2783,7 @@ mod tests {
         let mut changes = WireDict::new();
         changes.insert("PanelSize".to_owned(), WireValue::I64(44));
         changes.insert("Dark".to_owned(), WireValue::Bool(true));
-        changes.insert("taskbarOpacity".to_owned(), WireValue::U32(83));
+        changes.insert("surfaceOpacity".to_owned(), WireValue::U32(83));
         let call = WireCall::new(
             IFACE_SETTINGS,
             "Apply",
@@ -2801,7 +2799,7 @@ mod tests {
             transaction
                 .changes
                 .iter()
-                .any(|change| change.key == "taskbarOpacity"
+                .any(|change| change.key == "surfaceOpacity"
                     && change.value == Some(SettingValue::Percent(83)))
         );
     }
@@ -2923,7 +2921,7 @@ mod tests {
             .insert("fontBold".to_owned(), SettingValue::Boolean(true));
         snapshot
             .values
-            .insert("taskbarOpacity".to_owned(), SettingValue::Percent(83));
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(83));
         let signal = WireSignal {
             interface: IFACE_SETTINGS.to_owned(),
             member: "SettingsSnapshotChanged".to_owned(),
@@ -3027,7 +3025,7 @@ mod tests {
         let mut source = SettingsSnapshot::new(2);
         source
             .values
-            .insert("taskbarOpacity".to_owned(), SettingValue::Percent(83));
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(83));
         let reply =
             encode_reply(&call, &ControlResponse::Settings(source.clone())).expect("encode");
         assert_eq!(
@@ -3633,7 +3631,6 @@ mod hotkey_capture_lease_wire_tests {
     #[test]
     fn blur_percent_keys_decode_as_percent_like_the_opacities() {
         for key in [
-            "taskbarBlurPercent",
             "startMenuBlurPercent",
             "surfaceOpacity",
             "surfaceBlurPercent",

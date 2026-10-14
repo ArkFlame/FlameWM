@@ -371,7 +371,7 @@ def icon_centre_of(s: ap.Session, win_id: str) -> tuple[tuple[int, int, int, int
 
 def run_lamp(s: ap.Session, grab: RootGrab) -> dict[str, dict]:
     settings = {"animationsEnabled": "true", "minimizeAnimationEnabled": "true", "animationSpeed": "25",
-                "taskbarOpacity": "100"}
+                "surfaceOpacity": "100"}
     if not s.restart(settings):
         return {sid: entry(sid, FAIL, "WM or shell exited during restart") for sid in IDS}
     client_proc = s.ctx.spawn("client-lamp", [sys.executable, "-I", str(Path(__file__).resolve()), "--checker-client"],

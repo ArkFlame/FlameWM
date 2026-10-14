@@ -1204,12 +1204,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn set_taskbar_size(&mut self, direction: i8) -> Result<(), String> {
-        let color = self.text_setting("taskbarColor")?;
-        let opacity = self.percent_setting("taskbarOpacity")?;
         let height = self.integer_setting("taskbarHeight")?;
         let sizes = [34_i64, 44, 52, 64, 72];
         self.client
-            .set_taskbar_appearance(color, opacity, cycle_value(&sizes, height, direction) as u16)
+            .set_taskbar_height(cycle_value(&sizes, height, direction) as u16)
             .map_err(control_error)
     }
 
@@ -1434,6 +1432,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         self.sync_appearance(document)?;
         self.sync_decoration(document)?;
+        self.sync_titlebar_button_style(document)?;
         self.sync_animation_styles(document)?;
         self.sync_lock_screen(document)?;
         self.sync_segment_rows(document)?;
@@ -1481,13 +1480,26 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.size("animation-speed-fill", fill_width as f32, 12.0)?;
             document.position("animation-speed-thumb", fill as f32, 0.0)?;
         }
-        for (key, id) in [
-            ("titlebarMinimizeStyle", "titlebar-minimize-style-value"),
-            ("titlebarMaximizeStyle", "titlebar-maximize-style-value"),
-            ("titlebarCloseStyle", "titlebar-close-style-value"),
+        Ok(())
+    }
+
+    /// Highlights the preview button whose shape matches the authoritative `titlebarButtonStyle`.
+    fn sync_titlebar_button_style(
+        &self,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
+        let Ok(current) = self.text_setting("titlebarButtonStyle") else {
+            return Ok(());
+        };
+        let accent = self.accent()?;
+        for (value, id) in [
+            ("circle", "titlebar-button-style-circle"),
+            ("square", "titlebar-button-style-square"),
         ] {
-            if let Ok(value) = self.text_setting(key) {
-                document.text(id, value)?;
+            if current == value {
+                document.background(id, accent)?;
+            } else {
+                document.background_clear(id)?;
             }
         }
         Ok(())
@@ -2022,8 +2034,6 @@ fn highlight_segment(
     }
 }
 
-const TITLEBAR_STYLES: [&str; 4] = ["default", "flat", "circle", "square"];
-
 /// Parses `<target>.preset.<0..5>`, the rest after `settings.color.`.
 fn parse_color_preset(rest: &str) -> Result<SettingsAction, String> {
     let (target, rest) = rest
@@ -2519,17 +2529,13 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         }),
         "settings.start-icon.choose" => Ok(SettingsAction::StartIconChoose),
         "settings.start-icon.clear" => Ok(SettingsAction::StartIconClear),
-        "settings.titlebar.minimize.style" => Ok(SettingsAction::TextCycle {
-            key: "titlebarMinimizeStyle",
-            values: &TITLEBAR_STYLES,
+        "settings.titlebar.button-style.circle" => Ok(SettingsAction::TextSelect {
+            key: "titlebarButtonStyle",
+            value: "circle",
         }),
-        "settings.titlebar.maximize.style" => Ok(SettingsAction::TextCycle {
-            key: "titlebarMaximizeStyle",
-            values: &TITLEBAR_STYLES,
-        }),
-        "settings.titlebar.close.style" => Ok(SettingsAction::TextCycle {
-            key: "titlebarCloseStyle",
-            values: &TITLEBAR_STYLES,
+        "settings.titlebar.button-style.square" => Ok(SettingsAction::TextSelect {
+            key: "titlebarButtonStyle",
+            value: "square",
         }),
         "settings.display.keep" => Ok(SettingsAction::DisplayKeep),
         "settings.display.revert" => Ok(SettingsAction::DisplayRevert),
@@ -2802,9 +2808,11 @@ mod value_text_tests {
             Ok(SettingsAction::Toggle("maximizeAnimationEnabled"))
         ));
         assert!(matches!(
-            parse_action("settings.titlebar.close.style"),
-            Ok(SettingsAction::TextCycle { key: "titlebarCloseStyle", .. })
+            parse_action("settings.titlebar.button-style.square"),
+            Ok(SettingsAction::TextSelect { key: "titlebarButtonStyle", value: "square" })
         ));
+        assert!(parse_action("settings.titlebar.minimize.style").is_err());
+        assert!(parse_action("settings.titlebar.button-style.cycle").is_err());
         assert!(matches!(
             parse_action("settings.decoration.rounded"),
             Ok(SettingsAction::TextSelect { key: "decoration", value: "rounded" })

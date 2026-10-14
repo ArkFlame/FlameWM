@@ -135,9 +135,10 @@ def click(display: str, x: int, y: int) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--display", required=True, help="nested display, e.g. :128")
-    parser.add_argument("--taskbar-opacity", type=int, required=True, choices=range(0, 101), metavar="0-100")
+    parser.add_argument("--taskbar-opacity", type=int, required=True, choices=range(0, 101), metavar="0-100",
+                        help="surfaceOpacity in effect (the taskbar uses the surface policy)")
     parser.add_argument("--bar-rect", required=True, help="x,y,width,height of the taskbar in device pixels")
-    parser.add_argument("--solid", default="25,27,29", help="taskbarColor r,g,b (default #191b1d)")
+    parser.add_argument("--solid", default="25,27,29", help="surfaceColor r,g,b (default #191b1d)")
     parser.add_argument("--start-open-check", action="store_true",
                         help="click Start and sample app-list pixels (use with surfaceOpacity 0)")
     parser.add_argument("--start-button", default="22,620", help="x,y of the Start button")

@@ -180,7 +180,7 @@ def cpu_delta(before: dict[str, dict], after: dict[str, dict]) -> dict[str, floa
 def run_set(s: ap.Session, label: str, bin_dir: Path, args: argparse.Namespace) -> dict:
     """One binary set on a fresh WM + Shell. Each phase is kept or dropped on its own; see metric_values."""
     args.wm_bin, args.shell_bin = str(bin_dir / "flamewm"), str(bin_dir / "flamewm-shell")
-    if not s.restart({"taskbarOpacity": "100"}):
+    if not s.restart({"surfaceOpacity": "100"}):
         return {"label": label, "reason": "WM or shell exited during restart", "phases": {}}
     time.sleep(args.settle_seconds)
     pids = {"flamewm": s.ctx.wm.pid, "flamewm-shell": s.shell.pid}

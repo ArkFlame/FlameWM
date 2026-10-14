@@ -651,7 +651,7 @@ mod tests {
             flamewm_api::settings::SettingValue::Boolean(true),
         );
         snapshot.values.insert(
-            "taskbarOpacity".to_owned(),
+            "surfaceOpacity".to_owned(),
             flamewm_api::settings::SettingValue::Percent(83),
         );
         let expected = WireSignal {
