@@ -1129,7 +1129,7 @@ class Ss16StaticGateTests(unittest.TestCase):
         self.assertEqual(acc.assess_ss16({})[0], "NOT_RUN")
 
     def test_runner_maps_real_exit_codes(self) -> None:
-        results = iter([0, 1, 0, 0])
+        results = iter([1, 0, 0])
         with patch("flamewm_settings_acceptance.subprocess.run",
                    side_effect=lambda *a, **k: SimpleNamespace(returncode=next(results))), \
                 patch("flamewm_settings_acceptance.git_snapshot", return_value="same"):
