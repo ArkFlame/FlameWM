@@ -32,3 +32,9 @@ strip = "symbols"
 
 [profile.release.package.flamewm-render-compiler]
 opt-level = 2
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
