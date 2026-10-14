@@ -171,6 +171,15 @@ fn next_workspace(current: usize, count: usize, delta: isize) -> Option<usize> {
     (target < count).then_some(target)
 }
 
+/// Maps a workspace shortcut action to its step through the desktop list.
+fn workspace_action_delta(action: &str) -> Option<isize> {
+    match action {
+        ACTION_WORKSPACE_LEFT | ACTION_WORKSPACE_UP => Some(-1),
+        ACTION_WORKSPACE_RIGHT | ACTION_WORKSPACE_DOWN => Some(1),
+        _ => None,
+    }
+}
+
 const WM_STATE_WITHDRAWN: u32 = 0;
 const WM_STATE_NORMAL: u32 = 1;
 const WM_STATE_ICONIC: u32 = 3;
@@ -3088,20 +3097,17 @@ impl<'a, C: Connection> Wm<'a, C> {
                     self.toggle_maximize(client)?;
                 }
             }
-            ACTION_WORKSPACE_LEFT => {
-                if let Some(target) = next_workspace(self.current_workspace, self.workspace_count, -1)
-                {
-                    self.switch_workspace(target)?;
+            // Left/Up step to the previous workspace, Right/Down to the next; both clamp.
+            ACTION_WORKSPACE_LEFT | ACTION_WORKSPACE_RIGHT | ACTION_WORKSPACE_UP
+            | ACTION_WORKSPACE_DOWN => {
+                if let Some(delta) = workspace_action_delta(action.as_str()) {
+                    if let Some(target) =
+                        next_workspace(self.current_workspace, self.workspace_count, delta)
+                    {
+                        self.switch_workspace(target)?;
+                    }
                 }
             }
-            ACTION_WORKSPACE_RIGHT => {
-                if let Some(target) = next_workspace(self.current_workspace, self.workspace_count, 1)
-                {
-                    self.switch_workspace(target)?;
-                }
-            }
-            // Single-row desktop layout (KDE default): up/down intentionally do nothing.
-            ACTION_WORKSPACE_UP | ACTION_WORKSPACE_DOWN => {}
             // Same spawn and supervision path as the Lock session action.
             ACTION_SESSION_LOCK => {
                 if let Err(error) = flamewm_x11_desktop::start_lock_screen() {
@@ -6415,6 +6421,15 @@ mod tests {
         assert_eq!(next_workspace(2, 3, -1), Some(1));
         assert_eq!(next_workspace(0, 1, 1), None);
         assert_eq!(next_workspace(0, 1, -1), None);
+    }
+
+    #[test]
+    fn workspace_up_down_map_like_left_right() {
+        assert_eq!(workspace_action_delta(ACTION_WORKSPACE_LEFT), Some(-1));
+        assert_eq!(workspace_action_delta(ACTION_WORKSPACE_UP), Some(-1));
+        assert_eq!(workspace_action_delta(ACTION_WORKSPACE_RIGHT), Some(1));
+        assert_eq!(workspace_action_delta(ACTION_WORKSPACE_DOWN), Some(1));
+        assert_eq!(workspace_action_delta(ACTION_WINDOW_CLOSE), None);
     }
 }
 
