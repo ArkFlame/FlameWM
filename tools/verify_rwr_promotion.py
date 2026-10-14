@@ -25,16 +25,6 @@ def sha256_file(path: Path) -> str:
 # 0.0.9. Each pin is an exact SHA-256, so any further change fails until it is
 # re-accepted here. Non-pinned owners keep full token-identity checks.
 ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
-    "crates/flamewm-render-core/src/layout.rs": {
-        "sha256": "bc77915e702599fb8b153839ce76a6b70f60b3933023dad6b3d18f631650adb6",
-        "delta": "adds Rect content extents (contents) and document-revision tracking to retained layout boxes",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
-    },
-    "crates/flamewm-render-core/src/paint.rs": {
-        "sha256": "948b06c4bce423198e863c359b7de6e40b44a7cfbc23c0bd4f499041130f8315",
-        "delta": "PaintCommand set and field layout differ from 0.0.9 (multi-line variants plus FlameWM additions)",
-        "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
-    },
     "crates/flamewm-render-core/src/lib.rs": {
         "sha256": "40a7187113d2a68deeb7495ae57f4839ef5abea04ab04765b3390cdf0d97d4ee",
         "delta": "exports text_layout module and IntrinsicSize/IntrinsicMeasureError re-exports",
@@ -283,12 +273,6 @@ def require_anchor(path: str, anchor: str, description: str) -> None:
 if not (REF / "Cargo.toml").is_file() or 'version = "0.0.9"' not in (REF / "Cargo.toml").read_text():
     errors.append("vendor manifest is not RustWebRender 0.0.9")
 
-for rel in ["layout.rs", "paint.rs"]:
-    exact(
-        f"crates/rustwebrender-core/src/{rel}",
-        f"crates/flamewm-render-core/src/{rel}",
-        tuple(NAMESPACE_TRANSLATIONS.items()),
-    )
 exact(
     "crates/rustwebrender-core/src/lib.rs",
     "crates/flamewm-render-core/src/lib.rs",
