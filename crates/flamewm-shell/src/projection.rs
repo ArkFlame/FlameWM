@@ -294,18 +294,26 @@ pub fn project_panel(
     Ok(())
 }
 
-/// Tray battery: visibility and glyph come from the pure `battery` rules.
+/// Tray battery: visibility and glyph come from the pure `battery` rules. Exactly
+/// one glyph node is shown; the charging variant only while Charging.
 pub fn project_battery_tray(
     document: &mut impl UiDocumentAccess,
     power: &flamewm_api::system::PowerSnapshot,
 ) -> Result<(), String> {
-    use crate::taskbar::status::battery::{glyph_for_percent, BATTERY_GLYPHS};
-    document.visible("tray-battery", crate::taskbar::status::battery::tray_visible(power))?;
+    use crate::taskbar::status::battery::{glyph_for_percent, tray_visible, BATTERY_GLYPHS};
+    use flamewm_api::system::PowerState;
+    let charging = power.state == PowerState::Charging;
     let glyph = glyph_for_percent(power.percent);
+    document.visible("tray-battery", tray_visible(power))?;
     for candidate in BATTERY_GLYPHS {
+        let shown = candidate == glyph;
         document.visible(
             &format!("tray-battery-{}", candidate.id_suffix()),
-            candidate == glyph,
+            shown && !charging,
+        )?;
+        document.visible(
+            &format!("tray-battery-{}-charging", candidate.id_suffix()),
+            shown && charging,
         )?;
     }
     Ok(())
@@ -826,19 +834,17 @@ mod panel_template_tests {
     // hidden there, so that path's case fails) or skip the glyph bucket.
     #[test]
     fn tray_battery_button_follows_power_bucket_on_real_artifact() {
+        use crate::taskbar::status::battery::BATTERY_GLYPHS;
         use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
-        const GLYPHS: [&str; 10] = [
-            "tray-battery-caution",
-            "tray-battery-020",
-            "tray-battery-030",
-            "tray-battery-040",
-            "tray-battery-050",
-            "tray-battery-060",
-            "tray-battery-070",
-            "tray-battery-080",
-            "tray-battery-090",
-            "tray-battery-100",
-        ];
+        let glyphs: Vec<String> = BATTERY_GLYPHS
+            .iter()
+            .flat_map(|glyph| {
+                [
+                    format!("tray-battery-{}", glyph.id_suffix()),
+                    format!("tray-battery-{}-charging", glyph.id_suffix()),
+                ]
+            })
+            .collect();
         let power = |available, present, percent, state| PowerSnapshot {
             available,
             present,
@@ -847,13 +853,16 @@ mod panel_template_tests {
             cpu_percent: None,
         };
         let avail = ServiceAvailability::Available;
-        let cases: [(PowerSnapshot, Option<&str>); 11] = [
+        let cases: [(PowerSnapshot, Option<&str>); 14] = [
             (power(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
             (power(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
             (power(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
             (power(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
             (power(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
-            (power(avail, true, 30, PowerState::Charging), Some("tray-battery-030")),
+            (power(avail, true, 30, PowerState::Charging), Some("tray-battery-030-charging")),
+            (power(avail, true, 79, PowerState::Charging), Some("tray-battery-080-charging")),
+            (power(avail, true, 80, PowerState::Charging), None),
+            (power(avail, true, 100, PowerState::Charging), None),
             (power(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
             (power(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
             (power(avail, true, 80, PowerState::Discharging), Some("tray-battery-080")),
@@ -902,14 +911,82 @@ mod panel_template_tests {
                 };
                 let button = width("tray-battery") > 0.0;
                 assert_eq!(button, expected.is_some(), "{path}: button for {:?}", snapshot.system.power);
-                let lit: Vec<&str> = GLYPHS
+                let lit: Vec<&str> = glyphs
                     .iter()
-                    .copied()
+                    .map(String::as_str)
                     .filter(|id| width(id) > 0.0)
                     .collect();
                 match expected {
                     Some(glyph) => assert_eq!(lit, vec![glyph], "{path}: glyph for {:?}", snapshot.system.power),
                     None => assert!(lit.is_empty(), "{path}: no glyph while hidden for {:?}", snapshot.system.power),
+                }
+            }
+        }
+    }
+
+    // REGRESSION: the tray battery matrix over state x percent x presence. The
+    // button shows iff present and not Charging at >=80%; exactly one glyph is
+    // lit, and only the Charging case may light a `-charging` node.
+    // MUTATION: light the plain glyph while charging, or drop the charging
+    // hide rule at 80%.
+    #[test]
+    fn battery_tray_matrix_shows_one_glyph_and_charging_variant_only_while_charging() {
+        use crate::taskbar::status::battery::BATTERY_GLYPHS;
+        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+        let glyph_for = |percent: u8| match percent {
+            15 => "020",
+            79 | 80 => "080",
+            100 => "100",
+            other => panic!("matrix has no expected glyph for {other}%"),
+        };
+        let all_ids: Vec<String> = BATTERY_GLYPHS
+            .iter()
+            .flat_map(|glyph| {
+                [
+                    format!("tray-battery-{}", glyph.id_suffix()),
+                    format!("tray-battery-{}-charging", glyph.id_suffix()),
+                ]
+            })
+            .collect();
+        for state in [
+            PowerState::Charging,
+            PowerState::Discharging,
+            PowerState::Full,
+            PowerState::Unknown,
+        ] {
+            for percent in [15_u8, 79, 80, 100] {
+                for present in [true, false] {
+                    let power = PowerSnapshot {
+                        available: ServiceAvailability::Available,
+                        present,
+                        percent,
+                        state,
+                        cpu_percent: None,
+                    };
+                    let charging = state == PowerState::Charging;
+                    let visible = present && !(charging && percent >= 80);
+                    let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
+                        .expect("panel artifact must decode");
+                    project_battery_tray(&mut document, &power).expect("tray battery projects");
+                    let viewport = (1080.0, 72.0);
+                    let width = |id: &str| {
+                        document
+                            .layout_box_by_id(id, viewport)
+                            .map_or(0.0, |rect| rect.2)
+                    };
+                    assert_eq!(width("tray-battery") > 0.0, visible, "{state:?} {percent}% present={present}");
+                    let lit: Vec<&str> = all_ids
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|id| width(id) > 0.0)
+                        .collect();
+                    let expected = if visible {
+                        let suffix = if charging { "-charging" } else { "" };
+                        vec![format!("tray-battery-{}{suffix}", glyph_for(percent))]
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(lit, expected, "{state:?} {percent}% present={present}");
                 }
             }
         }

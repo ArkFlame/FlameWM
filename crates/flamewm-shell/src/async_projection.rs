@@ -1376,6 +1376,20 @@ mod tests {
         project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-090"), Some(&true));
+
+        // Charging below 80 shows the charging glyph; at 80 the button hides.
+        snapshot.system.power.percent = 45;
+        snapshot.system.power.state = PowerState::Charging;
+        let mut doc = FakeDoc::default();
+        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        assert_eq!(doc.visible.get("tray-battery"), Some(&true));
+        assert_eq!(doc.visible.get("tray-battery-050-charging"), Some(&true));
+        assert_eq!(doc.visible.get("tray-battery-050"), Some(&false));
+
+        snapshot.system.power.percent = 80;
+        let mut doc = FakeDoc::default();
+        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        assert_eq!(doc.visible.get("tray-battery"), Some(&false));
     }
 
     #[test]

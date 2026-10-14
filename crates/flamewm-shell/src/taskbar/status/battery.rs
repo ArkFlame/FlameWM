@@ -50,11 +50,14 @@ impl BatteryGlyph {
     }
 }
 
-/// Tray visibility: service available and a battery present. Charge state and
-/// percent never hide the icon, so the popup stays reachable.
+/// Tray visibility: service available, a battery present, and not charging at
+/// 80% or above. A charging battery below 80% shows the charging glyph; every
+/// other state (Discharging, Full, Empty, Unknown) shows the normal glyph.
 #[must_use]
 pub fn tray_visible(power: &PowerSnapshot) -> bool {
-    power.available == ServiceAvailability::Available && power.present
+    power.available == ServiceAvailability::Available
+        && power.present
+        && !(power.state == PowerState::Charging && power.percent >= 80)
 }
 
 /// Bucket rule: 0..=10 is Caution; above that the level rounds UP to the next
@@ -119,15 +122,23 @@ mod tests {
     }
 
     #[test]
-    fn tray_visible_for_any_present_battery_regardless_of_state_or_percent() {
+    fn tray_visible_for_present_battery_outside_charging_eighty() {
         assert!(tray_visible(&power(PowerState::Discharging, 0)));
         assert!(tray_visible(&power(PowerState::Discharging, 79)));
         assert!(tray_visible(&power(PowerState::Discharging, 80)));
         assert!(tray_visible(&power(PowerState::Discharging, 100)));
         assert!(tray_visible(&power(PowerState::Charging, 40)));
-        assert!(tray_visible(&power(PowerState::Charging, 100)));
+        assert!(tray_visible(&power(PowerState::Charging, 79)));
         assert!(tray_visible(&power(PowerState::Full, 100)));
         assert!(tray_visible(&power(PowerState::Unknown, 87)));
+    }
+
+    #[test]
+    fn tray_hidden_only_while_charging_at_eighty_or_more() {
+        assert!(!tray_visible(&power(PowerState::Charging, 80)));
+        assert!(!tray_visible(&power(PowerState::Charging, 100)));
+        assert!(tray_visible(&power(PowerState::Discharging, 80)));
+        assert!(tray_visible(&power(PowerState::Full, 100)));
     }
 
     #[test]
@@ -165,6 +176,8 @@ mod tests {
         for glyph in BATTERY_GLYPHS {
             let node = format!("id=\"tray-battery-{}\"", glyph.id_suffix());
             assert!(panel.contains(&node), "panel.html lacks {node}");
+            let charging_node = format!("id=\"tray-battery-{}-charging\"", glyph.id_suffix());
+            assert!(panel.contains(&charging_node), "panel.html lacks {charging_node}");
             let stem = glyph.asset_stem(false);
             let bytes = std::fs::read(format!("{assets}{stem}.svg"))
                 .unwrap_or_else(|error| panic!("{stem}.svg missing: {error}"));
