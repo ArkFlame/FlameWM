@@ -1311,7 +1311,6 @@ mod tests {
             ("settings.toggle.taskbarShowDate", true),
             ("settings.toggle.snapPreviewEnabled", true),
             ("settings.toggle.focusFollowsMouse", true),
-            ("settings.toggle.screensaverSpanMonitors", true),
         ] {
             assert_eq!(crate::parse_action(action).is_ok(), ok, "{action}");
         }

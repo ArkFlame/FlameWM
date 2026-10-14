@@ -32,6 +32,8 @@ pub struct SaverConfig {
     pub num_ribbons: usize,
     /// Ribbon width in tenths of a pixel (px = tenths / 10).
     pub ribbon_width_tenths: u32,
+    /// Parsed and tolerated, but inert: Ribbons always spans the whole root window
+    /// (see `ribbons.rs`), so this value does not change what is rendered.
     pub span_monitors: bool,
     pub display_off_minutes: u32,
 }

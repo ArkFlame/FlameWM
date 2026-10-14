@@ -103,6 +103,19 @@ mod tests {
         }
     }
 
+    /// Every frame after the first must stay fully opaque: a transparent gap would let the
+    /// lock-root colour or a stale wallpaper show through the Ribbons screensaver.
+    #[test]
+    fn every_animated_frame_pixel_is_opaque() {
+        let now = Instant::now();
+        let mut frames = RibbonFrames::new(160, 90, &saver(), now);
+        for secs in [1u64, 2, 5, 13, 40] {
+            let image = frames.frame(now + Duration::from_secs(secs));
+            let transparent = image.pixels.chunks(4).filter(|p| p[3] != 255).count();
+            assert_eq!(transparent, 0, "frame at {secs}s has {transparent} non-opaque pixels");
+        }
+    }
+
     #[test]
     fn frames_change_as_time_advances() {
         let now = Instant::now();

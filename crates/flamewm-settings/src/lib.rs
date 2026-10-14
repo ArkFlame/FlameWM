@@ -1405,7 +1405,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
-            ("screensaverSpanMonitors", "screensaver-span-on", "screensaver-span-off"),
         ] {
             let enabled = self
                 .client
@@ -2352,7 +2351,6 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "taskbarShowDate" => Ok(SettingsAction::Toggle("taskbarShowDate")),
             "snapPreviewEnabled" => Ok(SettingsAction::Toggle("snapPreviewEnabled")),
             "focusFollowsMouse" => Ok(SettingsAction::Toggle("focusFollowsMouse")),
-            "screensaverSpanMonitors" => Ok(SettingsAction::Toggle("screensaverSpanMonitors")),
             _ => Err(format!("unknown toggle '{key}'")),
         };
     }
@@ -2958,10 +2956,7 @@ mod value_text_tests {
             parse_action("settings.wallpaper.fit"),
             Ok(SettingsAction::TextCycle { key: "wallpaperFit", .. })
         ));
-        assert!(matches!(
-            parse_action("settings.toggle.screensaverSpanMonitors"),
-            Ok(SettingsAction::Toggle("screensaverSpanMonitors"))
-        ));
+        assert!(parse_action("settings.toggle.screensaverSpanMonitors").is_err());
     }
 
     #[test]
