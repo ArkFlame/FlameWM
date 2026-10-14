@@ -867,6 +867,27 @@ def leftover_clients(nodes: list[dict]) -> list[dict]:
             or (n.get("parent") is None and not n.get("name") and n["w"] > 1)]
 
 
+CLEAN_DESKTOP_SECONDS = 3.0  # AP07 precheck: leftovers from a previous case may take a moment to unmap
+CASE_CLEANUP_SECONDS = 3.0   # per-case teardown: bounded wait for the stopped client's window to leave the tree
+
+
+def wait_until_empty(sample, timeout: float, now=time.monotonic, sleep=time.sleep, interval: float = 0.1) -> list:
+    """Re-samples until sample() is empty or `timeout` has passed; returns the last sample (empty = clean)."""
+    deadline = now() + timeout
+    current = sample()
+    while current and now() < deadline:
+        sleep(interval)
+        current = sample()
+    return current
+
+
+def stop_case_clients(s: Session) -> None:
+    """Per-case teardown: stop the xclock this case spawned, then wait (bounded) for it to leave the X tree."""
+    s.ctx.stop(s.client)
+    s.client = None
+    wait_until_empty(lambda: leftover_clients(s.tree("case-cleanup")), CASE_CLEANUP_SECONDS)
+
+
 def overlay_observer(s: Session, label: str, top_before: set[str]):
     """observe() callable for sample_flight: overlay nodes from a fresh X tree each call."""
     ticks = iter(range(10 ** 9))
@@ -1191,7 +1212,7 @@ def ap07(s: Session) -> dict:
         timeout=20, check=False).stdout else "root-visual fallback (no 32-bit visual reported)"
     # Clean-desktop precheck: a leftover xclock or overlay from an earlier phase would be measured as the
     # client, so refuse to measure instead of producing an odd-geometry box0.
-    leftovers = leftover_clients(s.tree("AP07-clean"))
+    leftovers = wait_until_empty(lambda: leftover_clients(s.tree("AP07-clean")), CLEAN_DESKTOP_SECONDS)
     if leftovers:
         return entry("AP07", FAIL, f"desktop not clean before the minimize measurement: {leftovers}")
     precheck_ev = ["clean_desktop_precheck=passed (no xclock or nameless overlay before spawn)"]
@@ -1536,6 +1557,8 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                         results[sid] = scenario(session)
                     except Exception as error:  # a crashed scenario is a FAIL with its reason, never a PASS
                         results[sid] = entry(sid, FAIL, f"scenario raised {type(error).__name__}: {error}")
+                    finally:
+                        stop_case_clients(session)
     finally:
         teardown = ctx.teardown()
         doc = compose_document(results)

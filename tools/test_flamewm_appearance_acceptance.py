@@ -420,5 +420,58 @@ class FlightSamplingTests(unittest.TestCase):
             '0x400020 "FlameWM start"', '0x400020 "xclock"')))], ["0x400020"])
 
 
+class WaitUntilEmptyTests(unittest.TestCase):
+    class FakeClock:
+        def __init__(self) -> None:
+            self.t = 0.0
+
+        def now(self) -> float:
+            return self.t
+
+        def sleep(self, seconds: float) -> None:
+            self.t += seconds
+
+    def test_clean_sample_returns_without_sleeping(self) -> None:
+        clock = self.FakeClock()
+        self.assertEqual(ap.wait_until_empty(lambda: [], 3.0, clock.now, clock.sleep), [])
+        self.assertEqual(clock.t, 0.0)
+
+    def test_leftover_that_unmaps_is_waited_for(self) -> None:
+        clock = self.FakeClock()
+        samples = iter([["xclock"], ["xclock"], []])
+        self.assertEqual(ap.wait_until_empty(lambda: next(samples), 3.0, clock.now, clock.sleep), [])
+        self.assertAlmostEqual(clock.t, 0.2)
+
+    def test_persistent_leftover_is_returned_after_the_bounded_timeout(self) -> None:
+        clock = self.FakeClock()
+        result = ap.wait_until_empty(lambda: ["xclock"], 3.0, clock.now, clock.sleep)
+        self.assertEqual(result, ["xclock"])
+        self.assertGreaterEqual(clock.t, 3.0)
+        self.assertLess(clock.t, 3.2)
+
+
+class StopCaseClientsTests(unittest.TestCase):
+    def test_case_cleanup_terminates_the_started_client_and_clears_the_handle(self) -> None:
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "logs").mkdir()
+            ctx = ap.base.Ctx(run)
+            session = ap.Session(ctx, None)
+            session.tree = lambda label: []  # no X server: the window is already gone from the tree
+            session.client = ctx.spawn("client-xclock", [sys.executable, "-c", "import time; time.sleep(60)"],
+                                       dict(os.environ))
+            proc = session.client.proc
+            try:
+                self.assertIsNone(proc.poll())
+                ap.stop_case_clients(session)
+                self.assertIsNotNone(proc.poll(), "case cleanup left the started client running")
+                self.assertIsNone(session.client)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+
+
 if __name__ == "__main__":
     unittest.main()
