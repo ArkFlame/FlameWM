@@ -201,15 +201,21 @@ impl AppearanceSync {
 
     /// Rebuild the owned appearance files when `mode` differs from the applied mode.
     /// Returns the plan whose environment the caller must export; `None` when unchanged.
-    /// The host kdeglobals is never touched: only the owned root is written.
-    fn change(&mut self, mode: AppearanceMode) -> Option<AppearancePlan> {
+    /// `gtk3_theme_installed` is the caller's [`gtk3_theme_name`] result for `mode`, so the
+    /// theme roots are probed once per settings sync. The host kdeglobals is never touched:
+    /// only the owned root is written.
+    fn change(
+        &mut self,
+        mode: AppearanceMode,
+        gtk3_theme_installed: bool,
+    ) -> Option<AppearancePlan> {
         if self.applied == mode {
             return None;
         }
         self.applied = mode;
         let probe = AppearanceProbe {
             xsettings_owned: true,
-            gtk3_theme_installed: gtk3_theme_name(mode, &self.inherited).is_some(),
+            gtk3_theme_installed,
             kde_platform_theme: kde_platform_theme_installed(&self.inherited),
         };
         let plan = plan_appearance(&self.paths, &self.inherited, mode, probe);
@@ -330,6 +336,9 @@ fn xsettings_owner(
     let shared = Rc::new(RefCell::new(manager));
     let observer_manager = Rc::clone(&shared);
     let mut reported = false;
+    // Last input fully applied and published. Recorded only when the cursor apply and
+    // republish both succeeded, so a failed step is retried on the next snapshot.
+    let mut published: Option<XSettingsInput> = None;
     let observer: SettingsObserver = Box::new(move |snapshot: &SettingsSnapshot| {
         let mut pinned_snapshot = snapshot.clone();
         if let Some(mode) = sync.pinned {
@@ -339,17 +348,29 @@ fn xsettings_owner(
             );
         }
         let input = xsettings_input_from_snapshot(&pinned_snapshot);
-        for error in apply_cursor_theme(&input.cursor_theme) {
-            eprintln!("flamewm: cursor theme reload failed: {error}");
-        }
-        if let Some(plan) = sync.change(input.appearance) {
-            flamewm_session_core::apply_current_process_env(&plan.environment);
-        }
-        let outcome = {
-            let mut manager = observer_manager.borrow_mut();
-            manager
-                .drain_events()
-                .and_then(|_| manager.republish(&input))
+        let outcome = if published.as_ref() == Some(&input) {
+            // Unchanged input: no cursor, appearance, or publish work. Queued manager
+            // events are still consumed so a lost selection is noticed at this sync point.
+            observer_manager.borrow_mut().drain_events().map(|_| ())
+        } else {
+            let cursor_errors = apply_cursor_theme(&input.cursor_theme);
+            for error in &cursor_errors {
+                eprintln!("flamewm: cursor theme reload failed: {error}");
+            }
+            if let Some(plan) = sync.change(input.appearance, input.gtk3_theme.is_some()) {
+                flamewm_session_core::apply_current_process_env(&plan.environment);
+            }
+            let outcome = {
+                let mut manager = observer_manager.borrow_mut();
+                manager
+                    .drain_events()
+                    .and_then(|_| manager.republish(&input))
+                    .map(|_| ())
+            };
+            if outcome.is_ok() && cursor_errors.is_empty() {
+                published = Some(input);
+            }
+            outcome
         };
         if let Err(error) = outcome {
             if !reported {
@@ -374,6 +395,7 @@ fn xsettings_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_session_core::{Toolkit, ToolkitStatus};
 
     fn snapshot_with(entries: &[(&str, SettingValue)]) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
@@ -620,22 +642,45 @@ mod tests {
         let owned = owned_appearance_root(&paths()).join("kdeglobals");
         let mut sync = AppearanceSync::new(paths(), inherited, AppearanceMode::Dark, None);
         // The applied mode is not rewritten: the startup publish already wrote it.
-        assert!(sync.change(AppearanceMode::Dark).is_none());
-        let light = sync.change(AppearanceMode::Light).expect("light plan");
+        assert!(sync.change(AppearanceMode::Dark, false).is_none());
+        let light = sync.change(AppearanceMode::Light, false).expect("light plan");
         assert_eq!(light.environment.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("light"));
         let light_file = std::fs::read_to_string(&owned).expect("light file");
         assert!(light_file.contains("ColorScheme=BreezeLight\n"), "{light_file}");
         assert!(light_file.contains("[Colors:View]\nBackgroundNormal=255,255,255\n"), "{light_file}");
-        assert!(sync.change(AppearanceMode::Light).is_none());
-        sync.change(AppearanceMode::Dark).expect("dark plan");
+        assert!(sync.change(AppearanceMode::Light, false).is_none());
+        sync.change(AppearanceMode::Dark, false).expect("dark plan");
         let dark_file = std::fs::read_to_string(&owned).expect("dark file");
         assert!(dark_file.contains("ColorScheme=BreezeDark\n"), "{dark_file}");
         assert!(dark_file.contains("[Colors:View]\nBackgroundNormal=20,22,24\n"), "{dark_file}");
         assert!(!dark_file.contains("BreezeLight"), "{dark_file}");
         // System has no owned scheme: the stale owned file must go, not linger.
-        sync.change(AppearanceMode::System).expect("system plan");
+        sync.change(AppearanceMode::System, false).expect("system plan");
         assert!(!owned.exists());
         assert!(!paths().config_home.join("kdeglobals").exists(), "host kdeglobals untouched");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn live_change_uses_the_shared_gtk3_probe_result() {
+        let home = env::temp_dir().join(format!("flamewm-wm-shared-gtk3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let paths = default_paths_from_home("/usr/bin", &home);
+        let gtk3_status = |installed: bool| {
+            let mut sync = AppearanceSync::new(
+                paths.clone(),
+                BTreeMap::new(),
+                AppearanceMode::Dark,
+                None,
+            );
+            sync.change(AppearanceMode::Light, installed)
+                .expect("light plan")
+                .toolkits[&Toolkit::Gtk3]
+                .clone()
+        };
+        // The observer's probe decides the GTK3 status; change() must not re-probe the roots.
+        assert!(matches!(gtk3_status(true), ToolkitStatus::Unverified(_)));
+        assert!(matches!(gtk3_status(false), ToolkitStatus::Unsupported(_)));
         let _ = std::fs::remove_dir_all(&home);
     }
 }
