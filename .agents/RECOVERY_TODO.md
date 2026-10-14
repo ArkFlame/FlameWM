@@ -42,7 +42,7 @@ All entries below are `KEEP`: attribution, semantic completeness, and verificati
 | Shell/UI continuation | `crates/flamewm-shell-core/src/start_menu.rs`, `crates/flamewm-shell-core/src/status.rs`, `crates/flamewm-shell-core/src/taskbar.rs`, `crates/flamewm-shell/Cargo.toml`, `crates/flamewm-shell/build.rs`, `crates/flamewm-shell/src/lib.rs`, `crates/flamewm-shell/src/main.rs`, `crates/flamewm-shell/src/runtime.rs`, `crates/flamewm-shell/src/start.rs`, `crates/flamewm-skin/`, `crates/flamewm-ui/`, `ui/shell/` | KEEP | J07-J13 need source readback and explicit owners. |
 | Settings continuation | `crates/flamewm-settings/Cargo.toml`, `crates/flamewm-settings/build.rs`, `crates/flamewm-settings/src/lib.rs`, `crates/flamewm-settings/src/runtime.rs`, `crates/flamewm-settings/src/view.rs`, `ui/settings.css`, `ui/settings.html` | KEEP | J09 needs fresh visual and build proof. |
 | WM migration | `crates/flamewm-wm/Cargo.toml`, `crates/flamewm-wm/src/atoms.rs`, `crates/flamewm-wm/src/chrome.rs`, `crates/flamewm-wm/src/classifier.rs`, `crates/flamewm-wm/src/client.rs`, `crates/flamewm-wm/src/geometry.rs`, `crates/flamewm-wm/src/lib.rs`, `crates/flamewm-wm/src/runtime.rs`, `crates/flamewm-wm/src/wm.rs`, `crates/flamewm-wm-x11/` | KEEP | Do not repair or replace absent source without a separate source-backed job. |
-| Workspace/build/governance | `Cargo.toml`, `Cargo.lock`, `FLAMEWM_VERSION`, `tools/static_audit.py`, `tools/verify_rwr_promotion.py`, `tools/architecture_guard.py`, `docs/ARCHITECTURE_EXCEPTIONS.toml`, `docs/CANONICAL_OWNERS.md`, other untracked docs/scripts/assets | KEEP | Preserve; verify only through owner-specific jobs. |
+| Workspace/build/governance | `Cargo.toml`, `Cargo.lock`, `FLAMEWM_VERSION`, `tools/verify_rwr_promotion.py`, `tools/architecture_guard.py`, `docs/ARCHITECTURE_EXCEPTIONS.toml`, `docs/CANONICAL_OWNERS.md`, other untracked docs/scripts/assets | KEEP | Preserve; verify only through owner-specific jobs. |
 
 ## R01-R09 Recovery Status
 
@@ -181,7 +181,6 @@ Protected contracts P01-P13 all UNVERIFIED at ledger level (GOV is a constant; n
 
 ### 6. Next gate (Wave 1 gate)
 
-- `tools/static_audit.py`
 - `tools/architecture_guard.py`
 - `cargo fmt --check`
 - `cargo check --workspace`

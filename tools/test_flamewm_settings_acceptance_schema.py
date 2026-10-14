@@ -1124,7 +1124,7 @@ class Ss16StaticGateTests(unittest.TestCase):
 
     def test_unrun_gate_is_not_run_never_pass(self) -> None:
         codes = {name: 0 for name, _ in acc.STATIC_GATES}
-        codes["static_audit"] = None
+        codes["architecture_guard"] = None
         self.assertEqual(acc.assess_ss16(codes)[0], "NOT_RUN")
         self.assertEqual(acc.assess_ss16({})[0], "NOT_RUN")
 

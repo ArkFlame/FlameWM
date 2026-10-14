@@ -6,10 +6,112 @@ import re
 import sys
 import tomllib
 
-try:
-    from static_audit import _strip_rust_comments
-except ImportError:
-    from .static_audit import _strip_rust_comments
+_RUST_DELIMITERS = re.compile(r"""[/"']""")
+
+
+def _raw_string_prefix_hashes(text: str, quote: int) -> int:
+    """Classify the `"` at `quote` as a raw-string opener or a plain string.
+
+    Returns the raw-string `#` count, or 0 when the quote is an ordinary
+    string delimiter. Handles `r"..."`, `r#"..."#`, `br#"..."#`, `rb##"..."##`
+    while refusing identifier lookalikes such as `myvar"..."`.
+    """
+    back = quote - 1
+    while back >= 0 and text[back] == "#":
+        back -= 1
+    hashes = quote - 1 - back
+    start = back
+    while start >= 0 and text[start] in "rb":
+        start -= 1
+    if text[start + 1:back + 1] not in ("r", "br", "rb"):
+        return 0
+    if start >= 0 and (text[start].isalnum() or text[start] == "_"):
+        return 0
+    return -1 if hashes == 0 else hashes
+
+
+def _strip_rust_comments(text: str) -> str:
+    """Return Rust source with `//` and `/* */` comments removed.
+
+    Correct Rust lexing rules, so a retired symbol mentioned inside a comment
+    never leaks into the guarded source context:
+
+    * `//` line comments and nested `/* /* */ */` block comments are removed,
+      and newlines inside them are preserved so line numbers stay stable;
+    * `"` strings keep `\\` escapes;
+    * `'` CHAR literals (`'a'`, `'\\n'`, `'\\''`, `'{`) are preserved verbatim;
+    * LIFETIMES (`'a`, `'static`, `'static mut`) never open a string;
+    * raw strings `r"..."`, `r#"..."#`, `br#"..."#` are preserved verbatim.
+
+    Stdlib only.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    block_depth = 0
+    while i < n:
+        if block_depth:
+            close = text.find("*/", i)
+            nested = text.find("/*", i)
+            if nested != -1 and (close == -1 or nested < close):
+                block_depth += 1
+                out.append("\n" * text.count("\n", i, nested))
+                i = nested + 2
+            elif close != -1:
+                block_depth -= 1
+                out.append("\n" * text.count("\n", i, close))
+                i = close + 2
+            else:
+                out.append("\n" * text.count("\n", i))
+                return "".join(out)
+            continue
+        match = _RUST_DELIMITERS.search(text, i)
+        if match is None:
+            out.append(text[i:])
+            break
+        start = match.start()
+        if start > i:
+            out.append(text[i:start])
+            i = start
+        ch = text[start]
+        if ch == "/":
+            nxt = text[i + 1] if i + 1 < n else ""
+            if nxt == "/":
+                end = text.find("\n", i)
+                i = n if end == -1 else end  # the newline itself is kept
+            elif nxt == "*":
+                block_depth = 1
+                i += 2
+            else:
+                out.append("/")
+                i += 1
+        elif ch == '"':
+            hashes = _raw_string_prefix_hashes(text, i)
+            if hashes < 0:
+                end = text.find('"', i + 1)
+                stop = n if end == -1 else end + 1
+            else:
+                terminator = '"' + "#" * hashes
+                end = text.find(terminator, i + 1)
+                stop = n if end == -1 else end + len(terminator)
+            out.append(text[i:stop])
+            i = stop
+        else:
+            if i + 1 < n and text[i + 1] == "\\":
+                j = i + 1
+                while j < n and text[j] != "'":
+                    j += 2 if text[j] == "\\" else 1
+                stop = n if j >= n else j + 1
+                out.append(text[i:stop])
+                i = stop
+            elif text[i + 1:i + 2] and text[i + 2:i + 3] == "'":
+                out.append(text[i:i + 3])
+                i += 3
+            else:
+                out.append("'")  # lifetime: emit the quote, open nothing
+                i += 1
+    return "".join(out)
+
 
 
 PRODUCT_CRATES = {

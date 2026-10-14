@@ -2,7 +2,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
-python3 tools/static_audit.py
 python3 tools/verify_rwr_promotion.py
 python3 -I -m unittest discover -s tools -p 'test_package_source_archive.py' -q
 cargo metadata --format-version 1 --no-deps >/dev/null

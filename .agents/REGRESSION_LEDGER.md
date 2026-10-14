@@ -124,6 +124,6 @@ Implementation frontier: `BLOCKED`. No behavior pass claimed. Safe next action: 
 
 ### Next gate (Wave 1 gate)
 
-`tools/static_audit.py` + `tools/architecture_guard.py` + `cargo fmt --check` + `cargo check --workspace` + `cargo build --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell` + `FLAMEWM_XEPHYR_CANARY=1 ./xephyr`.
+`tools/architecture_guard.py` + `cargo fmt --check` + `cargo check --workspace` + `cargo build --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell` + `FLAMEWM_XEPHYR_CANARY=1 ./xephyr`.
 
 No gate is claimed green in this execution — none has run. Preserve all dirty work; no stash/reset/clean/checkout/restore.

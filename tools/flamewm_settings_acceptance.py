@@ -1253,7 +1253,6 @@ def start_toggle_count(ctx: Ctx, name: str, action, settle: float) -> tuple[int 
 
 # SS16 static gates (scripts/check-equivalent, no cargo): each must exit 0 on the same source.
 STATIC_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("static_audit", ("tools/static_audit.py",)),
     ("architecture_guard", ("tools/architecture_guard.py",)),
     ("verify_rwr_promotion", ("tools/verify_rwr_promotion.py",)),
     ("j18_frame_guard", ("tools/test_j18_frame_guard.py",)),

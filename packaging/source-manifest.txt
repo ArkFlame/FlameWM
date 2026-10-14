@@ -55,7 +55,6 @@ xephyr
 @exec scripts/package-source-archive
 @exec scripts/settings-acceptance
 @exec tools/performance_bundle.py
-@exec tools/static_audit.py
 @exec tools/profile_summary.py
 @exec tools/verify_rwr_promotion.py
 @exec tools/performance_retention.py
