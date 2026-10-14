@@ -702,11 +702,18 @@ fn main() -> Result<(), String> {
                 apply_pending_icon_results(document, &mut state)?;
                 sticky::poll_persist(document, &mut state)?;
                 let result = sticky::flush_persist_if_due(document, &mut state);
-                if result.is_ok() && state.workspace_present_pending {
-                    state.workspace_present_pending = false;
-                    state.workspace_present_span = Some(workspace_present_point().start());
+                match result {
+                    Ok(()) => {
+                        if state.workspace_present_pending {
+                            state.workspace_present_pending = false;
+                            state.workspace_present_span = Some(workspace_present_point().start());
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("desktop: sticky persist flush failed: {error}; retry stays armed");
+                    }
                 }
-                result
+                Ok(())
             }
         },
     )?;

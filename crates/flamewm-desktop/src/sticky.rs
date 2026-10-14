@@ -98,6 +98,12 @@ impl StickyState {
             _ => false,
         }
     }
+
+    /// Re-arms a save whose write failed, so the next debounce window retries it.
+    /// Uses the normal debounce delay (never zero), so a persistent failure cannot spin.
+    fn persist_failed(&mut self, now: Instant) {
+        self.arm_persist(now);
+    }
 }
 
 #[derive(Clone)]
@@ -144,10 +150,15 @@ pub(crate) fn flush_persist_if_due(
     _document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    if !state.sticky.take_due(Instant::now()) {
+    let now = Instant::now();
+    if !state.sticky.take_due(now) {
         return Ok(());
     }
-    persist(state)
+    let result = persist(state);
+    if result.is_err() {
+        state.sticky.persist_failed(now);
+    }
+    result
 }
 
 fn persist(state: &mut DesktopState) -> Result<(), String> {
@@ -613,6 +624,31 @@ mod tests {
         state.arm_persist(now);
         assert!(!state.take_due(now + Duration::from_millis(499)));
         assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
+        assert!(state.take_due(now + PERSIST_DEBOUNCE));
+        assert_eq!(state.wake.get(), None);
+        assert!(!state.persist_pending);
+        assert!(!state.take_due(now + PERSIST_DEBOUNCE * 2));
+    }
+
+    #[test]
+    fn failed_save_keeps_a_retry_deadline() {
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
+        assert!(state.take_due(now + PERSIST_DEBOUNCE));
+        let failed_at = now + PERSIST_DEBOUNCE;
+        state.persist_failed(failed_at);
+        assert!(state.persist_pending);
+        assert_eq!(state.wake.get(), Some(failed_at + PERSIST_DEBOUNCE));
+        assert!(!state.take_due(failed_at));
+        assert!(state.take_due(failed_at + PERSIST_DEBOUNCE));
+    }
+
+    #[test]
+    fn successful_save_clears_the_deadline() {
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
         assert!(state.take_due(now + PERSIST_DEBOUNCE));
         assert_eq!(state.wake.get(), None);
         assert!(!state.persist_pending);
