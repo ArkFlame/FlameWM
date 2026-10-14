@@ -11,7 +11,7 @@ use flamewm_desktop_core::sticky::{
 };
 use flamewm_desktop_core::sticky_persistence;
 use flamewm_profiler::CounterPoint;
-use flamewm_reactor::Reactor;
+use flamewm_reactor::{Reactor, WakeDeadline};
 use flamewm_ui_x11::{PointerButton, UiActionEvent, UiActionPhase, UiColor, UiDocumentAccess};
 
 use crate::projection;
@@ -21,6 +21,8 @@ use crate::{
 };
 
 const STICKY_SLOTS: usize = projection::STICKY_SLOT_COUNT;
+/// Coalesced save delay: every mutation within this window shares one write.
+const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 
 fn sticky_edit_counter() -> &'static CounterPoint {
     static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
@@ -52,6 +54,8 @@ pub(crate) struct StickyState {
     persist_pending: bool,
     persist_armed: bool,
     persist_due: Option<Instant>,
+    /// Reactor wake deadline; set to `persist_due` while a save is armed.
+    wake: WakeDeadline,
 }
 
 impl StickyState {
@@ -65,6 +69,33 @@ impl StickyState {
             persist_pending: false,
             persist_armed: false,
             persist_due: None,
+            wake: WakeDeadline::default(),
+        }
+    }
+
+    /// Marks a save pending and publishes its due time to the reactor wake deadline,
+    /// so dispatch wakes exactly when the coalesced save is due.
+    fn arm_persist(&mut self, now: Instant) {
+        self.persist_pending = true;
+        if !self.persist_armed {
+            self.persist_armed = true;
+            let due = now + PERSIST_DEBOUNCE;
+            self.persist_due = Some(due);
+            self.wake.set(Some(due));
+        }
+    }
+
+    /// Clears the armed save when it is due at `now`; returns whether it should run.
+    fn take_due(&mut self, now: Instant) -> bool {
+        match self.persist_due {
+            Some(due) if now >= due => {
+                self.persist_due = None;
+                self.persist_pending = false;
+                self.persist_armed = false;
+                self.wake.set(None);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -92,14 +123,11 @@ enum StickyGestureMode {
     Resize,
 }
 
-pub(crate) fn register_persist_timer(reactor: &mut Reactor) -> Result<(), String> {
-    // Debounce owner is the reactor tick: the flag is armed by mutations and
-    // flushed in poll_persist/flush_persist_if_due (<=500ms via
-    // a 100ms repeat). No threads.
-    reactor
-        .register_timer(Duration::from_millis(100), true, || {})
-        .map(|_| ())
-        .map_err(|error| format!("register sticky persist timer: {error}"))
+/// Shares the reactor wake deadline with sticky state. No timer is registered: while
+/// nothing is pending the reactor blocks indefinitely, and a pending save wakes it at
+/// its due time.
+pub(crate) fn attach_persist_wake(state: &mut StickyState, reactor: &Reactor) {
+    state.wake = reactor.wake_deadline();
 }
 
 pub(crate) fn poll_persist(
@@ -107,8 +135,7 @@ pub(crate) fn poll_persist(
     state: &mut DesktopState,
 ) -> Result<(), String> {
     if state.sticky.persist_pending && !state.sticky.persist_armed {
-        state.sticky.persist_armed = true;
-        state.sticky.persist_due = Some(Instant::now() + Duration::from_millis(500));
+        state.sticky.arm_persist(Instant::now());
     }
     Ok(())
 }
@@ -117,15 +144,9 @@ pub(crate) fn flush_persist_if_due(
     _document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let Some(due) = state.sticky.persist_due else {
-        return Ok(());
-    };
-    if Instant::now() < due {
+    if !state.sticky.take_due(Instant::now()) {
         return Ok(());
     }
-    state.sticky.persist_due = None;
-    state.sticky.persist_pending = false;
-    state.sticky.persist_armed = false;
     persist(state)
 }
 
@@ -136,7 +157,7 @@ fn persist(state: &mut DesktopState) -> Result<(), String> {
 }
 
 fn schedule_persist(state: &mut DesktopState) {
-    state.sticky.persist_pending = true;
+    state.sticky.arm_persist(Instant::now());
 }
 
 pub(crate) fn flush_now(state: &DesktopState) {
@@ -548,7 +569,66 @@ fn sticky_drag_exceeded(dx: f32, dy: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_note_body_action, sticky_drag_exceeded};
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use flamewm_desktop_core::sticky::StickyNoteStore;
+
+    use super::{PERSIST_DEBOUNCE, StickyState, is_note_body_action, sticky_drag_exceeded};
+
+    fn state() -> StickyState {
+        StickyState::new(StickyNoteStore::default(), PathBuf::from("unused"), true)
+    }
+
+    #[test]
+    fn idle_state_publishes_no_wake_deadline() {
+        let state = state();
+        assert_eq!(state.wake.get(), None);
+        assert!(!state.persist_pending);
+    }
+
+    #[test]
+    fn arming_publishes_the_due_time_immediately() {
+        // A poll-only arming would leave the reactor blocked after an action.
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
+        assert!(state.persist_pending);
+        assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
+    }
+
+    #[test]
+    fn repeated_mutations_coalesce_onto_the_first_deadline() {
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
+        state.arm_persist(now + Duration::from_millis(200));
+        assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
+    }
+
+    #[test]
+    fn save_runs_only_once_due_and_clears_the_deadline() {
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
+        assert!(!state.take_due(now + Duration::from_millis(499)));
+        assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
+        assert!(state.take_due(now + PERSIST_DEBOUNCE));
+        assert_eq!(state.wake.get(), None);
+        assert!(!state.persist_pending);
+        assert!(!state.take_due(now + PERSIST_DEBOUNCE * 2));
+    }
+
+    #[test]
+    fn mutation_after_a_save_arms_a_new_deadline() {
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
+        assert!(state.take_due(now + PERSIST_DEBOUNCE));
+        let later = now + Duration::from_secs(5);
+        state.arm_persist(later);
+        assert_eq!(state.wake.get(), Some(later + PERSIST_DEBOUNCE));
+    }
 
     #[test]
     fn click_below_threshold_stays_a_click() {

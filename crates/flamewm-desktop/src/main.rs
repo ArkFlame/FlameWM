@@ -475,7 +475,7 @@ fn main() -> Result<(), String> {
             },
         )
         .map_err(|error| format!("register profiler timer: {error}"))?;
-    sticky::register_persist_timer(&mut reactor)?;
+    sticky::attach_persist_wake(&mut state_cell.borrow_mut().sticky, &reactor);
     // Panel strut changes arrive as control signals. The signal handler only
     // sets this flag; the reactor tick re-resolves the work area once per burst.
     let panels_dirty = std::rc::Rc::new(std::cell::Cell::new(false));
