@@ -854,15 +854,15 @@ mod panel_template_tests {
         };
         let avail = ServiceAvailability::Available;
         let cases: [(PowerSnapshot, Option<&str>); 14] = [
-            (power(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
+            (power(avail, true, 87, PowerState::Unknown), None),
             (power(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
-            (power(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
+            (power(avail, true, 45, PowerState::Unknown), None),
             (power(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
             (power(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
             (power(avail, true, 30, PowerState::Charging), Some("tray-battery-030-charging")),
             (power(avail, true, 79, PowerState::Charging), Some("tray-battery-080-charging")),
-            (power(avail, true, 80, PowerState::Charging), None),
-            (power(avail, true, 100, PowerState::Charging), None),
+            (power(avail, true, 80, PowerState::Charging), Some("tray-battery-080-charging")),
+            (power(avail, true, 100, PowerState::Charging), Some("tray-battery-100-charging")),
             (power(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
             (power(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
             (power(avail, true, 80, PowerState::Discharging), Some("tray-battery-080")),
@@ -925,7 +925,7 @@ mod panel_template_tests {
     }
 
     // REGRESSION: the tray battery matrix over state x percent x presence. The
-    // button shows iff present and not Charging at >=80%; exactly one glyph is
+    // button shows iff present and state != Unknown; exactly one glyph is
     // lit, and only the Charging case may light a `-charging` node.
     // MUTATION: light the plain glyph while charging, or drop the charging
     // hide rule at 80%.
@@ -935,6 +935,7 @@ mod panel_template_tests {
         use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
         let glyph_for = |percent: u8| match percent {
             15 => "020",
+            45 => "050",
             79 | 80 => "080",
             100 => "100",
             other => panic!("matrix has no expected glyph for {other}%"),
@@ -952,9 +953,10 @@ mod panel_template_tests {
             PowerState::Charging,
             PowerState::Discharging,
             PowerState::Full,
+            PowerState::Empty,
             PowerState::Unknown,
         ] {
-            for percent in [15_u8, 79, 80, 100] {
+            for percent in [15_u8, 45, 79, 80, 100] {
                 for present in [true, false] {
                     let power = PowerSnapshot {
                         available: ServiceAvailability::Available,
@@ -964,7 +966,7 @@ mod panel_template_tests {
                         cpu_percent: None,
                     };
                     let charging = state == PowerState::Charging;
-                    let visible = present && !(charging && percent >= 80);
+                    let visible = present && state != PowerState::Unknown;
                     let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
                         .expect("panel artifact must decode");
                     project_battery_tray(&mut document, &power).expect("tray battery projects");

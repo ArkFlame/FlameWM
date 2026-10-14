@@ -50,14 +50,15 @@ impl BatteryGlyph {
     }
 }
 
-/// Tray visibility: service available, a battery present, and not charging at
-/// 80% or above. A charging battery below 80% shows the charging glyph; every
-/// other state (Discharging, Full, Empty, Unknown) shows the normal glyph.
+/// Tray visibility: service available, a battery present, and not in the
+/// Unknown ("Not charging": plugged in but not charging, e.g. a charge limit;
+/// also covers a genuine UPower unknown) state. Charging shows the charging
+/// glyph; Discharging, Empty and Full show the normal glyph at any percent.
 #[must_use]
 pub fn tray_visible(power: &PowerSnapshot) -> bool {
     power.available == ServiceAvailability::Available
         && power.present
-        && !(power.state == PowerState::Charging && power.percent >= 80)
+        && power.state != PowerState::Unknown
 }
 
 /// Bucket rule: 0..=10 is Caution; above that the level rounds UP to the next
@@ -122,23 +123,18 @@ mod tests {
     }
 
     #[test]
-    fn tray_visible_for_present_battery_outside_charging_eighty() {
-        assert!(tray_visible(&power(PowerState::Discharging, 0)));
-        assert!(tray_visible(&power(PowerState::Discharging, 79)));
-        assert!(tray_visible(&power(PowerState::Discharging, 80)));
-        assert!(tray_visible(&power(PowerState::Discharging, 100)));
-        assert!(tray_visible(&power(PowerState::Charging, 40)));
-        assert!(tray_visible(&power(PowerState::Charging, 79)));
-        assert!(tray_visible(&power(PowerState::Full, 100)));
-        assert!(tray_visible(&power(PowerState::Unknown, 87)));
-    }
-
-    #[test]
-    fn tray_hidden_only_while_charging_at_eighty_or_more() {
-        assert!(!tray_visible(&power(PowerState::Charging, 80)));
-        assert!(!tray_visible(&power(PowerState::Charging, 100)));
-        assert!(tray_visible(&power(PowerState::Discharging, 80)));
-        assert!(tray_visible(&power(PowerState::Full, 100)));
+    fn tray_visible_for_every_state_except_unknown() {
+        for percent in [0, 45, 79, 80, 100] {
+            for state in [
+                PowerState::Charging,
+                PowerState::Discharging,
+                PowerState::Full,
+                PowerState::Empty,
+            ] {
+                assert!(tray_visible(&power(state, percent)), "{state:?} {percent}");
+            }
+            assert!(!tray_visible(&power(PowerState::Unknown, percent)));
+        }
     }
 
     #[test]
