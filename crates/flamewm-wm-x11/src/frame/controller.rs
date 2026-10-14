@@ -65,7 +65,21 @@ pub struct ControllerState {
     pub screen_rect: RootRect,
     pub hints: ClientSizeHints,
     pub extents: FrameExtents,
+    /// Last title click (release without drag activation); a second one
+    /// inside the double-click window toggles maximize.
+    pub last_title_click: Option<TitleClick>,
 }
+
+/// Non-drag title release awaiting a possible second click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TitleClick {
+    pub client: u32,
+    pub time_ms: u32,
+    pub pointer: RootPoint,
+}
+
+const TITLE_DOUBLE_CLICK_TIMEOUT_MS: u32 = 500;
+const TITLE_DOUBLE_CLICK_SLOP_PX: i64 = 4;
 
 impl ControllerState {
     #[must_use]
@@ -88,6 +102,7 @@ impl ControllerState {
             screen_rect: work_area,
             hints,
             extents,
+            last_title_click: None,
         }
     }
 
@@ -120,8 +135,10 @@ pub enum FrameEvent {
     Motion {
         pointer: RootPoint,
     },
+    /// `time_ms` is the X server event time (wrapping) for double-click timing.
     Release {
         pointer: RootPoint,
+        time_ms: u32,
     },
     Enter,
     Leave,
@@ -353,6 +370,9 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
     match event {
         FrameEvent::Press { source, pointer } => {
             let target = target_for_xid(&state.registry, state.client, source);
+            if !matches!(target.region, FrameRegion::TitleDrag) {
+                next.last_title_click = None;
+            }
             match target.region {
                 FrameRegion::TitleDrag => {
                     let (start_mode, start_rect) = match state.placement.mode {
@@ -441,10 +461,14 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
                 (next, vec![FrameEffect::Noop])
             }
         },
-        FrameEvent::Release { pointer } => match state.session {
+        FrameEvent::Release { pointer, time_ms } => match state.session {
             InteractionSession::Move(m) => {
+                if !m.anchor.is_activated() && !move_reached_activation(m.start_pointer, pointer) {
+                    return title_click_release(state, pointer, time_ms);
+                }
                 let (mut next, mut effects) = move_step(state, m, pointer, true);
                 next.session = InteractionSession::Idle;
+                next.last_title_click = None;
                 if effects == vec![FrameEffect::Noop] {
                     return (next, vec![FrameEffect::Ungrab]);
                 }
@@ -571,6 +595,36 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
             }
         }
     }
+}
+
+/// Title release that never activated a move. Second such release from the
+/// same client within the window (same slop) toggles maximize; otherwise it
+/// is recorded as the pending first click.
+fn title_click_release(
+    state: &ControllerState,
+    pointer: RootPoint,
+    time_ms: u32,
+) -> (ControllerState, Vec<FrameEffect>) {
+    let mut next = state.clone();
+    next.session = InteractionSession::Idle;
+    let completes = state.last_title_click.is_some_and(|prev| {
+        let elapsed = time_ms.wrapping_sub(prev.time_ms);
+        let dx = i64::from(pointer.x) - i64::from(prev.pointer.x);
+        let dy = i64::from(pointer.y) - i64::from(prev.pointer.y);
+        prev.client == state.client
+            && elapsed <= TITLE_DOUBLE_CLICK_TIMEOUT_MS
+            && dx * dx + dy * dy <= TITLE_DOUBLE_CLICK_SLOP_PX * TITLE_DOUBLE_CLICK_SLOP_PX
+    });
+    if !completes {
+        next.last_title_click = Some(TitleClick {
+            client: state.client,
+            time_ms,
+            pointer,
+        });
+        return (next, vec![FrameEffect::Ungrab]);
+    }
+    next.last_title_click = None;
+    toggle_max(&next)
 }
 
 fn toggle_max(state: &ControllerState) -> (ControllerState, Vec<FrameEffect>) {
@@ -770,6 +824,7 @@ mod tests {
             &s2,
             FrameEvent::Release {
                 pointer: RootPoint::new(200, 170),
+                time_ms: 0,
             },
         );
         assert!(s3.session.is_idle());
@@ -800,6 +855,7 @@ mod tests {
             &s2,
             FrameEvent::Release {
                 pointer: RootPoint::new(550, 460),
+                time_ms: 0,
             },
         );
         assert!(s3.session.is_idle());
@@ -823,12 +879,147 @@ mod tests {
             &s1,
             FrameEvent::Release {
                 pointer: RootPoint::new(300, 110),
+                time_ms: 0,
             },
         );
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
         assert_eq!(s2.placement.current, WA);
         assert!(e2.contains(&FrameEffect::Ungrab));
         assert!(has_frame(&e2, 0, 0));
+    }
+
+    fn title_click(
+        state: &ControllerState,
+        x: i32,
+        y: i32,
+        time_ms: u32,
+    ) -> (ControllerState, Vec<FrameEffect>) {
+        let (pressed, _) = reduce(
+            state,
+            FrameEvent::Press {
+                source: 1,
+                pointer: RootPoint::new(x, y),
+            },
+        );
+        reduce(
+            &pressed,
+            FrameEvent::Release {
+                pointer: RootPoint::new(x, y),
+                time_ms,
+            },
+        )
+    }
+
+    #[test]
+    fn title_double_click_within_window_toggles_max() {
+        let s0 = floating_state();
+        let (s1, e1) = title_click(&s0, 150, 120, 1000);
+        assert_eq!(s1.placement.mode, PlacementMode::Floating);
+        assert!(s1.session.is_idle());
+        assert_eq!(e1, vec![FrameEffect::Ungrab]);
+        assert!(s1.last_title_click.is_some());
+        let (s2, e2) = title_click(&s1, 150, 120, 1300);
+        assert_eq!(s2.placement.mode, PlacementMode::Maximized);
+        assert_eq!(s2.placement.current, WA);
+        assert!(s2.session.is_idle());
+        assert!(s2.last_title_click.is_none());
+        assert!(has_frame(&e2, 0, 0));
+    }
+
+    #[test]
+    fn title_double_click_on_maximized_restores() {
+        let (s1, _) = title_click(&maximized_state(), 960, 20, 1000);
+        assert_eq!(s1.placement.mode, PlacementMode::Maximized);
+        let (s2, _) = title_click(&s1, 960, 20, 1100);
+        assert_eq!(s2.placement.mode, PlacementMode::Floating);
+        assert_eq!(s2.placement.current, START);
+    }
+
+    #[test]
+    fn title_second_click_after_timeout_does_not_toggle() {
+        let s0 = floating_state();
+        let (s1, _) = title_click(&s0, 150, 120, 1000);
+        let (slow, _) = title_click(&s1, 150, 120, 1501);
+        assert_eq!(slow.placement.mode, PlacementMode::Floating);
+        assert!(slow.last_title_click.is_some());
+        let (edge, _) = title_click(&s1, 150, 120, 1500);
+        assert_eq!(edge.placement.mode, PlacementMode::Maximized);
+    }
+
+    #[test]
+    fn title_second_click_beyond_slop_does_not_toggle() {
+        let s0 = floating_state();
+        let (s1, _) = title_click(&s0, 150, 120, 1000);
+        let (far, _) = title_click(&s1, 155, 120, 1100);
+        assert_eq!(far.placement.mode, PlacementMode::Floating);
+        let (diagonal, _) = title_click(&s1, 153, 123, 1100);
+        assert_eq!(diagonal.placement.mode, PlacementMode::Floating);
+        let (edge, _) = title_click(&s1, 154, 120, 1100);
+        assert_eq!(edge.placement.mode, PlacementMode::Maximized);
+    }
+
+    #[test]
+    fn title_click_from_other_client_does_not_toggle() {
+        let (mut s1, _) = title_click(&floating_state(), 150, 120, 1000);
+        if let Some(record) = s1.last_title_click.as_mut() {
+            record.client = 8;
+        }
+        let (s2, _) = title_click(&s1, 150, 120, 1100);
+        assert_eq!(s2.placement.mode, PlacementMode::Floating);
+        assert!(s2.last_title_click.is_some());
+    }
+
+    #[test]
+    fn title_drag_between_clicks_breaks_pair() {
+        let s0 = floating_state();
+        let (s1, _) = title_click(&s0, 150, 120, 1000);
+        let (s2, _) = reduce(
+            &s1,
+            FrameEvent::Press {
+                source: 1,
+                pointer: RootPoint::new(150, 120),
+            },
+        );
+        let (s3, _) = reduce(
+            &s2,
+            FrameEvent::Motion {
+                pointer: RootPoint::new(200, 170),
+            },
+        );
+        let (s4, _) = reduce(
+            &s3,
+            FrameEvent::Release {
+                pointer: RootPoint::new(200, 170),
+                time_ms: 1200,
+            },
+        );
+        assert_eq!(s4.placement.mode, PlacementMode::Floating);
+        assert!(s4.last_title_click.is_none());
+        let (s5, _) = title_click(&s4, 200, 170, 1300);
+        assert_eq!(s5.placement.mode, PlacementMode::Floating);
+    }
+
+    #[test]
+    fn non_title_press_clears_pending_title_click() {
+        let s0 = floating_state();
+        let (s1, _) = title_click(&s0, 150, 120, 1000);
+        let (s2, _) = reduce(
+            &s1,
+            FrameEvent::Press {
+                source: 2,
+                pointer: RootPoint::new(500, 400),
+            },
+        );
+        let (s3, _) = reduce(
+            &s2,
+            FrameEvent::Release {
+                pointer: RootPoint::new(500, 400),
+                time_ms: 1100,
+            },
+        );
+        assert!(s3.last_title_click.is_none());
+        let (s4, _) = title_click(&s3, 150, 120, 1200);
+        assert_eq!(s4.placement.mode, PlacementMode::Floating);
     }
 
     #[test]
@@ -1005,6 +1196,7 @@ mod tests {
             &s2,
             FrameEvent::Release {
                 pointer: RootPoint::new(550, 460),
+                time_ms: 0,
             },
         );
         assert!(e3.contains(&FrameEffect::LayoutInput));
@@ -1058,6 +1250,7 @@ mod tests {
             &s2,
             FrameEvent::Release {
                 pointer: RootPoint::new(200, 170),
+                time_ms: 0,
             },
         );
         assert_eq!(s3.placement.current, RootRect::new(150, 150, 400, 300));

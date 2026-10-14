@@ -689,7 +689,7 @@ fn emit_pointer_trace(
     let pointer = match event {
         FrameEvent::Press { pointer, .. }
         | FrameEvent::Motion { pointer }
-        | FrameEvent::Release { pointer } => Some(pointer),
+        | FrameEvent::Release { pointer, .. } => Some(pointer),
         _ => None,
     };
     let delta = pointer.and_then(|point| {
@@ -2120,7 +2120,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let pointer = match event {
             FrameEvent::Press { pointer, .. }
             | FrameEvent::Motion { pointer }
-            | FrameEvent::Release { pointer } => Some(pointer),
+            | FrameEvent::Release { pointer, .. } => Some(pointer),
             _ => None,
         };
         if let (Some(probe), Some(pointer)) = (self.resize_probe.as_mut(), pointer) {
@@ -2942,6 +2942,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.frame_to_client.remove(&client.frame);
         self.chrome_runtimes.remove(&window);
         let removed = self.registry.remove_client(window);
+        if let Some(renderer) = self.renderer.as_ref() {
+            let mut renderer = renderer.borrow_mut();
+            for xid in removed.iter().copied().chain(std::iter::once(client.frame)) {
+                renderer.forget_cursor(u64::from(xid));
+            }
+        }
         for xid in &removed {
             let _ = self.conn.destroy_window(*xid);
             self.frame_to_client.remove(xid);
@@ -3652,6 +3658,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.cancel_open_for(client)?;
         }
         if event.detail != BUTTON_PRIMARY {
+            if let Some(session) = self
+                .client_for(target)
+                .and_then(|client| self.sessions.get_mut(&client))
+            {
+                session.last_title_click = None;
+            }
             return Ok(());
         }
         let source = resolve_frame_event_source(&self.registry, event.event, event.child);
@@ -3727,6 +3739,9 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// always release the frozen pointer so the client receives the press.
     fn handle_client_press(&mut self, event: ButtonPressEvent) -> Result<(), ReplyError> {
         let client = event.event;
+        if let Some(session) = self.sessions.get_mut(&client) {
+            session.last_title_click = None;
+        }
         let focus = if matches!(event.detail, 1..=3) && should_focus_on_press(self.active, client) {
             self.focus(client)
         } else {
@@ -3793,7 +3808,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
-        let _ = self.reduce_and_execute(client_id, FrameEvent::Release { pointer });
+        let _ = self.reduce_and_execute(
+            client_id,
+            FrameEvent::Release {
+                pointer,
+                time_ms: event.time,
+            },
+        );
         if release_from_move {
             self.snap_preview.hide();
         }

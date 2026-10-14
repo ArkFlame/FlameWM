@@ -82,6 +82,8 @@ struct StickyGesture {
     start_x: f32,
     start_y: f32,
     original: Rect,
+    /// Set once the pointer has moved past STICKY_DRAG_THRESHOLD_PX.
+    moved: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,79 +416,59 @@ fn handle_slot(
         return Ok(());
     };
     let note_id = note.id.clone();
-    // Primary press anywhere on the note body (root sticky.N.move action,
-    // title excluded) activates the edit buffer, not just the text node.
-    if action.action.ends_with(".move")
-        && action.phase == UiActionPhase::Press
-        && pointer_button(action) == PointerButton::Primary
-    {
-        hide_menus(document)?;
-        state.menu = None;
-        state.sticky.edit = Some(StickyEdit {
-            note_id,
-            buffer: note.text.clone(),
-        });
-        sticky_edit_counter().increment();
-        return sync_sticky(document, state);
-    }
-    // Primary click elsewhere (desktop surface or another note) commits the
-    // active buffer, persists, and clears the edit.
-    if action.action.ends_with(".text") {
-        if action.phase == UiActionPhase::Press && pointer_button(action) == PointerButton::Primary
-        {
-            state.sticky.edit = Some(StickyEdit {
-                note_id,
-                buffer: note.text.clone(),
-            });
-            sticky_edit_counter().increment();
-            return sync_sticky(document, state);
-        }
-        return Ok(());
-    }
-    if action.action.ends_with(".drag") {
+    // Primary press on the note body (.move), drag overlay (.drag) or text
+    // (.text) activates the edit buffer and records a pending move. The move
+    // only starts once the pointer passes STICKY_DRAG_THRESHOLD_PX; a release
+    // below the threshold is a plain click and keeps the edit active.
+    if is_note_body_action(&action.action) {
         if pointer_button(action) != PointerButton::Primary {
             return Ok(());
         }
         match action.phase {
             UiActionPhase::Press => {
+                hide_menus(document)?;
+                state.menu = None;
+                state.sticky.edit = Some(StickyEdit {
+                    note_id: note_id.clone(),
+                    buffer: note.text.clone(),
+                });
                 state.sticky.gesture = Some(StickyGesture {
                     note_id,
                     mode: StickyGestureMode::Move,
                     start_x: action.x,
                     start_y: action.y,
                     original: note.rect,
+                    moved: false,
                 });
+                sticky_edit_counter().increment();
+                return sync_sticky(document, state);
             }
-            UiActionPhase::Motion => {
-                if let Some(gesture) = state.sticky.gesture.clone() {
-                    if gesture.note_id == note_id {
-                        let rect = move_rect(
-                            gesture.original,
-                            (action.x - gesture.start_x) as i32,
-                            (action.y - gesture.start_y) as i32,
-                            state.grid.work_area,
-                        );
-                        state.sticky.store.set_rect(&note_id, rect);
-                        sticky_move_counter().increment();
-                        sync_sticky(document, state)?;
-                    }
+            UiActionPhase::Motion | UiActionPhase::Release => {
+                let release = action.phase == UiActionPhase::Release;
+                let Some(gesture) = state.sticky.gesture.as_mut() else {
+                    return Ok(());
+                };
+                if gesture.note_id != note_id || gesture.mode != StickyGestureMode::Move {
+                    return Ok(());
                 }
-            }
-            UiActionPhase::Release => {
-                if let Some(gesture) = state.sticky.gesture.take() {
-                    if gesture.note_id == note_id {
-                        let rect = move_rect(
-                            gesture.original,
-                            (action.x - gesture.start_x) as i32,
-                            (action.y - gesture.start_y) as i32,
-                            state.grid.work_area,
-                        );
-                        state.sticky.store.set_rect(&note_id, rect);
-                        sticky_move_counter().increment();
-                        flush_now(state);
-                        sync_sticky(document, state)?;
-                    }
+                let dx = action.x - gesture.start_x;
+                let dy = action.y - gesture.start_y;
+                gesture.moved |= sticky_drag_exceeded(dx, dy);
+                let moved = gesture.moved;
+                let original = gesture.original;
+                if release {
+                    state.sticky.gesture = None;
                 }
+                if !moved {
+                    return Ok(());
+                }
+                let rect = move_rect(original, dx as i32, dy as i32, state.grid.work_area);
+                state.sticky.store.set_rect(&note_id, rect);
+                sticky_move_counter().increment();
+                if release {
+                    flush_now(state);
+                }
+                return sync_sticky(document, state);
             }
             UiActionPhase::Hover => {}
         }
@@ -513,6 +495,7 @@ fn handle_slot(
                     start_x: action.x,
                     start_y: action.y,
                     original: note.rect,
+                    moved: false,
                 });
                 state.sticky.gesture.as_mut().map(|gesture| {
                     gesture.mode = StickyGestureMode::Resize;
@@ -550,4 +533,43 @@ fn slot_number(action: &str) -> Option<usize> {
         .strip_prefix("sticky.")
         .and_then(|rest| rest.split('.').next())
         .and_then(|number| number.parse::<usize>().ok())
+}
+
+/// Pointer travel (logical px) before a note press becomes a move.
+const STICKY_DRAG_THRESHOLD_PX: f32 = 5.0;
+
+fn is_note_body_action(action: &str) -> bool {
+    action.ends_with(".move") || action.ends_with(".drag") || action.ends_with(".text")
+}
+
+fn sticky_drag_exceeded(dx: f32, dy: f32) -> bool {
+    dx * dx + dy * dy >= STICKY_DRAG_THRESHOLD_PX * STICKY_DRAG_THRESHOLD_PX
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_note_body_action, sticky_drag_exceeded};
+
+    #[test]
+    fn click_below_threshold_stays_a_click() {
+        assert!(!sticky_drag_exceeded(0.0, 0.0));
+        assert!(!sticky_drag_exceeded(3.0, 3.0));
+        assert!(!sticky_drag_exceeded(-4.9, 0.0));
+    }
+
+    #[test]
+    fn movement_at_or_past_threshold_is_a_drag() {
+        assert!(sticky_drag_exceeded(0.0, 5.0));
+        assert!(sticky_drag_exceeded(-5.0, 0.0));
+        assert!(sticky_drag_exceeded(3.0, 4.0));
+    }
+
+    #[test]
+    fn body_title_text_and_drag_actions_start_moves_but_controls_do_not() {
+        assert!(is_note_body_action("sticky.1.move"));
+        assert!(is_note_body_action("sticky.16.drag"));
+        assert!(is_note_body_action("sticky.2.text"));
+        assert!(!is_note_body_action("sticky.2.resize-se"));
+        assert!(!is_note_body_action("sticky.2.menu"));
+    }
 }

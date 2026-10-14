@@ -40,6 +40,22 @@ pub struct ExternalDecorationRenderer {
     unavailable: Option<String>,
     picture_transform: bool,
     last_title_style: Option<(f32, i32)>,
+    /// Last cursor kind defined per window, re-defined after a theme reload.
+    defined_cursors: Vec<(u64, CursorKind)>,
+}
+
+/// Re-defines each `(window, kind)` through `define`, stopping at the first
+/// window that fails to resolve a cursor.
+fn redefine_cursors(
+    defined: &[(u64, CursorKind)],
+    mut define: impl FnMut(u64, CursorKind) -> bool,
+) -> Result<(), String> {
+    for &(xid, kind) in defined {
+        if !define(xid, kind) {
+            return Err(format!("cursor redefine failed for window {xid:#x}"));
+        }
+    }
+    Ok(())
 }
 
 impl Drop for ExternalDecorationRenderer {
@@ -109,6 +125,7 @@ impl ExternalDecorationRenderer {
             unavailable: None,
             picture_transform,
             last_title_style: None,
+            defined_cursors: Vec::new(),
         })
     }
 
@@ -124,6 +141,7 @@ impl ExternalDecorationRenderer {
             unavailable: Some(reason.to_string()),
             picture_transform: false,
             last_title_style: None,
+            defined_cursors: Vec::new(),
         }
     }
 
@@ -258,9 +276,25 @@ impl ExternalDecorationRenderer {
             .as_mut()
             .ok_or_else(|| "external decoration has no cursor backend".to_string())?;
         match unsafe { cursor.define(window, kind) } {
-            Some(_) => Ok(()),
+            Some(_) => {
+                let known = self
+                    .defined_cursors
+                    .iter_mut()
+                    .find(|(seen, _)| *seen == frame_xid);
+                match known {
+                    Some(entry) => entry.1 = kind,
+                    None => self.defined_cursors.push((frame_xid, kind)),
+                }
+                Ok(())
+            }
             None => Err("define_cursor failed: no cursor resolved for kind".to_string()),
         }
+    }
+
+    /// Drops the cursor record for `frame_xid` so a theme reload never
+    /// re-defines a destroyed window. Call when the frame window is destroyed.
+    pub fn forget_cursor(&mut self, frame_xid: u64) {
+        self.defined_cursors.retain(|(seen, _)| *seen != frame_xid);
     }
 
     /// Measure `text` at `size`: live Xft advance when the backend is up,
@@ -391,14 +425,21 @@ pub trait CursorThemeOwner {
 }
 
 impl CursorThemeOwner for ExternalDecorationRenderer {
-    /// Replaces the cursor set. Cursors already defined on frames keep their
-    /// server reference until the WM redefines them. On error the old theme stays.
+    /// Replaces the cursor set, then re-defines the cursor on every window this
+    /// renderer already set, so live frames show the new theme. If the theme
+    /// reload fails, the old theme stays and the windows keep their cursors. If
+    /// the reload succeeds but a re-define fails, the new theme is already loaded
+    /// and this returns `Err`; the caller's `applied` theme is not advanced, so
+    /// the same theme is retried on the next settings publish.
     fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
         let cursor = self
             .cursor
             .as_mut()
             .ok_or_else(|| "external decoration has no cursor backend".to_string())?;
-        unsafe { cursor.reload_theme(theme) }
+        unsafe { cursor.reload_theme(theme) }?;
+        redefine_cursors(&self.defined_cursors, |xid, kind| {
+            unsafe { cursor.define(xid as super::xlib::Window, kind) }.is_some()
+        })
     }
 }
 
@@ -433,14 +474,13 @@ impl CursorThemeRegistry {
         self.owners.push(Rc::downgrade(owner));
     }
 
-    /// Reloads every live owner once when `resolved` differs from the last applied
-    /// theme. Returns per-owner failures; `applied` advances even on failure so
-    /// settings publishes do not retry an unchanged theme.
+    /// Reloads every live owner when `resolved` differs from the last applied
+    /// theme. Returns per-owner failures. `applied` advances only when every
+    /// owner succeeds, so a failed theme is retried on the next settings publish.
     fn apply(&mut self, resolved: &str) -> Vec<String> {
         if self.applied.as_deref() == Some(resolved) {
             return Vec::new();
         }
-        self.applied = Some(resolved.to_owned());
         self.owners.retain(|owner| owner.strong_count() > 0);
         let mut errors = Vec::new();
         for owner in self.owners.iter().filter_map(Weak::upgrade) {
@@ -448,6 +488,9 @@ impl CursorThemeRegistry {
             if let Err(error) = result {
                 errors.push(error);
             }
+        }
+        if errors.is_empty() {
+            self.applied = Some(resolved.to_owned());
         }
         errors
     }
@@ -536,9 +579,52 @@ mod tests {
         let errors = registry.apply("Missing-theme");
         assert_eq!(errors, ["reload Missing-theme failed"]);
         assert_eq!(healthy.borrow().reloads, ["Missing-theme"]);
-        // The failed theme is not retried on an unchanged publish.
-        assert!(registry.apply("Missing-theme").is_empty());
-        assert_eq!(broken.borrow().reloads.len(), 1);
+        // A failed theme is retried on the next publish of the same theme.
+        let retry = registry.apply("Missing-theme");
+        assert_eq!(retry, ["reload Missing-theme failed"]);
+        assert_eq!(broken.borrow().reloads, ["Missing-theme", "Missing-theme"]);
+    }
+
+    #[test]
+    fn successful_theme_is_not_reloaded_after_a_failed_owner_recovers() {
+        let mut registry = CursorThemeRegistry::default();
+        let flaky = fake(true);
+        registry.register(&as_owner(&flaky), None);
+        assert_eq!(registry.apply("Breeze").len(), 1);
+
+        flaky.borrow_mut().fail = false;
+        assert!(registry.apply("Breeze").is_empty());
+        assert_eq!(flaky.borrow().reloads, ["Breeze", "Breeze"]);
+        assert!(registry.apply("Breeze").is_empty());
+        assert_eq!(flaky.borrow().reloads.len(), 2);
+    }
+
+    #[test]
+    fn redefine_visits_every_recorded_window_with_its_last_kind() {
+        let defined = [(0x10, CursorKind::Move), (0x20, CursorKind::Default)];
+        let mut calls = Vec::new();
+        let result = redefine_cursors(&defined, |xid, kind| {
+            calls.push((xid, kind));
+            true
+        });
+        assert!(result.is_ok());
+        assert_eq!(
+            calls,
+            [(0x10, CursorKind::Move), (0x20, CursorKind::Default)]
+        );
+    }
+
+    #[test]
+    fn redefine_stops_at_first_unresolved_window() {
+        let defined = [(0x10, CursorKind::Move), (0x20, CursorKind::Default)];
+        let mut calls = 0;
+        let error = redefine_cursors(&defined, |_, _| {
+            calls += 1;
+            false
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(error.contains("0x10"));
     }
 
     #[test]
@@ -552,6 +638,23 @@ mod tests {
         assert!(registry.apply("Breeze").is_empty());
         assert_eq!(kept.borrow().reloads, ["Breeze"]);
         assert_eq!(registry.owners.len(), 1);
+    }
+
+    #[test]
+    fn forget_cursor_removes_only_the_destroyed_window() {
+        let mut renderer = ExternalDecorationRenderer::unavailable("no DISPLAY in test");
+        renderer.defined_cursors = vec![
+            (0x10, CursorKind::Move),
+            (0x20, CursorKind::Default),
+            (0x30, CursorKind::Move),
+        ];
+        renderer.forget_cursor(0x20);
+        assert_eq!(
+            renderer.defined_cursors,
+            [(0x10, CursorKind::Move), (0x30, CursorKind::Move)]
+        );
+        renderer.forget_cursor(0x99);
+        assert_eq!(renderer.defined_cursors.len(), 2);
     }
 
     #[test]
