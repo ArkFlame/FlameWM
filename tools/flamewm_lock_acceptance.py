@@ -24,8 +24,9 @@ XTEST input and capture. Statuses: PASS, FAIL, NOT_RUN, ENVIRONMENT_BLOCKED.
        within 3*s px of the reference anchors (701x438 canvas mapped onto the screen)
   LK13 power actions are real: a fake control plane (tools/flamewm_fake_control_plane.py) records
        Session calls from Sleep, Shut Down (+Cancel, +Escape, +confirm) and a dimmed Restart
-  LK14 screensaver wake is consumed: after Ribbons start (1 idle minute), the first key only wakes
-       the screen; the caret stays visible (no character reached the password field); the next key types
+  LK14 screensaver is Ribbons-only (the login is hidden while it runs), so the caret is visible before
+       the idle minute and hidden during the saver; the first key after it wakes the screen and the login
+       appears with the caret visible (no character reached the password field); the next key types
   LK15 screensaver: Ribbons frames change while active, and after displayOffMinutes the X server
        reports DPMS "Monitor is Off" (queried with xset q); a wake key turns the monitor back on
 
@@ -1140,15 +1141,19 @@ def lk14(s: LockSession) -> dict:
     if not s.restart({"screensaverAfterLockMinutes": "1", "screensaverDisplayOffMinutes": "0"}):
         return entry("LK14", FAIL, "WM or lock did not start with the screensaver settings")
     w, h = s.args.screen_w, s.args.screen_h
+    # Visible phase: shot taken before the one idle minute elapses, so the login (caret) is still shown.
+    visible_path, visible = s.shot("LK14-visible")
+    if visible is None:
+        return entry("LK14", ENV_BLOCKED, "capture failed")
     started = time.monotonic()
     time.sleep(max(0.0, SAVER_IDLE_SECONDS - (time.monotonic() - started)))
     active, frame_path = wait_for_ribbons(s, started + SAVER_POLL_SECONDS)
     if not active:
         return entry("LK14", FAIL, "Ribbons never became active after one idle minute")
-    _, before = s.shot("LK14-ribbons")
+    saver_path, before = s.shot("LK14-ribbons")
     if before is None:
         return entry("LK14", ENV_BLOCKED, "capture failed")
-    s.input(key="x")  # the wake key: consumed, never typed
+    s.input(key="x")  # the wake key: consumed, never typed; the login appears
     time.sleep(1.5)
     wake_path, after_wake = s.shot("LK14-after-wake")
     s.input(key="y")  # the next key is an ordinary one
@@ -1156,20 +1161,22 @@ def lk14(s: LockSession) -> dict:
     typed_path, typed = s.shot("LK14-after-typing")
     if after_wake is None or typed is None:
         return entry("LK14", ENV_BLOCKED, "capture failed")
+    caret_visible = caret_white_fraction(visible, w, h)
     caret_before = caret_white_fraction(before, w, h)
     caret_after_wake = caret_white_fraction(after_wake, w, h)
     caret_typed = caret_white_fraction(typed, w, h)
     checks = {
-        "caret_visible_before_wake": caret_before >= CARET_VISIBLE,
+        "caret_visible_before_saver": caret_visible >= CARET_VISIBLE,
+        "caret_hidden_while_saver": caret_before <= CARET_HIDDEN,
         "wake_key_consumed": caret_after_wake >= CARET_VISIBLE,
         "next_key_typed": caret_typed <= CARET_HIDDEN,
     }
     failed = [name for name, passed in checks.items() if not passed]
     reason = "" if not failed else "failed: " + ", ".join(failed)
-    observed = [f"caret dark fraction before={caret_before:.2f} after_wake={caret_after_wake:.2f} "
-                f"after_y={caret_typed:.2f}"]
+    observed = [f"caret white fraction visible={caret_visible:.2f} saver={caret_before:.2f} "
+                f"after_wake={caret_after_wake:.2f} after_y={caret_typed:.2f}"]
     return entry("LK14", PASS if not failed else FAIL, reason,
-                 [str(frame_path), str(wake_path), str(typed_path)] + observed
+                 [str(visible_path), str(frame_path), str(saver_path), str(wake_path), str(typed_path)] + observed
                  + [f"{k}={v}" for k, v in checks.items()],
                  ["flamewm_xtest.py --key x", "flamewm_xtest.py --key y", "caret rectangle from layout"])
 
