@@ -220,11 +220,13 @@ fn lock_on(
 
     let background = document::background_image(settings, width, height);
     let base_background = background.clone();
-    runtime
-        .with_document(surface, |view| {
-            document::apply_document(view, settings, width, height, background)
-        })
-        .map_err(|error| format!("theme lock surface: {error:?}"))?;
+    keep_lock_step("theme lock surface", || {
+        runtime
+            .with_document(surface, |view| {
+                document::apply_document(view, settings, width, height, background)
+            })
+            .map_err(|error| format!("theme lock surface: {error:?}"))
+    });
 
     let (outcome_tx, outcome_rx) = mpsc::channel::<Outcome>();
     let (power_tx, power_rx) = mpsc::channel::<PowerEvent>();
@@ -262,7 +264,7 @@ fn lock_on(
         outcome_rx,
         unlocked: false,
     };
-    lock.repaint(runtime)?;
+    lock.repaint(runtime);
     runtime
         .show(surface)
         .map_err(|error| format!("show lock surface: {error:?}"))?;
@@ -359,6 +361,18 @@ struct LockLoop {
     unlocked: bool,
 }
 
+/// Runs one lock-screen step that must not end the loop. A failure is logged and reported
+/// as `false`; the caller keeps its state and the grabs stay held.
+fn keep_lock_step(what: &str, step: impl FnOnce() -> Result<(), String>) -> bool {
+    match step() {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("flamewm-lock: {what}, keeping the lock engaged: {error}");
+            false
+        }
+    }
+}
+
 /// Applies the wanted widget visibility. A failure is logged and leaves `dirty` set so the
 /// next turn retries; it never ends the loop or touches the grabs.
 fn settle_lock_ui(
@@ -400,10 +414,10 @@ impl LockLoop {
         }
         let activity = moved || batch.presses > 0 || !clicks.is_empty();
         let consumed = if activity {
-            self.wake(runtime)?
+            self.wake(runtime)
         } else {
             if let Some(phase) = self.saver.tick(elapsed) {
-                self.enter(runtime, phase, now)?;
+                self.enter(runtime, phase, now);
             }
             false
         };
@@ -436,29 +450,33 @@ impl LockLoop {
         }
         self.settle_display();
         self.sync_ui_visibility(runtime);
-        self.animate(runtime, now)?;
+        self.animate(runtime, now);
         // A lost grab is retried every turn; the lock is never dropped by a failed retry.
         self.session.borrow_mut().try_grab();
         if runtime.is_pointer_grabbed(self.surface) != Ok(true) {
             let _ = runtime.grab_pointer(self.surface);
         }
-        runtime
-            .raise(self.surface)
-            .map_err(|error| format!("raise lock surface: {error:?}"))?;
-        self.repaint(runtime)
+        let surface = self.surface;
+        keep_lock_step("raise lock surface", || {
+            runtime
+                .raise(surface)
+                .map_err(|error| format!("raise lock surface: {error:?}"))
+        });
+        self.repaint(runtime);
+        Ok(())
     }
 
     /// Records input for the screensaver. `true` when it woke the screen: the input
     /// of this turn is consumed and must not reach the password or the power row.
-    fn wake(&mut self, runtime: &mut SurfaceRuntime) -> Result<bool, String> {
+    fn wake(&mut self, runtime: &mut SurfaceRuntime) -> bool {
         let before = self.saver.phase();
         if !self.saver.input() {
-            return Ok(false);
+            return false;
         }
         self.frame_pacer.set_running(false);
         self.frames = None;
         if before == Phase::RibbonsActive || before == Phase::DisplayOff {
-            self.restore_background(runtime)?;
+            self.restore_background(runtime);
         }
         if before == Phase::DisplayOff {
             self.display_on_pending = true;
@@ -470,16 +488,11 @@ impl LockLoop {
             self.shown = None;
             self.shown_power = None;
         }
-        Ok(true)
+        true
     }
 
     /// Applies a phase the screensaver entered on idle time.
-    fn enter(
-        &mut self,
-        runtime: &mut SurfaceRuntime,
-        phase: Phase,
-        now: Instant,
-    ) -> Result<(), String> {
+    fn enter(&mut self, runtime: &mut SurfaceRuntime, phase: Phase, now: Instant) {
         if phase != Phase::Visible {
             self.ui_shown_wanted = false;
             self.ui_visibility_dirty = true;
@@ -498,14 +511,13 @@ impl LockLoop {
             Phase::DisplayOff => {
                 self.frame_pacer.set_running(false);
                 if self.frames.take().is_some() {
-                    self.restore_background(runtime)?;
+                    self.restore_background(runtime);
                 }
                 // Fail open on the display only: a refused DPMS call leaves the screen on, still locked.
                 self.session.borrow_mut().set_display_power(false);
             }
             Phase::Visible => {}
         }
-        Ok(())
     }
 
     /// Pushes the wanted widget visibility to the document while it is dirty.
@@ -535,28 +547,38 @@ impl LockLoop {
     }
 
     /// Renders the next Ribbons frame into the background when one is due.
-    fn animate(&mut self, runtime: &mut SurfaceRuntime, now: Instant) -> Result<(), String> {
+    /// A failed frame keeps the previous background; `next_frame` already moved on, so the
+    /// next due frame retries.
+    fn animate(&mut self, runtime: &mut SurfaceRuntime, now: Instant) {
         if self.saver.phase() != Phase::RibbonsActive || now < self.next_frame {
-            return Ok(());
+            return;
         }
         let Some(frames) = self.frames.as_mut() else {
-            return Ok(());
+            return;
         };
         let image = frames.frame(now);
         self.next_frame = now + FRAME_INTERVAL;
-        runtime
-            .with_document(self.surface, |view| document::set_background(view, image))
-            .map_err(|error| format!("update lock background: {error:?}"))?;
-        runtime
-            .redraw(self.surface)
-            .map_err(|error| format!("redraw lock surface: {error:?}"))
+        let surface = self.surface;
+        keep_lock_step("animate lock background", || {
+            runtime
+                .with_document(surface, |view| document::set_background(view, image))
+                .map_err(|error| format!("update lock background: {error:?}"))
+                .and_then(|()| {
+                    runtime
+                        .redraw(surface)
+                        .map_err(|error| format!("redraw lock surface: {error:?}"))
+                })
+        });
     }
 
-    fn restore_background(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+    fn restore_background(&mut self, runtime: &mut SurfaceRuntime) {
         let base = self.base_background.clone();
-        runtime
-            .with_document(self.surface, |view| document::set_background(view, base))
-            .map_err(|error| format!("restore lock background: {error:?}"))
+        let surface = self.surface;
+        keep_lock_step("restore lock background", || {
+            runtime
+                .with_document(surface, |view| document::set_background(view, base))
+                .map_err(|error| format!("restore lock background: {error:?}"))
+        });
     }
 
     fn key(&mut self, key: Key, now: Instant) {
@@ -607,10 +629,12 @@ impl LockLoop {
         }
     }
 
-    fn repaint(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+    /// A failed paint keeps the previous frame: `shown` moves only after a full paint, so the
+    /// next turn sees the content still differs and retries.
+    fn repaint(&mut self, runtime: &mut SurfaceRuntime) {
         // While the screensaver runs the lock UI stays hidden: no content is projected.
         if self.saver.phase() != Phase::Visible {
-            return Ok(());
+            return;
         }
         let mut view = LockView::project(
             &self.settings,
@@ -626,26 +650,30 @@ impl LockLoop {
         let view_changed = self.shown.as_ref() != Some(&view);
         let power_changed = self.shown_power.as_ref() != Some(&power);
         if !view_changed && !power_changed {
-            return Ok(());
+            return;
         }
         let (width, height) = (self.width, self.height);
-        runtime
-            .with_document(self.surface, |document_view| {
-                if view_changed {
-                    document::apply_view(document_view, &view)?;
-                }
-                if power_changed {
-                    document::apply_power(document_view, width, height, &power)?;
-                }
-                Ok(())
-            })
-            .map_err(|error| format!("update lock surface: {error:?}"))?;
-        runtime
-            .redraw(self.surface)
-            .map_err(|error| format!("redraw lock surface: {error:?}"))?;
-        self.shown = Some(view);
-        self.shown_power = Some(power);
-        Ok(())
+        let surface = self.surface;
+        let painted = keep_lock_step("repaint lock surface", || {
+            runtime
+                .with_document(surface, |document_view| {
+                    if view_changed {
+                        document::apply_view(document_view, &view)?;
+                    }
+                    if power_changed {
+                        document::apply_power(document_view, width, height, &power)?;
+                    }
+                    Ok(())
+                })
+                .map_err(|error| format!("update lock surface: {error:?}"))?;
+            runtime
+                .redraw(surface)
+                .map_err(|error| format!("redraw lock surface: {error:?}"))
+        });
+        if painted {
+            self.shown = Some(view);
+            self.shown_power = Some(power);
+        }
     }
 }
 
@@ -750,6 +778,46 @@ mod tests {
             Some(7)
         );
         assert_eq!(calls, 1);
+    }
+
+    /// A failing lock-screen step is logged and reported, never propagated: the loop
+    /// keeps its grabs and retries on a later turn.
+    #[test]
+    fn failing_lock_step_is_logged_and_never_fatal() {
+        let mut attempts = 0;
+        let ok = keep_lock_step("test step", || {
+            attempts += 1;
+            Err("document unavailable".to_string())
+        });
+        assert!(!ok);
+        assert_eq!(attempts, 1);
+        assert!(keep_lock_step("test step", || Ok(())));
+    }
+
+    /// The loop-reachable functions must not propagate with `?`: a rendering or
+    /// background error there would end `tick()` and drop the lock. The only tolerated
+    /// propagation is the destroy after a successful authentication.
+    #[test]
+    fn lock_loop_paths_never_propagate_render_errors() {
+        let source = include_str!("run.rs");
+        let body = |name: &str| {
+            let start = source.find(name).expect("function present");
+            let end = start + source[start..].find("\n    }\n").expect("function end");
+            &source[start..end]
+        };
+        for name in [
+            "fn wake(",
+            "fn enter(",
+            "fn animate(",
+            "fn restore_background(",
+            "fn repaint(",
+        ] {
+            assert!(!body(name).contains("-> Result"), "{name} returns Result");
+        }
+        for name in ["fn wake(", "fn enter(", "fn animate(", "fn restore_background("] {
+            assert_eq!(body(name).matches(")?").count(), 0, "{name} propagates");
+        }
+        assert_eq!(body("fn tick(").matches(")?").count(), 1, "tick propagates");
     }
 
     /// Hiding on entry and restoring on wake must both exist, or the widgets stay hidden.
