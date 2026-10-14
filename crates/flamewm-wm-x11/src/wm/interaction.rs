@@ -106,7 +106,82 @@ pub fn store_controller(
     let entry = sessions.entry(client).or_insert_with(|| next.clone());
     entry.session = next.session;
     entry.placement = next.placement;
+    entry.last_title_click = next.last_title_click;
     if let Some(state) = client_state {
         state.apply_placement(next.placement);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::coords::RootPoint;
+    use crate::frame::model::PlacementMode;
+
+    const WA: RootRect = RootRect::new(0, 0, 1920, 1080);
+    const START: RootRect = RootRect::new(100, 100, 400, 300);
+
+    fn floating_placement() -> PlacementState {
+        PlacementState {
+            mode: PlacementMode::Floating,
+            current: START,
+            floating_restore: START,
+            resume: None,
+        }
+    }
+
+    fn build(placement: PlacementState) -> ControllerState {
+        let mut region_map = HashMap::new();
+        region_map.insert(1, FrameRegion::TitleDrag);
+        build_controller(
+            7,
+            71,
+            placement,
+            WA,
+            WA,
+            ClientSizeHints::default(),
+            FrameExtents::new(31, 1),
+            crate::frame::session::InteractionSession::Idle,
+            region_map,
+        )
+    }
+
+    fn title_release(state: &ControllerState, time_ms: u32) -> (ControllerState, PointerCommit) {
+        let pointer = RootPoint::new(150, 120);
+        let (pressed, _) = step(state, FrameEvent::Press { source: 1, pointer });
+        step(&pressed, FrameEvent::Release { pointer, time_ms })
+    }
+
+    #[test]
+    fn title_double_click_survives_store_and_rebuild() {
+        let mut sessions = HashMap::new();
+        // Map entry already exists from an earlier event (as in the live wm).
+        sessions.insert(7, build(floating_placement()));
+
+        let (first, _) = title_release(&build(floating_placement()), 1000);
+        assert!(first.last_title_click.is_some());
+        store_controller(&mut sessions, None, 7, &first);
+        assert!(
+            sessions[&7].last_title_click.is_some(),
+            "store_controller must persist last_title_click"
+        );
+
+        // Rebuild from stored state, seeding the click as the live wm does.
+        let mut rebuilt = build(sessions[&7].placement);
+        rebuilt.last_title_click = sessions[&7].last_title_click;
+        let (second, _) = title_release(&rebuilt, 1300);
+        assert_eq!(second.placement.mode, PlacementMode::Maximized);
+        assert!(second.last_title_click.is_none());
+    }
+
+    #[test]
+    fn store_without_seeded_click_does_not_retain_stale_click() {
+        let mut sessions = HashMap::new();
+        sessions.insert(7, build(floating_placement()));
+        let (first, _) = title_release(&build(floating_placement()), 1000);
+        store_controller(&mut sessions, None, 7, &first);
+        let (second, _) = title_release(&build(floating_placement()), 1300);
+        // Rebuilt without seeding: a click is not carried, so this is a first click.
+        assert_eq!(second.placement.mode, PlacementMode::Floating);
     }
 }

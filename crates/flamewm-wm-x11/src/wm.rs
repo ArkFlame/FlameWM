@@ -1704,7 +1704,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             i32::try_from(self.screen().width_in_pixels).unwrap_or(i32::MAX),
             i32::try_from(self.screen().height_in_pixels).unwrap_or(i32::MAX),
         );
-        Some(
+        let last_title_click = self
+            .sessions
+            .get(&client)
+            .and_then(|session| session.last_title_click);
+        let mut controller = Some(
             interaction::build_controller(
                 client,
                 state.frame,
@@ -1720,7 +1724,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 region_map,
             )
             .with_outputs(self.output_root_rects()),
-        )
+        );
+        if let Some(controller) = controller.as_mut() {
+            controller.last_title_click = last_title_click;
+        }
+        controller
     }
 
     /// Output geometries in root coordinates: the bound for drags (windows may overflow the work area).
@@ -1731,6 +1739,9 @@ impl<'a, C: Connection> Wm<'a, C> {
     fn store_controller(&mut self, client: Window, controller: &ControllerState) {
         let (sessions, clients) = (&mut self.sessions, &mut self.clients);
         interaction::store_controller(sessions, clients.get_mut(&client), client, controller);
+        if let Some(entry) = sessions.get_mut(&client) {
+            entry.last_title_click = controller.last_title_click;
+        }
     }
 
     fn execute_effects(
@@ -3808,6 +3819,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
+        let mode_before = self.clients.get(&client_id).map(|s| s.placement.mode);
         let _ = self.reduce_and_execute(
             client_id,
             FrameEvent::Release {
@@ -3817,6 +3829,15 @@ impl<'a, C: Connection> Wm<'a, C> {
         );
         if release_from_move {
             self.snap_preview.hide();
+        }
+        let mode_after = self.clients.get(&client_id).map(|s| s.placement.mode);
+        let drag_active = release_move.is_some_and(|m| m.anchor.is_activated());
+        if release_from_move && !drag_active && mode_before != mode_after {
+            // Title double-click toggled maximize in the reducer: publish state.
+            move_counters().record_toggle_max();
+            self.mark_windows();
+            self.publish_window_state(client_id)?;
+            return Ok(());
         }
         if let Some(control) = control {
             match control {
