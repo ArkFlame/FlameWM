@@ -6,7 +6,7 @@ private PipeWire + pipewire-pulse, null sink) and the XTEST helpers of
 tools/flamewm_g1_slider_drag_acceptance.py. Nothing outside the private stack is addressed.
 
 Cases (REPS each), every measured action is polled for WINDOW_S at POLL_S intervals with the
-canary `list`, watching the OSD window (430x74, title "FlameWM volume", map viewable):
+canary `list`, watching the OSD window (215x37, title "FlameWM volume", map viewable):
   B  popup closed, mute toggled at the sink with pw-cli (private sink only)
   A  popup open, click the slot-1 mute button (state alternates each rep)
   D  popup open, click mute then click again (unmute); both clicks measured
@@ -42,7 +42,7 @@ DEFAULT_DISPLAY = ":114"
 REPS = 5
 WINDOW_S = 4.0
 POLL_S = 0.05
-OSD_SIZE = (430, 74)
+OSD_SIZE = (215, 37)
 
 
 def utc_now() -> str:

@@ -1370,7 +1370,8 @@ impl ShellLoop {
             None => (self.surfaces.work_area(), 1.0),
         };
         let now = Instant::now();
-        if let Err(error) = self.osd.update(runtime, level, output, scale, now) {
+        let settings = self.settings_cache.as_ref();
+        if let Err(error) = self.osd.update(runtime, level, output, scale, settings, now) {
             eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
         }
     }

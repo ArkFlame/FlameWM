@@ -32,6 +32,7 @@ pub enum SurfaceKind {
     Start,
     TaskMenu,
     Media,
+    Osd,
 }
 
 /// Settings are presentation input only. Panel placement, edge, and size are
@@ -46,6 +47,7 @@ pub fn project(
         SurfaceKind::Start => "start-menu",
         SurfaceKind::TaskMenu => "task-menu",
         SurfaceKind::Media => "media-popup",
+        SurfaceKind::Osd => "osd",
     };
     let accent = accent_color(snapshot);
     let font_family = text_setting(snapshot, "fontFamily", DEFAULT_FONT_FAMILY);
@@ -87,6 +89,10 @@ pub fn project(
         }
         SurfaceKind::TaskMenu | SurfaceKind::Media => {
             document.border(root, accent)?;
+        }
+        SurfaceKind::Osd => {
+            // Volume OSD card: the shared surface fill; its outline and pill radius stay in osd.html.
+            document.background(root, surface_background(snapshot))?;
         }
     }
     Ok(())
@@ -408,6 +414,24 @@ mod tests {
             self.variables.insert(name.to_owned(), color);
             Ok(())
         }
+    }
+
+    #[test]
+    fn osd_projection_applies_surface_fill_and_accent_token() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(40));
+        snapshot.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text("#00ff00".to_owned()),
+        );
+        let mut doc = RecordingDocument::default();
+        project(&mut doc, &snapshot, SurfaceKind::Osd).expect("osd projection");
+        assert_eq!(doc.backgrounds["osd"], surface_background(&snapshot));
+        assert_eq!(doc.backgrounds["osd"].a, 102);
+        assert_eq!(doc.variables["--accent"].g, 0xff);
+        assert!(!doc.backgrounds.contains_key("start-menu"));
     }
 
     #[test]

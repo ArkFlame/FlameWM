@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant};
 
+use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::Rect;
 use flamewm_reactor::WakeDeadline;
 use flamewm_ui_x11::{
@@ -13,14 +14,16 @@ use flamewm_ui_x11::{
     UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
+use crate::settings_projection::{self, SurfaceKind};
+
 const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-osd.rwr"));
 
-pub const OSD_WIDTH: i32 = 430;
-pub const OSD_HEIGHT: i32 = 74;
-pub const OSD_RADIUS: i32 = 37;
-pub const TRACK_X: i32 = 80;
-pub const TRACK_W: i32 = 258;
-pub const TRACK_H: i32 = 9;
+pub const OSD_WIDTH: i32 = 215;
+pub const OSD_HEIGHT: i32 = 37;
+pub const OSD_RADIUS: i32 = 18;
+pub const TRACK_X: i32 = 40;
+pub const TRACK_W: i32 = 129;
+pub const TRACK_H: i32 = 5;
 pub const VOLUME_MAX: u8 = 150;
 pub const HOLD: Duration = Duration::from_millis(1200);
 pub const FADE: Duration = Duration::from_millis(180);
@@ -198,16 +201,18 @@ impl OsdController {
     }
 
     /// Feeds one snapshot level, hides at the deadline, then re-arms the timer.
-    /// `None` means no default endpoint is known.
+    /// `None` means no default endpoint is known. `settings` styles the card
+    /// (accent, surface fill, backdrop) on every show; `None` keeps the stylesheet defaults.
     pub fn update(
         &mut self,
         runtime: &mut SurfaceRuntime,
         level: Option<Level>,
         work: Rect,
         scale: f32,
+        settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
-        let result = self.observe(runtime, level, work, scale, now);
+        let result = self.observe(runtime, level, work, scale, settings, now);
         let result = result.and_then(|()| self.expire(runtime, now));
         self.publish_wake();
         result
@@ -219,6 +224,7 @@ impl OsdController {
         level: Option<Level>,
         work: Rect,
         scale: f32,
+        settings: Option<&SettingsSnapshot>,
         now: Instant,
     ) -> Result<(), UiBackendError> {
         let Some(level) = level else {
@@ -237,6 +243,13 @@ impl OsdController {
         };
         let scale = runtime.apply_output_scale(surface, scale)?;
         let card = placement(work, scale);
+        if let Some(settings) = settings {
+            runtime.with_document(surface, |document| {
+                settings_projection::project(document, settings, SurfaceKind::Osd)
+            })?;
+            let (opacity, blur) = settings_projection::start_backdrop_percents(settings);
+            runtime.set_popup_backdrop(surface, Some((opacity, blur)))?;
+        }
         runtime.with_document(surface, |document| paint(document, level))?;
         runtime.move_resize(
             surface,
@@ -302,7 +315,7 @@ mod tests {
     fn card_centres_on_full_output_at_100_percent() {
         assert_eq!(
             placement(work(0, 0, 1350, 641), 1.0),
-            Rect::new(460, 283, 430, 74)
+            Rect::new(567, 302, 215, 37)
         );
     }
 
@@ -331,7 +344,7 @@ mod tests {
         let target = target_output(None, &[only]).expect("one output");
         assert_eq!(
             placement(target.geometry, 1.0),
-            Rect::new(425, 363, 430, 74)
+            Rect::new(532, 381, 215, 37)
         );
     }
 
@@ -343,15 +356,15 @@ mod tests {
         assert_eq!(target.geometry.x, 1280);
         assert_eq!(
             placement(target.geometry, 1.0),
-            Rect::new(1705, 363, 430, 74)
+            Rect::new(1812, 381, 215, 37)
         );
     }
 
     #[test]
     fn card_clamps_inside_an_output_smaller_than_the_card() {
         assert_eq!(
-            placement(work(0, 0, 300, 50), 1.0),
-            Rect::new(0, 0, 430, 74)
+            placement(work(0, 0, 150, 20), 1.0),
+            Rect::new(0, 0, 215, 37)
         );
     }
 
@@ -359,21 +372,21 @@ mod tests {
     fn card_keeps_negative_origin_for_left_output() {
         assert_eq!(
             placement(work(-1920, -40, 1920, 1080), 1.0),
-            Rect::new(-1175, 463, 430, 74)
+            Rect::new(-1068, 481, 215, 37)
         );
     }
 
     #[test]
     fn scale_125_and_150_round_device_size() {
-        assert_eq!(device_size(1.25), (538, 93));
-        assert_eq!(device_size(1.5), (645, 111));
+        assert_eq!(device_size(1.25), (269, 46));
+        assert_eq!(device_size(1.5), (323, 56));
         assert_eq!(
             placement(work(0, 0, 1920, 1080), 1.5),
-            Rect::new(637, 484, 645, 111)
+            Rect::new(798, 512, 323, 56)
         );
         assert_eq!(
             placement(work(-1920, 0, 1920, 1080), 1.25),
-            Rect::new(-1229, 493, 538, 93)
+            Rect::new(-1095, 517, 269, 46)
         );
     }
 
@@ -381,9 +394,9 @@ mod tests {
     fn fill_width_at_zero_quarter_half_full_and_max() {
         let fill = |volume| Level::new(volume, false).fill_width();
         assert_eq!(fill(0), 0);
-        assert_eq!(fill(25), 43);
-        assert_eq!(fill(50), 86);
-        assert_eq!(fill(100), 172);
+        assert_eq!(fill(25), 21);
+        assert_eq!(fill(50), 43);
+        assert_eq!(fill(100), 86);
         assert_eq!(fill(150), TRACK_W);
     }
 
@@ -402,12 +415,12 @@ mod tests {
 
     #[test]
     fn device_width_scales_once_not_squared() {
-        for (scale, expected) in [(1.0_f32, 430), (1.25, 538), (1.5, 645), (2.0, 860)] {
+        for (scale, expected) in [(1.0_f32, 215), (1.25, 269), (1.5, 323), (2.0, 430)] {
             let card = placement(work(0, 0, 3840, 2160), scale);
             assert_eq!(card.width, expected, "scale {scale}");
-            assert_eq!(card.height, (74.0 * scale).round() as i32, "scale {scale}");
+            assert_eq!(card.height, (37.0 * scale).round() as i32, "scale {scale}");
         }
-        assert_ne!(placement(work(0, 0, 3840, 2160), 1.5).width, 967);
+        assert_ne!(placement(work(0, 0, 3840, 2160), 1.5).width, 484);
     }
 
     #[test]

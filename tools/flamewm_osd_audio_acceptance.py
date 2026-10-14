@@ -10,7 +10,7 @@ and PULSE_SERVER inside the private tree. Volume and mute changes are made by th
 scenarios on that private sink only.
 
 Scenarios (canary `j07`, explicit only, never part of `all`):
-  explicit-osd          OSD card per level: 430x74, centred, track fill ~ level/150, muted look,
+  explicit-osd          OSD card per level: 215x37, centred, track fill ~ level/150, muted look,
                         hides within 1.5 s, two changes in 300 ms give one card, no focus change,
                         a real click through the card reaches the window beneath it.
   explicit-audio-apps   audio popup Applications tab: rows QMMP and Firefox (OCR), no raw
