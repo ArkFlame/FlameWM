@@ -7,6 +7,9 @@
 //! path produced its verdict.
 
 pub mod debug_retention;
+pub mod explicit_layout;
+pub mod explicit_shell;
+pub mod explicit_tray;
 pub mod interaction_regressions;
 pub mod popup_lifecycle;
 pub mod reactor_presentation;
@@ -307,9 +310,46 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         let (pass, detail) = snap_border::run_s4(canary, args);
         results.push(run("s4-fixed-hints-client-stable", pass, detail));
     }
+    // Explicit-only shell scenarios (B14): never part of `all`; need --shot-dir.
+    if scenario == "explicit-taskbar-menu" {
+        let (pass, detail) = explicit_shell::run_s1(canary, args);
+        results.push(run("shell-s1-taskbar-background-menu", pass, detail));
+    }
+    if scenario == "explicit-desktop-settings" {
+        let (pass, detail) = explicit_shell::run_s2(canary, args);
+        results.push(run("shell-s2-desktop-menu-settings", pass, detail));
+    }
+    if scenario == "explicit-audio-tabs" {
+        let (pass, detail) = explicit_shell::run_s3(canary, args);
+        results.push(run("shell-s3-audio-popup-tabs", pass, detail));
+    }
+    // B15 explicit-only: private audio stack (tools/flamewm_osd_audio_acceptance.py), never in `all`.
+    if scenario == "explicit-osd" {
+        let (pass, detail) = explicit_shell::run_osd(canary, args);
+        results.push(run("shell-osd-volume-card", pass, detail));
+    }
+    if scenario == "explicit-audio-apps" {
+        let (pass, detail) = explicit_shell::run_audio_apps(canary, args);
+        results.push(run("shell-audio-popup-applications", pass, detail));
+    }
+    // V7 A14 explicit-only layout probe (overflow limits, taskbar stacking, snap, maximize).
+    if scenario == "explicit-window-overflow" {
+        let (pass, detail) = explicit_layout::run_overflow(canary, args);
+        results.push(run("layout-window-overflow", pass, detail));
+    }
+    // G2 explicit-only ConfigureRequest clamp (3/4 overflow limit in four directions).
+    if scenario == "explicit-window-clamp" {
+        let (pass, detail) = explicit_layout::run_clamp(canary, args);
+        results.push(run("layout-window-clamp", pass, detail));
+    }
+    // A15 explicit-only tray toggle (start, audio, network): never part of `all`.
+    if scenario == "explicit-tray-toggle" {
+        let (pass, detail) = explicit_tray::run_toggle(canary, args);
+        results.push(run("tray-toggle-explicit", pass, detail));
+    }
     if results.is_empty() {
         crate::fail(
-            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|snap-border|s1|s2|s3|s4|xtest-self-check|all)",
+            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|snap-border|s1|s2|s3|s4|xtest-self-check|explicit-taskbar-menu|explicit-desktop-settings|explicit-audio-tabs|explicit-osd|explicit-audio-apps|explicit-window-overflow|explicit-window-clamp|explicit-tray-toggle|all)",
         );
     }
     let pass = results.iter().all(|(_, ok, _)| *ok);

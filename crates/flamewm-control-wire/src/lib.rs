@@ -17,8 +17,8 @@ use flamewm_api::shortcuts::{KeyBinding, ShortcutSnapshot};
 use flamewm_api::system::{
     AudioEndpointKind, AudioEndpointSnapshot, AudioMuteAction, AudioSnapshot, AudioStreamSnapshot,
     AudioTarget, AudioVolumeAction, MediaSnapshot, NetworkAccessPointSnapshot, NetworkKind,
-    NetworkSecretRequestSnapshot, NetworkSnapshot, PlaybackState, ServiceAvailability,
-    SystemAction, SystemSnapshot,
+    NetworkSecretRequestSnapshot, NetworkSnapshot, PlaybackState, PowerSnapshot, PowerState,
+    ServiceAvailability, SystemAction, SystemSnapshot,
 };
 use flamewm_api::window::{WindowSnapshot, WindowState};
 use flamewm_api::workspace::WorkspaceSnapshot;
@@ -884,7 +884,9 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
             | "Next"
             | "Previous"
             | "SetVolume"
-            | "SetMute",
+            | "SetMute"
+            | "BatteryMenuOpened"
+            | "BatteryMenuClosed",
         ) => {
             expect_reply_arity(reply, 0)?;
             Ok(ControlResponse::Unit)
@@ -1708,6 +1710,26 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
         WireValue::Bool(snapshot.media.can_previous),
     );
     out.insert(
+        "powerAvailability".to_owned(),
+        WireValue::String(availability_name(snapshot.power.available).to_owned()),
+    );
+    out.insert(
+        "powerPresent".to_owned(),
+        WireValue::Bool(snapshot.power.present),
+    );
+    out.insert(
+        "powerPercent".to_owned(),
+        WireValue::U32(u32::from(snapshot.power.percent)),
+    );
+    out.insert(
+        "powerState".to_owned(),
+        WireValue::String(power_state_name(snapshot.power.state).to_owned()),
+    );
+    // Optional: absent while the battery menu is closed; older peers ignore the whole group.
+    if let Some(cpu) = snapshot.power.cpu_percent {
+        out.insert("powerCpuPercent".to_owned(), WireValue::U32(u32::from(cpu)));
+    }
+    out.insert(
         "audioAvailability".to_owned(),
         WireValue::String(availability_name(snapshot.audio.availability).to_owned()),
     );
@@ -1784,6 +1806,27 @@ const fn network_kind_name(value: NetworkKind) -> &'static str {
         NetworkKind::Connecting => "connecting",
         NetworkKind::Wired => "wired",
         NetworkKind::Wireless => "wireless",
+    }
+}
+
+const fn power_state_name(value: PowerState) -> &'static str {
+    match value {
+        PowerState::Charging => "charging",
+        PowerState::Discharging => "discharging",
+        PowerState::Full => "full",
+        PowerState::Empty => "empty",
+        PowerState::Unknown => "unknown",
+    }
+}
+
+fn parse_power_state(value: &str) -> Result<PowerState, ControlError> {
+    match value {
+        "charging" => Ok(PowerState::Charging),
+        "discharging" => Ok(PowerState::Discharging),
+        "full" => Ok(PowerState::Full),
+        "empty" => Ok(PowerState::Empty),
+        "unknown" => Ok(PowerState::Unknown),
+        _ => Err(invalid("power state is invalid")),
     }
 }
 
@@ -1866,6 +1909,29 @@ fn access_point_snapshot(value: &WireValue) -> Result<NetworkAccessPointSnapshot
     })
 }
 
+/// Absent power keys (older peers) decode to the default snapshot.
+fn power_snapshot(dict: &WireDict) -> Result<PowerSnapshot, ControlError> {
+    if dict.get("powerAvailability").is_none() {
+        return Ok(PowerSnapshot::default());
+    }
+    let percent = dict_u32(dict, "powerPercent")?;
+    let cpu_percent = if dict.get("powerCpuPercent").is_some() {
+        Some(
+            u8::try_from(dict_u32(dict, "powerCpuPercent")?)
+                .map_err(|_| invalid("power cpu percent exceeds u8"))?,
+        )
+    } else {
+        None
+    };
+    Ok(PowerSnapshot {
+        available: parse_availability(dict_string(dict, "powerAvailability")?)?,
+        present: dict_bool(dict, "powerPresent")?,
+        percent: u8::try_from(percent).map_err(|_| invalid("power percent exceeds u8"))?,
+        state: parse_power_state(dict_string(dict, "powerState")?)?,
+        cpu_percent,
+    })
+}
+
 fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
     let strength = dict_u32(dict, "networkStrength")?;
     let volume = dict_u32(dict, "audioVolume")?;
@@ -1916,6 +1982,7 @@ fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
             can_next: dict_bool(dict, "mediaCanNext")?,
             can_previous: dict_bool(dict, "mediaCanPrevious")?,
         },
+        power: power_snapshot(dict)?,
         audio: AudioSnapshot {
             availability: parse_availability(dict_string(dict, "audioAvailability")?)?,
             generation: dict_u64(dict, "audioGeneration")?,
@@ -1971,6 +2038,18 @@ fn audio_stream_wire_value(stream: &AudioStreamSnapshot) -> WireValue {
         WireValue::U32(u32::from(stream.volume_percent)),
     );
     out.insert("muted".to_owned(), WireValue::Bool(stream.muted));
+    // Optional identity keys are omitted when unknown so older peers see the original shape.
+    for (key, value) in [
+        ("appName", &stream.app_name),
+        ("appId", &stream.app_id),
+        ("iconName", &stream.icon_name),
+        ("processBinary", &stream.process_binary),
+        ("mediaName", &stream.media_name),
+    ] {
+        if let Some(value) = value {
+            out.insert(key.to_owned(), WireValue::String(value.clone()));
+        }
+    }
     WireValue::Dict(out)
 }
 
@@ -1997,7 +2076,19 @@ fn audio_stream_snapshot(value: &WireValue) -> Result<AudioStreamSnapshot, Contr
         volume_percent: u8::try_from(dict_u32(dict, "volume")?)
             .map_err(|_| invalid("audio stream volume exceeds u8"))?,
         muted: dict_bool(dict, "muted")?,
+        app_name: optional_string(dict, "appName")?,
+        app_id: optional_string(dict, "appId")?,
+        icon_name: optional_string(dict, "iconName")?,
+        process_binary: optional_string(dict, "processBinary")?,
+        media_name: optional_string(dict, "mediaName")?,
     })
+}
+
+/// Absent key means `None`; a present key must be a string.
+fn optional_string(dict: &WireDict, key: &str) -> Result<Option<String>, ControlError> {
+    dict.get(key)
+        .map(|value| required_string(value, key).map(str::to_owned))
+        .transpose()
 }
 
 #[must_use]
@@ -2427,6 +2518,8 @@ fn system_action_request(call: &WireCall, member: &str) -> Result<ControlRequest
         }
         "Disconnect" => system_simple_action(call, SystemAction::Disconnect)?,
         "Scan" => system_simple_action(call, SystemAction::Scan)?,
+        "BatteryMenuOpened" => system_simple_action(call, SystemAction::BatteryMenuOpened)?,
+        "BatteryMenuClosed" => system_simple_action(call, SystemAction::BatteryMenuClosed)?,
         "Play" => system_media_action(call, |bus_name| SystemAction::Play { bus_name })?,
         "Pause" => system_media_action(call, |bus_name| SystemAction::Pause { bus_name })?,
         "PlayPause" => system_media_action(call, |bus_name| SystemAction::PlayPause { bus_name })?,
@@ -2544,6 +2637,8 @@ fn system_action_call(action: &SystemAction, expected_revision: u64) -> WireCall
         ),
         SystemAction::Disconnect => ("Disconnect", Vec::new()),
         SystemAction::Scan => ("Scan", Vec::new()),
+        SystemAction::BatteryMenuOpened => ("BatteryMenuOpened", Vec::new()),
+        SystemAction::BatteryMenuClosed => ("BatteryMenuClosed", Vec::new()),
         SystemAction::Play { bus_name } => ("Play", vec![WireValue::String(bus_name.clone())]),
         SystemAction::Pause { bus_name } => ("Pause", vec![WireValue::String(bus_name.clone())]),
         SystemAction::PlayPause { bus_name } => {
@@ -3178,8 +3273,57 @@ mod tests {
                     name: "Player".to_owned(),
                     volume_percent: 72,
                     muted: false,
+                    app_name: Some("Spotify".to_owned()),
+                    app_id: Some("com.spotify.Client".to_owned()),
+                    icon_name: Some("spotify-client".to_owned()),
+                    process_binary: Some("spotify".to_owned()),
+                    media_name: Some("Track".to_owned()),
                 }],
             ),
+            power: PowerSnapshot {
+                available: ServiceAvailability::Available,
+                present: true,
+                percent: 87,
+                state: PowerState::Discharging,
+                cpu_percent: Some(13),
+            },
+        }
+    }
+
+    #[test]
+    fn power_snapshot_round_trips_with_and_without_cpu_sample() {
+        for cpu_percent in [Some(13), None] {
+            let source = SystemSnapshot {
+                power: PowerSnapshot {
+                    cpu_percent,
+                    ..system_fixture().power
+                },
+                ..system_fixture()
+            };
+            let dict = system_dict(&source);
+            assert_eq!(system_snapshot(&dict).expect("decode"), source);
+            assert_eq!(dict.contains_key("powerCpuPercent"), cpu_percent.is_some());
+        }
+    }
+
+    #[test]
+    fn older_peer_without_power_keys_decodes_to_default_power() {
+        let mut dict = system_dict(&system_fixture());
+        dict.retain(|key, _| !key.starts_with("power"));
+        let decoded = system_snapshot(&dict).expect("older peer must decode");
+        assert_eq!(decoded.power, PowerSnapshot::default());
+        assert_eq!(decoded.network, system_fixture().network);
+    }
+
+    #[test]
+    fn battery_menu_actions_round_trip_through_wire_mapping() {
+        for action in [SystemAction::BatteryMenuOpened, SystemAction::BatteryMenuClosed] {
+            let request = ControlRequest::SystemAction {
+                action,
+                expected_revision: 4,
+            };
+            let call = encode_call(&request).expect("encode");
+            assert_eq!(decode_call(&call).expect("decode"), request);
         }
     }
 
@@ -3202,6 +3346,46 @@ mod tests {
         assert_eq!(
             decode_reply(&call, &reply).expect("decode"),
             ControlResponse::System(source)
+        );
+    }
+
+    #[test]
+    fn audio_stream_identity_round_trips_with_and_without_optional_keys() {
+        let bare = AudioStreamSnapshot {
+            id: 3,
+            endpoint_id: 7,
+            name: "Stream".to_owned(),
+            volume_percent: 40,
+            muted: true,
+            ..AudioStreamSnapshot::default()
+        };
+        let bare_wire = audio_stream_wire_value(&bare);
+        let WireValue::Dict(bare_dict) = &bare_wire else {
+            panic!("stream must encode as a dict");
+        };
+        for key in ["appName", "appId", "iconName", "processBinary", "mediaName"] {
+            assert!(
+                !bare_dict.contains_key(key),
+                "absent identity must not be encoded: {key}"
+            );
+        }
+        assert_eq!(
+            audio_stream_snapshot(&bare_wire).expect("decode bare"),
+            bare
+        );
+
+        let identified = AudioStreamSnapshot {
+            app_name: Some("Spotify".to_owned()),
+            app_id: Some("com.spotify.Client".to_owned()),
+            icon_name: Some("spotify-client".to_owned()),
+            process_binary: Some("spotify".to_owned()),
+            media_name: Some("Track".to_owned()),
+            ..bare
+        };
+        let identified_wire = audio_stream_wire_value(&identified);
+        assert_eq!(
+            audio_stream_snapshot(&identified_wire).expect("decode identified"),
+            identified
         );
     }
 

@@ -7,7 +7,13 @@ use flamewm_api::shortcuts::{
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
-pub const ACTIONS: [&str; 9] = [
+/// Media-key actions. Their ids are local to the platform shortcut registry; they
+/// are dispatched through `PlatformHost::media_audio_key`.
+pub const ACTION_VOLUME_UP: &str = "VolumeUp";
+pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
+pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
+
+pub const ACTIONS: [&str; 12] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_WORKSPACE_LEFT,
     ACTION_WORKSPACE_RIGHT,
@@ -17,6 +23,9 @@ pub const ACTIONS: [&str; 9] = [
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
     ACTION_SESSION_LOCK,
+    ACTION_VOLUME_UP,
+    ACTION_VOLUME_DOWN,
+    ACTION_VOLUME_MUTE,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +66,18 @@ impl Default for ShortcutRegistry {
             (
                 ACTION_SESSION_LOCK.to_owned(),
                 KeyBinding::assigned("Super+L"),
+            ),
+            (
+                ACTION_VOLUME_UP.to_owned(),
+                KeyBinding::assigned("XF86AudioRaiseVolume"),
+            ),
+            (
+                ACTION_VOLUME_DOWN.to_owned(),
+                KeyBinding::assigned("XF86AudioLowerVolume"),
+            ),
+            (
+                ACTION_VOLUME_MUTE.to_owned(),
+                KeyBinding::assigned("XF86AudioMute"),
             ),
         ]);
         Self {
@@ -298,6 +319,31 @@ mod tests {
         assert_eq!(
             effective.binding(ACTION_WINDOW_CLOSE),
             Some(&KeyBinding::assigned("Ctrl+Super+Q"))
+        );
+    }
+
+    #[test]
+    fn media_keys_default_to_xf86_bindings_without_changing_existing_defaults() {
+        let registry = ShortcutRegistry::default();
+        assert_eq!(
+            registry.binding(ACTION_VOLUME_UP),
+            Some(&KeyBinding::assigned("XF86AudioRaiseVolume"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_VOLUME_DOWN),
+            Some(&KeyBinding::assigned("XF86AudioLowerVolume"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_VOLUME_MUTE),
+            Some(&KeyBinding::assigned("XF86AudioMute"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_SESSION_LOCK),
+            Some(&KeyBinding::assigned("Super+L"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_WINDOW_CLOSE),
+            Some(&KeyBinding::assigned("Alt+F4"))
         );
     }
 

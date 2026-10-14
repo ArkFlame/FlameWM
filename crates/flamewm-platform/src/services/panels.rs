@@ -21,7 +21,12 @@ pub struct PanelService {
 }
 
 impl PanelService {
+    /// Read-only: output currently holding the pointer, if known. Not yet consumed by the shell.
     #[must_use]
+    pub fn pointer_output(&self) -> Option<&OutputId> {
+        self.manager.pointer_output()
+    }
+
     pub fn manager(&self) -> &PanelManager {
         &self.manager
     }
@@ -327,6 +332,34 @@ mod tests {
             Rect::new(0, 1028, 1920, 52)
         );
         assert!(!service.reconcile_taskbar_height(52));
+    }
+
+    #[test]
+    fn output_scale_converts_panel_thickness_once_and_is_stable_across_syncs() {
+        for (scale, thickness) in [(100_u16, 44_i32), (125, 55), (150, 66)] {
+            let displays = DisplaySnapshot {
+                generation: 1,
+                outputs: vec![OutputSnapshot {
+                    id: OutputId::new("eDP-1"),
+                    connector: "eDP-1".to_owned(),
+                    edid_identity: "panel".to_owned(),
+                    connected: true,
+                    primary: true,
+                    geometry: Rect::new(0, 0, 1920, 1080),
+                    current_mode: ModeId(1),
+                    modes: Vec::new(),
+                    shell_scale_percent: scale,
+                }],
+                pending: None,
+            };
+            let mut service = PanelService::default();
+            service.sync_outputs(&displays);
+            service.sync_outputs(&displays);
+            let output = OutputId::new("eDP-1");
+            let panel = service.manager().panel(&output).expect("panel exists");
+            assert_eq!(panel.thickness(), thickness, "scale {scale}");
+            assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1080 - thickness), "scale {scale}");
+        }
     }
 
     #[test]

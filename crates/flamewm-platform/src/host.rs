@@ -688,6 +688,11 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.system.set_action_handler(handler);
     }
 
+    /// Dispatches a media key to the default output sink through the system action path.
+    pub fn media_audio_key(&mut self, key: crate::system::MediaAudioKey) -> FlameResult<()> {
+        self.system.media_audio_key(key)
+    }
+
     pub fn system_action(
         &mut self,
         action: SystemAction,

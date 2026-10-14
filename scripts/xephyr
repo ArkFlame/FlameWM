@@ -425,7 +425,9 @@ session_appearance_env(){
     echo "  expected dev staging symlink: $ROOT/.target/stage-icons -> <staged usr/share/icons>" >&2
     return 1
   fi
-  : "${FLAMEWM_APPEARANCE:=dark}"
+  # Empty unless the user set it: an empty value is no override, so the WM resolves
+  # env > persisted settings > Dark. A hard-coded dark here would override persisted light.
+  : "${FLAMEWM_APPEARANCE:=}"
   export FLAMEWM_APPEARANCE
   case "$FLAMEWM_APPEARANCE" in
     dark|Dark|DARK) export FLAMEWM_DARK_MODE=1 ;;

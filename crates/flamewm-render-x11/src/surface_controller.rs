@@ -1,9 +1,13 @@
+use std::collections::HashSet;
+use std::ffi::CStr;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::raw::c_char;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::native::cursor::DeferredNativeLibraryHandles;
+use crate::xinput::*;
 use crate::xlib::*;
 use crate::xshape::ClipRect;
 use flamewm_reactor::timeline::FRAME_INTERVAL;
@@ -24,9 +28,201 @@ unsafe extern "C" {
         revert_to: std::os::raw::c_int,
         time: Time,
     ) -> std::os::raw::c_int;
+    /// Reads WM_NAME of `window`; the caller frees the string with XFree.
+    pub(crate) fn XFetchName(
+        display: *mut Display,
+        window: Window,
+        window_name_return: *mut *mut c_char,
+    ) -> std::os::raw::c_int;
+}
+
+/// Selection key of the quick-popup press observer. Never a real surface id.
+const PRESS_OBSERVER: SurfaceId = SurfaceId(u64::MAX);
+
+/// One root press seen while the press observer is armed. `child_window_title`
+/// is the WM_NAME of the top-level window under the pointer, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawPressObservation {
+    pub x_root: i32,
+    pub y_root: i32,
+    pub button: u32,
+    pub time_ms: u64,
+    pub child_window_title: Option<String>,
 }
 
 const REVERT_TO_POINTER_ROOT: std::os::raw::c_int = 1;
+
+/// XInput2 2.0 raw selection for popup outside-dismissal. RawButtonPress is
+/// delivered to this client without any pointer grab, so every click reaches the
+/// window beneath it. Selected only while a popup holds its pointer grab.
+/// The root selection is shared by every armed popup: it is written when the
+/// first surface arms and cleared only when the last armed surface disarms.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct RawPressSelection {
+    opcode: Option<std::os::raw::c_int>,
+    armed: HashSet<SurfaceId>,
+}
+
+impl RawPressSelection {
+    pub(crate) fn new(opcode: Option<std::os::raw::c_int>) -> Self {
+        Self { opcode, armed: HashSet::new() }
+    }
+
+    /// XInput2 major opcode of the raw events this selection accepts.
+    pub(crate) fn opcode(&self) -> Option<std::os::raw::c_int> {
+        self.opcode
+    }
+
+    /// Arms `surface`. Returns true only when the set goes empty -> non-empty,
+    /// i.e. the root selection must be written. Idempotent per surface.
+    pub(crate) fn arm(&mut self, surface: SurfaceId) -> bool {
+        if self.opcode.is_none() {
+            return false;
+        }
+        let was_empty = self.armed.is_empty();
+        self.armed.insert(surface) && was_empty
+    }
+
+    /// Disarms `surface`. Returns true only when the set goes non-empty -> empty,
+    /// i.e. the root selection must be cleared. Idempotent per surface.
+    pub(crate) fn disarm(&mut self, surface: SurfaceId) -> bool {
+        self.armed.remove(&surface) && self.armed.is_empty()
+    }
+}
+
+/// Event mask bits for XI_RawButtonPress only.
+fn raw_press_mask() -> [u8; 2] {
+    let mut mask = [0u8; 2];
+    mask[(XI_RAW_BUTTON_PRESS >> 3) as usize] |= 1 << (XI_RAW_BUTTON_PRESS & 7);
+    mask
+}
+
+/// Select (`armed`) or clear this client's RawButtonPress selection on the root.
+/// An empty mask (mask_len 0) removes only this client's selection.
+unsafe fn write_raw_press_selection(display: *mut Display, root: Window, armed: bool) {
+    let mut mask = raw_press_mask();
+    let mut event_mask = XIEventMask {
+        deviceid: XI_ALL_MASTER_DEVICES,
+        mask_len: if armed { mask.len() as std::os::raw::c_int } else { 0 },
+        mask: mask.as_mut_ptr(),
+    };
+    // SAFETY: live connection; the mask outlives the request.
+    unsafe {
+        XISelectEvents(display, root, &mut event_mask, 1);
+        XFlush(display);
+    }
+}
+
+/// WM_NAME of `window`, or `None` when unset or unreadable.
+unsafe fn window_title(display: *mut Display, window: Window) -> Option<String> {
+    let mut name: *mut c_char = std::ptr::null_mut();
+    // SAFETY: live connection; `name` is freed below when XFetchName returns one.
+    unsafe {
+        if XFetchName(display, window, &mut name) == 0 || name.is_null() {
+            return None;
+        }
+        let title = CStr::from_ptr(name).to_string_lossy().into_owned();
+        XFree(name.cast());
+        Some(title)
+    }
+}
+
+/// XInput2 opcode when the server speaks XI 2.0. `None` disables raw dismissal;
+/// FocusOut and Escape still dismiss the popup.
+unsafe fn xi_raw_press_opcode(display: *mut Display) -> Option<std::os::raw::c_int> {
+    // SAFETY: live connection; out-pointers are locals.
+    unsafe {
+        let mut opcode: std::os::raw::c_int = 0;
+        let mut first_event: std::os::raw::c_int = 0;
+        let mut first_error: std::os::raw::c_int = 0;
+        if XQueryExtension(
+            display,
+            b"XInputExtension\0".as_ptr().cast(),
+            &mut opcode,
+            &mut first_event,
+            &mut first_error,
+        ) == 0
+        {
+            return None;
+        }
+        let mut major: std::os::raw::c_int = 2;
+        let mut minor: std::os::raw::c_int = 0;
+        let status = XIQueryVersion(display, &mut major, &mut minor);
+        (status == 0 && (major, minor) >= (2, 0)).then_some(opcode)
+    }
+}
+
+pub(crate) unsafe fn grab_popup_presses(
+    display: *mut Display,
+    root: Window,
+    selection: &mut RawPressSelection,
+    surface: SurfaceId,
+) {
+    if selection.arm(surface) {
+        // SAFETY: display/root are the live controller connection and root window.
+        unsafe { write_raw_press_selection(display, root, true) };
+    }
+}
+
+pub(crate) unsafe fn release_popup_presses(
+    display: *mut Display,
+    root: Window,
+    selection: &mut RawPressSelection,
+    surface: SurfaceId,
+) {
+    if selection.disarm(surface) {
+        // SAFETY: same live connection; the selection was armed by grab_popup_presses.
+        unsafe { write_raw_press_selection(display, root, false) };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrabbedPressOutcome {
+    Inside,
+    Outside,
+}
+
+/// Classify a root-space press against the popup rect (device px).
+pub fn classify_grabbed_press(
+    x_root: i32,
+    y_root: i32,
+    origin: (i32, i32),
+    width: u32,
+    height: u32,
+) -> GrabbedPressOutcome {
+    if button_release_is_outside(x_root - origin.0, y_root - origin.1, width, height) {
+        GrabbedPressOutcome::Outside
+    } else {
+        GrabbedPressOutcome::Inside
+    }
+}
+
+/// Pure mapping of one root RawButtonPress to the popup's outside-dismiss event.
+/// `popup` is (origin, size) in device px; `None` for any other event type or a
+/// press inside the popup rect.
+pub(crate) fn raw_press_outside_event(
+    surface: SurfaceId,
+    event_type: std::os::raw::c_int,
+    button: u32,
+    press: (i32, i32),
+    popup: ((i32, i32), (u32, u32)),
+    scale: f32,
+    time_ms: u64,
+) -> Option<SurfaceControllerEvent> {
+    let (origin, (width, height)) = popup;
+    if event_type != XI_RAW_BUTTON_PRESS
+        || classify_grabbed_press(press.0, press.1, origin, width, height) != GrabbedPressOutcome::Outside
+    {
+        return None;
+    }
+    Some(outside_release_event(
+        surface,
+        button,
+        (press.0 - origin.0) as f32 / scale,
+        (press.1 - origin.1) as f32 / scale,
+        time_ms,
+    ))
+}
 
 /// Popup focus handoff, called where the popup takes its pointer grab. Focus
 /// moves to the popup so Escape reaches it from any pointer position, and the
@@ -89,10 +285,9 @@ pub fn surface_role_label(role: SurfaceRole) -> &'static str {
 /// this single transient-lifecycle signal; it is never Start-specific.
 pub const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 
-/// Pure bounds check: window-relative press/release coords outside the
-/// grabbed surface rect. With an active pointer grab X reports releases
-/// to the grab window even when the pointer is outside, so coords outside
-/// `[0, width) x [0, height)` mean "outside the grabbed surface".
+/// Pure bounds check: window-relative coords outside `[0, width) x [0, height)`
+/// mean "outside the surface". Popups take no active pointer grab; outside
+/// presses arrive as raw root presses (see `RawPressSelection`).
 pub fn button_release_is_outside(x: i32, y: i32, width: u32, height: u32) -> bool {
     x < 0 || y < 0 || x >= width.max(1) as i32 || y >= height.max(1) as i32
 }
@@ -176,7 +371,7 @@ struct SurfaceInstance {
     /// The real window stays unmapped while it runs.
     overlay: Option<(PopupTransition, WarpOverlay)>,
     /// A pointer grab requested while the real window is still unmapped behind an opening
-    /// overlay: taken when the flight lands (XGrabPointer refuses a non-viewable window).
+    /// overlay: taken when the flight lands so the popup is mapped before it takes focus.
     grab_pending: bool,
     /// Root edge this dock reserves (floating docks touch no edge). `None` infers from the rect.
     dock_edge: Option<DockEdge>,
@@ -678,6 +873,12 @@ pub struct SurfaceController {
     slides: Timeline<SlideKind>,
     /// A root child was mapped, unmapped, configured or destroyed since the last `take_root_changed`.
     root_changed: bool,
+    /// XInput2 raw-press selection that dismisses popups on outside presses.
+    press_selection: RawPressSelection,
+    /// Set while the quick-popup press observer holds its root selection.
+    press_observer_armed: bool,
+    /// Root presses observed while armed, drained by the owner.
+    raw_press_observations: Vec<RawPressObservation>,
 }
 
 impl SurfaceController {
@@ -689,6 +890,10 @@ impl SurfaceController {
             }
             install_x_io_error_handler();
             install_x_protocol_error_handler();
+            let press_opcode = xi_raw_press_opcode(display);
+            if press_opcode.is_none() {
+                eprintln!("flamewm: XInput2 2.0 unavailable; popups dismiss on focus loss and Escape only");
+            }
             Ok(Self {
                 screen: XDefaultScreen(display),
                 display,
@@ -699,6 +904,9 @@ impl SurfaceController {
                 icon_geometry_atom: 0,
                 slides: Timeline::new(),
                 root_changed: false,
+                press_selection: RawPressSelection::new(press_opcode),
+                press_observer_armed: false,
+                raw_press_observations: Vec::new(),
             })
         }
     }
@@ -884,13 +1092,128 @@ impl SurfaceController {
         Ok(id)
     }
 
+    fn root_window(&self) -> Window {
+        // SAFETY: the controller owns the live display; root is a plain query.
+        unsafe { XRootWindow(self.display, self.screen) }
+    }
+
+    /// Dismiss the grabbed popup when a root RawButtonPress lands outside it. The
+    /// press is only observed: it is never grabbed, replayed or consumed.
+    fn dismiss_on_raw_press(
+        &mut self,
+        event: &XEvent,
+        on_action: &mut impl FnMut(&SurfaceControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let display = self.display;
+        // SAFETY: `event` is a GenericEvent per the caller's `GENERIC_EVENT` check.
+        let mut cookie = unsafe { generic_cookie(event) };
+        // SAFETY: the cookie is a copy of this XNextEvent generic event; Xlib fills `data`.
+        if unsafe { XGetEventData(display, &mut cookie) } == 0 {
+            return Ok(());
+        }
+        // SAFETY: XGetEventData succeeded, so `data` is an XIRawEvent until XFreeEventData.
+        let raw = unsafe { *(cookie.data as *const XIRawEvent) };
+        unsafe { XFreeEventData(display, &mut cookie) };
+        if raw.evtype != XI_RAW_BUTTON_PRESS {
+            return Ok(());
+        }
+        let root = self.root_window();
+        let mut root_return: Window = 0;
+        let mut child_return: Window = 0;
+        let (mut x_root, mut y_root, mut win_x, mut win_y) = (0, 0, 0, 0);
+        let mut mask: std::os::raw::c_uint = 0;
+        // SAFETY: live connection; out-pointers are locals.
+        let on_screen = unsafe {
+            XQueryPointer(
+                display,
+                root,
+                &mut root_return,
+                &mut child_return,
+                &mut x_root,
+                &mut y_root,
+                &mut win_x,
+                &mut win_y,
+                &mut mask,
+            )
+        };
+        if on_screen == 0 {
+            return Ok(());
+        }
+        if self.press_observer_armed {
+            let title = (child_return != 0)
+                .then(|| unsafe { window_title(display, child_return) })
+                .flatten();
+            self.raw_press_observations.push(RawPressObservation {
+                x_root,
+                y_root,
+                button: raw.detail as u32,
+                time_ms: raw.time as u64,
+                child_window_title: title,
+            });
+        }
+        let owner = self
+            .surfaces
+            .iter()
+            .find(|(_, instance)| instance.app.pointer_grabbed)
+            .map(|(id, instance)| {
+                (*id, instance.origin, (instance.app.width, instance.app.height), instance.document.ui_scale())
+            });
+        let Some((id, origin, size, scale)) = owner else {
+            return Ok(());
+        };
+        let Some(outside) = raw_press_outside_event(
+            id,
+            raw.evtype,
+            raw.detail as u32,
+            (x_root, y_root),
+            (origin, size),
+            scale,
+            raw.time as u64,
+        ) else {
+            return Ok(());
+        };
+        let instance = self.instance_mut(id)?;
+        on_action(&outside, &mut instance.document)
+    }
+
+    /// Observe root presses (no grab, no replay) while quick popups are open.
+    /// Idempotent; the observer shares the root selection with popup grabs.
+    pub fn arm_raw_press_observer(&mut self) {
+        if self.press_observer_armed {
+            return;
+        }
+        self.press_observer_armed = true;
+        // SAFETY: live controller connection and root window.
+        unsafe {
+            grab_popup_presses(self.display, self.root_window(), &mut self.press_selection, PRESS_OBSERVER)
+        };
+    }
+
+    /// Stop observing and drop anything still queued. Idempotent.
+    pub fn disarm_raw_press_observer(&mut self) {
+        if !self.press_observer_armed {
+            return;
+        }
+        self.press_observer_armed = false;
+        self.raw_press_observations.clear();
+        // SAFETY: same live connection; armed by arm_raw_press_observer.
+        unsafe {
+            release_popup_presses(self.display, self.root_window(), &mut self.press_selection, PRESS_OBSERVER)
+        };
+    }
+
+    /// Root presses observed since the last call, in arrival order.
+    pub fn take_raw_press_observations(&mut self) -> Vec<RawPressObservation> {
+        std::mem::take(&mut self.raw_press_observations)
+    }
+
     pub fn destroy_surface(&mut self, id: SurfaceId) -> Result<(), String> {
         if let Some(mut instance) = self.surfaces.remove(&id) {
             self.slides.cancel(id.get());
             self.windows.remove(&instance.app.window);
             if instance.app.pointer_grabbed {
                 unsafe {
-                    XUngrabPointer(self.display, CURRENT_TIME);
+                    release_popup_presses(self.display, self.root_window(), &mut self.press_selection, id);
                     popup_restore_focus(self.display, &mut instance.app);
                 }
                 instance.app.pointer_grabbed = false;
@@ -915,10 +1238,14 @@ impl SurfaceController {
     /// then unmap + Expose-present (retained re-blit) + flush. No repaint.
     pub fn close_surface(&mut self, id: SurfaceId) -> Result<(), String> {
         let display = self.display;
-        let instance = self.instance_mut(id)?;
+        let root = self.root_window();
+        let instance = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))?;
         if instance.app.pointer_grabbed {
             unsafe {
-                XUngrabPointer(display, CURRENT_TIME);
+                release_popup_presses(display, root, &mut self.press_selection, id);
                 popup_restore_focus(display, &mut instance.app);
             }
             instance.app.pointer_grabbed = false;
@@ -1071,13 +1398,17 @@ impl SurfaceController {
 
     pub fn hide(&mut self, id: SurfaceId) -> Result<(), String> {
         let display = self.display;
+        let root = self.root_window();
         let now = Instant::now();
         let key = id.get();
         let (slide, shown) = {
-            let instance = self.instance_mut(id)?;
+            let instance = self
+                .surfaces
+                .get_mut(&id)
+                .ok_or_else(|| format!("unknown surface {}", id.0))?;
             if instance.app.pointer_grabbed {
                 unsafe {
-                    XUngrabPointer(display, CURRENT_TIME);
+                    release_popup_presses(display, root, &mut self.press_selection, id);
                     popup_restore_focus(display, &mut instance.app);
                 }
                 instance.app.pointer_grabbed = false;
@@ -1310,6 +1641,7 @@ impl SurfaceController {
     /// repainted here.
     fn advance_motion(&mut self, now: Instant) {
         let display = self.display;
+        let root = self.root_window();
         let dock = self.dock_rect();
         for (id, instance) in self.surfaces.iter_mut() {
             let key = id.get();
@@ -1334,24 +1666,10 @@ impl SurfaceController {
                     let _ = unsafe { instance.app.present_scene() };
                     instance.shown = true;
                     if std::mem::take(&mut instance.grab_pending) {
-                        // SAFETY: the window was just mapped; display/window are live.
-                        let grabbed = unsafe {
-                            XGrabPointer(
-                                display,
-                                instance.app.window,
-                                1,
-                                (BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK) as u32,
-                                GRAB_MODE_ASYNC,
-                                GRAB_MODE_ASYNC,
-                                0,
-                                0,
-                                CURRENT_TIME,
-                            )
-                        };
-                        if grabbed == 0 {
-                            instance.app.pointer_grabbed = true;
-                            unsafe { popup_take_focus(display, &mut instance.app) };
-                        }
+                        // SAFETY: the window was just mapped; display/root are live.
+                        unsafe { grab_popup_presses(display, root, &mut self.press_selection, *id) };
+                        instance.app.pointer_grabbed = true;
+                        unsafe { popup_take_focus(display, &mut instance.app) };
                     }
                 } else {
                     instance.grab_pending = false;
@@ -1659,32 +1977,18 @@ impl SurfaceController {
             ));
         }
         let display = self.display;
-        let instance = self.instance_mut(id)?;
+        let root = self.root_window();
+        let instance = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))?;
         if instance.overlay.is_some() && !instance.shown {
             // The real window maps when the opening flight lands; grab then.
             instance.grab_pending = true;
             return Ok(());
         }
-        let result = unsafe {
-            XGrabPointer(
-                display,
-                instance.app.window,
-                1,
-                (BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK) as u32,
-                GRAB_MODE_ASYNC,
-                GRAB_MODE_ASYNC,
-                0,
-                0,
-                CURRENT_TIME,
-            )
-        };
-        if result != 0 {
-            // Nonzero grab status (AlreadyGrabbed/Frozen/InvalidTime/
-            // NotViewable) is a protocol reply on a live connection, not a
-            // dead server: do NOT set the x-error latch (Drop would skip
-            // teardown). Caller treats it as a transient popup refusal.
-            return Err(format!("XGrabPointer failed for surface {}", id.0));
-        }
+        // SAFETY: live connection; raw press selection only (see grab_popup_presses).
+        unsafe { grab_popup_presses(display, root, &mut self.press_selection, id) };
         instance.app.pointer_grabbed = true;
         unsafe {
             popup_take_focus(display, &mut instance.app);
@@ -1695,9 +1999,13 @@ impl SurfaceController {
 
     pub fn ungrab_pointer(&mut self, id: SurfaceId) -> Result<(), String> {
         let display = self.display;
-        let instance = self.instance_mut(id)?;
+        let root = self.root_window();
+        let instance = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))?;
         unsafe {
-            XUngrabPointer(display, CURRENT_TIME);
+            release_popup_presses(display, root, &mut self.press_selection, id);
             popup_restore_focus(display, &mut instance.app);
         }
         instance.app.pointer_grabbed = false;
@@ -1885,7 +2193,16 @@ impl SurfaceController {
                 XNextEvent(self.display, event.as_mut_ptr());
             }
             let event = unsafe { event.assume_init() };
-            if unsafe { event.xany.window } == unsafe { XRootWindow(self.display, self.screen) } {
+            let root = unsafe { XRootWindow(self.display, self.screen) };
+            if unsafe { event.type_ } == GENERIC_EVENT
+                && Some(unsafe { generic_cookie(&event) }.extension) == self.press_selection.opcode()
+            {
+                // Raw press from the popup selection: observe only, never grabbed or replayed.
+                self.dismiss_on_raw_press(&event, &mut on_action)?;
+                handled += 1;
+                continue;
+            }
+            if unsafe { event.xany.window } == root {
                 // Other root children coming and going change what lies under a pseudo-transparency
                 // bar. Our own surfaces are excluded: a capture unmaps and remaps them itself.
                 let kind = unsafe { event.type_ };
@@ -1904,32 +2221,11 @@ impl SurfaceController {
             if moving && matches!(event_type, BUTTON_PRESS | BUTTON_RELEASE | MOTION_NOTIFY) {
                 continue;
             }
-            let outside_release = if event_type == BUTTON_RELEASE {
-                let button = unsafe { event.xbutton };
-                self.surfaces
-                    .get(&id)
-                    .map(|instance| {
-                        instance.app.pointer_grabbed
-                            && button_release_is_outside(
-                                button.x,
-                                button.y,
-                                instance.app.width,
-                                instance.app.height,
-                            )
-                    })
-                    .unwrap_or(false)
-            } else {
-                false
-            };
+            // Outside presses arrive as raw root presses (dismiss_on_raw_press).
+            // A release that ends outside the popup (e.g. a slider drag) never dismisses.
             unsafe {
                 XPutBackEvent(self.display, &event as *const XEvent as *mut XEvent);
             }
-            let release_info = if outside_release {
-                let button = unsafe { event.xbutton };
-                Some((button.button, button.x, button.y, button.time as u64))
-            } else {
-                None
-            };
             let closed = {
                 let instance = self.instance_mut(id)?;
                 let mut callback = |event: &ActionEvent, document: &mut RuntimeDocument| {
@@ -1957,13 +2253,6 @@ impl SurfaceController {
                 instance.app.mark_dirty(pending);
                 instance.app.close_requested
             };
-            if let Some((button, x, y, time_ms)) = release_info {
-                let instance = self.instance_mut(id)?;
-                let scale = instance.document.ui_scale();
-                let outside =
-                    outside_release_event(id, button, x as f32 / scale, y as f32 / scale, time_ms);
-                on_action(&outside, &mut instance.document)?;
-            }
             handled += 1;
             if closed {
                 self.destroy_surface(id)?;
@@ -2208,6 +2497,103 @@ impl AsRawFd for ReactorPebble {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grabbed_press_classifies_inside_and_outside_in_root_space() {
+        let origin = (100, 50);
+        // 200x100 popup: [100,300) x [50,150)
+        assert_eq!(classify_grabbed_press(100, 50, origin, 200, 100), GrabbedPressOutcome::Inside);
+        assert_eq!(classify_grabbed_press(299, 149, origin, 200, 100), GrabbedPressOutcome::Inside);
+        assert_eq!(classify_grabbed_press(300, 80, origin, 200, 100), GrabbedPressOutcome::Outside);
+        assert_eq!(classify_grabbed_press(99, 80, origin, 200, 100), GrabbedPressOutcome::Outside);
+        assert_eq!(classify_grabbed_press(150, 150, origin, 200, 100), GrabbedPressOutcome::Outside);
+    }
+
+    #[test]
+    fn popup_press_policy_never_grabs_the_pointer_or_buttons() {
+        // Production code must not grab or replay presses; dismissal observes raw presses only.
+        let source = include_str!("surface_controller.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert!(!production.contains("XGrabPointer("), "active pointer grab reintroduced");
+        assert!(!production.contains("XGrabButton("), "passive button grab reintroduced");
+        assert!(!production.contains("XAllowEvents("), "press replay reintroduced");
+        assert!(production.contains("XISelectEvents("), "raw press selection missing");
+    }
+
+    #[test]
+    fn raw_press_mask_selects_only_raw_button_press() {
+        // XI_RawButtonPress is event 15: byte 15 >> 3 = 1, bit 15 & 7 = 7.
+        assert_eq!(raw_press_mask(), [0, 0x80]);
+        assert_eq!(XI_RAW_BUTTON_PRESS, 15);
+    }
+
+    #[test]
+    fn raw_press_selection_arms_and_disarms_idempotently() {
+        let a = SurfaceId(1);
+        let mut selection = RawPressSelection::new(Some(2));
+        assert!(!selection.disarm(a), "disarm while idle must not write");
+        assert!(selection.arm(a), "first arm writes the selection");
+        assert!(!selection.arm(a), "second arm of the same surface must not write again");
+        assert!(selection.disarm(a), "disarm of the last armed surface writes");
+        assert!(!selection.disarm(a), "second disarm must not write again");
+        assert!(selection.arm(a), "re-arm after disarm writes again");
+    }
+
+    #[test]
+    fn raw_press_selection_is_shared_across_two_armed_surfaces() {
+        let (a, b) = (SurfaceId(1), SurfaceId(2));
+        let mut selection = RawPressSelection::new(Some(2));
+        assert!(selection.arm(a), "first surface writes the selection");
+        assert!(!selection.arm(b), "second surface joins without rewriting");
+        assert!(!selection.disarm(a), "closing one popup must keep the selection for the other");
+        assert!(!selection.arm(b), "b stays armed and idempotent");
+        assert!(selection.disarm(b), "last surface out clears the selection");
+        assert!(!selection.disarm(a), "a already disarmed");
+        assert!(selection.arm(a), "re-arm after full clear writes again");
+    }
+
+    #[test]
+    fn press_observer_shares_the_root_selection_with_popup_grabs() {
+        let mut selection = RawPressSelection::new(Some(2));
+        let popup = SurfaceId(7);
+        assert!(selection.arm(PRESS_OBSERVER), "observer writes the root selection");
+        assert!(!selection.arm(popup), "popup rides the observer's selection");
+        assert!(selection.arm(PRESS_OBSERVER) == false, "re-arm is idempotent");
+        assert!(!selection.disarm(PRESS_OBSERVER), "popup keeps the selection");
+        assert!(selection.disarm(popup), "last disarm clears the root selection");
+        assert!(!selection.disarm(PRESS_OBSERVER), "disarm is idempotent");
+    }
+
+    #[test]
+    fn raw_press_selection_without_xinput2_never_writes() {
+        let mut selection = RawPressSelection::new(None);
+        assert_eq!(selection.opcode(), None);
+        assert!(!selection.arm(SurfaceId(1)));
+        assert!(!selection.disarm(SurfaceId(1)));
+    }
+
+    #[test]
+    fn raw_press_outside_maps_only_outside_presses_to_dismiss_event() {
+        let popup = ((100, 50), (200, 100));
+        let outside = raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 1, (300, 80), popup, 1.0, 42)
+            .expect("press right of the popup dismisses");
+        assert_eq!(outside.surface, SurfaceId(3));
+        assert_eq!(outside.event.action, OUTSIDE_RELEASE_ACTION);
+        assert_eq!(outside.event.phase, ActionPhase::Release);
+        assert_eq!((outside.event.x, outside.event.y), (200.0, 30.0));
+        assert_eq!(outside.event.button, 1);
+        assert_eq!(outside.event.time_ms, 42);
+        assert!(!outside.event.inside);
+
+        let scaled = raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 3, (300, 80), popup, 2.0, 7)
+            .expect("scaled outside press dismisses");
+        assert_eq!((scaled.event.x, scaled.event.y), (100.0, 15.0));
+        assert_eq!(scaled.event.button, 3);
+
+        assert!(raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 1, (150, 80), popup, 1.0, 0).is_none());
+        assert!(raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 1, (299, 149), popup, 1.0, 0).is_none());
+        assert!(raw_press_outside_event(SurfaceId(3), 16, 1, (300, 80), popup, 1.0, 0).is_none(), "release is not a press");
+    }
 
     #[test]
     fn outside_release_bounds_are_window_relative() {

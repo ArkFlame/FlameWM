@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod battery;
 pub mod media;
 pub mod network;
 

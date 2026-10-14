@@ -1,7 +1,9 @@
 mod xft;
+mod xinput;
 mod xlib;
 mod xlib_ext;
 mod xrender;
+mod xrender_aa;
 mod xrender_transform;
 mod xshape;
 mod overlay;

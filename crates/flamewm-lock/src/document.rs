@@ -13,7 +13,7 @@ use flamewm_ui_x11::{
 use crate::background;
 use crate::layout::{self, LockLayout, Placed, RefRect};
 use crate::power::{POWER_ORDER, PowerView};
-use crate::settings::{DEFAULT_BACKGROUND, LockSettings};
+use crate::settings::{DEFAULT_BACKGROUND, LockBackgroundMode, LockSettings};
 use crate::view::LockView;
 
 const LOCK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-lock.rwr"));
@@ -109,19 +109,19 @@ fn build_background(settings: &LockSettings, width: u32, height: u32) -> Runtime
 /// built-in lock background when none is configured. Any failure returns `None`,
 /// so the caller falls back to a colour.
 fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Option<RuntimeImage> {
-    let (source, format, bytes) = match settings.background_image.as_deref() {
-        Some(path) => (
+    let (source, format, bytes) = match (settings.background_mode, settings.background_image.as_deref()) {
+        (LockBackgroundMode::Custom, Some(path)) => (
             path.display().to_string(),
             ImageSourceFormat::from_extension(Path::new(path))?,
             Cow::Owned(fs::read(path).ok()?),
         ),
-        // An explicit colour wins over the built-in picture; the default colour keeps it.
-        None if settings.background_color != DEFAULT_BACKGROUND => return None,
-        None => (
+        (LockBackgroundMode::Default, _) => (
             BUILTIN_BACKGROUND_SOURCE.to_string(),
             ImageSourceFormat::Webp,
             Cow::Borrowed(BUILTIN_BACKGROUND),
         ),
+        // Solid colour, or a custom mode without a saved path: the caller paints the colour.
+        _ => return None,
     };
     let natural = decode_bytes(&bytes, format).ok()?;
     let cover = cover_rgba(&natural, width, height)?;
@@ -819,6 +819,7 @@ mod tests {
 
         let missing = LockSettings {
             background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
+            background_mode: LockBackgroundMode::Custom,
             blur_percent: 0,
             dim_percent: 0,
             ..LockSettings::default()
@@ -829,12 +830,28 @@ mod tests {
         let custom = LockSettings {
             background_color: [1, 2, 3],
             background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
+            background_mode: LockBackgroundMode::Custom,
             blur_percent: 0,
             dim_percent: 0,
             ..LockSettings::default()
         };
         let flat = background_image(&custom, 4, 4);
         assert_eq!(&flat.pixels[..4], &[1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn solid_mode_paints_the_colour_and_default_mode_keeps_the_builtin_picture() {
+        let builtin = background_image(&LockSettings::default(), 64, 36);
+        let solid = LockSettings {
+            background_mode: LockBackgroundMode::Solid,
+            background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
+            blur_percent: 0,
+            dim_percent: 0,
+            ..LockSettings::default()
+        };
+        let cleared = background_image(&solid, 64, 36);
+        assert_eq!(cleared.pixels, background::reference_navy(64, 36));
+        assert_ne!(builtin.pixels, cleared.pixels, "Clear must not look like Default");
     }
 
     fn solid(width: u32, height: u32) -> RgbaImage {

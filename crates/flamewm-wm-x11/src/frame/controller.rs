@@ -60,6 +60,8 @@ pub struct ControllerState {
     pub client: u32,
     pub grab: u32,
     pub work_area: RootRect,
+    /// Output geometries bounding drags; empty falls back to `work_area`.
+    pub outputs: Vec<RootRect>,
     pub screen_rect: RootRect,
     pub hints: ClientSizeHints,
     pub extents: FrameExtents,
@@ -82,6 +84,7 @@ impl ControllerState {
             client,
             grab,
             work_area,
+            outputs: Vec::new(),
             screen_rect: work_area,
             hints,
             extents,
@@ -91,6 +94,12 @@ impl ControllerState {
     #[must_use]
     pub fn with_screen_rect(mut self, screen_rect: RootRect) -> Self {
         self.screen_rect = screen_rect;
+        self
+    }
+
+    #[must_use]
+    pub fn with_outputs(mut self, outputs: Vec<RootRect>) -> Self {
+        self.outputs = outputs;
         self
     }
 
@@ -138,13 +147,14 @@ fn request(
     start: PlacementSnapshot,
     delta: (i32, i32),
     edges: ResizeEdges,
-) -> GeometryRequest {
+) -> GeometryRequest<'_> {
     GeometryRequest {
         reason,
         start,
         pointer_delta: delta,
         edges,
         work_area: state.work_area,
+        outputs: &state.outputs,
         hints: state.hints,
         frame_extents: state.extents,
     }
@@ -1257,6 +1267,7 @@ mod tests {
                 pointer_delta: (40, 30),
                 edges: e,
                 work_area: WA,
+                outputs: &[],
                 hints: ClientSizeHints::default(),
                 frame_extents: EXT,
             };

@@ -13,6 +13,7 @@ pub enum QuickControlKind {
     Audio,
     Network,
     Calendar,
+    Battery,
 }
 
 impl QuickControlKind {
@@ -22,6 +23,7 @@ impl QuickControlKind {
             Self::Audio => "audio",
             Self::Network => "network",
             Self::Calendar => "calendar",
+            Self::Battery => "battery",
         }
     }
 
@@ -30,6 +32,7 @@ impl QuickControlKind {
             "audio" => Ok(Self::Audio),
             "network" => Ok(Self::Network),
             "calendar" => Ok(Self::Calendar),
+            "battery" => Ok(Self::Battery),
             _ => Err(ProtocolError::UnknownKind(s.to_owned())),
         }
     }
@@ -234,6 +237,20 @@ mod tests {
         ] {
             assert!(decode_line(bad).is_err(), "accepted: {bad:?}");
         }
+    }
+
+    #[test]
+    fn battery_kind_round_trips_through_its_wire_name() {
+        assert_eq!(QuickControlKind::Battery.as_str(), "battery");
+        assert_eq!(QuickControlKind::parse("battery"), Ok(QuickControlKind::Battery));
+        let line = encode_command(&Command::Open(OpenRequest {
+            kind: QuickControlKind::Battery,
+            anchor: Rect::new(10, 20, 100, 30),
+            work_area: Rect::new(0, 0, 1920, 1040),
+            panel_edge: PanelEdge::Bottom,
+        }));
+        assert!(line.starts_with("OPEN battery "), "{line}");
+        assert!(decode_line(&line).is_ok());
     }
 
     #[test]

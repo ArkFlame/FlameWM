@@ -462,7 +462,7 @@ impl X11App {
                 if self.xrender.is_some() {
                     if let Some(xrender) = self.xrender.as_mut() {
                         // SAFETY: same initialized backbuffer/display contract as `paint`.
-                        unsafe { xrender.fill_rounded_rect(rect, radius, *color)? };
+                        unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color)? };
                         return Ok(());
                     }
                 }
@@ -492,7 +492,7 @@ impl X11App {
                 if self.xrender.is_some() {
                     if let Some(xrender) = self.xrender.as_mut() {
                         // SAFETY: same initialized backbuffer/display contract as `paint`.
-                        unsafe { xrender.stroke_rounded_rect(rect, radius, width, *color)? };
+                        unsafe { crate::xrender_aa::stroke_rounded_rect(xrender, rect, radius, width, *color)? };
                         return Ok(());
                     }
                 }

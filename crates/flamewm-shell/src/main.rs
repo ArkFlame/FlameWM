@@ -193,6 +193,10 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register control signal source: {error}"))?;
     }
+    // Volume OSD: the tick publishes its deadline to the reactor wake slot.
+    state
+        .borrow_mut()
+        .attach_osd_wake(reactor.wake_deadline());
     let tick_profile_flag = Arc::clone(&profile_due);
     reactor
         .register_timer(Duration::from_secs(5), false, move || {

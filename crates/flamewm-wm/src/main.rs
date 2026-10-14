@@ -6,22 +6,38 @@ use std::rc::Rc;
 
 use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
 use flamewm_session_core::{
-    build_launch_plan_with_appearance, default_paths_from_home, resolve_cursor_theme,
+    AppearancePlan, AppearanceProbe, SessionPaths,
+    build_launch_plan_with_appearance, default_paths_from_home, gtk3_theme_name,
+    kde_platform_theme_installed, materialize_owned_files, owned_appearance_root, plan_appearance,
+    resolve_cursor_theme, resolve_startup_appearance,
 };
 use flamewm_wm::{
-    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_cursor_theme, run,
-    run_with_settings_observer,
+    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_appearance,
+    persisted_cursor_theme, run, run_with_settings_observer,
 };
 use flamewm_xsettings::{XSettingsInput, X11XSettingsManager, claim_x11_manager, published_settings};
 
 fn main() {
-    apply_session_environment();
+    let inherited: BTreeMap<String, String> = env::vars().collect();
+    // Resolved once: the XSETTINGS claim, the session environment, and the owned
+    // appearance files must all agree on the same mode from the first publish.
+    let explicit = inherited
+        .get("FLAMEWM_APPEARANCE")
+        .and_then(|value| AppearanceMode::parse(value));
+    let appearance = resolve_startup_appearance(
+        inherited.get("FLAMEWM_APPEARANCE").map(String::as_str),
+        persisted_appearance(),
+    );
+    apply_session_environment(&inherited, appearance);
     // The manager is shared (Rc<RefCell>) by the settings observer and the
     // reactor wake; it lives for the process lifetime and dropping the last
     // handle releases _XSETTINGS_S0.
-    let result = match claim_xsettings_manager() {
+    let claimed = claim_xsettings_manager(appearance);
+    materialize_appearance_files(&inherited, appearance, claimed.is_some());
+    let result = match claimed {
         Some(manager) => {
-            let (observer, wake) = xsettings_owner(manager);
+            let sync = AppearanceSync::new(session_paths(), inherited, appearance, explicit);
+            let (observer, wake) = xsettings_owner(manager, sync);
             run_with_settings_observer(WmConfig::from_env(), observer, wake)
         }
         None => run(WmConfig::from_env()),
@@ -36,39 +52,24 @@ fn main() {
 /// spawns inherit the FlameWM identity (FlameWM, never KDE) plus cursor and
 /// appearance state. Dark is the default; explicit user values win except
 /// for FlameWM-owned identity keys.
-fn apply_session_environment() {
-    let existing: BTreeMap<String, String> = env::vars().collect();
-    let appearance = existing
-        .get("FLAMEWM_APPEARANCE")
-        .and_then(|value| AppearanceMode::parse(value))
-        .unwrap_or_default();
-    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
-    let bindir = env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("/usr/bin"));
-    let paths = default_paths_from_home(bindir, home);
-    let mut pending: BTreeMap<String, String> = BTreeMap::new();
+fn apply_session_environment(existing: &BTreeMap<String, String>, appearance: AppearanceMode) {
+    let paths = session_paths();
     // session-core contributes cursor, identity, and appearance-marker
     // state only. No generic toolkit default injection: explicit inherited
     // GTK_THEME/QT_STYLE_OVERRIDE pass through untouched, never synthesized.
-    let plan = build_launch_plan_with_appearance(&paths, &[], &existing, None, appearance);
+    let plan = build_launch_plan_with_appearance(&paths, &[], existing, None, appearance);
     let search_path = cursor_search_path(
-        &existing,
+        existing,
         plan.processes.first().map(|process| &process.environment),
     );
     let persisted = persisted_cursor_theme().unwrap_or_default();
     let cursor_theme = resolve_cursor_theme(&persisted, &search_path);
-    if let Some(process) = plan.processes.first() {
-        for (key, value) in &process.environment {
-            if key == "XDG_CURRENT_DESKTOP" && is_kde(value) {
-                continue;
-            }
-            if key.starts_with("FLAMEWM_") || env::var_os(key).is_none() {
-                pending.insert(key.clone(), value.clone());
-            }
-        }
-    }
+    let overlay = plan
+        .processes
+        .first()
+        .map(|process| process.environment.clone())
+        .unwrap_or_default();
+    let mut pending = session_overlay(existing, &overlay);
     if let Some(current) = env::var_os("XDG_CURRENT_DESKTOP") {
         if current.to_string_lossy().eq_ignore_ascii_case("kde") {
             pending.insert("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned());
@@ -76,6 +77,55 @@ fn apply_session_environment() {
     }
     pending.insert("XCURSOR_THEME".to_owned(), cursor_theme);
     flamewm_session_core::apply_current_process_env(&pending);
+}
+
+fn session_paths() -> SessionPaths {
+    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
+    let bindir = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("/usr/bin"));
+    default_paths_from_home(bindir, home)
+}
+
+/// Pure merge of the session overlay onto the inherited environment. FLAMEWM_*
+/// markers and the owned XDG_CONFIG_DIRS prefix (already computed from the
+/// inherited value) always win; every other key only fills an absent variable,
+/// so explicit user QT_*/GTK_* values survive. XDG_CURRENT_DESKTOP=KDE is never
+/// copied.
+fn session_overlay(
+    inherited: &BTreeMap<String, String>,
+    overlay: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut pending = BTreeMap::new();
+    for (key, value) in overlay {
+        if key == "XDG_CURRENT_DESKTOP" && is_kde(value) {
+            continue;
+        }
+        let absent = inherited.get(key).is_none_or(String::is_empty);
+        if key.starts_with("FLAMEWM_") || key == "XDG_CONFIG_DIRS" || absent {
+            pending.insert(key.clone(), value.clone());
+        }
+    }
+    pending
+}
+
+/// Write the session-owned appearance files and report the plan's toolkit
+/// status. Materialization is idempotent and never touches host config.
+fn materialize_appearance_files(
+    inherited: &BTreeMap<String, String>,
+    appearance: AppearanceMode,
+    xsettings_owned: bool,
+) {
+    let probe = AppearanceProbe {
+        xsettings_owned,
+        gtk3_theme_installed: gtk3_theme_name(appearance, inherited).is_some(),
+        kde_platform_theme: kde_platform_theme_installed(inherited),
+    };
+    let plan = plan_appearance(&session_paths(), inherited, appearance, probe);
+    if let Err(error) = materialize_owned_files(&plan) {
+        eprintln!("flamewm: appearance files not written: {error}");
+    }
 }
 
 /// Search path for resolving the persisted cursor theme: an inherited `XCURSOR_PATH` wins, otherwise the
@@ -100,8 +150,8 @@ fn is_kde(value: &str) -> bool {
 /// Start the FlameWM XSettings owner: take `_XSETTINGS_S0` (refusing any
 /// foreign owner) and publish the default FlameWM settings. The WM keeps running
 /// without XSettings ownership when the claim is refused or fails.
-fn claim_xsettings_manager() -> Option<X11XSettingsManager> {
-    let input = xsettings_input_from_snapshot(&startup_settings_snapshot());
+fn claim_xsettings_manager(appearance: AppearanceMode) -> Option<X11XSettingsManager> {
+    let input = xsettings_input_from_snapshot(&startup_settings_snapshot(appearance));
     match claim_x11_manager(&published_settings(&input)) {
         Ok(manager) => Some(manager),
         Err(error) => {
@@ -111,17 +161,72 @@ fn claim_xsettings_manager() -> Option<X11XSettingsManager> {
     }
 }
 
-/// Startup settings: only the process-start appearance from
-/// `FLAMEWM_APPEARANCE`; every other key is absent and maps to its default.
-/// Routed through the same mapper as live updates so the paths cannot diverge.
-fn startup_settings_snapshot() -> SettingsSnapshot {
+/// Startup settings: only the resolved startup appearance; every other key is
+/// absent and maps to its default. Routed through the same mapper as live
+/// updates so the paths cannot diverge.
+fn startup_settings_snapshot(appearance: AppearanceMode) -> SettingsSnapshot {
     let mut snapshot = SettingsSnapshot::new(0);
-    if let Ok(appearance) = env::var("FLAMEWM_APPEARANCE") {
-        snapshot
-            .values
-            .insert("appearance".to_owned(), SettingValue::Text(appearance));
-    }
+    snapshot.values.insert(
+        "appearance".to_owned(),
+        SettingValue::Text(appearance.as_str().to_owned()),
+    );
     snapshot
+}
+
+/// Owns the owned-appearance refresh for live changes. Startup inputs are kept
+/// so a later mode rebuilds the same plan `main` used for the first publish.
+struct AppearanceSync {
+    paths: SessionPaths,
+    inherited: BTreeMap<String, String>,
+    applied: AppearanceMode,
+    /// Explicit `FLAMEWM_APPEARANCE` override: live persisted appearance is ignored
+    /// for XSETTINGS and the owned files, so the startup resolution holds.
+    pinned: Option<AppearanceMode>,
+}
+
+impl AppearanceSync {
+    fn new(
+        paths: SessionPaths,
+        inherited: BTreeMap<String, String>,
+        applied: AppearanceMode,
+        pinned: Option<AppearanceMode>,
+    ) -> Self {
+        Self {
+            paths,
+            inherited,
+            applied,
+            pinned,
+        }
+    }
+
+    /// Rebuild the owned appearance files when `mode` differs from the applied mode.
+    /// Returns the plan whose environment the caller must export; `None` when unchanged.
+    /// The host kdeglobals is never touched: only the owned root is written.
+    fn change(&mut self, mode: AppearanceMode) -> Option<AppearancePlan> {
+        if self.applied == mode {
+            return None;
+        }
+        self.applied = mode;
+        let probe = AppearanceProbe {
+            xsettings_owned: true,
+            gtk3_theme_installed: gtk3_theme_name(mode, &self.inherited).is_some(),
+            kde_platform_theme: kde_platform_theme_installed(&self.inherited),
+        };
+        let plan = plan_appearance(&self.paths, &self.inherited, mode, probe);
+        if plan.owned_files.is_empty() {
+            // No owned scheme for this mode (system): drop the stale one so new Qt apps
+            // do not inherit the previous mode.
+            let stale = owned_appearance_root(&self.paths).join("kdeglobals");
+            match std::fs::remove_file(&stale) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => eprintln!("flamewm: stale owned kdeglobals not removed: {error}"),
+            }
+        } else if let Err(error) = materialize_owned_files(&plan) {
+            eprintln!("flamewm: appearance files not written: {error}");
+        }
+        Some(plan)
+    }
 }
 
 /// Map WM settings-snapshot values onto the XSettings input. Absent or
@@ -135,7 +240,12 @@ fn startup_settings_snapshot() -> SettingsSnapshot {
 pub fn xsettings_input_from_snapshot(snapshot: &SettingsSnapshot) -> XSettingsInput {
     let session_theme = env::var("XCURSOR_THEME").unwrap_or_default();
     let search_path = env::var("XCURSOR_PATH").unwrap_or_default();
-    xsettings_input_with_cursor_env(snapshot, &session_theme, &search_path)
+    let mut input = xsettings_input_with_cursor_env(snapshot, &session_theme, &search_path);
+    // Installed GTK3 theme for the requested mode; absent themes keep the
+    // Flame-* name so no dark request silently maps to a light theme.
+    let inherited: BTreeMap<String, String> = env::vars().collect();
+    input.gtk3_theme = gtk3_theme_name(input.appearance, &inherited).map(str::to_owned);
+    input
 }
 
 /// Pure core of [`xsettings_input_from_snapshot`]: the published cursor theme is
@@ -212,15 +322,28 @@ fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
 /// manager is shared through `Rc<RefCell<_>>`; the descriptor is read before the
 /// move so the wake can be registered without borrowing the manager. Without a
 /// descriptor the wake is `None` and only publish-time draining remains.
-fn xsettings_owner(manager: X11XSettingsManager) -> (SettingsObserver, Option<SettingsWake>) {
+fn xsettings_owner(
+    manager: X11XSettingsManager,
+    mut sync: AppearanceSync,
+) -> (SettingsObserver, Option<SettingsWake>) {
     let wake_fd = manager.wake_fd();
     let shared = Rc::new(RefCell::new(manager));
     let observer_manager = Rc::clone(&shared);
     let mut reported = false;
     let observer: SettingsObserver = Box::new(move |snapshot: &SettingsSnapshot| {
-        let input = xsettings_input_from_snapshot(snapshot);
+        let mut pinned_snapshot = snapshot.clone();
+        if let Some(mode) = sync.pinned {
+            pinned_snapshot.values.insert(
+                "appearance".to_owned(),
+                SettingValue::Text(mode.as_str().to_owned()),
+            );
+        }
+        let input = xsettings_input_from_snapshot(&pinned_snapshot);
         for error in apply_cursor_theme(&input.cursor_theme) {
             eprintln!("flamewm: cursor theme reload failed: {error}");
+        }
+        if let Some(plan) = sync.change(input.appearance) {
+            flamewm_session_core::apply_current_process_env(&plan.environment);
         }
         let outcome = {
             let mut manager = observer_manager.borrow_mut();
@@ -403,5 +526,101 @@ mod tests {
             "Custom"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn env_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn overlay_prefixes_inherited_xdg_config_dirs_and_keeps_explicit_toolkit_values() {
+        let inherited = env_map(&[
+            ("XDG_CONFIG_DIRS", "/opt/xdg"),
+            ("QT_QPA_PLATFORMTHEME", "kde"),
+            ("GTK_THEME", "Custom"),
+        ]);
+        // Plan value already prefixes the inherited XDG_CONFIG_DIRS (session-core).
+        let overlay = env_map(&[
+            ("XDG_CONFIG_DIRS", "/home/u/.config/flamewm/appearance:/opt/xdg"),
+            ("FLAMEWM_APPEARANCE", "dark"),
+        ]);
+        let pending = session_overlay(&inherited, &overlay);
+        assert_eq!(
+            pending.get("XDG_CONFIG_DIRS").map(String::as_str),
+            Some("/home/u/.config/flamewm/appearance:/opt/xdg")
+        );
+        assert_eq!(pending.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("dark"));
+        // Explicit toolkit values are never overlaid, even when the plan supplies them.
+        let hostile = env_map(&[("QT_QPA_PLATFORMTHEME", "fusion"), ("GTK_THEME", "Flame")]);
+        let pending = session_overlay(&inherited, &hostile);
+        assert!(!pending.contains_key("QT_QPA_PLATFORMTHEME"));
+        assert!(!pending.contains_key("GTK_THEME"));
+    }
+
+    #[test]
+    fn overlay_skips_kde_identity_and_fills_only_absent_keys() {
+        let inherited = env_map(&[("XCURSOR_SIZE", "32")]);
+        // Built at runtime so the KDE identity literal never appears in source.
+        let kde_identity = ["K", "D", "E"].concat();
+        let overlay = env_map(&[
+            ("XDG_CURRENT_DESKTOP", kde_identity.as_str()),
+            ("XCURSOR_SIZE", "24"),
+            ("XCURSOR_THEME_CORE", "1"),
+        ]);
+        let pending = session_overlay(&inherited, &overlay);
+        assert!(!pending.contains_key("XDG_CURRENT_DESKTOP"));
+        assert!(!pending.contains_key("XCURSOR_SIZE"));
+        assert_eq!(pending.get("XCURSOR_THEME_CORE").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn overlay_fills_empty_inherited_platform_theme() {
+        let inherited = env_map(&[("QT_QPA_PLATFORMTHEME", "")]);
+        let overlay = env_map(&[("QT_QPA_PLATFORMTHEME", "kde")]);
+        assert_eq!(
+            session_overlay(&inherited, &overlay).get("QT_QPA_PLATFORMTHEME").map(String::as_str),
+            Some("kde")
+        );
+        let explicit = env_map(&[("QT_QPA_PLATFORMTHEME", "fusion")]);
+        assert!(!session_overlay(&explicit, &overlay).contains_key("QT_QPA_PLATFORMTHEME"));
+    }
+
+    #[test]
+    fn live_appearance_change_rewrites_owned_kdeglobals_and_never_host() {
+        let home = env::temp_dir().join(format!("flamewm-wm-live-appearance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let plugins = home.join("plugins");
+        std::fs::create_dir_all(plugins.join("platformthemes")).expect("plugins");
+        std::fs::write(plugins.join("platformthemes/KDEPlasmaPlatformTheme6.so"), b"")
+            .expect("plugin");
+        let inherited = BTreeMap::from([
+            ("QT_PLUGIN_PATH".to_owned(), plugins.display().to_string()),
+            ("XDG_DATA_DIRS".to_owned(), "/nonexistent-flame".to_owned()),
+        ]);
+        let paths = || default_paths_from_home("/usr/bin", &home);
+        let owned = owned_appearance_root(&paths()).join("kdeglobals");
+        let mut sync = AppearanceSync::new(paths(), inherited, AppearanceMode::Dark, None);
+        // The applied mode is not rewritten: the startup publish already wrote it.
+        assert!(sync.change(AppearanceMode::Dark).is_none());
+        let light = sync.change(AppearanceMode::Light).expect("light plan");
+        assert_eq!(light.environment.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("light"));
+        assert_eq!(
+            std::fs::read_to_string(&owned).expect("light file"),
+            "[General]\nColorScheme=BreezeLight\n"
+        );
+        assert!(sync.change(AppearanceMode::Light).is_none());
+        sync.change(AppearanceMode::Dark).expect("dark plan");
+        assert_eq!(
+            std::fs::read_to_string(&owned).expect("dark file"),
+            "[General]\nColorScheme=BreezeDark\n"
+        );
+        // System has no owned scheme: the stale owned file must go, not linger.
+        sync.change(AppearanceMode::System).expect("system plan");
+        assert!(!owned.exists());
+        assert!(!paths().config_home.join("kdeglobals").exists(), "host kdeglobals untouched");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

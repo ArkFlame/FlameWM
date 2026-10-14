@@ -21,6 +21,7 @@ use pulse::volume::{ChannelVolumes, Volume};
 
 const APPLICATION_NAME: &str = "FlameWM";
 const RETRY_TIMER_SEED: Duration = Duration::from_secs(86_400);
+const STREAM_TEXT_MAX_CHARS: usize = 128;
 
 type SnapshotCallback = dyn FnMut(AudioSnapshot) + Send + 'static;
 type PulseTimer = TimeEvent<<Mainloop as PulseMainloop>::MI>;
@@ -747,13 +748,14 @@ fn request_stream_list(
     generation: u64,
 ) {
     let _operation = introspector.get_sink_input_info_list(move |result| match result {
-        ListResult::Item(info) => lock(&state).streams.push(AudioStreamSnapshot {
-            id: info.index,
-            endpoint_id: info.sink,
-            name: info.name.as_deref().unwrap_or_default().to_owned(),
-            volume_percent: volume_percent(info.volume.avg()),
-            muted: info.mute,
-        }),
+        ListResult::Item(info) => lock(&state).streams.push(stream_snapshot_from_proplist(
+            info.index,
+            info.sink,
+            info.name.as_deref().unwrap_or_default().to_owned(),
+            volume_percent(info.volume.avg()),
+            info.mute,
+            |key| info.proplist.get_str(key),
+        )),
         ListResult::End => complete_audio_list(&state, &controller, &on_snapshot, generation),
         ListResult::Error => complete_audio_list(&state, &controller, &on_snapshot, generation),
     });
@@ -864,6 +866,36 @@ fn emit_snapshot(
     callback(snapshot);
 }
 
+/// Builds a stream snapshot; identity keys come from the sink-input proplist via `lookup`.
+fn stream_snapshot_from_proplist(
+    id: u32,
+    endpoint_id: u32,
+    name: String,
+    volume_percent: u8,
+    muted: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> AudioStreamSnapshot {
+    AudioStreamSnapshot {
+        id,
+        endpoint_id,
+        name,
+        volume_percent,
+        muted,
+        app_name: sanitize_stream_text(lookup("application.name")),
+        app_id: sanitize_stream_text(lookup("application.id")),
+        icon_name: sanitize_stream_text(lookup("application.icon_name")),
+        process_binary: sanitize_stream_text(lookup("application.process.binary")),
+        media_name: sanitize_stream_text(lookup("media.name")),
+    }
+}
+
+/// Drops control characters, trims, and bounds proplist text; empty text becomes `None`.
+fn sanitize_stream_text(raw: Option<String>) -> Option<String> {
+    let cleaned: String = raw?.chars().filter(|c| !c.is_control()).collect();
+    let trimmed = cleaned.trim();
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(STREAM_TEXT_MAX_CHARS).collect())
+}
+
 fn pulse_volume(percent: u8) -> Volume {
     let normal = u64::from(Volume::NORMAL.0);
     let raw = (normal
@@ -902,6 +934,68 @@ mod tests {
     use flamewm_integrations_core::pulse::BackoffConfig;
     use std::sync::mpsc;
     use std::thread;
+
+    #[test]
+    fn stream_identity_maps_proplist_keys_and_sanitizes_text() {
+        let mut proplist = pulse::proplist::Proplist::new().expect("proplist must allocate");
+        proplist
+            .set_str("application.name", "  Spotify\t")
+            .expect("set name");
+        proplist
+            .set_str("application.id", "com.spotify.Client")
+            .expect("set id");
+        proplist
+            .set_str("application.icon_name", "spotify-client")
+            .expect("set icon");
+        proplist
+            .set_str("application.process.binary", "spotify")
+            .expect("set binary");
+        proplist
+            .set_str("media.name", "\u{7}\n")
+            .expect("set media");
+        proplist
+            .set_str("media.title", "ignored")
+            .expect("set unrelated");
+        let stream = stream_snapshot_from_proplist(4, 9, "Playback".to_owned(), 55, true, |key| {
+            proplist.get_str(key)
+        });
+        assert_eq!(stream.id, 4);
+        assert_eq!(stream.endpoint_id, 9);
+        assert_eq!(stream.name, "Playback");
+        assert_eq!(stream.volume_percent, 55);
+        assert!(stream.muted);
+        assert_eq!(stream.app_name.as_deref(), Some("Spotify"));
+        assert_eq!(stream.app_id.as_deref(), Some("com.spotify.Client"));
+        assert_eq!(stream.icon_name.as_deref(), Some("spotify-client"));
+        assert_eq!(stream.process_binary.as_deref(), Some("spotify"));
+        assert_eq!(
+            stream.media_name, None,
+            "control-only media.name must drop to None"
+        );
+    }
+
+    #[test]
+    fn stream_identity_absent_keys_are_none_and_long_text_is_bounded() {
+        let absent = stream_snapshot_from_proplist(1, 2, String::new(), 0, false, |_| None);
+        assert_eq!(
+            absent,
+            AudioStreamSnapshot {
+                id: 1,
+                endpoint_id: 2,
+                ..AudioStreamSnapshot::default()
+            }
+        );
+        let long = "é".repeat(STREAM_TEXT_MAX_CHARS + 40);
+        let bounded =
+            stream_snapshot_from_proplist(1, 2, String::new(), 0, false, |_| Some(long.clone()));
+        let expected: String = "é".repeat(STREAM_TEXT_MAX_CHARS);
+        assert_eq!(bounded.app_name.as_deref(), Some(expected.as_str()));
+        assert_eq!(bounded.media_name.as_deref(), Some(expected.as_str()));
+        let blank = stream_snapshot_from_proplist(1, 2, String::new(), 0, false, |_| {
+            Some(" \t\n ".to_owned())
+        });
+        assert_eq!(blank.app_name, None);
+    }
 
     #[test]
     fn unavailable_retry_timer_returns_from_pulse_callback_thread() {

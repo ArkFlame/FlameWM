@@ -297,6 +297,11 @@ pub fn system_action_for_row(
     })
 }
 
+/// Trimmed candidate text, or `None` when absent or blank.
+fn non_blank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowSource {
     pub kind: AudioRowKind,
@@ -317,11 +322,13 @@ impl RowSource {
 
     #[must_use]
     pub fn from_endpoint(endpoint: &flamewm_api::system::AudioEndpointSnapshot) -> Self {
-        let label = if endpoint.description.is_empty() {
-            endpoint.name.clone()
-        } else {
-            endpoint.description.clone()
+        let fallback = match endpoint.kind {
+            flamewm_api::system::AudioEndpointKind::Sink => "Output device",
+            flamewm_api::system::AudioEndpointKind::Source => "Input device",
         };
+        let label = non_blank(Some(&endpoint.description))
+            .unwrap_or(fallback)
+            .to_owned();
         Self {
             kind: AudioRowKind::Endpoint,
             id: format!(
@@ -341,11 +348,17 @@ impl RowSource {
         Self {
             kind: AudioRowKind::Stream,
             id: format!("stream:{}", stream.id),
-            label: if stream.name.is_empty() {
-                format!("Stream {}", stream.id)
-            } else {
-                stream.name.clone()
-            },
+            label: [
+                stream.app_name.as_deref(),
+                stream.app_id.as_deref(),
+                stream.process_binary.as_deref(),
+                stream.media_name.as_deref(),
+                Some(stream.name.as_str()),
+            ]
+            .into_iter()
+            .find_map(non_blank)
+            .unwrap_or("Unknown application")
+            .to_owned(),
             volume_percent: stream.volume_percent,
             muted: stream.muted,
             selected: false,
@@ -442,6 +455,7 @@ mod tests {
             name: "app".to_owned(),
             volume_percent: 50,
             muted: false,
+            ..Default::default()
         });
         assert_eq!(active_page(&snapshot), 1);
         assert_eq!(slot_id(&snapshot, 0), Some("endpoint:sink:4".to_owned()));
@@ -539,6 +553,7 @@ mod tests {
                 name: format!("app-{id}"),
                 volume_percent: 10,
                 muted: false,
+                ..Default::default()
             });
         }
         assert_eq!(
@@ -553,5 +568,81 @@ mod tests {
     fn pending_unknown_audio_allows_volume_and_mute_actions() {
         let snapshot = sink_fixture(ServiceAvailability::Unknown);
         assert!(system_action_for_row(&snapshot, "endpoint:sink:7", None, Some(true)).is_some());
+    }
+
+    #[test]
+    fn endpoint_without_description_is_labelled_output_device() {
+        let endpoint = AudioEndpointSnapshot {
+            id: 7,
+            kind: AudioEndpointKind::Sink,
+            name: "alsa_output.pci-x".to_owned(),
+            description: "   ".to_owned(),
+            volume_percent: 50,
+            muted: false,
+            is_default: true,
+        };
+        assert_eq!(RowSource::from_endpoint(&endpoint).label, "Output device");
+        let described = AudioEndpointSnapshot {
+            description: "Built-in Audio Analog Stereo".to_owned(),
+            ..endpoint
+        };
+        assert_eq!(
+            RowSource::from_endpoint(&described).label,
+            "Built-in Audio Analog Stereo"
+        );
+    }
+
+    #[test]
+    fn stream_label_prefers_app_name_then_app_id_then_binary_then_media_then_name() {
+        let base = AudioStreamSnapshot {
+            id: 9,
+            endpoint_id: 1,
+            name: "  stream name  ".to_owned(),
+            volume_percent: 50,
+            muted: false,
+            ..Default::default()
+        };
+        let label = |stream: &AudioStreamSnapshot| RowSource::from_stream(stream).label;
+        assert_eq!(label(&base), "stream name");
+        let media = AudioStreamSnapshot {
+            media_name: Some("Track".to_owned()),
+            ..base.clone()
+        };
+        assert_eq!(label(&media), "Track");
+        let binary = AudioStreamSnapshot {
+            process_binary: Some("firefox".to_owned()),
+            media_name: Some("Track".to_owned()),
+            ..base.clone()
+        };
+        assert_eq!(label(&binary), "firefox");
+        let app_id = AudioStreamSnapshot {
+            app_id: Some("org.mozilla.firefox".to_owned()),
+            process_binary: Some("firefox".to_owned()),
+            ..base.clone()
+        };
+        assert_eq!(label(&app_id), "org.mozilla.firefox");
+        let app_name = AudioStreamSnapshot {
+            app_name: Some("Firefox".to_owned()),
+            app_id: Some("org.mozilla.firefox".to_owned()),
+            ..base.clone()
+        };
+        assert_eq!(label(&app_name), "Firefox");
+    }
+
+    #[test]
+    fn stream_label_skips_blank_candidates_and_falls_back_to_unknown_application() {
+        let blank = AudioStreamSnapshot {
+            id: 3,
+            endpoint_id: 1,
+            name: " ".to_owned(),
+            app_name: Some("   ".to_owned()),
+            app_id: Some(String::new()),
+            process_binary: None,
+            media_name: Some("\t".to_owned()),
+            ..Default::default()
+        };
+        let row = RowSource::from_stream(&blank);
+        assert_eq!(row.label, "Unknown application");
+        assert_eq!(row.id, "stream:3");
     }
 }

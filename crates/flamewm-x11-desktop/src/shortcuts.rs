@@ -5,7 +5,7 @@
 //! can be tested with fakes. The X side effects live behind [`GrabBackend`];
 //! [`XGrabBackend`] is the only implementation that touches the server.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use flamewm_api::shortcuts::KeyBinding;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
@@ -70,6 +70,9 @@ const KEYSYM_NAMES: &[(&str, u32)] = &[
     ("F10", 0xffc7),
     ("F11", 0xffc8),
     ("F12", 0xffc9),
+    ("XF86AudioLowerVolume", 0x1008_ff11),
+    ("XF86AudioMute", 0x1008_ff12),
+    ("XF86AudioRaiseVolume", 0x1008_ff13),
 ];
 
 /// Resolves a keysym name (case-insensitive) or a single ASCII letter/digit.
@@ -206,11 +209,20 @@ pub struct Grab {
     pub modifiers: u16,
 }
 
-/// A grab owned by an action.
+/// A grab owned by an action. An optional grab may fail without failing the
+/// commit; see [`ShortcutGrabs::commit`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub action: String,
     pub grab: Grab,
+    pub optional: bool,
+}
+
+/// XF86 media keys are optional: another client or desktop may already own
+/// them, and losing one must not drop the rest of the hotkey set.
+#[must_use]
+pub fn is_optional_keysym(keysym: u32) -> bool {
+    (0x1008_ff00..=0x1008_ffff).contains(&keysym)
 }
 
 /// Resolves a chord to every keycode that produces its keysym, expanded over
@@ -237,6 +249,7 @@ pub fn resolve(
                     keycode,
                     modifiers: chord.modifiers | variant,
                 },
+                optional: is_optional_keysym(chord.keysym),
             });
         }
     }
@@ -293,8 +306,9 @@ impl ShortcutGrabs {
     }
 
     /// Ungrabs the active set, grabs the staged set, and then makes it active.
-    /// On any grab failure the partial grabs are released, the previous set is
-    /// re-grabbed, and the error is returned.
+    /// A failed optional grab is logged and skipped. On a failed required grab
+    /// the partial grabs are released, the previous set is re-grabbed, and the
+    /// error is returned.
     pub fn commit(&mut self, backend: &mut dyn GrabBackend) -> FlameResult<()> {
         let next = self.staged.take().ok_or_else(|| {
             FlameError::new(ErrorCode::InvalidArgument, "no shortcut set is staged")
@@ -302,13 +316,34 @@ impl ShortcutGrabs {
         for entry in &self.active {
             backend.ungrab(entry.grab);
         }
-        let mut granted: Vec<Grab> = Vec::new();
-        for entry in &next {
+        let mut granted: Vec<Entry> = Vec::new();
+        let mut skipped: BTreeSet<String> = BTreeSet::new();
+        for entry in next {
+            if skipped.contains(&entry.action) {
+                continue;
+            }
             match backend.grab(entry.grab) {
-                Ok(()) => granted.push(entry.grab),
+                Ok(()) => granted.push(entry),
+                Err(error) if entry.optional => {
+                    eprintln!(
+                        "flamewm: optional shortcut for {} was not grabbed: {}",
+                        entry.action, error.message
+                    );
+                    // A binding is all-or-nothing across its NumLock/CapsLock variants.
+                    let mut kept = Vec::with_capacity(granted.len());
+                    for granted_entry in granted {
+                        if granted_entry.action == entry.action {
+                            backend.ungrab(granted_entry.grab);
+                        } else {
+                            kept.push(granted_entry);
+                        }
+                    }
+                    granted = kept;
+                    skipped.insert(entry.action);
+                }
                 Err(error) => {
-                    for grab in granted {
-                        backend.ungrab(grab);
+                    for granted_entry in granted {
+                        backend.ungrab(granted_entry.grab);
                     }
                     let restored = self.regrab_active(backend);
                     return Err(match restored {
@@ -324,7 +359,7 @@ impl ShortcutGrabs {
                 }
             }
         }
-        self.active = next;
+        self.active = granted;
         self.degraded = false;
         Ok(())
     }
@@ -712,11 +747,101 @@ mod tests {
     }
 
     #[test]
+    fn optional_media_grab_conflict_is_skipped_and_required_bindings_commit() {
+        let lookup = FakeLookup(BTreeMap::from([
+            (keysym_for_name("Left").unwrap(), vec![113]),
+            (keysym_for_name("F4").unwrap(), vec![70]),
+            (0x1008_ff13, vec![123]),
+        ]));
+        let mut backend = FakeBackend {
+            fail_on: Some(base_grab(123, 0)),
+            ..FakeBackend::default()
+        };
+        let mut grabs = ShortcutGrabs::new();
+        grabs
+            .prepare(
+                &desired(&[
+                    ("WorkspaceLeft", "Ctrl+Super+Left"),
+                    ("WindowClose", "Alt+F4"),
+                    ("VolumeUp", "XF86AudioRaiseVolume"),
+                ]),
+                &lookup,
+            )
+            .unwrap();
+        grabs
+            .commit(&mut backend)
+            .expect("optional conflict must not fail the commit");
+        assert!(backend.held.contains(&base_grab(113, MOD_CONTROL | MOD_SUPER)));
+        assert!(backend.held.contains(&base_grab(70, MOD_ALT)));
+        assert!(
+            !backend.held.iter().any(|grab| grab.keycode == 123),
+            "every NumLock/CapsLock variant of the skipped binding is released"
+        );
+        assert_eq!(grabs.action_for_key(70, MOD_ALT), Some("WindowClose"));
+        assert_eq!(grabs.action_for_key(123, 0), None);
+        assert_eq!(grabs.active().len(), 8);
+    }
+
+    #[test]
+    fn required_grab_conflict_still_rolls_back_even_with_optional_bindings() {
+        let lookup = FakeLookup(BTreeMap::from([
+            (keysym_for_name("F4").unwrap(), vec![70]),
+            (0x1008_ff13, vec![123]),
+        ]));
+        let mut backend = FakeBackend {
+            fail_on: Some(base_grab(70, MOD_ALT)),
+            ..FakeBackend::default()
+        };
+        let mut grabs = ShortcutGrabs::new();
+        grabs
+            .prepare(
+                &desired(&[
+                    ("VolumeUp", "XF86AudioRaiseVolume"),
+                    ("WindowClose", "Alt+F4"),
+                ]),
+                &lookup,
+            )
+            .unwrap();
+        let error = grabs
+            .commit(&mut backend)
+            .expect_err("required conflict must fail");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert!(grabs.active().is_empty());
+        assert!(backend.held.is_empty(), "optional grab released on rollback");
+    }
+
+    #[test]
     fn keyboard_table_maps_keysym_to_keycode_by_column() {
         let table = KeyboardTable::new(8, 2, vec![0xff1b, 0, 0x61, 0x41, 0xff51, 0]);
         assert_eq!(table.keycodes_for(0xff1b), vec![8]);
         assert_eq!(table.keycodes_for(0x41), vec![9]);
         assert_eq!(table.keycodes_for(0xff51), vec![10]);
         assert!(table.keycodes_for(0x62).is_empty());
+    }
+
+    #[test]
+    fn xf86_audio_keysyms_resolve_to_xkb_values() {
+        assert_eq!(keysym_for_name("XF86AudioLowerVolume"), Some(0x1008_ff11));
+        assert_eq!(keysym_for_name("XF86AudioMute"), Some(0x1008_ff12));
+        assert_eq!(keysym_for_name("XF86AudioRaiseVolume"), Some(0x1008_ff13));
+        assert_eq!(keysym_for_name("xf86audiomute"), Some(0x1008_ff12));
+    }
+
+    #[test]
+    fn xf86_audio_bindings_parse_as_bare_keys_without_modifiers() {
+        assert_eq!(
+            parse_binding("XF86AudioRaiseVolume").unwrap(),
+            KeyChord {
+                keysym: 0x1008_ff13,
+                modifiers: 0,
+            }
+        );
+        assert_eq!(
+            parse_binding("XF86AudioMute").unwrap(),
+            KeyChord {
+                keysym: 0x1008_ff12,
+                modifiers: 0,
+            }
+        );
     }
 }

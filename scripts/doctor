@@ -53,6 +53,7 @@ else
   fail=1
 fi
 runtime_lib libXrender.so.1 Xrender
+runtime_lib libXi.so.6 Xi
 python3 tools/static_audit.py
 if [[ $fail -ne 0 ]]; then exit 1; fi
 VERSION="$(tr -d '[:space:]' < FLAMEWM_VERSION)"

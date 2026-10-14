@@ -12,6 +12,7 @@ pub mod media_store;
 pub mod mpris;
 pub mod network_manager;
 pub mod portal_file_chooser;
+pub mod power;
 pub mod pulse;
 pub mod themes;
 
@@ -26,9 +27,10 @@ pub use network_manager::{
     NetworkManagerProperties, NetworkManagerProvider, NetworkManagerProviderState,
 };
 pub use portal_file_chooser::PortalFileChooser;
+pub use power::PowerProvider;
 
 use flamewm_api::FlameResult;
-use flamewm_api::system::{MediaSnapshot, NetworkSnapshot, SystemAction};
+use flamewm_api::system::{MediaSnapshot, NetworkSnapshot, PowerSnapshot, SystemAction};
 use flamewm_dbus_reactor::BusWatch;
 
 /// Which D-Bus source reported readiness to the desktop reactor.
@@ -36,12 +38,14 @@ use flamewm_dbus_reactor::BusWatch;
 pub enum LinuxIntegrationSource {
     NetworkManager,
     Mpris,
+    Power,
 }
 
 /// The single owner of Linux integration provider lifecycles.
 pub struct LinuxIntegrationRuntime {
     network_manager: NetworkManagerProvider,
     mpris: MprisProvider,
+    power: PowerProvider,
     started: bool,
 }
 
@@ -51,6 +55,7 @@ impl LinuxIntegrationRuntime {
         Ok(Self {
             network_manager: NetworkManagerProvider::connect()?,
             mpris: MprisProvider::connect()?,
+            power: PowerProvider::connect()?,
             started: false,
         })
     }
@@ -62,12 +67,14 @@ impl LinuxIntegrationRuntime {
         }
         self.network_manager.start()?;
         self.mpris.start()?;
+        self.power.start();
         self.started = true;
         Ok(())
     }
 
     /// Stop publication and invalidate provider-local generations.
     pub fn stop(&mut self) {
+        self.power.stop();
         self.mpris.stop();
         self.network_manager.stop();
         self.started = false;
@@ -103,6 +110,7 @@ impl LinuxIntegrationRuntime {
         match source {
             LinuxIntegrationSource::NetworkManager => self.network_manager.watch(),
             LinuxIntegrationSource::Mpris => self.mpris.watch(),
+            LinuxIntegrationSource::Power => self.power.watch(),
         }
     }
 
@@ -111,6 +119,7 @@ impl LinuxIntegrationRuntime {
         match source {
             LinuxIntegrationSource::NetworkManager => self.network_manager.on_ready(),
             LinuxIntegrationSource::Mpris => self.mpris.on_ready(),
+            LinuxIntegrationSource::Power => self.power.on_ready(),
         }
     }
 
@@ -129,6 +138,16 @@ impl LinuxIntegrationRuntime {
     #[must_use]
     pub fn media_snapshot(&self) -> MediaSnapshot {
         self.mpris.snapshot()
+    }
+
+    #[must_use]
+    pub fn power_snapshot(&self) -> PowerSnapshot {
+        self.power.snapshot()
+    }
+
+    /// One CPU sample while the battery menu is open. Returns true when the published value changed.
+    pub fn sample_power_cpu(&mut self) -> bool {
+        self.power.sample_cpu()
     }
 
     /// Route every optional integration command to its native state owner.
@@ -151,6 +170,14 @@ impl LinuxIntegrationRuntime {
             | SystemAction::PlayPause { .. }
             | SystemAction::Next { .. }
             | SystemAction::Previous { .. } => self.mpris.perform_action(action, media),
+            SystemAction::BatteryMenuOpened => {
+                self.power.set_battery_menu_open(true);
+                Ok(())
+            }
+            SystemAction::BatteryMenuClosed => {
+                self.power.set_battery_menu_open(false);
+                Ok(())
+            }
             SystemAction::SetVolume(_) | SystemAction::SetMute(_) => {
                 Err(flamewm_api::FlameError::new(
                     flamewm_api::ErrorCode::Unsupported,

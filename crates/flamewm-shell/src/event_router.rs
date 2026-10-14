@@ -1,10 +1,12 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flamewm_ui_x11::{
     ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
 };
 
 use crate::app::{is_popup_refusal, shell_slow_note, ShellLoop};
+use flamewm_shell::quick_controls::host::is_quick_popup_title;
+use flamewm_shell::quick_controls::QuickControlKind;
 
 /// C07 stage helper: open a static profiler span. Static labels only.
 macro_rules! shell_stage {
@@ -17,6 +19,14 @@ macro_rules! shell_stage {
 const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 /// Tray volume source node; its release toggles the audio popup.
 const TRAY_VOLUME_ACTION: &str = "volume.open";
+const TASKBAR_SURFACE_ACTION: &str = "taskbar.surface";
+const TASKBAR_MENU_SETTINGS_ACTION: &str = "taskbar.menu.settings";
+const GENERAL_SETTINGS_PROGRAM: &str = "flamewm-settings";
+
+/// Program to spawn for a taskbar-menu row action; `None` for other actions.
+fn general_settings_launch(action: &str) -> Option<&'static str> {
+    (action == TASKBAR_MENU_SETTINGS_ACTION).then_some(GENERAL_SETTINGS_PROGRAM)
+}
 
 /// What a release outside the active popup does to the quick-control popups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,12 +67,95 @@ pub(crate) fn outside_release_decision(
     OutsideReleaseDecision::Close
 }
 
+/// Window in which the opener release that follows an outside-press dismissal
+/// is still treated as the same click.
+pub(crate) const DISMISS_LATCH_TTL: Duration = Duration::from_millis(300);
+
+/// Popup group closed by the latest outside-press dismissal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DismissLatch {
+    pub(crate) group: &'static str,
+    pub(crate) at: Instant,
+}
+
+/// Popup group an opener action toggles; `None` for non-opener actions.
+pub(crate) fn opener_group(action: &str) -> Option<&'static str> {
+    match action {
+        "start.toggle" => Some("start"),
+        TRAY_VOLUME_ACTION => Some("audio"),
+        "network.open" => Some("network"),
+        "battery.open" => Some("battery"),
+        "clock.open" => Some("calendar"),
+        "media.open" | "media.toggle" => Some("media"),
+        _ => None,
+    }
+}
+
+/// Popup group a quick-control kind occupies; matches its opener's `opener_group`.
+pub(crate) fn quick_popup_group(kind: QuickControlKind) -> &'static str {
+    match kind {
+        QuickControlKind::Audio => "audio",
+        QuickControlKind::Network => "network",
+        QuickControlKind::Calendar => "calendar",
+        QuickControlKind::Battery => "battery",
+    }
+}
+
+/// True when an observed root press lands outside every quick popup. `title` is
+/// the WM_NAME of the top-level window under the pointer.
+pub(crate) fn raw_press_is_outside_quick_popups(title: Option<&str>) -> bool {
+    !title.is_some_and(is_quick_popup_title)
+}
+
+/// Consumes the opener release that is the same click as the dismissal that set
+/// `latch`: true means the opener must be a no-op. The latch survives unrelated
+/// events and expires after `DISMISS_LATCH_TTL`.
+pub(crate) fn latch_consumes_opener(
+    latch: &mut Option<DismissLatch>,
+    action: &str,
+    now: Instant,
+) -> bool {
+    let Some(pending) = *latch else {
+        return false;
+    };
+    if now.saturating_duration_since(pending.at) > DISMISS_LATCH_TTL {
+        *latch = None;
+        return false;
+    }
+    if opener_group(action) == Some(pending.group) {
+        *latch = None;
+        return true;
+    }
+    false
+}
+
 impl ShellLoop {
+    /// Applies root presses seen by the quick-popup observer. A press outside every
+    /// quick popup dismisses the open quick popup and latches its group, so the
+    /// opener release of the same click is consumed instead of reopening it.
+    pub(crate) fn drain_raw_press_observations(&mut self, runtime: &mut SurfaceRuntime) {
+        for observation in runtime.take_raw_press_observations() {
+            let Some(kind) = self.quick_kind_open else {
+                break;
+            };
+            if !raw_press_is_outside_quick_popups(observation.child_window_title.as_deref()) {
+                continue;
+            }
+            self.dismiss_latch = Some(DismissLatch {
+                group: quick_popup_group(kind),
+                at: Instant::now(),
+            });
+            self.close_quick_control_nonfatal();
+        }
+    }
+
     pub(crate) fn route_event(
         &mut self,
         event: SurfaceEvent,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
+        // Presses are queued during the same reactor step, ahead of this release.
+        self.drain_raw_press_observations(runtime);
         let action = event.action.action.as_str();
         // never activate on Secondary.
         let button = PointerButton::from_raw_x(event.action.button);
@@ -130,11 +223,21 @@ impl ShellLoop {
             event.action.inside,
             self.quick_audio_open,
         );
+        if event.action.phase == ActionPhase::Release
+            && event.action.inside
+            && latch_consumes_opener(&mut self.dismiss_latch, action, Instant::now())
+        {
+            return Ok(());
+        }
         match decision {
             OutsideReleaseDecision::Ignore => {}
             // Toggle-closed and close share the same teardown; the early
             // return is what prevents the same-turn OpenPopover reopen.
             OutsideReleaseDecision::Close | OutsideReleaseDecision::ToggleTrayVolumeClosed => {
+                self.dismiss_latch = self.open_popup_group().map(|group| DismissLatch {
+                    group,
+                    at: Instant::now(),
+                });
                 self.shell.dispatch("popover.close");
                 // C04: geometry-invalidating or menu-opening paths also drop
                 // any helper popup on the same turn (nonfatal, loop survives).
@@ -176,6 +279,13 @@ impl ShellLoop {
         }
 
         if event.action.phase == ActionPhase::Release && event.action.inside {
+            if let Some(program) = general_settings_launch(action) {
+                if let Err(error) = std::process::Command::new(program).spawn() {
+                    eprintln!("flamewm-shell: spawn {program}: {error}");
+                }
+                self.shell.dispatch("popover.close");
+                return self.apply_controls(runtime);
+            }
             if let Some(request) = self.context_system_request(action) {
                 self.submit(request);
                 if action == "network.secret.submit" || action == "network.secret.cancel" {
@@ -351,7 +461,7 @@ impl ShellLoop {
                 false
             }
             ActionPhase::Motion => {
-                let count = self.shell.snapshot().panels.tasks.len();
+                let count = self.shell.task_slot_count();
                 let Some(drag) = self.task_drag.as_mut() else {
                     return false;
                 };
@@ -366,7 +476,7 @@ impl ShellLoop {
                     return false;
                 };
                 self.set_task_insert_marker(runtime, None);
-                let count = self.shell.snapshot().panels.tasks.len();
+                let count = self.shell.task_slot_count();
                 match drag.release_on_strip(event.action.x, event.action.y, count) {
                     TaskDragRelease::Click => false,
                     TaskDragRelease::Noop => true,
@@ -442,8 +552,12 @@ impl ShellLoop {
             self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
-        if action == "taskbar.surface" {
-            self.shell.dispatch("popover.close");
+        if action == TASKBAR_SURFACE_ACTION {
+            self.shell.open_taskbar_context_at(Some(
+                self.surfaces
+                    .root_pointer(runtime, event.action.x, event.action.y),
+            ));
+            self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
         Ok(())
@@ -478,6 +592,16 @@ impl ShellLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn taskbar_settings_row_maps_to_general_settings_program_only() {
+        assert_eq!(
+            general_settings_launch("taskbar.menu.settings"),
+            Some("flamewm-settings")
+        );
+        assert_eq!(general_settings_launch("taskbar.menu.new-desktop"), None);
+        assert_eq!(general_settings_launch("task.menu.close"), None);
+    }
 
     #[test]
     fn tray_release_while_audio_open_toggles_closed_without_reopen() {
@@ -521,5 +645,118 @@ mod tests {
             outside_release_decision("network.open", false, false, false, true),
             OutsideReleaseDecision::Ignore
         );
+    }
+
+    fn latch_for(group: &'static str, at: Instant) -> Option<DismissLatch> {
+        Some(DismissLatch { group, at })
+    }
+
+    #[test]
+    fn opener_release_after_its_own_dismiss_is_consumed_for_every_popup_group() {
+        let now = Instant::now();
+        for (group, opener) in [
+            ("start", "start.toggle"),
+            ("audio", TRAY_VOLUME_ACTION),
+            ("network", "network.open"),
+            ("battery", "battery.open"),
+            ("calendar", "clock.open"),
+        ] {
+            let mut latch = latch_for(group, now);
+            assert!(latch_consumes_opener(&mut latch, opener, now), "{opener}");
+            assert_eq!(latch, None, "{opener} consumes the latch");
+        }
+    }
+
+    #[test]
+    fn closed_popup_opener_is_not_consumed_and_opens() {
+        let now = Instant::now();
+        let mut latch = None;
+        assert!(!latch_consumes_opener(&mut latch, "start.toggle", now));
+        assert_eq!(latch, None);
+    }
+
+    #[test]
+    fn other_group_opener_is_not_consumed_and_latch_survives() {
+        let now = Instant::now();
+        let mut latch = latch_for("start", now);
+        assert!(!latch_consumes_opener(&mut latch, "network.open", now));
+        assert_eq!(latch, latch_for("start", now));
+    }
+
+    #[test]
+    fn latch_expires_so_a_later_genuine_click_reopens() {
+        let now = Instant::now();
+        let inside = now + DISMISS_LATCH_TTL - Duration::from_millis(1);
+        let expired = now + DISMISS_LATCH_TTL + Duration::from_millis(1);
+        let mut latch = latch_for("start", now);
+        assert!(latch_consumes_opener(&mut latch, "start.toggle", inside));
+        let mut latch = latch_for("start", now);
+        assert!(!latch_consumes_opener(&mut latch, "start.toggle", expired));
+        assert_eq!(latch, None);
+    }
+
+    /// Replays one click as the shell sees it: the outside release closes `group`
+    /// (recording the latch when enabled), then the same click's opener release arrives.
+    /// Returns whether the popup is open afterwards.
+    fn replay_dismiss_then_opener(latch_enabled: bool, group: &'static str, opener: &str) -> bool {
+        let at = Instant::now();
+        let mut latch = latch_enabled.then_some(DismissLatch { group, at });
+        let mut open = false;
+        open |= !latch_consumes_opener(&mut latch, opener, at + Duration::from_millis(5));
+        open
+    }
+
+    #[test]
+    fn replayed_opener_after_outside_dismiss_leaves_popup_closed() {
+        for (group, opener) in [
+            ("start", "start.toggle"),
+            ("audio", TRAY_VOLUME_ACTION),
+            ("network", "network.open"),
+            ("battery", "battery.open"),
+            ("calendar", "clock.open"),
+            ("media", "media.open"),
+            ("media", "media.toggle"),
+        ] {
+            assert!(!replay_dismiss_then_opener(true, group, opener), "{opener}");
+        }
+    }
+
+    #[test]
+    fn opener_group_covers_quick_popups_and_ignores_other_actions() {
+        assert_eq!(opener_group("start.toggle"), Some("start"));
+        assert_eq!(opener_group(TRAY_VOLUME_ACTION), Some("audio"));
+        assert_eq!(opener_group("network.open"), Some("network"));
+        assert_eq!(opener_group("battery.open"), Some("battery"));
+        assert_eq!(opener_group("clock.open"), Some("calendar"));
+        assert_eq!(opener_group("media.open"), Some("media"));
+        assert_eq!(opener_group("media.toggle"), Some("media"));
+        assert_eq!(opener_group("start.category.apps"), None);
+    }
+
+    #[test]
+    fn observed_outside_press_latches_each_quick_group_and_its_opener_is_consumed_once() {
+        let now = Instant::now();
+        for (kind, opener) in [
+            (QuickControlKind::Audio, TRAY_VOLUME_ACTION),
+            (QuickControlKind::Network, "network.open"),
+            (QuickControlKind::Calendar, "clock.open"),
+            (QuickControlKind::Battery, "battery.open"),
+        ] {
+            let group = quick_popup_group(kind);
+            assert_eq!(opener_group(opener), Some(group), "{opener}");
+            let mut latch = Some(DismissLatch { group, at: now });
+            assert!(latch_consumes_opener(&mut latch, opener, now), "{opener}");
+            assert!(!latch_consumes_opener(&mut latch, opener, now), "{opener} second release opens");
+        }
+    }
+
+    #[test]
+    fn press_classification_treats_only_quick_popup_titles_as_inside() {
+        for title in ["FlameWM audio", "FlameWM network", "FlameWM calendar", "FlameWM battery", "FlameWM media"] {
+            assert!(!raw_press_is_outside_quick_popups(Some(title)), "{title} is inside");
+        }
+        assert!(raw_press_is_outside_quick_popups(None), "no window under pointer");
+        assert!(raw_press_is_outside_quick_popups(Some("FlameWM Render 0.0.9")), "panel");
+        assert!(raw_press_is_outside_quick_popups(Some("FlameWM audio2")), "prefix is not a match");
     }
 }

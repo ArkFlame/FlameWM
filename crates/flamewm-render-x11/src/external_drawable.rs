@@ -453,7 +453,7 @@ impl ExternalDrawableTarget {
         color: Color,
     ) -> Result<(), String> {
         if let Some(xrender) = self.xrender.as_mut() {
-            return unsafe { xrender.fill_rounded_rect(rect, radius, color) };
+            return unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, color) };
         }
         if color.a < 255 {
             return Err("external translucent fill requires XRender (unavailable)".to_string());

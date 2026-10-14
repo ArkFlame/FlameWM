@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use crate::animation::{self, Animator, Begin, CaptureCache, Effect, OpenGate, Settings, Tick};
+use crate::frame::geometry::keep_on_outputs;
 use flamewm_render_x11::{CapturedImage, PanelEdge, TransitionDirection, TransitionStyle, WarpOverlay, WarpRect};
 
 /// Frame cadence while a transition is in flight (60 Hz).
@@ -92,12 +93,15 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
     ACTION_WORKSPACE_UP,
 };
+use flamewm_platform::shortcuts::{ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP};
+use flamewm_platform::system::MediaAudioKey;
 use flamewm_window_core::{
     SnapTarget, snap_geometry as core_snap_geometry, snap_target_in_output as core_snap_target_in_output,
 };
 use x11rb::connection::Connection;
 use x11rb::errors::{ReplyError, ReplyOrIdError};
 use x11rb::protocol::damage::{self};
+use x11rb::protocol::randr::{self, ConnectionExt as _};
 use x11rb::protocol::shape::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::{ErrorKind, Event};
@@ -181,6 +185,8 @@ pub struct WmChangeSet {
     pub work_area: bool,
     /// One-shot request from the ToggleStartMenu shortcut; the flush emits it once.
     pub start_menu_toggle: bool,
+    /// One-shot media-key request; the flush dispatches it through the platform host.
+    pub media_audio_key: Option<MediaAudioKey>,
 }
 
 impl WmChangeSet {
@@ -192,7 +198,12 @@ impl WmChangeSet {
 
     #[cfg(test)]
     fn any(self) -> bool {
-        self.windows || self.workspaces || self.panels || self.work_area || self.start_menu_toggle
+        self.windows
+            || self.workspaces
+            || self.panels
+            || self.work_area
+            || self.start_menu_toggle
+            || self.media_audio_key.is_some()
     }
 }
 
@@ -1063,6 +1074,11 @@ fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError>
             | EventMask::KEY_RELEASE,
     );
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
+    conn.randr_select_input(
+        screen.root,
+        randr::NotifyMask::SCREEN_CHANGE | randr::NotifyMask::OUTPUT_CHANGE | randr::NotifyMask::CRTC_CHANGE,
+    )?
+    .check()?;
     if let Err(ReplyError::X11Error(ref error)) = result {
         if error.error_kind == ErrorKind::Access {
             eprintln!("flamewm: another window manager is already running on this display");
@@ -1109,6 +1125,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     workspace_focus: Vec<Option<Window>>,
     screen_rect: Rect,
     output_work_areas: Vec<OutputWorkArea>,
+    /// Set by RandR notifications; the runtime refreshes the display snapshot on the next turn.
+    display_topology_dirty: TopologyDirty,
     dock_struts: HashMap<Window, [u32; 12]>,
     snap_preview: SnapPreviewSurface,
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
@@ -1231,6 +1249,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 u32::from(screen.height_in_pixels),
             ),
             output_work_areas: Vec::new(),
+            display_topology_dirty: TopologyDirty::default(),
             dock_struts: HashMap::new(),
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),
@@ -1467,6 +1486,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         )
     }
 
+    /// Consumes the RandR topology-change flag; true when the display snapshot must be refreshed.
+    pub(crate) fn take_display_topology_dirty(&mut self) -> bool {
+        self.display_topology_dirty.take()
+    }
+
     pub(crate) fn set_output_work_areas(
         &mut self,
         areas: Vec<(flamewm_api::OutputId, flamewm_api::Rect, flamewm_api::Rect, bool)>,
@@ -1485,7 +1509,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn work_area_for_rect(&self, rect: Rect) -> Rect {
-        self.output_for_rect(rect).map_or_else(|| self.work_area(), |output| output.work_area)
+        work_area_for_rect_in(&self.output_work_areas, self.work_area(), rect)
     }
 
     fn output_for_point(&self, x: i32, y: i32, fallback: Rect) -> Option<&OutputWorkArea> {
@@ -1680,20 +1704,28 @@ impl<'a, C: Connection> Wm<'a, C> {
             i32::try_from(self.screen().width_in_pixels).unwrap_or(i32::MAX),
             i32::try_from(self.screen().height_in_pixels).unwrap_or(i32::MAX),
         );
-        Some(interaction::build_controller(
-            client,
-            state.frame,
-            state.placement,
-            {
-                let work = self.work_area_for_rect(state.outer);
-                RootRect::new(work.x, work.y, work.width.max(1) as i32, work.height.max(1) as i32)
-            },
-            screen_rect,
-            state.hints,
-            self.extents_for(client),
-            session,
-            region_map,
-        ))
+        Some(
+            interaction::build_controller(
+                client,
+                state.frame,
+                state.placement,
+                {
+                    let work = self.work_area_for_rect(state.outer);
+                    RootRect::new(work.x, work.y, work.width.max(1) as i32, work.height.max(1) as i32)
+                },
+                screen_rect,
+                state.hints,
+                self.extents_for(client),
+                session,
+                region_map,
+            )
+            .with_outputs(self.output_root_rects()),
+        )
+    }
+
+    /// Output geometries in root coordinates: the bound for drags (windows may overflow the work area).
+    fn output_root_rects(&self) -> Vec<RootRect> {
+        self.output_work_areas.iter().map(|output| to_root_rect(output.geometry)).collect()
     }
 
     fn store_controller(&mut self, client: Window, controller: &ControllerState) {
@@ -2294,28 +2326,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             if minimized {
                 continue;
             }
-            match mode {
-                PlacementMode::Fullscreen => continue,
-                PlacementMode::Maximized => {
-                    let next = self.work_area_for_rect(outer);
-                    if next != outer {
-                        if let Some(state) = self.clients.get_mut(&id) {
-                            state.set_outer(next);
-                        }
-                        self.apply_frame_geometry(id)?;
-                        self.publish_window_state(id)?;
-                    }
+            let next = rehome_outer(mode, outer, &self.output_work_areas, self.work_area());
+            if next != outer {
+                if let Some(state) = self.clients.get_mut(&id) {
+                    state.set_outer(next);
                 }
-                PlacementMode::Floating | PlacementMode::Snapped(_) => {
-                    let clamped = outer.clamp_inside(self.work_area_for_rect(outer));
-                    if clamped != outer {
-                        if let Some(state) = self.clients.get_mut(&id) {
-                            state.set_outer(clamped);
-                        }
-                        self.apply_frame_geometry(id)?;
-                        self.publish_window_state(id)?;
-                    }
-                }
+                self.apply_frame_geometry(id)?;
+                self.publish_window_state(id)?;
             }
         }
         self.mark_work_area();
@@ -2531,6 +2548,22 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(classify(&self.atoms, &types, override_redirect))
     }
 
+    /// Keeps every dock above a normal client that was just raised to the top of the stack.
+    /// Fullscreen clients keep their existing stacking, so they are not raised over docks here.
+    fn raise_docks_above_normal(&self, client: Window, frame: Window) -> Result<(), ReplyError> {
+        let fullscreen = match self.clients.get(&client) {
+            Some(state) => state.is_fullscreen(),
+            None => return Ok(()),
+        };
+        if fullscreen {
+            return Ok(());
+        }
+        for dock in self.dock_struts.keys() {
+            self.conn.configure_window(*dock, &dock_above_frame_aux(frame))?;
+        }
+        Ok(())
+    }
+
     fn map_unframed(&self, window: Window, stack_mode: StackMode) -> Result<(), ReplyError> {
         self.conn.map_window(window)?;
         self.conn
@@ -2642,6 +2675,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let decoration = self.read_decoration(window, kind);
         let extents = self.extents_for_decoration(decoration);
         let work_root = self.work_root();
+        let output_rects = self.output_root_rects();
         let start = crate::client::placement_floating(RootRect::new(0, 0, 1, 1));
         let initial_req = GeometryRequest {
             reason: GeometryReason::InitialMap,
@@ -2652,6 +2686,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             pointer_delta: (0, 0),
             edges: crate::frame::model::ResizeEdges::none(),
             work_area: work_root,
+            outputs: &output_rects,
             hints,
             frame_extents: extents,
         };
@@ -2863,6 +2898,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.mark_windows();
         self.publish_client_list()?;
         self.focus(window)?;
+        self.raise_docks_above_normal(window, frame)?;
         // Window-open effect: only a new, non-adopted normal top-level. It starts on a later
         // Expose, so arming never delays the map or the focus above.
         if !adopt && kind == WindowKind::Normal && self.animator.wants(Effect::Open) {
@@ -2984,6 +3020,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
+            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => self.display_topology_dirty.mark(),
             Event::ClientMessage(event) => self.handle_client_message(event)?,
             _ => {}
         }
@@ -3057,6 +3094,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             // Chorded start-menu binding: toggle on press. Bare Super is handled above
             // and toggles through the SuperTap commit at the end of the batch.
             ACTION_TOGGLE_START_MENU => self.changes.start_menu_toggle = true,
+            ACTION_VOLUME_UP => self.changes.media_audio_key = Some(MediaAudioKey::VolumeUp),
+            ACTION_VOLUME_DOWN => self.changes.media_audio_key = Some(MediaAudioKey::VolumeDown),
+            ACTION_VOLUME_MUTE => self.changes.media_audio_key = Some(MediaAudioKey::VolumeMute),
             other => log_unhandled_shortcut_once(other),
         }
         Ok(())
@@ -3353,6 +3393,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             pointer_delta: (0, 0),
             edges: crate::frame::model::ResizeEdges::none(),
             work_area: controller.work_area,
+            outputs: &controller.outputs,
             hints: controller.hints,
             frame_extents: extents,
         };
@@ -4111,6 +4152,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 state.frame,
                 &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
             )?;
+            self.raise_docks_above_normal(client, state.frame)?;
         }
         if self.supports_protocol(client, self.atoms.wm_take_focus)? {
             let event = ClientMessageEvent::new(
@@ -4309,6 +4351,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             frame,
             &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
         );
+        self.raise_docks_above_normal(client, frame)?;
         self.publish_client_list()?;
         Ok(())
     }
@@ -5342,6 +5385,60 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 }
 
+/// RandR topology-change flag. Set by notifications; consumed once per runtime turn.
+#[derive(Debug, Default)]
+pub(crate) struct TopologyDirty(bool);
+
+impl TopologyDirty {
+    fn mark(&mut self) {
+        self.0 = true;
+    }
+
+    fn take(&mut self) -> bool {
+        std::mem::take(&mut self.0)
+    }
+}
+
+/// Work area of the output holding `rect`, else the global work area.
+fn work_area_for_rect_in(outputs: &[OutputWorkArea], global: Rect, rect: Rect) -> Rect {
+    select_output_for_rect(outputs, rect).map_or(global, |index| outputs[index].work_area)
+}
+
+/// Target frame rect for a managed client after the output layout changes.
+/// Floating windows keep a quarter visible on the outputs (may overflow the work area);
+/// Snapped and Maximized keep work-area semantics.
+fn rehome_outer(mode: PlacementMode, outer: Rect, outputs: &[OutputWorkArea], global: Rect) -> Rect {
+    match mode {
+        PlacementMode::Fullscreen => outer,
+        PlacementMode::Maximized => work_area_for_rect_in(outputs, global, outer),
+        PlacementMode::Snapped(_) => {
+            outer.clamp_inside(work_area_for_rect_in(outputs, global, outer))
+        }
+        PlacementMode::Floating => {
+            let rects: Vec<RootRect> = outputs.iter().map(|output| to_root_rect(output.geometry)).collect();
+            from_root_rect(keep_on_outputs(to_root_rect(outer), &rects, to_root_rect(global)))
+        }
+    }
+}
+
+fn to_root_rect(rect: Rect) -> RootRect {
+    RootRect::new(
+        rect.x,
+        rect.y,
+        i32::try_from(rect.width).unwrap_or(i32::MAX),
+        i32::try_from(rect.height).unwrap_or(i32::MAX),
+    )
+}
+
+fn from_root_rect(rect: RootRect) -> Rect {
+    Rect::new(rect.x, rect.y, rect.w.max(0) as u32, rect.h.max(0) as u32)
+}
+
+/// Stacking for a dock: directly above `frame`, the normal window just raised to the top.
+fn dock_above_frame_aux(frame: Window) -> ConfigureWindowAux {
+    ConfigureWindowAux::new().sibling(frame).stack_mode(StackMode::ABOVE)
+}
+
 fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> Option<usize> {
     let center_x = rect.x.saturating_add(i32::try_from(rect.width / 2).unwrap_or(i32::MAX));
     let center_y = rect.y.saturating_add(i32::try_from(rect.height / 2).unwrap_or(i32::MAX));
@@ -6161,6 +6258,92 @@ mod tests {
             observed_release_action(session, PlacementMode::Floating, SnapTarget::LeftHalf),
             ReleaseAction::None
         );
+    }
+
+    #[test]
+    fn topology_dirty_is_consumed_exactly_once_per_change() {
+        // A RandR notification must survive until the runtime consumes it, then clear.
+        let mut dirty = TopologyDirty::default();
+        assert!(!dirty.take());
+        dirty.mark();
+        dirty.mark();
+        assert!(dirty.take());
+        assert!(!dirty.take());
+    }
+
+    fn test_output(id: &str, geometry: (i32, i32, i32, i32), work: (i32, i32, i32, i32), primary: bool) -> OutputWorkArea {
+        OutputWorkArea::from_host((
+            flamewm_api::OutputId::new(id),
+            flamewm_api::Rect::new(geometry.0, geometry.1, geometry.2, geometry.3),
+            flamewm_api::Rect::new(work.0, work.1, work.2, work.3),
+            primary,
+        ))
+    }
+
+    #[test]
+    fn removed_output_rehomes_floating_snapped_and_maximized_clients() {
+        let global = Rect::new(0, 0, 1920, 1040);
+        let surviving = vec![test_output("A", (0, 0, 1920, 1080), (0, 0, 1920, 1040), true)];
+        // A window on the removed right output is pulled onto the surviving output, keeping 1/4
+        // (100 px) visible; it may overflow the primary work area (taskbar band included).
+        let floating = rehome_outer(PlacementMode::Floating, Rect::new(2500, 900, 400, 300), &surviving, global);
+        assert_eq!(floating, Rect::new(1820, 900, 400, 300));
+        let snapped = rehome_outer(
+            PlacementMode::Snapped(crate::frame::model::SnapTarget::Right),
+            Rect::new(2900, 0, 960, 1040),
+            &surviving,
+            global,
+        );
+        assert_eq!(snapped, Rect::new(960, 0, 960, 1040));
+        let maximized = rehome_outer(PlacementMode::Maximized, Rect::new(2000, 0, 1920, 1040), &surviving, global);
+        assert_eq!(maximized, Rect::new(0, 0, 1920, 1040));
+        // Fullscreen is left to its own owner; reconcile must not move it.
+        let fullscreen = Rect::new(2000, 0, 1920, 1080);
+        assert_eq!(rehome_outer(PlacementMode::Fullscreen, fullscreen, &surviving, global), fullscreen);
+        // A client already inside the surviving layout is untouched.
+        let inside = Rect::new(100, 100, 300, 200);
+        assert_eq!(rehome_outer(PlacementMode::Floating, inside, &surviving, global), inside);
+    }
+
+    #[test]
+    fn negative_origin_outputs_clamp_without_unsigned_wrap() {
+        let global = Rect::new(0, 0, 1920, 1040);
+        let outputs = vec![
+            test_output("L", (-1920, 0, 1920, 1080), (-1920, 0, 1920, 1040), false),
+            test_output("P", (0, 0, 1920, 1080), (0, 0, 1920, 1040), true),
+            test_output("T", (0, -1080, 1920, 1080), (0, -1080, 1920, 1040), false),
+        ];
+        // Overlaps the left output with y above its work area: floating windows may overflow the
+        // work area, and this one keeps a quarter visible on the outputs, so it is left alone.
+        assert_eq!(
+            rehome_outer(PlacementMode::Floating, Rect::new(-1900, -50, 400, 300), &outputs, global),
+            Rect::new(-1900, -50, 400, 300)
+        );
+        // Lives entirely on the negative-y output: already inside its work area, unchanged.
+        let above = Rect::new(100, -1000, 400, 300);
+        assert_eq!(rehome_outer(PlacementMode::Floating, above, &outputs, global), above);
+        // Fully outside every output: pulled to the nearest output so 1/4 (100 px) stays visible.
+        assert_eq!(
+            rehome_outer(PlacementMode::Floating, Rect::new(-2500, 100, 400, 300), &outputs, global),
+            Rect::new(-2220, 100, 400, 300)
+        );
+        // Snapped keeps work-area semantics: no output contains it, so the primary work area wins.
+        assert_eq!(
+            rehome_outer(
+                PlacementMode::Snapped(crate::frame::model::SnapTarget::Left),
+                Rect::new(-2500, 100, 400, 300),
+                &outputs,
+                global
+            ),
+            Rect::new(0, 100, 400, 300)
+        );
+    }
+
+    #[test]
+    fn dock_raise_targets_frame_sibling_above_so_dock_stays_over_focused_normal() {
+        let aux = dock_above_frame_aux(0x42);
+        assert_eq!(aux.sibling, Some(0x42));
+        assert_eq!(aux.stack_mode, Some(StackMode::ABOVE));
     }
 
     #[test]

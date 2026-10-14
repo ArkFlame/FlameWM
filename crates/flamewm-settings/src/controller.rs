@@ -910,6 +910,99 @@ mod tests {
         );
     }
 
+    fn appearance_snapshot(revision: u64, appearance: Option<&str>) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(revision);
+        if let Some(appearance) = appearance {
+            snapshot.values.insert(
+                "appearance".to_owned(),
+                SettingValue::Text(appearance.to_owned()),
+            );
+        }
+        snapshot
+    }
+
+    #[test]
+    fn application_appearance_buttons_write_exact_values_and_highlight_the_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
+                1,
+                Some("dark"),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
+                2,
+                Some("light"),
+            ))));
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application
+            .sync(&mut document)
+            .expect("sync initial snapshot");
+        assert!(document.highlighted["appearance-apps-dark"]);
+        assert!(!document.highlighted["appearance-apps-light"]);
+
+        application
+            .handle_action(&release("settings.appearance.apps.light"), &mut document)
+            .expect("light option");
+        assert!(document.highlighted["appearance-apps-light"]);
+        assert!(!document.highlighted["appearance-apps-dark"]);
+
+        let writes: Vec<(String, SettingValue)> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => {
+                    transaction.changes.first().and_then(|change| {
+                        change
+                            .value
+                            .clone()
+                            .map(|value| (change.key.clone(), value))
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            vec![(
+                "appearance".to_owned(),
+                SettingValue::Text("light".to_owned())
+            )],
+        );
+    }
+
+    #[test]
+    fn application_appearance_highlights_nothing_without_an_authoritative_value() {
+        let transport = RecordingTransport {
+            responses: VecDeque::from([Ok(ControlResponse::Settings(appearance_snapshot(
+                1, None,
+            )))]),
+            ..RecordingTransport::default()
+        };
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application
+            .sync(&mut document)
+            .expect("sync snapshot without appearance");
+        assert!(!document.highlighted["appearance-apps-dark"]);
+        assert!(!document.highlighted["appearance-apps-light"]);
+    }
+
     #[test]
     fn external_decoration_change_moves_the_highlight_without_a_write() {
         let requests = Rc::new(RefCell::new(Vec::new()));
@@ -1140,6 +1233,10 @@ mod tests {
             ("settings.lock.clock.13h", false),
             ("settings.lock.background.choose", true),
             ("settings.lock.background.clear", true),
+            ("settings.lock.background.default", true),
+            ("settings.wallpaper.default", true),
+            ("settings.wallpaper.clear", true),
+            ("settings.wallpaper.reset", false),
             ("settings.avatar.choose", true),
             ("settings.avatar.clear", true),
             ("settings.start-icon.choose", true),
@@ -1662,6 +1759,63 @@ mod tests {
             })
             .collect();
         assert_eq!(written, vec![SettingValue::Integer(64)]);
+    }
+
+    #[test]
+    fn background_mode_actions_write_distinct_modes_and_never_touch_saved_paths() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        for revision in 1..=5 {
+            transport
+                .responses
+                .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                    revision,
+                    "wallpaperMode",
+                    SettingValue::Text("default".to_owned()),
+                ))));
+        }
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        for action in [
+            "settings.wallpaper.default",
+            "settings.wallpaper.clear",
+            "settings.lock.background.clear",
+            "settings.lock.background.default",
+        ] {
+            application
+                .handle_action(&release(action), &mut document)
+                .expect("background mode action");
+        }
+
+        let written: Vec<(String, SettingValue)> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .and_then(|change| Some((change.key.clone(), change.value.clone()?))),
+                _ => None,
+            })
+            .collect();
+        let text = |value: &str| SettingValue::Text(value.to_owned());
+        assert_eq!(
+            written,
+            vec![
+                ("wallpaperMode".to_owned(), text("default")),
+                ("wallpaperMode".to_owned(), text("solid")),
+                ("lockBackgroundMode".to_owned(), text("solid")),
+                ("lockBackgroundMode".to_owned(), text("default")),
+            ],
+            "Clear must write solid, Default must write default, and no saved path is erased"
+        );
     }
 
     #[test]

@@ -25,17 +25,6 @@ pub fn project_audio_full(
     settings: flamewm_shell_core::status::AudioSettings,
     scroll_offset: u32,
 ) -> Result<(), String> {
-    let view = crate::taskbar::status::audio::project(&snapshot.system);
-    let popover = crate::taskbar::status::audio::popover_view(&snapshot.system);
-    let details = if snapshot.system.audio.availability == ServiceAvailability::Unavailable {
-        "Audio unavailable".to_owned()
-    } else {
-        popover
-            .as_ref()
-            .map(|popover| popover.popover.details.clone())
-            .unwrap_or_else(|| view.label.clone())
-    };
-    document.text("audio-details", details)?;
     let devices = tab == flamewm_shell_core::status::AudioTab::Devices;
     document.visible("audio-tab-devices-bg", devices)?;
     document.visible("audio-tab-apps-bg", !devices)?;
@@ -217,6 +206,7 @@ mod audio_template_tests {
                 name: "Firefox".to_owned(),
                 volume_percent: 80,
                 muted: false,
+                ..Default::default()
             },
             AudioStreamSnapshot {
                 id: 11,
@@ -224,6 +214,7 @@ mod audio_template_tests {
                 name: "Spotify".to_owned(),
                 volume_percent: 25,
                 muted: true,
+                ..Default::default()
             },
         ];
         let settings = AudioSettings { raise_maximum };
@@ -353,6 +344,49 @@ mod audio_template_tests {
 
     // Synthetic layout fixture: sink 0%, sink 100% and source 50% on Devices;
     // an app stream at 150% on Applications. Raise-maximum is on, so the cap is 150.
+    // Raw PulseAudio sink ids never reach the popup; the Devices row shows the
+    // endpoint description instead.
+    #[test]
+    fn popup_hides_raw_sink_name_and_devices_row_uses_description() {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        snapshot.system.audio.sink_name = "alsa_output.pci-x".to_owned();
+        snapshot.system.audio.endpoints = vec![AudioEndpointSnapshot {
+            id: 1,
+            kind: AudioEndpointKind::Sink,
+            name: "alsa_output.pci-x".to_owned(),
+            description: "Built-in Audio Analog Stereo".to_owned(),
+            volume_percent: 50,
+            muted: false,
+            is_default: true,
+        }];
+        let mut document =
+            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
+        let mut recorder = AudioRecorder {
+            document: &mut document,
+            recorded: Recorded::default(),
+        };
+        project_audio_full(
+            &mut recorder,
+            &snapshot,
+            AudioTab::Devices,
+            AudioSettings::default(),
+            0,
+        )
+        .expect("audio projection");
+        let recorded = recorder.recorded;
+        assert!(
+            recorded.texts.values().all(|value| !value.contains("alsa_output")),
+            "raw sink id leaked: {:?}",
+            recorded.texts
+        );
+        assert!(!recorded.texts.contains_key("audio-details"));
+        assert_eq!(
+            text(&recorded, "audio-slot-1-label"),
+            "Built-in Audio Analog Stereo"
+        );
+    }
+
     fn layout_document(snapshot: &crate::ShellSnapshot, tab: AudioTab) -> flamewm_ui_x11::UiDocument {
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
@@ -428,6 +462,7 @@ mod audio_template_tests {
             name: "Loud App".to_owned(),
             volume_percent: 150,
             muted: false,
+            ..Default::default()
         }];
         snapshot
     }

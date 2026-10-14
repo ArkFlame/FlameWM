@@ -17,7 +17,7 @@ use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::{ControlClient, ControlSignalClient, MutationDispatcher};
 use flamewm_dbus_reactor::BusKind;
 use flamewm_desktop_core::file_actions::{
-    CommandIntent, EntryMenuAction, LauncherOpen, create_new_folder, desktop_settings,
+    CommandIntent, EntryMenuAction, LauncherOpen, create_new_folder,
     entry_context_menu, launcher_open_kind, open_terminal, rename_entry_no_replace,
     shortcut_destination, terminal_program, validate_rename_name,
 };
@@ -367,11 +367,7 @@ fn main() -> Result<(), String> {
         surface.height as u32,
         packaged_root(),
     )?;
-    wallpaper_loader
-        .request(
-            setting_text(&settings, "wallpaper"),
-            wallpaper_fit::parse(&setting_text(&settings, "wallpaperFit")),
-        )
+    request_wallpaper(&mut wallpaper_loader, &settings.values)
         .map_err(|_| "wallpaper loader closed during startup".to_owned())?;
     let mut model = DesktopModel::default();
     let output = OutputId::new("default");
@@ -513,14 +509,10 @@ fn main() -> Result<(), String> {
                             flamewm_control_wire::ControlSignal::SettingsSnapshotChanged {
                                 snapshot,
                             } => {
-                                let wallpaper = match snapshot.values.get("wallpaper") {
-                                    Some(SettingValue::Text(path)) => path.clone(),
-                                    _ => String::new(),
-                                };
                                 let mut state = state_cell.borrow_mut();
-                                let fit =
-                                    wallpaper_fit::parse(&setting_text(&snapshot, "wallpaperFit"));
-                                if let Err(error) = state.wallpaper_loader.request(wallpaper, fit) {
+                                if let Err(error) =
+                                    request_wallpaper(&mut state.wallpaper_loader, &snapshot.values)
+                                {
                                     eprintln!(
                                         "desktop: wallpaper settings request failed: {error:?}"
                                     );
@@ -759,6 +751,29 @@ fn query_settings() -> SettingsSnapshot {
         Err(error) => {
             eprintln!("desktop: startup settings subscription degraded: {error}; using defaults");
             fallback
+        }
+    }
+}
+
+/// Resolves `wallpaperMode` (+ custom path / solid color) and requests it. Runs on every
+/// settings snapshot, so a mode or color change refreshes even when the path is unchanged.
+fn request_wallpaper(
+    loader: &mut wallpaper_loader::WallpaperLoader,
+    values: &std::collections::BTreeMap<String, SettingValue>,
+) -> Result<u64, wallpaper_loader::LoaderClosed> {
+    let text = |key: &str| match values.get(key) {
+        Some(SettingValue::Text(value)) => value.clone(),
+        _ => String::new(),
+    };
+    let source = wallpaper_loader::source_for_settings(
+        &text("wallpaperMode"),
+        &text("wallpaper"),
+        &text("wallpaperColor"),
+    );
+    match source {
+        wallpaper_loader::WallpaperSource::Solid(rgb) => loader.request_solid(rgb),
+        wallpaper_loader::WallpaperSource::Image(path) => {
+            loader.request(path, wallpaper_fit::parse(&text("wallpaperFit")))
         }
     }
 }
@@ -1520,6 +1535,15 @@ fn open_item_inner(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> 
     }
 }
 
+/// General settings: the settings app's default page, with no `--page` deep link.
+fn general_settings() -> CommandIntent {
+    CommandIntent {
+        program: "flamewm-settings".to_owned(),
+        argv: Vec::new(),
+        cwd: None,
+    }
+}
+
 fn spawn_intent(intent: &CommandIntent) -> Result<(), String> {
     let mut command = Command::new(&intent.program);
     command.args(&intent.argv);
@@ -1575,8 +1599,8 @@ fn handle_menu_action(
             sync_menu(document, state)?;
         }
         "menu.settings" => {
-            if let Err(error) = spawn_intent(&desktop_settings()) {
-                report_action_failure("open desktop settings", error);
+            if let Err(error) = spawn_intent(&general_settings()) {
+                report_action_failure("open flamewm settings", error);
                 spawn_failure_counter().increment();
             }
             state.menu = None;
@@ -2454,5 +2478,26 @@ mod packaged_root_tests {
             resolve_packaged_root(Some(executable), manifest_root, |_| true),
             manifest_root.to_path_buf()
         );
+    }
+}
+
+#[cfg(test)]
+mod general_settings_tests {
+    use super::general_settings;
+
+    #[test]
+    fn general_settings_intent_has_no_page_deep_link() {
+        let intent = general_settings();
+        assert_eq!(intent.program, "flamewm-settings");
+        assert!(intent.argv.is_empty());
+        assert!(intent.cwd.is_none());
+    }
+
+    #[test]
+    fn desktop_menu_settings_row_is_flamewm_settings_only() {
+        let html = include_str!("../../../ui/desktop/index.html");
+        assert_eq!(html.matches("id=\"menu-row-settings\"").count(), 1);
+        assert!(html.contains("<span>FlameWM Settings</span>"));
+        assert!(!html.contains("Desktop and Wallpaper"));
     }
 }

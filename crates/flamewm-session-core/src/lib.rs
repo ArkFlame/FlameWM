@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::settings::AppearanceMode;
 
+pub mod appearance;
+pub use appearance::{
+    AppearancePlan, AppearanceProbe, Toolkit, ToolkitStatus, gtk3_theme_name,
+    kde_platform_theme_installed, materialize_owned_files, owned_appearance_root, plan_appearance,
+    resolve_startup_appearance,
+};
+
 /// Bundled cursor authority: FlameWM-Breeze-Dark (Breeze Dark Xcursor files
 /// under a FlameWM-owned theme id), size 24. Never claims KDE identity.
 pub const CURSOR_THEME_ID: &str = "FlameWM-Breeze-Dark";
@@ -124,7 +131,11 @@ pub fn build_launch_plan_with_appearance(
         existing_env,
         cursor_library_path,
     );
-    let overlay = appearance_environment(appearance);
+    let probe = AppearanceProbe {
+        kde_platform_theme: kde_platform_theme_installed(existing_env),
+        ..AppearanceProbe::default()
+    };
+    let overlay = plan_appearance(paths, existing_env, appearance, probe).environment;
     for process in &mut plan.processes {
         for (key, value) in &overlay {
             process.environment.insert(key.clone(), value.clone());
@@ -252,9 +263,11 @@ fn flame_environment(
     environment
 }
 
-/// Appearance markers for the env producer side only: FLAMEWM_APPEARANCE and
+/// Appearance markers for the env producer side: FLAMEWM_APPEARANCE and
 /// FLAMEWM_DARK_MODE. Never synthesizes generic GTK_THEME/QT_STYLE_OVERRIDE
 /// defaults; explicit inherited toolkit values pass through untouched.
+/// The Qt channel is the owned XDG_CONFIG_DIRS prefix added by
+/// [`appearance::plan_appearance`], not a style-override variable.
 #[must_use]
 pub fn appearance_environment(appearance: AppearanceMode) -> BTreeMap<String, String> {
     let mut environment = BTreeMap::new();
@@ -536,6 +549,23 @@ mod tests {
         );
         assert!(!environment.contains_key("GTK_THEME"));
         assert!(!environment.contains_key("QT_STYLE_OVERRIDE"));
+        // Decision (B6): the Qt channel is an owned kdeglobals reached through
+        // an XDG_CONFIG_DIRS prefix. QT_QPA_PLATFORMTHEME=kde is set only when
+        // the KDE platform theme plugin is installed and no value is inherited.
+        // GTK_THEME and QT_STYLE_OVERRIDE stay forbidden.
+        let xdg = environment
+            .get("XDG_CONFIG_DIRS")
+            .expect("owned kdeglobals channel");
+        assert!(xdg.starts_with(&format!("{}:", owned_appearance_root(&paths).display())));
+        let expected_theme = kde_platform_theme_installed(&existing).then_some("kde");
+        assert_eq!(
+            environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str),
+            expected_theme
+        );
+        // An inherited explicit platform theme is never overlaid.
+        let explicit = BTreeMap::from([("QT_QPA_PLATFORMTHEME".to_owned(), "fusion".to_owned())]);
+        let plan = build_launch_plan_with_appearance(&paths, &[], &explicit, None, AppearanceMode::Dark);
+        assert!(!plan.processes[0].environment.contains_key("QT_QPA_PLATFORMTHEME"));
     }
 
     fn install_cursor_theme(root: &std::path::Path, name: &str) {

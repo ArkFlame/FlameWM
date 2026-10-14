@@ -18,7 +18,8 @@ mod wm;
 
 pub use flamewm_render_x11::apply_cursor_theme;
 pub use runtime::{
-    SettingsObserver, SettingsWake, persisted_cursor_theme, run, run_with_settings_observer,
+    SettingsObserver, SettingsWake, persisted_appearance, persisted_cursor_theme, run,
+    run_with_settings_observer,
 };
 pub use wm::WmConfig;
 
@@ -340,6 +341,29 @@ fn parse_wm_class(raw: &[u8]) -> (String, String) {
     (instance, class)
 }
 
+/// Output owning a window rect: centre containment, else largest overlap, else
+/// primary. Same rule as `wm.rs::select_output_for_rect` (not importable here).
+fn output_for_window_rect(outputs: &[OutputSnapshot], rect: Rect) -> Option<OutputId> {
+    let centre = Point::new(
+        rect.x.saturating_add(rect.width / 2),
+        rect.y.saturating_add(rect.height / 2),
+    );
+    if let Some(output) = outputs.iter().find(|output| output.geometry.contains(centre)) {
+        return Some(output.id.clone());
+    }
+    let mut best: Option<(&OutputSnapshot, u64)> = None;
+    for output in outputs {
+        let width = rect.right().min(output.geometry.right()).saturating_sub(rect.x.max(output.geometry.x));
+        let height = rect.bottom().min(output.geometry.bottom()).saturating_sub(rect.y.max(output.geometry.y));
+        let area = u64::try_from(width).unwrap_or(0).saturating_mul(u64::try_from(height).unwrap_or(0));
+        if area > 0 && best.map_or(true, |(_, score)| area > score) {
+            best = Some((output, area));
+        }
+    }
+    best.map(|(output, _)| output.id.clone())
+        .or_else(|| outputs.iter().find(|output| output.primary).map(|output| output.id.clone()))
+}
+
 impl WindowPort for X11Desktop {
     fn get(&self, reference: WindowRef) -> FlameResult<flamewm_api::window::WindowSnapshot> {
         let window = self.check_window(reference)?;
@@ -369,18 +393,16 @@ impl WindowPort for X11Desktop {
             .copied()
             .unwrap_or(0);
         let workspace = self.workspace_snapshot()?;
-        let output = self
-            .display_snapshot()?
-            .outputs
-            .into_iter()
-            .find(|output| {
-                output.geometry.contains(Point::new(
-                    i32::from(geometry.x) + i32::from(geometry.width) / 2,
-                    i32::from(geometry.y) + i32::from(geometry.height) / 2,
-                ))
-            })
-            .map(|output| output.id)
-            .unwrap_or_else(|| OutputId::new("default"));
+        let output = output_for_window_rect(
+            &self.display_snapshot()?.outputs,
+            Rect::new(
+                i32::from(geometry.x),
+                i32::from(geometry.y),
+                i32::from(geometry.width),
+                i32::from(geometry.height),
+            ),
+        )
+        .unwrap_or_else(|| OutputId::new("default"));
         let title = self
             .text(window, "_NET_WM_NAME")
             .or_else(|_| self.text(window, "WM_NAME"))?;
@@ -1107,6 +1129,71 @@ impl DisplayPort for X11Desktop {
         }
         self.pending_mode = None;
         self.flush()
+    }
+}
+
+#[cfg(test)]
+mod output_derivation_tests {
+    use super::{OutputId, OutputSnapshot, Rect, output_for_window_rect};
+    use flamewm_api::ModeId;
+
+    fn output(name: &str, geometry: Rect, primary: bool) -> OutputSnapshot {
+        OutputSnapshot {
+            id: OutputId::new(name),
+            connector: name.to_owned(),
+            edid_identity: String::new(),
+            connected: true,
+            primary,
+            geometry,
+            current_mode: ModeId(1),
+            modes: Vec::new(),
+            shell_scale_percent: 100,
+        }
+    }
+
+    fn two_outputs() -> Vec<OutputSnapshot> {
+        vec![
+            output("A", Rect::new(0, 0, 1000, 800), true),
+            output("B", Rect::new(1000, 0, 1000, 800), false),
+        ]
+    }
+
+    #[test]
+    fn centre_containment_picks_the_output_under_the_window_centre() {
+        let outputs = two_outputs();
+        let on_b = Rect::new(1100, 100, 200, 200);
+        assert_eq!(output_for_window_rect(&outputs, on_b), Some(OutputId::new("B")));
+        // Straddling the seam: centre at x=1000 belongs to B.
+        let seam = Rect::new(900, 100, 200, 200);
+        assert_eq!(output_for_window_rect(&outputs, seam), Some(OutputId::new("B")));
+    }
+
+    #[test]
+    fn negative_origin_output_is_found_by_centre() {
+        let outputs = vec![
+            output("LEFT", Rect::new(-1920, 0, 1920, 1080), false),
+            output("A", Rect::new(0, 0, 1920, 1080), true),
+        ];
+        let window = Rect::new(-1800, 100, 400, 300);
+        assert_eq!(output_for_window_rect(&outputs, window), Some(OutputId::new("LEFT")));
+        let spanning = Rect::new(-100, 100, 400, 300);
+        assert_eq!(output_for_window_rect(&outputs, spanning), Some(OutputId::new("A")));
+    }
+
+    #[test]
+    fn off_screen_window_falls_back_to_largest_overlap_then_primary() {
+        let outputs = two_outputs();
+        // Centre (2100, 800) is off both outputs; overlap with B is 100x100.
+        let mostly_b = Rect::new(1900, 700, 400, 200);
+        assert_eq!(output_for_window_rect(&outputs, mostly_b), Some(OutputId::new("B")));
+        // No overlap at all: primary output wins.
+        let nowhere = Rect::new(5000, 5000, 100, 100);
+        assert_eq!(output_for_window_rect(&outputs, nowhere), Some(OutputId::new("A")));
+    }
+
+    #[test]
+    fn no_outputs_yields_none_so_caller_keeps_its_fallback() {
+        assert_eq!(output_for_window_rect(&[], Rect::new(0, 0, 10, 10)), None);
     }
 }
 

@@ -12,7 +12,7 @@ use crate::taskbar::workspaces::{
 };
 use crate::ShellSnapshot;
 use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
-use flamewm_shell_core::{task_visual_states, StartModel};
+use flamewm_shell_core::{task_visual_states_on_output, StartModel};
 
 mod audio;
 mod calendar;
@@ -163,7 +163,12 @@ pub fn project_panel(
     icon_resolver: &mut IconResolver,
 ) -> Result<(), String> {
     project_taskbar_height(document, snapshot)?;
-    let states = task_visual_states(&snapshot.panels, &snapshot.windows, &snapshot.applications);
+    let states = task_visual_states_on_output(
+        &snapshot.panels,
+        &snapshot.windows,
+        &snapshot.applications,
+        snapshot.panels.panels.first().map(|panel| &panel.output),
+    );
     let status = crate::taskbar::status::project(&snapshot.system).views;
     let workspaces = project_workspaces(snapshot.workspaces.as_ref());
     for index in 0..TASK_SLOT_COUNT {
@@ -285,8 +290,64 @@ pub fn project_panel(
     document.visible("tray-volume-icon", !status.audio.muted)?;
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
     document.visible("tray-network", status.network.visible)?;
+    project_battery_tray(document, &snapshot.system.power)?;
     Ok(())
 }
+
+/// Tray battery: visibility and glyph come from the pure `battery` rules.
+pub fn project_battery_tray(
+    document: &mut impl UiDocumentAccess,
+    power: &flamewm_api::system::PowerSnapshot,
+) -> Result<(), String> {
+    use crate::taskbar::status::battery::{glyph_for_percent, BATTERY_GLYPHS};
+    document.visible("tray-battery", crate::taskbar::status::battery::tray_visible(power))?;
+    let glyph = glyph_for_percent(power.percent);
+    for candidate in BATTERY_GLYPHS {
+        document.visible(
+            &format!("tray-battery-{}", candidate.id_suffix()),
+            candidate == glyph,
+        )?;
+    }
+    Ok(())
+}
+
+/// Battery menu body: percent, state and CPU text, progress fill, and the
+/// charging glyph variant. Uses the full 0..=100 range (menu is not hidden).
+pub fn project_battery_menu(
+    document: &mut impl UiDocumentAccess,
+    power: &flamewm_api::system::PowerSnapshot,
+    track_width: f32,
+) -> Result<(), String> {
+    use crate::taskbar::status::battery::{
+        cpu_text, glyph_for_percent, progress_width, state_text, BATTERY_GLYPHS,
+    };
+    use flamewm_api::system::PowerState;
+    let charging = power.state == PowerState::Charging;
+    let glyph = glyph_for_percent(power.percent);
+    document.text("battery-percent", format!("{}%", power.percent.min(100)))?;
+    document.text("battery-state", state_text(power.state).to_owned())?;
+    document.text("battery-cpu", cpu_text(power.cpu_percent))?;
+    document.size(
+        "battery-progress-fill",
+        progress_width(power.percent, track_width),
+        BATTERY_PROGRESS_HEIGHT,
+    )?;
+    for candidate in BATTERY_GLYPHS {
+        let shown = candidate == glyph;
+        document.visible(
+            &format!("battery-icon-{}", candidate.id_suffix()),
+            shown && !charging,
+        )?;
+        document.visible(
+            &format!("battery-icon-{}-charging", candidate.id_suffix()),
+            shown && charging,
+        )?;
+    }
+    Ok(())
+}
+
+/// Height of the battery menu progress fill (matches ui/shell/battery.html).
+pub const BATTERY_PROGRESS_HEIGHT: f32 = 8.0;
 
 /// The single Start result owner: every projection and click path reads this.
 /// A non-empty query searches ALL categories (the category rail is hidden);
@@ -398,6 +459,8 @@ pub fn project_context_menu(
         "context-workspace-activate",
         "context-workspace-insert-after",
         "context-workspace-remove",
+        "context-taskbar-new-desktop",
+        "context-taskbar-settings",
     ] {
         document.visible(id, false)?;
     }
@@ -422,6 +485,13 @@ pub fn project_context_menu(
                     if let flamewm_ui_core::MenuEntry::Action { id, .. } = entry {
                         document.visible(&format!("context-workspace-{id}"), true)?;
                     }
+                }
+            }
+        }
+        crate::ContextMenuKind::Taskbar => {
+            for entry in crate::taskbar::context_menu::taskbar_menu() {
+                if let flamewm_ui_core::MenuEntry::Action { id, .. } = entry {
+                    document.visible(&format!("context-{id}"), true)?;
                 }
             }
         }
@@ -697,6 +767,150 @@ mod panel_template_tests {
             checked.push(id);
         }
         assert_eq!(checked.len(), 12);
+    }
+
+    // REGRESSION: the battery popup shows exactly one glyph node, charging-aware,
+    // on the compiled flamewm-battery.rwr artifact for each charge bucket.
+    // MUTATION: keep a retired low node or project the wrong bucket in the menu.
+    #[test]
+    fn battery_menu_shows_exactly_one_glyph_on_real_artifact() {
+        use crate::taskbar::status::battery::BATTERY_GLYPHS;
+        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+        const BATTERY_ARTIFACT: &[u8] =
+            include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr"));
+        let cases = [
+            (5, PowerState::Discharging, "battery-icon-caution"),
+            (15, PowerState::Discharging, "battery-icon-020"),
+            (45, PowerState::Discharging, "battery-icon-050"),
+            (100, PowerState::Discharging, "battery-icon-100"),
+            (45, PowerState::Charging, "battery-icon-050-charging"),
+        ];
+        let ids: Vec<String> = BATTERY_GLYPHS
+            .iter()
+            .flat_map(|glyph| {
+                [
+                    format!("battery-icon-{}", glyph.id_suffix()),
+                    format!("battery-icon-{}-charging", glyph.id_suffix()),
+                ]
+            })
+            .collect();
+        for (percent, state, expected) in cases {
+            let power = PowerSnapshot {
+                available: ServiceAvailability::Available,
+                present: true,
+                percent,
+                state,
+                cpu_percent: None,
+            };
+            let mut document =
+                flamewm_ui_x11::decode_document(BATTERY_ARTIFACT).expect("battery artifact must decode");
+            project_battery_menu(&mut document, &power, 268.0).expect("battery menu projects");
+            let viewport = (300.0, 132.0);
+            let lit: Vec<&str> = ids
+                .iter()
+                .map(String::as_str)
+                .filter(|id| document.layout_box_by_id(id, viewport).map_or(0.0, |rect| rect.2) > 0.0)
+                .collect();
+            assert_eq!(lit, vec![expected], "{percent}% {state:?}");
+        }
+    }
+
+    // REGRESSION: the tray battery button and its glyph must follow the power
+    // bucket on the compiled panel through every panel projection path: the
+    // sync `project` pass, the full async refresh, and a power-only SystemChanged
+    // scope. Visible = laid out with a non-zero box.
+    // OBSERVABLE: hidden for Unknown>=80, Charging, Unavailable, >=80; one glyph
+    // (Caution 0-10, otherwise the level rounded up to 10%) for not-charging < 80.
+    // MUTATION: drop the battery projection from one path (default markup stays
+    // hidden there, so that path's case fails) or skip the glyph bucket.
+    #[test]
+    fn tray_battery_button_follows_power_bucket_on_real_artifact() {
+        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+        const GLYPHS: [&str; 10] = [
+            "tray-battery-caution",
+            "tray-battery-020",
+            "tray-battery-030",
+            "tray-battery-040",
+            "tray-battery-050",
+            "tray-battery-060",
+            "tray-battery-070",
+            "tray-battery-080",
+            "tray-battery-090",
+            "tray-battery-100",
+        ];
+        let power = |available, present, percent, state| PowerSnapshot {
+            available,
+            present,
+            percent,
+            state,
+            cpu_percent: None,
+        };
+        let avail = ServiceAvailability::Available;
+        let cases: [(PowerSnapshot, Option<&str>); 10] = [
+            (power(avail, true, 87, PowerState::Unknown), None),
+            (power(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
+            (power(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
+            (power(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
+            (power(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
+            (power(avail, true, 30, PowerState::Charging), None),
+            (power(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
+            (power(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
+            (power(avail, true, 80, PowerState::Discharging), None),
+            (power(avail, false, 45, PowerState::Discharging), None),
+        ];
+        for (power, expected) in cases {
+            let mut snapshot = crate::ShellSnapshot::default();
+            snapshot.system.power = power;
+            let paths: [(&str, fn(&mut flamewm_ui_x11::UiDocument, &crate::ShellSnapshot)); 3] = [
+                ("sync project", |document, snapshot| {
+                    let mut resolver = flamewm_integrations_linux::icons::IconResolver::new(
+                        std::path::PathBuf::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        0,
+                    );
+                    project(document, snapshot, &mut resolver).expect("sync panel projects");
+                }),
+                ("async full refresh", |document, snapshot| {
+                    crate::async_projection::project_panel_async(document, snapshot, None)
+                        .expect("async panel projects");
+                }),
+                ("async system scope", |document, snapshot| {
+                    crate::async_projection::project_panel_for_changed(
+                        document,
+                        snapshot,
+                        None,
+                        crate::runtime::ChangedDomains {
+                            system: true,
+                            ..crate::runtime::ChangedDomains::default()
+                        },
+                    )
+                    .expect("system-scope panel projects");
+                }),
+            ];
+            for (path, project_path) in paths {
+                let mut document =
+                    flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
+                project_path(&mut document, &snapshot);
+                let viewport = (1080.0, 72.0);
+                let width = |id: &str| {
+                    document
+                        .layout_box_by_id(id, viewport)
+                        .map_or(0.0, |rect| rect.2)
+                };
+                let button = width("tray-battery") > 0.0;
+                assert_eq!(button, expected.is_some(), "{path}: button for {:?}", snapshot.system.power);
+                let lit: Vec<&str> = GLYPHS
+                    .iter()
+                    .copied()
+                    .filter(|id| width(id) > 0.0)
+                    .collect();
+                match expected {
+                    Some(glyph) => assert_eq!(lit, vec![glyph], "{path}: glyph for {:?}", snapshot.system.power),
+                    None => assert!(lit.is_empty(), "{path}: no glyph while hidden for {:?}", snapshot.system.power),
+                }
+            }
+        }
     }
 
     // Full cold-start panel pass against the real artifact: a refused write in

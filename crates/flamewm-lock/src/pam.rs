@@ -443,6 +443,14 @@ mod tests {
     }
 
     #[test]
+    fn new_token_required_after_valid_password_stays_locked() {
+        const PAM_NEW_AUTHTOK_REQD: c_int = 12;
+        let mut session = mock(Ok(()), PAM_SUCCESS, PAM_NEW_AUTHTOK_REQD);
+        assert_eq!(run_flow(&mut session), Outcome::Denied);
+        assert_eq!(session.ended_with, Some(PAM_AUTH_ERR));
+    }
+
+    #[test]
     fn missing_libpam_stays_locked() {
         assert!(DynamicPam::load_from(&["libflamewm-no-such-pam.so.0"]).is_err());
     }

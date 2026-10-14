@@ -3,8 +3,10 @@
 //! Registered I/O objects are transferred to calloop and are released with the registration; this
 //! crate never duplicates a descriptor. Tokio is deliberately not part of this integration boundary.
 
+use std::cell::Cell;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use std::time::Duration;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
@@ -46,6 +48,37 @@ impl From<Readiness> for FdReadiness {
 /// The process-local event loop owner.
 pub struct Reactor {
     event_loop: EventLoop<'static, ()>,
+    wake: WakeDeadline,
+}
+
+/// Shared wake deadline: dispatch never sleeps past it. Owners set it from their tick without
+/// reactor access. `None` leaves dispatch bounded only by its own timeout (zero idle wakeups).
+#[derive(Clone, Debug, Default)]
+pub struct WakeDeadline(Rc<Cell<Option<Instant>>>);
+
+impl WakeDeadline {
+    pub fn set(&self, at: Option<Instant>) {
+        self.0.set(at);
+    }
+
+    #[must_use]
+    pub fn get(&self) -> Option<Instant> {
+        self.0.get()
+    }
+}
+
+/// Dispatch timeout bounded by a pending wake deadline. Pure for unit tests.
+#[must_use]
+pub fn bounded_timeout(
+    timeout: Option<Duration>,
+    deadline: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    let Some(at) = deadline else {
+        return timeout;
+    };
+    let until = at.saturating_duration_since(now);
+    Some(timeout.map_or(until, |timeout| timeout.min(until)))
 }
 
 struct BorrowedRawFd(RawFd);
@@ -71,7 +104,14 @@ impl Reactor {
     pub fn new() -> calloop::Result<Self> {
         Ok(Self {
             event_loop: EventLoop::try_new()?,
+            wake: WakeDeadline::default(),
         })
+    }
+
+    /// Handle to the shared wake deadline consumed by [`Reactor::dispatch`].
+    #[must_use]
+    pub fn wake_deadline(&self) -> WakeDeadline {
+        self.wake.clone()
     }
 
     /// Registers an `AsFd` source. The source is owned by calloop until removal or shutdown.
@@ -271,7 +311,59 @@ impl Reactor {
 
     /// Dispatches pending events, waiting no longer than `timeout` for the next event.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> calloop::Result<()> {
+        let timeout = bounded_timeout(timeout, self.wake.get(), Instant::now());
         self.event_loop.dispatch(timeout, &mut ())
+    }
+}
+
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+
+    #[test]
+    fn no_deadline_keeps_the_caller_timeout() {
+        let now = Instant::now();
+        assert_eq!(bounded_timeout(None, None, now), None);
+        assert_eq!(
+            bounded_timeout(Some(Duration::from_secs(3)), None, now),
+            Some(Duration::from_secs(3))
+        );
+    }
+
+    #[test]
+    fn deadline_bounds_an_unbounded_or_longer_timeout() {
+        let now = Instant::now();
+        let at = now + Duration::from_millis(1200);
+        assert_eq!(bounded_timeout(None, Some(at), now), Some(Duration::from_millis(1200)));
+        assert_eq!(
+            bounded_timeout(Some(Duration::from_secs(5)), Some(at), now),
+            Some(Duration::from_millis(1200))
+        );
+        assert_eq!(
+            bounded_timeout(Some(Duration::from_millis(100)), Some(at), now),
+            Some(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
+    fn past_deadline_yields_zero_wait() {
+        let now = Instant::now();
+        assert_eq!(
+            bounded_timeout(None, Some(now), now + Duration::from_millis(5)),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn wake_deadline_handles_share_one_slot() {
+        let reactor = Reactor::new().expect("reactor");
+        let handle = reactor.wake_deadline();
+        let clone = handle.clone();
+        let at = Instant::now() + Duration::from_secs(1);
+        clone.set(Some(at));
+        assert_eq!(handle.get(), Some(at));
+        clone.set(None);
+        assert_eq!(handle.get(), None);
     }
 }
 

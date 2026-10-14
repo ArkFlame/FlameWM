@@ -86,6 +86,23 @@ mod tests {
         assert!(image.pixels.chunks(4).all(|p| p[3] == 255));
     }
 
+    /// The Ribbons frame is the whole background: opaque black with ribbons only. Any
+    /// wallpaper, blur or dim would show as a non-black corner or sample on the first frame.
+    #[test]
+    fn first_frame_is_opaque_black_with_no_wallpaper_or_dim() {
+        let now = Instant::now();
+        let (w, h) = (160u32, 90u32);
+        let mut frames = RibbonFrames::new(w, h, &saver(), now);
+        let image = frames.frame(now);
+        let at = |x: u32, y: u32| {
+            let i = (y as usize * w as usize + x as usize) * 4;
+            [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2], image.pixels[i + 3]]
+        };
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w / 2, h / 2)] {
+            assert_eq!(at(x, y), [0, 0, 0, 255], "pixel ({x}, {y}) is not opaque black");
+        }
+    }
+
     #[test]
     fn frames_change_as_time_advances() {
         let now = Instant::now();

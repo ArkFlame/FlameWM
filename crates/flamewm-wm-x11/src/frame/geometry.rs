@@ -54,12 +54,15 @@ impl FrameExtents {
 
 /// Pure input to every planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GeometryRequest {
+pub struct GeometryRequest<'a> {
     pub reason: GeometryReason,
     pub start: PlacementSnapshot,
     pub pointer_delta: (i32, i32),
     pub edges: ResizeEdges,
     pub work_area: RootRect,
+    /// Output geometries; drags keep 1/4 of the window visible on these, not on the work area.
+    /// Empty means no output info: `work_area` is used as the bound.
+    pub outputs: &'a [RootRect],
     pub hints: ClientSizeHints,
     pub frame_extents: FrameExtents,
 }
@@ -93,26 +96,119 @@ impl GeometryPlan {
     }
 }
 
-/// Interactive move: candidate = start + delta (never incremental),
-/// clamped so the frame top-left stays inside the work area.
+/// Minimum visible extent on one axis: a quarter of the window, rounded up.
+fn min_visible(extent: i32) -> i32 {
+    extent.max(0).saturating_add(3) / 4
+}
+
+/// Start of a span of `len` so that at least a quarter of it stays inside `[lo, hi)`.
+fn keep_span(start: i32, len: i32, lo: i32, hi: i32) -> i32 {
+    let min_start = lo.saturating_sub(len.saturating_sub(min_visible(len)));
+    let max_start = hi.saturating_sub(min_visible(len)).max(min_start);
+    start.clamp(min_start, max_start)
+}
+
+/// Keeps `rect` in `bounds` with at least a quarter of each axis visible; up to 3/4 may overflow.
 #[must_use]
-pub fn plan_move(req: &GeometryRequest) -> GeometryPlan {
+pub fn keep_visible(rect: RootRect, bounds: RootRect) -> RootRect {
+    RootRect::new(
+        keep_span(rect.x, rect.w, bounds.x, bounds.x.saturating_add(bounds.w)),
+        keep_span(rect.y, rect.h, bounds.y, bounds.y.saturating_add(bounds.h)),
+        rect.w,
+        rect.h,
+    )
+}
+
+/// Bounding box of the outputs, or `fallback` when there are none.
+fn outputs_bounds(outputs: &[RootRect], fallback: RootRect) -> RootRect {
+    let Some((first, rest)) = outputs.split_first() else {
+        return fallback;
+    };
+    let (mut x0, mut y0) = (first.x, first.y);
+    let (mut x1, mut y1) = (first.x.saturating_add(first.w), first.y.saturating_add(first.h));
+    for o in rest {
+        x0 = x0.min(o.x);
+        y0 = y0.min(o.y);
+        x1 = x1.max(o.x.saturating_add(o.w));
+        y1 = y1.max(o.y.saturating_add(o.h));
+    }
+    RootRect::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
+}
+
+/// True when `r` keeps a quarter of its width and height visible on the single output `o`.
+fn visible_on(r: RootRect, o: RootRect) -> bool {
+    let vw = r.x.saturating_add(r.w).min(o.x.saturating_add(o.w)).saturating_sub(r.x.max(o.x));
+    let vh = r.y.saturating_add(r.h).min(o.y.saturating_add(o.h)).saturating_sub(r.y.max(o.y));
+    vw >= min_visible(r.w) && vh >= min_visible(r.h)
+}
+
+/// Squared gap distance between `r` and `o` (0 when they touch or overlap).
+fn gap_sq(r: RootRect, o: RootRect) -> i64 {
+    let (r_right, o_right) = (i64::from(r.x) + i64::from(r.w), i64::from(o.x) + i64::from(o.w));
+    let (r_bottom, o_bottom) = (i64::from(r.y) + i64::from(r.h), i64::from(o.y) + i64::from(o.h));
+    let dx = (i64::from(o.x) - r_right).max(i64::from(r.x) - o_right).max(0);
+    let dy = (i64::from(o.y) - r_bottom).max(i64::from(r.y) - o_bottom).max(0);
+    dx * dx + dy * dy
+}
+
+/// Keeps `rect` visible on the outputs. Bounds are the outputs' bounding box; a rect parked in a
+/// gap of a non-rectangular union moves minimally onto the nearest output.
+#[must_use]
+pub fn keep_on_outputs(rect: RootRect, outputs: &[RootRect], fallback: RootRect) -> RootRect {
+    let bounded = keep_visible(rect, outputs_bounds(outputs, fallback));
+    let Some(nearest) = outputs.iter().copied().min_by_key(|o| gap_sq(bounded, *o)) else {
+        return bounded;
+    };
+    if outputs.iter().any(|o| visible_on(bounded, *o)) {
+        bounded
+    } else {
+        keep_visible(bounded, nearest)
+    }
+}
+
+/// Valid `[lo, hi]` for a left edge at `x` while the right edge `right` is fixed, against `[b0, b1)`.
+/// Visible width must stay >= a quarter of the width (ceil); derived from `4 * visible >= width`.
+fn left_edge_range(right: i32, b0: i32, b1: i32) -> (i32, i32) {
+    let (r, b0, b1) = (i64::from(right), i64::from(b0), i64::from(b1));
+    let m = r.min(b1);
+    let outside_min = r - 4 * (m - b0);
+    let inside_max = (4 * m - r).div_euclid(3);
+    let hi = (b0 - 1).max(inside_max).min(r - 1);
+    let lo = outside_min.min(b0).min(hi);
+    (to_i32(lo), to_i32(hi))
+}
+
+/// Valid `[lo, hi]` for a right edge at `x` while the left edge `left` is fixed, against `[b0, b1)`.
+fn right_edge_range(left: i32, b0: i32, b1: i32) -> (i32, i32) {
+    let (l, b0, b1) = (i64::from(left), i64::from(b0), i64::from(b1));
+    let a = l.max(b0);
+    let inside_min = (4 * a - l + 2).div_euclid(3);
+    let outside_max = l + 4 * (b1 - a);
+    let lo = inside_min.min(b1 + 1).max(l + 1);
+    let hi = b1.max(outside_max).max(lo);
+    (to_i32(lo), to_i32(hi))
+}
+
+fn to_i32(v: i64) -> i32 {
+    v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+/// Interactive move: candidate = start + delta (never incremental),
+/// kept visible on the outputs (see [`keep_on_outputs`]).
+#[must_use]
+pub fn plan_move(req: &GeometryRequest<'_>) -> GeometryPlan {
     let s = req.start.rect;
-    let wa = req.work_area;
-    let mut x = s.x.saturating_add(req.pointer_delta.0);
-    let mut y = s.y.saturating_add(req.pointer_delta.1);
-    // Clamp top-left inside; oversized frames pin to the work-area origin.
-    let max_x = wa.x.saturating_add(wa.w.saturating_sub(s.w).max(0));
-    let max_y = wa.y.saturating_add(wa.h.saturating_sub(s.h).max(0));
-    x = x.clamp(wa.x.min(max_x), max_x.max(wa.x));
-    y = y.clamp(wa.y.min(max_y), max_y.max(wa.y));
-    GeometryPlan::of(req, RootRect::new(x, y, s.w, s.h))
+    let x = s.x.saturating_add(req.pointer_delta.0);
+    let y = s.y.saturating_add(req.pointer_delta.1);
+    let frame = keep_on_outputs(RootRect::new(x, y, s.w, s.h), req.outputs, req.work_area);
+    GeometryPlan::of(req, frame)
 }
 
 /// Interactive resize with a fixed opposite-edge invariant.
 ///
 /// 1. Fix the edge(s) opposite the drag from `start.rect`.
-/// 2. Constrain only the moving edge against the work area.
+/// 2. Constrain only the moving edge so a quarter of the frame stays visible
+///    within the outputs' bounding box.
 /// 3. Constrain the requested client size via [`snap_client_size`]
 ///    (min/max/base/inc/aspect).
 /// 4. Reconstruct the dragged edge as fixed edge +/- constrained size.
@@ -120,20 +216,18 @@ pub fn plan_move(req: &GeometryRequest) -> GeometryPlan {
 /// No `clamp_inside`-after-resize: the fixed edge never moves, even if the
 /// constrained size pushes the moving edge outside the work area.
 #[must_use]
-pub fn plan_resize(req: &GeometryRequest) -> GeometryPlan {
+pub fn plan_resize(req: &GeometryRequest<'_>) -> GeometryPlan {
     let s = req.start.rect;
     let (dx, dy) = req.pointer_delta;
-    let wa = req.work_area;
+    let bounds = outputs_bounds(req.outputs, req.work_area);
     let (dw, dh) = req.frame_extents.delta();
 
     let fixed_left = s.x;
     let fixed_right = s.x.saturating_add(s.w);
     let fixed_top = s.y;
     let fixed_bottom = s.y.saturating_add(s.h);
-    let wa_right = wa.x.saturating_add(wa.w);
-    let wa_bottom = wa.y.saturating_add(wa.h);
 
-    // Desired moving edges, constrained against the work area only.
+    // Desired moving edges, constrained against the outputs' bounds only.
     // Left/top moving edges must leave at least a 1px frame; the size-hint
     // floor is applied later via snap_client_size.
     let mut moving_left = s.x.saturating_add(dx);
@@ -141,16 +235,20 @@ pub fn plan_resize(req: &GeometryRequest) -> GeometryPlan {
     let mut moving_top = s.y.saturating_add(dy);
     let mut moving_bottom = fixed_bottom.saturating_add(dy);
     if req.edges.left {
-        moving_left = moving_left.clamp(wa.x, fixed_right.saturating_sub(1));
+        let (lo, hi) = left_edge_range(fixed_right, bounds.x, bounds.x.saturating_add(bounds.w));
+        moving_left = moving_left.clamp(lo, hi);
     }
     if req.edges.right {
-        moving_right = moving_right.clamp(fixed_left.saturating_add(1), wa_right);
+        let (lo, hi) = right_edge_range(fixed_left, bounds.x, bounds.x.saturating_add(bounds.w));
+        moving_right = moving_right.clamp(lo, hi);
     }
     if req.edges.top {
-        moving_top = moving_top.clamp(wa.y, fixed_bottom.saturating_sub(1));
+        let (lo, hi) = left_edge_range(fixed_bottom, bounds.y, bounds.y.saturating_add(bounds.h));
+        moving_top = moving_top.clamp(lo, hi);
     }
     if req.edges.bottom {
-        moving_bottom = moving_bottom.clamp(fixed_top.saturating_add(1), wa_bottom);
+        let (lo, hi) = right_edge_range(fixed_top, bounds.y, bounds.y.saturating_add(bounds.h));
+        moving_bottom = moving_bottom.clamp(lo, hi);
     }
 
     let raw_w = if req.edges.left {
@@ -311,10 +409,14 @@ pub fn plan_client_configure(
     } else {
         req_client_origin
     };
-    GeometryPlan::of(
-        req,
-        client_rect_to_frame(origin, new_size, req.frame_extents),
-    )
+    let frame = client_rect_to_frame(origin, new_size, req.frame_extents);
+    // Floating frames obey the same keep-visible rule as user moves: a client
+    // cannot park a window fully off-screen. Snapped frames keep their geometry.
+    let frame = match req.start.mode {
+        PlacementMode::Floating => keep_on_outputs(frame, req.outputs, req.work_area),
+        _ => frame,
+    };
+    GeometryPlan::of(req, frame)
 }
 
 /// Initial map: client rect -> frame rect, clamped inside the work area.
@@ -367,6 +469,7 @@ pub fn plan_adopt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::model::SnapTarget;
     use crate::size_hints::{
         HINT_P_ASPECT, HINT_P_BASE_SIZE, HINT_P_MAX_SIZE, HINT_P_MIN_SIZE, HINT_P_RESIZE_INC,
         HINT_P_WIN_GRAVITY,
@@ -375,8 +478,9 @@ mod tests {
     const EXT: FrameExtents = FrameExtents::new(31, 1);
     const WA: RootRect = RootRect::new(0, 0, 1920, 1080);
     const START: RootRect = RootRect::new(100, 100, 400, 300);
+    const OUTS: &[RootRect] = &[WA];
 
-    fn req(edges: ResizeEdges, delta: (i32, i32), hints: ClientSizeHints) -> GeometryRequest {
+    fn req(edges: ResizeEdges, delta: (i32, i32), hints: ClientSizeHints) -> GeometryRequest<'static> {
         GeometryRequest {
             reason: GeometryReason::InteractiveResize,
             start: PlacementSnapshot {
@@ -386,6 +490,7 @@ mod tests {
             pointer_delta: delta,
             edges,
             work_area: WA,
+            outputs: &[],
             hints,
             frame_extents: EXT,
         }
@@ -502,23 +607,79 @@ mod tests {
         assert_eq!(p2.frame.x - START.x, 120);
     }
 
-    #[test]
-    fn move_clamps_inside_work_area() {
-        let mut r = req(ResizeEdges::none(), (5000, 5000), free());
+    fn move_by(delta: (i32, i32)) -> RootRect {
+        let mut r = req(ResizeEdges::none(), delta, free());
         r.reason = GeometryReason::InteractiveMove;
-        r.work_area = RootRect::new(0, 0, 800, 600);
-        let p = plan_move(&r);
-        assert_eq!(p.frame, RootRect::new(400, 300, 400, 300));
+        r.outputs = OUTS;
+        plan_move(&r).frame
     }
 
     #[test]
-    fn resize_moving_edge_constrained_by_work_area() {
-        let mut r = req(ResizeEdges::right(), (5000, 0), free());
-        r.work_area = RootRect::new(0, 0, 800, 600);
+    fn move_stops_at_three_quarters_outside_each_side() {
+        // START 400x300 on WA 1920x1080: at most 3/4 may leave, so 100x75 stays visible.
+        // Old work-area clamp would pin these at x 1520 / 0 and y 0 / 780.
+        assert_eq!(move_by((5000, 0)), RootRect::new(1820, 100, 400, 300));
+        assert_eq!(move_by((-5000, 0)), RootRect::new(-300, 100, 400, 300));
+        assert_eq!(move_by((0, -5000)), RootRect::new(100, -225, 400, 300));
+        assert_eq!(move_by((0, 5000)), RootRect::new(100, 1005, 400, 300));
+    }
+
+    #[test]
+    fn move_over_taskbar_band_is_allowed() {
+        // A 24px taskbar at the bottom is not excluded from the drag bound.
+        assert_eq!(move_by((0, 800)), RootRect::new(100, 900, 400, 300));
+    }
+
+    #[test]
+    fn oversized_window_keeps_quarter_visible_and_never_wraps() {
+        let mut r = req(ResizeEdges::none(), (-5000, -5000), free());
+        r.reason = GeometryReason::InteractiveMove;
+        r.start.rect = RootRect::new(0, 0, 3000, 2000);
+        r.outputs = OUTS;
+        // min visible = 750 x 500 of the 3000 x 2000 window.
+        assert_eq!(plan_move(&r).frame, RootRect::new(-2250, -1500, 3000, 2000));
+    }
+
+    #[test]
+    fn negative_origin_output_bounds_move_without_unsigned_wrap() {
+        let left = RootRect::new(-1920, 0, 1920, 1080);
+        let mut r = req(ResizeEdges::none(), (-5000, 0), free());
+        r.reason = GeometryReason::InteractiveMove;
+        let outs = [left, WA];
+        r.outputs = &outs;
+        assert_eq!(plan_move(&r).frame, RootRect::new(-2220, 100, 400, 300));
+    }
+
+    #[test]
+    fn window_parked_in_gap_of_output_union_moves_to_nearest_output() {
+        let a = RootRect::new(0, 0, 800, 600);
+        let b = RootRect::new(1000, 0, 800, 600);
+        // 100 px window fully inside the 200 px gap: no output keeps 1/4 visible.
+        // Nearest is A (touching at x = 800): moved to x = 775 so 25 px stay on A.
+        assert_eq!(keep_on_outputs(RootRect::new(800, 10, 100, 100), &[a, b], WA), RootRect::new(775, 10, 100, 100));
+        // A window straddling both outputs with 1/4 on one of them is left alone.
+        assert_eq!(keep_on_outputs(RootRect::new(600, 10, 400, 300), &[a, b], WA), RootRect::new(600, 10, 400, 300));
+    }
+
+    #[test]
+    fn resize_top_left_past_bounds_keeps_fixed_corner_and_quarter_visible() {
+        let mut r = req(ResizeEdges::top_left(), (-5000, -5000), free());
+        r.outputs = OUTS;
         let p = plan_resize(&r);
-        // Moving (right) edge pinned at 800; fixed left = 100.
-        assert_eq!(p.frame.x, 100);
-        assert_eq!(p.frame.w, 700);
+        // Fixed bottom-right corner is (500, 400); left and top stop at 3/4 outside.
+        assert_eq!(p.frame, RootRect::new(-1500, -1200, 2000, 1600));
+        assert_eq!(p.frame.x + p.frame.w, 500);
+        assert_eq!(p.frame.y + p.frame.h, 400);
+    }
+
+    #[test]
+    fn resize_moving_edge_constrained_by_outputs_bounds() {
+        let mut r = req(ResizeEdges::right(), (5000, 0), free());
+        r.start.rect = RootRect::new(1500, 100, 400, 300);
+        r.outputs = OUTS;
+        let p = plan_resize(&r);
+        // Left edge fixed at 1500; 1/4 of the 1680 px width (420) stays on the 1920 px output.
+        assert_eq!(p.frame, RootRect::new(1500, 100, 1680, 300));
     }
 
     #[test]
@@ -695,6 +856,89 @@ mod tests {
         let p = plan_client_configure(&r, RootPoint::new(300, 300), None);
         assert_eq!(p.frame, RootRect::new(300, 269, 400, 300));
         assert_eq!(p.client_size, (400, 269));
+    }
+
+    /// Position-only request for a frame origin `(x, y)` on a 400x300 START window.
+    fn configure_at(outs: &'static [RootRect], frame_xy: (i32, i32), size: Option<(u32, u32)>) -> RootRect {
+        let r = GeometryRequest {
+            reason: GeometryReason::ClientConfigure,
+            outputs: outs,
+            ..req(ResizeEdges::none(), (0, 0), free())
+        };
+        let (ox, oy) = EXT.client_offset();
+        plan_client_configure(&r, RootPoint::new(frame_xy.0 + ox, frame_xy.1 + oy), size).frame
+    }
+
+    #[test]
+    fn client_configure_far_offscreen_position_is_kept_visible() {
+        // START 400x300 frame on WA 1920x1080, one output: 1/4 of each axis stays visible.
+        const ONE: &[RootRect] = &[WA];
+        assert_eq!(configure_at(ONE, (-10000, 100), None), RootRect::new(-300, 100, 400, 300));
+        assert_eq!(configure_at(ONE, (10000, 100), None), RootRect::new(1820, 100, 400, 300));
+        assert_eq!(configure_at(ONE, (100, -10000), None), RootRect::new(100, -225, 400, 300));
+        assert_eq!(configure_at(ONE, (100, 10000), None), RootRect::new(100, 1005, 400, 300));
+    }
+
+    #[test]
+    fn client_configure_clamps_on_second_output_with_negative_origin() {
+        const TWO: &[RootRect] = &[RootRect::new(-1920, 0, 1920, 1080), RootRect::new(0, 0, 1920, 1080)];
+        // Far left lands at the left edge of the negative-origin output, not the work area.
+        assert_eq!(configure_at(TWO, (-10000, 100), None), RootRect::new(-2220, 100, 400, 300));
+        assert_eq!(configure_at(TWO, (10000, 100), None), RootRect::new(1820, 100, 400, 300));
+    }
+
+    #[test]
+    fn client_configure_in_gap_moves_to_nearest_output() {
+        const GAP: &[RootRect] = &[RootRect::new(0, 0, 800, 600), RootRect::new(1000, 0, 800, 600)];
+        // 100x100 frame fully inside the 200px gap (x 800..1000): nearest output A moves it to x 775.
+        let (ox, oy) = EXT.client_offset();
+        let r = GeometryRequest {
+            reason: GeometryReason::ClientConfigure,
+            start: PlacementSnapshot { mode: PlacementMode::Floating, rect: RootRect::new(0, 0, 100, 100) },
+            outputs: GAP,
+            ..req(ResizeEdges::none(), (0, 0), free())
+        };
+        let p = plan_client_configure(&r, RootPoint::new(820 + ox, 10 + oy), None);
+        assert_eq!(p.frame, RootRect::new(775, 10, 100, 100));
+    }
+
+    #[test]
+    fn client_configure_oversized_window_keeps_quarter_visible() {
+        const ONE: &[RootRect] = &[WA];
+        let r = GeometryRequest {
+            reason: GeometryReason::ClientConfigure,
+            start: PlacementSnapshot { mode: PlacementMode::Floating, rect: RootRect::new(0, 0, 3000, 2000) },
+            outputs: ONE,
+            ..req(ResizeEdges::none(), (0, 0), free())
+        };
+        let p = plan_client_configure(&r, RootPoint::new(-10000, 10000), None);
+        assert_eq!(p.frame, RootRect::new(-2250, 1080 - 500, 3000, 2000));
+    }
+
+    #[test]
+    fn client_configure_within_rule_is_unchanged() {
+        const ONE: &[RootRect] = &[WA];
+        assert_eq!(configure_at(ONE, (300, 300), None), RootRect::new(300, 300, 400, 300));
+        assert_eq!(configure_at(ONE, (-300, 100), None), RootRect::new(-300, 100, 400, 300));
+    }
+
+    #[test]
+    fn client_configure_snapped_is_not_clamped() {
+        const ONE: &[RootRect] = &[WA];
+        let mut r = GeometryRequest {
+            reason: GeometryReason::ClientConfigure,
+            outputs: ONE,
+            ..req(ResizeEdges::none(), (0, 0), free())
+        };
+        r.start.mode = PlacementMode::Snapped(SnapTarget::Left);
+        let p = plan_client_configure(&r, RootPoint::new(-10000, 100), None);
+        assert_eq!(p.frame.x, -10000 - EXT.client_offset().0);
+    }
+
+    #[test]
+    fn user_move_is_unchanged_by_configure_clamp() {
+        // Same far-left target through the user drag path keeps the identical rect.
+        assert_eq!(move_by((-10000, 0)), configure_at(&[WA], (-10000, 100), None));
     }
 
     #[test]

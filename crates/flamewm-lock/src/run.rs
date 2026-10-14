@@ -247,6 +247,7 @@ fn lock_on(
         shown_power: None,
         saver: Screensaver::new(settings.saver.clone()),
         frames: None,
+        background_stale: false,
         next_frame: Instant::now(),
         frame_pacer,
         base_background,
@@ -340,6 +341,8 @@ struct LockLoop {
     shown_power: Option<PowerView>,
     saver: Screensaver,
     frames: Option<RibbonFrames>,
+    /// Set when the wallpaper restore was refused; the next turn outside Ribbons retries.
+    background_stale: bool,
     next_frame: Instant,
     frame_pacer: FramePacer,
     base_background: RuntimeImage,
@@ -369,6 +372,18 @@ fn keep_lock_step(what: &str, step: impl FnOnce() -> Result<(), String>) -> bool
         Err(error) => {
             eprintln!("flamewm-lock: {what}, keeping the lock engaged: {error}");
             false
+        }
+    }
+}
+
+/// Applies the wallpaper restore. A failure is logged and leaves `stale` set so a later turn
+/// retries; the Ribbons frame stays up until a restore succeeds.
+fn settle_background(stale: &mut bool, apply: impl FnOnce() -> Result<(), String>) {
+    match apply() {
+        Ok(()) => *stale = false,
+        Err(error) => {
+            *stale = true;
+            eprintln!("flamewm-lock: lock background restore, retrying next turn: {error}");
         }
     }
 }
@@ -450,6 +465,10 @@ impl LockLoop {
         }
         self.settle_display();
         self.sync_ui_visibility(runtime);
+        // A refused restore keeps the Ribbons frame up; retried here, never while Ribbons runs.
+        if self.saver.phase() != Phase::RibbonsActive {
+            self.retry_background_restore(runtime);
+        }
         self.animate(runtime, now);
         // A lost grab is retried every turn; the lock is never dropped by a failed retry.
         self.session.borrow_mut().try_grab();
@@ -574,11 +593,20 @@ impl LockLoop {
     fn restore_background(&mut self, runtime: &mut SurfaceRuntime) {
         let base = self.base_background.clone();
         let surface = self.surface;
-        keep_lock_step("restore lock background", || {
+        let mut stale = self.background_stale;
+        settle_background(&mut stale, || {
             runtime
                 .with_document(surface, |view| document::set_background(view, base))
                 .map_err(|error| format!("restore lock background: {error:?}"))
         });
+        self.background_stale = stale;
+    }
+
+    /// Re-applies the wallpaper while a failed restore is pending. Not called during Ribbons.
+    fn retry_background_restore(&mut self, runtime: &mut SurfaceRuntime) {
+        if self.background_stale {
+            self.restore_background(runtime);
+        }
     }
 
     fn key(&mut self, key: Key, now: Instant) {
@@ -832,6 +860,24 @@ mod tests {
         assert!(body("fn enter(").contains("ui_shown_wanted = false"));
         assert!(body("fn wake(").contains("ui_shown_wanted = true"));
         assert!(body("fn sync_ui_visibility(").contains("set_lock_ui_shown(view, shown)"));
+    }
+
+    /// A refused wallpaper restore must stay pending and be retried; a success clears it.
+    #[test]
+    fn failed_wallpaper_restore_stays_pending_until_it_succeeds() {
+        let mut stale = false;
+        let mut attempts = 0;
+        settle_background(&mut stale, || {
+            attempts += 1;
+            Err("document unavailable".to_string())
+        });
+        assert!(stale, "a refused restore must stay pending, not drop the Ribbons frame silently");
+        settle_background(&mut stale, || {
+            attempts += 1;
+            Ok(())
+        });
+        assert!(!stale, "a successful retry clears the pending restore");
+        assert_eq!(attempts, 2);
     }
 
     /// A refused widget update must keep the loop alive: it is retried with the same

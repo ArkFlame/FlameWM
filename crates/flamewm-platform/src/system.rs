@@ -1,10 +1,36 @@
 use flamewm_api::system::{
-    AudioSnapshot, MediaSnapshot, NetworkSnapshot, ServiceAvailability, SystemAction,
+    AudioEndpointKind, AudioMuteAction, AudioSnapshot, AudioTarget, AudioVolumeAction,
+    MediaSnapshot, NetworkSnapshot, PowerSnapshot, ServiceAvailability, SystemAction,
     SystemSnapshot,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 pub type SystemActionHandler = Box<dyn FnMut(SystemAction, SystemSnapshot) -> FlameResult<()>>;
+
+/// Volume change per media-key press, in percent.
+pub const MEDIA_VOLUME_STEP: u8 = 5;
+/// Highest volume the system action path accepts.
+pub const MAX_VOLUME_PERCENT: u8 = 150;
+
+/// Media keys that adjust the default output endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaAudioKey {
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+}
+
+/// Returns `current` moved one media-key step up or down, clamped to 0..=150.
+#[must_use]
+pub fn stepped_volume(current: u8, up: bool) -> u8 {
+    if up {
+        current
+            .saturating_add(MEDIA_VOLUME_STEP)
+            .min(MAX_VOLUME_PERCENT)
+    } else {
+        current.saturating_sub(MEDIA_VOLUME_STEP)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReconnectBackoff {
@@ -73,6 +99,15 @@ impl SystemService {
             return false;
         }
         self.snapshot.media = update;
+        self.bump_revision();
+        true
+    }
+
+    pub fn update_power(&mut self, update: PowerSnapshot) -> bool {
+        if update == self.snapshot.power {
+            return false;
+        }
+        self.snapshot.power = update;
         self.bump_revision();
         true
     }
@@ -157,6 +192,45 @@ impl SystemService {
         handler(action, snapshot)
     }
 
+    /// Applies a media key to the default output sink through `perform_action`,
+    /// the same typed path the UI uses. The write is fenced by the current audio
+    /// generation. With no default sink there is nothing to adjust and this is a no-op.
+    pub fn media_audio_key(&mut self, key: MediaAudioKey) -> FlameResult<()> {
+        let revision = self.snapshot.revision;
+        let generation = self.snapshot.audio.generation;
+        let server_generation = self.snapshot.audio.server_generation;
+        let Some(endpoint) = self
+            .snapshot
+            .audio
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.is_default && endpoint.kind == AudioEndpointKind::Sink)
+        else {
+            return Ok(());
+        };
+        let target = AudioTarget::Endpoint {
+            id: endpoint.id,
+            kind: endpoint.kind,
+        };
+        let action = match key {
+            MediaAudioKey::VolumeUp | MediaAudioKey::VolumeDown => {
+                SystemAction::SetVolume(AudioVolumeAction {
+                    target,
+                    percent: stepped_volume(endpoint.volume_percent, key == MediaAudioKey::VolumeUp),
+                    generation,
+                    server_generation,
+                })
+            }
+            MediaAudioKey::VolumeMute => SystemAction::SetMute(AudioMuteAction {
+                target,
+                muted: !endpoint.muted,
+                generation,
+                server_generation,
+            }),
+        };
+        self.perform_action(action, revision)
+    }
+
     fn bump_revision(&mut self) {
         self.snapshot.revision = self.snapshot.revision.saturating_add(1).max(1);
     }
@@ -213,6 +287,41 @@ mod tests {
     }
 
     #[test]
+    fn power_update_bumps_revision_only_on_change() {
+        let mut service = SystemService::default();
+        let update = PowerSnapshot {
+            available: ServiceAvailability::Available,
+            present: true,
+            percent: 87,
+            ..PowerSnapshot::default()
+        };
+        assert!(service.update_power(update));
+        assert_eq!(service.snapshot().revision, 1);
+        assert!(!service.update_power(update));
+        assert_eq!(service.snapshot().revision, 1);
+    }
+
+    #[test]
+    fn battery_menu_actions_bypass_revision_fence_but_still_reach_handler() {
+        let mut service = SystemService::default();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        service.set_action_handler(Box::new(move |action, _| {
+            sink.borrow_mut().push(action);
+            Ok(())
+        }));
+        let _ = service.update_power(PowerSnapshot {
+            percent: 50,
+            ..PowerSnapshot::default()
+        });
+        let stale = service.snapshot().revision.wrapping_add(7);
+        service
+            .perform_action(SystemAction::BatteryMenuOpened, stale)
+            .expect("menu open is not revision-fenced");
+        assert_eq!(seen.borrow().as_slice(), [SystemAction::BatteryMenuOpened]);
+    }
+
+    #[test]
     fn stale_revision_still_rejects_non_audio_actions() {
         let mut service = SystemService::default();
         service.set_action_handler(Box::new(|_, _| Ok(())));
@@ -255,8 +364,109 @@ mod tests {
 }
 
 /// Volume and mute writes carry their own PulseAudio generation fences, so the
-/// snapshot-wide revision is not required for them.
+/// snapshot-wide revision is not required for them. Battery-menu visibility toggles
+/// are idempotent and must not be rejected because power or CPU samples moved the revision.
 #[must_use]
 pub fn bypasses_revision_fence(action: &SystemAction) -> bool {
-    matches!(action, SystemAction::SetVolume(_) | SystemAction::SetMute(_))
+    matches!(
+        action,
+        SystemAction::SetVolume(_)
+            | SystemAction::SetMute(_)
+            | SystemAction::BatteryMenuOpened
+            | SystemAction::BatteryMenuClosed
+    )
+}
+
+#[cfg(test)]
+mod media_key_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use flamewm_api::system::{AudioEndpointSnapshot, ServiceAvailability};
+
+    use super::*;
+
+    fn sink(id: u32, is_default: bool, volume: u8, muted: bool) -> AudioEndpointSnapshot {
+        AudioEndpointSnapshot {
+            id,
+            kind: AudioEndpointKind::Sink,
+            name: format!("sink{id}"),
+            description: String::new(),
+            volume_percent: volume,
+            muted,
+            is_default,
+        }
+    }
+
+    fn service_with(endpoints: Vec<AudioEndpointSnapshot>) -> (SystemService, Rc<RefCell<Vec<SystemAction>>>) {
+        let mut service = SystemService::default();
+        let update = AudioSnapshot {
+            availability: ServiceAvailability::Available,
+            generation: 4,
+            server_generation: 9,
+            endpoints,
+            ..AudioSnapshot::default()
+        };
+        assert!(service.update_audio(update));
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        service.set_action_handler(Box::new(move |action, _snapshot| {
+            sink.borrow_mut().push(action);
+            Ok(())
+        }));
+        (service, seen)
+    }
+
+    #[test]
+    fn step_moves_five_percent_and_clamps_to_0_through_150() {
+        assert_eq!(stepped_volume(40, true), 45);
+        assert_eq!(stepped_volume(40, false), 35);
+        assert_eq!(stepped_volume(148, true), 150);
+        assert_eq!(stepped_volume(150, true), 150);
+        assert_eq!(stepped_volume(3, false), 0);
+        assert_eq!(stepped_volume(0, false), 0);
+    }
+
+    #[test]
+    fn volume_up_dispatches_set_volume_with_generation_fence_on_default_sink() {
+        let (mut service, seen) = service_with(vec![sink(1, false, 10, false), sink(2, true, 40, false)]);
+        service.media_audio_key(MediaAudioKey::VolumeUp).expect("dispatch");
+        assert_eq!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetVolume(AudioVolumeAction {
+                target: AudioTarget::Endpoint { id: 2, kind: AudioEndpointKind::Sink },
+                percent: 45,
+                generation: 4,
+                server_generation: 9,
+            })]
+        );
+    }
+
+    #[test]
+    fn volume_down_at_zero_dispatches_zero_not_underflow() {
+        let (mut service, seen) = service_with(vec![sink(2, true, 0, false)]);
+        service.media_audio_key(MediaAudioKey::VolumeDown).expect("dispatch");
+        assert!(matches!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetVolume(AudioVolumeAction { percent: 0, .. })]
+        ));
+    }
+
+    #[test]
+    fn mute_key_toggles_the_current_default_sink_state() {
+        let (mut service, seen) = service_with(vec![sink(2, true, 40, true)]);
+        service.media_audio_key(MediaAudioKey::VolumeMute).expect("dispatch");
+        assert!(matches!(
+            seen.borrow().as_slice(),
+            [SystemAction::SetMute(AudioMuteAction { muted: false, generation: 4, server_generation: 9, .. })]
+        ));
+    }
+
+    #[test]
+    fn no_default_sink_is_a_noop_without_handler_call() {
+        let (mut service, seen) = service_with(vec![sink(1, false, 40, false)]);
+        service.media_audio_key(MediaAudioKey::VolumeUp).expect("no-op");
+        service.media_audio_key(MediaAudioKey::VolumeMute).expect("no-op");
+        assert!(seen.borrow().is_empty());
+    }
 }

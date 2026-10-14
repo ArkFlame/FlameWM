@@ -557,6 +557,12 @@ pub fn project_panel_for_changed(
     project_panel_scoped(document, snapshot, loader, &scope)
 }
 
+/// Output of the panel whose task slots this document shows (first panel,
+/// matching `projection::project_panel`). `None` lists every task entry.
+fn shown_panel_output(snapshot: &ShellSnapshot) -> Option<&flamewm_api::OutputId> {
+    snapshot.panels.panels.first().map(|panel| &panel.output)
+}
+
 /// WindowsChanged -> task slots only. Resolves task visual states (cheap
 /// in-memory join, no fetch) and projects labels/icon/visibility/background
 /// for the 8 task slots. Pager, tray, and geometry nodes are untouched, so
@@ -568,10 +574,11 @@ pub fn project_task_slots_async(
 ) -> Result<(), String> {
     let _span = crate::runtime::shell_span("shell.tasks.project").start();
     bump_task_view_epoch();
-    let states = flamewm_shell_core::task_visual_states(
+    let states = flamewm_shell_core::task_visual_states_on_output(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
+        shown_panel_output(snapshot),
     );
     // Task-slot nodes only: labels, icons, line visibility, backgrounds,
     // slot visibility. Pager/tray/geometry untouched.
@@ -720,6 +727,7 @@ pub fn project_status_tray_async(
     document.visible("tray-volume-icon", !status.audio.muted)?;
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
     document.visible("tray-network", status.network.visible)?;
+    crate::projection::project_battery_tray(document, &snapshot.system.power)?;
     Ok(())
 }
 
@@ -733,10 +741,11 @@ pub fn project_panel_geometry(
     snapshot: &ShellSnapshot,
 ) -> Result<(), String> {
     crate::projection::project_taskbar_height(document, snapshot)?;
-    let states = flamewm_shell_core::task_visual_states(
+    let states = flamewm_shell_core::task_visual_states_on_output(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
+        shown_panel_output(snapshot),
     );
     for index in 0..TASK_SLOT_COUNT {
         document.visible(
@@ -1171,6 +1180,65 @@ mod tests {
     }
 
     #[test]
+    fn task_slots_list_only_windows_on_the_shown_panel_output() {
+        use flamewm_api::panels::{PanelEdge, PanelSnapshot, PanelsSnapshot, TaskEntry, TaskEntryKind};
+        use flamewm_api::window::{WindowSnapshot, WindowState};
+        use flamewm_api::{DesktopAppId, OutputId, Rect, TaskEntryId, WindowRef, WorkspaceRef};
+        let window_on = |id: u64, output: &str| WindowSnapshot {
+            reference: WindowRef::new(id, 1),
+            title: String::new(),
+            app_id: DesktopAppId::new("term"),
+            outer_geometry: Rect::new(0, 0, 10, 10),
+            restore_geometry: Rect::new(0, 0, 10, 10),
+            state: WindowState::Normal,
+            sticky: false,
+            focused: false,
+            workspace: WorkspaceRef { index: 0, revision: 1 },
+            output: OutputId::new(output),
+            state_generation: 1,
+        };
+        let task = |id: u64| {
+            let window = WindowRef::new(id, 1);
+            TaskEntry {
+                id: TaskEntryId::window(window),
+                app_id: DesktopAppId::new("term"),
+                kind: TaskEntryKind::Window { window },
+                order_index: id as usize,
+            }
+        };
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.panels = PanelsSnapshot {
+            revision: 1,
+            panels: vec![PanelSnapshot {
+                output: OutputId::new("A"),
+                edge: PanelEdge::Bottom,
+                logical_size: 40,
+                visible: true,
+                geometry: Rect::new(0, 760, 1000, 40),
+            }],
+            tasks: vec![task(1), task(2)],
+            pinned_apps: Vec::new(),
+        };
+        snapshot.windows = vec![window_on(1, "A"), window_on(2, "B")];
+        let mut doc = FakeDoc::default();
+        project_task_slots_async(&mut doc, &snapshot, None).expect("projects");
+        assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
+        assert_eq!(doc.visible.get("task-slot-2"), Some(&false));
+        // Window 1 moved A->B; window 2 is already on B. Panel A lists neither.
+        snapshot.windows[0].output = OutputId::new("B");
+        let mut doc = FakeDoc::default();
+        project_task_slots_async(&mut doc, &snapshot, None).expect("panel A projects");
+        assert_eq!(doc.visible.get("task-slot-1"), Some(&false));
+        assert_eq!(doc.visible.get("task-slot-2"), Some(&false));
+        // Panel B lists both.
+        snapshot.panels.panels[0].output = OutputId::new("B");
+        let mut doc = FakeDoc::default();
+        project_task_slots_async(&mut doc, &snapshot, None).expect("panel B projects");
+        assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
+        assert_eq!(doc.visible.get("task-slot-2"), Some(&true));
+    }
+
+    #[test]
     fn windows_scope_projects_task_slots_only() {
         let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
@@ -1273,6 +1341,40 @@ mod tests {
         );
         assert!(doc.texts.is_empty(), "geometry writes no labels");
         assert!(doc.images.is_empty(), "geometry writes no icons");
+    }
+
+    // REGRESSION: a power-only SystemChanged reprojects through the tray
+    // scope; the battery button must follow the power snapshot there, not
+    // only on the sync projection path. A 45% discharge shows the 50 glyph,
+    // an 87% discharge hides the whole button.
+    // MUTATION: drop the project_battery_tray call from project_status_tray_async.
+    #[test]
+    fn system_scope_projects_battery_from_power_snapshot() {
+        use crate::runtime::ChangedDomains;
+        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.system.power = PowerSnapshot {
+            available: ServiceAvailability::Available,
+            present: true,
+            percent: 45,
+            state: PowerState::Discharging,
+            cpu_percent: None,
+        };
+        let changed = ChangedDomains {
+            system: true,
+            ..ChangedDomains::default()
+        };
+        let mut doc = FakeDoc::default();
+        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        assert_eq!(doc.visible.get("tray-battery"), Some(&true));
+        assert_eq!(doc.visible.get("tray-battery-050"), Some(&true));
+        assert_eq!(doc.visible.get("tray-battery-caution"), Some(&false));
+
+        snapshot.system.power.percent = 87;
+        snapshot.system.power.state = PowerState::Unknown;
+        let mut doc = FakeDoc::default();
+        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        assert_eq!(doc.visible.get("tray-battery"), Some(&false));
     }
 
     #[test]

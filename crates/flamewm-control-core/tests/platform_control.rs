@@ -444,6 +444,7 @@ fn control_system_returns_host_snapshot_without_engine_round_trip() {
                 name: "Player".to_owned(),
                 volume_percent: 72,
                 muted: false,
+                ..Default::default()
             }],
         ),
     );
@@ -559,6 +560,8 @@ fn canonical_dbus_protocol_matches_system_action_wire_members() {
         "Previous",
         "SetVolume",
         "SetMute",
+        "BatteryMenuOpened",
+        "BatteryMenuClosed",
         "SystemChanged",
     ] {
         assert!(XML.contains(&format!("name=\"{member}\"")));

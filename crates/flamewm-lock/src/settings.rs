@@ -7,7 +7,9 @@ use crate::clock::ClockFormat;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockSettings {
     pub background_color: [u8; 3],
+    /// Saved custom image (`lockBackgroundImage`); decoded only in `LockBackgroundMode::Custom`.
     pub background_image: Option<PathBuf>,
+    pub background_mode: LockBackgroundMode,
     /// Avatar picture inside the avatar ring (`avatarImage`); `None` shows the default icon.
     pub avatar_image: Option<PathBuf>,
     pub clock_format: ClockFormat,
@@ -69,6 +71,7 @@ impl Default for LockSettings {
         Self {
             background_color: DEFAULT_BACKGROUND,
             background_image: None,
+            background_mode: LockBackgroundMode::Default,
             avatar_image: None,
             clock_format: ClockFormat::H24,
             show_date: true,
@@ -86,14 +89,29 @@ impl LockSettings {
     /// Builds settings from a key lookup; `lookup` returns the raw text value.
     pub fn from_lookup<'a>(lookup: impl Fn(&str) -> Option<&'a str>) -> Self {
         let defaults = Self::default();
+        let background_color = lookup("lockBackgroundColor")
+            .and_then(parse_hex_color)
+            .unwrap_or(defaults.background_color);
+        let background_image = lookup("lockBackgroundImage")
+            .map(str::trim)
+            .filter(|path| path.starts_with('/'))
+            .map(PathBuf::from);
+        // Files written before `lockBackgroundMode` existed derive the mode from the saved values.
+        let background_mode = lookup("lockBackgroundMode")
+            .and_then(LockBackgroundMode::parse)
+            .unwrap_or_else(|| {
+                if background_image.is_some() {
+                    LockBackgroundMode::Custom
+                } else if background_color != DEFAULT_BACKGROUND {
+                    LockBackgroundMode::Solid
+                } else {
+                    LockBackgroundMode::Default
+                }
+            });
         Self {
-            background_color: lookup("lockBackgroundColor")
-                .and_then(parse_hex_color)
-                .unwrap_or(defaults.background_color),
-            background_image: lookup("lockBackgroundImage")
-                .map(str::trim)
-                .filter(|path| path.starts_with('/'))
-                .map(PathBuf::from),
+            background_color,
+            background_image,
+            background_mode,
             avatar_image: lookup("avatarImage")
                 .map(str::trim)
                 .filter(|path| path.starts_with('/'))
@@ -117,6 +135,26 @@ impl LockSettings {
             saver: saver_from_lookup(&lookup),
             blur_percent: percent_from_lookup(&lookup, "lockBackgroundBlurPercent", 100, DEFAULT_BLUR_PERCENT),
             dim_percent: percent_from_lookup(&lookup, "lockBackgroundDimPercent", 80, DEFAULT_DIM_PERCENT),
+        }
+    }
+}
+
+/// Lock background source (`lockBackgroundMode`): the bundled image, the plain colour, or the
+/// saved custom image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockBackgroundMode {
+    Default,
+    Solid,
+    Custom,
+}
+
+impl LockBackgroundMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "solid" => Some(Self::Solid),
+            "custom" => Some(Self::Custom),
+            _ => None,
         }
     }
 }
@@ -245,6 +283,22 @@ mod tests {
         ];
         let saver = LockSettings::from_lookup(lookup_from(PAIRS)).saver;
         assert_eq!(saver, SaverConfig::default());
+    }
+
+    #[test]
+    fn background_mode_migrates_when_absent_and_explicit_mode_wins() {
+        let custom = LockSettings::from_lookup(lookup_from(&[("lockBackgroundImage", "/a.png")]));
+        assert_eq!(custom.background_mode, LockBackgroundMode::Custom);
+        let solid = LockSettings::from_lookup(lookup_from(&[("lockBackgroundColor", "#102030")]));
+        assert_eq!(solid.background_mode, LockBackgroundMode::Solid);
+        let default = LockSettings::from_lookup(lookup_from(&[]));
+        assert_eq!(default.background_mode, LockBackgroundMode::Default);
+        let explicit = LockSettings::from_lookup(lookup_from(&[
+            ("lockBackgroundImage", "/a.png"),
+            ("lockBackgroundMode", "default"),
+        ]));
+        assert_eq!(explicit.background_mode, LockBackgroundMode::Default);
+        assert_eq!(explicit.background_image, Some(PathBuf::from("/a.png")));
     }
 
     #[test]

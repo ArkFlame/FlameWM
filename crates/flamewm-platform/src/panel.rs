@@ -252,6 +252,12 @@ impl PanelManager {
         self.pointer_output = output;
     }
 
+    /// Read-only: output currently holding the pointer, if known. Not yet consumed by the shell.
+    #[must_use]
+    pub fn pointer_output(&self) -> Option<&OutputId> {
+        self.pointer_output.as_ref()
+    }
+
     pub fn set_primary_output(&mut self, output: Option<OutputId>) {
         self.primary_output = output;
     }
@@ -403,6 +409,7 @@ mod tests {
         ));
         manager.set_primary_output(Some(id("eDP-1")));
         manager.set_pointer_output(Some(id("HDMI-1")));
+        assert_eq!(manager.pointer_output(), Some(&id("HDMI-1")));
         assert_eq!(manager.active_output(), Some(id("eDP-1")));
         manager.set_focused_frame_output(Some(id("HDMI-1")));
         assert_eq!(manager.active_output(), Some(id("HDMI-1")));

@@ -40,6 +40,29 @@ const POPUP_TRANSITION: DebugEventId = DebugEventId("shell.popup.transition");
 const AUDIO_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-audio.rwr"));
 const NETWORK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
 const CALENDAR_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-calendar.rwr"));
+const BATTERY_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr"));
+
+/// WM_NAME of each helper-hosted quick popup, and of the main-hosted media popup.
+pub const AUDIO_POPUP_TITLE: &str = "FlameWM audio";
+pub const NETWORK_POPUP_TITLE: &str = "FlameWM network";
+pub const CALENDAR_POPUP_TITLE: &str = "FlameWM calendar";
+pub const BATTERY_POPUP_TITLE: &str = "FlameWM battery";
+pub const MEDIA_POPUP_TITLE: &str = "FlameWM media";
+
+/// Every quick-popup title. A press whose top-level window carries one of these
+/// titles lands inside a popup and is not an outside dismissal.
+pub const QUICK_POPUP_TITLES: [&str; 5] = [
+    AUDIO_POPUP_TITLE,
+    NETWORK_POPUP_TITLE,
+    CALENDAR_POPUP_TITLE,
+    BATTERY_POPUP_TITLE,
+    MEDIA_POPUP_TITLE,
+];
+
+/// True when `title` names a quick popup window.
+pub fn is_quick_popup_title(title: &str) -> bool {
+    QUICK_POPUP_TITLES.contains(&title)
+}
 
 const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 
@@ -47,6 +70,19 @@ const OUTSIDE_RELEASE_ACTION: &str = "surface.outside.release";
 /// `FLAMEWM_DEBUG=1`. Normal mode issues zero extra X sync.
 fn host_debug_enabled() -> bool {
     std::env::var_os("FLAMEWM_DEBUG").is_some_and(|v| v == "1")
+}
+
+/// R2 tab-latency probe (debug-only, per click; never per frame). Stamps are
+/// microseconds since the first probe in this process.
+fn r2_now_us() -> u128 {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    EPOCH.get_or_init(std::time::Instant::now).elapsed().as_micros()
+}
+
+thread_local! {
+    /// Ingress instant of the latest non-motion pointer event, consumed by the
+    /// next reprojection present.
+    static R2_INGRESS: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
 }
 
 #[derive(Debug)]
@@ -440,17 +476,46 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
             // &mut surfaces and &mut snapshot in place, no snapshot clone.
             let state = &mut *guard;
             let calendar_before = state.snapshot.calendar;
+            let open_before = state.surfaces.open;
+            let r2_probe = host_debug_enabled()
+                && event.action.phase != ActionPhase::Motion
+                && event.action.action != "scroll";
+            if r2_probe {
+                R2_INGRESS.with(|c| c.set(Some(std::time::Instant::now())));
+                eprintln!(
+                    "r2 route t_us={} action={} phase={:?} inside={} x={:.1} y={:.1} surface={:?} audio_open={} audio_tab={:?}",
+                    r2_now_us(),
+                    event.action.action,
+                    event.action.phase,
+                    event.action.inside,
+                    event.action.x,
+                    event.action.y,
+                    event.surface,
+                    state.surfaces.open == Some(QuickControlKind::Audio),
+                    state.snapshot.audio_tab,
+                );
+            }
             let keep = route_helper_event(
                 &event,
                 runtime,
                 &mut state.surfaces,
                 &mut state.snapshot,
                 state.dispatcher.as_ref(),
+                &mut state.system_reprojection_pending,
             );
+            if r2_probe && state.system_reprojection_pending {
+                eprintln!("r2 flag t_us={} audio_tab={:?}", r2_now_us(), state.snapshot.audio_tab);
+            }
             if state.snapshot.calendar != calendar_before {
                 // Data-only reprojection of the open calendar; no reopen or resize.
                 state.system_reprojection_pending = true;
             }
+            battery_menu_edge(
+                open_before,
+                state.surfaces.open,
+                &state.snapshot,
+                state.dispatcher.as_ref(),
+            );
             if !keep {
                 state.shutdown = true;
             }
@@ -471,7 +536,10 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
                 // error is returned so the owner exits nonzero instead of
                 // continuing into the known-crashing runtime destructor.
                 let mut state = tick_state.borrow_mut();
-                state.surfaces.shutdown(runtime)?;
+                let open_before = state.surfaces.open;
+                let result = state.surfaces.shutdown(runtime);
+                battery_menu_edge(open_before, None, &state.snapshot, state.dispatcher.as_ref());
+                result?;
             }
             Ok(())
         },
@@ -540,6 +608,7 @@ fn tick_host(
         let Some(command) = command else {
             break;
         };
+        let open_before = state.borrow().surfaces.open;
         match command {
             Command::Shutdown => {
                 // Leave the open surface for the owning shutdown transaction
@@ -575,6 +644,13 @@ fn tick_host(
                 }
             }
         }
+        let guard = state.borrow();
+        battery_menu_edge(
+            open_before,
+            guard.surfaces.open,
+            &guard.snapshot,
+            guard.dispatcher.as_ref(),
+        );
     }
     let pending = {
         let mut guard = state.borrow_mut();
@@ -593,10 +669,38 @@ fn tick_host(
         }
     };
     if let Some((surface, snapshot, kind)) = pending {
+        let probe_start = std::time::Instant::now();
         project_snapshot(runtime, surface, &snapshot, kind).map_err(UiBackendError::Document)?;
+        let projected = probe_start.elapsed();
         runtime.redraw(surface)?;
+        if host_debug_enabled() {
+            let ingress = R2_INGRESS.with(|c| c.take());
+            eprintln!(
+                "r2 present t_us={} project_us={} redraw_us={} ingress_to_present_us={}",
+                r2_now_us(),
+                projected.as_micros(),
+                probe_start.elapsed().saturating_sub(projected).as_micros(),
+                ingress.map_or(-1, |t| t.elapsed().as_micros() as i128),
+            );
+        }
     }
     Ok(())
+}
+
+/// Battery menu open/close edges send the typed `BatteryMenuOpened`/`Closed`
+/// action through the existing dispatcher; those bound the CPU sampling.
+fn battery_menu_edge(
+    before: Option<QuickControlKind>,
+    after: Option<QuickControlKind>,
+    snapshot: &QuickControlSnapshot,
+    dispatcher: Option<&Arc<flamewm_control_dbus::MutationDispatcher>>,
+) {
+    let was_open = before == Some(QuickControlKind::Battery);
+    let is_open = after == Some(QuickControlKind::Battery);
+    if was_open != is_open {
+        let request = crate::taskbar::status::battery::menu_action(&snapshot.system, is_open);
+        crate::control_actions::enqueue_action(dispatcher, request);
+    }
 }
 
 fn apply_system_snapshot(
@@ -835,6 +939,7 @@ fn project_snapshot(
                 QuickControlKind::Audio => "audio-popup",
                 QuickControlKind::Network => "wifi-popup",
                 QuickControlKind::Calendar => "clock-popup",
+                QuickControlKind::Battery => "battery-popup",
             };
             crate::settings_projection::project_menu_background(
                 document,
@@ -875,9 +980,27 @@ fn project_snapshot(
                     &snapshot.calendar,
                     crate::projection::local_date(),
                 ),
+                QuickControlKind::Battery => {
+                    crate::projection::project_battery_menu(document, &snapshot.system.power, 268.0)
+                }
             }
         })
         .map_err(|error| format!("{error:?}"))
+}
+
+/// Selects the audio tab named by a released tab action and resets the list
+/// window. Returns true when the projected tab or window changed, so the open
+/// popup must be reprojected to show the new selection.
+fn select_audio_tab(snapshot: &mut QuickControlSnapshot, action: &str) -> bool {
+    let tab = match action {
+        "audio.tab.devices" => AudioTab::Devices,
+        "audio.tab.apps" => AudioTab::Applications,
+        _ => return false,
+    };
+    let changed = snapshot.audio_tab != tab || snapshot.audio_scroll_offset != 0;
+    snapshot.audio_tab = tab;
+    snapshot.audio_scroll_offset = 0;
+    changed
 }
 
 /// Route one helper surface event: Escape/outside closes the helper popup,
@@ -891,6 +1014,7 @@ pub fn route_helper_event(
     surfaces: &mut HelperSurfaces,
     snapshot: &mut QuickControlSnapshot,
     dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
+    reprojection: &mut bool,
 ) -> bool {
     sync_network_secret(snapshot);
     let action = event.action.action.as_str();
@@ -984,13 +1108,10 @@ pub fn route_helper_event(
     if event.action.phase == ActionPhase::Release && event.action.inside {
         match action {
             "audio.back" => surfaces.close(runtime),
-            "audio.tab.devices" => {
-                snapshot.audio_tab = AudioTab::Devices;
-                snapshot.audio_scroll_offset = 0;
-            }
-            "audio.tab.apps" => {
-                snapshot.audio_tab = AudioTab::Applications;
-                snapshot.audio_scroll_offset = 0;
+            "audio.tab.devices" | "audio.tab.apps" => {
+                if select_audio_tab(snapshot, action) {
+                    *reprojection = true;
+                }
             }
             "audio.raise.toggle" => {
                 snapshot.audio_settings.raise_maximum = !snapshot.audio_settings.raise_maximum;
@@ -1245,18 +1366,21 @@ pub struct HelperSurfaces {
     pub audio: SurfaceHandle,
     pub network: SurfaceHandle,
     pub calendar: SurfaceHandle,
+    pub battery: SurfaceHandle,
     pub open: Option<QuickControlKind>,
 }
 
 impl HelperSurfaces {
     pub fn create(runtime: &mut SurfaceRuntime) -> Result<Self, String> {
-        let audio = create_surface(runtime, AUDIO_ARTIFACT, "FlameWM audio")?;
-        let network = create_surface(runtime, NETWORK_ARTIFACT, "FlameWM network")?;
-        let calendar = create_surface(runtime, CALENDAR_ARTIFACT, "FlameWM calendar")?;
+        let audio = create_surface(runtime, AUDIO_ARTIFACT, AUDIO_POPUP_TITLE)?;
+        let network = create_surface(runtime, NETWORK_ARTIFACT, NETWORK_POPUP_TITLE)?;
+        let calendar = create_surface(runtime, CALENDAR_ARTIFACT, CALENDAR_POPUP_TITLE)?;
+        let battery = create_surface(runtime, BATTERY_ARTIFACT, BATTERY_POPUP_TITLE)?;
         Ok(Self {
             audio,
             network,
             calendar,
+            battery,
             open: None,
         })
     }
@@ -1266,6 +1390,7 @@ impl HelperSurfaces {
             QuickControlKind::Audio => self.audio,
             QuickControlKind::Network => self.network,
             QuickControlKind::Calendar => self.calendar,
+            QuickControlKind::Battery => self.battery,
         }
     }
 
@@ -1299,7 +1424,7 @@ impl HelperSurfaces {
                 first_error = Some(UiBackendError::Renderer(error.to_string()));
             }
         }
-        for surface in [self.audio, self.network, self.calendar] {
+        for surface in [self.audio, self.network, self.calendar, self.battery] {
             if let Err(error) = runtime.destroy(surface) {
                 eprintln!(
                     "flamewm-quick-control: surface destroy during shutdown failed: {error:?}"
@@ -1876,6 +2001,7 @@ mod audio_routing_tests {
             name: "Firefox".to_owned(),
             volume_percent: 30,
             muted: false,
+            ..Default::default()
         }];
         QuickControlSnapshot {
             system,
@@ -1935,6 +2061,23 @@ mod audio_routing_tests {
                 kind: AudioEndpointKind::Sink
             })
         );
+    }
+
+    // RED before the fix: a released tab action must both select the tab and
+    // request a reprojection, or the popup keeps showing the old tab.
+    #[test]
+    fn audio_tab_release_selects_tab_and_requests_reprojection() {
+        let mut snapshot = quick(AudioTab::Devices, false);
+        snapshot.audio_scroll_offset = 40;
+        assert!(select_audio_tab(&mut snapshot, "audio.tab.apps"));
+        assert_eq!(snapshot.audio_tab, AudioTab::Applications);
+        assert_eq!(snapshot.audio_scroll_offset, 0);
+        // Re-selecting the shown tab with its window at the top changes nothing.
+        assert!(!select_audio_tab(&mut snapshot, "audio.tab.apps"));
+        assert!(select_audio_tab(&mut snapshot, "audio.tab.devices"));
+        assert_eq!(snapshot.audio_tab, AudioTab::Devices);
+        assert!(!select_audio_tab(&mut snapshot, "audio.raise.toggle"));
+        assert_eq!(snapshot.audio_tab, AudioTab::Devices);
     }
 
     fn target_of(request: Option<ControlRequest>) -> Option<AudioTarget> {
@@ -2026,5 +2169,122 @@ mod audio_routing_tests {
             percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH / 2.0),
             Some(75)
         );
+    }
+}
+
+#[cfg(test)]
+mod battery_popup_tests {
+    use super::*;
+    use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+    use flamewm_ui_x11::{RuntimeImage, UiColor};
+
+    #[derive(Default)]
+    struct TextDoc {
+        texts: std::collections::HashMap<String, String>,
+    }
+
+    impl UiDocumentAccess for TextDoc {
+        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            self.texts.insert(id.to_owned(), text);
+            Ok(())
+        }
+        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn background_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn border_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn layer(&mut self, _: &str, _: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
+            Ok(())
+        }
+        fn overflow(
+            &mut self,
+            _: &str,
+            _: flamewm_ui_x11::Overflow,
+            _: flamewm_ui_x11::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn power(cpu_percent: Option<u8>) -> PowerSnapshot {
+        PowerSnapshot {
+            available: ServiceAvailability::Available,
+            present: true,
+            percent: 80,
+            state: PowerState::Discharging,
+            cpu_percent,
+        }
+    }
+
+    #[test]
+    fn battery_kind_wire_name_and_popup_root_are_battery() {
+        assert_eq!(QuickControlKind::Battery.as_str(), "battery");
+        assert_eq!(
+            popup::role_for_kind(QuickControlKind::Battery).intrinsic_node_id(),
+            "battery-popup"
+        );
+    }
+
+    #[test]
+    fn battery_menu_projects_cpu_text_and_refreshes_when_cpu_changes() {
+        let mut doc = TextDoc::default();
+        crate::projection::project_battery_menu(&mut doc, &power(Some(37)), 268.0)
+            .expect("battery menu projects");
+        assert_eq!(doc.texts.get("battery-cpu").map(String::as_str), Some("CPU usage: 37%"));
+        assert_eq!(doc.texts.get("battery-percent").map(String::as_str), Some("80%"));
+        // A later snapshot with a new CPU sample must change the projected text.
+        crate::projection::project_battery_menu(&mut doc, &power(Some(64)), 268.0)
+            .expect("battery menu reprojects");
+        assert_eq!(doc.texts.get("battery-cpu").map(String::as_str), Some("CPU usage: 64%"));
+        crate::projection::project_battery_menu(&mut doc, &power(None), 268.0)
+            .expect("battery menu projects without a sample");
+        assert_eq!(doc.texts.get("battery-cpu").map(String::as_str), Some("CPU usage: --%"));
+    }
+
+    #[test]
+    fn battery_artifact_decodes_and_projects_on_the_real_document() {
+        let mut document = decode_document(BATTERY_ARTIFACT).expect("battery artifact must decode");
+        document
+            .visible("battery-popup", true)
+            .expect("battery root must resolve");
+        crate::projection::project_battery_menu(&mut document, &power(Some(12)), 268.0)
+            .expect("battery menu projects on the compiled document");
     }
 }

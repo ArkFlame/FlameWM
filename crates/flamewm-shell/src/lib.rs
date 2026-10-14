@@ -4,6 +4,7 @@ pub mod async_projection;
 pub mod calendar;
 pub mod control_actions;
 pub mod icon_loader;
+pub mod osd;
 pub mod panel;
 pub mod popovers;
 pub mod popup_controller;

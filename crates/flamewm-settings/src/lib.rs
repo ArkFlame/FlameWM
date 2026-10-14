@@ -346,10 +346,16 @@ enum SettingsAction {
     /// Opens the portal chooser for one archive, or one folder when `folder` is set.
     ThemeInstallChoose { folder: bool },
     WallpaperChoose,
-    WallpaperReset,
+    /// Shows the bundled wallpaper; the saved custom path is kept.
+    WallpaperDefault,
+    /// Shows the solid wallpaper colour; the saved custom path is kept.
+    WallpaperClear,
     /// Opens the shared file chooser for the lock-screen background image.
     LockBackgroundChoose,
+    /// Shows the solid lock colour; the saved custom path is kept.
     LockBackgroundClear,
+    /// Shows the bundled lock background; the saved custom path is kept.
+    LockBackgroundDefault,
     /// Opens the shared file chooser for the lock-screen profile picture.
     AvatarChoose,
     AvatarClear,
@@ -569,12 +575,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 Ok(Some(path)) => {
                     let applied = match import_for_setting(self.chooser_target.media_kind(), &path) {
                         Ok(managed) => match self.chooser_target {
-                            ChooserTarget::Wallpaper => {
-                                self.client.set_wallpaper(managed).map_err(control_error)
-                            }
-                            ChooserTarget::LockBackground => {
-                                self.apply_text("lockBackgroundImage", managed)
-                            }
+                            ChooserTarget::Wallpaper => self
+                                .client
+                                .set_wallpaper(managed)
+                                .map_err(control_error)
+                                .and_then(|()| self.apply_text("wallpaperMode", "custom".to_owned())),
+                            ChooserTarget::LockBackground => self
+                                .apply_text("lockBackgroundImage", managed)
+                                .and_then(|()| {
+                                    self.apply_text("lockBackgroundMode", "custom".to_owned())
+                                }),
                             ChooserTarget::Avatar => self.apply_text("avatarImage", managed),
                             ChooserTarget::StartIcon => self.replace_start_icon(managed),
                         },
@@ -704,14 +714,20 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::ThemeInstallChoose { folder } => self.start_theme_install(folder)?,
             SettingsAction::WallpaperChoose => self.start_file_chooser(ChooserTarget::Wallpaper)?,
-            SettingsAction::WallpaperReset => {
-                self.client.set_wallpaper("").map_err(control_error)?;
+            SettingsAction::WallpaperDefault => {
+                self.apply_text("wallpaperMode", "default".to_owned())?;
+            }
+            SettingsAction::WallpaperClear => {
+                self.apply_text("wallpaperMode", "solid".to_owned())?;
             }
             SettingsAction::LockBackgroundChoose => {
                 self.start_file_chooser(ChooserTarget::LockBackground)?;
             }
             SettingsAction::LockBackgroundClear => {
-                self.apply_text("lockBackgroundImage", String::new())?;
+                self.apply_text("lockBackgroundMode", "solid".to_owned())?;
+            }
+            SettingsAction::LockBackgroundDefault => {
+                self.apply_text("lockBackgroundMode", "default".to_owned())?;
             }
             SettingsAction::AvatarChoose => {
                 self.start_file_chooser(ChooserTarget::Avatar)?;
@@ -1555,8 +1571,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Projects the lock-screen background path (or `None`) and highlights the clock and timeout segments.
     fn sync_lock_screen(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        if let Ok(path) = self.text_setting("lockBackgroundImage") {
-            let label = if path.is_empty() { "None".to_owned() } else { path };
+        if let Ok(mode) = self.text_setting("lockBackgroundMode") {
+            let label = match mode.as_str() {
+                "solid" => "Solid colour".to_owned(),
+                "custom" => self.text_setting("lockBackgroundImage").unwrap_or_default(),
+                _ => "Built-in".to_owned(),
+            };
             document.text("lock-background-image-value", label)?;
         }
         if let Ok(path) = self.text_setting("avatarImage") {
@@ -1589,6 +1609,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let clock = self.text_setting("taskbarClockFormat").ok();
         for (value, id) in [("24h", "taskbar-clock-24h"), ("12h", "taskbar-clock-12h")] {
             highlight_segment(document, id, clock.as_deref() == Some(value), accent)?;
+        }
+        let appearance = self.text_setting("appearance").ok();
+        for (value, id) in [("dark", "appearance-apps-dark"), ("light", "appearance-apps-light")] {
+            highlight_segment(document, id, appearance.as_deref() == Some(value), accent)?;
         }
         let size = self.integer_setting("cursorSize").ok();
         for value in CURSOR_SIZE_CHOICES {
@@ -2466,18 +2490,28 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         }),
         "settings.lock.background.choose" => Ok(SettingsAction::LockBackgroundChoose),
         "settings.lock.background.clear" => Ok(SettingsAction::LockBackgroundClear),
+        "settings.lock.background.default" => Ok(SettingsAction::LockBackgroundDefault),
         "settings.avatar.choose" => Ok(SettingsAction::AvatarChoose),
         "settings.avatar.clear" => Ok(SettingsAction::AvatarClear),
         "settings.lock.preview" => Ok(SettingsAction::LockPreview),
         "settings.screensaver.preview" => Ok(SettingsAction::ScreensaverPreview),
         "settings.wallpaper.choose" => Ok(SettingsAction::WallpaperChoose),
-        "settings.wallpaper.reset" => Ok(SettingsAction::WallpaperReset),
+        "settings.wallpaper.default" => Ok(SettingsAction::WallpaperDefault),
+        "settings.wallpaper.clear" => Ok(SettingsAction::WallpaperClear),
         "settings.taskbar.position" => Ok(SettingsAction::TaskbarEdgeCycle),
         "settings.taskbar.size" => Ok(SettingsAction::TaskbarSizeCycle),
         "settings.font.family" => Ok(SettingsAction::FontFamilyCycle),
         "settings.decoration.rounded" => Ok(SettingsAction::TextSelect {
             key: "decoration",
             value: "rounded",
+        }),
+        "settings.appearance.apps.dark" => Ok(SettingsAction::TextSelect {
+            key: "appearance",
+            value: "dark",
+        }),
+        "settings.appearance.apps.light" => Ok(SettingsAction::TextSelect {
+            key: "appearance",
+            value: "light",
         }),
         "settings.decoration.squared" => Ok(SettingsAction::TextSelect {
             key: "decoration",
@@ -2779,6 +2813,20 @@ mod value_text_tests {
             parse_action("settings.decoration.squared"),
             Ok(SettingsAction::TextSelect { key: "decoration", value: "squared" })
         ));
+        assert!(matches!(
+            parse_action("settings.appearance.apps.dark"),
+            Ok(SettingsAction::TextSelect { key: "appearance", value: "dark" })
+        ));
+        assert!(matches!(
+            parse_action("settings.appearance.apps.light"),
+            Ok(SettingsAction::TextSelect { key: "appearance", value: "light" })
+        ));
+        assert!(parse_action("settings.appearance.apps.system").is_err());
+        assert_eq!(
+            flamewm_api::settings::AppearanceMode::default().as_str(),
+            "dark",
+            "application appearance defaults to Dark"
+        );
         assert!(parse_action("settings.decoration.ios").is_err());
         assert!(parse_action("settings.decoration.cycle").is_err());
     }

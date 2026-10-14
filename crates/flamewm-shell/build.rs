@@ -19,6 +19,8 @@ fn main() {
         "audio.html",
         "network.html",
         "calendar.html",
+        "osd.html",
+        "battery.html",
     ];
     let artifacts = [
         ("flamewm-panel.rwr", "panel.html"),
@@ -28,6 +30,8 @@ fn main() {
         ("flamewm-audio.rwr", "audio.html"),
         ("flamewm-network.rwr", "network.html"),
         ("flamewm-calendar.rwr", "calendar.html"),
+        ("flamewm-osd.rwr", "osd.html"),
+        ("flamewm-battery.rwr", "battery.html"),
     ];
 
     println!("cargo:rerun-if-changed={}", css.display());

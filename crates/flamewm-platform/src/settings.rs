@@ -108,6 +108,37 @@ impl TaskbarStyle {
 /// screen, so both keys share one type.
 pub type ClockFormat = LockClockFormat;
 
+/// Image source for the desktop wallpaper (`wallpaperMode`) and the lock background
+/// (`lockBackgroundMode`). `default` is the bundled image, `solid` the plain colour, and `custom`
+/// the saved image path. Switching modes never erases the saved path or colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundMode {
+    Default,
+    Solid,
+    Custom,
+}
+
+impl BackgroundMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Solid => "solid",
+            Self::Custom => "custom",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "solid" => Some(Self::Solid),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
 /// Desktop wallpaper placement (`wallpaperFit`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WallpaperFit {
@@ -215,8 +246,11 @@ pub struct ProductSettings {
     pub accent: String,
     pub icon_theme: String,
     pub appearance: AppearanceMode,
-    /// Empty means use the desktop/theme default wallpaper.
+    /// Saved custom wallpaper path; used only when `wallpaper_mode` is `Custom`.
     pub wallpaper: String,
+    pub wallpaper_mode: BackgroundMode,
+    /// Solid desktop colour used when `wallpaper_mode` is `Solid`.
+    pub wallpaper_color: String,
     pub wallpaper_fit: WallpaperFit,
     pub desktop_selection_fill_opacity: u8,
     pub window_snap_preview_fill_opacity: u8,
@@ -275,6 +309,8 @@ pub struct ProductSettings {
     pub maximize_animation_enabled: bool,
     pub lock_background_color: String,
     pub lock_background_image: String,
+    /// Saved custom lock image path; used only when `lock_background_mode` is `Custom`.
+    pub lock_background_mode: BackgroundMode,
     pub lock_background_blur_percent: u16,
     pub lock_background_dim_percent: u16,
     /// Lock-screen profile picture path; empty selects the built-in ring icon.
@@ -304,6 +340,8 @@ impl Default for ProductSettings {
             icon_theme: "PlagueSur".to_owned(),
             appearance: AppearanceMode::Dark,
             wallpaper: String::new(),
+            wallpaper_mode: BackgroundMode::Default,
+            wallpaper_color: "#232629".to_owned(),
             wallpaper_fit: WallpaperFit::Fill,
             desktop_selection_fill_opacity: 20,
             window_snap_preview_fill_opacity: 20,
@@ -361,6 +399,7 @@ impl Default for ProductSettings {
             maximize_animation_enabled: true,
             lock_background_color: "#232629".to_owned(),
             lock_background_image: String::new(),
+            lock_background_mode: BackgroundMode::Default,
             lock_background_blur_percent: 40,
             lock_background_dim_percent: 25,
             avatar_image: String::new(),
@@ -555,6 +594,7 @@ impl ProductSettings {
         if !(25..=200).contains(&self.animation_speed) {
             return invalid("animationSpeed must be 25..200");
         }
+        validate_color(&self.wallpaper_color, false, "wallpaperColor")?;
         validate_color(&self.lock_background_color, false, "lockBackgroundColor")?;
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
@@ -637,6 +677,8 @@ impl ConfigStore {
         let mut snapshot = self.current.clone();
         let mut has_surface_key = false;
         let mut has_legacy_taskbar_surface_key = false;
+        let mut has_wallpaper_mode = false;
+        let mut has_lock_background_mode = false;
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -655,6 +697,8 @@ impl ConfigStore {
                 key,
                 "taskbarColor" | "taskbarOpacity" | "taskbarBlurPercent"
             );
+            has_wallpaper_mode |= key == "wallpaperMode";
+            has_lock_background_mode |= key == "lockBackgroundMode";
             if let Some(row) = stable_setting(key) {
                 (row.parse)(&mut snapshot, value, key)?;
                 continue;
@@ -689,6 +733,13 @@ impl ConfigStore {
             snapshot.surface_color = snapshot.taskbar_color.clone();
             snapshot.surface_opacity = snapshot.taskbar_opacity;
             snapshot.surface_blur_percent = snapshot.taskbar_blur_percent;
+        }
+        // Files written before the mode keys existed derive the mode from the saved values.
+        if !has_wallpaper_mode {
+            snapshot.wallpaper_mode = legacy_wallpaper_mode(&snapshot);
+        }
+        if !has_lock_background_mode {
+            snapshot.lock_background_mode = legacy_lock_background_mode(&snapshot);
         }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
@@ -728,10 +779,24 @@ impl ConfigStore {
         // Base rows are always written. Optional rows are written only when they differ from
         // defaults, so settings files that never set them keep their existing byte-for-byte shape.
         for row in STABLE_SETTINGS {
+            if matches!(row.key, "wallpaperMode" | "lockBackgroundMode") {
+                continue;
+            }
             let value = (row.get)(snapshot);
             if row.base || value != (row.get)(&defaults) {
                 lines.push(format!("{}={}", row.key, wire_text(&value, row.base)));
             }
+        }
+        // A mode is written only when the legacy inference from the saved values would pick a
+        // different one, so defaults stay silent and Default with a saved path still round-trips.
+        if snapshot.wallpaper_mode != legacy_wallpaper_mode(snapshot) {
+            lines.push(format!("wallpaperMode={}", snapshot.wallpaper_mode.as_str()));
+        }
+        if snapshot.lock_background_mode != legacy_lock_background_mode(snapshot) {
+            lines.push(format!(
+                "lockBackgroundMode={}",
+                snapshot.lock_background_mode.as_str()
+            ));
         }
         lines.extend(
             snapshot
@@ -949,6 +1014,23 @@ impl Slot for TaskbarStyle {
     }
 }
 
+impl Slot for BackgroundMode {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::Text(self.as_str().to_owned())
+    }
+
+    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+    }
+
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        match value {
+            SettingValue::Text(text) => Self::from_text(text, key),
+            _ => invalid("setting requires text"),
+        }
+    }
+}
+
 impl Slot for WallpaperFit {
     fn to_value(&self) -> SettingValue {
         SettingValue::Text(self.as_str().to_owned())
@@ -1038,6 +1120,8 @@ stable_settings! {
     (true, appearance, "accent", accent),
     (true, appearance, "appearance", appearance),
     (true, desktop, "wallpaper", wallpaper),
+    (false, desktop, "wallpaperMode", wallpaper_mode),
+    (false, desktop, "wallpaperColor", wallpaper_color),
     (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
     (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),
     (true, fonts, "fontFamily", font_family),
@@ -1096,6 +1180,7 @@ stable_settings! {
     (false, windows, "maximizeAnimationEnabled", maximize_animation_enabled),
     (false, lock, "lockBackgroundColor", lock_background_color),
     (false, lock, "lockBackgroundImage", lock_background_image),
+    (false, lock, "lockBackgroundMode", lock_background_mode),
     (false, lock, "lockBackgroundBlurPercent", lock_background_blur_percent),
     (false, lock, "lockBackgroundDimPercent", lock_background_dim_percent),
     (false, appearance, "avatarImage", avatar_image),
@@ -1190,6 +1275,27 @@ fn validate_lock_image_path(value: &str, name: &str) -> FlameResult<()> {
         ));
     }
     Ok(())
+}
+
+/// Desktop mode implied by saved values alone: a saved path means custom, otherwise bundled.
+fn legacy_wallpaper_mode(snapshot: &ProductSettings) -> BackgroundMode {
+    if snapshot.wallpaper.is_empty() {
+        BackgroundMode::Default
+    } else {
+        BackgroundMode::Custom
+    }
+}
+
+/// Lock mode implied by saved values alone: a saved path means custom, a non-default colour
+/// means solid, and otherwise the bundled image.
+fn legacy_lock_background_mode(snapshot: &ProductSettings) -> BackgroundMode {
+    if !snapshot.lock_background_image.is_empty() {
+        BackgroundMode::Custom
+    } else if snapshot.lock_background_color != ProductSettings::default().lock_background_color {
+        BackgroundMode::Solid
+    } else {
+        BackgroundMode::Default
+    }
 }
 
 fn is_stable_key(key: &str) -> bool {
@@ -1360,6 +1466,81 @@ mod tests {
                 ErrorCode::InvalidArgument,
                 "{line} must be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn background_modes_migrate_from_legacy_values_when_keys_are_absent() {
+        let store = ConfigStore::default();
+        let legacy_wallpaper = store
+            .parse_snapshot("revision=2\nwallpaper=/home/u/a.png\n")
+            .expect("legacy wallpaper");
+        assert_eq!(legacy_wallpaper.wallpaper_mode, BackgroundMode::Custom);
+        let empty_wallpaper = store.parse_snapshot("revision=2\n").expect("empty wallpaper");
+        assert_eq!(empty_wallpaper.wallpaper_mode, BackgroundMode::Default);
+        let custom_lock = store
+            .parse_snapshot("revision=2\nlockBackgroundImage=/home/u/bg.png\n")
+            .expect("custom lock");
+        assert_eq!(custom_lock.lock_background_mode, BackgroundMode::Custom);
+        let solid_lock = store
+            .parse_snapshot("revision=2\nlockBackgroundColor=#102030\n")
+            .expect("solid lock");
+        assert_eq!(solid_lock.lock_background_mode, BackgroundMode::Solid);
+        let default_lock = store.parse_snapshot("revision=2\n").expect("default lock");
+        assert_eq!(default_lock.lock_background_mode, BackgroundMode::Default);
+    }
+
+    #[test]
+    fn explicit_background_mode_wins_over_saved_path_and_keeps_it() {
+        let parsed = ConfigStore::default()
+            .parse_snapshot(
+                "revision=2\nwallpaperMode=default\nwallpaper=/home/u/a.png\n\
+                 lockBackgroundMode=solid\nlockBackgroundImage=/home/u/bg.png\n",
+            )
+            .expect("explicit modes");
+        assert_eq!(parsed.wallpaper_mode, BackgroundMode::Default);
+        assert_eq!(parsed.wallpaper, "/home/u/a.png");
+        assert_eq!(parsed.lock_background_mode, BackgroundMode::Solid);
+        assert_eq!(parsed.lock_background_image, "/home/u/bg.png");
+    }
+
+    #[test]
+    fn background_modes_round_trip_and_clear_differs_from_default() {
+        let store = ConfigStore::default();
+        for mode in [BackgroundMode::Default, BackgroundMode::Solid, BackgroundMode::Custom] {
+            let mut snapshot = ProductSettings::default();
+            snapshot.revision = 9;
+            snapshot.wallpaper = "/home/u/a.png".to_owned();
+            snapshot.wallpaper_mode = mode;
+            snapshot.lock_background_image = "/home/u/bg.png".to_owned();
+            snapshot.lock_background_mode = mode;
+            let text = ConfigStore::serialize(&snapshot);
+            let parsed = store.parse_snapshot(&text).expect("round trip");
+            assert_eq!(parsed.wallpaper_mode, mode);
+            assert_eq!(parsed.lock_background_mode, mode);
+            assert_eq!(parsed.wallpaper, "/home/u/a.png");
+            assert_eq!(parsed.lock_background_image, "/home/u/bg.png");
+        }
+        let mut clear = ProductSettings::default();
+        clear.lock_background_mode = BackgroundMode::Solid;
+        let mut default = ProductSettings::default();
+        default.lock_background_mode = BackgroundMode::Default;
+        assert_ne!(
+            ConfigStore::serialize(&clear),
+            ConfigStore::serialize(&default),
+            "Clear (solid) must not persist the same output as Default"
+        );
+    }
+
+    #[test]
+    fn invalid_background_mode_and_wallpaper_color_are_rejected() {
+        let store = ConfigStore::default();
+        for text in [
+            "wallpaperMode=clear\n",
+            "lockBackgroundMode=Custom\n",
+            "wallpaperColor=red\n",
+        ] {
+            assert!(store.parse_snapshot(text).is_err(), "{text} must be rejected");
         }
     }
 

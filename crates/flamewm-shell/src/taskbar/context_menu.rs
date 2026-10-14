@@ -137,6 +137,19 @@ pub fn workspace_action(
     }
 }
 
+/// Taskbar-background menu: exactly one row that opens general settings.
+pub const TASKBAR_ROW_SETTINGS: &str = "taskbar-settings";
+
+#[must_use]
+pub fn taskbar_menu() -> Vec<MenuEntry> {
+    vec![MenuEntry::Action {
+        id: TASKBAR_ROW_SETTINGS.to_owned(),
+        label: "FlameWM Settings".to_owned(),
+        icon: None,
+        enabled: true,
+    }]
+}
+
 /// Visible context-menu row count for a menu kind. Row identity is the
 /// row id, never the label. Used to size the native surface to its content
 /// rows so no spare (black) area remains.
@@ -155,8 +168,28 @@ pub fn visible_row_count_for_kind(
         crate::ContextMenuKind::Workspace { index } => workspaces
             .map(|snapshot| workspace_menu(snapshot, *index).len())
             .unwrap_or(0),
+        crate::ContextMenuKind::Taskbar => taskbar_menu().len(),
     }
 }
 
 /// Stable row identity for a task entry slot: entry id plus policy row id.
 pub use flamewm_shell_core::menu_policy::row_identity;
+
+#[cfg(test)]
+mod taskbar_menu_tests {
+    use super::*;
+
+    #[test]
+    fn taskbar_background_menu_has_exactly_one_flamewm_settings_row() {
+        let entries = taskbar_menu();
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            MenuEntry::Action { id, label, .. } => {
+                assert_eq!(id, TASKBAR_ROW_SETTINGS);
+                assert_eq!(label, "FlameWM Settings");
+            }
+            other => panic!("taskbar row must be an action, got {other:?}"),
+        }
+    }
+
+}

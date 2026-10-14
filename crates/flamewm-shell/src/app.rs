@@ -17,6 +17,8 @@ use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_ui_x11::{SurfaceRuntime, UiBackendError};
 
+use crate::event_router::quick_popup_group;
+
 /// C07: one shell operation owns exactly one total span; nested totals must
 /// not double-own. `operation_total_active` on the `ShellLoop` event turn
 /// marks the outer owner; inner paths check it and skip their own total.
@@ -107,11 +109,17 @@ pub(crate) struct ShellLoop {
     /// Shell-side record that the audio popup was last opened and not yet
     /// closed by the shell. Drives the tray-volume toggle decision.
     pub(crate) quick_audio_open: bool,
+    /// Kind of the quick-control popup currently open, if any.
+    pub(crate) quick_kind_open: Option<flamewm_shell::quick_controls::QuickControlKind>,
+    /// Group closed by the latest outside-press dismissal; consumes its opener.
+    pub(crate) dismiss_latch: Option<crate::event_router::DismissLatch>,
     /// One-shot: task-slot icons re-requested once the loader exists.
     pub(crate) task_icon_prime_armed: bool,
     /// Last `_NET_WM_ICON_GEOMETRY` written per task client window. Per shell
     /// run: a restart starts empty.
     pub(crate) icon_geometry: IconGeometryTracker,
+    /// Volume OSD: one retained overlay, driven by the audio snapshot.
+    pub(crate) osd: flamewm_shell::osd::OsdController,
 }
 
 impl ShellLoop {
@@ -137,6 +145,8 @@ impl ShellLoop {
             start_error: None,
             active_start_launch: None,
             quick_audio_open: false,
+            quick_kind_open: None,
+            dismiss_latch: None,
             context_menu: None,
             network_secret: String::new(),
             network_secret_request_id: None,
@@ -154,6 +164,7 @@ impl ShellLoop {
             quick_control,
             task_icon_prime_armed: true,
             icon_geometry: IconGeometryTracker::default(),
+            osd: flamewm_shell::osd::OsdController::default(),
         }
     }
 
@@ -308,9 +319,9 @@ impl ShellLoop {
                     }
                 }
                 ShellControl::OpenPopover(name) => {
-                    // J07: media stays in-process; audio/network/clock
+                    // J07: media stays in-process; audio/network/clock/battery
                     // forward to the supervisor, then return immediately.
-                    if matches!(name.as_str(), "volume" | "audio" | "network" | "clock") {
+                    if matches!(name.as_str(), "volume" | "audio" | "network" | "clock" | "battery") {
                         self.open_quick_control(runtime, &name);
                         self.end_start_session();
                         continue;
@@ -562,6 +573,7 @@ impl ShellLoop {
     /// invalidation). Best-effort and nonfatal: the loop always survives.
     pub(crate) fn close_quick_control_nonfatal(&mut self) {
         self.quick_audio_open = false;
+        self.quick_kind_open = None;
         if let Err(error) = self.quick_control.close() {
             let message = error.to_string();
             // NotRunning = no helper/harmless; log the rest as diagnostics.
@@ -575,7 +587,7 @@ impl ShellLoop {
     /// return immediately. Failures are nonfatal (logged, loop survives).
     /// F10: always reads the current context generation first and
     /// refuses when edge/geometry is inconsistent.
-    pub(crate) fn open_quick_control(&mut self, runtime: &SurfaceRuntime, name: &str) {
+    pub(crate) fn open_quick_control(&mut self, runtime: &mut SurfaceRuntime, name: &str) {
         use flamewm_shell::quick_controls::QuickControlKind;
         self.note_popup_generation("quick");
         if self.refuse_popup_on_inconsistent_geometry().is_some() {
@@ -585,12 +597,14 @@ impl ShellLoop {
             "volume" | "audio" => QuickControlKind::Audio,
             "network" => QuickControlKind::Network,
             "clock" => QuickControlKind::Calendar,
+            "battery" => QuickControlKind::Battery,
             _ => return,
         };
         let source_id = match kind {
             QuickControlKind::Audio => "tray-volume",
             QuickControlKind::Network => "tray-network",
             QuickControlKind::Calendar => "clock-button",
+            QuickControlKind::Battery => "tray-battery",
         };
         // Retained anchor preferred; snapshot geometry is the sole
         // pre-map fallback (same contract as the in-process path).
@@ -609,6 +623,19 @@ impl ShellLoop {
             panel_edge,
         );
         self.quick_audio_open = kind == QuickControlKind::Audio;
+        self.quick_kind_open = Some(kind);
+        runtime.arm_raw_press_observer();
+    }
+
+    /// Popup group that an outside-press dismissal would close right now.
+    pub(crate) fn open_popup_group(&self) -> Option<&'static str> {
+        if self.surfaces.is_start_group_open() {
+            return Some("start");
+        }
+        if self.surfaces.is_media_open() {
+            return Some("media");
+        }
+        self.quick_kind_open.map(quick_popup_group)
     }
 
     /// Pre-map anchor fallback: the panel snapshot geometry. Used only
@@ -1044,10 +1071,11 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         snapshot: &ShellSnapshot,
     ) {
-        let slots: Vec<Option<u64>> = flamewm_shell_core::task_visual_states(
+        let slots: Vec<Option<u64>> = flamewm_shell_core::task_visual_states_on_output(
             &snapshot.panels,
             &snapshot.windows,
             &snapshot.applications,
+            snapshot.panels.panels.first().map(|panel| &panel.output),
         )
         .iter()
         .map(|state| state.window.map(|window| window.id))
@@ -1197,6 +1225,10 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         clock_due: &std::sync::atomic::AtomicBool,
     ) -> Result<(), UiBackendError> {
+        self.drain_raw_press_observations(runtime);
+        if self.quick_kind_open.is_none() {
+            runtime.disarm_raw_press_observer();
+        }
         // Event-driven retry: a blank taskbar snapshot is recaptured when root children change.
         if runtime.take_root_changed() && self.surfaces.panel_capture_pending() {
             self.apply_taskbar_backdrop(runtime);
@@ -1211,10 +1243,11 @@ impl ShellLoop {
         if self.task_icon_prime_armed {
             self.ensure_loader();
             let snapshot = self.shell.snapshot().clone();
-            let task_state_count = flamewm_shell_core::task_visual_states(
+            let task_state_count = flamewm_shell_core::task_visual_states_on_output(
                 &snapshot.panels,
                 &snapshot.windows,
                 &snapshot.applications,
+                snapshot.panels.panels.first().map(|panel| &panel.output),
             )
             .len();
             let loader_present = self.icon_loader.is_some();
@@ -1297,7 +1330,49 @@ impl ShellLoop {
             self.apply_controls(runtime)?;
             runtime.redraw_dirty()?;
         }
+        self.tick_osd(runtime);
         Ok(())
+    }
+
+    pub(crate) fn attach_osd_wake(&mut self, wake: flamewm_reactor::WakeDeadline) {
+        self.osd.attach_wake(wake);
+    }
+
+    /// Volume OSD: shows the default endpoint's snapshot level when it changes
+    /// and hides at the single deadline. Nonfatal: a failure never stops the loop.
+    fn tick_osd(&mut self, runtime: &mut SurfaceRuntime) {
+        let snapshot = self.shell.snapshot();
+        let level = flamewm_shell::taskbar::status::audio::default_endpoint_row(
+            &snapshot.system.audio,
+        )
+        .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
+        // Same output source as the panel scale: the shown panel's placement output.
+        let panel = self.surfaces.placement().output.clone();
+        let panel = flamewm_shell::osd::OsdOutput {
+            geometry: panel.geometry,
+            scale_percent: panel.shell_scale_percent,
+            primary: panel.primary,
+            connected: panel.connected,
+        };
+        let outputs = snapshot
+            .displays
+            .outputs
+            .iter()
+            .map(|output| flamewm_shell::osd::OsdOutput {
+                geometry: output.geometry,
+                scale_percent: output.shell_scale_percent,
+                primary: output.primary,
+                connected: output.connected,
+            })
+            .collect::<Vec<_>>();
+        let (output, scale) = match flamewm_shell::osd::target_output(Some(panel), &outputs) {
+            Some(target) => (target.geometry, f32::from(target.scale_percent) / 100.0),
+            None => (self.surfaces.work_area(), 1.0),
+        };
+        let now = Instant::now();
+        if let Err(error) = self.osd.update(runtime, level, output, scale, now) {
+            eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
+        }
     }
 
     /// Applies the Start slide for the next show/hide. Derived from the cached

@@ -73,6 +73,7 @@ impl Default for ShellSnapshot {
                 network: Default::default(),
                 media: Default::default(),
                 audio: Default::default(),
+                power: Default::default(),
             },
         }
     }
@@ -126,6 +127,8 @@ pub enum ShellControl {
 pub enum ContextMenuKind {
     Task(flamewm_api::TaskEntryId),
     Workspace { index: usize },
+    /// Taskbar background (Secondary on `taskbar.surface`); one settings row.
+    Taskbar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,6 +382,7 @@ impl ShellRuntime {
                     _ => None,
                 }
             }
+            ContextMenuKind::Taskbar => None,
             ContextMenuKind::Workspace { index } => {
                 let row = action.strip_prefix("workspace.menu.")?;
                 let snapshot = self.snapshot.workspaces.as_ref()?;
@@ -428,23 +432,49 @@ impl ShellRuntime {
     }
 
     /// Reorder request moving the task entry at `from` to final index `to`.
+    /// Task slots shown on the first panel's output; slot N is `task_visual_states()[N]`.
+    fn task_visual_states(&self) -> Vec<flamewm_shell_core::TaskVisualState> {
+        flamewm_shell_core::task_visual_states_on_output(
+            &self.snapshot.panels,
+            &self.snapshot.windows,
+            &self.snapshot.applications,
+            self.shown_panel_output(),
+        )
+    }
+
+    #[must_use]
+    pub fn task_slot_count(&self) -> usize {
+        self.task_visual_states().len()
+    }
+
+    /// `from`/`to` are task-slot indices on the shown output; the request carries the
+    /// full task-list index of the entry now occupying `to`.
     #[must_use]
     pub fn task_reorder_request(&self, from: usize, to: usize) -> Option<ControlRequest> {
-        let entry = self.snapshot.panels.tasks.get(from)?;
-        (to < self.snapshot.panels.tasks.len()).then(|| ControlRequest::ReorderTask {
-            entry_id: entry.id.clone(),
-            index: to,
+        let states = self.task_visual_states();
+        let entry_id = states.get(from)?.id.clone();
+        let target = &states.get(to)?.id;
+        let index = self
+            .snapshot
+            .panels
+            .tasks
+            .iter()
+            .position(|entry| &entry.id == target)?;
+        Some(ControlRequest::ReorderTask {
+            entry_id,
+            index,
             expected_revision: self.snapshot.panels.revision,
         })
     }
 
+    /// Output of the panel whose task slots are shown; `None` on a single-panel desktop.
+    fn shown_panel_output(&self) -> Option<&flamewm_api::OutputId> {
+        self.snapshot.panels.panels.first().map(|panel| &panel.output)
+    }
+
     #[must_use]
     pub fn task_click_requests_for_slot(&self, slot: usize) -> Option<Vec<ControlRequest>> {
-        let task_visual_states = flamewm_shell_core::task_visual_states(
-            &self.snapshot.panels,
-            &self.snapshot.windows,
-            &self.snapshot.applications,
-        );
+        let task_visual_states = self.task_visual_states();
         let state = task_visual_states.get(slot)?;
         let entry = self
             .snapshot
@@ -492,11 +522,7 @@ impl ShellRuntime {
     /// Pointer-anchored variant: `pointer` is the root-coordinate click
     /// point (local x/y + source surface global rect).
     pub fn open_task_context_at_slot(&mut self, slot: usize, pointer: Option<flamewm_api::Point>) {
-        let states = flamewm_shell_core::task_visual_states(
-            &self.snapshot.panels,
-            &self.snapshot.windows,
-            &self.snapshot.applications,
-        );
+        let states = self.task_visual_states();
         if let Some(state) = states.get(slot) {
             self.controls
                 .push_back(ShellControl::OpenContextMenu(ContextMenuState {
@@ -533,6 +559,16 @@ impl ShellRuntime {
         }
     }
 
+    /// Taskbar-background context menu, anchored at the root-coordinate click.
+    pub fn open_taskbar_context_at(&mut self, pointer: Option<flamewm_api::Point>) {
+        self.controls
+            .push_back(ShellControl::OpenContextMenu(ContextMenuState {
+                kind: ContextMenuKind::Taskbar,
+                revision: self.snapshot.panels.revision,
+                anchor: pointer,
+            }));
+    }
+
     pub fn dispatch(&mut self, action: &str) {
         let control = match action {
             "start.toggle" => Some(ShellControl::ToggleStart),
@@ -540,7 +576,8 @@ impl ShellRuntime {
             value if value.starts_with("start.category.") => {
                 start::category_for_action(value).map(ShellControl::SelectStartCategory)
             }
-            "media.open" | "media.toggle" | "volume.open" | "network.open" | "clock.open" => Some(
+            "media.open" | "media.toggle" | "volume.open" | "network.open" | "battery.open"
+            | "clock.open" => Some(
                 ShellControl::OpenPopover(action.split('.').next().unwrap_or(action).to_owned()),
             ),
             "popover.close" => Some(ShellControl::ClosePopovers),
@@ -1021,7 +1058,7 @@ impl ShellSurfaces {
             runtime,
             MEDIA_ARTIFACT,
             status_popup_config(
-                "FlameWM media",
+                crate::quick_controls::host::MEDIA_POPUP_TITLE,
                 flamewm_shell_core::MEDIA_POPOVER_SIZE,
                 panel_anchor(&panel_snapshot, &output, metrics, 1),
             ),
@@ -2199,6 +2236,150 @@ mod tests {
             flamewm_api::Rect::new(0, 0, 1920, 1080),
         )];
         assert!(panel_context_for_snapshot(&empty, PanelEdge::Bottom).is_none());
+    }
+
+    /// Two panels (A shown first, then B) with tasks t1 and t2 on the windows below.
+    fn task_slot_snapshot(outputs: &[&str]) -> ShellSnapshot {
+        use flamewm_api::panels::{PanelSnapshot, TaskEntry, TaskEntryKind};
+        use flamewm_api::window::WindowState;
+        use flamewm_api::{
+            DesktopAppId, OutputId, PanelEdge, TaskEntryId, WindowRef, WorkspaceRef,
+        };
+        let window_on = |id: u64, output: &str| WindowSnapshot {
+            reference: WindowRef::new(id, 1),
+            title: String::new(),
+            app_id: DesktopAppId::new("term"),
+            outer_geometry: flamewm_api::Rect::new(0, 0, 10, 10),
+            restore_geometry: flamewm_api::Rect::new(0, 0, 10, 10),
+            state: WindowState::Normal,
+            sticky: false,
+            focused: false,
+            workspace: WorkspaceRef { index: 0, revision: 1 },
+            output: OutputId::new(output),
+            state_generation: 1,
+        };
+        let task = |id: u64| {
+            let window = WindowRef::new(id, 1);
+            TaskEntry {
+                id: TaskEntryId::window(window),
+                app_id: DesktopAppId::new("term"),
+                kind: TaskEntryKind::Window { window },
+                order_index: id as usize,
+            }
+        };
+        let panel = |output: &str| PanelSnapshot {
+            output: OutputId::new(output),
+            edge: PanelEdge::Bottom,
+            logical_size: 40,
+            visible: true,
+            geometry: flamewm_api::Rect::new(0, 1036, 1920, 44),
+        };
+        let mut snapshot = ShellSnapshot::default();
+        let ids: Vec<u64> = (1..=outputs.len() as u64).collect();
+        snapshot.panels = PanelsSnapshot {
+            revision: 7,
+            panels: vec![panel("A"), panel("B")],
+            tasks: ids.iter().map(|&id| task(id)).collect(),
+            pinned_apps: Vec::new(),
+        };
+        snapshot.windows = ids
+            .iter()
+            .zip(outputs)
+            .map(|(&id, output)| window_on(id, output))
+            .collect();
+        snapshot
+    }
+
+    fn win_ref(id: u64) -> flamewm_api::WindowRef {
+        flamewm_api::WindowRef::new(id, 1)
+    }
+
+    #[test]
+    fn task_slot_click_maps_to_the_task_on_the_shown_panel_output() {
+        // Window 1 on A: slot 0 of the shown panel A is window 1; B holds window 2 only.
+        let mut runtime = ShellRuntime::new(task_slot_snapshot(&["A", "B"]));
+        assert_eq!(
+            runtime.task_click_requests_for_slot(0),
+            Some(vec![ControlRequest::ActivateWindow(win_ref(1))])
+        );
+        assert_eq!(runtime.task_click_requests_for_slot(1), None);
+
+        // Window 1 moves to B: panel A now shows nothing, so slot 0 no longer maps to window 1.
+        runtime = ShellRuntime::new(task_slot_snapshot(&["B", "B"]));
+        assert_eq!(runtime.task_click_requests_for_slot(0), None);
+        // Panel B shown first: slot 0 is window 1, slot 1 is window 2.
+        let mut snapshot = task_slot_snapshot(&["B", "B"]);
+        snapshot.panels.panels.reverse();
+        runtime = ShellRuntime::new(snapshot);
+        assert_eq!(
+            runtime.task_click_requests_for_slot(0),
+            Some(vec![ControlRequest::ActivateWindow(win_ref(1))])
+        );
+        assert_eq!(
+            runtime.task_click_requests_for_slot(1),
+            Some(vec![ControlRequest::ActivateWindow(win_ref(2))])
+        );
+    }
+
+    #[test]
+    fn task_slot_context_menu_follows_the_shown_panel_output() {
+        let mut runtime = ShellRuntime::new(task_slot_snapshot(&["B", "B"]));
+        runtime.open_task_context_at_slot(0, None);
+        assert!(runtime.controls.is_empty(), "panel A shows no tasks");
+
+        let mut snapshot = task_slot_snapshot(&["A", "B"]);
+        snapshot.panels.panels.reverse();
+        runtime = ShellRuntime::new(snapshot);
+        runtime.open_task_context_at_slot(0, None);
+        // Panel B shown first: slot 0 is window 2 (task 2) only after window 1 leaves B.
+        let expected = flamewm_api::TaskEntryId::window(win_ref(2));
+        match runtime.controls.front() {
+            Some(ShellControl::OpenContextMenu(state)) => {
+                assert_eq!(state.kind, ContextMenuKind::Task(expected));
+            }
+            other => panic!("expected task context menu, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_slot_reorder_skips_hidden_entries_with_full_list_index() {
+        // Tasks 1, 2, 4 on B (shown first), task 3 on A (hidden). Slot 1 is task 2, slot 2 is task 4.
+        let mut snapshot = task_slot_snapshot(&["B", "B", "A", "B"]);
+        snapshot.panels.panels.reverse();
+        let runtime = ShellRuntime::new(snapshot);
+        assert_eq!(runtime.task_slot_count(), 3);
+        assert_eq!(
+            runtime.task_reorder_request(1, 2),
+            Some(ControlRequest::ReorderTask {
+                entry_id: flamewm_api::TaskEntryId::window(win_ref(2)),
+                index: 3,
+                expected_revision: 7,
+            })
+        );
+    }
+
+    #[test]
+    fn task_slot_reorder_uses_shown_output_slots_and_full_list_index() {
+        // Panel B shown first with both windows on B: slots equal the full task list.
+        let mut snapshot = task_slot_snapshot(&["B", "B"]);
+        snapshot.panels.panels.reverse();
+        let runtime = ShellRuntime::new(snapshot);
+        assert_eq!(runtime.task_slot_count(), 2);
+        assert_eq!(
+            runtime.task_reorder_request(0, 1),
+            Some(ControlRequest::ReorderTask {
+                entry_id: flamewm_api::TaskEntryId::window(win_ref(1)),
+                index: 1,
+                expected_revision: 7,
+            })
+        );
+
+        // Window 1 on A: panel B shows only window 2, so its single slot cannot reorder.
+        let mut snapshot = task_slot_snapshot(&["A", "B"]);
+        snapshot.panels.panels.reverse();
+        let runtime = ShellRuntime::new(snapshot);
+        assert_eq!(runtime.task_slot_count(), 1);
+        assert_eq!(runtime.task_reorder_request(0, 1), None);
     }
 
     fn two_output_snapshot() -> ShellSnapshot {

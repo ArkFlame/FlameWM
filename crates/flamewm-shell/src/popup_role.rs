@@ -31,6 +31,7 @@ pub enum PopupRole {
     Audio,
     Network,
     Calendar,
+    Battery,
 }
 
 impl PopupRole {
@@ -44,6 +45,7 @@ impl PopupRole {
             Self::Audio => "audio-popup",
             Self::Network => "wifi-popup",
             Self::Calendar => "clock-popup",
+            Self::Battery => "battery-popup",
         }
     }
 
@@ -56,6 +58,7 @@ impl PopupRole {
             Self::Audio => "tray-volume",
             Self::Network => "tray-network",
             Self::Calendar => "clock-button",
+            Self::Battery => "tray-battery",
         }
     }
 
@@ -71,6 +74,7 @@ impl PopupRole {
             Self::Audio => "audio",
             Self::Network => "network",
             Self::Calendar => "calendar",
+            Self::Battery => "battery",
         }
     }
 
@@ -84,6 +88,7 @@ impl PopupRole {
             Self::Audio => Some(QuickControlKind::Audio),
             Self::Network => Some(QuickControlKind::Network),
             Self::Calendar => Some(QuickControlKind::Calendar),
+            Self::Battery => Some(QuickControlKind::Battery),
         }
     }
 }
@@ -108,6 +113,7 @@ mod popup_contract_tests {
             PopupRole::Calendar => {
                 include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-calendar.rwr"))
             }
+            PopupRole::Battery => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr")),
         }
     }
 
@@ -118,6 +124,7 @@ mod popup_contract_tests {
             PopupRole::Audio => Size::new(310, 220),
             PopupRole::Network => Size::new(310, 260),
             PopupRole::Calendar => Size::new(300, 320),
+            PopupRole::Battery => flamewm_shell_core::BATTERY_POPOVER_SIZE,
         }
     }
 
@@ -136,6 +143,7 @@ mod popup_contract_tests {
             PopupRole::Audio,
             PopupRole::Network,
             PopupRole::Calendar,
+            PopupRole::Battery,
         ] {
             let mut document = flamewm_ui_x11::decode_document(artifact_bytes(role))
                 .unwrap_or_else(|error| panic!("{role:?} artifact must decode: {error}"));
@@ -230,6 +238,17 @@ mod tests {
         assert_eq!(PopupRole::Audio.intrinsic_node_id(), "audio-popup");
         assert_eq!(PopupRole::Network.intrinsic_node_id(), "wifi-popup");
         assert_eq!(PopupRole::Calendar.intrinsic_node_id(), "clock-popup");
+        assert_eq!(PopupRole::Battery.intrinsic_node_id(), "battery-popup");
+    }
+
+    #[test]
+    fn battery_role_is_sized_and_anchored_to_the_tray_battery_node() {
+        assert_eq!(
+            flamewm_shell_core::BATTERY_POPOVER_SIZE,
+            flamewm_api::Size::new(300, 132)
+        );
+        assert_eq!(PopupRole::Battery.source_node_id(), "tray-battery");
+        assert_eq!(PopupRole::Battery.semantic_name(), "battery");
     }
 
     #[test]
@@ -239,6 +258,7 @@ mod tests {
         assert_eq!(PopupRole::Audio.source_node_id(), "tray-volume");
         assert_eq!(PopupRole::Network.source_node_id(), "tray-network");
         assert_eq!(PopupRole::Calendar.source_node_id(), "clock-button");
+        assert_eq!(PopupRole::Battery.source_node_id(), "tray-battery");
     }
 
     #[test]
@@ -248,6 +268,7 @@ mod tests {
         assert_eq!(PopupRole::Audio.semantic_name(), "audio");
         assert_eq!(PopupRole::Network.semantic_name(), "network");
         assert_eq!(PopupRole::Calendar.semantic_name(), "calendar");
+        assert_eq!(PopupRole::Battery.semantic_name(), "battery");
     }
 
     #[test]
@@ -265,6 +286,10 @@ mod tests {
         assert_eq!(
             PopupRole::Calendar.quick_control_kind(),
             Some(QuickControlKind::Calendar)
+        );
+        assert_eq!(
+            PopupRole::Battery.quick_control_kind(),
+            Some(QuickControlKind::Battery)
         );
     }
 }

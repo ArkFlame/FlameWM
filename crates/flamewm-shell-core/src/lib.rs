@@ -133,11 +133,12 @@ pub const AUDIO_POPOVER_SIZE: Size = Size::new(459, 460);
 pub const MEDIA_POPOVER_SIZE: Size = Size::new(276, 80);
 /// Network popup: 461x453 logical px (matches ui/shell/network.html root).
 pub const NETWORK_POPOVER_SIZE: Size = Size::new(461, 453);
+/// Battery popup: 300x132 logical px (matches ui/shell/battery.html root).
+pub const BATTERY_POPOVER_SIZE: Size = Size::new(300, 132);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioPopoverModel {
     pub size: Size,
-    pub details: String,
     pub volume_percent: u8,
     pub muted: bool,
 }
@@ -184,11 +185,6 @@ impl StatusPopovers {
         let views = StatusViews::from_snapshot(system);
         let audio = views.audio.visible.then(|| AudioPopoverModel {
             size: AUDIO_POPOVER_SIZE,
-            details: if system.audio.sink_name.is_empty() {
-                "Audio".to_owned()
-            } else {
-                system.audio.sink_name.clone()
-            },
             volume_percent: system.audio.volume_percent.min(100),
             muted: system.audio.muted,
         });
@@ -638,23 +634,41 @@ pub fn task_visual_states(
     windows: &[WindowSnapshot],
     applications: &[DesktopApplication],
 ) -> Vec<TaskVisualState> {
+    task_visual_states_on_output(panels, windows, applications, None)
+}
+
+/// Task states listed by the panel on `output`. A running entry is listed only
+/// on the output its window is on; an entry with no live window (pinned, not
+/// running) or no window snapshot is listed on every panel. `None` lists all.
+#[must_use]
+pub fn task_visual_states_on_output(
+    panels: &PanelsSnapshot,
+    windows: &[WindowSnapshot],
+    applications: &[DesktopApplication],
+    output: Option<&OutputId>,
+) -> Vec<TaskVisualState> {
     panels
         .tasks
         .iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let window = match entry.kind {
                 TaskEntryKind::PinnedSlot { window } => window,
                 TaskEntryKind::Window { window } => Some(window),
             };
             let snapshot = window
                 .and_then(|reference| windows.iter().find(|item| item.reference == reference));
+            if let (Some(output), Some(snapshot)) = (output, snapshot) {
+                if &snapshot.output != output {
+                    return None;
+                }
+            }
             let icon_name = applications
                 .iter()
                 .find(|app| app.id == entry.app_id)
                 .map(|app| app.icon_name.clone())
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| entry.app_id.as_str().to_owned());
-            TaskVisualState {
+            Some(TaskVisualState {
                 id: entry.id.clone(),
                 app_id: entry.app_id.clone(),
                 window,
@@ -662,7 +676,7 @@ pub fn task_visual_states(
                 running: window.is_some(),
                 focused: snapshot.is_some_and(|item| item.focused),
                 minimized: snapshot.is_some_and(|item| item.state == WindowState::Minimized),
-            }
+            })
         })
         .collect()
 }
@@ -783,6 +797,118 @@ mod tests {
         );
     }
 
+    mod task_output {
+        use super::super::*;
+        use flamewm_api::window::WindowState;
+        use flamewm_api::{DesktopAppId, TaskEntryId, WindowRef};
+
+        fn window(id: u64, output: &str, state: WindowState) -> WindowSnapshot {
+            WindowSnapshot {
+                reference: WindowRef::new(id, 1),
+                title: String::new(),
+                app_id: DesktopAppId::new("term"),
+                outer_geometry: Rect::new(-1920, 0, 100, 100),
+                restore_geometry: Rect::new(-1920, 0, 100, 100),
+                state,
+                sticky: false,
+                focused: false,
+                workspace: flamewm_api::WorkspaceRef { index: 0, revision: 1 },
+                output: OutputId::new(output),
+                state_generation: 1,
+            }
+        }
+
+        fn running(id: u64) -> TaskEntry {
+            let window = WindowRef::new(id, 1);
+            TaskEntry {
+                id: TaskEntryId::window(window),
+                app_id: DesktopAppId::new("term"),
+                kind: TaskEntryKind::Window { window },
+                order_index: id as usize,
+            }
+        }
+
+        fn pinned(app: &str, window: Option<WindowRef>) -> TaskEntry {
+            let app_id = DesktopAppId::new(app);
+            TaskEntry {
+                id: TaskEntryId::pinned(&app_id),
+                app_id,
+                kind: TaskEntryKind::PinnedSlot { window },
+                order_index: 0,
+            }
+        }
+
+        fn panels(tasks: Vec<TaskEntry>) -> PanelsSnapshot {
+            PanelsSnapshot { revision: 1, panels: Vec::new(), tasks, pinned_apps: Vec::new() }
+        }
+
+        fn ids(states: &[TaskVisualState]) -> Vec<TaskEntryId> {
+            states.iter().map(|state| state.id.clone()).collect()
+        }
+
+        #[test]
+        fn window_moving_between_outputs_moves_its_entry() {
+            let (a, b) = (OutputId::new("A"), OutputId::new("B"));
+            let tasks = panels(vec![running(1)]);
+            let on_a = [window(1, "A", WindowState::Normal)];
+            assert_eq!(ids(&task_visual_states_on_output(&tasks, &on_a, &[], Some(&a))).len(), 1);
+            assert!(task_visual_states_on_output(&tasks, &on_a, &[], Some(&b)).is_empty());
+            let on_b = [window(1, "B", WindowState::Normal)];
+            assert!(task_visual_states_on_output(&tasks, &on_b, &[], Some(&a)).is_empty());
+            assert_eq!(ids(&task_visual_states_on_output(&tasks, &on_b, &[], Some(&b))).len(), 1);
+        }
+
+        #[test]
+        fn minimized_window_stays_on_its_last_output() {
+            let a = OutputId::new("A");
+            let tasks = panels(vec![running(1)]);
+            let windows = [window(1, "A", WindowState::Minimized)];
+            let on_a = task_visual_states_on_output(&tasks, &windows, &[], Some(&a));
+            assert_eq!(on_a.len(), 1);
+            assert!(on_a[0].minimized);
+            assert!(task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")))
+                .is_empty());
+        }
+
+        #[test]
+        fn pinned_entry_without_window_lists_on_every_panel() {
+            let tasks = panels(vec![pinned("term", None), pinned("ghost", Some(WindowRef::new(9, 1)))]);
+            let windows = [window(1, "A", WindowState::Normal)];
+            for output in ["A", "B"] {
+                let output = OutputId::new(output);
+                assert_eq!(
+                    task_visual_states_on_output(&tasks, &windows, &[], Some(&output)).len(),
+                    2
+                );
+            }
+        }
+
+        #[test]
+        fn same_app_windows_on_two_outputs_split_between_panels() {
+            let tasks = panels(vec![running(1), running(2)]);
+            let windows = [window(1, "A", WindowState::Normal), window(2, "B", WindowState::Normal)];
+            let a = task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("A")));
+            let b = task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")));
+            assert_eq!(ids(&a), vec![TaskEntryId::window(WindowRef::new(1, 1))]);
+            assert_eq!(ids(&b), vec![TaskEntryId::window(WindowRef::new(2, 1))]);
+        }
+
+        #[test]
+        fn single_output_filter_matches_unfiltered_states() {
+            let a = OutputId::new("A");
+            let tasks = panels(vec![pinned("term", None), running(1), running(2)]);
+            let windows = [window(1, "A", WindowState::Normal), window(2, "A", WindowState::Minimized)];
+            assert_eq!(
+                task_visual_states(&tasks, &windows, &[]),
+                task_visual_states_on_output(&tasks, &windows, &[], Some(&a)),
+            );
+            assert_eq!(
+                task_visual_states(&tasks, &windows, &[]),
+                task_visual_states_on_output(&tasks, &windows, &[], None),
+            );
+        }
+    }
+
     #[test]
     fn bottom_start_surface_anchors_to_real_button() {
         let layout = start_surface_layout(
@@ -862,6 +988,11 @@ mod tests {
     fn audio_and_network_popovers_match_html_roots() {
         assert_eq!(AUDIO_POPOVER_SIZE, Size::new(459, 460));
         assert_eq!(NETWORK_POPOVER_SIZE, Size::new(461, 453));
+    }
+
+    #[test]
+    fn battery_popover_matches_html_root() {
+        assert_eq!(BATTERY_POPOVER_SIZE, Size::new(300, 132));
     }
 
     #[test]

@@ -33,16 +33,28 @@ pub fn project_background(
     presentation: &WallpaperPresentation,
 ) -> Result<(), String> {
     let has_image = matches!(presentation, WallpaperPresentation::Image(_));
-    document.background(
-        "desktop",
-        UiColor {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 255,
-        },
-    )?;
-    document.visible("desktop-watermark", true)?;
+    let (background, watermark) = match presentation {
+        WallpaperPresentation::Solid([r, g, b]) => (
+            UiColor {
+                r: *r,
+                g: *g,
+                b: *b,
+                a: 255,
+            },
+            false,
+        ),
+        _ => (
+            UiColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            true,
+        ),
+    };
+    document.background("desktop", background)?;
+    document.visible("desktop-watermark", watermark)?;
     document.visible("desktop-wallpaper-selection", has_image)?;
     if let WallpaperPresentation::Image(raster) = presentation {
         document.image_rgba8(

@@ -13,7 +13,7 @@ use x11rb::connection::Connection as _;
 
 use crate::{X11Desktop, log_committed_startup_shortcuts};
 use flamewm_api::ports::FdEvents;
-use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
 use flamewm_api::system::{AudioSnapshot, SystemAction};
 use flamewm_applications::ApplicationCatalog;
 use flamewm_control_dbus::ControlServer;
@@ -159,6 +159,18 @@ fn run_session(
         &integrations,
         &provider_error,
         LinuxIntegrationSource::Mpris,
+    ) {
+        Ok(registration) => registration,
+        Err(error) => {
+            integrations.borrow_mut().stop();
+            return Err(error);
+        }
+    };
+    let mut power_registration = match register_provider(
+        &reactor,
+        &integrations,
+        &provider_error,
+        LinuxIntegrationSource::Power,
     ) {
         Ok(registration) => registration,
         Err(error) => {
@@ -316,6 +328,9 @@ fn run_session(
     let pulse_for_hook = Rc::clone(&pulse);
     let audio_updates_for_hook = Rc::clone(&audio_updates);
     let reactor_for_hook = Rc::clone(&reactor);
+    let battery_menu_open_for_hook = Rc::new(Cell::new(false));
+    let battery_menu_open_for_clone = Rc::clone(&battery_menu_open_for_hook);
+    let power_cpu_due_for_hook = Rc::new(Cell::new(None::<Instant>));
     let host_for_hook = Rc::clone(&host);
     let control_for_hook = Rc::clone(&control);
     let control_now_ms_for_hook = Rc::clone(&control_now_ms);
@@ -358,8 +373,15 @@ fn run_session(
             );
             let _ = new_host.replace_applications(catalog_for_hook.all());
             let integrations = Rc::clone(&integrations_for_hook);
+            let battery_open = Rc::clone(&battery_menu_open_for_clone);
             let pulse = Rc::clone(&pulse_for_hook);
-            new_host.set_system_action_handler(Box::new(move |action, snapshot| match action {
+            new_host.set_system_action_handler(Box::new(move |action, snapshot| {
+                match action {
+                    SystemAction::BatteryMenuOpened => battery_open.set(true),
+                    SystemAction::BatteryMenuClosed => battery_open.set(false),
+                    _ => {}
+                }
+                match action {
                 SystemAction::SetVolume(action) => pulse.set_volume(action),
                 SystemAction::SetMute(action) => pulse.set_mute(action),
                 SystemAction::SetWifiEnabled(_)
@@ -373,12 +395,15 @@ fn run_session(
                 | SystemAction::Pause { .. }
                 | SystemAction::PlayPause { .. }
                 | SystemAction::Next { .. }
-                | SystemAction::Previous { .. } => integrations.borrow_mut().perform_action(
+                | SystemAction::Previous { .. }
+                | SystemAction::BatteryMenuOpened
+                | SystemAction::BatteryMenuClosed => integrations.borrow_mut().perform_action(
                     action,
                     &snapshot.network,
                     &snapshot.media,
                 ),
-            }));
+            }
+        }));
             *host_guard = Some(new_host);
         }
         let host = host_guard.as_mut().expect("host initialized");
@@ -421,6 +446,10 @@ fn run_session(
             if host.system_mut().update_network(network) {
                 emit_system_signals(host, control_for_hook.as_ref())?;
             }
+            let power = integrations.power_snapshot();
+            if host.system_mut().update_power(power) {
+                emit_system_signals(host, control_for_hook.as_ref())?;
+            }
             if reconciled {
                 let media = integrations.media_snapshot();
                 if host.system_mut().update_media(media) {
@@ -440,9 +469,38 @@ fn run_session(
             &integrations_for_hook,
             &provider_error_for_hook,
         )?;
+        refresh_provider(
+            &reactor_for_hook,
+            &mut power_registration,
+            &integrations_for_hook,
+            &provider_error_for_hook,
+        )?;
+        // Battery-menu CPU sampling: deadline armed only while the menu is open (zero idle wakeups).
+        let (changed, next_cpu_due) = tick_power_cpu(
+            battery_menu_open_for_hook.get(),
+            power_cpu_due_for_hook.get(),
+            Instant::now(),
+            || integrations_for_hook.borrow_mut().sample_power_cpu(),
+        );
+        power_cpu_due_for_hook.set(next_cpu_due);
+        reactor_for_hook.borrow().wake_deadline().set(next_cpu_due);
+        if changed && host.system_mut().update_power(integrations_for_hook.borrow().power_snapshot()) {
+            emit_system_signals(host, control_for_hook.as_ref())?;
+        }
         let now_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         control_now_ms_for_hook.set(now_ms);
         // Deadline check only: reverts an unconfirmed display mode once its deadline passes.
+        // RandR hotplug/mode notifications mark the topology dirty; refresh it before comparing.
+        if wm.take_display_topology_dirty() {
+            match host.display_snapshot() {
+                Ok(displays) => {
+                    if let Err(error) = host.resync_panels_for_displays(&displays) {
+                        eprintln!("flamewm: panel resync after display change failed: {error}");
+                    }
+                }
+                Err(error) => eprintln!("flamewm: display topology refresh failed: {error}"),
+            }
+        }
         let display_before = host.cached_display_snapshot();
         // The transaction is retired before any native call, so a failed or disconnected-output
         // revert is reported once here and never retried; it must not abort the WM loop.
@@ -495,6 +553,17 @@ pub fn persisted_cursor_theme() -> Option<String> {
     Some(settings.cursor_theme)
 }
 
+/// Persisted `appearance` from the settings file at startup. `None` when the
+/// file is missing or unparsable.
+pub fn persisted_appearance() -> Option<AppearanceMode> {
+    let (path, _) = settings_path();
+    let text = std::fs::read_to_string(path).ok()?;
+    let settings = flamewm_platform::settings::ConfigStore::default()
+        .parse_snapshot(&text)
+        .ok()?;
+    Some(settings.appearance)
+}
+
 /// Single settings sync point: applies the WM-owned snapshot effects, then
 /// notifies the optional observer with the same snapshot.
 fn publish_settings_snapshot(observer: &SharedSettingsObserver, snapshot: &SettingsSnapshot) {
@@ -544,6 +613,7 @@ where
     // Take the one-shot start-menu request out of the drained set so it is emitted
     // exactly once for this turn and never carried into a later flush.
     let start_menu_toggle = std::mem::take(&mut changes.start_menu_toggle);
+    let media_audio_key = changes.media_audio_key.take();
     for signal in collect_wm_signals(host, changes).map_err(any_from_flame)? {
         control.emit_signal(&signal).map_err(any_from_flame)?;
     }
@@ -551,6 +621,12 @@ where
         control
             .emit_signal(&ControlSignal::StartMenuToggleRequested)
             .map_err(any_from_flame)?;
+    }
+    if let Some(key) = media_audio_key {
+        // A rejected write (stale generation, no sink, Pulse down) must not stop the WM.
+        if let Err(error) = host.media_audio_key(key) {
+            eprintln!("flamewm: media key {key:?} was not applied: {error:?}");
+        }
     }
     Ok(())
 }
@@ -718,6 +794,37 @@ struct ProviderRegistration {
     fd: i32,
     events: FdEvents,
     token: RegistrationToken,
+}
+
+/// CPU sample cadence while the battery menu is open.
+const POWER_CPU_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Returns `(sample_now, next_due)`. The deadline is `None` unless the battery menu is open, and
+/// the first open samples immediately so the CPU baseline starts without waiting a full interval.
+/// Runs one battery-menu CPU tick: the sampler is called only when the gate says a sample is due.
+/// Returns whether the published CPU sample changed, plus the next deadline to arm.
+fn tick_power_cpu(
+    menu_open: bool,
+    next_due: Option<Instant>,
+    now: Instant,
+    sample: impl FnOnce() -> bool,
+) -> (bool, Option<Instant>) {
+    let (sample_due, next) = advance_power_cpu_sampling(menu_open, next_due, now);
+    (sample_due && sample(), next)
+}
+
+fn advance_power_cpu_sampling(
+    menu_open: bool,
+    next_due: Option<Instant>,
+    now: Instant,
+) -> (bool, Option<Instant>) {
+    if !menu_open {
+        return (false, None);
+    }
+    match next_due {
+        Some(at) if now < at => (false, Some(at)),
+        _ => (true, Some(now + POWER_CPU_SAMPLE_INTERVAL)),
+    }
 }
 
 fn register_provider(
@@ -1108,6 +1215,7 @@ mod tests {
             panels,
             work_area: false,
             start_menu_toggle: false,
+            media_audio_key: None,
         }
     }
 
@@ -1200,8 +1308,74 @@ mod tests {
             panels: false,
             work_area: true,
             start_menu_toggle: false,
+            media_audio_key: None,
         };
         let signals = collect_wm_signals(&mut host, only_area).expect("collect");
         assert!(signals.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod power_cpu_sampling_tests {
+    use super::*;
+
+    #[test]
+    fn closed_menu_never_arms_even_with_a_stale_deadline() {
+        let t0 = Instant::now();
+        let stale = Some(t0 + POWER_CPU_SAMPLE_INTERVAL);
+        assert_eq!(advance_power_cpu_sampling(false, stale, t0), (false, None));
+    }
+
+    #[test]
+    fn due_sample_while_open_calls_sampler_and_rearms() {
+        let t0 = Instant::now();
+        let mut calls = 0;
+        let out = tick_power_cpu(true, Some(t0), t0, || {
+            calls += 1;
+            true
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(out, (true, Some(t0 + POWER_CPU_SAMPLE_INTERVAL)));
+    }
+
+    #[test]
+    fn closed_menu_never_calls_sampler_and_never_arms() {
+        let t0 = Instant::now();
+        let mut calls = 0;
+        let out = tick_power_cpu(false, Some(t0), t0, || {
+            calls += 1;
+            true
+        });
+        assert_eq!(calls, 0);
+        assert_eq!(out, (false, None));
+    }
+
+    #[test]
+    fn not_yet_due_open_menu_does_not_sample() {
+        let t0 = Instant::now();
+        let due = t0 + POWER_CPU_SAMPLE_INTERVAL;
+        let out = tick_power_cpu(true, Some(due), t0, || panic!("sampled before due"));
+        assert_eq!(out, (false, Some(due)));
+    }
+
+    #[test]
+    fn first_open_samples_now_and_arms_one_second() {
+        let t0 = Instant::now();
+        assert_eq!(
+            advance_power_cpu_sampling(true, None, t0),
+            (true, Some(t0 + POWER_CPU_SAMPLE_INTERVAL))
+        );
+    }
+
+    #[test]
+    fn open_menu_waits_until_due_then_rearms() {
+        let t0 = Instant::now();
+        let due = t0 + POWER_CPU_SAMPLE_INTERVAL;
+        let half = t0 + POWER_CPU_SAMPLE_INTERVAL / 2;
+        assert_eq!(advance_power_cpu_sampling(true, Some(due), half), (false, Some(due)));
+        assert_eq!(
+            advance_power_cpu_sampling(true, Some(due), due),
+            (true, Some(due + POWER_CPU_SAMPLE_INTERVAL))
+        );
     }
 }

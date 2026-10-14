@@ -128,13 +128,43 @@ pub struct AudioEndpointSnapshot {
     pub is_default: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioStreamSnapshot {
     pub id: u32,
     pub endpoint_id: u32,
     pub name: String,
     pub volume_percent: u8,
     pub muted: bool,
+    /// Sanitized `application.name` from the stream proplist, when the producer knows it.
+    pub app_name: Option<String>,
+    /// Sanitized `application.id` from the stream proplist.
+    pub app_id: Option<String>,
+    /// Sanitized `application.icon_name` from the stream proplist.
+    pub icon_name: Option<String>,
+    /// Sanitized `application.process.binary` from the stream proplist.
+    pub process_binary: Option<String>,
+    /// Sanitized `media.name` from the stream proplist.
+    pub media_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PowerState {
+    Charging,
+    Discharging,
+    Full,
+    Empty,
+    #[default]
+    Unknown,
+}
+
+/// Aggregate UPower `DisplayDevice` state. `cpu_percent` is sampled only while the battery menu is open.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PowerSnapshot {
+    pub available: ServiceAvailability,
+    pub present: bool,
+    pub percent: u8,
+    pub state: PowerState,
+    pub cpu_percent: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +245,7 @@ pub struct SystemSnapshot {
     pub network: NetworkSnapshot,
     pub media: MediaSnapshot,
     pub audio: AudioSnapshot,
+    pub power: PowerSnapshot,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -255,6 +286,8 @@ pub enum SystemAction {
     },
     SetVolume(AudioVolumeAction),
     SetMute(AudioMuteAction),
+    BatteryMenuOpened,
+    BatteryMenuClosed,
 }
 
 impl core::fmt::Debug for SystemAction {
@@ -310,6 +343,8 @@ impl core::fmt::Debug for SystemAction {
                 .finish(),
             Self::SetVolume(action) => f.debug_tuple("SetVolume").field(action).finish(),
             Self::SetMute(action) => f.debug_tuple("SetMute").field(action).finish(),
+            Self::BatteryMenuOpened => f.write_str("BatteryMenuOpened"),
+            Self::BatteryMenuClosed => f.write_str("BatteryMenuClosed"),
         }
     }
 }

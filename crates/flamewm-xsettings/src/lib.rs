@@ -47,6 +47,8 @@ pub struct XSettingsInput {
     pub hinting: bool,
     pub hint_style: String,
     pub rgba_order: String,
+    /// Installed GTK3 theme name for `Net/ThemeName`; `None` keeps `theme_name_for`.
+    pub gtk3_theme: Option<String>,
 }
 
 impl Default for XSettingsInput {
@@ -65,6 +67,7 @@ impl Default for XSettingsInput {
             hinting: true,
             hint_style: "hintslight".to_owned(),
             rgba_order: "rgb".to_owned(),
+            gtk3_theme: None,
         }
     }
 }
@@ -93,13 +96,20 @@ pub fn theme_name_for(appearance: AppearanceMode) -> &'static str {
     }
 }
 
+fn gtk3_theme_for(input: &XSettingsInput) -> &str {
+    input
+        .gtk3_theme
+        .as_deref()
+        .unwrap_or_else(|| theme_name_for(input.appearance))
+}
+
 #[must_use]
 pub fn build_settings(input: &XSettingsInput) -> XSettingsSnapshot {
     let dark = published_appearance(input.appearance).prefers_dark();
     let mut settings = BTreeMap::new();
     settings.insert(
         "Net/ThemeName".to_owned(),
-        XSettingsValue::Text(theme_name_for(input.appearance).to_owned()),
+        XSettingsValue::Text(gtk3_theme_for(input).to_owned()),
     );
     settings.insert(
         "Net/IconThemeName".to_owned(),
@@ -129,6 +139,12 @@ pub fn build_settings(input: &XSettingsInput) -> XSettingsSnapshot {
         "Gtk/PreferDarkTheme".to_owned(),
         XSettingsValue::Integer(i32::from(dark)),
     );
+    // Spec key for GTK3 dark preference. Installed libgdk's XSETTINGS table does
+    // not list it, so GTK3 dark selection also relies on Net/ThemeName.
+    settings.insert(
+        "Gtk/ApplicationPreferDarkTheme".to_owned(),
+        XSettingsValue::Integer(i32::from(dark)),
+    );
     XSettingsSnapshot {
         serial: 0,
         settings,
@@ -141,10 +157,7 @@ pub fn build_settings(input: &XSettingsInput) -> XSettingsSnapshot {
 #[must_use]
 pub fn string_table(input: &XSettingsInput) -> BTreeMap<String, String> {
     BTreeMap::from([
-        (
-            "Net/ThemeName".to_owned(),
-            theme_name_for(input.appearance).to_owned(),
-        ),
+        ("Net/ThemeName".to_owned(), gtk3_theme_for(input).to_owned()),
         ("Net/IconThemeName".to_owned(), input.icon_theme.clone()),
         ("Xft/HintStyle".to_owned(), input.hint_style.clone()),
         ("Xft/RGBA".to_owned(), input.rgba_order.clone()),
@@ -229,6 +242,10 @@ mod tests {
         let snapshot = build_settings(&XSettingsInput::default());
         assert_eq!(
             snapshot.get("Gtk/PreferDarkTheme"),
+            Some(XSettingsValue::Integer(1))
+        );
+        assert_eq!(
+            snapshot.get("Gtk/ApplicationPreferDarkTheme"),
             Some(XSettingsValue::Integer(1))
         );
         assert!(snapshot.settings.contains_key("Net/ThemeName"));
@@ -317,6 +334,10 @@ mod tests {
             Some(XSettingsValue::Integer(0))
         );
         assert_eq!(
+            snapshot.get("Gtk/ApplicationPreferDarkTheme"),
+            Some(XSettingsValue::Integer(0))
+        );
+        assert_eq!(
             string_table(&input).get("Net/ThemeName").map(String::as_str),
             Some("Flame-Light")
         );
@@ -337,6 +358,27 @@ mod tests {
         assert_eq!(
             strings.get("Net/ThemeName").map(String::as_str),
             Some("Flame-Light")
+        );
+    }
+
+    #[test]
+    fn installed_gtk3_theme_overrides_flame_name_only_when_set() {
+        let default = XSettingsInput::default();
+        assert_eq!(
+            published_settings(&default).get("Net/ThemeName"),
+            Some(&XSettingsValue::Text("Flame-Dark".to_owned()))
+        );
+        let input = XSettingsInput {
+            gtk3_theme: Some("Breeze-Dark".to_owned()),
+            ..XSettingsInput::default()
+        };
+        assert_eq!(
+            published_settings(&input).get("Net/ThemeName"),
+            Some(&XSettingsValue::Text("Breeze-Dark".to_owned()))
+        );
+        assert_eq!(
+            string_table(&input).get("Net/ThemeName").map(String::as_str),
+            Some("Breeze-Dark")
         );
     }
 }

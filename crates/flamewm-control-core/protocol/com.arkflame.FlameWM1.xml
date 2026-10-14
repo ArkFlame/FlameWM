@@ -263,6 +263,8 @@
     <method name="Previous"><arg name="busName" type="s" direction="in"/><arg name="expectedRevision" type="t" direction="in"/></method>
     <method name="SetVolume"><arg name="targetKind" type="s" direction="in"/><arg name="endpointKind" type="s" direction="in"/><arg name="id" type="u" direction="in"/><arg name="percent" type="u" direction="in"/><arg name="generation" type="t" direction="in"/><arg name="serverGeneration" type="t" direction="in"/><arg name="expectedRevision" type="t" direction="in"/></method>
     <method name="SetMute"><arg name="targetKind" type="s" direction="in"/><arg name="endpointKind" type="s" direction="in"/><arg name="id" type="u" direction="in"/><arg name="muted" type="b" direction="in"/><arg name="generation" type="t" direction="in"/><arg name="serverGeneration" type="t" direction="in"/><arg name="expectedRevision" type="t" direction="in"/></method>
+    <method name="BatteryMenuOpened"><arg name="expectedRevision" type="t" direction="in"/></method>
+    <method name="BatteryMenuClosed"><arg name="expectedRevision" type="t" direction="in"/></method>
     <signal name="SystemChanged">
       <arg name="revision" type="t"/>
     </signal>

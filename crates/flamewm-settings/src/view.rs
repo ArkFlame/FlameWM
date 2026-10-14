@@ -42,6 +42,9 @@ mod tests {
         "taskbar-floating-margin-value",
         "taskbar-floating-radius-value",
         "wallpaper-fit-value",
+        "wallpaper-clear",
+        "wallpaper-default",
+        "lock-background-default",
         "screensaver-after-lock-value",
         "screensaver-ribbons-value",
         "screensaver-ribbon-width-value",
@@ -355,9 +358,24 @@ mod tests {
         for (id, action, label) in [
             ("wallpaper-choose", "settings.wallpaper.choose", "Choose…"),
             (
-                "wallpaper-reset",
-                "settings.wallpaper.reset",
-                "Restore default",
+                "wallpaper-clear",
+                "settings.wallpaper.clear",
+                "Clear",
+            ),
+            (
+                "wallpaper-default",
+                "settings.wallpaper.default",
+                "Default",
+            ),
+            (
+                "lock-background-default",
+                "settings.lock.background.default",
+                "Default",
+            ),
+            (
+                "lock-background-clear",
+                "settings.lock.background.clear",
+                "Clear",
             ),
         ] {
             assert!(
@@ -371,6 +389,33 @@ mod tests {
             document
                 .text(id, label.to_owned())
                 .unwrap_or_else(|error| panic!("compiled wallpaper action target {id}: {error}"));
+        }
+    }
+
+    #[test]
+    fn compiled_application_appearance_selector_is_addressable_and_labelled() {
+        let mut document = document().expect("settings artifact must decode");
+        let html = include_str!("../../../ui/settings.html");
+        let dispatch = include_str!("lib.rs");
+        assert!(html.contains("Applies to newly opened applications."));
+        for (id, action, label) in [
+            ("appearance-apps-dark", "settings.appearance.apps.dark", "Dark"),
+            ("appearance-apps-light", "settings.appearance.apps.light", "Light"),
+        ] {
+            assert!(
+                html.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                "application appearance {id} must retain its production action"
+            );
+            assert!(
+                dispatch.contains(&format!("\"{action}\" =>")),
+                "application appearance action {action} must have a production dispatch branch"
+            );
+            document
+                .text(id, label.to_owned())
+                .unwrap_or_else(|error| panic!("compiled appearance target {id}: {error}"));
+            document
+                .background(id, flamewm_ui_x11::UiColor { r: 0x3d, g: 0x3d, b: 0x3d, a: 0xff })
+                .unwrap_or_else(|error| panic!("compiled appearance selected state {id}: {error}"));
         }
     }
 

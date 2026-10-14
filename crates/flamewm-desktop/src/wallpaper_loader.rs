@@ -17,6 +17,37 @@ use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 pub enum WallpaperPresentation {
     DefaultBlackWatermark,
     Image(Rgba8Raster),
+    /// Flat `wallpaperMode=solid` fill; no decode and no worker round trip.
+    Solid([u8; 3]),
+}
+
+/// Background source chosen by `wallpaperMode`. `Image` with an empty path is the bundled default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WallpaperSource {
+    Image(PathBuf),
+    Solid([u8; 3]),
+}
+
+/// Fallback fill when `wallpaperColor` is unparsable (matches the settings default).
+const DEFAULT_SOLID: [u8; 3] = [0x23, 0x26, 0x29];
+
+/// Resolves `wallpaperMode` to a source. `default` ignores the saved custom path.
+#[must_use]
+pub fn source_for_settings(mode: &str, custom_path: &str, color: &str) -> WallpaperSource {
+    match mode {
+        "solid" => WallpaperSource::Solid(parse_rgb(color).unwrap_or(DEFAULT_SOLID)),
+        "custom" => WallpaperSource::Image(PathBuf::from(custom_path)),
+        _ => WallpaperSource::Image(PathBuf::new()),
+    }
+}
+
+fn parse_rgb(value: &str) -> Option<[u8; 3]> {
+    let digits = value.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let rgb = u32::from_str_radix(digits, 16).ok()?;
+    Some([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
 }
 
 impl Default for WallpaperPresentation {
@@ -170,6 +201,31 @@ impl WallpaperLoader {
         state.stale_generation = None;
         self.control.wake.notify_one();
         Ok(self.next_generation)
+    }
+
+    /// Shows a flat solid fill immediately and supersedes any in-flight image request.
+    pub fn request_solid(&mut self, rgb: [u8; 3]) -> Result<u64, LoaderClosed> {
+        self.next_generation = self.next_generation.saturating_add(1);
+        let generation = self.next_generation;
+        let mut state = self
+            .control
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.shutdown {
+            return Err(LoaderClosed);
+        }
+        state.latest_generation = generation;
+        state.pending = None;
+        state.completion = None;
+        state.stale_generation = None;
+        drop(state);
+        self.state = WallpaperState {
+            generation,
+            presentation: WallpaperPresentation::Solid(rgb),
+            diagnostic: None,
+        };
+        Ok(generation)
     }
 
     /// Admits one worker completion on the caller's turn. Decode and filesystem reads never run
@@ -327,22 +383,36 @@ fn load_wallpaper(
     packaged_root: &Path,
 ) -> LoadResult {
     if path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty() {
-        let default_path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
-        return match decode_bytes_at(&default_path, fit, target) {
+        return match decode_default(packaged_root, fit, target) {
             Ok(image) => LoadResult::Image(image),
-            Err(error) => LoadResult::Failure(format!(
-                "packaged default wallpaper {} unavailable: {error}",
-                default_path.display()
-            )),
+            Err(error) => LoadResult::Failure(error),
         };
     }
-    if !is_supported_wallpaper(path) {
-        return LoadResult::Failure(format!("unsupported wallpaper format: {}", path.display()));
-    }
-    match decode_bytes_at(path, fit, target) {
+    match decode_custom(path, fit, target) {
         Ok(image) => LoadResult::Image(image),
         Err(message) => LoadResult::Failure(message),
     }
+}
+
+fn decode_default(
+    packaged_root: &Path,
+    fit: WallpaperFit,
+    target: (u32, u32),
+) -> Result<Rgba8Raster, String> {
+    let default_path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
+    decode_bytes_at(&default_path, fit, target).map_err(|error| {
+        format!(
+            "packaged default wallpaper {} unavailable: {error}",
+            default_path.display()
+        )
+    })
+}
+
+fn decode_custom(path: &Path, fit: WallpaperFit, target: (u32, u32)) -> Result<Rgba8Raster, String> {
+    if !is_supported_wallpaper(path) {
+        return Err(format!("unsupported wallpaper format: {}", path.display()));
+    }
+    decode_bytes_at(path, fit, target)
 }
 
 fn is_supported_wallpaper(path: &Path) -> bool {
@@ -380,6 +450,52 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn default_mode_ignores_saved_custom_path() {
+        assert_eq!(
+            source_for_settings("default", "/home/u/a.png", "#232629"),
+            WallpaperSource::Image(PathBuf::new())
+        );
+    }
+
+    #[test]
+    fn custom_mode_uses_saved_path_and_solid_uses_color() {
+        assert_eq!(
+            source_for_settings("custom", "/home/u/a.png", "#232629"),
+            WallpaperSource::Image(PathBuf::from("/home/u/a.png"))
+        );
+        assert_eq!(
+            source_for_settings("solid", "/home/u/a.png", "#102030"),
+            WallpaperSource::Solid([0x10, 0x20, 0x30])
+        );
+        assert_ne!(
+            source_for_settings("default", "", "#232629"),
+            source_for_settings("solid", "", "#232629")
+        );
+    }
+
+    #[test]
+    fn solid_with_invalid_color_falls_back_to_default_fill() {
+        assert_eq!(
+            source_for_settings("solid", "", "red"),
+            WallpaperSource::Solid([0x23, 0x26, 0x29])
+        );
+    }
+
+    #[test]
+    fn solid_request_is_presented_without_worker_and_supersedes_images() {
+        let mut loader = WallpaperLoader::new(64, 48, "/nonexistent-root").expect("loader");
+        let generation = loader
+            .request_solid([1, 2, 3])
+            .expect("solid request accepted");
+        assert_eq!(loader.state().generation, generation);
+        assert_eq!(
+            loader.state().presentation,
+            WallpaperPresentation::Solid([1, 2, 3])
+        );
+        assert_eq!(loader.poll(), PollOutcome::Idle);
+    }
 
     fn production_source() -> &'static str {
         let source = include_str!("wallpaper_loader.rs");
@@ -483,7 +599,9 @@ mod tests {
         assert_eq!(loader.state().generation, second_generation);
         match &loader.state().presentation {
             WallpaperPresentation::Image(image) => assert_eq!(image.pixels, [0, 255, 0, 255]),
-            WallpaperPresentation::DefaultBlackWatermark => panic!("latest image was not applied"),
+            WallpaperPresentation::DefaultBlackWatermark | WallpaperPresentation::Solid(_) => {
+                panic!("latest image was not applied")
+            }
         }
         loader.shutdown();
         let _ = fs::remove_file(first);

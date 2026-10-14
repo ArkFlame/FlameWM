@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use flamewm_render_core::RuntimeDocument;
 use flamewm_render_x11::{
-    GeometryTrace, SurfaceConfig as RenderSurfaceConfig, SurfaceController, SurfaceId,
+    GeometryTrace, RawPressObservation, SurfaceConfig as RenderSurfaceConfig, SurfaceController,
+    SurfaceId,
 };
 pub use flamewm_render_x11::{SlideConfig, SlideEdge};
 
@@ -377,6 +378,20 @@ impl SurfaceRuntime {
 
     pub fn connection_fd(&self) -> RawFd {
         self.controller.connection_fd()
+    }
+
+    /// Observe root presses while quick popups (hosted by the helper) are open.
+    pub fn arm_raw_press_observer(&mut self) {
+        self.controller.arm_raw_press_observer();
+    }
+
+    pub fn disarm_raw_press_observer(&mut self) {
+        self.controller.disarm_raw_press_observer();
+    }
+
+    /// Root presses observed since the last call.
+    pub fn take_raw_press_observations(&mut self) -> Vec<RawPressObservation> {
+        self.controller.take_raw_press_observations()
     }
 
     pub fn grab_pointer(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
