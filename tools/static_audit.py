@@ -187,7 +187,7 @@ def _j11_g01_owner_errors(owner_path: Path) -> list[str]:
 
 
 # Production shell topology, sourced from crates/flamewm-shell/build.rs: these
-# seven templates (and flamewm.css) are the documents the compiled .rwr
+# eight templates (and flamewm.css) are the documents the compiled .rwr
 # artifacts are actually built from.
 PRODUCTION_SHELL_CSS = "ui/shell/flamewm.css"
 PRODUCTION_SHELL_TEMPLATES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -205,6 +205,10 @@ PRODUCTION_SHELL_TEMPLATES: tuple[tuple[str, tuple[str, ...]], ...] = (
      ("network-slots", "network-secret", "network-scan")),
     ("ui/shell/calendar.html",
      ("calendar-month", "calendar-days", "calendar-day-")),
+    ("ui/shell/osd.html",
+     ("osd-icon-high", "osd-icon-muted", "osd-track", "osd-fill", "osd-text")),
+    ("ui/shell/battery.html",
+     ("battery-popup", "battery-progress-fill", "battery-state", "battery-cpu")),
 )
 PRODUCTION_SHELL_BUILD_RS = "crates/flamewm-shell/build.rs"
 PRODUCTION_UI_CONTRACT = "https://wm.arkflame.com"
@@ -578,6 +582,7 @@ helper_artifacts = [
     ("flamewm-audio.rwr", "audio.html"),
     ("flamewm-network.rwr", "network.html"),
     ("flamewm-calendar.rwr", "calendar.html"),
+    ("flamewm-battery.rwr", "battery.html"),
 ]
 for artifact, source in helper_artifacts:
     if f'(\"{artifact}\", \"{source}\")' not in shell_build:
