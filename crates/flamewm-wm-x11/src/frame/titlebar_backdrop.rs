@@ -187,10 +187,6 @@ pub fn forget(owner: u64) {
 fn end_drag_in(state: &mut State, owner: u64) {
     if let Some(drag) = state.drag.take_if(|drag| drag.owner == owner) {
         state.retained = drag.blurred.map(|blurred| (owner, blurred));
-        if state.drag.is_none() {
-            // Rebuilt lazily by `wallpaper_rect` / `build_backdrop` on next use.
-            state.canvas = None;
-        }
     }
 }
 
@@ -698,12 +694,12 @@ mod tests {
     }
 
     #[test]
-    fn end_drag_drops_canvas_once_no_drag_is_active() {
+    fn end_drag_keeps_decoded_canvas_for_next_drag() {
         let mut state = State::default();
         state.drag = build_drag(&mut state, 3, (1, 1), Some(vec![0; 4]), (0, 0, 0, 0));
         state.canvas = Some(((1, 1), None));
         end_drag_in(&mut state, 3);
-        assert!(state.canvas.is_none());
+        assert!(state.canvas.is_some(), "a drag must not re-decode the wallpaper");
     }
 
     #[test]
