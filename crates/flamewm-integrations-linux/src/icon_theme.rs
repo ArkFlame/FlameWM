@@ -1,6 +1,7 @@
 //! Freedesktop `index.theme` parser and inheritance expansion (J2).
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -302,7 +303,7 @@ const THEME_WALK_MAX_DEPTH: usize = 32;
 
 fn walk_theme_dir(
     base: &Path,
-    files: &mut HashMap<String, Vec<IndexedIconFile>>,
+    files: &mut IconFileBuilder,
     theme_rank: usize,
     directory_rank: usize,
 ) {
@@ -331,21 +332,8 @@ fn walk_theme_dir(
                 }
                 continue;
             }
-            let name = item.file_name().to_string_lossy().into_owned();
-            let Some((base_name, ext)) = split_icon_filename(&name) else {
-                continue;
-            };
-            // Unindexed theme: accept only supported extensions.
-            let Some(format_rank) = IconLookupIndex::EXTENSIONS.iter().position(|e| *e == ext) else {
-                continue;
-            };
-            files.entry(base_name).or_default().push(IndexedIconFile {
-                path,
-                theme_rank,
-                directory_rank,
-                distance: 0,
-                format_rank,
-            });
+            let rel = dir.strip_prefix(base).unwrap_or(Path::new(""));
+            files.push(theme_rank, directory_rank, rel, &dir, &item.file_name());
         }
     }
 }
@@ -383,7 +371,7 @@ fn child_filter(paths: &[PathBuf], explicit: Option<&str>) -> Vec<PathBuf> {
 }
 
 fn directory_distance(index: &IconLookupIndex, file: &IndexedIconFile, physical: u32) -> u64 {
-    let theme = match index.ordered_themes.get(file.theme_rank) {
+    let theme = match index.ordered_themes.get(file.theme_rank as usize) {
         Some(t) => t,
         None => return u64::MAX / 2,
     };
@@ -391,7 +379,7 @@ fn directory_distance(index: &IconLookupIndex, file: &IndexedIconFile, physical:
         Some(d) => d,
         None => return u64::MAX / 2,
     };
-    let dir_name = match dirs.directories.get(file.directory_rank) {
+    let dir_name = match dirs.directories.get(file.directory_rank as usize) {
         Some(d) => d,
         None => return u64::MAX / 2,
     };
@@ -614,13 +602,163 @@ pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
 /// build, and a bounded `name -> paths` memo so repeated lookups are
 /// memory-only. Interior memo uses a `Mutex`; snapshots are replaced (never
 /// mutated) on generation bumps.
-#[derive(Debug)]
-pub struct IndexedIconFile {
-    pub path: PathBuf,
-    pub theme_rank: usize,
-    pub directory_rank: usize,
-    pub distance: u64,
-    pub format_rank: usize,
+/// One existing icon file. The base name is the [`IconFileIndex`] map key;
+/// the directory and extension are interned, and the path is rebuilt on demand.
+#[derive(Clone, Copy, Debug)]
+struct IndexedIconFile {
+    /// Index into `IconFileIndex::dirs`.
+    dir: u32,
+    /// Index into `IconFileIndex::exts` (extension as spelled on disk).
+    ext: u16,
+    /// File name is not valid UTF-8: `dirs[dir]` then holds the full path.
+    raw_name: bool,
+    theme_rank: u32,
+    directory_rank: u32,
+    format_rank: u8,
+}
+
+/// Real name -> existing-files index. Each file is a 16-byte record; base
+/// names, directories and extensions are stored once.
+#[derive(Debug, Default)]
+pub struct IconFileIndex {
+    /// Base name -> (start, len) range into `entries`, build order kept.
+    names: HashMap<Box<str>, (u32, u32)>,
+    entries: Vec<IndexedIconFile>,
+    dirs: Vec<PathBuf>,
+    exts: Vec<String>,
+}
+
+impl IconFileIndex {
+    fn get(&self, base: &str) -> Option<&[IndexedIconFile]> {
+        let &(start, len) = self.names.get(base)?;
+        self.entries.get(start as usize..(start + len) as usize)
+    }
+
+    fn ext(&self, file: &IndexedIconFile) -> &str {
+        &self.exts[file.ext as usize]
+    }
+
+    /// Rebuilds the on-disk path of `file` whose base name is `base`.
+    fn path(&self, base: &str, file: &IndexedIconFile) -> PathBuf {
+        let dir = &self.dirs[file.dir as usize];
+        if file.raw_name {
+            return dir.clone();
+        }
+        dir.join(format!("{base}.{}", self.ext(file)))
+    }
+}
+
+/// Build-time accumulator for [`IconFileIndex`].
+#[derive(Default)]
+struct IconFileBuilder {
+    /// Base name -> (file, interned rel-dir id). The rel id dedupes the same
+    /// theme dir seen under another search root (first one wins).
+    by_name: HashMap<Box<str>, Vec<(IndexedIconFile, u32)>>,
+    rel_ids: HashMap<PathBuf, u32>,
+    dirs: Vec<PathBuf>,
+    dir_ids: HashMap<PathBuf, u32>,
+    exts: Vec<String>,
+    ext_ids: HashMap<String, u16>,
+}
+
+impl IconFileBuilder {
+    /// Records one supported icon file in `dir`; `rel` is `dir` relative to
+    /// its theme root.
+    fn push(
+        &mut self,
+        theme_rank: usize,
+        directory_rank: usize,
+        rel: &Path,
+        dir: &Path,
+        file_name: &OsStr,
+    ) {
+        let lossy = file_name.to_string_lossy();
+        let Some((base, ext)) = split_icon_filename(&lossy) else {
+            return;
+        };
+        // Only supported extensions are indexed (both for indexed and walked themes).
+        let Some(format_rank) = IconLookupIndex::EXTENSIONS.iter().position(|e| *e == ext) else {
+            return;
+        };
+        let theme_rank = u32::try_from(theme_rank).unwrap_or(u32::MAX);
+        let directory_rank = u32::try_from(directory_rank).unwrap_or(u32::MAX);
+        let format_rank = format_rank as u8;
+        let raw_name = file_name.to_str().is_none();
+        let rel_id = match self.rel_ids.get(rel) {
+            Some(&id) => id,
+            None => {
+                let id = self.rel_ids.len() as u32;
+                self.rel_ids.insert(rel.to_path_buf(), id);
+                id
+            }
+        };
+        // Same theme dir under another search root: keep the first. Raw names
+        // dedupe on the exact on-disk name, never the lossy base.
+        let dup = self.by_name.get(base.as_str()).is_some_and(|files| {
+            files.iter().any(|(f, r)| {
+                *r == rel_id
+                    && f.theme_rank == theme_rank
+                    && f.format_rank == format_rank
+                    && f.raw_name == raw_name
+                    && (!raw_name || self.dirs[f.dir as usize].file_name() == Some(file_name))
+            })
+        });
+        if dup {
+            return;
+        }
+        let dir = if raw_name {
+            dir.join(file_name)
+        } else {
+            dir.to_path_buf()
+        };
+        let dir_id = self.intern_dir(&dir);
+        let ext_orig = &lossy[lossy.len() - ext.len()..];
+        let ext_id = match self.ext_ids.get(ext_orig) {
+            Some(&id) => id,
+            None => {
+                let id = self.exts.len() as u16;
+                self.exts.push(ext_orig.to_owned());
+                self.ext_ids.insert(ext_orig.to_owned(), id);
+                id
+            }
+        };
+        self.by_name.entry(base.into_boxed_str()).or_default().push((
+            IndexedIconFile {
+                dir: dir_id,
+                ext: ext_id,
+                raw_name,
+                theme_rank,
+                directory_rank,
+                format_rank,
+            },
+            rel_id,
+        ));
+    }
+
+    fn intern_dir(&mut self, path: &Path) -> u32 {
+        if let Some(&id) = self.dir_ids.get(path) {
+            return id;
+        }
+        let id = self.dirs.len() as u32;
+        self.dirs.push(path.to_path_buf());
+        self.dir_ids.insert(path.to_path_buf(), id);
+        id
+    }
+
+    fn finish(self) -> IconFileIndex {
+        let IconFileBuilder { by_name, rel_ids, dirs, dir_ids, exts, ext_ids } = self;
+        drop(rel_ids);
+        drop(dir_ids);
+        drop(ext_ids);
+        let total: usize = by_name.values().map(Vec::len).sum();
+        let mut names = HashMap::with_capacity(by_name.len());
+        let mut entries = Vec::with_capacity(total);
+        for (name, files) in by_name {
+            names.insert(name, (entries.len() as u32, files.len() as u32));
+            entries.extend(files.into_iter().map(|(file, _)| file));
+        }
+        IconFileIndex { names, entries, dirs, exts }
+    }
 }
 
 #[derive(Debug)]
@@ -637,7 +775,7 @@ pub struct IconLookupIndex {
     pub theme_roots: HashMap<String, Vec<PathBuf>>,
     /// Real name -> existing-files index: base icon name -> files found by
     /// reading each declared directory once at build.
-    pub files: HashMap<String, Vec<IndexedIconFile>>,
+    pub files: IconFileIndex,
     /// Pixmaps recorded at build (sibling `pixmaps` + `/usr/share/pixmaps`).
     pub pixmaps: HashMap<String, Vec<PathBuf>>,
     /// Top-level roots `mtime` snapshot + last check (5s cooldown owner).
@@ -679,7 +817,7 @@ impl IconLookupIndex {
             ordered_themes,
             indexes,
             theme_roots,
-            HashMap::new(),
+            IconFileIndex::default(),
             HashMap::new(),
             Vec::new(),
             Vec::new(),
@@ -694,7 +832,7 @@ impl IconLookupIndex {
         ordered_themes: Vec<String>,
         indexes: HashMap<String, Option<IconThemeIndex>>,
         theme_roots: HashMap<String, Vec<PathBuf>>,
-        files: HashMap<String, Vec<IndexedIconFile>>,
+        files: IconFileIndex,
         pixmaps: HashMap<String, Vec<PathBuf>>,
         theme_names: Vec<String>,
         data_dirs: Vec<PathBuf>,
@@ -789,7 +927,7 @@ impl IconLookupIndex {
         }
         // Real name -> existing-files index: read each declared dir once,
         // record actual supported files only.
-        let mut files: HashMap<String, Vec<IndexedIconFile>> = HashMap::new();
+        let mut files = IconFileBuilder::default();
         for (theme_rank, theme) in ordered.iter().enumerate() {
             let parsed = parsed.borrow();
             let Some(Some(index)) = parsed.get(theme) else {
@@ -811,21 +949,13 @@ impl IconLookupIndex {
                         continue;
                     };
                     for item in read.flatten() {
-                        let name = item.file_name().to_string_lossy().into_owned();
-                        let Some((base, ext)) = split_icon_filename(&name) else {
-                            continue;
-                        };
-                        let Some(format_rank) = Self::EXTENSIONS.iter().position(|e| *e == ext)
-                        else {
-                            continue;
-                        };
-                        files.entry(base).or_default().push(IndexedIconFile {
-                            path: item.path(),
+                        files.push(
                             theme_rank,
                             directory_rank,
-                            distance: 0,
-                            format_rank,
-                        });
+                            Path::new(dir),
+                            &dir_path,
+                            &item.file_name(),
+                        );
                     }
                 }
             }
@@ -887,7 +1017,7 @@ impl IconLookupIndex {
             ordered,
             parsed.into_inner(),
             theme_roots,
-            files,
+            files.finish(),
             pixmaps,
             theme_names.to_vec(),
             data_dirs.to_vec(),
@@ -928,9 +1058,10 @@ impl IconLookupIndex {
         // then global exact-first to mirror resolver precedence: exact-size
         // (distance 0) matches anywhere in the chain win in chain order,
         // remaining per-theme bests follow in theme-rank order.
-        let mut theme_best: HashMap<usize, (&IndexedIconFile, u64)> = HashMap::new();
+        let want = explicit.as_deref();
+        let mut theme_best: HashMap<u32, (&IndexedIconFile, u64)> = HashMap::new();
         for file in entries {
-            if !explicit_matches(&file.path, explicit.as_deref()) {
+            if !want.map_or(true, |want| self.files.ext(file).eq_ignore_ascii_case(want)) {
                 continue;
             }
             let distance = directory_distance(self, file, physical.max(1));
@@ -945,7 +1076,7 @@ impl IconLookupIndex {
                 theme_best.insert(file.theme_rank, (file, distance));
             }
         }
-        let mut best: Vec<(usize, &IndexedIconFile, u64)> = theme_best
+        let mut best: Vec<(u32, &IndexedIconFile, u64)> = theme_best
             .into_iter()
             .map(|(rank, (file, distance))| (rank, file, distance))
             .collect();
@@ -956,12 +1087,12 @@ impl IconLookupIndex {
         let mut ordered = Vec::new();
         for (_, file, distance) in &best {
             if *distance == 0 {
-                ordered.push(file.path.clone());
+                ordered.push(self.files.path(&base, file));
             }
         }
         for (_, file, distance) in &best {
             if *distance != 0 {
-                ordered.push(file.path.clone());
+                ordered.push(self.files.path(&base, file));
             }
         }
         let mut out = ordered;
@@ -1359,5 +1490,100 @@ mod tests {
             "Mine and Breeze each parse index.theme once per build"
         );
         assert!(hit && paths[0].ends_with("Breeze/16x16/apps/once-app.png"));
+    }
+
+    #[test]
+    fn indexed_file_record_stays_compact() {
+        assert!(std::mem::size_of::<IndexedIconFile>() <= 16);
+    }
+
+    #[test]
+    fn compact_index_selects_same_paths_as_before() {
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-compact-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let base = data.join("icons/FlameFixture");
+        fs::create_dir_all(base.join("16x16/apps")).expect("16 dir");
+        fs::create_dir_all(base.join("32x32/apps")).expect("32 dir");
+        fs::write(
+            base.join("index.theme"),
+            "[Icon Theme]\nName=FlameFixture\nDirectories=16x16/apps,32x32/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n\n[32x32/apps]\nSize=32\nType=Fixed\n",
+        )
+        .expect("index.theme fixture");
+        fs::write(base.join("16x16/apps/flame-fixture-app.png"), b"").expect("16 png");
+        fs::write(base.join("32x32/apps/flame-fixture-app.svg"), b"").expect("32 svg");
+        fs::write(base.join("32x32/apps/flame-fixture-app.png"), b"").expect("32 png");
+        let names = vec!["FlameFixture".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let at_32 = index.lookup("flame-fixture-app", 32).0;
+        let at_16 = index.lookup("flame-fixture-app", 16).0;
+        let svg = index.lookup("flame-fixture-app.svg", 16).0;
+        let _ = fs::remove_dir_all(&data);
+        assert_eq!(at_32, vec![base.join("32x32/apps/flame-fixture-app.png")]);
+        assert_eq!(at_16, vec![base.join("16x16/apps/flame-fixture-app.png")]);
+        assert_eq!(svg, vec![base.join("32x32/apps/flame-fixture-app.svg")]);
+    }
+
+    #[test]
+    fn duplicate_search_roots_index_each_file_once() {
+        let first = std::env::temp_dir().join(format!(
+            "flamewm-dup-a-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let second = std::env::temp_dir().join(format!(
+            "flamewm-dup-b-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        for data in [&first, &second] {
+            let _ = fs::remove_dir_all(data);
+            let base = data.join("icons/FlameDup");
+            fs::create_dir_all(base.join("16x16/apps")).expect("dup theme dirs");
+            fs::write(
+                base.join("index.theme"),
+                "[Icon Theme]\nName=FlameDup\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
+            )
+            .expect("dup index.theme");
+            fs::write(base.join("16x16/apps/flame-dup-app.png"), b"").expect("dup icon");
+        }
+        let names = vec!["FlameDup".to_owned()];
+        let index = IconLookupIndex::build(&names, &[first.clone(), second.clone()], 1);
+        let (paths, hit) = index.lookup("flame-dup-app", 16);
+        let copies = index.files.get("flame-dup-app").map_or(0, |files| files.len());
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
+        assert!(hit);
+        assert_eq!(
+            paths,
+            vec![first.join("icons/FlameDup/16x16/apps/flame-dup-app.png")]
+        );
+        assert_eq!(copies, 1, "same theme under two roots must be indexed once");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_non_utf8_names_are_both_indexed() {
+        use std::os::unix::ffi::OsStringExt;
+        let data = std::env::temp_dir().join(format!(
+            "flamewm-rawname-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        theme_fixture(&data, "RawNames", FIXED_16, None);
+        let apps = data.join("icons/RawNames/16x16/apps");
+        for raw in [b"a\xff.png".to_vec(), b"a\xfe.png".to_vec()] {
+            fs::write(apps.join(std::ffi::OsString::from_vec(raw)), b"").expect("raw icon fixture");
+        }
+        let names = vec!["RawNames".to_owned()];
+        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let _ = fs::remove_dir_all(&data);
+        // Both names lossy-decode to `a\u{FFFD}`; the key must stay exact.
+        let copies = index.files.get("a\u{FFFD}").map_or(0, |files| files.len());
+        assert_eq!(copies, 2, "distinct raw names must not dedupe by lossy base");
     }
 }
