@@ -398,7 +398,11 @@ def j7_violations(root):
 J6_SKIN_OWNER = "crates/flamewm-skin/src/icons.rs"
 J6_CHROME_FILE = "crates/flamewm-wm-x11/src/chrome.rs"
 J6_ICONS_FILE = "crates/flamewm-integrations-linux/src/icons.rs"
-J6_MODEL_FILE = "crates/flamewm-render-core/src/model.rs"
+J6_MODEL_FILES = (
+    "crates/flamewm-render-core/src/model/mod.rs",
+    "crates/flamewm-render-core/src/model/style.rs",
+    "crates/flamewm-render-core/src/model/document.rs",
+)
 J6_SHELL_MAIN = "crates/flamewm-shell/src/main.rs"
 J6_PENDING: list[str] = []
 # TODO(J12-PENDING): promote J6-G5/G6 to violation entries once migrations land.
@@ -406,6 +410,14 @@ J6_PENDING: list[str] = []
 
 def _j6_strip_comments(text: str) -> str:
     return _strip_rust_comments(text)
+
+
+def _owner_path(root, rel):
+    """Return an expected owner file; a missing owner is a hard error, never a silent skip."""
+    path = root / rel
+    if not path.is_file():
+        raise SystemExit(f"ERROR architecture guard: expected owner file missing: {rel}")
+    return path
 
 
 def print_j6_warnings(root):
@@ -444,12 +456,10 @@ def j6_violations(root):
         theme = text.find("theme_candidates(name")
         if pack != -1 and theme != -1 and pack < theme:
             J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g5-system-before-packaged: {J6_ICONS_FILE}")
-    model = root / J6_MODEL_FILE
-    if model.is_file() and re.search(
-        r"z_index_overrides|set_z_index|effective_z_index",
-        _j6_strip_comments(model.read_text(encoding="utf-8")),
-    ):
-        J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g6-no-new-zindex-store: {J6_MODEL_FILE}")
+    for rel in J6_MODEL_FILES:
+        model_text = _j6_strip_comments(_owner_path(root, rel).read_text(encoding="utf-8"))
+        if re.search(r"z_index_overrides|set_z_index|effective_z_index", model_text):
+            J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g6-no-new-zindex-store: {rel}")
     shell = root / J6_SHELL_MAIN
     if shell.is_file() and re.search(
         r"root_pointer\(\s*0(\.0)?\s*,\s*0(\.0)?\s*\)",
