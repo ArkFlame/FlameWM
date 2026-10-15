@@ -507,6 +507,17 @@ mod tests {
     }
 
     #[test]
+    fn sticky_text_never_draws_horizontal_scrollbar() {
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        let rule = css
+            .lines()
+            .find(|line| line.starts_with(".sticky-text {"))
+            .expect(".sticky-text rule");
+        assert!(rule.contains("overflow-x:hidden"), "{rule}");
+        assert!(rule.contains("overflow:auto"), "vertical scroll kept: {rule}");
+    }
+
+    #[test]
     fn sticky_resize_handles_centre_on_outer_corner() {
         // Handles are positioned against the padding box, which sits 1px inside
         // the note's border. A 10px handle centred on the outer corner therefore
