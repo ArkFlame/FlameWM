@@ -168,7 +168,7 @@ pub struct IconService<R = IconResolver> {
     workers: Vec<JoinHandle<()>>,
     resolver: std::marker::PhantomData<R>,
     /// One shared result cache (key -> resolved raster) fed by workers.
-    result_cache: Arc<Mutex<HashMap<IconKey, Result<Rgba8Raster, IconError>>>>,
+    result_cache: Arc<Mutex<ResultCache>>,
     /// Wake FD: worker writes one byte per completed result; drained by poller.
     wake_reader: Option<UnixStream>,
     submitted: Arc<AtomicU64>,
@@ -239,8 +239,7 @@ impl<R: IconResolve> IconService<R> {
             .and_then(|stream: &UnixStream| stream.try_clone().ok())
             .map(|stream| Arc::new(Mutex::new(stream)));
         let factory = Arc::new(factory);
-        let result_cache: Arc<Mutex<HashMap<IconKey, Result<Rgba8Raster, IconError>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let result_cache = Arc::new(Mutex::new(ResultCache::default()));
         let submitted = Arc::new(AtomicU64::new(0));
         let completed = Arc::new(AtomicU64::new(0));
         let coalesced = Arc::new(AtomicU64::new(0));
@@ -366,7 +365,7 @@ impl<R: IconResolve> IconService<R> {
     pub fn result_cache_len(&self) -> usize {
         self.result_cache
             .lock()
-            .map(|cache| cache.len())
+            .map(|cache| cache.entries.len())
             .unwrap_or(0)
     }
 
@@ -393,7 +392,7 @@ impl<R: IconResolve> IconService<R> {
     /// Cached result for `key` from the single shared result cache.
     #[must_use]
     pub fn cached(&self, key: &IconKey) -> Option<Result<Rgba8Raster, IconError>> {
-        self.result_cache.lock().ok()?.get(key).cloned()
+        self.result_cache.lock().ok()?.entries.get(key).cloned()
     }
 }
 
@@ -519,17 +518,40 @@ impl<R: IconResolve> IconService<R> {
         if let Ok(mut cache) = self.result_cache.lock() {
             // Final shared result cache: bounded by entries and bytes.
             let cost = result_memory(&result.result);
-            while (cache.len() >= RESULT_CACHE_ENTRIES
-                || cache_memory(&cache) + cost > RESULT_CACHE_BYTES)
-                && !cache.is_empty()
+            while (cache.entries.len() >= RESULT_CACHE_ENTRIES
+                || cache.bytes + cost > RESULT_CACHE_BYTES)
+                && !cache.entries.is_empty()
             {
-                if let Some(first) = cache.keys().next().cloned() {
+                if let Some(first) = cache.entries.keys().next().cloned() {
                     cache.remove(&first);
                 } else {
                     break;
                 }
             }
             cache.insert(result.key.clone(), result.result.clone());
+        }
+    }
+}
+
+/// Shared result cache map plus the running sum of its [`result_memory`] costs,
+/// kept in step on every insert and remove so eviction never rescans the map.
+#[derive(Default)]
+struct ResultCache {
+    entries: HashMap<IconKey, Result<Rgba8Raster, IconError>>,
+    bytes: usize,
+}
+
+impl ResultCache {
+    fn insert(&mut self, key: IconKey, value: Result<Rgba8Raster, IconError>) {
+        self.bytes += result_memory(&value);
+        if let Some(replaced) = self.entries.insert(key, value) {
+            self.bytes -= result_memory(&replaced);
+        }
+    }
+
+    fn remove(&mut self, key: &IconKey) {
+        if let Some(removed) = self.entries.remove(key) {
+            self.bytes -= result_memory(&removed);
         }
     }
 }
@@ -545,10 +567,6 @@ fn result_memory(result: &Result<Rgba8Raster, IconError>) -> usize {
         Ok(raster) => raster.pixels.len() + 96,
         Err(_) => 96,
     }
-}
-
-fn cache_memory(cache: &HashMap<IconKey, Result<Rgba8Raster, IconError>>) -> usize {
-    cache.values().map(result_memory).sum()
 }
 
 /// Empty generation-0 index used when no theme state is provided yet.
@@ -692,7 +710,7 @@ fn worker_loop<R: IconResolve>(
     shared: Arc<SharedQueue>,
     result_tx: SyncSender<IconResult>,
     wake_tx: Option<Arc<Mutex<UnixStream>>>,
-    result_cache: Arc<Mutex<HashMap<IconKey, Result<Rgba8Raster, IconError>>>>,
+    result_cache: Arc<Mutex<ResultCache>>,
     completed: Arc<AtomicU64>,
     mut resolver: R,
 ) {
@@ -722,7 +740,7 @@ fn worker_loop<R: IconResolve>(
             if let Some(hit) = result_cache
                 .lock()
                 .ok()
-                .and_then(|c| c.get(&front_key).cloned())
+                .and_then(|c| c.entries.get(&front_key).cloned())
             {
                 let queued = if queue.high.front().is_some_and(|q| q.key == front_key) {
                     queue.high.pop_front().expect("queued icon")
@@ -888,7 +906,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::icons::{IconLookupPurpose, IconRequest, IconSize};
+    use crate::icons::{IconLookupPurpose, IconOrigin, IconRequest, IconSize};
 
     struct FakeResolver(Arc<AtomicUsize>);
 
@@ -1219,6 +1237,47 @@ mod tests {
             }),
             Ok(IconSubmit::DroppedLow)
         );
+    }
+
+    #[test]
+    fn result_cache_eviction_honours_byte_and_entry_limits() {
+        use std::time::Instant;
+
+        let service = IconService::new(1, 8, || {
+            FakeResolver(Arc::new(AtomicUsize::new(0)))
+        });
+        let finish_raster = |name: String, pixels: usize| IconResult {
+            key: key(&name),
+            result: Ok(Rgba8Raster {
+                source: name,
+                width: 1,
+                height: 1,
+                pixels: vec![0; pixels],
+                origin: IconOrigin::PackagedFlame,
+                fallback_reason: None,
+            }),
+            completed_at: Instant::now(),
+        };
+        // Large rasters: the byte bound binds before the entry bound.
+        for index in 0..16 {
+            service.finish(&finish_raster(format!("big-{index}"), 256 * 1024));
+        }
+        {
+            let cache = service.result_cache.lock().expect("cache");
+            assert!(cache.bytes <= RESULT_CACHE_BYTES, "byte bound honoured");
+            assert!(cache.entries.len() < 16, "byte bound evicted entries");
+            let recomputed: usize = cache.entries.values().map(result_memory).sum();
+            assert_eq!(cache.bytes, recomputed, "running total matches map");
+        }
+        // Tiny rasters on a fresh service: the entry bound binds exactly.
+        let small = IconService::new(1, 8, || FakeResolver(Arc::new(AtomicUsize::new(0))));
+        for index in 0..(RESULT_CACHE_ENTRIES + 10) {
+            small.finish(&finish_raster(format!("small-{index}"), 0));
+        }
+        assert_eq!(small.result_cache_len(), RESULT_CACHE_ENTRIES);
+        let cache = small.result_cache.lock().expect("cache");
+        let recomputed: usize = cache.entries.values().map(result_memory).sum();
+        assert_eq!(cache.bytes, recomputed, "running total matches map");
     }
 
     #[test]

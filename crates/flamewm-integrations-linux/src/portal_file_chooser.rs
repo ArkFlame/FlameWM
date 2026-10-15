@@ -423,10 +423,8 @@ fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
         return Err(FlameError::invalid(context));
     };
     values
-        .clone()
-        .into_vec()
-        .into_iter()
-        .map(|value| item_string(&value, context))
+        .iter()
+        .map(|value| item_string(value, context))
         .collect()
 }
 

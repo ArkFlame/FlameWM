@@ -308,18 +308,18 @@ impl PowerProvider {
             return;
         };
         let mut snapshot = self.snapshot;
-        for (key, value) in dict.clone().into_vec() {
+        for (key, value) in dict.iter() {
             let (MessageItem::Str(key), value) = (key, unwrap_variant(value)) else {
                 continue;
             };
             match (key.as_str(), value) {
                 ("Percentage", MessageItem::Double(value)) => {
-                    snapshot.percent = clamp_percent(value);
+                    snapshot.percent = clamp_percent(*value);
                 }
                 ("State", MessageItem::UInt32(value)) => {
-                    snapshot.state = power_state_from_upower(value);
+                    snapshot.state = power_state_from_upower(*value);
                 }
-                ("IsPresent", MessageItem::Bool(value)) => snapshot.present = value,
+                ("IsPresent", MessageItem::Bool(value)) => snapshot.present = *value,
                 _ => {}
             }
         }
@@ -349,9 +349,9 @@ fn parse_message(message: &dbus::Message) -> Option<Event> {
     is_device.then_some(Event::Changed { items })
 }
 
-fn unwrap_variant(item: MessageItem) -> MessageItem {
+fn unwrap_variant(item: &MessageItem) -> &MessageItem {
     match item {
-        MessageItem::Variant(value) => unwrap_variant(*value),
+        MessageItem::Variant(value) => unwrap_variant(value),
         item => item,
     }
 }

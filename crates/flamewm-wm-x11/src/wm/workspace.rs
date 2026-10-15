@@ -53,7 +53,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         target: usize,
     ) -> Result<Vec<(bool, bool)>, ReplyError> {
         let _guard = flamewm_profiler::start("wm.workspace.switch.visibility");
-        let ids = self.clients.keys().copied().collect::<Vec<_>>();
+        let mut ids = Vec::with_capacity(self.clients.len());
+        ids.extend(self.clients.keys().copied());
         let mut pairs = Vec::with_capacity(ids.len());
         for id in ids {
             let (frame, old_visible, new_visible) = {
@@ -108,7 +109,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn reconcile_workspace_visibility(&mut self) -> Result<(), ReplyError> {
-        let ids = self.clients.keys().copied().collect::<Vec<_>>();
+        let mut ids = Vec::with_capacity(self.clients.len());
+        ids.extend(self.clients.keys().copied());
         for id in ids {
             let (frame, visible) = {
                 let Some(state) = self.clients.get(&id) else {
