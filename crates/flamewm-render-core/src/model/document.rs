@@ -245,7 +245,15 @@ impl RuntimeDocument {
             }
             first
         };
-        self.text_overrides.insert(target, text.into());
+        let text = text.into();
+        let current = self
+            .text_overrides
+            .get(&target)
+            .unwrap_or(&self.document.nodes[target as usize].text);
+        if *current == text {
+            return Ok(());
+        }
+        self.text_overrides.insert(target, text);
         self.touch();
         Ok(())
     }
@@ -254,6 +262,9 @@ impl RuntimeDocument {
         let index = self
             .node_by_id(id)
             .ok_or_else(|| format!("no node with id '{id}'"))?;
+        if self.hidden_nodes.contains(&index) == !visible {
+            return Ok(());
+        }
         if visible {
             self.hidden_nodes.remove(&index);
         } else {
@@ -294,6 +305,14 @@ impl RuntimeDocument {
                 "image replacement has {} bytes; expected {expected}",
                 rgba8.len()
             ));
+        }
+        if self.node_image_overrides.get(&index).is_some_and(|entry| {
+            entry.width == width
+                && entry.height == height
+                && entry.source == source
+                && entry.rgba8 == rgba8
+        }) {
+            return Ok(());
         }
         let revision = self
             .node_image_overrides

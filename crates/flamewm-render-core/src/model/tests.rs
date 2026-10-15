@@ -385,3 +385,109 @@ mod image_replace_tests {
         assert_eq!(rev(&after), 1);
     }
 }
+
+#[cfg(test)]
+mod idempotent_mutation_tests {
+    use super::*;
+
+    fn node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> CompiledNode {
+        CompiledNode {
+            kind,
+            parent: None,
+            first_child: None,
+            next_sibling: None,
+            id: id.to_string(),
+            action: String::new(),
+            text: text.to_string(),
+            image,
+            style: Style::default(),
+            hover_style: None,
+            active_style: None,
+        }
+    }
+
+    fn fixture() -> RuntimeDocument {
+        let mut label = node(NodeKind::Element, "label", "", None);
+        label.first_child = Some(2);
+        let mut root = node(NodeKind::Element, "", "", None);
+        root.first_child = Some(1);
+        RuntimeDocument::new(CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: vec![ImageAsset {
+                source: "old".to_string(),
+                width: 1,
+                height: 1,
+                pixels: vec![1, 2, 3, 255],
+            }],
+            nodes: vec![
+                root,
+                label,
+                node(NodeKind::Text, "", "12:00", None),
+                node(NodeKind::Image, "icon", "", Some(0)),
+            ],
+        })
+        .expect("fixture validates")
+    }
+
+    #[test]
+    fn set_text_same_value_keeps_revision_and_damage() {
+        let mut doc = fixture();
+        let revision = doc.revision();
+        let _ = doc.take_damage();
+        doc.set_text("label", "12:00").expect("same text");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+    }
+
+    #[test]
+    fn set_text_changed_value_bumps_revision() {
+        let mut doc = fixture();
+        let revision = doc.revision();
+        let _ = doc.take_damage();
+        doc.set_text("label", "13:00").expect("new text");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        assert_eq!(doc.peek_damage(), SurfaceDamage::Full);
+        let revision = doc.revision();
+        let _ = doc.take_damage();
+        doc.set_text("label", "13:00").expect("same override");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+    }
+
+    #[test]
+    fn set_visible_same_state_keeps_revision_and_damage() {
+        let mut doc = fixture();
+        let revision = doc.revision();
+        let _ = doc.take_damage();
+        doc.set_visible("label", true).expect("already visible");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+        doc.set_visible("label", false).expect("hide");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+        let revision = doc.revision();
+        let _ = doc.take_damage();
+        doc.set_visible("label", false).expect("already hidden");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+    }
+
+    #[test]
+    fn replace_image_same_pixels_keeps_revision_and_damage() {
+        let mut doc = fixture();
+        doc.replace_image_for_node("icon", "n".to_string(), 1, 1, vec![5, 6, 7, 255])
+            .expect("first replace");
+        let revision = doc.revision();
+        let image_revision = doc.image_revision_for_node(3);
+        let _ = doc.take_damage();
+        doc.replace_image_for_node("icon", "n".to_string(), 1, 1, vec![5, 6, 7, 255])
+            .expect("same image");
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.image_revision_for_node(3), image_revision);
+        assert_eq!(doc.peek_damage(), SurfaceDamage::None);
+        doc.replace_image_for_node("icon", "n".to_string(), 1, 1, vec![9, 9, 9, 255])
+            .expect("changed pixels");
+        assert_eq!(doc.revision(), revision.wrapping_add(1));
+    }
+}
