@@ -5,6 +5,12 @@ Usage:
   tools/flamewm_mem_phase_compare.py --old-bin-dir DIR --new-bin-dir DIR [--run-dir DIR] [--reps N]
       [--idle-seconds S] [--idle-samples N] [--samples N] [--start-cycles N] [--minimize-cycles N]
       [--drag-cycles N] [--settle-seconds S] [--geometry WxH] [--display :N]
+      [--icon-theme-dir PATH | --synthetic-icons N]
+
+Icon theme scenario (opt-in, default none): --icon-theme-dir symlinks an existing theme dir into the run's
+private XDG_DATA_HOME/icons; --synthetic-icons N generates an N-file theme there. Either way the theme name
+is written to kdeglobals and gtk-3.0/settings.ini under the private XDG_CONFIG_HOME, which is where the
+product reads them. The scenario is recorded in result.json (icon_theme) and the first line of result.md.
 
 Each repetition runs both binary sets (order alternates) on a fresh owned WM + Shell. Every phase reads
 WM, Shell and the owned Xephyr at one instant per sample (mem_sample.sample_round, barrier-aligned):
@@ -25,6 +31,7 @@ Exit: 0 all phases complete, 1 PARTIAL/FAILED, 2 usage, 3 environment blocked.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -53,6 +60,14 @@ VERDICT_METRICS = ("pss", "rss")
 SAMPLE_SPACING_SECONDS = 0.5
 DRAG_STEP_PX = 120
 DRAG_DROP_PX = 60
+SYNTHETIC_THEME = "FlameWM-Synthetic-Icons"
+SYNTHETIC_SIZES = (16, 22, 24, 32, 48, 64, 128, 256)
+SCALABLE_DIR = "scalable/apps"
+# 1x1 transparent PNG; the synthetic theme repeats it so every file is a real, decodable image.
+SYNTHETIC_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+SYNTHETIC_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">'
+                 b'<rect width="16" height="16" fill="#777"/></svg>\n')
 
 
 # ---------------------------------------------------------------- pure helpers (unit-tested)
@@ -181,6 +196,65 @@ def render_markdown(summary: dict, verdicts: dict, reps: int, problems: list[str
     return "\n".join(lines) + "\n"
 
 
+def icon_scenario(args: argparse.Namespace) -> dict:
+    """The icon theme scenario the run stages, recorded verbatim in result.json."""
+    if args.icon_theme_dir:
+        src = Path(args.icon_theme_dir).expanduser().absolute()
+        return {"mode": "dir", "name": src.name, "source": str(src)}
+    if args.synthetic_icons:
+        return {"mode": "synthetic", "name": SYNTHETIC_THEME, "files": args.synthetic_icons}
+    return {"mode": "none"}
+
+
+def scenario_text(scenario: dict) -> str:
+    if scenario["mode"] == "dir":
+        return f"icon theme {scenario['name']} from {scenario['source']}"
+    if scenario["mode"] == "synthetic":
+        return f"synthetic icon theme {scenario['name']} with {scenario['files']} files"
+    return "none (default, no icon theme staged)"
+
+
+def write_synthetic_theme(icons_root: Path, count: int) -> Path:
+    """Write index.theme and `count` small PNG/SVG icons under icons_root/SYNTHETIC_THEME, round-robin over
+    the fixed size dirs and the scalable dir."""
+    theme = icons_root / SYNTHETIC_THEME
+    dirs = [f"{size}x{size}/apps" for size in SYNTHETIC_SIZES] + [SCALABLE_DIR]
+    for d in dirs:
+        (theme / d).mkdir(parents=True, exist_ok=True)
+    sections = [f"[{d}]\nSize={SYNTHETIC_SIZES[i] if i < len(SYNTHETIC_SIZES) else 48}\nContext=Apps\n"
+                + ("Type=Scalable\nMinSize=8\nMaxSize=512\n" if d == SCALABLE_DIR else "Type=Fixed\n")
+                for i, d in enumerate(dirs)]
+    index = (f"[Icon Theme]\nName={SYNTHETIC_THEME}\nComment=Generated memory-scenario icon theme\n"
+             f"Inherits=hicolor\nDirectories={','.join(dirs)}\n\n" + "\n".join(sections))
+    (theme / "index.theme").write_text(index, encoding="ascii")
+    for i in range(count):
+        d = dirs[i % len(dirs)]
+        if d == SCALABLE_DIR:
+            (theme / d / f"icon-{i:06d}.svg").write_bytes(SYNTHETIC_SVG)
+        else:
+            (theme / d / f"icon-{i:06d}.png").write_bytes(SYNTHETIC_PNG)
+    return theme
+
+
+def stage_icon_scenario(run: Path, args: argparse.Namespace) -> None:
+    """Stage the selected icon theme: the theme under XDG_DATA_HOME/icons and its name in the private
+    XDG_CONFIG_HOME (kdeglobals and gtk-3.0/settings.ini, the files the product reads). No-op by default."""
+    scenario = icon_scenario(args)
+    if scenario["mode"] == "none":
+        return
+    icons = run / "xdg-data" / "icons"
+    icons.mkdir(parents=True, exist_ok=True)
+    if scenario["mode"] == "dir":
+        (icons / scenario["name"]).symlink_to(scenario["source"])
+    else:
+        write_synthetic_theme(icons, scenario["files"])
+    config = run / "xdg-config"
+    (config / "gtk-3.0").mkdir(parents=True, exist_ok=True)
+    (config / "kdeglobals").write_text(f"[Icons]\nTheme={scenario['name']}\n", encoding="utf-8")
+    (config / "gtk-3.0" / "settings.ini").write_text(
+        f"[Settings]\ngtk-icon-theme-name={scenario['name']}\n", encoding="utf-8")
+
+
 # ---------------------------------------------------------------- live helpers
 
 def timed_samples(pids: list[tuple[str, int]], count: int, spacing: float) -> list[dict]:
@@ -281,12 +355,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--geometry", default="1280x800")
     p.add_argument("--display", default=None)
     p.add_argument("--client-bin", default="xclock")
+    icons = p.add_mutually_exclusive_group()
+    icons.add_argument("--icon-theme-dir", default=None, metavar="PATH",
+                       help="existing icon theme dir (contains index.theme), symlinked into the private run")
+    icons.add_argument("--synthetic-icons", type=int, default=None, metavar="N",
+                       help="generate an N-file synthetic icon theme in the private run")
     args = p.parse_args(argv)
     counts = (args.reps, args.idle_samples, args.samples, args.start_cycles, args.minimize_cycles, args.drag_cycles)
     if min(counts) < 1 or args.idle_seconds <= 0:
         p.error("reps, sample, cycle counts and idle-seconds must be positive")
     if not re.fullmatch(r"\d+x\d+", args.geometry):
         p.error("--geometry must be WxH")
+    if args.synthetic_icons is not None and args.synthetic_icons < 1:
+        p.error("--synthetic-icons must be a positive file count")
+    if args.icon_theme_dir and not (Path(args.icon_theme_dir).expanduser() / "index.theme").is_file():
+        p.error("--icon-theme-dir must be a directory containing index.theme")
     args.screen_w, args.screen_h = (int(v) for v in args.geometry.split("x"))
     return args
 
@@ -297,8 +380,9 @@ def build_doc(sets: list[dict], args: argparse.Namespace) -> tuple[dict, list[st
         problems.append(f"run incomplete: {len(sets)}/{2 * args.reps} binary-set repetitions")
     summary = {label: aggregate(sets, label) for label in LABELS}
     verdicts = {label: verdict(summary[label]) for label in LABELS}
-    doc = {"summary": summary, "verdicts": verdicts, "problems": problems,
-           "markdown": render_markdown(summary, verdicts, args.reps, problems)}
+    markdown = f"Icon theme scenario: {scenario_text(icon_scenario(args))}.\n" + \
+        render_markdown(summary, verdicts, args.reps, problems)
+    doc = {"summary": summary, "verdicts": verdicts, "problems": problems, "markdown": markdown}
     return doc, problems
 
 
@@ -317,6 +401,7 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
             return 3
         ctx.display = display
         ctx.build_app_env()
+        stage_icon_scenario(run, args)
         ctx.token = secrets.token_hex(32)
         ctx.marker.write_text(f"{ctx.display}\n{ctx.token}\n", encoding="ascii")
         os.chmod(ctx.marker, 0o600)
@@ -341,7 +426,8 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
         doc |= {"run_dir": str(run), "display": ctx.display, "geometry": args.geometry, "reps": args.reps,
                 "idle_seconds": args.idle_seconds, "idle_samples": args.idle_samples, "samples": args.samples,
                 "start_cycles": args.start_cycles, "minimize_cycles": args.minimize_cycles,
-                "drag_cycles": args.drag_cycles, "target_bytes": mem.TARGET_BYTES,
+                "drag_cycles": args.drag_cycles, "icon_theme": icon_scenario(args),
+                "target_bytes": mem.TARGET_BYTES,
                 "binaries": {label: {name: {"path": str(bins[label] / name),
                                             "sha256": perf.sha256(bins[label] / name)}
                                      for name in ("flamewm", "flamewm-shell")}

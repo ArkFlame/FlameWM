@@ -6,7 +6,10 @@ Run with:
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -177,6 +180,116 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(mpc.perf.order_for_rep(0), ("old", "new"))
         self.assertEqual(mpc.perf.order_for_rep(1), ("new", "old"))
         self.assertEqual(mpc.perf.order_for_rep(2), ("old", "new"))
+
+
+class IconArgumentTests(unittest.TestCase):
+    def parse(self, *argv: str):
+        return mpc.parse_args(list(argv))
+
+    def rejects(self, *argv: str) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            self.parse(*argv)
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_default_has_no_icon_scenario(self) -> None:
+        args = self.parse()
+        self.assertIsNone(args.icon_theme_dir)
+        self.assertIsNone(args.synthetic_icons)
+        self.assertEqual(mpc.icon_scenario(args), {"mode": "none"})
+        self.assertEqual(mpc.scenario_text(mpc.icon_scenario(args)), "none (default, no icon theme staged)")
+
+    def test_synthetic_icons_scenario(self) -> None:
+        scenario = mpc.icon_scenario(self.parse("--synthetic-icons", "12"))
+        self.assertEqual(scenario, {"mode": "synthetic", "name": mpc.SYNTHETIC_THEME, "files": 12})
+
+    def test_icon_theme_dir_scenario_uses_dir_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            theme = Path(tmp) / "BigTheme"
+            theme.mkdir()
+            (theme / "index.theme").write_text("[Icon Theme]\nName=BigTheme\n", encoding="ascii")
+            scenario = mpc.icon_scenario(self.parse("--icon-theme-dir", str(theme)))
+        self.assertEqual(scenario, {"mode": "dir", "name": "BigTheme", "source": str(theme)})
+
+    def test_icon_options_are_mutually_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.rejects("--icon-theme-dir", tmp, "--synthetic-icons", "3")
+
+    def test_synthetic_count_must_be_positive(self) -> None:
+        self.rejects("--synthetic-icons", "0")
+        self.rejects("--synthetic-icons", "-4")
+
+    def test_icon_theme_dir_must_contain_index_theme(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.rejects("--icon-theme-dir", tmp)
+        self.rejects("--icon-theme-dir", "/nonexistent/flamewm-theme")
+
+
+class SyntheticThemeTests(unittest.TestCase):
+    def test_generates_requested_file_count_with_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            icons = Path(tmp)
+            theme = mpc.write_synthetic_theme(icons, 37)
+            files = [p for p in theme.rglob("*") if p.is_file() and p.name != "index.theme"]
+            self.assertEqual(len(files), 37)
+            self.assertEqual({p.suffix for p in files}, {".png", ".svg"})
+            index = (theme / "index.theme").read_text(encoding="ascii")
+        self.assertIn(f"Name={mpc.SYNTHETIC_THEME}\n", index)
+        self.assertIn("Inherits=hicolor", index)
+        self.assertIn("Type=Scalable", index)
+
+    def test_index_lists_every_directory_with_a_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            theme = mpc.write_synthetic_theme(Path(tmp), 1)
+            index = (theme / "index.theme").read_text(encoding="ascii")
+            on_disk = sorted(p.relative_to(theme).as_posix() for p in theme.glob("*/apps"))
+            listed = index.split("Directories=")[1].split("\n")[0].split(",")
+            self.assertEqual(sorted(listed), on_disk)
+            self.assertEqual(len(listed), len(mpc.SYNTHETIC_SIZES) + 1)
+            for name in listed:
+                self.assertIn(f"[{name}]\n", index)
+                self.assertTrue((theme / name).is_dir())
+
+    def test_files_are_real_small_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            theme = mpc.write_synthetic_theme(Path(tmp), 9)
+            pngs = sorted(theme.rglob("*.png"))
+            svgs = sorted(theme.rglob("*.svg"))
+            self.assertTrue(pngs and svgs)
+            self.assertTrue(all(p.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for p in pngs))
+            self.assertTrue(all(p.read_bytes().startswith(b"<svg") for p in svgs))
+
+
+class StageIconScenarioTests(unittest.TestCase):
+    def test_default_stages_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            mpc.stage_icon_scenario(run, mpc.parse_args([]))
+            self.assertEqual(list(run.iterdir()), [])
+
+    def test_synthetic_stages_theme_and_config_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            mpc.stage_icon_scenario(run, mpc.parse_args(["--synthetic-icons", "5"]))
+            theme = run / "xdg-data" / "icons" / mpc.SYNTHETIC_THEME
+            self.assertTrue((theme / "index.theme").is_file())
+            kde = (run / "xdg-config" / "kdeglobals").read_text(encoding="utf-8")
+            gtk = (run / "xdg-config" / "gtk-3.0" / "settings.ini").read_text(encoding="utf-8")
+        self.assertEqual(kde, f"[Icons]\nTheme={mpc.SYNTHETIC_THEME}\n")
+        self.assertIn(f"gtk-icon-theme-name={mpc.SYNTHETIC_THEME}", gtk)
+
+    def test_icon_theme_dir_is_symlinked_and_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src" / "BigTheme"
+            src.mkdir(parents=True)
+            (src / "index.theme").write_text("[Icon Theme]\nName=BigTheme\n", encoding="ascii")
+            run = Path(tmp) / "run"
+            run.mkdir()
+            mpc.stage_icon_scenario(run, mpc.parse_args(["--icon-theme-dir", str(src)]))
+            link = run / "xdg-data" / "icons" / "BigTheme"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.resolve(), src.resolve())
+            kde = (run / "xdg-config" / "kdeglobals").read_text(encoding="utf-8")
+        self.assertEqual(kde, "[Icons]\nTheme=BigTheme\n")
 
 
 if __name__ == "__main__":
