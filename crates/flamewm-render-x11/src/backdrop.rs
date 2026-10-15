@@ -193,10 +193,11 @@ pub fn capture_drawable_rect(
             return Err(format!("backdrop capture unsupported bpp {bits_per_pixel}"));
         }
     };
-    let mut pixels = Vec::with_capacity((width_px as usize) * (height_px as usize) * 4);
-    for row in 0..height_px as usize {
+    let row_out_len = (width_px as usize) * 4;
+    let mut pixels = vec![0u8; row_out_len * (height_px as usize)];
+    for (row, out_row) in pixels.chunks_exact_mut(row_out_len).enumerate() {
         let row_base = row.saturating_mul(bytes_per_line);
-        for col in 0..width_px as usize {
+        for (col, out) in out_row.chunks_exact_mut(4).enumerate() {
             let off = row_base.saturating_add(col.saturating_mul(bytes_per_pixel));
             if off + bytes_per_pixel > data.len() {
                 unsafe { XDestroyImage(image) };
@@ -225,7 +226,7 @@ pub fn capture_drawable_rect(
                 _ => 0,
             };
             let (r, g, b) = decode_pixel(word, red_mask, green_mask, blue_mask);
-            pixels.extend_from_slice(&[r, g, b, 255]);
+            out.copy_from_slice(&[r, g, b, 255]);
         }
     }
     unsafe { XDestroyImage(image) };
