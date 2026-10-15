@@ -174,6 +174,32 @@ fn secret_agent_parser_preserves_requested_setting_without_secret_data() {
 }
 
 #[test]
+fn secret_agent_parser_marks_hintless_get_secrets_as_empty_key() {
+    let mut message = Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        SECRET_AGENT_PATH,
+        SECRET_AGENT_INTERFACE,
+        GET_SECRETS,
+    )
+    .expect("valid SecretAgent call");
+    message.set_serial(1);
+    message.append_items(&[
+        empty_dict(),
+        MessageItem::ObjectPath(
+            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
+                .expect("valid path"),
+        ),
+        MessageItem::Str("802-11-wireless-security".to_owned()),
+        MessageItem::from(&[] as &[&str]),
+        MessageItem::UInt32(0),
+    ]);
+    match parse_secret_agent_call(&message).expect("valid SecretAgent call") {
+        SecretAgentCall::GetSecrets { secret_key, .. } => assert!(secret_key.is_empty()),
+        SecretAgentCall::CancelGetSecrets { .. } => panic!("GetSecrets parsed as cancel"),
+    }
+}
+
+#[test]
 fn device_signal_requests_ap_refresh_only_for_changed_ap_or_scan() {
     let cached = WifiDevice {
         active_connection: "/c/3".to_owned(),
@@ -614,4 +640,24 @@ fn update_message_targets_saved_profile_with_psk_flags_zero() {
     assert!(security.contains(&("psk-flags".to_owned(), MessageItem::UInt32(0))));
     assert!(security.contains(&("psk".to_owned(), MessageItem::Str("new-secret".to_owned()))));
     assert!(!format!("{items:?}").contains("old-secret"));
+}
+
+#[test]
+fn failing_secret_event_does_not_abort_remaining_batch() {
+    let events = vec![
+        Incoming::SecretAgent(SecretAgentCall::CancelGetSecrets { reply: None }),
+        Incoming::SecretAgent(SecretAgentCall::CancelGetSecrets { reply: None }),
+    ];
+    let mut applied = 0usize;
+    dispatch_incoming(events, |_event| {
+        applied += 1;
+        if applied == 1 {
+            return Err(FlameError::new(
+                ErrorCode::NotFound,
+                "NetworkManager secret request has no saved access point",
+            ));
+        }
+        Ok(())
+    });
+    assert_eq!(applied, 2, "second queued event was never dispatched");
 }

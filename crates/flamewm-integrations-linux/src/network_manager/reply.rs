@@ -254,9 +254,10 @@ pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAg
             let setting_name = item_string(&items[2], "NetworkManager SecretAgent setting name")?;
             let hints = item_strings(&items[3], "NetworkManager SecretAgent hints")?;
             let _ = item_u32(&items[4], "NetworkManager SecretAgent flags")?;
+            // An empty key means NetworkManager sent no hints; apply rejects that request.
             Ok(SecretAgentCall::GetSecrets {
                 setting_name,
-                secret_key: hints.into_iter().next().unwrap_or_else(|| "psk".to_owned()),
+                secret_key: hints.into_iter().next().unwrap_or_default(),
                 reply: (!message.get_no_reply()).then(|| message.method_return()),
             })
         }
@@ -792,8 +793,21 @@ impl NetworkManagerProvider {
                 reply,
             } => {
                 self.cancel_secret_context()?;
-                let Some(access_point_path) = self.saved_secret_access_point() else {
+                if secret_key.is_empty() {
+                    eprintln!(
+                        "flamewm-integrations-linux: NetworkManager secret request for {setting_name} had no secret hints; cancelled"
+                    );
                     return self.send_user_canceled(reply);
+                }
+                let Some(access_point_path) = self.saved_secret_access_point() else {
+                    eprintln!(
+                        "flamewm-integrations-linux: NetworkManager secret request for {setting_name} has no saved access point; cancelled"
+                    );
+                    self.send_user_canceled(reply)?;
+                    return Err(FlameError::new(
+                        ErrorCode::NotFound,
+                        "NetworkManager secret request has no saved access point",
+                    ));
                 };
                 let request = self
                     .controller

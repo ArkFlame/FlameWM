@@ -322,11 +322,24 @@ impl NetworkManagerProvider {
         if let Some(error) = parse_error.into_inner() {
             return Err(error);
         }
-        for event in incoming.into_inner() {
-            self.apply(event)?;
-        }
+        dispatch_incoming(incoming.into_inner(), |event| self.apply(event));
         let _ = self.reconcile()?;
         Ok(count)
+    }
+}
+
+/// Applies every drained event in order. A failing event is logged by error text only (the
+/// event payload can carry secrets, so it is never printed) and does not stop the batch.
+fn dispatch_incoming(
+    events: Vec<Incoming>,
+    mut apply: impl FnMut(Incoming) -> FlameResult<()>,
+) {
+    for event in events {
+        if let Err(error) = apply(event) {
+            eprintln!(
+                "flamewm-integrations-linux: NetworkManager event failed; remaining events still dispatched: {error}"
+            );
+        }
     }
 }
 
