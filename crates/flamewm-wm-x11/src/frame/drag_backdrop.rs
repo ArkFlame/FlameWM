@@ -107,13 +107,13 @@ fn composite_pixel(dst: &mut [u8], src: &[u8]) {
 }
 
 impl DragSnapshot {
-    /// Builds the snapshot from `base` then `layers` in order. Refuses sizes above
-    /// [`MAX_SNAPSHOT_BYTES`] before reading any buffer.
+    /// Builds the snapshot from `base` (taken as the snapshot's storage, no copy) then `layers`
+    /// in order. Refuses sizes above [`MAX_SNAPSHOT_BYTES`] before reading any buffer.
     pub fn build(
         origin: (i32, i32),
         width: u32,
         height: u32,
-        base: &[u8],
+        base: Vec<u8>,
         layers: &[Layer<'_>],
     ) -> Result<Self, SnapshotError> {
         let len = byte_len(width, height)?;
@@ -123,7 +123,7 @@ impl DragSnapshot {
                 actual: base.len(),
             });
         }
-        let mut pixels = base.to_vec();
+        let mut pixels = base;
         for layer in layers {
             let layer_len = byte_len(layer.w, layer.h)?;
             if layer.rgba.len() != layer_len {
@@ -201,13 +201,13 @@ mod tests {
             Layer { x: 0, y: 0, w: 1, h: 1, rgba: &red },
             Layer { x: 0, y: 0, w: 1, h: 1, rgba: &green },
         ];
-        let snap = DragSnapshot::build((0, 0), 1, 1, &base, &layers).unwrap();
+        let snap = DragSnapshot::build((0, 0), 1, 1, base.clone(), &layers).unwrap();
         assert_eq!(snap.crop(0, 0, 1, 1), GREEN.to_vec());
 
         // Half-coverage premultiplied white over opaque black gives mid grey, not white.
         let half = [128, 128, 128, 128];
         let layers = [Layer { x: 0, y: 0, w: 1, h: 1, rgba: &half }];
-        let snap = DragSnapshot::build((0, 0), 1, 1, &base, &layers).unwrap();
+        let snap = DragSnapshot::build((0, 0), 1, 1, base.clone(), &layers).unwrap();
         assert_eq!(snap.crop(0, 0, 1, 1), vec![128, 128, 128, 255]);
     }
 
@@ -218,7 +218,7 @@ mod tests {
         for i in 0..4u8 {
             base.extend_from_slice(&[i * 10 + 1, 0, 0, 255]);
         }
-        let snap = DragSnapshot::build((-2, -1), 2, 2, &base, &[]).unwrap();
+        let snap = DragSnapshot::build((-2, -1), 2, 2, base.clone(), &[]).unwrap();
         // Local (0,0) is pixel index 0.
         assert_eq!(snap.crop(-2, -1, 1, 1), base[0..4].to_vec());
         // Desktop (-1, 0) is local (1, 1) = pixel index 3; (0, 0) is local (2, 1), outside.
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn crop_outside_root_is_transparent() {
         let base = [px(RED), px(GREEN), px(BLACK), px(RED)].concat();
-        let snap = DragSnapshot::build((0, 0), 2, 2, &base, &[]).unwrap();
+        let snap = DragSnapshot::build((0, 0), 2, 2, base.clone(), &[]).unwrap();
         assert_eq!(snap.crop(10, 10, 3, 3), vec![0u8; 3 * 3 * 4]);
         // Desktop (1,1) is the last root pixel; the rest of this 2x2 window is outside.
         let mut expected = px(RED);
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn crop_clamped_replicates_root_edges() {
         let base = [px(RED), px(GREEN), px(BLACK), px(RED)].concat();
-        let snap = DragSnapshot::build((0, 0), 2, 2, &base, &[]).unwrap();
+        let snap = DragSnapshot::build((0, 0), 2, 2, base.clone(), &[]).unwrap();
         assert_eq!(snap.crop_clamped(-2, -2, 2, 2), [px(RED), px(RED), px(RED), px(RED)].concat());
         assert_eq!(snap.crop_clamped(1, 1, 2, 1), [px(RED), px(RED)].concat());
     }
@@ -250,13 +250,13 @@ mod tests {
     fn build_refuses_snapshot_above_cap() {
         // 4097 x 4096 x 4 bytes is above the 64 MiB cap; the cap check runs before the base
         // buffer is read, so an empty base is enough to exercise it.
-        let err = DragSnapshot::build((0, 0), 4097, 4096, &[], &[]).unwrap_err();
+        let err = DragSnapshot::build((0, 0), 4097, 4096, Vec::new(), &[]).unwrap_err();
         assert!(matches!(err, SnapshotError::TooLarge { bytes } if bytes > MAX_SNAPSHOT_BYTES));
     }
 
     #[test]
     fn build_rejects_wrong_base_length() {
-        let err = DragSnapshot::build((0, 0), 2, 2, &[0u8; 4], &[]).unwrap_err();
+        let err = DragSnapshot::build((0, 0), 2, 2, vec![0u8; 4], &[]).unwrap_err();
         assert_eq!(err, SnapshotError::BadLength { expected: 16, actual: 4 });
     }
 }

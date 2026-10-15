@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 use flamewm_api::background::WallpaperFit;
 use flamewm_image_core::RgbaImage;
+use flamewm_image_core::blur::{BlurScratch, gaussian_blur_rgba_with};
 use flamewm_image_core::wallpaper::{self, DEFAULT_WALLPAPER_PATH};
 use flamewm_render_x11::backdrop::blur_radius_px;
 
@@ -22,6 +23,8 @@ use super::drag_backdrop::{DragSnapshot, Layer};
 
 /// Titlebar backdrops kept (about 300 KB each at 1080p width).
 pub const CACHE_ENTRIES: usize = 16;
+/// Total `Vec<u8>` bytes kept across backdrops; the newest entry is always kept.
+pub const CACHE_BYTE_BUDGET: usize = 4 * 1024 * 1024;
 /// Backdrop used when no wallpaper pixels are available (frame background colour).
 pub const FALLBACK_BACKDROP: [u8; 3] = [0x1b, 0x1e, 0x20];
 
@@ -60,10 +63,15 @@ impl BackdropCache {
             self.entries.push(entry);
         } else {
             self.misses += 1;
+            // Entries of a previous root size are stale once the root changes.
+            self.entries.retain(|(k, _)| k.root == key.root);
             if self.entries.len() >= CACHE_ENTRIES {
                 self.entries.remove(0);
             }
             self.entries.push((key, make()));
+            while self.entries.len() > 1 && self.bytes() > CACHE_BYTE_BUDGET {
+                self.entries.remove(0);
+            }
         }
         &self.entries.last().expect("entry just stored").1
     }
@@ -75,6 +83,10 @@ impl BackdropCache {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    fn bytes(&self) -> usize {
+        self.entries.iter().map(|(_, pixels)| pixels.len()).sum()
+    }
 }
 
 #[derive(Debug)]
@@ -82,6 +94,8 @@ struct DragBackdrop {
     owner: u64,
     snapshot: DragSnapshot,
     blurred: Option<Blurred>,
+    /// Blur work buffers reused by every move step of this drag.
+    scratch: BlurScratch,
 }
 
 /// Blurred titlebar crop: `(origin x, origin y, w, h, radius tenths, wallpaper generation)`.
@@ -129,7 +143,7 @@ pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
 pub fn begin_drag(owner: u64, root: (u32, u32), raw_root: Option<Vec<u8>>, mask: (i32, i32, u32, u32)) {
     let Ok(mut guard) = STATE.lock() else { return };
     let state = guard.get_or_insert_with(State::default);
-    let captured = raw_root.as_deref().map(bgrx_to_rgba);
+    let captured = raw_root.map(bgrx_to_rgba);
     state.retained = None;
     state.drag = build_drag(state, owner, root, captured, mask);
 }
@@ -153,6 +167,10 @@ pub fn forget(owner: u64) {
 fn end_drag_in(state: &mut State, owner: u64) {
     if let Some(drag) = state.drag.take_if(|drag| drag.owner == owner) {
         state.retained = drag.blurred.map(|blurred| (owner, blurred));
+        if state.drag.is_none() {
+            // Rebuilt lazily by `wallpaper_rect` / `build_backdrop` on next use.
+            state.canvas = None;
+        }
     }
 }
 
@@ -194,7 +212,7 @@ fn titlebar_in(
     let key = (origin.0, origin.1, width, height, (radius * 10.0).round() as u32, state.generation);
     if let Some(drag) = state.drag.as_mut().filter(|drag| drag.owner == owner) {
         if drag.blurred.as_ref().map(|blurred| blurred.key) != Some(key) {
-            let pixels = blur_crop(&drag.snapshot, origin, width, height, radius);
+            let pixels = blur_crop(&mut drag.scratch, &drag.snapshot, origin, width, height, radius);
             drag.blurred = Some(Blurred { key, pixels });
         }
         return drag.blurred.as_ref().map(|blurred| compose_rgba(&blurred.pixels, rgb, alpha));
@@ -212,12 +230,19 @@ fn titlebar_in(
 
 /// `w x h` crop at `origin`, Gaussian-blurred with `radius` using a padded gather so the blur
 /// has real neighbours.
-fn blur_crop(snapshot: &DragSnapshot, origin: (i32, i32), w: u32, h: u32, radius: f32) -> Vec<u8> {
+fn blur_crop(
+    scratch: &mut BlurScratch,
+    snapshot: &DragSnapshot,
+    origin: (i32, i32),
+    w: u32,
+    h: u32,
+    radius: f32,
+) -> Vec<u8> {
     let pad = radius.ceil() as u32;
     let (pw, ph) = (w + 2 * pad, h + 2 * pad);
     let mut region = snapshot.crop_clamped(origin.0 - pad as i32, origin.1 - pad as i32, pw, ph);
     if radius > 0.0 {
-        if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut region, pw, ph, radius) {
+        if let Err(error) = gaussian_blur_rgba_with(scratch, &mut region, pw, ph, radius) {
             eprintln!("flamewm-wm-x11: drag backdrop blur skipped: {error:?}");
         }
     }
@@ -237,26 +262,53 @@ fn build_drag(
     mask: (i32, i32, u32, u32),
 ) -> Option<DragBackdrop> {
     let (rw, rh) = root;
+    let (mx, my, mw, mh) = mask;
+    // Masked first: it reads the canvas, which `wallpaper_base` may consume as the base.
+    let masked = wallpaper_rect(state.source.as_ref(), &mut state.canvas, mask, root);
     let base = match captured {
         Some(pixels) if pixels.len() == rw as usize * rh as usize * 4 => pixels,
-        _ => wallpaper_rect(state.source.as_ref(), &mut state.canvas, (0, 0, rw, rh), root),
+        _ => wallpaper_base(state.source.as_ref(), &mut state.canvas, root),
     };
-    let (mx, my, mw, mh) = mask;
-    let masked = wallpaper_rect(state.source.as_ref(), &mut state.canvas, mask, root);
     let layer = Layer { x: mx, y: my, w: mw, h: mh, rgba: &masked };
-    DragSnapshot::build((0, 0), rw, rh, &base, &[layer])
-        .ok()
-        .map(|snapshot| DragBackdrop { owner, snapshot, blurred: None })
+    DragSnapshot::build((0, 0), rw, rh, base, &[layer]).ok().map(|snapshot| DragBackdrop {
+        owner,
+        snapshot,
+        blurred: None,
+        scratch: BlurScratch::new(),
+    })
 }
 
-/// Opaque straight RGBA from 24-bit LSB `BGRX` root pixels.
+/// Opaque straight RGBA from 24-bit LSB `BGRX` root pixels, swapped in place. A trailing
+/// partial pixel is dropped.
 #[must_use]
-pub fn bgrx_to_rgba(bgrx: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bgrx.len());
-    for px in bgrx.chunks_exact(4) {
-        out.extend_from_slice(&[px[2], px[1], px[0], 255]);
+pub fn bgrx_to_rgba(mut bgrx: Vec<u8>) -> Vec<u8> {
+    bgrx.truncate(bgrx.len() / 4 * 4);
+    for px in bgrx.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        px[3] = 255;
     }
-    out
+    bgrx
+}
+
+/// Root-sized wallpaper as an owned base. A matching decoded canvas is moved out (no copy) and
+/// made opaque; it is then rebuilt lazily on next use. Otherwise falls back to `wallpaper_rect`.
+fn wallpaper_base(
+    source: Option<&WallpaperSource>,
+    canvas: &mut Option<((u32, u32), Option<RgbaImage>)>,
+    root: (u32, u32),
+) -> Vec<u8> {
+    match canvas.take() {
+        Some((size, Some(mut image)))
+            if size == root && image.width == root.0 && image.height == root.1 =>
+        {
+            for px in image.pixels.chunks_exact_mut(4) {
+                px[3] = 255;
+            }
+            return image.pixels;
+        }
+        other => *canvas = other,
+    }
+    wallpaper_rect(source, canvas, (0, 0, root.0, root.1), root)
 }
 
 /// Wallpaper pixels for the root-relative `rect`, edge-clamped; solid or fallback colour when
@@ -494,6 +546,35 @@ mod tests {
     }
 
     #[test]
+    fn cache_evicts_oldest_past_byte_budget_and_keeps_newest() {
+        let key = |i: i32| BackdropKey { rect: (i, 0, 1, 1), generation: 0, radius_tenths: 0, root: (1, 1) };
+        let mut cache = BackdropCache::default();
+        for i in 0..3 {
+            cache.get_or_insert_with(key(i), || vec![0; 1_500_000]);
+        }
+        assert_eq!(cache.len(), 2, "third 1.5 MB entry exceeds the 4 MiB budget");
+        cache.get_or_insert_with(key(2), || panic!("newest must be kept"));
+        cache.get_or_insert_with(key(0), || vec![0; 4]);
+        assert_eq!(cache.misses, 4, "oldest was evicted");
+
+        let mut oversize = BackdropCache::default();
+        oversize.get_or_insert_with(key(0), || vec![0; CACHE_BYTE_BUDGET + 1]);
+        assert_eq!(oversize.len(), 1, "newest entry is kept even when alone over budget");
+    }
+
+    #[test]
+    fn cache_drops_entries_of_previous_root_size() {
+        let key = |root| BackdropKey { rect: (0, 0, 1, 1), generation: 0, radius_tenths: 0, root };
+        let mut cache = BackdropCache::default();
+        cache.get_or_insert_with(key((100, 50)), || vec![0; 4]);
+        cache.get_or_insert_with(key((100, 50)), || panic!("same root must hit"));
+        cache.get_or_insert_with(BackdropKey { rect: (1, 0, 1, 1), ..key((100, 50)) }, || vec![0; 4]);
+        cache.get_or_insert_with(key((200, 80)), || vec![0; 4]);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.entries[0].0.root, (200, 80));
+    }
+
+    #[test]
     fn flat_fallback_without_wallpaper_is_opaque_and_never_errors() {
         let px = flat_pixels(3, 2, (0, 0, 0), 0);
         assert_eq!(px.len(), 3 * 2 * 4);
@@ -502,7 +583,33 @@ mod tests {
 
     #[test]
     fn bgrx_converts_to_opaque_rgba() {
-        assert_eq!(bgrx_to_rgba(&[3, 2, 1, 0]), vec![1, 2, 3, 255]);
+        assert_eq!(bgrx_to_rgba(vec![3, 2, 1, 0]), vec![1, 2, 3, 255]);
+        // Trailing partial pixel is dropped, matching the old chunks_exact copy.
+        assert_eq!(bgrx_to_rgba(vec![3, 2, 1, 0, 9, 9]), vec![1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn wallpaper_base_moves_matching_canvas_and_keeps_failed_decode() {
+        let image = RgbaImage { width: 2, height: 1, pixels: vec![1, 2, 3, 0, 4, 5, 6, 0] };
+        let mut canvas = Some(((2, 1), Some(image)));
+        let base = wallpaper_base(Some(&WallpaperSource::Solid([0; 3])), &mut canvas, (2, 1));
+        assert_eq!(base, vec![1, 2, 3, 255, 4, 5, 6, 255]);
+        assert!(canvas.is_none(), "canvas moved out, rebuilt lazily");
+
+        let image_source = WallpaperSource::Image { path: String::new(), fit: WallpaperFit::Fill };
+        let mut failed = Some(((2, 1), None));
+        let base = wallpaper_base(Some(&image_source), &mut failed, (2, 1));
+        assert_eq!(base, [0x1b, 0x1e, 0x20, 255].repeat(2));
+        assert_eq!(failed, Some(((2, 1), None)), "failed decode stays cached");
+    }
+
+    #[test]
+    fn end_drag_drops_canvas_once_no_drag_is_active() {
+        let mut state = State::default();
+        state.drag = build_drag(&mut state, 3, (1, 1), Some(vec![0; 4]), (0, 0, 0, 0));
+        state.canvas = Some(((1, 1), None));
+        end_drag_in(&mut state, 3);
+        assert!(state.canvas.is_none());
     }
 
     #[test]
@@ -522,9 +629,9 @@ mod tests {
         let mut state = State { source: Some(WallpaperSource::Solid([0, 0, 0])), ..State::default() };
         let uniform: Vec<u8> = [40, 80, 120, 255].repeat(8 * 8);
         let drag = build_drag(&mut state, 1, (8, 8), Some(uniform), (0, 0, 0, 0)).unwrap();
-        let blurred = blur_crop(&drag.snapshot, (2, 2), 3, 3, 2.0);
+        let blurred = blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 2.0);
         assert!(blurred.chunks_exact(4).all(|px| px == [40, 80, 120, 255]));
-        assert_eq!(blur_crop(&drag.snapshot, (2, 2), 3, 3, 0.0), drag.snapshot.crop(2, 2, 3, 3));
+        assert_eq!(blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 0.0), drag.snapshot.crop(2, 2, 3, 3));
     }
 
     #[test]
