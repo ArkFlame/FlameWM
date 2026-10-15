@@ -215,11 +215,13 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register icon result source: {error}"))?;
     }
-    reactor
-        .register_timer(Duration::from_secs(profile_interval), true, move || {
-            profile_flag.store(true, Ordering::Release)
-        })
-        .map_err(|error| format!("register profile timer: {error}"))?;
+    if flamewm_profiler::enabled() {
+        reactor
+            .register_timer(Duration::from_secs(profile_interval), true, move || {
+                profile_flag.store(true, Ordering::Release)
+            })
+            .map_err(|error| format!("register profile timer: {error}"))?;
+    }
     run_surface_runtime_with_reactor_access(
         &mut runtime,
         &mut reactor,

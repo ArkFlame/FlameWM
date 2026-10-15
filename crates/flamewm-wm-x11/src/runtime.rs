@@ -258,22 +258,26 @@ fn run_session(
         };
     // Profiler report timer on the reactor; interval from
     // `FLAMEWM_PROFILE_INTERVAL` (floored at 10s, default 60s), never
-    // hardcoded here. No timer thread.
-    let _profiler_registration = reactor
-        .borrow_mut()
-        .register_timer(profile_report_interval(), true, || {
-            if flamewm_profiler::enabled() {
-                let report = flamewm_profiler::report_window();
-                if !report.is_empty() {
-                    eprintln!("{report}");
-                }
-            }
-        })
-        .map_err(|error| {
-            drop(pulse.clone());
-            integrations.borrow_mut().stop();
-            AnyError::from(io::Error::new(io::ErrorKind::Other, error.to_string()))
-        })?;
+    // hardcoded here. No timer thread. Not registered when profiling is off.
+    let _profiler_registration = if flamewm_profiler::enabled() {
+        Some(
+            reactor
+                .borrow_mut()
+                .register_timer(profile_report_interval(), true, || {
+                    let report = flamewm_profiler::report_window();
+                    if !report.is_empty() {
+                        eprintln!("{report}");
+                    }
+                })
+                .map_err(|error| {
+                    drop(pulse.clone());
+                    integrations.borrow_mut().stop();
+                    AnyError::from(io::Error::new(io::ErrorKind::Other, error.to_string()))
+                })?,
+        )
+    } else {
+        None
+    };
     let _startup_guard = flamewm_profiler::start("wm.startup.catalog");
     let catalog = discover_catalog_once()?;
     drop(_startup_guard);

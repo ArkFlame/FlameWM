@@ -461,20 +461,20 @@ fn main() -> Result<(), String> {
     }
     update_gauges(&state_cell.borrow());
     let mut reactor = Reactor::new().map_err(|error| format!("create reactor: {error}"))?;
-    reactor
-        .register_timer(
-            Duration::from_secs(flamewm_profiler::profile_interval_secs()),
-            true,
-            || {
-                if flamewm_profiler::enabled() {
+    if flamewm_profiler::enabled() {
+        reactor
+            .register_timer(
+                Duration::from_secs(flamewm_profiler::profile_interval_secs()),
+                true,
+                || {
                     let report = report_window();
                     if !report.is_empty() {
                         eprintln!("{report}");
                     }
-                }
-            },
-        )
-        .map_err(|error| format!("register profiler timer: {error}"))?;
+                },
+            )
+            .map_err(|error| format!("register profiler timer: {error}"))?;
+    }
     sticky::attach_persist_wake(&mut state_cell.borrow_mut().sticky, &reactor);
     // Panel strut changes arrive as control signals. The signal handler only
     // sets this flag; the reactor tick re-resolves the work area once per burst.
