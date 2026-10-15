@@ -25,6 +25,13 @@ pub const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 
 const NAME_OWNER_CHANGED: &str = "NameOwnerChanged";
 const PROPERTIES_CHANGED: &str = "PropertiesChanged";
+/// Interfaces whose `PropertiesChanged` the WM consumes. Device.Statistics (TxBytes/RxBytes)
+/// is deliberately absent: NetworkManager emits it on a ~500 ms cadence and it drives no state.
+const NM_PROPERTY_INTERFACES: [&str; 3] = [
+    "org.freedesktop.NetworkManager",
+    "org.freedesktop.NetworkManager.Device",
+    "org.freedesktop.NetworkManager.Device.Wireless",
+];
 const GET_ALL: &str = "GetAll";
 const SET: &str = "Set";
 const DEACTIVATE_CONNECTION: &str = "DeactivateConnection";
@@ -380,6 +387,14 @@ struct WifiDevice {
     last_scan: Option<i64>,
 }
 
+/// Match rule for NetworkManager `PropertiesChanged` of one interface (arg0 = interface name),
+/// so the bus only wakes the WM for interfaces it consumes.
+fn properties_changed_rule(interface: &str) -> String {
+    format!(
+        "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='{interface}'"
+    )
+}
+
 /// Refresh work implied by one wireless device `PropertiesChanged` signal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct DeviceRefresh {
@@ -470,9 +485,9 @@ impl NetworkManagerProvider {
         self.add_match(
             "type='signal',sender='org.freedesktop.DBus',path='/org/freedesktop/DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.freedesktop.NetworkManager'",
         )?;
-        self.add_match(
-            "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
-        )?;
+        for interface in NM_PROPERTY_INTERFACES {
+            self.add_match(&properties_changed_rule(interface))?;
+        }
         self.add_match(
             "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.NetworkManager.Device',member='StateChanged'",
         )?;
@@ -2232,6 +2247,18 @@ fn secret_agent_registration_message() -> FlameResult<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn properties_rules_exclude_device_statistics_signal() {
+        let rules: Vec<String> = NM_PROPERTY_INTERFACES
+            .iter()
+            .map(|interface| properties_changed_rule(interface))
+            .collect();
+        assert!(rules.iter().all(|rule| rule.contains("arg0='")));
+        assert!(rules.iter().any(|rule| rule.contains("arg0='org.freedesktop.NetworkManager.Device.Wireless'")));
+        assert!(rules.iter().any(|rule| rule.contains("arg0='org.freedesktop.NetworkManager.Device'")));
+        assert!(!rules.iter().any(|rule| rule.contains("Device.Statistics")));
+    }
 
     #[test]
     fn register_with_capabilities_uses_identifier_and_capabilities_only() {
