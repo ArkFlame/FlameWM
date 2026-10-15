@@ -60,6 +60,27 @@ class DependsTests(unittest.TestCase):
         self.assertEqual([d for d in deb.REQUIRED_DEPENDS if d not in declared], [])
 
 
+class PamRuntimeTests(unittest.TestCase):
+    def test_required_depends_include_pam_runtime(self):
+        self.assertIn("libpam0g", deb.REQUIRED_DEPENDS)
+        self.assertIn("libpam-runtime", deb.REQUIRED_DEPENDS)
+
+    def test_conffiles_exact_pam_entry_passes(self):
+        self.assertEqual(deb.check_conffiles("/etc/pam.d/flamewm-lock\n"), [])
+
+    def test_conffiles_missing_leading_slash_fails(self):
+        self.assertEqual(len(deb.check_conffiles("etc/pam.d/flamewm-lock\n")), 1)
+
+    def test_conffiles_missing_trailing_newline_fails(self):
+        self.assertEqual(len(deb.check_conffiles("/etc/pam.d/flamewm-lock")), 1)
+
+    def test_conffiles_extra_entry_fails(self):
+        self.assertEqual(len(deb.check_conffiles("/etc/pam.d/flamewm-lock\n/etc/x\n")), 1)
+
+    def test_conffiles_empty_fails(self):
+        self.assertEqual(len(deb.check_conffiles("")), 1)
+
+
 class HelperTests(unittest.TestCase):
     def test_depends_names_strip_versions_and_alternatives(self):
         self.assertEqual(deb.depend_names("libx11-6 (>= 2:1.6), libxi6 | libxi7, libxft2"),
