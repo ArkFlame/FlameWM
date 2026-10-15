@@ -33,6 +33,21 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 - no stale motion rendered after release;
 - Start/taskbar/window manipulation must not block on disk/network/system commands.
 
+## Measured status (0.0.9)
+
+Measurements from a development machine. They are not release certification.
+
+| Scenario | Result | Against target |
+| --- | --- | --- |
+| Harness, no theme, combined WM + shell, idle | about 35 MiB RSS; about 21 MiB PSS | PSS is below the 40 MiB PSS target. |
+| Real session with an icon theme | about 80 MiB RSS | Not evaluated against the PSS target; PSS not reported. |
+
+- The memory tooling in `tools/flamewm_mem_phase_compare.py` uses a 34 MiB threshold (35651584 B) on combined WM + shell PSS and RSS. That threshold is **not reached for RSS** in the figures above.
+- The X server process is separate and is excluded from these figures.
+- Frame-time p95 has **not been measured**.
+- Idle CPU/wakeups, startup latency, and interaction latency are not recorded in this document.
+- Not run: the installed `.deb`, two-output RandR, and a real NetworkManager session.
+
 ## Profiler (`flamewm-profiler`, frozen seams R01-R06)
 
 - Static `&'static str` labels only; no per-span allocation or thread.

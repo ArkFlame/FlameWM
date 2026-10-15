@@ -12,7 +12,7 @@ Version and release history: [`FLAMEWM_VERSION`](FLAMEWM_VERSION), [`Cargo.toml`
 
 - Source-level 0.0.9 release. Remaining product surfaces are tracked in [`docs/TODO.md`](docs/TODO.md).
 - FlameWM does not claim parity with the historical IceWM or FlameWM C implementations.
-- Benchmarks are **pending**. No performance numbers are published here. Measured comparisons are produced with [`tools/flamewm_perf_compare.py`](tools/flamewm_perf_compare.py) and will be recorded once run on target hardware. The memory target is described in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+- Memory has been measured on a development machine only; see [Memory](#memory) for exactly what was and was not measured. The performance contract is in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 
 ## Features
 
@@ -21,7 +21,7 @@ Version and release history: [`FLAMEWM_VERSION`](FLAMEWM_VERSION), [`Cargo.toml`
 - Desktop with icons, context menus, and wallpaper loading (`crates/flamewm-desktop`, `crates/flamewm-integrations-linux`).
 - Panel, Start menu, and status popovers rendered by the shell (`crates/flamewm-shell`).
 - Settings application with typed settings transactions across the platform services (`crates/flamewm-settings`, `crates/flamewm-platform`).
-- Breeze-styled lock screen with PAM authentication (`crates/flamewm-lock`, `packaging/pam.d/flamewm-lock`).
+- Lock screen with PAM authentication (`crates/flamewm-lock`, `packaging/pam.d/flamewm-lock`).
 - Volume on-screen display driven by the XF86 audio keys.
 
 ## X11 limitations
@@ -30,14 +30,15 @@ Version and release history: [`FLAMEWM_VERSION`](FLAMEWM_VERSION), [`Cargo.toml`
 - Requires X11, Xft, and Fontconfig runtime libraries.
 - The renderer crate (`crates/flamewm-render-x11`) is the explicit Xlib/Xft FFI boundary; the window manager itself uses safe `x11rb` protocol APIs.
 - FlameWM does not replace a display manager. Select it from the session chooser after installation.
+- Multi-output (two-output RandR) layouts have not been tested.
 
 ## Default shortcuts
 
-The defaults below come from `crates/flamewm-platform/src/shortcuts.rs`. Bindings are configurable through settings.
+The defaults below come from `crates/flamewm-platform/src/shortcuts.rs` (`ShortcutRegistry::default`). Bindings are configurable through settings.
 
 | Action | Default |
 | --- | --- |
-| Toggle Start menu | `Super` (left Super, bare tap) |
+| Toggle Start menu | `Super_L` (left Super, bare tap) |
 | Switch workspace left / right | `Ctrl+Super+Left` / `Ctrl+Super+Right` |
 | Switch workspace up / down | `Ctrl+Super+Up` / `Ctrl+Super+Down` |
 | Close window | `Alt+F4` |
@@ -47,7 +48,10 @@ The defaults below come from `crates/flamewm-platform/src/shortcuts.rs`. Binding
 
 ## Configuration locations
 
-- Settings file: `$XDG_CONFIG_HOME/flamewm/settings.toml` (default `~/.config/flamewm/settings.toml`), per `crates/flamewm-wm-x11/src/runtime.rs:892-908`. `FLAMEWM_CONFIG_DIR` takes precedence over XDG config; `FLAMEWM_SETTINGS_PATH` takes precedence over both.
+- Settings file, resolved in this order (`settings_path` in `crates/flamewm-wm-x11/src/runtime.rs`):
+  1. `FLAMEWM_SETTINGS_PATH` (exact file path);
+  2. `$FLAMEWM_CONFIG_DIR/settings.toml`;
+  3. `$XDG_CONFIG_HOME/flamewm/settings.toml`, or `~/.config/flamewm/settings.toml` when `XDG_CONFIG_HOME` is unset.
 - Wallpapers: `$XDG_DATA_HOME/flamewm/wallpapers` (default `~/.local/share/flamewm/wallpapers`), per `crates/flamewm-integrations-linux/src/media_store.rs`.
 - Installed read-only assets: `/usr/share/flamewm/` (see `packaging/install-manifest.txt`).
 
@@ -80,9 +84,9 @@ Visual comparison (`./scripts/verify-visual`) and the other acceptance scripts u
 
 ## Install, upgrade, and uninstall
 
-These steps are documented but **not tested** in this README revision.
+`./scripts/package` writes `.target/dist/flamewm-0.0.9-linux-x86_64.tar.gz`, `.target/dist/flamewm-0.0.9-source.tar.gz`, and, when `dpkg-deb` is available, `.target/dist/flamewm_0.0.9_amd64.deb`. See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
-Build release binaries, then package them with `./scripts/package` (see [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md)). When `dpkg-deb` is available, the package is written to `.target/dist/flamewm_0.0.9_amd64.deb`.
+**The installed `.deb` (install, upgrade, uninstall) has not been run in this revision.** The steps below are documented from `scripts/package` and `packaging/debian/control.in`; they are not verified acceptance.
 
 Install:
 
@@ -98,11 +102,25 @@ Uninstall:
 sudo dpkg -r flamewm
 ```
 
-Without `dpkg` (not tested), the Linux archive `flamewm-0.0.9-linux-x86_64.tar.gz` can be unpacked as root. Its entries are prefixed `flamewm-0.0.9/`, so strip that component:
+Without `dpkg` (not tested), the Linux archive can be unpacked as root. Its entries are prefixed `flamewm-0.0.9/`, so strip that component:
 
 ```bash
-tar -xzf flamewm-0.0.9-linux-x86_64.tar.gz --strip-components=1 -C /
+tar -xzf .target/dist/flamewm-0.0.9-linux-x86_64.tar.gz --strip-components=1 -C /
 ```
+
+## Memory
+
+Measurements are from a development machine and are not a release certification. Current figures:
+
+| Scenario | Measurement | Notes |
+| --- | --- | --- |
+| Harness, no theme, combined Flame-owned processes (WM + shell) at idle | about 35 MiB RSS; about 21 MiB PSS | Same run. |
+| Real session with an icon theme | about 80 MiB RSS | Scope as reported for the session; PSS not reported. |
+
+- The 34 MiB (35651584 B) threshold in `tools/flamewm_mem_phase_compare.py` is **not reached for RSS** in the figures above. The no-theme harness PSS (about 21 MiB) is below the 40 MiB PSS acceptance target in `docs/PERFORMANCE.md`; the icon-theme session was not evaluated against that target.
+- The X server process is separate and is not included in these figures.
+- Frame-time p95 has **not been measured**.
+- Not run: the installed `.deb`, two-output RandR, and a real NetworkManager session.
 
 ## Crate architecture
 
@@ -126,8 +144,8 @@ The `.vendor/` directory holds historical reference corpora only. No active crat
 
 ## Licensing
 
-- The workspace metadata in [`Cargo.toml`](Cargo.toml) and [`packaging/debian/copyright`](packaging/debian/copyright) declare `LGPL-2.0-only`; the full text is in [`LICENSE`](LICENSE).
-- `crates/flamewm-render-compiler/Cargo.toml` declares `MIT`, and [`LICENSES/RustWebRender-MIT.txt`](LICENSES/RustWebRender-MIT.txt) contains MIT text. The license for that crate is pending maintainer confirmation.
+- The workspace package license in [`Cargo.toml`](Cargo.toml) (`workspace.package.license`) is `LGPL-2.0-only`; the full text is in [`LICENSE`](LICENSE). [`packaging/debian/copyright`](packaging/debian/copyright) also declares LGPL-2.0-only.
+- **Known mismatch:** `crates/flamewm-render-compiler/Cargo.toml` declares `license = "MIT"` and [`LICENSES/RustWebRender-MIT.txt`](LICENSES/RustWebRender-MIT.txt) contains MIT text, while the rest of the workspace is LGPL-2.0-only. The license for that crate is pending maintainer confirmation; this README does not resolve it.
 - Third-party notices and icon/theme licenses are in [`LICENSES/`](LICENSES/).
 
 ## Documentation
@@ -135,5 +153,5 @@ The `.vendor/` directory holds historical reference corpora only. No active crat
 - [`CHANGELOG.md`](CHANGELOG.md): release history.
 - [`docs/INSTALL.md`](docs/INSTALL.md), [`docs/PACKAGING.md`](docs/PACKAGING.md): install and packaging.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): product boundary and ownership.
-- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): performance targets.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): performance contract and targets.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
