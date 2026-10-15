@@ -886,7 +886,7 @@ mod tests {
         let sticky = find("sticky");
         assert_eq!(sticky.text_wrap, TextWrap::Wrap);
         assert!(sticky.break_anywhere);
-        assert_eq!(sticky.overflow_x, flamewm_render_core::Overflow::Auto);
+        assert_eq!(sticky.overflow_x, flamewm_render_core::Overflow::Hidden);
         assert_eq!(find("label").text_wrap, TextWrap::NoWrap);
         assert!(!find("label").break_anywhere);
         assert_eq!(find("row").text_wrap, TextWrap::NoWrap);

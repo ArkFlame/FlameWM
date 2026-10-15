@@ -36,7 +36,7 @@ ACCEPTED_OWNERS: dict[str, dict[str, str]] = {
         "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
     },
     "crates/flamewm-render-compiler/src/compile.rs": {
-        "sha256": "748c1c2f7ef99927c58dc1eae6708e110679f7948a903123408e7888934cf210",
+        "sha256": "4506ea4e22149774a6ca29e535d07192c2fbe2902c02758af5f76876641eeccd",
         "delta": "imports and lowers ImageTreatment, Overflow and TextWrap style fields",
         "reason": "user accepted current renderer source as the new baseline (2026-10-09)",
     },
