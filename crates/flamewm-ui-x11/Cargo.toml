@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "FlameWM typed UI bridge for the X11 renderer"
 
+[features]
+# Exposes `test_support::RecordingUiDoc` to dependent crates' test builds.
+test-support = []
+
 [dependencies]
 flamewm-ui = { path = "../flamewm-ui" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }

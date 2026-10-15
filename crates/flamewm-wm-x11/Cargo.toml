@@ -16,7 +16,6 @@ flamewm-window-core = { path = "../flamewm-window-core" }
 flamewm-platform = { path = "../flamewm-platform" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
-flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-wire = { path = "../flamewm-control-wire" }
 flamewm-debug = { path = "../flamewm-debug" }
 flamewm-reactor = { path = "../flamewm-reactor" }

@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-chrono = "=0.4.45"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 flamewm-api = { path = "../flamewm-api" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
@@ -30,3 +30,6 @@ flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+flamewm-ui-x11 = { path = "../flamewm-ui-x11", features = ["test-support"] }
