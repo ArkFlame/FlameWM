@@ -13,6 +13,7 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 use crate::wallpaper_loader::WallpaperPresentation;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// Mirror of the shared icon theme generation for [`ParallelIconService::icon_key`],
 /// which stays a static constructor for its existing callers. Written only by
@@ -56,17 +57,65 @@ pub fn project_background(
     document.background("desktop", background)?;
     document.visible("desktop-watermark", watermark)?;
     document.visible("desktop-wallpaper-selection", has_image)?;
-    if let WallpaperPresentation::Image(raster) = presentation {
-        document.image_rgba8(
-            "desktop-wallpaper-selection",
-            RuntimeImage {
-                source: raster.source.clone(),
-                width: raster.width,
-                height: raster.height,
-                pixels: raster.pixels.clone(),
-            },
-        )?;
+    let mut stamp = WALLPAPER_STAMP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match presentation {
+        WallpaperPresentation::Image(raster) => {
+            project_wallpaper_image(document, &mut stamp, raster)?;
+        }
+        _ => *stamp = None,
     }
+    Ok(())
+}
+
+/// Identity of the wallpaper last written to the document. The pixel buffer
+/// pointer and length change whenever the loader replaces the raster, so an
+/// unchanged raster skips the full-buffer clone without a content compare.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WallpaperStamp {
+    source: String,
+    width: u32,
+    height: u32,
+    pixels_ptr: usize,
+    pixels_len: usize,
+}
+
+/// Last image projected by [`project_background`]. Cleared when the wallpaper is
+/// not an image so a later image re-sends.
+static WALLPAPER_STAMP: Mutex<Option<WallpaperStamp>> = Mutex::new(None);
+
+fn wallpaper_stamp(raster: &Rgba8Raster) -> WallpaperStamp {
+    WallpaperStamp {
+        source: raster.source.clone(),
+        width: raster.width,
+        height: raster.height,
+        pixels_ptr: raster.pixels.as_ptr() as usize,
+        pixels_len: raster.pixels.len(),
+    }
+}
+
+/// Sends the image only when it differs from `cache`; the cache advances only
+/// after the document accepts the image, so a failed write is retried.
+fn project_wallpaper_image(
+    document: &mut impl UiDocumentAccess,
+    cache: &mut Option<WallpaperStamp>,
+    raster: &Rgba8Raster,
+) -> Result<(), String> {
+    let stamp = wallpaper_stamp(raster);
+    if cache.as_ref() == Some(&stamp) {
+        return Ok(());
+    }
+    document.image_rgba8(
+        "desktop-wallpaper-selection",
+        RuntimeImage {
+            source: raster.source.clone(),
+            width: raster.width,
+            height: raster.height,
+            pixels: raster.pixels.clone(),
+        },
+    )?;
+    *cache = Some(stamp);
     Ok(())
 }
 
@@ -1032,6 +1081,135 @@ mod tests {
         fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct WallpaperImageProbe {
+        sent: Vec<Vec<u8>>,
+        fail_next: bool,
+    }
+
+    impl UiDocumentAccess for WallpaperImageProbe {
+        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgba8(&mut self, _: &str, image: RuntimeImage) -> Result<(), String> {
+            if std::mem::take(&mut self.fail_next) {
+                return Err("rejected".to_owned());
+            }
+            self.sent.push(image.pixels);
+            Ok(())
+        }
+        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn background_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn border_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn overflow(
+            &mut self,
+            _: &str,
+            _: flamewm_ui_x11::Overflow,
+            _: flamewm_ui_x11::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
+            Ok(())
+        }
+        fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn wallpaper_raster(fill: u8) -> Rgba8Raster {
+        Rgba8Raster {
+            source: "custom.webp".to_owned(),
+            width: 1,
+            height: 1,
+            pixels: vec![fill, fill, fill, 255],
+            origin: flamewm_integrations_linux::icons::IconOrigin::PackagedFlame,
+            fallback_reason: None,
+        }
+    }
+
+    #[test]
+    fn unchanged_wallpaper_skips_clone_and_changed_wallpaper_resends() {
+        let first = WallpaperPresentation::Image(wallpaper_raster(10));
+        let same = WallpaperPresentation::Image(wallpaper_raster(10));
+        let changed = WallpaperPresentation::Image(wallpaper_raster(200));
+        let mut cache = None;
+        let mut probe = WallpaperImageProbe::default();
+
+        let WallpaperPresentation::Image(raster) = &first else {
+            unreachable!()
+        };
+        project_wallpaper_image(&mut probe, &mut cache, raster).expect("first projection");
+        assert_eq!(probe.sent, vec![vec![10, 10, 10, 255]]);
+
+        // Same loader raster: no image write, document keeps the prior pixels.
+        project_wallpaper_image(&mut probe, &mut cache, raster).expect("unchanged projection");
+        assert_eq!(probe.sent.len(), 1, "unchanged wallpaper must not resend");
+
+        // Equal content in a new buffer is a new raster and resends.
+        let WallpaperPresentation::Image(raster) = &same else {
+            unreachable!()
+        };
+        project_wallpaper_image(&mut probe, &mut cache, raster).expect("reloaded projection");
+        assert_eq!(probe.sent.len(), 2, "replaced raster must resend");
+
+        let WallpaperPresentation::Image(raster) = &changed else {
+            unreachable!()
+        };
+        project_wallpaper_image(&mut probe, &mut cache, raster).expect("changed projection");
+        assert_eq!(probe.sent.last(), Some(&vec![200, 200, 200, 255]));
+        assert_eq!(probe.sent.len(), 3);
+    }
+
+    #[test]
+    fn rejected_wallpaper_write_is_retried_on_next_projection() {
+        let presentation = WallpaperPresentation::Image(wallpaper_raster(42));
+        let WallpaperPresentation::Image(raster) = &presentation else {
+            unreachable!()
+        };
+        let mut cache = None;
+        let mut probe = WallpaperImageProbe {
+            sent: Vec::new(),
+            fail_next: true,
+        };
+        assert!(project_wallpaper_image(&mut probe, &mut cache, raster).is_err());
+        project_wallpaper_image(&mut probe, &mut cache, raster).expect("retry");
+        assert_eq!(probe.sent.len(), 1);
     }
 
     #[test]
