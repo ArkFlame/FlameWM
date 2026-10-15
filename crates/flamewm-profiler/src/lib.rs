@@ -7,6 +7,7 @@
 
 mod memory;
 mod point;
+mod present_interval;
 mod process;
 mod report;
 mod span;
@@ -14,6 +15,7 @@ mod stats;
 
 pub use memory::{MemoryGauge, SmapsSummary, parse_smaps_text};
 pub use point::{CounterPoint, ProfilePoint, SpanGuard, start};
+pub use present_interval::record_present;
 pub use process::{cpu_percent, process_pss_kb, smaps_rollup_kb, vmrss_fallback_kb};
 pub use report::report_window;
 pub use span::record_elapsed;

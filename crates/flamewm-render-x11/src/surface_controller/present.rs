@@ -63,12 +63,16 @@ impl SurfaceController {
     pub fn redraw(&mut self, id: SurfaceId) -> Result<(), String> {
         let _guard = flamewm_profiler::start("render.present");
         let instance = self.instance_mut(id)?;
-        unsafe {
+        let result = unsafe {
             instance.app.redraw(&instance.document).map_err(|error| {
                 mark_x_error_seen();
                 error
             })
+        };
+        if result.is_ok() {
+            flamewm_profiler::record_present();
         }
+        result
     }
 
     pub fn redraw_dirty(&mut self) -> Result<(), String> {
@@ -90,6 +94,7 @@ impl SurfaceController {
                 let instance = self.instance_mut(id)?;
                 // SAFETY: display/window live; mask follows repaint.
                 unsafe { instance.app.refresh_shape_mask(&instance.document) };
+                flamewm_profiler::record_present();
             }
         }
         Ok(())

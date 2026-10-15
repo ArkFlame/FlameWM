@@ -72,8 +72,9 @@ pub fn report_window() -> String {
     let counters = crate::stats::counter_aggs_reset();
     let mut gauges = gauge_snapshot();
     gauges.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+    let presents = crate::present_interval::take_present_interval();
 
-    if spans.is_empty() && counters.is_empty() && gauges.is_empty() {
+    if spans.is_empty() && counters.is_empty() && gauges.is_empty() && presents.is_none() {
         // Still advance the process-CPU baseline so the next window's delta
         // covers only its own interval.
         let _ = process_delta(interval.saturating_mul(1_000_000_000));
@@ -148,6 +149,17 @@ pub fn report_window() -> String {
         for (label, value) in counters.iter().take(top) {
             out.push_str(&format!(" {label} value={value}\n"));
         }
+    }
+
+    if let Some(p) = presents {
+        out.push_str("PRESENT_INTERVAL:\n");
+        out.push_str(&format!(
+            " present-interval count={} p50={} p95={} max={}\n",
+            p.count,
+            fmt_ms(p.p50_ns),
+            fmt_ms(p.p95_ns),
+            fmt_ms(p.max_ns)
+        ));
     }
 
     out.push_str("MEMORY_TOP:\n");
