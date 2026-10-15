@@ -64,11 +64,14 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
         })
         .collect();
 
-    let mut out = Vec::with_capacity(wu * hu * 4);
-    for y in 0..hu {
+    if wu == 0 || hu == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![0u8; wu * hu * 4];
+    for (y, out_row) in out.chunks_exact_mut(wu * 4).enumerate() {
         let t = if hu > 1 { y as f64 / (hu - 1) as f64 } else { 0.0 };
         let row = gradient_at(t);
-        for x in 0..wu {
+        for (x, px) in out_row.chunks_exact_mut(4).enumerate() {
             let mut c = row;
             for (blob, (cols, rows, opacity)) in BLOBS.iter().zip(&blob_terms) {
                 let u = cols[x] + rows[y];
@@ -80,7 +83,7 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
                     }
                 }
             }
-            out.extend([to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), 255]);
+            px.copy_from_slice(&[to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), 255]);
         }
     }
     out
@@ -110,10 +113,10 @@ pub fn post_process(pixels: &mut [u8], w: u32, h: u32, blur_percent: u8, dim_per
 
 /// Solid RGBA8 fill of `w`x`h`.
 pub fn flat(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
-    let count = w as usize * h as usize;
-    let mut out = Vec::with_capacity(count * 4);
-    for _ in 0..count {
-        out.extend([rgb[0], rgb[1], rgb[2], 255]);
+    let row = [rgb[0], rgb[1], rgb[2], 255].repeat(w as usize);
+    let mut out = Vec::with_capacity(row.len() * h as usize);
+    for _ in 0..h {
+        out.extend_from_slice(&row);
     }
     out
 }
@@ -193,6 +196,61 @@ mod tests {
         let buf = flat(3, 2, [10, 20, 30]);
         assert_eq!(buf.len(), 24);
         assert!(buf.chunks(4).all(|p| p == [10, 20, 30, 255]));
+    }
+
+    /// Pre-rewrite per-pixel `extend` algorithm, kept verbatim as the byte-for-byte oracle.
+    fn old_reference_navy(w: u32, h: u32) -> Vec<u8> {
+        let (wu, hu) = (w as usize, h as usize);
+        let s = layout::fit(w, h).s;
+        let (wf, hf) = (f64::from(w), f64::from(h));
+        let blob_terms: Vec<(Vec<f64>, Vec<f64>, f64)> = BLOBS
+            .iter()
+            .map(|b| {
+                let r = (b.radius_ref * s).max(1.0);
+                let (px, py) = (b.cx * wf, b.cy * hf);
+                let cols = (0..wu).map(|x| ((x as f64 + 0.5 - px) / r).powi(2)).collect();
+                let rows = (0..hu).map(|y| ((y as f64 + 0.5 - py) / r).powi(2)).collect();
+                (cols, rows, b.opacity)
+            })
+            .collect();
+        let mut out = Vec::with_capacity(wu * hu * 4);
+        for y in 0..hu {
+            let t = if hu > 1 { y as f64 / (hu - 1) as f64 } else { 0.0 };
+            let row = gradient_at(t);
+            for x in 0..wu {
+                let mut c = row;
+                for (blob, (cols, rows, opacity)) in BLOBS.iter().zip(&blob_terms) {
+                    let u = cols[x] + rows[y];
+                    if u < 1.0 {
+                        let falloff = 1.0 - u;
+                        let a = opacity * falloff * falloff;
+                        for i in 0..3 {
+                            c[i] += (blob.rgb[i] - c[i]) * a;
+                        }
+                    }
+                }
+                out.extend([to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), 255]);
+            }
+        }
+        out
+    }
+
+    fn old_flat(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let count = w as usize * h as usize;
+        let mut out = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            out.extend([rgb[0], rgb[1], rgb[2], 255]);
+        }
+        out
+    }
+
+    #[test]
+    fn rewritten_fills_match_old_algorithm_byte_for_byte() {
+        let sizes = [(0, 0), (0, 5), (5, 0), (1, 1), (1, 40), (3, 2), (64, 36), (320, 180), (333, 211)];
+        for (w, h) in sizes {
+            assert_eq!(reference_navy(w, h), old_reference_navy(w, h), "reference_navy {w}x{h}");
+            assert_eq!(flat(w, h, [10, 20, 30]), old_flat(w, h, [10, 20, 30]), "flat {w}x{h}");
+        }
     }
 
     fn checker(w: u32, h: u32) -> Vec<u8> {
