@@ -9,6 +9,12 @@
 - Connected workspace synchronization and reactor presentation scenarios to event-driven desktop updates and verification.
 - Improved snap-preview lifecycle and settings/shell projection behavior.
 
+### Documentation
+
+- Rewrote `README.md` for the 0.0.9 X11-only product: current crate layout (`crates/flamewm-wm` ships the `flamewm` binary on top of `crates/flamewm-wm-x11`), verified scripts, default shortcuts, configuration locations, and install/upgrade/uninstall steps (not tested).
+- Benchmarks are pending measured runs via `tools/flamewm_perf_compare.py`; no benchmark figures are published.
+- Recorded the license metadata mismatch (`LGPL-2.0-only` workspace versus `MIT` for `crates/flamewm-render-compiler`) as pending maintainer confirmation.
+
 ## 0.0.8 — 2026-09-09
 
 ### Interaction and performance convergence
