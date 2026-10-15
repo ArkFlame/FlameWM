@@ -478,6 +478,23 @@ J11_ENV_OK = re.compile(
 )
 
 
+J11_WM_DIR = "crates/flamewm-wm-x11/src/wm"
+J11_FRAME_PATH_OWNER = "crates/flamewm-wm-x11/src/wm/paint.rs"
+
+
+def _j11_wm_text(root, code):
+    """Concatenate every production file of the split wm/ layout (tests excluded)."""
+    wm_dir = root / J11_WM_DIR
+    if not wm_dir.is_dir():
+        raise SystemExit(f"ERROR architecture guard: expected owner directory missing: {J11_WM_DIR}")
+    _owner_path(root, J11_FRAME_PATH_OWNER)
+    parts = []
+    for path in sorted(wm_dir.rglob("*.rs")):
+        if not _j7_is_test(path):
+            parts.append(code(path.read_text(encoding="utf-8")))
+    return "\n".join(parts)
+
+
 def _j11_fn_body(code, fn_name):
     match = re.search(r"fn\s+" + re.escape(fn_name) + r"\s*\(", code)
     if not match:
@@ -554,7 +571,7 @@ def j11_violations(root):
         found.add(("crates/flamewm-desktop/src/projection.rs", "j11-g04-desktop-cold-fallback"))
     # J11-G05: no sync IconResolver in WM draw/manage (generic
     # IconService<IconResolver> import is async-service use, not sync).
-    wm = live("crates/flamewm-wm-x11/src/wm.rs")
+    wm = _j11_wm_text(root, code)
     if (
         "prepare_application" in wm
         or "prepare_semantic" in wm
@@ -569,17 +586,18 @@ def j11_violations(root):
     has_draw = "draw_frame" in wm
     has_chrome = "fn paint_chrome" in wm
     if not has_draw and not has_chrome:
-        found.add(("crates/flamewm-wm-x11/src/wm.rs", "j11-g06-renderer-frame-path"))
+        found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
     elif has_draw:
         if "self.decorations" not in draw:
-            found.add(("crates/flamewm-wm-x11/src/wm.rs", "j11-g06-renderer-frame-path"))
+            found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
         elif re.search(r"paint::paint_frame|image_text8|XDrawString|XRenderComposite", draw):
-            found.add(("crates/flamewm-wm-x11/src/wm.rs", "j11-g06-renderer-frame-path"))
+            found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
     if has_chrome:
         chrome_body = _j11_fn_body(wm, "paint_chrome")
         chrome_runtime = live("crates/flamewm-wm-x11/src/wm/chrome_runtime.rs")
+        _owner_path(root, "crates/flamewm-wm-x11/src/wm/chrome_runtime.rs")
         if re.search(r"paint::paint_frame|image_text8|XDrawString|XRenderComposite", chrome_body):
-            found.add(("crates/flamewm-wm-x11/src/wm.rs", "j11-g06-renderer-frame-path"))
+            found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
         elif not (
             "frame_chrome::plan_scene" in chrome_body
             or "frame_chrome::render" in chrome_body
@@ -590,7 +608,7 @@ def j11_violations(root):
                 and "pub fn paint_cached" in chrome_runtime
             )
         ):
-            found.add(("crates/flamewm-wm-x11/src/wm.rs", "j11-g06-renderer-frame-path"))
+            found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
     # J11-G07: retention cleanup defaults opt-out-on (checked in tools).
     ret = root / "tools/performance_retention.py"
     if ret.is_file() and 'os.environ.get("FLAMEWM_PERFORMANCE_CLEANUP", "1")' not in ret.read_text(encoding="utf-8"):
@@ -640,6 +658,19 @@ J12_SURFACE_RT = "crates/flamewm-ui-x11/src/surface_runtime.rs"
 J12_SVG = "crates/flamewm-image-core/src/svg.rs"
 J12_SESSION = "crates/flamewm-session-core/src/lib.rs"
 J12_PAINT_OWNER = "crates/flamewm-render-core/src/paint.rs"
+
+
+def _j12_title_scan_paths(root):
+    """Production files that may carry the fixed-font/legacy title path; a missing owner is a hard error."""
+    wm_dir = root / J11_WM_DIR
+    if not wm_dir.is_dir():
+        raise SystemExit(f"ERROR architecture guard: expected owner directory missing: {J11_WM_DIR}")
+    paths = [p for p in sorted(wm_dir.rglob("*.rs")) if not _j7_is_test(p)]
+    paths.append(_owner_path(root, "crates/flamewm-wm-x11/src/chrome.rs"))
+    deco_dir = root / "crates/flamewm-wm-x11/src/decoration"
+    _owner_path(root, "crates/flamewm-wm-x11/src/decoration/mod.rs")
+    paths += [p for p in sorted(deco_dir.rglob("*.rs")) if not _j7_is_test(p)]
+    return paths
 
 
 def j12_violations(root):
@@ -702,17 +733,12 @@ def j12_violations(root):
     if "_ => None" not in start:
         found.add((J12_START_MENU, "j12-g09-unknown-not-visible"))
     # J12-G10: no image_text8/fixed-font normal decoration path.
-    for deco in [
-        "crates/flamewm-wm-x11/src/decoration/paint.rs",
-        "crates/flamewm-wm-x11/src/decoration/manager.rs",
-        "crates/flamewm-wm-x11/src/wm.rs",
-        "crates/flamewm-wm-x11/src/chrome.rs",
-    ]:
-        text = live(deco)
-        if text and re.search(
+    for deco in _j12_title_scan_paths(root):
+        text = code(deco.read_text(encoding="utf-8"))
+        if re.search(
             r"image_text8|XDrawString|fixed_font|fixed-font|9x15|TITLE_CHAR_ADVANCE", text
         ):
-            found.add((deco, "j12-g10-no-fixed-font-decoration"))
+            found.add((relative_path(root, deco), "j12-g10-no-fixed-font-decoration"))
     # J12-G11: exactly one DecorationManager owner (J16 cutover: deleted;
     # successor is the frame-engine FrameResources registry).
     count = sum(
@@ -865,7 +891,8 @@ J18_GEOMETRY_OWNER_FILES = (
     "crates/flamewm-wm-x11/src/frame/controller.rs",
     "crates/flamewm-wm-x11/src/frame/geometry.rs",
     "crates/flamewm-wm-x11/src/frame/model.rs",
-    "crates/flamewm-wm-x11/src/wm.rs",
+    "crates/flamewm-wm-x11/src/wm/configure_handlers.rs",
+    "crates/flamewm-wm-x11/src/wm/effects.rs",
 )
 J18_HIT_OWNER_FILES = (
     "crates/flamewm-wm-x11/src/frame/input.rs",
@@ -892,6 +919,8 @@ def j18_violations(root):
     # Direct outer-rect writes inside the live wm-x11 crate but outside the
     # geometry owner are rejected (legacy-mirror bypass). Pure policy crates
     # (e.g. window-core snap math over their own state) are out of scope.
+    for rel in J18_GEOMETRY_OWNER_FILES:
+        _owner_path(root, rel)
     wm11 = root / "crates/flamewm-wm-x11/src"
     if wm11.is_dir():
         for path in sorted(wm11.rglob("*.rs")):
@@ -1056,10 +1085,10 @@ def j12h_violations(root):
     if "flamewm_skin" not in chrome and "WINDOW_CHROME" not in chrome:
         found.add(("crates/flamewm-wm-x11/src/chrome.rs", "j12h-g12-skin-metrics"))
     # J12H-G13: no legacy title path; measured intent success (missing-tolerant).
-    for deco in ("crates/flamewm-wm-x11/src/decoration/paint.rs", "crates/flamewm-wm-x11/src/chrome.rs", "crates/flamewm-wm-x11/src/wm.rs"):
-        text = live(deco)
-        if text and ("image_text8" in text or "XDrawString" in text):
-            found.add((deco, "j12h-g13-no-legacy-title"))
+    for deco in _j12_title_scan_paths(root):
+        text = code(deco.read_text(encoding="utf-8"))
+        if "image_text8" in text or "XDrawString" in text:
+            found.add((relative_path(root, deco), "j12h-g13-no-legacy-title"))
     if (root / "crates/flamewm-wm-x11/src/decoration/paint.rs").is_file() and "title_drawn = true" not in paint_decor:
         found.add(("crates/flamewm-wm-x11/src/decoration/paint.rs", "j12h-g13-measured-title-intent"))
     # J12H-G14: PANEL #1b1e20.
