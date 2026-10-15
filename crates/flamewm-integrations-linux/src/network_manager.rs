@@ -45,6 +45,8 @@ const GET_SECRETS: &str = "GetSecrets";
 const CANCEL_GET_SECRETS: &str = "CancelGetSecrets";
 const USER_CANCELED: &str = "org.freedesktop.NetworkManager.SecretAgent.Error.UserCanceled";
 const DELETE: &str = "Delete";
+const GET_SETTINGS: &str = "GetSettings";
+const UPDATE: &str = "Update";
 const SETTINGS_CONNECTION_INTERFACE: &str = "org.freedesktop.NetworkManager.Settings.Connection";
 const DEVICE_INTERFACE: &str = "org.freedesktop.NetworkManager.Device";
 const DEVICE_STATE_CHANGED: &str = "StateChanged";
@@ -119,6 +121,20 @@ enum PendingRequest {
     AddAndActivateSecure {
         attempt: u64,
     },
+    /// Read a saved profile before its psk is replaced. Holds the password in memory only.
+    SavedSettings {
+        attempt: u64,
+        profile: String,
+        device: String,
+        access_point: String,
+        secret: String,
+    },
+    UpdateSavedProfile {
+        attempt: u64,
+        profile: String,
+        device: String,
+        access_point: String,
+    },
 }
 
 enum Incoming {
@@ -171,6 +187,25 @@ enum SecretPrompt {
 }
 
 /// One Wi-Fi activation. Only a profile this attempt created may be deleted on failure.
+/// Which profile write a submitted password performs: a new network creates its profile,
+/// a known network's saved profile is updated in place before activation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SecretSubmitPlan {
+    CreateProfile { access_point: String },
+    UpdateSavedProfile { access_point: String },
+}
+
+fn secret_submit_plan(prompt: &SecretPrompt) -> SecretSubmitPlan {
+    match prompt {
+        SecretPrompt::NewNetwork { access_point } => SecretSubmitPlan::CreateProfile {
+            access_point: access_point.clone(),
+        },
+        SecretPrompt::SavedNetwork { access_point } => SecretSubmitPlan::UpdateSavedProfile {
+            access_point: access_point.clone(),
+        },
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConnectAttempt {
     id: u64,
@@ -227,6 +262,12 @@ impl ConnectAttempts {
 
     fn clear(&mut self) {
         self.current = None;
+    }
+
+    fn is_current(&self, id: u64) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|attempt| attempt.id == id)
     }
 
     fn saved_access_point(&self) -> Option<&str> {
@@ -787,6 +828,52 @@ impl NetworkManagerProvider {
         self.queue(message, PendingRequest::ActivateConnection { attempt })
     }
 
+    fn queue_saved_settings(
+        &mut self,
+        attempt: u64,
+        profile: String,
+        device: String,
+        access_point: String,
+        secret: String,
+    ) -> FlameResult<()> {
+        let message = method_call(
+            NETWORK_MANAGER_SERVICE,
+            &profile,
+            SETTINGS_CONNECTION_INTERFACE,
+            GET_SETTINGS,
+        )?;
+        self.queue(
+            message,
+            PendingRequest::SavedSettings {
+                attempt,
+                profile,
+                device,
+                access_point,
+                secret,
+            },
+        )
+    }
+
+    fn queue_update_saved_profile(
+        &mut self,
+        attempt: u64,
+        profile: String,
+        device: String,
+        access_point: String,
+        settings: MessageItem,
+    ) -> FlameResult<()> {
+        let message = update_connection_message(&profile, settings)?;
+        self.queue(
+            message,
+            PendingRequest::UpdateSavedProfile {
+                attempt,
+                profile,
+                device,
+                access_point,
+            },
+        )
+    }
+
     fn queue_delete_profile(&mut self, profile: String) -> FlameResult<()> {
         let message = method_call(
             NETWORK_MANAGER_SERVICE,
@@ -996,19 +1083,50 @@ impl NetworkManagerProvider {
             }
             return Ok(());
         }
-        match self.secret_prompt.clone() {
-            Some(SecretPrompt::NewNetwork { access_point }) => {
-                self.create_secured_profile(request_id, generation, access_point, secret)
-            }
-            // A saved profile's password can only be returned to NetworkManager's request.
-            Some(SecretPrompt::SavedNetwork { .. }) => Err(unsupported(
-                "saved NetworkManager password update requires a NetworkManager secret request",
-            )),
-            None => Err(FlameError::new(
+        let Some(prompt) = self.secret_prompt.clone() else {
+            return Err(FlameError::new(
                 ErrorCode::NotFound,
                 "NetworkManager secret request was not found",
-            )),
+            ));
+        };
+        match secret_submit_plan(&prompt) {
+            SecretSubmitPlan::CreateProfile { access_point } => {
+                self.create_secured_profile(request_id, generation, access_point, secret)
+            }
+            SecretSubmitPlan::UpdateSavedProfile { access_point } => {
+                self.update_saved_profile(request_id, generation, access_point, secret)
+            }
         }
+    }
+
+    /// Validate lookups first so a failed lookup leaves the prompt intact. The saved profile
+    /// is read, its psk replaced, then activated; the profile itself is never deleted.
+    fn update_saved_profile(
+        &mut self,
+        request_id: u64,
+        generation: u64,
+        access_point: String,
+        secret: String,
+    ) -> FlameResult<()> {
+        let device = self.device_for_access_point(&access_point)?;
+        let profile = self.profile_for_access_point(&access_point)?;
+        let NetworkIntent::SubmitSecret { secret, .. } = self
+            .controller
+            .request_submit_secret(request_id, generation, secret)?
+        else {
+            return Err(unsupported("unexpected NetworkManager secret intent"));
+        };
+        self.secret_prompt = None;
+        let attempt = self
+            .attempts
+            .begin(access_point.clone(), device.clone(), false);
+        if let Err(error) =
+            self.queue_saved_settings(attempt, profile, device, access_point, secret)
+        {
+            self.attempts.clear();
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Validate the request and lookups first so a failed lookup leaves the prompt intact.
@@ -1310,7 +1428,9 @@ impl NetworkManagerProvider {
                 }
                 PendingRequest::Action | PendingRequest::RegisterSecretAgent => return Ok(()),
                 PendingRequest::ActivateConnection { attempt }
-                | PendingRequest::AddAndActivateSecure { attempt } => {
+                | PendingRequest::AddAndActivateSecure { attempt }
+                | PendingRequest::SavedSettings { attempt, .. }
+                | PendingRequest::UpdateSavedProfile { attempt, .. } => {
                     let effect = self.attempts.on_request_failed(attempt);
                     return self.apply_attempt_effect(effect);
                 }
@@ -1332,6 +1452,58 @@ impl NetworkManagerProvider {
             | PendingRequest::Action
             | PendingRequest::ActivateConnection { .. }
             | PendingRequest::RegisterSecretAgent => Ok(()),
+            PendingRequest::SavedSettings {
+                attempt,
+                profile,
+                device,
+                access_point,
+                secret,
+            } => {
+                if !self.attempts.is_current(attempt) {
+                    return Ok(());
+                }
+                let settings = items
+                    .first()
+                    .ok_or_else(|| {
+                        FlameError::invalid("NetworkManager profile settings reply is invalid")
+                    })
+                    .and_then(|item| saved_profile_update_settings(item.clone(), &secret));
+                let settings = match settings {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        self.attempts.clear();
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = self.queue_update_saved_profile(
+                    attempt,
+                    profile,
+                    device,
+                    access_point,
+                    settings,
+                ) {
+                    self.attempts.clear();
+                    return Err(error);
+                }
+                Ok(())
+            }
+            PendingRequest::UpdateSavedProfile {
+                attempt,
+                profile,
+                device,
+                access_point,
+            } => {
+                if !self.attempts.is_current(attempt) {
+                    return Ok(());
+                }
+                if let Err(error) =
+                    self.queue_activate_connection(attempt, profile, device, access_point)
+                {
+                    self.attempts.clear();
+                    return Err(error);
+                }
+                Ok(())
+            }
             PendingRequest::AddAndActivateSecure { attempt } => {
                 let Some(item) = items.first() else {
                     return Err(FlameError::invalid(
@@ -1642,6 +1814,73 @@ fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
             "NetworkManager SecretAgent method is unsupported",
         )),
     }
+}
+
+/// Full settings for `Connection.Update`: the GetSettings sections are kept, and only the
+/// wireless-security `psk` is replaced with psk-flags NONE (0) so the password is stored.
+fn saved_profile_update_settings(settings: MessageItem, secret: &str) -> FlameResult<MessageItem> {
+    let MessageItem::Dict(sections) = settings else {
+        return Err(FlameError::invalid(
+            "NetworkManager profile settings are not a dictionary",
+        ));
+    };
+    let mut secured = false;
+    let mut updated = Vec::new();
+    for (section, value) in sections.into_vec() {
+        let value = if item_string(&section, "NetworkManager profile section")?
+            == "802-11-wireless-security"
+        {
+            secured = true;
+            wireless_security_with_secret(unwrap_variant(value), secret)?
+        } else {
+            unwrap_variant(value)
+        };
+        updated.push((section, value));
+    }
+    if !secured {
+        return Err(FlameError::invalid(
+            "NetworkManager saved profile has no wireless security",
+        ));
+    }
+    MessageItem::new_dict(updated)
+        .map_err(|_| FlameError::invalid("NetworkManager saved profile settings are invalid"))
+}
+
+fn wireless_security_with_secret(security: MessageItem, secret: &str) -> FlameResult<MessageItem> {
+    let MessageItem::Dict(properties) = security else {
+        return Err(FlameError::invalid(
+            "NetworkManager wireless security section is not a dictionary",
+        ));
+    };
+    let mut entries = Vec::new();
+    for (key, value) in properties.into_vec() {
+        let name = item_string(&key, "NetworkManager wireless security property")?;
+        if name == "psk" || name == "psk-flags" {
+            continue;
+        }
+        entries.push((key, MessageItem::Variant(Box::new(unwrap_variant(value)))));
+    }
+    entries.push((
+        MessageItem::Str("psk".to_owned()),
+        MessageItem::Variant(Box::new(MessageItem::Str(secret.to_owned()))),
+    ));
+    entries.push((
+        MessageItem::Str("psk-flags".to_owned()),
+        MessageItem::Variant(Box::new(MessageItem::UInt32(0))),
+    ));
+    MessageItem::new_dict(entries)
+        .map_err(|_| FlameError::invalid("NetworkManager wireless security settings are invalid"))
+}
+
+/// `Settings.Connection.Update(a{sa{sv}})` on one saved profile.
+fn update_connection_message(profile: &str, settings: MessageItem) -> FlameResult<Message> {
+    Ok(method_call(
+        NETWORK_MANAGER_SERVICE,
+        profile,
+        SETTINGS_CONNECTION_INTERFACE,
+        UPDATE,
+    )?
+    .append1(settings))
 }
 
 fn secret_reply(
@@ -2415,5 +2654,182 @@ mod tests {
         }
         let short = vec![MessageItem::UInt32(120)];
         assert!(parse_device_state_changed(short, DEV.to_owned()).is_err());
+    }
+
+    #[test]
+    fn submit_plan_creates_profile_only_for_unknown_networks() {
+        assert_eq!(
+            secret_submit_plan(&SecretPrompt::NewNetwork {
+                access_point: AP.to_owned(),
+            }),
+            SecretSubmitPlan::CreateProfile {
+                access_point: AP.to_owned(),
+            }
+        );
+        assert_eq!(
+            secret_submit_plan(&SecretPrompt::SavedNetwork {
+                access_point: AP.to_owned(),
+            }),
+            SecretSubmitPlan::UpdateSavedProfile {
+                access_point: AP.to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn known_network_credential_failure_reprompts_and_submit_updates_not_creates() {
+        let mut attempts = ConnectAttempts::default();
+        let _ = attempts.begin(AP.to_owned(), DEV.to_owned(), false);
+        assert_eq!(attempts.on_device_state(DEV, 40, 0), AttemptEffect::None);
+        let AttemptEffect::RetrySavedNetwork { access_point } =
+            attempts.on_device_state(DEV, 120, DEVICE_REASON_NO_SECRETS)
+        else {
+            panic!("known-network credential failure must reprompt");
+        };
+        assert_eq!(
+            secret_submit_plan(&SecretPrompt::SavedNetwork { access_point }),
+            SecretSubmitPlan::UpdateSavedProfile {
+                access_point: AP.to_owned(),
+            }
+        );
+    }
+
+    fn security_entries(settings: &MessageItem) -> Vec<(String, MessageItem)> {
+        let sections = dict_entries(settings);
+        let (_, security) = sections
+            .iter()
+            .find(|(name, _)| name == "802-11-wireless-security")
+            .expect("security section");
+        dict_entries(security)
+    }
+
+    fn dict_entries(item: &MessageItem) -> Vec<(String, MessageItem)> {
+        let MessageItem::Dict(dict) = item else {
+            panic!("expected a dictionary");
+        };
+        dict.clone()
+            .into_vec()
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    item_string(&key, "test key").expect("string key"),
+                    unwrap_variant(value),
+                )
+            })
+            .collect()
+    }
+
+    fn saved_settings_fixture() -> MessageItem {
+        let connection = MessageItem::from_dict(
+            vec![
+                ("id".to_owned(), MessageItem::Str("Home".to_owned())),
+                (
+                    "type".to_owned(),
+                    MessageItem::Str("802-11-wireless".to_owned()),
+                ),
+            ]
+            .into_iter()
+            .map(Ok::<_, FlameError>),
+        )
+        .expect("valid connection");
+        let security = MessageItem::from_dict(
+            vec![
+                (
+                    "key-mgmt".to_owned(),
+                    MessageItem::Str("wpa-psk".to_owned()),
+                ),
+                ("psk".to_owned(), MessageItem::Str("old-secret".to_owned())),
+                ("psk-flags".to_owned(), MessageItem::UInt32(1)),
+            ]
+            .into_iter()
+            .map(Ok::<_, FlameError>),
+        )
+        .expect("valid security");
+        MessageItem::new_dict(vec![
+            (MessageItem::Str("connection".to_owned()), connection),
+            (
+                MessageItem::Str("802-11-wireless-security".to_owned()),
+                security,
+            ),
+        ])
+        .expect("valid settings")
+    }
+
+    #[test]
+    fn saved_profile_update_replaces_only_psk_and_keeps_other_settings() {
+        let updated = saved_profile_update_settings(saved_settings_fixture(), "new-secret")
+            .expect("update settings");
+        let sections = dict_entries(&updated);
+        let (_, connection) = sections
+            .iter()
+            .find(|(name, _)| name == "connection")
+            .expect("connection section");
+        assert_eq!(
+            dict_entries(connection)
+                .iter()
+                .find(|(key, _)| key == "id")
+                .map(|(_, value)| value.clone()),
+            Some(MessageItem::Str("Home".to_owned()))
+        );
+        let security = security_entries(&updated);
+        let keys: Vec<&str> = security.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(keys.len(), 3, "only key-mgmt, psk and psk-flags: {keys:?}");
+        let value = |wanted: &str| {
+            security
+                .iter()
+                .find(|(key, _)| key == wanted)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(
+            value("key-mgmt"),
+            Some(MessageItem::Str("wpa-psk".to_owned()))
+        );
+        assert_eq!(
+            value("psk"),
+            Some(MessageItem::Str("new-secret".to_owned()))
+        );
+        assert_eq!(value("psk-flags"), Some(MessageItem::UInt32(0)));
+        assert!(!format!("{updated:?}").contains("old-secret"));
+    }
+
+    #[test]
+    fn saved_profile_update_rejects_profile_without_wireless_security() {
+        let open = MessageItem::new_dict(vec![(
+            MessageItem::Str("connection".to_owned()),
+            MessageItem::from_dict(
+                vec![("id".to_owned(), MessageItem::Str("Cafe".to_owned()))]
+                    .into_iter()
+                    .map(Ok::<_, FlameError>),
+            )
+            .expect("valid connection"),
+        )])
+        .expect("valid settings");
+        assert!(saved_profile_update_settings(open, "new-secret").is_err());
+    }
+
+    #[test]
+    fn update_message_targets_saved_profile_with_psk_flags_zero() {
+        let settings = saved_profile_update_settings(saved_settings_fixture(), "new-secret")
+            .expect("update settings");
+        let message = update_connection_message(PROFILE, settings).expect("valid Update call");
+        assert_eq!(
+            message.path().map(|path| path.to_string()),
+            Some(PROFILE.to_owned())
+        );
+        assert_eq!(
+            message.interface().map(|name| name.to_string()),
+            Some(SETTINGS_CONNECTION_INTERFACE.to_owned())
+        );
+        assert_eq!(
+            message.member().map(|name| name.to_string()),
+            Some("Update".to_owned())
+        );
+        let items = message.get_items();
+        assert_eq!(items.len(), 1);
+        let security = security_entries(&items[0]);
+        assert_eq!(security.len(), 3);
+        assert!(security.contains(&("psk-flags".to_owned(), MessageItem::UInt32(0))));
+        assert!(security.contains(&("psk".to_owned(), MessageItem::Str("new-secret".to_owned()))));
+        assert!(!format!("{items:?}").contains("old-secret"));
     }
 }
