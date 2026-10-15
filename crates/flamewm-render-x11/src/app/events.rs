@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::input::apply_wheel_scroll;
 use super::*;
 use crate::WindowGeometrySlot;
@@ -33,39 +35,110 @@ fn normalized_modifiers(state: u32) -> Vec<&'static str> {
     modifiers
 }
 
-fn canonical_key_name(symbol: u64) -> String {
+fn canonical_key_name(symbol: u64) -> Cow<'static, str> {
     match symbol {
-        XK_BACK_SPACE => "BackSpace".to_string(),
-        XK_TAB => "Tab".to_string(),
-        XK_SPACE => "Space".to_string(),
-        XK_RETURN => "Return".to_string(),
-        XK_ESCAPE => "Escape".to_string(),
-        XK_LEFT => "Left".to_string(),
-        XK_UP => "Up".to_string(),
-        XK_RIGHT => "Right".to_string(),
-        XK_DOWN => "Down".to_string(),
-        XK_SUPER_L => "Super_L".to_string(),
-        XK_SUPER_R => "Super_R".to_string(),
-        0xffe1 => "Shift_L".to_string(),
-        0xffe2 => "Shift_R".to_string(),
-        0xffe3 => "Control_L".to_string(),
-        0xffe4 => "Control_R".to_string(),
-        0xffe7 => "Meta_L".to_string(),
-        0xffe8 => "Meta_R".to_string(),
-        0xffe9 => "Alt_L".to_string(),
-        0xffea => "Alt_R".to_string(),
-        0xffbe..=0xffc9 => format!("F{}", symbol - 0xffbd),
-        0x20..=0x7e | 0xa0..=0xff => char::from_u32(symbol as u32)
-            .map_or_else(|| format!("Keysym(0x{symbol:x})"), |key| key.to_string()),
-        _ => format!("Keysym(0x{symbol:x})"),
+        XK_BACK_SPACE => Cow::Borrowed("BackSpace"),
+        XK_TAB => Cow::Borrowed("Tab"),
+        XK_SPACE => Cow::Borrowed("Space"),
+        XK_RETURN => Cow::Borrowed("Return"),
+        XK_ESCAPE => Cow::Borrowed("Escape"),
+        XK_LEFT => Cow::Borrowed("Left"),
+        XK_UP => Cow::Borrowed("Up"),
+        XK_RIGHT => Cow::Borrowed("Right"),
+        XK_DOWN => Cow::Borrowed("Down"),
+        XK_SUPER_L => Cow::Borrowed("Super_L"),
+        XK_SUPER_R => Cow::Borrowed("Super_R"),
+        0xffe1 => Cow::Borrowed("Shift_L"),
+        0xffe2 => Cow::Borrowed("Shift_R"),
+        0xffe3 => Cow::Borrowed("Control_L"),
+        0xffe4 => Cow::Borrowed("Control_R"),
+        0xffe7 => Cow::Borrowed("Meta_L"),
+        0xffe8 => Cow::Borrowed("Meta_R"),
+        0xffe9 => Cow::Borrowed("Alt_L"),
+        0xffea => Cow::Borrowed("Alt_R"),
+        0xffbe..=0xffc9 => Cow::Owned(format!("F{}", symbol - 0xffbd)),
+        0x20..=0x7e | 0xa0..=0xff => char::from_u32(symbol as u32).map_or_else(
+            || Cow::Owned(format!("Keysym(0x{symbol:x})")),
+            |key| Cow::Owned(key.to_string()),
+        ),
+        _ => Cow::Owned(format!("Keysym(0x{symbol:x})")),
     }
 }
 
-fn printable_key_text(symbol: u64) -> Option<String> {
+fn printable_key_char(symbol: u64) -> Option<char> {
     match symbol {
-        0x20..=0x7e | 0xa0..=0xff => char::from_u32(symbol as u32).map(|key| key.to_string()),
+        0x20..=0x7e | 0xa0..=0xff => char::from_u32(symbol as u32),
         _ => None,
     }
+}
+
+#[cfg(test)]
+fn printable_key_text(symbol: u64) -> Option<String> {
+    printable_key_char(symbol).map(|key| key.to_string())
+}
+
+/// Reusable buffers for ActionEvent strings. A buffer is moved into the event
+/// for the callback and reclaimed afterwards, so steady-state dispatch does not
+/// allocate action names or typed-key payloads.
+#[derive(Default)]
+struct ActionBuffers {
+    action: String,
+    payload: String,
+}
+
+/// Invokes the callback with `event.action` taken from `buffers.action`, then
+/// returns that buffer for reuse. `buffers.action` must already hold the name.
+fn invoke_action<F>(
+    on_action: &mut F,
+    document: &mut RuntimeDocument,
+    buffers: &mut ActionBuffers,
+    event: &mut ActionEvent,
+) -> Result<(), String>
+where
+    F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+{
+    event.action = std::mem::take(&mut buffers.action);
+    let result = on_action(&*event, document);
+    buffers.action = std::mem::take(&mut event.action);
+    result
+}
+
+/// Dispatches `event` under a static or caller-owned action name.
+fn fire_static<F>(
+    on_action: &mut F,
+    document: &mut RuntimeDocument,
+    buffers: &mut ActionBuffers,
+    name: &str,
+    event: &mut ActionEvent,
+) -> Result<(), String>
+where
+    F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+{
+    buffers.action.clear();
+    buffers.action.push_str(name);
+    invoke_action(on_action, document, buffers, event)
+}
+
+/// Dispatches `event` under the action name of `nodes[node]`. Returns Ok(false)
+/// without invoking the callback when that name is empty.
+fn fire_node<F>(
+    on_action: &mut F,
+    document: &mut RuntimeDocument,
+    buffers: &mut ActionBuffers,
+    node: u32,
+    event: &mut ActionEvent,
+) -> Result<bool, String>
+where
+    F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+{
+    let name = document.document.nodes[node as usize].action.as_str();
+    if name.is_empty() {
+        return Ok(false);
+    }
+    buffers.action.clear();
+    buffers.action.push_str(name);
+    invoke_action(on_action, document, buffers, event)?;
+    Ok(true)
 }
 
 fn emit_typed_key<F>(
@@ -74,37 +147,44 @@ fn emit_typed_key<F>(
     phase: ActionPhase,
     document: &mut RuntimeDocument,
     on_action: &mut F,
+    buffers: &mut ActionBuffers,
 ) -> Result<(), String>
 where
     F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
 {
     let modifiers = normalized_modifiers(key.state);
     let key_name = canonical_key_name(symbol);
-    let text = (!modifiers.iter().any(|modifier| *modifier != "Shift"))
-        .then(|| printable_key_text(symbol))
+    let printable = (!modifiers.iter().any(|modifier| *modifier != "Shift"))
+        .then(|| printable_key_char(symbol))
         .flatten();
-    let payload = format!(
-        "{}{}{}{}{}",
-        modifiers.join("+"),
-        KEY_PAYLOAD_SEPARATOR,
-        key_name,
-        KEY_PAYLOAD_SEPARATOR,
-        text.as_deref().unwrap_or_default()
-    );
+    let mut payload = std::mem::take(&mut buffers.payload);
+    payload.clear();
+    for (index, modifier) in modifiers.iter().enumerate() {
+        if index > 0 {
+            payload.push('+');
+        }
+        payload.push_str(modifier);
+    }
+    payload.push(KEY_PAYLOAD_SEPARATOR);
+    payload.push_str(&key_name);
+    payload.push(KEY_PAYLOAD_SEPARATOR);
+    if let Some(key) = printable {
+        payload.push(key);
+    }
     let scale = document.ui_scale();
-    on_action(
-        &ActionEvent {
-            action: TYPED_KEY_ACTION.to_string(),
-            phase,
-            button: 0,
-            x: key.x as f32 / scale,
-            y: key.y as f32 / scale,
-            inside: true,
-            time_ms: key.time as u64,
-            text: Some(payload),
-        },
-        document,
-    )
+    let mut event = ActionEvent {
+        action: String::new(),
+        phase,
+        button: 0,
+        x: key.x as f32 / scale,
+        y: key.y as f32 / scale,
+        inside: true,
+        time_ms: key.time as u64,
+        text: Some(payload),
+    };
+    let result = fire_static(on_action, document, buffers, TYPED_KEY_ACTION, &mut event);
+    buffers.payload = event.text.take().unwrap_or_default();
+    result
 }
 
 impl X11App {
@@ -133,6 +213,7 @@ impl X11App {
     {
         // No unconditional redraw on entry: presenters start from the
         // retained scene; damage/expose drive paints via redraw_if_dirty.
+        let mut buffers = ActionBuffers::default();
         loop {
             let mut event = MaybeUninit::<XEvent>::uninit();
             // SAFETY: XNextEvent initializes the supplied XEvent storage before returning.
@@ -239,21 +320,17 @@ impl X11App {
                             0.0,
                             motion.x as f32 / scale,
                         );
-                        let action = document.document.nodes[drag_index as usize].action.clone();
-                        if !action.is_empty() {
-                            on_action(
-                                &ActionEvent {
-                                    action,
-                                    phase: ActionPhase::Motion,
-                                    button: self.pointer_button.unwrap_or(1),
-                                    x: motion.x as f32 / scale,
-                                    y: motion.y as f32 / scale,
-                                    inside: hover == Some(drag_index),
-                                    time_ms: motion.time as u64,
-                                    text: Some(value.to_string()),
-                                },
-                                document,
-                            )?;
+                        let mut event = ActionEvent {
+                            action: String::new(),
+                            phase: ActionPhase::Motion,
+                            button: self.pointer_button.unwrap_or(1),
+                            x: motion.x as f32 / scale,
+                            y: motion.y as f32 / scale,
+                            inside: hover == Some(drag_index),
+                            time_ms: motion.time as u64,
+                            text: Some(value.to_string()),
+                        };
+                        if fire_node(on_action, document, &mut buffers, drag_index, &mut event)? {
                             self.mark_full();
                             if self.single_event {
                                 unsafe { self.redraw_if_dirty(document)? };
@@ -265,43 +342,34 @@ impl X11App {
                     if let (Some(button), Some(index)) =
                         (self.pointer_button, self.interaction.active)
                     {
-                        let action = document.document.nodes[index as usize].action.clone();
-                        if !action.is_empty() {
-                            on_action(
-                                &ActionEvent {
-                                    action,
-                                    phase: ActionPhase::Motion,
-                                    button,
-                                    x: motion.x as f32 / document.ui_scale(),
-                                    y: motion.y as f32 / document.ui_scale(),
-                                    inside: hover == Some(index),
-                                    time_ms: motion.time as u64,
-                                    text: None,
-                                },
-                                document,
-                            )?;
+                        let mut event = ActionEvent {
+                            action: String::new(),
+                            phase: ActionPhase::Motion,
+                            button,
+                            x: motion.x as f32 / document.ui_scale(),
+                            y: motion.y as f32 / document.ui_scale(),
+                            inside: hover == Some(index),
+                            time_ms: motion.time as u64,
+                            text: None,
+                        };
+                        if fire_node(on_action, document, &mut buffers, index, &mut event)? {
                             self.mark_full();
                         } else if changed {
                             self.mark_full();
                         }
                     } else if changed {
                         if let Some(index) = hover {
-                            let action = document.document.nodes[index as usize].action.clone();
-                            if !action.is_empty() {
-                                on_action(
-                                    &ActionEvent {
-                                        action,
-                                        phase: ActionPhase::Hover,
-                                        button: 0,
-                                        x: motion.x as f32 / document.ui_scale(),
-                                        y: motion.y as f32 / document.ui_scale(),
-                                        inside: true,
-                                        time_ms: motion.time as u64,
-                                        text: None,
-                                    },
-                                    document,
-                                )?;
-                            }
+                            let mut event = ActionEvent {
+                                action: String::new(),
+                                phase: ActionPhase::Hover,
+                                button: 0,
+                                x: motion.x as f32 / document.ui_scale(),
+                                y: motion.y as f32 / document.ui_scale(),
+                                inside: true,
+                                time_ms: motion.time as u64,
+                                text: None,
+                            };
+                            fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
                         self.mark_full();
                     }
@@ -321,7 +389,14 @@ impl X11App {
                     let shift_index = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
                     // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
                     let typed_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
-                    emit_typed_key(&key, typed_symbol, ActionPhase::Press, document, on_action)?;
+                    emit_typed_key(
+                        &key,
+                        typed_symbol,
+                        ActionPhase::Press,
+                        document,
+                        on_action,
+                        &mut buffers,
+                    )?;
                     let ctrl = key.state & CONTROL_MASK != 0;
                     let alt = key.state & MOD1_MASK != 0;
                     let super_key = key.state & MOD4_MASK != 0;
@@ -354,36 +429,38 @@ impl X11App {
                         None
                     };
                     if let Some(action) = action {
-                        on_action(
-                            &ActionEvent {
-                                action: action.to_string(),
+                        let mut event = ActionEvent {
+                            action: String::new(),
+                            phase: ActionPhase::Release,
+                            button: 0,
+                            x: key.x as f32 / document.ui_scale(),
+                            y: key.y as f32 / document.ui_scale(),
+                            inside: true,
+                            time_ms: key.time as u64,
+                            text: None,
+                        };
+                        fire_static(on_action, document, &mut buffers, action, &mut event)?;
+                        self.mark_full();
+                    } else if !ctrl && !alt && !super_key {
+                        // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
+                        let text_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
+                        if let Some(text) = keyboard_text(text_symbol) {
+                            let mut event = ActionEvent {
+                                action: String::new(),
                                 phase: ActionPhase::Release,
                                 button: 0,
                                 x: key.x as f32 / document.ui_scale(),
                                 y: key.y as f32 / document.ui_scale(),
                                 inside: true,
                                 time_ms: key.time as u64,
-                                text: None,
-                            },
-                            document,
-                        )?;
-                        self.mark_full();
-                    } else if !ctrl && !alt && !super_key {
-                        // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
-                        let text_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
-                        if let Some(text) = keyboard_text(text_symbol) {
-                            on_action(
-                                &ActionEvent {
-                                    action: "keyboard.input".to_string(),
-                                    phase: ActionPhase::Release,
-                                    button: 0,
-                                    x: key.x as f32 / document.ui_scale(),
-                                    y: key.y as f32 / document.ui_scale(),
-                                    inside: true,
-                                    time_ms: key.time as u64,
-                                    text: Some(text),
-                                },
+                                text: Some(text),
+                            };
+                            fire_static(
+                                on_action,
                                 document,
+                                &mut buffers,
+                                "keyboard.input",
+                                &mut event,
                             )?;
                             self.mark_full();
                         }
@@ -403,21 +480,26 @@ impl X11App {
                         ActionPhase::Release,
                         document,
                         on_action,
+                        &mut buffers,
                     )?;
                     if symbol == XK_SUPER_L || symbol == XK_SUPER_R {
                         if !self.super_chord_used {
-                            on_action(
-                                &ActionEvent {
-                                    action: "keyboard.start.0".to_string(),
-                                    phase: ActionPhase::Release,
-                                    button: 0,
-                                    x: key.x as f32 / document.ui_scale(),
-                                    y: key.y as f32 / document.ui_scale(),
-                                    inside: true,
-                                    time_ms: key.time as u64,
-                                    text: None,
-                                },
+                            let mut event = ActionEvent {
+                                action: String::new(),
+                                phase: ActionPhase::Release,
+                                button: 0,
+                                x: key.x as f32 / document.ui_scale(),
+                                y: key.y as f32 / document.ui_scale(),
+                                inside: true,
+                                time_ms: key.time as u64,
+                                text: None,
+                            };
+                            fire_static(
+                                on_action,
                                 document,
+                                &mut buffers,
+                                "keyboard.start.0",
+                                &mut event,
                             )?;
                             self.mark_full();
                         }
@@ -442,19 +524,17 @@ impl X11App {
                                 (dx, dy),
                             );
                         }
-                        on_action(
-                            &ActionEvent {
-                                action: "scroll".to_string(),
-                                phase: ActionPhase::Motion,
-                                button: button.button,
-                                x: button.x as f32 / scale + dx * 0.0,
-                                y: button.y as f32 / scale,
-                                inside: true,
-                                time_ms: button.time as u64,
-                                text: Some(format!("{dx},{dy}")),
-                            },
-                            document,
-                        )?;
+                        let mut event = ActionEvent {
+                            action: String::new(),
+                            phase: ActionPhase::Motion,
+                            button: button.button,
+                            x: button.x as f32 / scale + dx * 0.0,
+                            y: button.y as f32 / scale,
+                            inside: true,
+                            time_ms: button.time as u64,
+                            text: Some(format!("{dx},{dy}")),
+                        };
+                        fire_static(on_action, document, &mut buffers, "scroll", &mut event)?;
                         self.mark_full();
                         if self.single_event {
                             unsafe { self.redraw_if_dirty(document)? };
@@ -465,10 +545,11 @@ impl X11App {
                     let hit = self.hit_test(document, button.x as f32, button.y as f32);
                     if button.button == 1 {
                         if let Some(index) = hit {
-                            let action = document.document.nodes[index as usize].action.clone();
                             let now = button.time as u64;
-                            let double_title = action.starts_with("window.")
-                                && action.ends_with(".move")
+                            let name = document.document.nodes[index as usize].action.as_str();
+                            let is_title_move =
+                                name.starts_with("window.") && name.ends_with(".move");
+                            let double_title = is_title_move
                                 && self
                                     .last_title_press
                                     .map(|(last_index, last_time)| {
@@ -476,32 +557,37 @@ impl X11App {
                                     })
                                     .unwrap_or(false);
                             if double_title {
+                                let maximize = name
+                                    .strip_prefix("window.")
+                                    .and_then(|rest| rest.strip_suffix(".move"))
+                                    .map(|prefix| format!("{prefix}.maximize"));
                                 self.last_title_press = None;
                                 self.interaction.active = None;
                                 self.pointer_button = None;
-                                if let Some(prefix) = action
-                                    .strip_prefix("window.")
-                                    .and_then(|rest| rest.strip_suffix(".move"))
-                                {
-                                    on_action(
-                                        &ActionEvent {
-                                            action: format!("{prefix}.maximize"),
-                                            phase: ActionPhase::Release,
-                                            button: button.button,
-                                            x: button.x as f32 / document.ui_scale(),
-                                            y: button.y as f32 / document.ui_scale(),
-                                            inside: true,
-                                            time_ms: button.time as u64,
-                                            text: None,
-                                        },
+                                if let Some(maximize) = maximize {
+                                    let mut event = ActionEvent {
+                                        action: String::new(),
+                                        phase: ActionPhase::Release,
+                                        button: button.button,
+                                        x: button.x as f32 / document.ui_scale(),
+                                        y: button.y as f32 / document.ui_scale(),
+                                        inside: true,
+                                        time_ms: button.time as u64,
+                                        text: None,
+                                    };
+                                    fire_static(
+                                        on_action,
                                         document,
+                                        &mut buffers,
+                                        &maximize,
+                                        &mut event,
                                     )?;
                                 }
                                 self.mark_full();
                                 unsafe { self.redraw_if_dirty(document)? };
                                 return Ok(());
                             }
-                            if action.starts_with("window.") && action.ends_with(".move") {
+                            if is_title_move {
                                 self.last_title_press = Some((index, now));
                             } else {
                                 self.last_title_press = None;
@@ -512,29 +598,24 @@ impl X11App {
                         self.interaction.active = hit;
                         self.pointer_button = Some(button.button);
                         if let Some(index) = hit {
-                            let action = document.document.nodes[index as usize].action.clone();
-                            if !action.is_empty() {
-                                on_action(
-                                    &ActionEvent {
-                                        action,
-                                        phase: ActionPhase::Press,
-                                        button: button.button,
-                                        x: button.x as f32 / document.ui_scale(),
-                                        y: button.y as f32 / document.ui_scale(),
-                                        inside: true,
-                                        time_ms: button.time as u64,
-                                        text: None,
-                                    },
-                                    document,
-                                )?;
-                            }
+                            let mut event = ActionEvent {
+                                action: String::new(),
+                                phase: ActionPhase::Press,
+                                button: button.button,
+                                x: button.x as f32 / document.ui_scale(),
+                                y: button.y as f32 / document.ui_scale(),
+                                inside: true,
+                                time_ms: button.time as u64,
+                                text: None,
+                            };
+                            fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
                         // Range drag arm: action names starting with "range." or
                         // "slider." capture the press as a slider drag; pointer
                         // geometry comes from the retained layout box.
                         if let Some(index) = hit {
                             let press_action =
-                                document.document.nodes[index as usize].action.clone();
+                                document.document.nodes[index as usize].action.as_str();
                             if press_action.starts_with("range.")
                                 || press_action.starts_with("slider.")
                             {
@@ -573,23 +654,17 @@ impl X11App {
                                 0.0,
                                 button.x as f32 / scale,
                             );
-                            let action =
-                                document.document.nodes[drag_index as usize].action.clone();
-                            if !action.is_empty() {
-                                on_action(
-                                    &ActionEvent {
-                                        action,
-                                        phase: ActionPhase::Release,
-                                        button: button.button,
-                                        x: button.x as f32 / scale,
-                                        y: button.y as f32 / scale,
-                                        inside: true,
-                                        time_ms: button.time as u64,
-                                        text: Some(value.to_string()),
-                                    },
-                                    document,
-                                )?;
-                            }
+                            let mut event = ActionEvent {
+                                action: String::new(),
+                                phase: ActionPhase::Release,
+                                button: button.button,
+                                x: button.x as f32 / scale,
+                                y: button.y as f32 / scale,
+                                inside: true,
+                                time_ms: button.time as u64,
+                                text: Some(value.to_string()),
+                            };
+                            fire_node(on_action, document, &mut buffers, drag_index, &mut event)?;
                         }
                     }
                     let hit = self.hit_test(document, button.x as f32, button.y as f32);
@@ -602,22 +677,17 @@ impl X11App {
                         None
                     };
                     if let Some(index) = dispatch {
-                        let action = document.document.nodes[index as usize].action.clone();
-                        if !action.is_empty() {
-                            on_action(
-                                &ActionEvent {
-                                    action,
-                                    phase: ActionPhase::Release,
-                                    button: button.button,
-                                    x: button.x as f32 / document.ui_scale(),
-                                    y: button.y as f32 / document.ui_scale(),
-                                    inside: hit == Some(index),
-                                    time_ms: button.time as u64,
-                                    text: None,
-                                },
-                                document,
-                            )?;
-                        }
+                        let mut event = ActionEvent {
+                            action: String::new(),
+                            phase: ActionPhase::Release,
+                            button: button.button,
+                            x: button.x as f32 / document.ui_scale(),
+                            y: button.y as f32 / document.ui_scale(),
+                            inside: hit == Some(index),
+                            time_ms: button.time as u64,
+                            text: None,
+                        };
+                        fire_node(on_action, document, &mut buffers, index, &mut event)?;
                     }
                     self.mark_full();
                     let hover = self.hit_test(document, button.x as f32, button.y as f32);

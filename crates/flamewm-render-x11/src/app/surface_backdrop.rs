@@ -13,10 +13,11 @@ use crate::xlib::*;
 use super::X11App;
 
 /// Debug trace for backdrop painting, enabled by `FLAMEWM_DEBUG_BACKDROP=1` (stderr).
-fn trace_paint(message: &str) {
+/// The message is built only when tracing is enabled, so disabled tracing allocates nothing.
+fn trace_paint(message: impl FnOnce() -> String) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_DEBUG_BACKDROP").is_some_and(|v| v == "1")) {
-        eprintln!("debug backdrop paint {message}");
+        eprintln!("debug backdrop paint {}", message());
     }
 }
 
@@ -101,21 +102,23 @@ impl X11App {
     /// Must run on the app's display thread after `clear_scene`.
     pub(crate) unsafe fn paint_surface_backdrop(&mut self) -> Result<(), String> {
         let Some(backdrop) = self.surface_backdrop else {
-            trace_paint("no-backdrop");
+            trace_paint(|| "no-backdrop".to_string());
             return Ok(());
         };
         if backdrop.width != self.width || backdrop.height != self.height {
-            trace_paint(&format!(
-                "size-mismatch backdrop={}x{} scene={}x{}",
-                backdrop.width, backdrop.height, self.width, self.height
-            ));
+            trace_paint(|| {
+                format!(
+                    "size-mismatch backdrop={}x{} scene={}x{}",
+                    backdrop.width, backdrop.height, self.width, self.height
+                )
+            });
             return Ok(());
         }
         let Some(xrender) = self.xrender.as_mut() else {
-            trace_paint("no-xrender");
+            trace_paint(|| "no-xrender".to_string());
             return Ok(());
         };
-        trace_paint(&format!("blit {}x{}", backdrop.width, backdrop.height));
+        trace_paint(|| format!("blit {}x{}", backdrop.width, backdrop.height));
         unsafe { xrender.blit_argb32_over(backdrop.pixmap, 0, 0, backdrop.width, backdrop.height) }
     }
 }
@@ -134,6 +137,8 @@ pub(crate) struct NodeBackdropKey {
 pub(crate) struct NodeBackdropCache {
     entries: HashMap<u32, (NodeBackdropKey, Pixmap)>,
     used: HashSet<u32>,
+    /// Scratch for pixmaps freed by the last `finish_frame` / `drain`; reused across frames.
+    freed: Vec<Pixmap>,
 }
 
 impl NodeBackdropCache {
@@ -153,25 +158,29 @@ impl NodeBackdropCache {
     }
 
     /// Ends a frame: removes entries not touched this frame and returns their pixmaps to free.
-    pub(crate) fn finish_frame(&mut self) -> Vec<Pixmap> {
-        let used = std::mem::take(&mut self.used);
-        let stale: Vec<u32> = self
-            .entries
-            .keys()
-            .filter(|node| !used.contains(node))
-            .copied()
-            .collect();
-        stale
-            .into_iter()
-            .filter_map(|node| self.entries.remove(&node))
-            .map(|(_, pixmap)| pixmap)
-            .collect()
+    /// The returned slice is reused storage, valid until the next call.
+    pub(crate) fn finish_frame(&mut self) -> &[Pixmap] {
+        self.freed.clear();
+        let used = &self.used;
+        let freed = &mut self.freed;
+        self.entries.retain(|node, (_, pixmap)| {
+            let keep = used.contains(node);
+            if !keep {
+                freed.push(*pixmap);
+            }
+            keep
+        });
+        self.used.clear();
+        &self.freed
     }
 
-    /// Removes every entry and returns the pixmaps to free.
-    pub(crate) fn drain(&mut self) -> Vec<Pixmap> {
+    /// Removes every entry and returns the pixmaps to free. The returned slice is reused storage.
+    pub(crate) fn drain(&mut self) -> &[Pixmap] {
         self.used.clear();
-        self.entries.drain().map(|(_, (_, pixmap))| pixmap).collect()
+        self.freed.clear();
+        let freed = &mut self.freed;
+        freed.extend(self.entries.drain().map(|(_, (_, pixmap))| pixmap));
+        &self.freed
     }
 }
 
@@ -287,14 +296,14 @@ impl X11App {
 
     /// Frees node backdrops that the finished frame did not paint.
     pub(crate) fn finish_node_backdrops(&mut self) {
-        for pixmap in self.node_backdrops.finish_frame() {
+        for &pixmap in self.node_backdrops.finish_frame() {
             unsafe { XFreePixmap(self.display, pixmap) };
         }
     }
 
     /// Frees every node backdrop pixmap (teardown).
     pub(crate) fn clear_node_backdrops(&mut self) {
-        for pixmap in self.node_backdrops.drain() {
+        for &pixmap in self.node_backdrops.drain() {
             unsafe { XFreePixmap(self.display, pixmap) };
         }
     }
@@ -366,7 +375,7 @@ mod tests {
         cache.store(2, key(80, 1), 12);
         cache.finish_frame();
         assert_eq!(cache.hit(1, key(80, 1)), Some(11));
-        assert_eq!(cache.finish_frame(), vec![12]);
+        assert_eq!(cache.finish_frame(), &[12]);
         assert_eq!(cache.hit(2, key(80, 1)), None);
     }
 }
