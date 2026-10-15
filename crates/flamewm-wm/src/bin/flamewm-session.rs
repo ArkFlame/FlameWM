@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,8 +18,9 @@ use flamewm_session_core::{
     build_launch_plan, default_paths_from_home,
 };
 use rustix::process::{Pid, Signal, getppid, kill_process, set_parent_process_death_signal};
-use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
+use signal_hook::consts::signal::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
 use signal_hook::flag;
+use signal_hook::low_level::pipe;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
@@ -44,6 +47,7 @@ fn execute() -> Result<(), String> {
         flag::register(signal, Arc::clone(&stop_requested))
             .map_err(|error| format!("register session shutdown signal {signal}: {error}"))?;
     }
+    register_wakeups()?;
     let parent = getppid().ok_or_else(|| "session has no parent process".to_owned())?;
     set_parent_process_death_signal(Some(Signal::CHILD))
         .map_err(|error| format!("configure parent-death notification: {error}"))?;
@@ -117,6 +121,33 @@ fn spawn(plan: ProcessPlan) -> Result<Running, String> {
     Ok(Running { plan, child, supervisor: ProcessSupervisorPolicy::default() })
 }
 
+/// Read end of the self-pipe written by the signal handlers for SIGCHLD and stop signals.
+static WAKEUP: OnceLock<UnixStream> = OnceLock::new();
+
+fn register_wakeups() -> Result<(), String> {
+    let (reader, writer) = UnixStream::pair().map_err(|error| format!("create supervisor wakeup pipe: {error}"))?;
+    for signal in [SIGCHLD, SIGTERM, SIGINT, SIGHUP] {
+        let fd = writer.try_clone().map_err(|error| format!("duplicate supervisor wakeup pipe: {error}"))?;
+        pipe::register(signal, fd).map_err(|error| format!("register supervisor wakeup for signal {signal}: {error}"))?;
+    }
+    WAKEUP.set(reader).map_err(|_| "supervisor wakeup pipe registered twice".to_owned())
+}
+
+/// Blocks until a child exits, a stop signal arrives, or `timeout` elapses (`None` waits indefinitely).
+fn wait_for_wakeup(timeout: Option<Duration>) -> Result<(), String> {
+    let reader = WAKEUP.get().ok_or_else(|| "supervisor wakeup pipe is not registered".to_owned())?;
+    reader
+        .set_read_timeout(timeout.map(|duration| duration.max(Duration::from_millis(1))))
+        .map_err(|error| format!("configure supervisor wakeup: {error}"))?;
+    let mut buffer = [0u8; 64];
+    match (&*reader).read(&mut buffer) {
+        Ok(0) => Err("supervisor wakeup pipe closed".to_owned()),
+        Ok(_) => Ok(()),
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => Ok(()),
+        Err(error) => Err(format!("wait for supervisor wakeup: {error}")),
+    }
+}
+
 fn check_stop(stop_requested: &AtomicBool) -> Result<(), String> {
     if stop_requested.load(Ordering::Relaxed) { Err("session shutdown signal received".to_owned()) } else { Ok(()) }
 }
@@ -133,7 +164,7 @@ fn startup_grace(child: &mut Running, parent: rustix::process::Pid, stop_request
         if let Some(status) = child.child.try_wait().map_err(|error| child_error(child, "check startup", error))? {
             return Err(format!("{:?} at {} exited during startup: {status}", child.plan.role, child.plan.program.display()));
         }
-        thread::sleep(TICK.min(until.saturating_duration_since(Instant::now())));
+        wait_for_wakeup(Some(until.saturating_duration_since(Instant::now())))?;
     }
     Ok(())
 }
@@ -286,7 +317,7 @@ fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_pla
             }
             break;
         }
-        thread::sleep(TICK);
+            wait_for_wakeup(None)?;
     }
 }
 
@@ -294,7 +325,7 @@ fn wait_backoff(delay_ms: u64, parent: rustix::process::Pid, stop_requested: &At
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
     while Instant::now() < deadline {
         check_parent(parent, stop_requested)?;
-        thread::sleep(TICK.min(deadline.saturating_duration_since(Instant::now())));
+        wait_for_wakeup(Some(deadline.saturating_duration_since(Instant::now())))?;
     }
     check_parent(parent, stop_requested)
 }
@@ -330,7 +361,12 @@ fn stop_role(child: &mut Running) -> Result<(), String> {
                 exited = true;
                 break;
             }
-            Ok(None) if Instant::now() < deadline => thread::sleep(TICK.min(deadline.saturating_duration_since(Instant::now()))),
+            Ok(None) if Instant::now() < deadline => {
+                if let Err(error) = wait_for_wakeup(Some(deadline.saturating_duration_since(Instant::now()))) {
+                    failures.push(error);
+                    break;
+                }
+            }
             Ok(None) => break,
             Err(error) => {
                 failures.push(child_error(child, "check during graceful stop", error));
