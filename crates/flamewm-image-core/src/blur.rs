@@ -91,6 +91,18 @@ pub fn frosted_backdrop(
     radius_px: f32,
     tint: Option<[u8; 4]>,
 ) -> RgbaImage {
+    frosted_backdrop_with(&mut BlurScratch::new(), src, crop, radius_px, tint)
+}
+
+/// Same as [`frosted_backdrop`], reusing `scratch` buffers.
+#[must_use]
+pub fn frosted_backdrop_with(
+    scratch: &mut BlurScratch,
+    src: &RgbaImage,
+    crop: Rect,
+    radius_px: f32,
+    tint: Option<[u8; 4]>,
+) -> RgbaImage {
     if src.width == 0 || src.height == 0 {
         return RgbaImage {
             width: 1,
@@ -128,7 +140,7 @@ pub fn frosted_backdrop(
         }
     }
     if blur {
-        blur_straight(&mut BlurScratch::default(), &mut padded, pw, ph, radius);
+        blur_straight(scratch, &mut padded, pw, ph, radius);
     }
     let mut out = vec![0u8; cw * ch * 4];
     for y in 0..ch {
@@ -655,6 +667,25 @@ mod tests {
             gaussian_blur_rgba(&mut px, 1, 1, 65.0),
             Err(BlurError::RadiusTooLarge)
         );
+    }
+
+    #[test]
+    fn frosted_backdrop_with_matches_allocating_variant() {
+        let src = RgbaImage::from_rgba8(40, 30, noisy(40, 30)).unwrap();
+        let crop = Rect {
+            x: -5,
+            y: 3,
+            width: 25,
+            height: 20,
+        };
+        let mut scratch = BlurScratch::new();
+        for radius in [0.0f32, 2.0, 9.0, 20.0] {
+            let fresh = frosted_backdrop(&src, crop, radius, Some([10, 20, 30, 100]));
+            let reused =
+                frosted_backdrop_with(&mut scratch, &src, crop, radius, Some([10, 20, 30, 100]));
+            assert_eq!(fresh.pixels, reused.pixels, "radius {radius}");
+            assert_eq!((fresh.width, fresh.height), (reused.width, reused.height));
+        }
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::model::TextWrap;
 
 /// One laid-out line: collapsed text plus its advance width in px.
@@ -52,7 +54,11 @@ pub fn layout_text(
 ) -> TextLayout {
     let size = font_size.max(0.0);
     let line_h = line_height(size);
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized: Cow<str> = if text.contains('\r') {
+        Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(text)
+    };
     let mut lines: Vec<TextLine> = Vec::new();
 
     for paragraph in normalized.split('\n') {
