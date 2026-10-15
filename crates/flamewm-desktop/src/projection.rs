@@ -1,5 +1,5 @@
-use flamewm_api::Point;
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+use flamewm_api::Point;
 use flamewm_desktop_core::model::DesktopItemKind;
 use flamewm_desktop_core::presentation::desktop_label_lines;
 use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconService};
@@ -426,13 +426,15 @@ pub fn launcher_icon_name(kind: DesktopItemKind, icon_override: Option<&str>) ->
         .unwrap_or_else(|| icon_name(kind).to_owned())
 }
 
-/// Projection-only caret: appends the caret glyph to the edit buffer for
-/// display/sync output while a sticky edit is active. Never persisted to
-/// the model; callers pass the raw buffer and render the return value.
+/// Projection-only caret: appends a thin `|` glyph to the edit buffer for
+/// display/sync output while a sticky edit is active. A glyph is used because
+/// `UiDocumentAccess` has no text-position query, so a separate element cannot
+/// be placed at the insertion point of wrapped text. Never persisted to the
+/// model; callers pass the raw buffer and render the return value.
 #[must_use]
 pub fn caret_text(buffer: &str, editing: bool) -> String {
     if editing {
-        format!("{buffer}▏")
+        format!("{buffer}|")
     } else {
         buffer.to_owned()
     }
@@ -499,9 +501,37 @@ mod tests {
 
     #[test]
     fn projection_caret_is_display_only_and_model_stays_raw() {
-        assert_eq!(caret_text("abc", true), "abc▏");
+        assert_eq!(caret_text("abc", true), "abc|");
         assert_eq!(caret_text("abc", false), "abc");
-        assert_eq!(caret_text("", true), "▏");
+        assert_eq!(caret_text("", true), "|");
+    }
+
+    #[test]
+    fn sticky_resize_handles_centre_on_outer_corner() {
+        // Handles are positioned against the padding box, which sits 1px inside
+        // the note's border. A 10px handle centred on the outer corner therefore
+        // needs a -6px offset on both edges it anchors to (1 + 5 = 6).
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        for (corner, horizontal, vertical) in [
+            ("nw", "left", "top"),
+            ("ne", "right", "top"),
+            ("sw", "left", "bottom"),
+            ("se", "right", "bottom"),
+        ] {
+            let selector = format!("sticky-resize-{corner}");
+            assert_eq!(css_px(css, &selector, "width"), 10, "{selector} width");
+            assert_eq!(css_px(css, &selector, "height"), 10, "{selector} height");
+            assert_eq!(
+                css_px(css, &selector, horizontal),
+                -6,
+                "{selector} {horizontal}"
+            );
+            assert_eq!(
+                css_px(css, &selector, vertical),
+                -6,
+                "{selector} {vertical}"
+            );
+        }
     }
 
     #[test]
@@ -906,11 +936,9 @@ mod tests {
                 shown: Vec::new(),
             };
             project_background(&mut probe, wallpaper.as_ref(), &image).expect("project image");
-            assert!(
-                probe
-                    .shown
-                    .contains(&"desktop-wallpaper-selection".to_owned())
-            );
+            assert!(probe
+                .shown
+                .contains(&"desktop-wallpaper-selection".to_owned()));
             assert!(probe.shown.contains(&"desktop-watermark".to_owned()));
             assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
         }
@@ -925,11 +953,9 @@ mod tests {
             &WallpaperPresentation::DefaultBlackWatermark,
         )
         .expect("project reset fallback");
-        assert!(
-            reset
-                .hidden
-                .contains(&"desktop-wallpaper-selection".to_owned())
-        );
+        assert!(reset
+            .hidden
+            .contains(&"desktop-wallpaper-selection".to_owned()));
         assert!(reset.shown.contains(&"desktop-watermark".to_owned()));
     }
 

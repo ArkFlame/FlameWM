@@ -22,12 +22,14 @@ use flamewm_dbus_reactor::BusKind;
 use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_ui_x11::{
-    ActionPhase, PointerButton, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
-    SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate, decode_document,
+    decode_document, ActionPhase, PointerButton, SlideConfig, SurfaceConfig, SurfaceHandle,
+    SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
-use self::popup::{close_helper, fit_helper, grab, measure_helper, prepare_commit, present};
-use super::protocol::{Command, MAX_LINE_LEN, OpenRequest, QuickControlKind, decode_line};
+use self::popup::{
+    arm_slide, close_helper, fit_helper, grab, measure_helper, popup_slide, prepare_commit, present,
+};
+use super::protocol::{decode_line, Command, OpenRequest, QuickControlKind, MAX_LINE_LEN};
 use super::supervisor::{QuickControlSupervisor, SupervisorError};
 
 #[path = "popup.rs"]
@@ -76,7 +78,10 @@ fn host_debug_enabled() -> bool {
 /// microseconds since the first probe in this process.
 fn r2_now_us() -> u128 {
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    EPOCH.get_or_init(std::time::Instant::now).elapsed().as_micros()
+    EPOCH
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_micros()
 }
 
 thread_local! {
@@ -829,6 +834,15 @@ fn open_request(
     if let Err(error) = runtime.set_popup_backdrop(surface, Some(backdrop)) {
         eprintln!("flamewm-quick-control: popup backdrop skipped (nonfatal): {error:?}");
     }
+    // Same Start slide preference and speed as the Start menu, on this panel edge.
+    let slide = popup_slide(&snapshot.settings, request.panel_edge);
+    let slide = match arm_slide(runtime, surface, slide) {
+        Ok(()) => slide,
+        Err(error) => {
+            eprintln!("flamewm-quick-control: popup slide skipped (nonfatal): {error}");
+            None
+        }
+    };
     let present_start = std::time::Instant::now();
     let _present = crate::runtime::shell_span("shell.quick.present").start();
     present(runtime, surface).map_err(|error| error.to_string())?;
@@ -848,7 +862,7 @@ fn open_request(
     let _grab = crate::runtime::shell_span("shell.quick.pointer_grab").start();
     if let Err(error) = grab(runtime, surface).map_err(|error| error.to_string()) {
         drop(_grab);
-        if let Err(close_error) = close_helper(runtime, surface) {
+        if let Err(close_error) = close_helper(runtime, surface, None) {
             eprintln!("flamewm-quick-control: popup rollback close failed: {close_error}");
         }
         match surfaces.open {
@@ -860,6 +874,7 @@ fn open_request(
     let grab_elapsed = grab_start.elapsed();
     drop(_grab);
     surfaces.open = Some(request.kind);
+    surfaces.slide = slide;
     let total = total_start.elapsed();
     if host_debug_enabled() {
         eprintln!(
@@ -1042,6 +1057,7 @@ pub fn route_helper_event(
                 } else if snapshot.network_filter_focused {
                     snapshot.network_query.filter.pop();
                     snapshot.network_scroll_offset = 0;
+                    *reprojection = true;
                 }
             } else if text == "\r" || text == "\n" {
                 if snapshot.network_secret_focused {
@@ -1054,6 +1070,7 @@ pub fn route_helper_event(
             } else if snapshot.network_filter_focused {
                 snapshot.network_query.filter.push_str(text);
                 snapshot.network_scroll_offset = 0;
+                *reprojection = true;
             }
         }
     }
@@ -1368,6 +1385,8 @@ pub struct HelperSurfaces {
     pub calendar: SurfaceHandle,
     pub battery: SurfaceHandle,
     pub open: Option<QuickControlKind>,
+    /// Slide armed for the open popup; `Some` closes it through `hide` (slide-out).
+    pub slide: Option<SlideConfig>,
 }
 
 impl HelperSurfaces {
@@ -1382,6 +1401,7 @@ impl HelperSurfaces {
             calendar,
             battery,
             open: None,
+            slide: None,
         })
     }
 
@@ -1405,11 +1425,12 @@ impl HelperSurfaces {
     }
 
     pub fn close(&mut self, runtime: &mut SurfaceRuntime) {
+        let slide = self.slide.take();
         let Some(surface) = self.close_handle() else {
             return;
         };
         let _span = crate::runtime::shell_span("shell.quick.close/ungrab/unmap").start();
-        let _ = close_helper(runtime, surface);
+        let _ = close_helper(runtime, surface, slide);
     }
 
     /// Shutdown path: close the open surface (the shared close owner performs
@@ -1419,7 +1440,7 @@ impl HelperSurfaces {
         let mut first_error = None;
         if let Some(surface) = self.close_handle() {
             let _span = crate::runtime::shell_span("shell.quick.close/ungrab/unmap").start();
-            if let Err(error) = close_helper(runtime, surface) {
+            if let Err(error) = close_helper(runtime, surface, None) {
                 eprintln!("flamewm-quick-control: popup close during shutdown failed: {error}");
                 first_error = Some(UiBackendError::Renderer(error.to_string()));
             }
@@ -1888,7 +1909,7 @@ mod tests {
             "grab refusal must have an explicit rollback branch"
         );
         assert!(
-            after_grab.contains("close_helper(runtime, surface)"),
+            after_grab.contains("close_helper(runtime, surface, None)"),
             "grab refusal must hide/unmap through the existing close owner"
         );
         assert!(
@@ -2267,15 +2288,27 @@ mod battery_popup_tests {
         let mut doc = TextDoc::default();
         crate::projection::project_battery_menu(&mut doc, &power(Some(37)), 268.0)
             .expect("battery menu projects");
-        assert_eq!(doc.texts.get("battery-cpu").map(String::as_str), Some("CPU usage: 37%"));
-        assert_eq!(doc.texts.get("battery-percent").map(String::as_str), Some("80%"));
+        assert_eq!(
+            doc.texts.get("battery-cpu").map(String::as_str),
+            Some("CPU usage: 37%")
+        );
+        assert_eq!(
+            doc.texts.get("battery-percent").map(String::as_str),
+            Some("80%")
+        );
         // A later snapshot with a new CPU sample must change the projected text.
         crate::projection::project_battery_menu(&mut doc, &power(Some(64)), 268.0)
             .expect("battery menu reprojects");
-        assert_eq!(doc.texts.get("battery-cpu").map(String::as_str), Some("CPU usage: 64%"));
+        assert_eq!(
+            doc.texts.get("battery-cpu").map(String::as_str),
+            Some("CPU usage: 64%")
+        );
         crate::projection::project_battery_menu(&mut doc, &power(None), 268.0)
             .expect("battery menu projects without a sample");
-        assert_eq!(doc.texts.get("battery-cpu").map(String::as_str), Some("CPU usage: --%"));
+        assert_eq!(
+            doc.texts.get("battery-cpu").map(String::as_str),
+            Some("CPU usage: --%")
+        );
     }
 
     #[test]
@@ -2286,5 +2319,31 @@ mod battery_popup_tests {
             .expect("battery root must resolve");
         crate::projection::project_battery_menu(&mut document, &power(Some(12)), 268.0)
             .expect("battery menu projects on the compiled document");
+    }
+}
+
+#[cfg(test)]
+mod network_filter_reprojection_tests {
+    /// Every Wi-Fi filter keystroke (typed or backspace) must request reprojection, so
+    /// `tick_host` projects and redraws the open popup. Source-scan over the keyboard
+    /// section of `route_helper_event`, which needs a live runtime to call directly.
+    #[test]
+    fn each_network_filter_edit_requests_reprojection() {
+        let source = include_str!("host.rs");
+        let function = source
+            .split_once("pub fn route_helper_event(")
+            .expect("route_helper_event must exist")
+            .1;
+        let keyboard = function
+            .split_once("let open_surface = surfaces.open")
+            .expect("keyboard section must precede the outside-release check")
+            .0;
+        assert!(keyboard.contains("snapshot.network_query.filter.pop();"));
+        assert!(keyboard.contains("snapshot.network_query.filter.push_str(text);"));
+        assert_eq!(
+            keyboard.matches("*reprojection = true;").count(),
+            2,
+            "backspace and typed filter edits must each request reprojection"
+        );
     }
 }

@@ -8,11 +8,12 @@
 //! native failures into [`PopupError`]. No duplicate fitted/measure map
 //! lives here or in `host.rs` after cutover.
 
+use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::{PanelEdge, Rect, Size};
 use flamewm_ui_core::popover::{PopoverAlign, PopoverEdge};
-use flamewm_ui_x11::{SurfaceHandle, SurfaceRuntime};
+use flamewm_ui_x11::{SlideConfig, SurfaceHandle, SurfaceRuntime};
 
-use crate::popup_controller::{self, POPUP_GAP, PopupError, PopupSpec};
+use crate::popup_controller::{self, PopupError, PopupSpec, POPUP_GAP};
 use crate::popup_role::PopupRole;
 use crate::quick_controls::protocol::{OpenRequest, QuickControlKind};
 
@@ -102,15 +103,40 @@ pub fn grab(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), Po
         .map_err(|_| PopupError::GrabRefused)
 }
 
-/// Shared close transaction over the existing single-turn close owner.
-pub fn close_helper(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), PopupError> {
-    popup_controller::close_popup(runtime, popup)
+/// Slide for a helper popup: the Start slide preference and speed on the panel edge the
+/// popup anchors to. Magic Lamp has no target here, so it presents immediately.
+#[must_use]
+pub fn popup_slide(settings: &SettingsSnapshot, edge: PanelEdge) -> Option<SlideConfig> {
+    crate::settings_projection::start_slide(settings, edge, None)
+}
+
+/// Arms the popup's slide for its next `show`; `None` keeps the immediate present.
+pub fn arm_slide(
+    runtime: &mut SurfaceRuntime,
+    popup: SurfaceHandle,
+    slide: Option<SlideConfig>,
+) -> Result<(), PopupError> {
+    runtime
+        .set_slide(popup, slide)
+        .map_err(|error| PopupError::Surface(format!("{error:?}")))
+}
+
+/// Shared close transaction over the existing single-turn close owner. `slide` is the
+/// slide armed at open; `Some` slides out, `None` unmaps at once.
+pub fn close_helper(
+    runtime: &mut SurfaceRuntime,
+    popup: SurfaceHandle,
+    slide: Option<SlideConfig>,
+) -> Result<(), PopupError> {
+    popup_controller::close_popup(runtime, popup, slide.is_some())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_api::settings::SettingValue;
     use flamewm_shell_core::popup::work_area_for_panel;
+    use flamewm_ui_x11::SlideEdge;
 
     fn request(kind: QuickControlKind, anchor: Rect, output: Rect, edge: PanelEdge) -> OpenRequest {
         OpenRequest {
@@ -257,5 +283,22 @@ mod tests {
         let req = request(QuickControlKind::Audio, anchor, work, PanelEdge::Right);
         let rect = fit_helper(&req, Size::new(310, 220)).expect("fit");
         assert_eq!(rect.right(), work.right());
+    }
+
+    #[test]
+    fn popup_slide_follows_the_start_preference_and_panel_edge() {
+        let on = SettingsSnapshot::new(1);
+        assert_eq!(
+            popup_slide(&on, PanelEdge::Top),
+            Some(SlideConfig::slide(SlideEdge::Top, 100))
+        );
+        let mut off = SettingsSnapshot::new(1);
+        off.values
+            .insert("animationsEnabled".to_owned(), SettingValue::Boolean(false));
+        assert_eq!(
+            popup_slide(&off, PanelEdge::Top),
+            None,
+            "disabled animation stays immediate"
+        );
     }
 }

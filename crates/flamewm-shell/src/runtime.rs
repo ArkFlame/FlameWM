@@ -25,8 +25,8 @@ use flamewm_shell_core::popup::{
 use flamewm_shell_core::start_surface_layout;
 use flamewm_ui_core::style::ShellMetrics;
 use flamewm_ui_x11::{
-    decode_document, DockEdge, GeometryTrace, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
-    SurfaceRole, SurfaceRuntime, UiBackendError, UiTemplate,
+    decode_document, DockEdge, GeometryTrace, SlideConfig, SurfaceConfig, SurfaceHandle,
+    SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiTemplate,
 };
 
 const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
@@ -126,7 +126,9 @@ pub enum ShellControl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextMenuKind {
     Task(flamewm_api::TaskEntryId),
-    Workspace { index: usize },
+    Workspace {
+        index: usize,
+    },
     /// Taskbar background (Secondary on `taskbar.surface`); one settings row.
     Taskbar,
 }
@@ -469,7 +471,11 @@ impl ShellRuntime {
 
     /// Output of the panel whose task slots are shown; `None` on a single-panel desktop.
     fn shown_panel_output(&self) -> Option<&flamewm_api::OutputId> {
-        self.snapshot.panels.panels.first().map(|panel| &panel.output)
+        self.snapshot
+            .panels
+            .panels
+            .first()
+            .map(|panel| &panel.output)
     }
 
     #[must_use]
@@ -577,9 +583,9 @@ impl ShellRuntime {
                 start::category_for_action(value).map(ShellControl::SelectStartCategory)
             }
             "media.open" | "media.toggle" | "volume.open" | "network.open" | "battery.open"
-            | "clock.open" => Some(
-                ShellControl::OpenPopover(action.split('.').next().unwrap_or(action).to_owned()),
-            ),
+            | "clock.open" => Some(ShellControl::OpenPopover(
+                action.split('.').next().unwrap_or(action).to_owned(),
+            )),
             "popover.close" => Some(ShellControl::ClosePopovers),
             "session.lock" => Some(ShellControl::SessionAction(SessionAction::Lock)),
             "session.logout" => Some(ShellControl::SessionAction(SessionAction::Logout)),
@@ -797,6 +803,8 @@ pub struct ShellSurfaces {
     transient: Option<Transient>,
     /// A Start slide, fade, or Magic Lamp is configured, so Start toggles close through `hide`.
     start_motion: bool,
+    /// Slide armed for task menu, media, and status popups on their next open; `None` is immediate.
+    popup_slide: Option<SlideConfig>,
     /// Root pixels under the primary panel, captured before its first map (see `surface_backdrop`).
     panel_snapshot: Option<RgbaImage>,
     /// Key and outcome of the last panel capture attempt (see `refresh_panel_backdrop`).
@@ -809,6 +817,17 @@ struct PanelCapture {
     key: CaptureKey,
     attempts: u8,
     settled: bool,
+}
+
+/// Whether a dismissed transient slides out through `hide` instead of unmapping at once.
+/// Start follows the Start motion; the task menu and media follow the popup slide.
+#[must_use]
+pub fn dismiss_animates(is_start: bool, start_motion: bool, popup_slide: bool) -> bool {
+    if is_start {
+        start_motion
+    } else {
+        popup_slide
+    }
 }
 
 /// Whether a Start toggle-close animates out through `hide` (a configured motion) instead of
@@ -1084,6 +1103,7 @@ impl ShellSurfaces {
             panels,
             transient: None,
             start_motion: false,
+            popup_slide: None,
             panel_snapshot: None,
             panel_capture: None,
         })
@@ -1093,9 +1113,21 @@ impl ShellSurfaces {
     /// when grabbed + unmap + Expose-present, same turn, no sleeps, no
     /// compositor), then clear the open marker. Never touches panel or
     /// mapped popup geometry.
+    /// Dismiss of every transient: a configured slide slides out through `hide`; otherwise
+    /// each surface unmaps at once. Reopen paths use it too, so a closing overlay is reversed
+    /// by the following `show`.
     pub fn close_transients(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
         for surface in [self.start, self.task_menu, self.media] {
-            runtime.close_surface(surface).map_err(ui_error)?;
+            let animated = dismiss_animates(
+                surface == self.start,
+                self.start_motion,
+                self.popup_slide.is_some(),
+            );
+            if animated {
+                runtime.hide(surface).map_err(ui_error)?;
+            } else {
+                runtime.close_surface(surface).map_err(ui_error)?;
+            }
         }
         self.transient = None;
         Ok(())
@@ -1104,6 +1136,12 @@ impl ShellSurfaces {
     /// Sets whether Start toggles animate out (a Start slide, fade, or lamp is configured).
     pub fn set_start_motion(&mut self, configured: bool) {
         self.start_motion = configured;
+    }
+
+    /// Sets the slide for task menu, media, and status popups on their next open. `None`
+    /// keeps the immediate path. Start keeps its own slide from `set_start_motion`.
+    pub fn set_popup_slide(&mut self, slide: Option<SlideConfig>) {
+        self.popup_slide = slide;
     }
 
     pub fn toggle_start(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
@@ -1232,6 +1270,9 @@ impl ShellSurfaces {
             return Err(format!("unsupported shell popup source {source_id}"));
         }
         self.close_transients(runtime)?;
+        runtime
+            .set_slide(surface, self.popup_slide)
+            .map_err(ui_error)?;
         status_surface::open(
             runtime,
             self.primary().panel,
@@ -2254,7 +2295,10 @@ mod tests {
             state: WindowState::Normal,
             sticky: false,
             focused: false,
-            workspace: WorkspaceRef { index: 0, revision: 1 },
+            workspace: WorkspaceRef {
+                index: 0,
+                revision: 1,
+            },
             output: OutputId::new(output),
             state_generation: 1,
         };
@@ -2479,5 +2523,34 @@ mod start_toggle_tests {
     #[test]
     fn no_motion_keeps_the_immediate_toggle_close() {
         assert!(!start_toggle_animates(false));
+    }
+}
+
+#[cfg(test)]
+mod popup_motion_tests {
+    use super::dismiss_animates;
+
+    #[test]
+    fn each_transient_dismisses_through_its_own_motion() {
+        assert!(
+            dismiss_animates(true, true, false),
+            "Start slide animates Start"
+        );
+        assert!(
+            !dismiss_animates(true, false, true),
+            "popup slide must not change Start"
+        );
+        assert!(
+            dismiss_animates(false, false, true),
+            "popup slide animates menu and media"
+        );
+        assert!(
+            !dismiss_animates(false, true, false),
+            "Start motion must not animate popups"
+        );
+        assert!(
+            !dismiss_animates(false, false, false),
+            "no slide keeps the immediate unmap"
+        );
     }
 }

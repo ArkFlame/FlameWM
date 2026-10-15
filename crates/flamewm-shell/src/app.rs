@@ -321,7 +321,10 @@ impl ShellLoop {
                 ShellControl::OpenPopover(name) => {
                     // J07: media stays in-process; audio/network/clock/battery
                     // forward to the supervisor, then return immediately.
-                    if matches!(name.as_str(), "volume" | "audio" | "network" | "clock" | "battery") {
+                    if matches!(
+                        name.as_str(),
+                        "volume" | "audio" | "network" | "clock" | "battery"
+                    ) {
                         self.open_quick_control(runtime, &name);
                         self.end_start_session();
                         continue;
@@ -1345,10 +1348,9 @@ impl ShellLoop {
     /// and hides at the single deadline. Nonfatal: a failure never stops the loop.
     fn tick_osd(&mut self, runtime: &mut SurfaceRuntime) {
         let snapshot = self.shell.snapshot();
-        let level = flamewm_shell::taskbar::status::audio::default_endpoint_row(
-            &snapshot.system.audio,
-        )
-        .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
+        let level =
+            flamewm_shell::taskbar::status::audio::default_endpoint_row(&snapshot.system.audio)
+                .map(|row| flamewm_shell::osd::Level::new(row.volume_percent, row.muted));
         // Same output source as the panel scale: the shown panel's placement output.
         let panel = self.surfaces.placement().output.clone();
         let panel = flamewm_shell::osd::OsdOutput {
@@ -1374,7 +1376,10 @@ impl ShellLoop {
         };
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
-        if let Err(error) = self.osd.update(runtime, level, output, scale, settings, now) {
+        if let Err(error) = self
+            .osd
+            .update(runtime, level, output, scale, settings, now)
+        {
             eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
         }
     }
@@ -1411,6 +1416,12 @@ impl ShellLoop {
             eprintln!("flamewm-shell: start slide setup failed (nonfatal): {error:?}");
             let _ = runtime.set_slide(self.surfaces.start, None);
         }
+        // Same Start preference and speed for task menu, media, and status popups. Magic Lamp
+        // has no popup target, so the popup slide never takes the start_button path.
+        let popup_slide = self.settings_cache.as_ref().and_then(|snapshot| {
+            crate::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)
+        });
+        self.surfaces.set_popup_slide(popup_slide);
     }
 
     /// Installs the taskbar pseudo-transparency backdrop from the current opacity and blur.
@@ -1665,6 +1676,24 @@ mod tests {
             .split_once("\n#[cfg(test)]\nmod tests")
             .map(|(source, _)| source)
             .expect("app tests must have a production section")
+    }
+
+    #[test]
+    fn start_slide_pass_also_arms_popup_slide_without_start_button_target() {
+        let source = production_source();
+        let body = source
+            .split_once("fn apply_start_slide(")
+            .and_then(|(_, rest)| rest.split_once("\n    }\n"))
+            .map(|(body, _)| body)
+            .expect("apply_start_slide must exist");
+        assert!(
+            body.contains("self.surfaces.set_popup_slide(popup_slide);"),
+            "apply_start_slide must arm the popup slide on every Start-slide refresh"
+        );
+        assert!(
+            body.contains("crate::settings_projection::start_slide(snapshot, self.surfaces.panel_edge(), None)"),
+            "popup slide must use the shared start_slide owner with no Magic Lamp target"
+        );
     }
 
     #[test]

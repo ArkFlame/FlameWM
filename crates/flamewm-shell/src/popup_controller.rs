@@ -220,9 +220,41 @@ pub fn open_popup(
     Ok(rect)
 }
 
-/// Shared close transaction over the existing single-turn close owner.
-pub fn close_popup(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), PopupError> {
-    runtime
-        .close_surface(popup)
-        .map_err(|error| PopupError::Surface(format!("{error:?}")))
+/// Shared dismiss predicate: a configured slide closes through `hide` (slide-out),
+/// otherwise the popup is unmapped at once by the single-turn close owner.
+#[must_use]
+pub const fn dismiss_animates(slide_configured: bool) -> bool {
+    slide_configured
+}
+
+/// Shared close transaction. Slide-out through `hide` when `slide_configured`,
+/// else the immediate single-turn close owner (`close_surface`).
+pub fn close_popup(
+    runtime: &mut SurfaceRuntime,
+    popup: SurfaceHandle,
+    slide_configured: bool,
+) -> Result<(), PopupError> {
+    let result = if dismiss_animates(slide_configured) {
+        runtime.hide(popup)
+    } else {
+        runtime.close_surface(popup)
+    };
+    result.map_err(|error| PopupError::Surface(format!("{error:?}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dismiss_routes_through_hide_only_when_a_slide_is_configured() {
+        assert!(
+            dismiss_animates(true),
+            "configured slide must slide out via hide"
+        );
+        assert!(
+            !dismiss_animates(false),
+            "animation off must keep the immediate unmap"
+        );
+    }
 }

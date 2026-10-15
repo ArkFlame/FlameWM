@@ -11,7 +11,9 @@ use dbus::{Message, MessageType};
 use flamewm_api::system::{NetworkKind, NetworkSnapshot, SystemAction};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
-use flamewm_integrations_core::network::{AccessPoint, NetworkController, NetworkStatus};
+use flamewm_integrations_core::network::{
+    AccessPoint, NetworkController, NetworkIntent, NetworkStatus,
+};
 
 pub const NETWORK_MANAGER_SERVICE: &str = "org.freedesktop.NetworkManager";
 pub const NETWORK_MANAGER_ROOT: &str = "/org/freedesktop/NetworkManager";
@@ -42,6 +44,22 @@ const REGISTER_WITH_CAPABILITIES: &str = "RegisterWithCapabilities";
 const GET_SECRETS: &str = "GetSecrets";
 const CANCEL_GET_SECRETS: &str = "CancelGetSecrets";
 const USER_CANCELED: &str = "org.freedesktop.NetworkManager.SecretAgent.Error.UserCanceled";
+const DELETE: &str = "Delete";
+const SETTINGS_CONNECTION_INTERFACE: &str = "org.freedesktop.NetworkManager.Settings.Connection";
+const DEVICE_INTERFACE: &str = "org.freedesktop.NetworkManager.Device";
+const DEVICE_STATE_CHANGED: &str = "StateChanged";
+// NMDeviceState values (nm-dbus-interface.h); the attempt tracker needs only these.
+const DEVICE_STATE_DISCONNECTED: u32 = 30;
+const DEVICE_STATE_PREPARE: u32 = 40;
+const DEVICE_STATE_SECONDARIES: u32 = 90;
+const DEVICE_STATE_ACTIVATED: u32 = 100;
+const DEVICE_STATE_FAILED: u32 = 120;
+// NMDeviceStateReason values meaning the Wi-Fi credentials were missing or rejected.
+const DEVICE_REASON_NO_SECRETS: u32 = 7;
+const DEVICE_REASON_SUPPLICANT_DISCONNECT: u32 = 8;
+const DEVICE_REASON_SUPPLICANT_CONFIG_FAILED: u32 = 9;
+const DEVICE_REASON_SUPPLICANT_FAILED: u32 = 10;
+const DEVICE_REASON_SUPPLICANT_TIMEOUT: u32 = 11;
 
 /// Values from a NetworkManager root `PropertiesChanged` signal or `GetAll` reply.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -95,6 +113,12 @@ enum PendingRequest {
         generation: u64,
     },
     Action,
+    ActivateConnection {
+        attempt: u64,
+    },
+    AddAndActivateSecure {
+        attempt: u64,
+    },
 }
 
 enum Incoming {
@@ -113,6 +137,11 @@ enum Incoming {
         properties: NetworkManagerProperties,
     },
     SecretAgent(SecretAgentCall),
+    DeviceStateChanged {
+        path: String,
+        new_state: u32,
+        reason: u32,
+    },
 }
 
 enum SecretAgentCall {
@@ -131,6 +160,176 @@ struct SecretContext {
     setting_name: String,
     secret_key: String,
     reply: Option<Message>,
+}
+
+/// Which password request is open. A new network's password creates its profile on submit;
+/// a saved profile's password is accepted only as the answer to NetworkManager's own request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SecretPrompt {
+    NewNetwork { access_point: String },
+    SavedNetwork { access_point: String },
+}
+
+/// One Wi-Fi activation. Only a profile this attempt created may be deleted on failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConnectAttempt {
+    id: u64,
+    access_point: String,
+    device: String,
+    created: bool,
+    profile: Option<String>,
+    /// Set once the device enters an activation state. Earlier DISCONNECTED signals belong to
+    /// the connection that was active before this attempt.
+    activating: bool,
+    /// Credentials were rejected before the add reply named the created profile.
+    auth_failed: bool,
+}
+
+/// Follow-up the provider must perform for an attempt signal. The tracker only decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AttemptEffect {
+    None,
+    /// Delete `profile` when this attempt created it, then reopen the new-network prompt.
+    RetryNewNetwork {
+        access_point: String,
+        profile: Option<String>,
+    },
+    /// Keep the saved profile and reopen the prompt for its access point.
+    RetrySavedNetwork {
+        access_point: String,
+    },
+}
+
+#[derive(Debug, Default)]
+struct ConnectAttempts {
+    current: Option<ConnectAttempt>,
+    next_id: u64,
+}
+
+impl ConnectAttempts {
+    fn begin(&mut self, access_point: String, device: String, created: bool) -> u64 {
+        self.next_id = self.next_id.saturating_add(1);
+        self.current = Some(ConnectAttempt {
+            id: self.next_id,
+            access_point,
+            device,
+            created,
+            profile: None,
+            activating: false,
+            auth_failed: false,
+        });
+        self.next_id
+    }
+
+    fn is_busy(&self) -> bool {
+        self.current.is_some()
+    }
+
+    fn clear(&mut self) {
+        self.current = None;
+    }
+
+    fn saved_access_point(&self) -> Option<&str> {
+        self.current
+            .as_ref()
+            .filter(|attempt| !attempt.created)
+            .map(|attempt| attempt.access_point.as_str())
+    }
+
+    /// The add reply names the profile this attempt created.
+    fn on_profile_created(&mut self, id: u64, profile: String) -> AttemptEffect {
+        let Some(attempt) = self.current.as_mut().filter(|attempt| attempt.id == id) else {
+            return AttemptEffect::None;
+        };
+        attempt.profile = Some(profile);
+        if attempt.auth_failed {
+            self.current
+                .take()
+                .map_or(AttemptEffect::None, retry_effect)
+        } else {
+            AttemptEffect::None
+        }
+    }
+
+    /// A rejected add creates nothing to delete; a rejected saved activation needs no prompt.
+    fn on_request_failed(&mut self, id: u64) -> AttemptEffect {
+        match self.current.take() {
+            Some(attempt) if attempt.id == id => {
+                if attempt.created {
+                    retry_effect(attempt)
+                } else {
+                    AttemptEffect::None
+                }
+            }
+            other => {
+                self.current = other;
+                AttemptEffect::None
+            }
+        }
+    }
+
+    fn on_device_state(&mut self, device: &str, state: u32, reason: u32) -> AttemptEffect {
+        let activating = match self
+            .current
+            .as_mut()
+            .filter(|attempt| attempt.device == device)
+        {
+            None => return AttemptEffect::None,
+            Some(attempt) => {
+                if (DEVICE_STATE_PREPARE..=DEVICE_STATE_SECONDARIES).contains(&state) {
+                    attempt.activating = true;
+                    return AttemptEffect::None;
+                }
+                attempt.activating
+            }
+        };
+        match state {
+            DEVICE_STATE_DISCONNECTED if !activating => AttemptEffect::None,
+            DEVICE_STATE_FAILED if is_credential_reason(reason) => self.on_credentials_rejected(),
+            DEVICE_STATE_DISCONNECTED | DEVICE_STATE_ACTIVATED | DEVICE_STATE_FAILED => {
+                self.current = None;
+                AttemptEffect::None
+            }
+            _ => AttemptEffect::None,
+        }
+    }
+
+    fn on_credentials_rejected(&mut self) -> AttemptEffect {
+        let Some(attempt) = self.current.as_mut() else {
+            return AttemptEffect::None;
+        };
+        if attempt.created && attempt.profile.is_none() {
+            attempt.auth_failed = true;
+            return AttemptEffect::None;
+        }
+        self.current
+            .take()
+            .map_or(AttemptEffect::None, retry_effect)
+    }
+}
+
+fn retry_effect(attempt: ConnectAttempt) -> AttemptEffect {
+    if attempt.created {
+        AttemptEffect::RetryNewNetwork {
+            access_point: attempt.access_point,
+            profile: attempt.profile,
+        }
+    } else {
+        AttemptEffect::RetrySavedNetwork {
+            access_point: attempt.access_point,
+        }
+    }
+}
+
+fn is_credential_reason(reason: u32) -> bool {
+    matches!(
+        reason,
+        DEVICE_REASON_NO_SECRETS
+            | DEVICE_REASON_SUPPLICANT_DISCONNECT
+            | DEVICE_REASON_SUPPLICANT_CONFIG_FAILED
+            | DEVICE_REASON_SUPPLICANT_FAILED
+            | DEVICE_REASON_SUPPLICANT_TIMEOUT
+    )
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -200,8 +399,9 @@ pub struct NetworkManagerProvider {
     wifi_devices: BTreeMap<String, WifiDevice>,
     access_points: BTreeMap<String, AccessPointProperties>,
     profile_ssids: BTreeMap<String, String>,
-    secret_access_point: Option<String>,
+    secret_prompt: Option<SecretPrompt>,
     secret_context: Option<SecretContext>,
+    attempts: ConnectAttempts,
 }
 
 impl NetworkManagerProvider {
@@ -216,8 +416,9 @@ impl NetworkManagerProvider {
             wifi_devices: BTreeMap::new(),
             access_points: BTreeMap::new(),
             profile_ssids: BTreeMap::new(),
-            secret_access_point: None,
+            secret_prompt: None,
             secret_context: None,
+            attempts: ConnectAttempts::default(),
         })
     }
 
@@ -230,6 +431,9 @@ impl NetworkManagerProvider {
         )?;
         self.add_match(
             "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+        )?;
+        self.add_match(
+            "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.NetworkManager.Device',member='StateChanged'",
         )?;
         self.queue_service_owner_request()?;
         self.state = NetworkManagerProviderState::Started;
@@ -249,8 +453,9 @@ impl NetworkManagerProvider {
         self.wifi_devices.clear();
         self.access_points.clear();
         self.profile_ssids.clear();
-        self.secret_access_point = None;
+        self.secret_prompt = None;
         self.secret_context = None;
+        self.attempts.clear();
     }
 
     #[must_use]
@@ -346,8 +551,7 @@ impl NetworkManagerProvider {
                     let _ = self
                         .controller
                         .request_connect_known(&access_point_path, snapshot.generation)?;
-                    let profile = self.profile_for_access_point(&access_point_path)?;
-                    self.queue_activate_connection(profile, device, access_point_path)
+                    self.connect_saved(access_point_path)
                 }
             }
             SystemAction::ConnectWifi {
@@ -357,80 +561,15 @@ impl NetworkManagerProvider {
                 .controller
                 .request_connect_wifi(&access_point_path, generation)?
             {
-                flamewm_integrations_core::network::NetworkIntent::ConnectKnown { .. } => {
-                    let device = self.device_for_access_point(&access_point_path)?;
-                    let profile = self.profile_for_access_point(&access_point_path)?;
-                    self.queue_activate_connection(profile, device, access_point_path)
-                }
-                flamewm_integrations_core::network::NetworkIntent::RequestSecret { .. } => {
-                    if self.secret_access_point.is_some() {
-                        return Err(FlameError::new(
-                            ErrorCode::Busy,
-                            "NetworkManager secret request is already pending",
-                        ));
-                    }
-                    let device = self.device_for_access_point(&access_point_path)?;
-                    let ssid = self
-                        .access_points
-                        .get(&access_point_path)
-                        .map(|access_point| access_point.ssid.clone())
-                        .ok_or_else(|| {
-                            FlameError::new(
-                                ErrorCode::NotFound,
-                                "NetworkManager access point was not found",
-                            )
-                        })?;
-                    self.secret_access_point = Some(access_point_path.clone());
-                    if let Err(error) =
-                        self.queue_add_and_activate_secure(ssid, device, access_point_path)
-                    {
-                        self.secret_access_point = None;
-                        return Err(error);
-                    }
-                    Ok(())
-                }
+                NetworkIntent::ConnectKnown { .. } => self.connect_saved(access_point_path),
+                NetworkIntent::RequestSecret { .. } => self.prompt_new_network(access_point_path),
                 _ => Err(unsupported("unexpected NetworkManager Wi-Fi intent")),
             },
             SystemAction::SubmitNetworkSecret {
                 request_id,
                 generation,
                 secret,
-            } => {
-                // Check the adapter's context before the controller consumes its pending
-                // secret, so a mismatched id leaves both records intact for the correct retry.
-                if self
-                    .secret_context
-                    .as_ref()
-                    .map(|context| context.request_id)
-                    != Some(request_id)
-                {
-                    return Err(FlameError::new(
-                        ErrorCode::NotFound,
-                        "NetworkManager secret request was not found",
-                    ));
-                }
-                let _ = self.controller.request_submit_secret(
-                    request_id,
-                    generation,
-                    secret.clone(),
-                )?;
-                let Some(context) = self.secret_context.take() else {
-                    return Err(FlameError::new(
-                        ErrorCode::NotFound,
-                        "NetworkManager secret request was not found",
-                    ));
-                };
-                self.secret_access_point = None;
-                if let Some(reply) = context.reply {
-                    self.pump.send(secret_reply(
-                        reply,
-                        context.setting_name,
-                        context.secret_key,
-                        secret,
-                    )?)?;
-                }
-                Ok(())
-            }
+            } => self.submit_network_secret(request_id, generation, secret),
             SystemAction::CancelNetworkSecret {
                 request_id,
                 generation,
@@ -438,7 +577,8 @@ impl NetworkManagerProvider {
                 let _ = self
                     .controller
                     .request_cancel_secret(request_id, generation)?;
-                self.secret_access_point = None;
+                self.secret_prompt = None;
+                self.attempts.clear();
                 if let Some(context) = self.secret_context.take() {
                     self.send_user_canceled(context.reply)?;
                 }
@@ -628,6 +768,7 @@ impl NetworkManagerProvider {
 
     fn queue_activate_connection(
         &mut self,
+        attempt: u64,
         profile: String,
         device: String,
         access_point: String,
@@ -643,6 +784,16 @@ impl NetworkManagerProvider {
             object_path(device)?,
             object_path(access_point)?,
         );
+        self.queue(message, PendingRequest::ActivateConnection { attempt })
+    }
+
+    fn queue_delete_profile(&mut self, profile: String) -> FlameResult<()> {
+        let message = method_call(
+            NETWORK_MANAGER_SERVICE,
+            &profile,
+            SETTINGS_CONNECTION_INTERFACE,
+            DELETE,
+        )?;
         self.queue(message, PendingRequest::Action)
     }
 
@@ -687,9 +838,11 @@ impl NetworkManagerProvider {
 
     fn queue_add_and_activate_secure(
         &mut self,
+        attempt: u64,
         ssid: String,
         device: String,
         access_point: String,
+        secret: String,
     ) -> FlameResult<()> {
         let wireless = MessageItem::from_dict(
             vec![("ssid".to_owned(), MessageItem::from(ssid.as_bytes()))]
@@ -697,11 +850,16 @@ impl NetworkManagerProvider {
                 .map(Ok::<_, FlameError>),
         )
         .map_err(|_| FlameError::invalid("NetworkManager secure wireless settings are invalid"))?;
+        // psk-flags NONE (0) stores the password in the profile, so it survives a successful connect.
         let security = MessageItem::from_dict(
-            vec![(
-                "key-mgmt".to_owned(),
-                MessageItem::Str("wpa-psk".to_owned()),
-            )]
+            vec![
+                (
+                    "key-mgmt".to_owned(),
+                    MessageItem::Str("wpa-psk".to_owned()),
+                ),
+                ("psk".to_owned(), MessageItem::Str(secret)),
+                ("psk-flags".to_owned(), MessageItem::UInt32(0)),
+            ]
             .into_iter()
             .map(Ok::<_, FlameError>),
         )
@@ -738,7 +896,184 @@ impl NetworkManagerProvider {
             ADD_AND_ACTIVATE_CONNECTION,
         )?
         .append3(settings, object_path(device)?, object_path(access_point)?);
-        self.queue(message, PendingRequest::Action)
+        self.queue(message, PendingRequest::AddAndActivateSecure { attempt })
+    }
+
+    fn ssid_for_access_point(&self, access_point: &str) -> FlameResult<String> {
+        self.access_points
+            .get(access_point)
+            .map(|access_point| access_point.ssid.clone())
+            .ok_or_else(|| {
+                FlameError::new(
+                    ErrorCode::NotFound,
+                    "NetworkManager access point was not found",
+                )
+            })
+    }
+
+    fn secret_or_attempt_pending(&self) -> bool {
+        self.secret_prompt.is_some() || self.secret_context.is_some() || self.attempts.is_busy()
+    }
+
+    fn busy_error() -> FlameError {
+        FlameError::new(
+            ErrorCode::Busy,
+            "NetworkManager connection attempt is already pending",
+        )
+    }
+
+    /// Activate a saved profile. Its failure may only re-prompt; the profile is never deleted.
+    fn connect_saved(&mut self, access_point: String) -> FlameResult<()> {
+        if self.secret_or_attempt_pending() {
+            return Err(Self::busy_error());
+        }
+        let device = self.device_for_access_point(&access_point)?;
+        let profile = self.profile_for_access_point(&access_point)?;
+        let attempt = self
+            .attempts
+            .begin(access_point.clone(), device.clone(), false);
+        if let Err(error) = self.queue_activate_connection(attempt, profile, device, access_point) {
+            self.attempts.clear();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Open the password prompt for an unknown secured network. Nothing reaches NetworkManager
+    /// until the user submits, so a cancelled prompt leaves no profile behind.
+    fn prompt_new_network(&mut self, access_point: String) -> FlameResult<()> {
+        if self.secret_or_attempt_pending() {
+            return Err(Self::busy_error());
+        }
+        self.device_for_access_point(&access_point)?;
+        self.ssid_for_access_point(&access_point)?;
+        self.reopen_prompt(SecretPrompt::NewNetwork { access_point })
+    }
+
+    fn reopen_prompt(&mut self, prompt: SecretPrompt) -> FlameResult<()> {
+        self.cancel_secret_context()?;
+        let access_point = match &prompt {
+            SecretPrompt::NewNetwork { access_point }
+            | SecretPrompt::SavedNetwork { access_point } => access_point.clone(),
+        };
+        let _ = self.controller.request_secret_from_agent(access_point)?;
+        self.secret_prompt = Some(prompt);
+        Ok(())
+    }
+
+    fn submit_network_secret(
+        &mut self,
+        request_id: u64,
+        generation: u64,
+        secret: String,
+    ) -> FlameResult<()> {
+        if self
+            .secret_context
+            .as_ref()
+            .is_some_and(|context| context.request_id == request_id)
+        {
+            // NetworkManager is waiting on its SecretAgent request; its reply carries the password.
+            let NetworkIntent::SubmitSecret { secret, .. } = self
+                .controller
+                .request_submit_secret(request_id, generation, secret)?
+            else {
+                return Err(unsupported("unexpected NetworkManager secret intent"));
+            };
+            self.secret_prompt = None;
+            let Some(context) = self.secret_context.take() else {
+                return Err(FlameError::new(
+                    ErrorCode::NotFound,
+                    "NetworkManager secret request was not found",
+                ));
+            };
+            if let Some(reply) = context.reply {
+                self.pump.send(secret_reply(
+                    reply,
+                    context.setting_name,
+                    context.secret_key,
+                    secret,
+                )?)?;
+            }
+            return Ok(());
+        }
+        match self.secret_prompt.clone() {
+            Some(SecretPrompt::NewNetwork { access_point }) => {
+                self.create_secured_profile(request_id, generation, access_point, secret)
+            }
+            // A saved profile's password can only be returned to NetworkManager's request.
+            Some(SecretPrompt::SavedNetwork { .. }) => Err(unsupported(
+                "saved NetworkManager password update requires a NetworkManager secret request",
+            )),
+            None => Err(FlameError::new(
+                ErrorCode::NotFound,
+                "NetworkManager secret request was not found",
+            )),
+        }
+    }
+
+    /// Validate the request and lookups first so a failed lookup leaves the prompt intact.
+    fn create_secured_profile(
+        &mut self,
+        request_id: u64,
+        generation: u64,
+        access_point: String,
+        secret: String,
+    ) -> FlameResult<()> {
+        let device = self.device_for_access_point(&access_point)?;
+        let ssid = self.ssid_for_access_point(&access_point)?;
+        let NetworkIntent::SubmitSecret { secret, .. } = self
+            .controller
+            .request_submit_secret(request_id, generation, secret)?
+        else {
+            return Err(unsupported("unexpected NetworkManager secret intent"));
+        };
+        self.secret_prompt = None;
+        let attempt = self
+            .attempts
+            .begin(access_point.clone(), device.clone(), true);
+        if let Err(error) =
+            self.queue_add_and_activate_secure(attempt, ssid, device, access_point, secret)
+        {
+            self.attempts.clear();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn apply_attempt_effect(&mut self, effect: AttemptEffect) -> FlameResult<()> {
+        match effect {
+            AttemptEffect::None => Ok(()),
+            AttemptEffect::RetryNewNetwork {
+                access_point,
+                profile,
+            } => {
+                if let Some(profile) = profile {
+                    self.profile_ssids.remove(&profile);
+                    self.queue_delete_profile(profile)?;
+                    self.publish_access_points();
+                }
+                self.reopen_prompt(SecretPrompt::NewNetwork { access_point })
+            }
+            AttemptEffect::RetrySavedNetwork { access_point } => {
+                self.reopen_prompt(SecretPrompt::SavedNetwork { access_point })
+            }
+        }
+    }
+
+    /// The saved-profile AP a NetworkManager GetSecrets request may be answered for.
+    fn saved_secret_access_point(&self) -> Option<String> {
+        match &self.secret_prompt {
+            Some(SecretPrompt::SavedNetwork { access_point }) => Some(access_point.clone()),
+            Some(SecretPrompt::NewNetwork { .. }) => None,
+            None => self.attempts.saved_access_point().map(str::to_owned),
+        }
+    }
+
+    fn clear_saved_prompt(&mut self) {
+        if matches!(self.secret_prompt, Some(SecretPrompt::SavedNetwork { .. })) {
+            self.secret_prompt = None;
+            self.controller.cancel_secret_from_agent();
+        }
     }
 
     fn device_for_access_point(&self, access_point: &str) -> FlameResult<String> {
@@ -879,7 +1214,8 @@ impl NetworkManagerProvider {
                     self.wifi_devices.clear();
                     self.access_points.clear();
                     self.profile_ssids.clear();
-                    self.secret_access_point = None;
+                    self.secret_prompt = None;
+                    self.attempts.clear();
                     self.reconcile_pending = false;
                 } else if old_owner != new_owner {
                     self.controller.service_appeared();
@@ -928,6 +1264,21 @@ impl NetworkManagerProvider {
                 Ok(())
             }
             Incoming::SecretAgent(call) => self.apply_secret_agent_call(call),
+            Incoming::DeviceStateChanged {
+                path,
+                new_state,
+                reason,
+            } => {
+                if !self.controller.is_available() {
+                    return Ok(());
+                }
+                if new_state == DEVICE_STATE_ACTIVATED {
+                    // The activated profile must appear in the saved-profile list.
+                    self.reconcile_pending = true;
+                }
+                let effect = self.attempts.on_device_state(&path, new_state, reason);
+                self.apply_attempt_effect(effect)
+            }
         }
     }
 
@@ -958,6 +1309,11 @@ impl NetworkManagerProvider {
                     return Ok(());
                 }
                 PendingRequest::Action | PendingRequest::RegisterSecretAgent => return Ok(()),
+                PendingRequest::ActivateConnection { attempt }
+                | PendingRequest::AddAndActivateSecure { attempt } => {
+                    let effect = self.attempts.on_request_failed(attempt);
+                    return self.apply_attempt_effect(effect);
+                }
                 PendingRequest::Devices { generation }
                 | PendingRequest::DeviceProperties { generation, .. }
                 | PendingRequest::AccessPoints { generation }
@@ -974,7 +1330,18 @@ impl NetworkManagerProvider {
         match request {
             PendingRequest::AddMatch
             | PendingRequest::Action
+            | PendingRequest::ActivateConnection { .. }
             | PendingRequest::RegisterSecretAgent => Ok(()),
+            PendingRequest::AddAndActivateSecure { attempt } => {
+                let Some(item) = items.first() else {
+                    return Err(FlameError::invalid(
+                        "NetworkManager connection reply is invalid",
+                    ));
+                };
+                let profile = item_object_path(item, "NetworkManager connection reply")?;
+                let effect = self.attempts.on_profile_created(attempt, profile);
+                self.apply_attempt_effect(effect)
+            }
             PendingRequest::Scan { generation } => {
                 let _ = self.controller.complete_scan(generation);
                 Ok(())
@@ -1135,7 +1502,7 @@ impl NetworkManagerProvider {
                 reply,
             } => {
                 self.cancel_secret_context()?;
-                let Some(access_point_path) = self.secret_access_point.clone() else {
+                let Some(access_point_path) = self.saved_secret_access_point() else {
                     return self.send_user_canceled(reply);
                 };
                 let request = self
@@ -1150,7 +1517,7 @@ impl NetworkManagerProvider {
                 Ok(())
             }
             SecretAgentCall::CancelGetSecrets { reply } => {
-                self.secret_access_point = None;
+                self.clear_saved_prompt();
                 self.cancel_secret_context()?;
                 if let Some(reply) = reply {
                     self.pump.send(reply)?;
@@ -1160,9 +1527,11 @@ impl NetworkManagerProvider {
         }
     }
 
+    /// Clears the controller's pending request only when it belongs to the agent context, so an
+    /// unrelated open new-network prompt is left intact.
     fn cancel_secret_context(&mut self) -> FlameResult<()> {
-        self.controller.cancel_secret_from_agent();
         if let Some(context) = self.secret_context.take() {
+            self.controller.cancel_secret_from_agent();
             self.send_user_canceled(context.reply)?;
         }
         Ok(())
@@ -1204,7 +1573,30 @@ fn parse_message(message: &Message) -> Option<Result<Incoming, FlameError>> {
         let items = message.get_items();
         return Some(parse_properties_changed(items, path.unwrap_or_default()));
     }
+    if interface.as_deref() == Some(DEVICE_INTERFACE)
+        && member.as_deref() == Some(DEVICE_STATE_CHANGED)
+    {
+        let items = message.get_items();
+        return Some(parse_device_state_changed(items, path.unwrap_or_default()));
+    }
     None
+}
+
+/// `StateChanged(new_state, old_state, reason)` from a NetworkManager device.
+fn parse_device_state_changed(
+    items: Vec<MessageItem>,
+    path: String,
+) -> Result<Incoming, FlameError> {
+    let [new_state, _old_state, reason] = items.as_slice() else {
+        return Err(FlameError::invalid(
+            "NetworkManager device StateChanged arguments are invalid",
+        ));
+    };
+    Ok(Incoming::DeviceStateChanged {
+        path,
+        new_state: item_u32(new_state, "NetworkManager device new state")?,
+        reason: item_u32(reason, "NetworkManager device state reason")?,
+    })
 }
 
 fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
@@ -1856,5 +2248,172 @@ mod tests {
                 .active_access_point,
             ""
         );
+    }
+
+    const AP: &str = "/org/freedesktop/NetworkManager/AccessPoint/9";
+    const DEV: &str = "/org/freedesktop/NetworkManager/Devices/2";
+    const PROFILE: &str = "/org/freedesktop/NetworkManager/Settings/5";
+
+    #[test]
+    fn successful_new_network_attempt_keeps_its_profile() {
+        let mut attempts = ConnectAttempts::default();
+        let id = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        assert_eq!(
+            attempts.on_profile_created(id, PROFILE.to_owned()),
+            AttemptEffect::None
+        );
+        assert_eq!(attempts.on_device_state(DEV, 40, 0), AttemptEffect::None);
+        assert_eq!(attempts.on_device_state(DEV, 100, 0), AttemptEffect::None);
+        assert!(!attempts.is_busy());
+    }
+
+    #[test]
+    fn rejected_new_network_deletes_only_its_created_profile_and_reprompts() {
+        let mut attempts = ConnectAttempts::default();
+        let id = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        let _ = attempts.on_profile_created(id, PROFILE.to_owned());
+        assert_eq!(attempts.on_device_state(DEV, 40, 0), AttemptEffect::None);
+        assert_eq!(
+            attempts.on_device_state(DEV, 120, DEVICE_REASON_SUPPLICANT_DISCONNECT),
+            AttemptEffect::RetryNewNetwork {
+                access_point: AP.to_owned(),
+                profile: Some(PROFILE.to_owned()),
+            }
+        );
+        assert!(!attempts.is_busy());
+    }
+
+    #[test]
+    fn rejection_before_profile_reply_defers_the_delete_until_the_profile_is_known() {
+        let mut attempts = ConnectAttempts::default();
+        let id = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        assert_eq!(attempts.on_device_state(DEV, 40, 0), AttemptEffect::None);
+        assert_eq!(
+            attempts.on_device_state(DEV, 120, DEVICE_REASON_NO_SECRETS),
+            AttemptEffect::None
+        );
+        assert!(attempts.is_busy());
+        assert_eq!(
+            attempts.on_profile_created(id, PROFILE.to_owned()),
+            AttemptEffect::RetryNewNetwork {
+                access_point: AP.to_owned(),
+                profile: Some(PROFILE.to_owned()),
+            }
+        );
+        assert!(!attempts.is_busy());
+    }
+
+    #[test]
+    fn rejected_add_reprompts_without_deleting_anything() {
+        let mut attempts = ConnectAttempts::default();
+        let id = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        assert_eq!(
+            attempts.on_request_failed(id),
+            AttemptEffect::RetryNewNetwork {
+                access_point: AP.to_owned(),
+                profile: None,
+            }
+        );
+    }
+
+    #[test]
+    fn rejected_saved_profile_reprompts_and_is_never_deleted() {
+        let mut attempts = ConnectAttempts::default();
+        let _ = attempts.begin(AP.to_owned(), DEV.to_owned(), false);
+        assert_eq!(attempts.on_device_state(DEV, 40, 0), AttemptEffect::None);
+        // The effect type carries no profile, so a saved profile cannot be deleted from it.
+        assert_eq!(
+            attempts.on_device_state(DEV, 120, DEVICE_REASON_SUPPLICANT_CONFIG_FAILED),
+            AttemptEffect::RetrySavedNetwork {
+                access_point: AP.to_owned(),
+            }
+        );
+        assert!(!attempts.is_busy());
+    }
+
+    #[test]
+    fn saved_profile_activation_error_is_not_a_password_prompt() {
+        let mut attempts = ConnectAttempts::default();
+        let id = attempts.begin(AP.to_owned(), DEV.to_owned(), false);
+        assert_eq!(attempts.on_request_failed(id), AttemptEffect::None);
+        assert!(!attempts.is_busy());
+    }
+
+    #[test]
+    fn non_credential_failure_clears_without_prompt_or_delete() {
+        let mut attempts = ConnectAttempts::default();
+        let id = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        let _ = attempts.on_profile_created(id, PROFILE.to_owned());
+        let _ = attempts.on_device_state(DEV, 40, 0);
+        // NMDeviceStateReason 5 is IP_CONFIG_UNAVAILABLE, not a credential failure.
+        assert_eq!(attempts.on_device_state(DEV, 120, 5), AttemptEffect::None);
+        assert!(!attempts.is_busy());
+    }
+
+    #[test]
+    fn previous_connection_disconnect_before_activation_is_ignored() {
+        let mut attempts = ConnectAttempts::default();
+        let _ = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        assert_eq!(attempts.on_device_state(DEV, 30, 0), AttemptEffect::None);
+        assert!(attempts.is_busy());
+    }
+
+    #[test]
+    fn stale_profile_reply_and_other_device_signals_are_ignored() {
+        let mut attempts = ConnectAttempts::default();
+        let stale = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        let current = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        assert_ne!(stale, current);
+        assert_eq!(
+            attempts.on_profile_created(stale, PROFILE.to_owned()),
+            AttemptEffect::None
+        );
+        assert_eq!(
+            attempts.on_device_state("/org/freedesktop/NetworkManager/Devices/7", 120, 8),
+            AttemptEffect::None
+        );
+        assert!(attempts.is_busy());
+    }
+
+    #[test]
+    fn cancelled_attempt_clears_and_later_failure_has_no_effect() {
+        let mut attempts = ConnectAttempts::default();
+        let _ = attempts.begin(AP.to_owned(), DEV.to_owned(), false);
+        attempts.clear();
+        assert!(!attempts.is_busy());
+        assert_eq!(
+            attempts.on_device_state(DEV, 120, DEVICE_REASON_NO_SECRETS),
+            AttemptEffect::None
+        );
+    }
+
+    #[test]
+    fn saved_attempt_answers_agent_requests_but_new_attempt_does_not() {
+        let mut attempts = ConnectAttempts::default();
+        assert_eq!(attempts.saved_access_point(), None);
+        let _ = attempts.begin(AP.to_owned(), DEV.to_owned(), true);
+        assert_eq!(attempts.saved_access_point(), None);
+        attempts.clear();
+        let _ = attempts.begin(AP.to_owned(), DEV.to_owned(), false);
+        assert_eq!(attempts.saved_access_point(), Some(AP));
+    }
+
+    #[test]
+    fn device_state_signal_parses_new_state_and_reason() {
+        let items = vec![
+            MessageItem::UInt32(120),
+            MessageItem::UInt32(40),
+            MessageItem::UInt32(DEVICE_REASON_SUPPLICANT_TIMEOUT),
+        ];
+        match parse_device_state_changed(items, DEV.to_owned()) {
+            Ok(Incoming::DeviceStateChanged {
+                path,
+                new_state,
+                reason,
+            }) => assert_eq!((path.as_str(), new_state, reason), (DEV, 120, 11)),
+            _ => panic!("device StateChanged parsed incorrectly"),
+        }
+        let short = vec![MessageItem::UInt32(120)];
+        assert!(parse_device_state_changed(short, DEV.to_owned()).is_err());
     }
 }

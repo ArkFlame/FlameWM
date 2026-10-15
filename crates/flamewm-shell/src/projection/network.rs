@@ -64,14 +64,18 @@ pub fn project_network_full(
     document.visible("network-connected", connected.is_some())?;
     if let Some(popover) = popover {
         document.text("wifi-connected-name", popover.connected_label.clone())?;
+        // The label stays static; the query lives inside the input box so the
+        // layout never shifts while typing.
+        let filter_empty = query.filter.trim().is_empty();
         document.text(
-            "network-filter-label",
-            if query.filter.trim().is_empty() {
-                "Filter".to_owned()
+            "network-filter-value",
+            if filter_empty {
+                String::new()
             } else {
-                format!("Filter: {}", query.filter)
+                query.filter.clone()
             },
         )?;
+        document.visible("network-filter-placeholder", filter_empty)?;
         document.visible("network-wifi-toggle", true)?;
         document.toggle(
             "network-wifi-track",
@@ -149,7 +153,7 @@ mod network_template_tests {
             "network-connected".to_owned(),
             "network-connected-status".to_owned(),
             "wifi-connected-name".to_owned(),
-            "network-filter-label".to_owned(),
+            "network-filter-value".to_owned(),
             "network-secret-value".to_owned(),
         ];
         for slot in 1..=8 {
@@ -422,6 +426,42 @@ mod network_template_tests {
         assert_eq!(recorder.texts["network-slot-1-name"], "StubNeighbor");
         assert_eq!(recorder.texts["network-slot-2-name"], "OtherStub");
         assert_eq!(recorder.visible.get("network-slot-3"), Some(&false));
+    }
+
+    // REGRESSION: the query is projected into the input box value node, not the
+    // static label. The label is never rewritten ("Filter: stub" would shift the
+    // input), and the placeholder shows only while the query is empty.
+    // MUTATION: a fix that writes "Filter: <query>" into the label, or leaves the
+    // placeholder visible for a non-empty query, fails these assertions.
+    #[test]
+    fn filter_query_is_projected_inside_the_input_box() {
+        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
+            .expect("network artifact must decode");
+        let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
+        let mut recorder = NetworkRecorder {
+            document: &mut document,
+            texts: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+            toggles: std::collections::HashMap::new(),
+        };
+        let typed = flamewm_shell_core::status::NetworkQuery {
+            filter: "stub".to_owned(),
+        };
+        project_network_full(&mut recorder, &snapshot, &typed, 0)
+            .expect("network projection must succeed");
+        assert_eq!(recorder.texts["network-filter-value"], "stub");
+        assert_eq!(
+            recorder.visible.get("network-filter-placeholder"),
+            Some(&false)
+        );
+        assert!(!recorder.texts.contains_key("network-filter-label"));
+
+        project_network(&mut recorder, &snapshot).expect("network projection must succeed");
+        assert_eq!(recorder.texts["network-filter-value"], "");
+        assert_eq!(
+            recorder.visible.get("network-filter-placeholder"),
+            Some(&true)
+        );
     }
 
     // REGRESSION: the Wi-Fi control is the canonical switch. Its track reflects
