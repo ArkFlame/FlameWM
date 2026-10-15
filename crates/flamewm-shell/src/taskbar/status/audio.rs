@@ -130,7 +130,7 @@ pub fn slot_id(snapshot: &AudioSnapshot, slot: usize) -> Option<String> {
     paged_rows(snapshot)
         .into_iter()
         .find(|(page_slot, _)| *page_slot == slot)
-        .map(|(_, row)| row.stable_id())
+        .map(|(_, row)| row.stable_id().to_owned())
 }
 
 /// Stable slot index for a row identity on the active page.
@@ -366,8 +366,8 @@ impl RowSource {
     }
 
     #[must_use]
-    pub fn stable_id(&self) -> String {
-        self.id.clone()
+    pub fn stable_id(&self) -> &str {
+        &self.id
     }
 
     #[must_use]
