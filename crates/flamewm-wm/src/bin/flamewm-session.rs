@@ -96,9 +96,23 @@ fn execute() -> Result<(), String> {
     }
 }
 
+const ALLOCATOR_TUNING: [(&str, &str); 3] = [
+    ("MALLOC_ARENA_MAX", "2"),
+    ("MALLOC_TRIM_THRESHOLD_", "131072"),
+    ("MALLOC_MMAP_THRESHOLD_", "131072"),
+];
+
+/// Allocator-tuning pairs whose key is not already set; a user-provided value always wins.
+fn allocator_tuning_defaults(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
+    ALLOCATOR_TUNING.into_iter().filter(|(key, _)| !is_set(key)).collect()
+}
+
 fn spawn(plan: ProcessPlan) -> Result<Running, String> {
     let mut command = Command::new(&plan.program);
     command.args(&plan.arguments).envs(&plan.environment);
+    for (key, value) in allocator_tuning_defaults(|key| env::var_os(key).is_some() || plan.environment.contains_key(key)) {
+        command.env(key, value);
+    }
     let child = command.spawn().map_err(|error| format!("spawn {:?} at {}: {error}", plan.role, plan.program.display()))?;
     Ok(Running { plan, child, supervisor: ProcessSupervisorPolicy::default() })
 }
@@ -187,7 +201,24 @@ fn supporting_wm_check_is_valid(root_support: Option<u32>, self_support: Option<
 
 #[cfg(test)]
 mod tests {
-    use super::supporting_wm_check_is_valid;
+    use super::{allocator_tuning_defaults, supporting_wm_check_is_valid};
+
+    #[test]
+    fn allocator_tuning_fills_only_unset_keys() {
+        let all = allocator_tuning_defaults(|_| false);
+        assert_eq!(
+            all,
+            vec![
+                ("MALLOC_ARENA_MAX", "2"),
+                ("MALLOC_TRIM_THRESHOLD_", "131072"),
+                ("MALLOC_MMAP_THRESHOLD_", "131072"),
+            ]
+        );
+        let user_arena = allocator_tuning_defaults(|key| key == "MALLOC_ARENA_MAX");
+        assert_eq!(user_arena.len(), 2);
+        assert!(user_arena.iter().all(|(key, _)| *key != "MALLOC_ARENA_MAX"));
+        assert!(allocator_tuning_defaults(|_| true).is_empty());
+    }
 
     #[test]
     fn supporting_wm_check_requires_matching_nonzero_self_reference() {
