@@ -27,6 +27,9 @@ pub const CACHE_ENTRIES: usize = 16;
 pub const CACHE_BYTE_BUDGET: usize = 4 * 1024 * 1024;
 /// Backdrop used when no wallpaper pixels are available (frame background colour).
 pub const FALLBACK_BACKDROP: [u8; 3] = [0x1b, 0x1e, 0x20];
+/// Grid cell edge for the drag blur. A region blurred for a cell covers it plus this much slack
+/// to the right and bottom, so every origin inside the cell crops from one blur.
+const DRAG_SLACK: u32 = 32;
 
 /// Wallpaper the desktop owner paints, as named by the settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,8 +106,12 @@ type BlurKey = (i32, i32, u32, u32, u32, u32);
 
 #[derive(Debug, Clone, PartialEq)]
 struct Blurred {
+    /// Exact key of the last crop served; the retained crop matches on it.
     key: BlurKey,
-    pixels: Vec<u8>,
+    /// Grid cell the region was blurred for.
+    cell: (i32, i32),
+    /// `(w + DRAG_SLACK) x (h + DRAG_SLACK)` straight RGBA blurred at `cell`.
+    region: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -195,7 +202,8 @@ fn forget_in(state: &mut State, owner: u64) {
 }
 
 /// Titlebar pixels for `owner`: cropped from the live drag snapshot (blurred like the wallpaper
-/// path, reused while origin, size, radius and wallpaper generation are unchanged), or the
+/// path). The blur is reused while the origin stays in its [`DRAG_SLACK`] grid cell and size,
+/// radius and wallpaper generation are unchanged, so each cell is blurred once per drag. Or the
 /// final crop kept after release while its key still matches. `None` means use the wallpaper.
 /// A kept crop is dropped as soon as its key no longer matches.
 #[must_use]
@@ -222,13 +230,29 @@ fn titlebar_in(
     blur_percent: u8,
 ) -> Option<Vec<u8>> {
     let radius = blur_radius_px(opacity_percent(alpha), blur_percent);
-    let key = (origin.0, origin.1, width, height, (radius * 10.0).round() as u32, state.generation);
+    let radius_tenths = (radius * 10.0).round() as u32;
+    let generation = state.generation;
+    let key = (origin.0, origin.1, width, height, radius_tenths, generation);
     if let Some(drag) = state.drag.as_mut().filter(|drag| drag.owner == owner) {
-        if drag.blurred.as_ref().map(|blurred| blurred.key) != Some(key) {
-            let pixels = blur_crop(&mut drag.scratch, &drag.snapshot, origin, width, height, radius);
-            drag.blurred = Some(Blurred { key, pixels });
+        let cell = drag_cell(origin);
+        let reusable = drag.blurred.as_ref().is_some_and(|blurred| {
+            blurred.cell == cell
+                && (blurred.key.2, blurred.key.3, blurred.key.4, blurred.key.5)
+                    == (width, height, radius_tenths, generation)
+        });
+        if reusable {
+            if let Some(blurred) = drag.blurred.as_mut() {
+                blurred.key = key;
+            }
+        } else {
+            let region_w = width + DRAG_SLACK;
+            let region_h = height + DRAG_SLACK;
+            let region = blur_region(&mut drag.scratch, &drag.snapshot, cell, region_w, region_h, radius);
+            drag.blurred = Some(Blurred { key, cell, region });
         }
-        return drag.blurred.as_ref().map(|blurred| compose_rgba(&blurred.pixels, rgb, alpha));
+        let blurred = drag.blurred.as_ref()?;
+        let crop = slice_region(&blurred.region, width + DRAG_SLACK, origin, cell, width, height);
+        return Some(compose_rgba(&crop, rgb, alpha));
     }
     let (kept_owner, kept) = state.retained.as_ref()?;
     if *kept_owner != owner {
@@ -238,12 +262,39 @@ fn titlebar_in(
         state.retained = None;
         return None;
     }
-    Some(compose_rgba(&kept.pixels, rgb, alpha))
+    let crop = slice_region(&kept.region, width + DRAG_SLACK, origin, kept.cell, width, height);
+    Some(compose_rgba(&crop, rgb, alpha))
 }
 
-/// `w x h` crop at `origin`, Gaussian-blurred with `radius` using a padded gather so the blur
+/// Grid cell (top-left) of the [`DRAG_SLACK`]-sized cell containing `origin`.
+fn drag_cell(origin: (i32, i32)) -> (i32, i32) {
+    let slack = DRAG_SLACK as i32;
+    (origin.0.div_euclid(slack) * slack, origin.1.div_euclid(slack) * slack)
+}
+
+/// `w x h` crop at `origin` out of a row-major region of width `region_w` whose top-left is
+/// `cell`. `origin` must lie inside the region.
+fn slice_region(
+    region: &[u8],
+    region_w: u32,
+    origin: (i32, i32),
+    cell: (i32, i32),
+    w: u32,
+    h: u32,
+) -> Vec<u8> {
+    let ox = (origin.0 - cell.0) as usize;
+    let oy = (origin.1 - cell.1) as usize;
+    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
+    for row in 0..h as usize {
+        let start = ((oy + row) * region_w as usize + ox) * 4;
+        out.extend_from_slice(&region[start..start + w as usize * 4]);
+    }
+    out
+}
+
+/// `w x h` region at `origin`, Gaussian-blurred with `radius` using a padded gather so the blur
 /// has real neighbours.
-fn blur_crop(
+fn blur_region(
     scratch: &mut BlurScratch,
     snapshot: &DragSnapshot,
     origin: (i32, i32),
@@ -265,6 +316,22 @@ fn blur_crop(
         out.extend_from_slice(&region[start..start + w as usize * 4]);
     }
     out
+}
+
+/// Fresh reference blur of the `w x h` crop at `origin`: the cell region's crop, so it equals
+/// what the drag cache serves for that origin.
+#[cfg(test)]
+fn blur_crop(
+    scratch: &mut BlurScratch,
+    snapshot: &DragSnapshot,
+    origin: (i32, i32),
+    w: u32,
+    h: u32,
+    radius: f32,
+) -> Vec<u8> {
+    let cell = drag_cell(origin);
+    let region = blur_region(scratch, snapshot, cell, w + DRAG_SLACK, h + DRAG_SLACK, radius);
+    slice_region(&region, w + DRAG_SLACK, origin, cell, w, h)
 }
 
 fn build_drag(
@@ -659,6 +726,36 @@ mod tests {
         let blurred = blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 2.0);
         assert!(blurred.chunks_exact(4).all(|px| px == [40, 80, 120, 255]));
         assert_eq!(blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 0.0), drag.snapshot.crop(2, 2, 3, 3));
+    }
+
+    #[test]
+    fn drag_moves_match_fresh_blur_and_reuse_cell_region() {
+        let captured: Vec<u8> = (0..96 * 80u32)
+            .flat_map(|i| [(i * 37 % 251) as u8, (i * 91 % 253) as u8, (i * 13 % 247) as u8, 255])
+            .collect();
+        let mut state = State { source: Some(WallpaperSource::Solid([0; 3])), ..State::default() };
+        state.drag = build_drag(&mut state, 5, (96, 80), Some(captured), (0, 0, 0, 0));
+        let snapshot = state.drag.as_ref().unwrap().snapshot.clone();
+        let (w, h, rgb, alpha) = (20u32, 12u32, (10u8, 20u8, 30u8), 60u8);
+        let mut saw_large_radius = false;
+        for blur_percent in [30u8, 100] {
+            let radius = blur_radius_px(opacity_percent(alpha), blur_percent);
+            saw_large_radius |= radius > DRAG_SLACK as f32 / 2.0;
+            for origin in [(3, 3), (10, 3), (20, 3), (31, 3), (33, 3), (40, 20), (63, 40), (64, 41), (70, 50), (-5, -7), (70, 66)] {
+                let got = titlebar_in(&mut state, 5, origin, (w, h), rgb, alpha, blur_percent).unwrap();
+                let fresh = blur_crop(&mut BlurScratch::new(), &snapshot, origin, w, h, radius);
+                assert_eq!(got, compose_rgba(&fresh, rgb, alpha), "origin {origin:?} blur {blur_percent}");
+            }
+        }
+        assert!(saw_large_radius, "exercise the downscaled blur path too");
+
+        // Moves inside one cell reuse the cached region; crossing the cell edge re-blurs.
+        titlebar_in(&mut state, 5, (2, 2), (w, h), rgb, alpha, 30).unwrap();
+        let before = state.drag.as_ref().unwrap().blurred.clone();
+        titlebar_in(&mut state, 5, (9, 17), (w, h), rgb, alpha, 30).unwrap();
+        assert_eq!(state.drag.as_ref().unwrap().blurred.as_ref().map(|b| &b.region), before.as_ref().map(|b| &b.region));
+        titlebar_in(&mut state, 5, (33, 17), (w, h), rgb, alpha, 30).unwrap();
+        assert_eq!(state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell, (32, 0));
     }
 
     #[test]

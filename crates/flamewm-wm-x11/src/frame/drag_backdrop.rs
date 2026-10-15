@@ -158,7 +158,8 @@ impl DragSnapshot {
     }
 
     /// Returns the `w x h` region at desktop `(x, y)` as RGBA. Areas outside the root are
-    /// transparent black.
+    /// transparent black. Test-only: the titlebar path crops via `crop_clamped`.
+    #[cfg(test)]
     pub fn crop(&self, x: i32, y: i32, w: u32, h: u32) -> Vec<u8> {
         let mut out = vec![0u8; w as usize * h as usize * 4];
         for row in 0..h {
