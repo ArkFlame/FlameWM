@@ -89,6 +89,9 @@ pub struct MprisProvider {
     pending_players: BTreeMap<String, PendingPlayer>,
     pending: BTreeMap<u32, PendingRequest>,
     state: MprisProviderState,
+    /// A selection change consumed by an internal reconcile (`on_ready`) that the next
+    /// `reconcile()` caller must still observe.
+    changed_pending: bool,
 }
 
 impl MprisProvider {
@@ -101,6 +104,7 @@ impl MprisProvider {
             pending_players: BTreeMap::new(),
             pending: BTreeMap::new(),
             state: MprisProviderState::Disconnected,
+            changed_pending: false,
         })
     }
 
@@ -157,7 +161,8 @@ impl MprisProvider {
     /// Reconcile a coalesced property update using the core controller's deterministic active-player
     /// policy. The native event has already supplied the player values.
     pub fn reconcile(&mut self) -> bool {
-        self.controller.reconcile()
+        let changed = self.controller.reconcile();
+        changed | std::mem::take(&mut self.changed_pending)
     }
 
     /// Queue a player command after validating its generation and advertised capability.
@@ -212,7 +217,7 @@ impl MprisProvider {
         for event in incoming {
             self.apply(event)?;
         }
-        let _ = self.reconcile();
+        self.changed_pending |= self.controller.reconcile();
         Ok(count)
     }
 
@@ -675,6 +680,76 @@ mod tests {
                 String::new(),
                 ":1.42".to_owned(),
             )
+    }
+
+    fn stage_player(provider: &mut MprisProvider, serial: u32, bus: &str, playback: &str) {
+        let owner = format!(":1.{serial}");
+        provider.owners.insert(bus.to_owned(), owner.clone());
+        provider
+            .pending_players
+            .insert(bus.to_owned(), PendingPlayer::default());
+        let reply = |interface: &'static str, entry: (&str, MessageItem)| {
+            let (key, value) = entry;
+            let dict = MessageItem::new_dict(vec![(
+                MessageItem::Str(key.to_owned()),
+                MessageItem::Variant(Box::new(value)),
+            )])
+            .expect("valid property dict");
+            (interface, dict)
+        };
+        let replies = [
+            reply(MPRIS_ROOT_INTERFACE, ("Identity", MessageItem::Str(bus.to_owned()))),
+            reply(
+                MPRIS_PLAYER_INTERFACE,
+                ("PlaybackStatus", MessageItem::Str(playback.to_owned())),
+            ),
+        ];
+        for (offset, (interface, dict)) in replies.into_iter().enumerate() {
+            let serial = serial * 10 + offset as u32;
+            provider.pending.insert(
+                serial,
+                PendingRequest::Properties {
+                    player: bus.to_owned(),
+                    interface,
+                    owner: owner.clone(),
+                },
+            );
+            provider
+                .apply(Incoming::Reply {
+                    serial,
+                    is_error: false,
+                    items: vec![dict],
+                })
+                .expect("property reply applies");
+        }
+    }
+
+    #[test]
+    fn change_made_inside_on_ready_is_reported_by_next_reconcile_once() {
+        // Real session bus is required for the pump; no message is sent by this test.
+        let mut provider = MprisProvider::connect().expect("session bus for MPRIS pump");
+        stage_player(&mut provider, 1, "org.mpris.MediaPlayer2.paused", "Paused");
+        stage_player(&mut provider, 2, "org.mpris.MediaPlayer2.playing", "Playing");
+
+        // Aggregate sequence: provider.on_ready() then provider.reconcile().
+        provider.on_ready().expect("on_ready");
+        assert!(
+            provider.reconcile(),
+            "selection change produced inside on_ready must be reported"
+        );
+        assert!(!provider.reconcile(), "change must be reported exactly once");
+
+        let snapshot = provider.snapshot();
+        assert_eq!(
+            snapshot.availability,
+            flamewm_api::system::ServiceAvailability::Available
+        );
+        assert_eq!(snapshot.playback, PlaybackState::Playing);
+        assert_eq!(
+            snapshot.active_bus_name,
+            "org.mpris.MediaPlayer2.playing"
+        );
+        assert_ne!(snapshot.generation, 0);
     }
 
     #[test]

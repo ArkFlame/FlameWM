@@ -110,10 +110,10 @@ impl StatusViews {
             media: MediaView {
                 visible: system.media.availability != ServiceAvailability::Unavailable,
                 enabled: media_enabled,
-                // Current native V4 contract: Playing -> Play glyph, Paused -> Pause glyph.
+                // Shows the action the control performs: Playing -> Pause glyph, Paused -> Play glyph.
                 play_pause_icon: match system.media.playback {
-                    PlaybackState::Playing => Some(IconRole::MediaPlay),
-                    PlaybackState::Paused => Some(IconRole::MediaPause),
+                    PlaybackState::Playing => Some(IconRole::MediaPause),
+                    PlaybackState::Paused => Some(IconRole::MediaPlay),
                     PlaybackState::Stopped | PlaybackState::Unavailable => None,
                 },
                 identity: system.media.identity.clone(),
@@ -958,10 +958,21 @@ mod tests {
     }
 
     #[test]
-    fn playing_media_uses_current_native_play_glyph_contract() {
+    fn playing_media_shows_pause_action_glyph() {
         let mut system = SystemSnapshot::default();
         system.media.availability = ServiceAvailability::Available;
         system.media.playback = PlaybackState::Playing;
+        assert_eq!(
+            StatusViews::from_snapshot(&system).media.play_pause_icon,
+            Some(IconRole::MediaPause)
+        );
+    }
+
+    #[test]
+    fn paused_media_shows_play_action_glyph() {
+        let mut system = SystemSnapshot::default();
+        system.media.availability = ServiceAvailability::Available;
+        system.media.playback = PlaybackState::Paused;
         assert_eq!(
             StatusViews::from_snapshot(&system).media.play_pause_icon,
             Some(IconRole::MediaPlay)
