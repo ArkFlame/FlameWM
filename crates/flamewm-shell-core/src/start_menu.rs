@@ -100,33 +100,11 @@ pub fn start_category(application: &DesktopApplication) -> StartCategory {
 }
 
 #[must_use]
-pub fn filter_start_applications<'a>(
-    applications: &'a [DesktopApplication],
-    category: StartCategory,
-    query: &str,
-) -> Vec<&'a DesktopApplication> {
-    StartModel::filter_slice(applications, category, query)
-}
-
-#[must_use]
 pub fn search_start_applications<'a>(
     applications: &'a [DesktopApplication],
     query: &str,
 ) -> Vec<&'a DesktopApplication> {
     StartModel::filter_slice(applications, StartCategory::All, query)
-}
-
-#[must_use]
-pub fn project_start_slots<'a>(
-    applications: &'a [DesktopApplication],
-    first_slot: usize,
-    slot_count: usize,
-) -> Vec<&'a DesktopApplication> {
-    applications
-        .iter()
-        .skip(first_slot)
-        .take(slot_count)
-        .collect()
 }
 
 /// Precomputed per-application search index. Normalized once per set
@@ -263,17 +241,6 @@ impl StartModel {
             .collect()
     }
 
-    /// Borrowed generation view: single slot of a category plus query view.
-    #[must_use]
-    pub fn application_for_slot(
-        &self,
-        category: StartCategory,
-        query: &str,
-        slot: usize,
-    ) -> Option<&DesktopApplication> {
-        self.filter_view(category, query).into_iter().nth(slot)
-    }
-
     /// Borrowed generation view: presentation bucket plus ad-hoc query.
     #[must_use]
     pub fn bucket_view(&self, bucket: StartBucket, query: &str) -> Vec<&DesktopApplication> {
@@ -284,33 +251,6 @@ impl StartModel {
             .filter(|&&index| self.entries[index].matches(&needle))
             .map(|&index| &self.applications[index])
             .collect()
-    }
-
-    /// Borrowed generation view: presentation bucket plus query, windowed.
-    #[must_use]
-    pub fn bucket_slot_view(
-        &self,
-        bucket: StartBucket,
-        query: &str,
-        first: usize,
-        count: usize,
-    ) -> Vec<&DesktopApplication> {
-        self.bucket_view(bucket, query)
-            .into_iter()
-            .skip(first)
-            .take(count)
-            .collect()
-    }
-
-    /// Borrowed generation view: single slot of a bucket plus query view.
-    #[must_use]
-    pub fn application_for_bucket_slot(
-        &self,
-        bucket: StartBucket,
-        query: &str,
-        slot: usize,
-    ) -> Option<&DesktopApplication> {
-        self.bucket_view(bucket, query).into_iter().nth(slot)
     }
 
     #[must_use]

@@ -344,59 +344,6 @@ mod work_area_tests {
         assert!(area.height >= 0 && area.width >= 0);
     }
 }
-/// Context-menu placement: Below/Start preferred, Above/Start opposite.
-/// Caps height to the work area and reports scrolling when capped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContextMenuPlacement {
-    pub rect: Rect,
-    pub requires_scroll: bool,
-}
-
-#[must_use]
-pub fn context_menu_placement(
-    anchor: Rect,
-    size: Size,
-    work_area: Rect,
-    offset: i32,
-) -> ContextMenuPlacement {
-    let width = size.width.max(0).min(work_area.width.max(0));
-    let below = PopoverGeometry::place(
-        anchor,
-        Size::new(width, size.height.max(0)),
-        PopoverEdge::Below,
-        work_area,
-        offset,
-    );
-    let above = PopoverGeometry::place(
-        anchor,
-        Size::new(width, size.height.max(0)),
-        PopoverEdge::Above,
-        work_area,
-        offset,
-    );
-    // Preferred: Below/Start. Opposite: Above/Start. Start (x) is clamped
-    // to the work area in both cases.
-    let below_fits_height =
-        size.height.max(0) <= work_area.height.max(0) && below.edge == PopoverEdge::Below;
-    let above_fits_height =
-        size.height.max(0) <= work_area.height.max(0) && above.edge == PopoverEdge::Above;
-    let geometry = if below_fits_height {
-        below
-    } else if above_fits_height {
-        above
-    } else {
-        below
-    };
-    let available = work_area.height.max(0);
-    let requires_scroll = size.height.max(0) > available;
-    let height = size.height.max(0).min(available);
-    let rect = Rect::from_parts(geometry.origin, Size::new(width, height)).clamp_inside(work_area);
-    ContextMenuPlacement {
-        rect,
-        requires_scroll,
-    }
-}
-
 #[cfg(test)]
 mod measured_tests {
     use super::*;
