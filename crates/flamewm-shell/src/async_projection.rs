@@ -19,21 +19,50 @@ pub const TASK_SLOT_COUNT: usize = 8;
 pub const START_APP_SLOT_COUNT: usize = 8;
 
 const ICON_CACHE_ENTRY_BUDGET: usize = 2048;
+/// Straight RGBA8 pixel bytes retained by the icon cache (8 MiB).
+const ICON_CACHE_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
 pub type IconCacheKey = (String, u32, u32);
 
 struct IconCache {
     entry_budget: usize,
+    byte_budget: usize,
+    bytes: usize,
     entries: HashMap<IconCacheKey, RuntimeImage>,
     order: VecDeque<IconCacheKey>,
 }
 
+fn image_bytes(image: &RuntimeImage) -> usize {
+    image.pixels.len()
+}
+
 impl IconCache {
     fn new(entry_budget: usize) -> Self {
+        Self::with_budgets(entry_budget, ICON_CACHE_BYTE_BUDGET)
+    }
+
+    fn with_budgets(entry_budget: usize, byte_budget: usize) -> Self {
         Self {
             entry_budget: entry_budget.max(1),
+            byte_budget,
+            bytes: 0,
             entries: HashMap::new(),
             order: VecDeque::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+    }
+
+    fn remove(&mut self, key: &IconCacheKey) {
+        if let Some(image) = self.entries.remove(key) {
+            self.bytes -= image_bytes(&image);
+            if let Some(position) = self.order.iter().position(|entry| entry == key) {
+                self.order.remove(position);
+            }
         }
     }
 
@@ -47,15 +76,20 @@ impl IconCache {
     }
 
     fn insert(&mut self, key: IconCacheKey, image: RuntimeImage) {
-        if self.entries.contains_key(&key) {
-            if let Some(position) = self.order.iter().position(|entry| entry == &key) {
-                self.order.remove(position);
-            }
-        } else if self.entries.len() == self.entry_budget {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            }
+        self.remove(&key);
+        let size = image_bytes(&image);
+        if size > self.byte_budget {
+            // An oversized raster is never retained; evicting others for it
+            // would only churn the cache.
+            return;
         }
+        while self.entries.len() >= self.entry_budget || self.bytes + size > self.byte_budget {
+            let Some(oldest) = self.order.front().cloned() else {
+                break;
+            };
+            self.remove(&oldest);
+        }
+        self.bytes += size;
         self.order.push_back(key.clone());
         self.entries.insert(key, image);
     }
@@ -287,8 +321,7 @@ pub fn test_reset_icon_bindings() {
         bindings.clear();
     }
     if let Ok(mut cache) = icon_cache().lock() {
-        cache.entries.clear();
-        cache.order.clear();
+        cache.clear();
     }
 }
 #[derive(Debug, Default)]
@@ -327,8 +360,7 @@ pub fn note_icon_result(name: &str, w: u32, h: u32, image: RuntimeImage) {
 /// them without changing call-site signatures.
 pub fn invalidate_icon_cache() {
     if let Ok(mut cache) = icon_cache().lock() {
-        cache.entries.clear();
-        cache.order.clear();
+        cache.clear();
     }
 }
 
@@ -1418,6 +1450,48 @@ mod tests {
         assert!(cache.get(&second).is_none(), "least-recent entry evicted");
         assert_eq!(cache.get(&first).expect("first retained").source, "first");
         assert_eq!(cache.get(&third).expect("third retained").source, "third");
+    }
+
+    fn sized_test_image(source: &str, side: u32) -> RuntimeImage {
+        RuntimeImage {
+            source: source.to_owned(),
+            width: side,
+            height: side,
+            pixels: vec![0; side as usize * side as usize * 4],
+        }
+    }
+
+    #[test]
+    fn icon_cache_byte_budget_evicts_oldest_when_exceeded() {
+        // Entry budget is loose; the 8-byte byte budget must drive eviction.
+        let mut cache = IconCache::with_budgets(10, 8);
+        let first = ("first".to_owned(), 1, 1);
+        let second = ("second".to_owned(), 1, 1);
+        let third = ("third".to_owned(), 1, 1);
+        cache.insert(first.clone(), test_image("first"));
+        cache.insert(second.clone(), test_image("second"));
+        cache.insert(third.clone(), test_image("third"));
+
+        assert!(cache.get(&first).is_none(), "oldest evicted by bytes");
+        assert!(cache.get(&second).is_some(), "second retained");
+        assert!(cache.get(&third).is_some(), "third retained");
+        assert!(cache.bytes <= 8, "cache stays under byte budget");
+    }
+
+    #[test]
+    fn icon_cache_entry_larger_than_byte_budget_is_not_retained() {
+        let mut cache = IconCache::with_budgets(10, 8);
+        let small = ("small".to_owned(), 1, 1);
+        let huge = ("huge".to_owned(), 3, 3);
+        cache.insert(small.clone(), test_image("small"));
+        cache.insert(huge.clone(), sized_test_image("huge", 3));
+
+        assert!(cache.get(&huge).is_none(), "oversized entry not retained");
+        assert!(
+            cache.get(&small).is_some(),
+            "oversized insert evicts nothing"
+        );
+        assert!(cache.bytes <= 8, "cache stays under byte budget");
     }
 
     #[test]
