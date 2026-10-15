@@ -156,6 +156,19 @@ pub fn end_drag(owner: u64) {
     }
 }
 
+/// Drops the root-sized wallpaper canvas; rebuilt lazily on the next miss. Called when a
+/// transition finishes.
+pub fn release_backdrop_canvas() {
+    let Ok(mut guard) = STATE.lock() else { return };
+    if let Some(state) = guard.as_mut() {
+        release_canvas_in(state);
+    }
+}
+
+fn release_canvas_in(state: &mut State) {
+    state.canvas = None;
+}
+
 /// Drops everything kept for `owner` (window closed).
 pub fn forget(owner: u64) {
     let Ok(mut guard) = STATE.lock() else { return };
@@ -396,6 +409,20 @@ pub fn titlebar_pixels(
         return flat_pixels(width, height, rgb, alpha);
     };
     let state = guard.get_or_insert_with(State::default);
+    titlebar_fill_in(state, origin, root, (width, height), rgb, alpha, radius)
+}
+
+/// Non-drag fill. The root-sized wallpaper canvas stays resident while hot: a cache hit never
+/// touches it and a miss reuses it. `release_backdrop_canvas` drops it when the transition ends.
+fn titlebar_fill_in(
+    state: &mut State,
+    origin: (i32, i32),
+    root: (u32, u32),
+    (width, height): (u32, u32),
+    rgb: (u8, u8, u8),
+    alpha: u8,
+    radius: f32,
+) -> Vec<u8> {
     let key = BackdropKey {
         rect: (origin.0, origin.1, width, height),
         generation: state.generation,
@@ -669,6 +696,30 @@ mod tests {
         let mut state = State { source: Some(WallpaperSource::Solid([5, 6, 7])), ..State::default() };
         let drag = build_drag(&mut state, 1, (2, 2), Some(vec![0; 4]), (0, 0, 0, 0)).unwrap();
         assert_eq!(drag.snapshot.crop(1, 1, 1, 1), vec![5, 6, 7, 255]);
+    }
+
+    #[test]
+    fn canvas_kept_across_misses_released_by_hook_and_rebuilt_lazily() {
+        let mut state = State {
+            source: Some(WallpaperSource::Image { path: "/nonexistent/flamewm-test.png".into(), fit: WallpaperFit::Fill }),
+            ..State::default()
+        };
+        let root = (16, 8);
+        let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
+        fill(&mut state, (0, 0));
+        assert!(state.canvas.is_some(), "kept after first miss");
+        assert_eq!(state.cache.misses, 1);
+        fill(&mut state, (1, 0));
+        assert!(state.canvas.is_some(), "kept across consecutive miss");
+        assert_eq!(state.cache.misses, 2);
+        fill(&mut state, (1, 0));
+        assert!(state.canvas.is_some(), "hit leaves canvas untouched");
+        assert_eq!((state.cache.hits, state.cache.misses), (1, 2));
+        release_canvas_in(&mut state);
+        assert!(state.canvas.is_none(), "released by hook");
+        fill(&mut state, (2, 0));
+        assert!(state.canvas.is_some(), "rebuilt lazily after release on miss");
+        assert_eq!(state.cache.misses, 3);
     }
 
     #[test]

@@ -111,6 +111,7 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Releases the overlay and applies `effect`'s end state exactly once.
     pub(super) fn finish_transition(&mut self, client: Window, effect: Effect) -> Result<(), ReplyError> {
+        crate::frame::titlebar_backdrop::release_backdrop_canvas();
         let flight = self.overlays.remove(&client);
         let hidden = flight.as_ref().is_some_and(|flight| flight.frame_hidden);
         match effect {
