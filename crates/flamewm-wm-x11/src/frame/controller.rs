@@ -308,11 +308,17 @@ fn move_step(
     if plan.noop && (!final_commit || state.placement.current == session.start_placement.rect) {
         return (next, vec![FrameEffect::Noop]);
     }
+    let moved = plan.frame != state.placement.current;
     next.placement.current = plan.frame;
     if next.placement.mode == PlacementMode::Floating {
         next.placement.floating_restore = plan.frame;
     }
-    (next, move_effects(plan.frame, state.extents))
+    let mut effects = move_effects(plan.frame, state.extents);
+    if moved {
+        // Titlebar pixels are frame-relative; repaint after the frame moves.
+        effects.push(FrameEffect::PaintChrome);
+    }
+    (next, effects)
 }
 
 fn resize_step(
@@ -759,12 +765,12 @@ mod tests {
     }
 
     fn assert_position_only(effects: &[FrameEffect]) {
-        assert_eq!(effects.len(), 2);
+        assert_eq!(effects.len(), 3);
         assert!(matches!(effects[0], FrameEffect::MoveFrameRoot { .. }));
         assert!(matches!(effects[1], FrameEffect::NotifyClientRoot { .. }));
+        assert!(matches!(effects[2], FrameEffect::PaintChrome));
         assert!(!has_any_frame_root(effects));
         assert!(!effects.contains(&FrameEffect::LayoutInput));
-        assert!(!effects.contains(&FrameEffect::PaintChrome));
         assert!(!effects.contains(&FrameEffect::ApplyShape));
     }
 
@@ -1146,7 +1152,7 @@ mod tests {
                 pointer: RootPoint::new(200, 170),
             },
         );
-        assert_eq!(e2.len(), 2);
+        assert_eq!(e2.len(), 3);
         assert!(matches!(
             e2[0],
             FrameEffect::MoveFrameRoot { x: 150, y: 150 }
@@ -1164,7 +1170,7 @@ mod tests {
         ));
         assert_eq!(count_local(&e2), 0);
         assert!(!e2.contains(&FrameEffect::LayoutInput));
-        assert!(!e2.contains(&FrameEffect::PaintChrome));
+        assert!(matches!(e2[2], FrameEffect::PaintChrome));
         assert!(!e2.contains(&FrameEffect::ApplyShape));
         assert!(!e2.contains(&FrameEffect::Ungrab));
     }
@@ -1303,15 +1309,19 @@ mod tests {
                 },
             );
             // Move motion emits either Noop (zero/non-plan delta) or exactly
-            // [MoveFrameRoot, NotifyClientRoot]; nothing else is representable.
+            // [MoveFrameRoot, NotifyClientRoot, PaintChrome]; nothing else is representable.
             if e == vec![FrameEffect::Noop] {
                 total_noop += 1;
                 continue;
             }
             assert_eq!(
                 e.len(),
-                2,
-                "move motion must emit exactly move+notify (sample {i})"
+                3,
+                "move motion must emit move+notify+paint (sample {i})"
+            );
+            assert!(
+                matches!(e[2], FrameEffect::PaintChrome),
+                "move[2] must be PaintChrome (sample {i})"
             );
             assert!(
                 matches!(e[0], FrameEffect::MoveFrameRoot { .. }),
@@ -1337,11 +1347,58 @@ mod tests {
         assert_eq!(total_local, 0);
         assert_eq!(total_configure_root, 0);
         assert_eq!(total_layout, 0);
-        assert_eq!(total_paint, 0);
+        assert_eq!(total_paint, total_move_root);
         assert_eq!(total_shape, 0);
         assert_eq!(total_move_root, total_notify);
         assert!(total_move_root > 0, "expected non-noop move samples");
         assert!(total_noop > 0, "expected at least one noop sample");
+    }
+
+    #[test]
+    fn post_activation_move_repaints_chrome_after_frame_move() {
+        let s0 = floating_state();
+        let (s1, _) = reduce(
+            &s0,
+            FrameEvent::Press {
+                source: 1,
+                pointer: RootPoint::new(150, 120),
+            },
+        );
+        let (s2, _) = reduce(
+            &s1,
+            FrameEvent::Motion {
+                pointer: RootPoint::new(200, 170),
+            },
+        );
+        // Post-activation step whose frame position changes: titlebar must
+        // repaint live, ordered after the frame move.
+        let (s3, e3) = reduce(
+            &s2,
+            FrameEvent::Motion {
+                pointer: RootPoint::new(230, 190),
+            },
+        );
+        assert_eq!(s3.placement.current, RootRect::new(180, 170, 400, 300));
+        let move_pos = e3
+            .iter()
+            .position(|e| matches!(e, FrameEffect::MoveFrameRoot { .. }))
+            .expect("move geometry");
+        let paint_pos = e3
+            .iter()
+            .position(|e| *e == FrameEffect::PaintChrome)
+            .expect("live move must repaint titlebar");
+        assert!(
+            move_pos < paint_pos,
+            "PaintChrome must follow MoveFrameRoot"
+        );
+        // Repeated pointer position leaves the frame unchanged: no repaint.
+        let (_, e4) = reduce(
+            &s3,
+            FrameEvent::Motion {
+                pointer: RootPoint::new(230, 190),
+            },
+        );
+        assert!(!e4.contains(&FrameEffect::PaintChrome));
     }
 
     #[test]
