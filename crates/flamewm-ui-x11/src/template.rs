@@ -450,7 +450,7 @@ pub fn rounded_rect_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32
     if width == 0 || height == 0 {
         return Vec::new();
     }
-    let radius = radius.min(width / 2).min(height / 2);
+    let radius = flamewm_render_core::paint::clamp_radius_px(width, height, radius);
     if radius <= 1 {
         return (0..height).map(|row| (row, 0, width)).collect();
     }

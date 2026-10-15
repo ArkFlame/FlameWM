@@ -281,6 +281,11 @@ pub fn root_corner_radius(document: &RuntimeDocument, interaction: InteractionSt
         .max(0.0)
 }
 
+/// Corner radius in px clamped so it never exceeds half of either side.
+pub fn clamp_radius_px(width: u32, height: u32, radius: u32) -> u32 {
+    radius.min(width / 2).min(height / 2)
+}
+
 /// Surface-shape pixels for an X Shape bounding mask: (width, height, radius)
 /// clamped so the radius never exceeds half the smallest side.
 pub fn surface_shape_pixels(width: u32, height: u32, radius: f32) -> (u32, u32, u32) {

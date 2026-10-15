@@ -6,6 +6,8 @@ mod input;
 mod popup;
 mod reconcile;
 mod surface_runtime;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod template;
 
 pub use event_source::{
