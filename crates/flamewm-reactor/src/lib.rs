@@ -5,7 +5,9 @@
 
 use std::cell::Cell;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::panic::Location;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use calloop::generic::Generic;
@@ -208,6 +210,7 @@ impl Reactor {
     }
 
     /// Registers a one-shot or repeating timer.
+    #[track_caller]
     pub fn register_timer<C>(
         &mut self,
         delay: Duration,
@@ -217,10 +220,29 @@ impl Reactor {
     where
         C: FnMut() + 'static,
     {
+        let site = if timer_trace_enabled() {
+            Some(Location::caller())
+        } else {
+            None
+        };
+        if let Some(site) = site {
+            trace_log(format_args!(
+                "register timer {}:{} delay={delay:?} repeat={repeat}",
+                site.file(),
+                site.line()
+            ));
+        }
         let mut callback = callback;
         self.event_loop
             .handle()
             .insert_source(Timer::from_duration(delay), move |_, _, _| {
+                if let Some(site) = site {
+                    trace_log(format_args!(
+                        "fire timer {}:{} delay={delay:?} repeat={repeat}",
+                        site.file(),
+                        site.line()
+                    ));
+                }
                 callback();
                 if repeat {
                     TimeoutAction::ToDuration(delay)
@@ -277,6 +299,7 @@ impl Reactor {
     /// wall time reported by `clock`, so drift never accumulates and a
     /// suspend/resume jump simply realigns to the next live boundary on the
     /// following tick (at most one catch-up tick fires after a forward jump).
+    #[track_caller]
     pub fn register_wall_clock<C, W>(
         &mut self,
         clock: W,
@@ -287,14 +310,33 @@ impl Reactor {
         W: WallClockSource + 'static,
         C: FnMut() + 'static,
     {
+        let site = if timer_trace_enabled() {
+            Some(Location::caller())
+        } else {
+            None
+        };
+        let initial = wall_clock_delay_ms(clock.now_epoch_ms(), with_seconds);
+        if let Some(site) = site {
+            trace_log(format_args!(
+                "register wall_clock {}:{} with_seconds={with_seconds} initial={initial}ms",
+                site.file(),
+                site.line()
+            ));
+        }
         let mut callback = callback;
         let clock = clock;
-        let initial = wall_clock_delay_ms(clock.now_epoch_ms(), with_seconds);
         self.event_loop
             .handle()
             .insert_source(
                 Timer::from_duration(Duration::from_millis(initial.max(1))),
                 move |_, _, _| {
+                    if let Some(site) = site {
+                        trace_log(format_args!(
+                            "fire wall_clock {}:{} with_seconds={with_seconds}",
+                            site.file(),
+                            site.line()
+                        ));
+                    }
                     callback();
                     let next = wall_clock_delay_ms(clock.now_epoch_ms(), with_seconds);
                     TimeoutAction::ToDuration(Duration::from_millis(next.max(1)))
@@ -311,9 +353,45 @@ impl Reactor {
 
     /// Dispatches pending events, waiting no longer than `timeout` for the next event.
     pub fn dispatch(&mut self, timeout: Option<Duration>) -> calloop::Result<()> {
-        let timeout = bounded_timeout(timeout, self.wake.get(), Instant::now());
+        let requested = timeout;
+        let wake = self.wake.get();
+        let timeout = bounded_timeout(timeout, wake, Instant::now());
+        if timer_trace_enabled() {
+            let source = if timeout != requested {
+                "wake_deadline"
+            } else {
+                "caller"
+            };
+            trace_log(format_args!(
+                "dispatch wait={timeout:?} source={source} requested={requested:?} wake_deadline={wake:?}"
+            ));
+        }
         self.event_loop.dispatch(timeout, &mut ())
     }
+}
+
+const TIMER_TRACE_ENV: &str = "FLAMEWM_TIMER_TRACE";
+
+/// Parses the raw `FLAMEWM_TIMER_TRACE` value; only exactly `1` enables tracing.
+#[must_use]
+fn timer_trace_flag(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Reads the trace gate once per process; afterwards this is a single cached bool load.
+#[inline]
+fn timer_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| timer_trace_flag(std::env::var(TIMER_TRACE_ENV).ok().as_deref()))
+}
+
+fn trace_log(args: std::fmt::Arguments<'_>) {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let origin = *ORIGIN.get_or_init(Instant::now);
+    eprintln!(
+        "[flamewm-timer +{:.3}ms] {args}",
+        origin.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 #[cfg(test)]
@@ -447,5 +525,19 @@ mod tests {
         fake.advance(3_630_000);
         assert_eq!(wall_clock_delay_ms(fake.now_epoch_ms(), false), 28_766);
         assert!(fake.now_epoch_ms() % 60_000 != 0);
+    }
+}
+
+#[cfg(test)]
+mod timer_trace_tests {
+    use super::timer_trace_flag;
+
+    #[test]
+    fn timer_trace_gate_is_enabled_only_by_exact_one() {
+        assert!(timer_trace_flag(Some("1")));
+        assert!(!timer_trace_flag(None));
+        assert!(!timer_trace_flag(Some("")));
+        assert!(!timer_trace_flag(Some("0")));
+        assert!(!timer_trace_flag(Some("true")));
     }
 }

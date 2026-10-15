@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""Old-vs-new FlameWM memory per phase on a private Xephyr (reuses perf_compare and mem_sample helpers).
+
+Usage:
+  tools/flamewm_mem_phase_compare.py --old-bin-dir DIR --new-bin-dir DIR [--run-dir DIR] [--reps N]
+      [--idle-seconds S] [--idle-samples N] [--samples N] [--start-cycles N] [--minimize-cycles N]
+      [--drag-cycles N] [--settle-seconds S] [--geometry WxH] [--display :N]
+
+Each repetition runs both binary sets (order alternates) on a fresh owned WM + Shell. Every phase reads
+WM, Shell and the owned Xephyr at one instant per sample (mem_sample.sample_round, barrier-aligned):
+  cold      after settle
+  idle      --idle-samples reads spread over the --idle-seconds window
+  start     after --start-cycles Super open/close cycles
+  minimize  after --minimize-cycles fresh-xclock minimize cycles (restore not driven)
+  drag      after --drag-cycles titlebar drags of one fresh xclock (XTEST via flamewm_xtest.py)
+A phase that cannot complete is recorded as NOT_RUN with its reason.
+
+Per repetition the phase value is the median of its samples. Across repetitions: median and nearest-rank
+p95. Verdict: combined WM+Shell PSS and RSS against 34 MiB (35651584 B), evaluated on the median per phase
+(a value at or below the target is WITHIN). Xephyr PSS is reported on its own line and is not in the verdict.
+Output: DIR/result.json and DIR/result.md; the markdown is printed on stdout.
+Exit: 0 all phases complete, 1 PARTIAL/FAILED, 2 usage, 3 environment blocked.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import secrets
+import shutil
+import statistics
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TOOLS = Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOLS))
+
+import flamewm_appearance_acceptance as ap  # noqa: E402
+import flamewm_mem_sample as mem  # noqa: E402
+import flamewm_perf_compare as perf  # noqa: E402
+import flamewm_settings_acceptance as base  # noqa: E402
+
+SCHEMA = "flamewm-mem-phase-compare/1"
+LABELS = ("old", "new")
+PHASES = ("cold", "idle", "start", "minimize", "drag")
+WS_METRICS = ("rss", "pss", "private_dirty", "threads")   # combined WM+Shell
+XE_METRICS = ("pss", "private_dirty")                      # Xephyr, separate line
+VERDICT_METRICS = ("pss", "rss")
+SAMPLE_SPACING_SECONDS = 0.5
+DRAG_STEP_PX = 120
+DRAG_DROP_PX = 60
+
+
+# ---------------------------------------------------------------- pure helpers (unit-tested)
+
+def combine_ws(round_sample: dict) -> dict[str, int]:
+    """Sum WM and Shell metrics for one sample_round() result; Xephyr is excluded."""
+    wm, shell = round_sample["flamewm"], round_sample["flamewm-shell"]
+    return {m: wm[m] + shell[m] for m in WS_METRICS}
+
+
+def phase_rep_value(samples: list[dict]) -> dict[str, dict[str, float]]:
+    """Median over one repetition's samples of one phase: combined WM+Shell and Xephyr."""
+    combos = [combine_ws(s) for s in samples]
+    return {
+        "wm_shell": {m: statistics.median([c[m] for c in combos]) for m in WS_METRICS},
+        "xephyr": {m: statistics.median([s["xephyr"][m] for s in samples]) for m in XE_METRICS},
+    }
+
+
+def phase_stats(rep_values: list[dict]) -> dict | None:
+    """summarize() (min/median/p95) per metric across repetitions; None when no repetition completed."""
+    if not rep_values:
+        return None
+    return {
+        "wm_shell": {m: perf.summarize([r["wm_shell"][m] for r in rep_values]) for m in WS_METRICS},
+        "xephyr": {m: perf.summarize([r["xephyr"][m] for r in rep_values]) for m in XE_METRICS},
+    }
+
+
+def aggregate(sets: list[dict], label: str) -> dict[str, dict | None]:
+    """phase -> phase_stats() for one label. A repetition counts for a phase only when that phase is ok."""
+    out: dict[str, dict | None] = {}
+    for phase in PHASES:
+        reps = [phase_rep_value(r["phases"][phase]["samples"])
+                for r in sets
+                if r["label"] == label and r.get("phases", {}).get(phase, {}).get("status") == "ok"]
+        out[phase] = phase_stats(reps)
+    return out
+
+
+def mib_text(value: float) -> str:
+    return f"{mem.mib(value):.3f} MiB"
+
+
+def verdict(agg: dict[str, dict | None], target: int = mem.TARGET_BYTES) -> dict:
+    """OVER if any measured phase has a combined WM+Shell PSS or RSS median above target, else WITHIN.
+    NOT_RUN when no phase was measured; a status gets '+PARTIAL' when some phases were not measured."""
+    lines: list[str] = []
+    over = False
+    not_run = [p for p in PHASES if agg.get(p) is None]
+    for phase in PHASES:
+        st = agg.get(phase)
+        if st is None:
+            lines.append(f"{phase}: NOT_RUN")
+            continue
+        parts = []
+        for metric in VERDICT_METRICS:
+            s = st["wm_shell"][metric]
+            above = s["median"] > target
+            over = over or above
+            flag = "OVER" if above else "WITHIN"
+            parts.append(f"{metric.upper()} median {mib_text(s['median'])}, p95 {mib_text(s['p95'])}, {flag}")
+        lines.append(f"{phase}: " + "; ".join(parts))
+    if len(not_run) == len(PHASES):
+        status = "NOT_RUN"
+    else:
+        status = "OVER" if over else "WITHIN"
+        if not_run:
+            status += "+PARTIAL"
+    return {"status": status, "lines": lines, "not_run_phases": not_run}
+
+
+def ratio_or_none(new: dict | None, old: dict | None, metric: str) -> float | None:
+    if new is None or old is None:
+        return None
+    return perf.ratio(new["wm_shell"][metric]["median"], old["wm_shell"][metric]["median"])
+
+
+def fmt_value(metric: str, value: float) -> str:
+    return f"{value:.0f}" if metric == "threads" else mib_text(value)
+
+
+def render_markdown(summary: dict, verdicts: dict, reps: int, problems: list[str]) -> str:
+    lines = [
+        f"Repetitions per binary set: {reps} (order alternated). Problems: "
+        f"{'; '.join(problems) if problems else 'none'}.",
+        "",
+        "Combined WM+Shell (per phase: median and p95 across repetitions):",
+        "",
+        "| phase | metric | old median | old p95 | new median | new p95 | new/old (median) |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for phase in PHASES:
+        for metric in WS_METRICS:
+            cells = []
+            for label in LABELS:
+                st = summary[label][phase]
+                if st is None:
+                    cells += ["n/a", "n/a"]
+                else:
+                    cells += [fmt_value(metric, st["wm_shell"][metric]["median"]),
+                              fmt_value(metric, st["wm_shell"][metric]["p95"])]
+            r = ratio_or_none(summary["new"][phase], summary["old"][phase], metric)
+            lines.append(f"| {phase} | {metric} | " + " | ".join(cells)
+                         + f" | {'n/a' if r is None else f'{r:.3f}'} |")
+    lines += ["", "Xephyr (private, separate from the verdict):", "",
+              "| phase | label | Xephyr PSS median | Xephyr PSS p95 | Xephyr Private_Dirty median | Xephyr Private_Dirty p95 |",
+              "|---|---|---|---|---|---|"]
+    for phase in PHASES:
+        for label in LABELS:
+            st = summary[label][phase]
+            if st is None:
+                lines.append(f"| {phase} | {label} | n/a | n/a | n/a | n/a |")
+            else:
+                x = st["xephyr"]
+                lines.append(f"| {phase} | {label} | {mib_text(x['pss']['median'])} | {mib_text(x['pss']['p95'])} "
+                             f"| {mib_text(x['private_dirty']['median'])} | {mib_text(x['private_dirty']['p95'])} |")
+    lines.append("")
+    for label in LABELS:
+        v = verdicts[label]
+        lines.append(f"VERDICT {label}: {v['status']} vs 34 MiB (35651584 B) on combined WM+Shell PSS and RSS "
+                     f"(median per phase across repetitions; p95 shown; <= target is WITHIN).")
+        lines += [f"- {row}" for row in v["lines"]]
+    lines += ["", f"Noise: shared host ({os.cpu_count()} CPUs), nested Xephyr, no CPU pinning; p95 is nearest-rank "
+              "over the repetitions (small N makes p95 close to max)."]
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------- live helpers
+
+def timed_samples(pids: list[tuple[str, int]], count: int, spacing: float) -> list[dict]:
+    """count concurrent sample_round() reads, each after `spacing` seconds."""
+    out = []
+    for _ in range(count):
+        time.sleep(spacing)
+        out.append(mem.sample_round(pids))
+    return out
+
+
+def start_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> list[dict]:
+    fails = 0
+    for _ in range(args.start_cycles):
+        opened = perf.toggle_start(s)
+        time.sleep(perf.CYCLE_GAP_SECONDS)
+        closed = perf.toggle_start(s)
+        time.sleep(perf.CYCLE_GAP_SECONDS)
+        fails += (not opened) + (not closed)
+    if fails:
+        raise RuntimeError(f"{fails} Start toggle inputs failed")
+    return timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)
+
+
+def minimize_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> list[dict]:
+    for n in range(args.minimize_cycles):
+        s.spawn_client()
+        client, frame = perf.wait_client_frame(s)
+        if client is None or frame is None:
+            raise RuntimeError(f"minimize cycle {n}: xclock or frame not found")
+        at = f"{frame['x'] + frame['w'] - 3 * ap.BUTTON_WIDTH + ap.BUTTON_WIDTH // 2},{frame['y'] + 15}"
+        code, _ = s.input(click=at)
+        unmapped = code == 0 and perf.wait_map_state(s, client["id"], ("IsUnMapped", "IsUnviewable"))
+        base.Ctx.stop(s.client)
+        if not unmapped:
+            raise RuntimeError(f"minimize cycle {n}: no unmap within {perf.MAP_TIMEOUT_SECONDS:g}s")
+    return timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)
+
+
+def drag_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> list[dict]:
+    """Drag one fresh xclock by its titlebar; each drag starts where the previous one ended."""
+    s.spawn_client()
+    client, frame = perf.wait_client_frame(s)
+    if client is None or frame is None:
+        raise RuntimeError("xclock or frame not found")
+    x, y = frame["x"] + frame["w"] // 2, frame["y"] + 15
+    for i in range(args.drag_cycles):
+        step = DRAG_STEP_PX if i % 2 == 0 else -DRAG_STEP_PX
+        end_x, end_y = x + step, y + (DRAG_DROP_PX if i % 2 == 0 else 0)
+        s.input(drag=f"{x},{y},{end_x},{end_y}")
+        x, y = end_x, end_y
+    base.Ctx.stop(s.client)
+    return timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)
+
+
+def run_set(s: ap.Session, label: str, bin_dir: Path, args: argparse.Namespace, xephyr_pid: int) -> dict:
+    """One binary set on a fresh WM + Shell. Each phase is kept or marked NOT_RUN on its own."""
+    args.wm_bin, args.shell_bin = str(bin_dir / "flamewm"), str(bin_dir / "flamewm-shell")
+    out: dict = {"label": label, "phases": {}}
+    if not s.restart({"surfaceOpacity": "100"}):
+        out["phases"] = {p: {"status": "NOT_RUN: WM or shell exited during restart", "samples": []} for p in PHASES}
+        out["reason"] = "WM or shell exited during restart"
+        return out
+    time.sleep(args.settle_seconds)
+    pids = [("flamewm", s.ctx.wm.pid), ("flamewm-shell", s.shell.pid), ("xephyr", xephyr_pid)]
+
+    def record(name: str, fn) -> None:
+        try:
+            out["phases"][name] = {"status": "ok", "samples": fn()}
+        except (RuntimeError, OSError, ValueError) as exc:
+            out["phases"][name] = {"status": f"NOT_RUN: {exc}", "samples": []}
+
+    record("cold", lambda: timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS))
+    record("idle", lambda: timed_samples(pids, args.idle_samples, args.idle_seconds / args.idle_samples))
+    record("start", lambda: start_phase(s, pids, args))
+    record("minimize", lambda: minimize_phase(s, pids, args))
+    record("drag", lambda: drag_phase(s, pids, args))
+    not_ok = [f"{p}: {v['status']}" for p, v in out["phases"].items() if v["status"] != "ok"]
+    out["reason"] = "; ".join(not_ok)
+    return out
+
+
+# ---------------------------------------------------------------- CLI and run
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--old-bin-dir", default="/tmp/claude-1000/perf-base-target/release")
+    p.add_argument("--new-bin-dir", default=str(base.ROOT / ".target/release"))
+    p.add_argument("--run-dir", default=None, help="default /tmp/claude-1000/mem-phase-runs/<utc-id>")
+    p.add_argument("--reps", type=int, default=5)
+    p.add_argument("--idle-seconds", type=float, default=30.0)
+    p.add_argument("--idle-samples", type=int, default=5)
+    p.add_argument("--samples", type=int, default=3, help="samples per non-idle phase")
+    p.add_argument("--start-cycles", type=int, default=40)
+    p.add_argument("--minimize-cycles", type=int, default=10)
+    p.add_argument("--drag-cycles", type=int, default=10)
+    p.add_argument("--settle-seconds", type=float, default=3.0)
+    p.add_argument("--geometry", default="1280x800")
+    p.add_argument("--display", default=None)
+    p.add_argument("--client-bin", default="xclock")
+    args = p.parse_args(argv)
+    counts = (args.reps, args.idle_samples, args.samples, args.start_cycles, args.minimize_cycles, args.drag_cycles)
+    if min(counts) < 1 or args.idle_seconds <= 0:
+        p.error("reps, sample, cycle counts and idle-seconds must be positive")
+    if not re.fullmatch(r"\d+x\d+", args.geometry):
+        p.error("--geometry must be WxH")
+    args.screen_w, args.screen_h = (int(v) for v in args.geometry.split("x"))
+    return args
+
+
+def build_doc(sets: list[dict], args: argparse.Namespace) -> tuple[dict, list[str]]:
+    problems = [f"rep{r['rep']}-{r['label']}: {r['reason']}" for r in sets if r["reason"]]
+    if len(sets) != 2 * args.reps:
+        problems.append(f"run incomplete: {len(sets)}/{2 * args.reps} binary-set repetitions")
+    summary = {label: aggregate(sets, label) for label in LABELS}
+    verdicts = {label: verdict(summary[label]) for label in LABELS}
+    doc = {"summary": summary, "verdicts": verdicts, "problems": problems,
+           "markdown": render_markdown(summary, verdicts, args.reps, problems)}
+    return doc, problems
+
+
+def run_inner(args: argparse.Namespace, run: Path) -> int:
+    ctx = base.Ctx(run)
+    sets: list[dict] = []
+    started = ap.utc_now()
+    bins = {"old": Path(args.old_bin_dir), "new": Path(args.new_bin_dir)}
+    for sub in ("home", "xdg-config", "xdg-data", "xdg-cache", "xdg-runtime", "logs"):
+        (run / sub).mkdir(parents=True, exist_ok=True)
+    doc: dict = {"schema": SCHEMA, "verdict": "BLOCKED", "exit_code": 3}
+    try:
+        display = base.pick_display(args.display)
+        if display is None:
+            doc["reason"] = "no free display in :90..:99"
+            return 3
+        ctx.display = display
+        ctx.build_app_env()
+        ctx.token = secrets.token_hex(32)
+        ctx.marker.write_text(f"{ctx.display}\n{ctx.token}\n", encoding="ascii")
+        os.chmod(ctx.marker, 0o600)
+        xephyr = ctx.spawn("xephyr", ["Xephyr", ctx.display, "-screen", args.geometry, "-ac", "-noreset", "-br"],
+                           ctx.host_env)
+        if not base.wait_for_display(ctx, xephyr):
+            doc["reason"] = f"Xephyr did not become ready on {ctx.display}"
+            return 3
+        session = ap.Session(ctx, args)
+        for rep in range(args.reps):
+            for label in perf.order_for_rep(rep):
+                result = run_set(session, label, bins[label], args, xephyr.pid) | {"rep": rep}
+                sets.append(result)
+                print(f"rep {rep} {label}: {result['reason'] or 'complete'}", file=sys.stderr)
+        built, problems = build_doc(sets, args)
+        complete = not problems
+        doc |= built | {"verdict": "MEASURED" if complete else "PARTIAL", "exit_code": 0 if complete else 1,
+                        "problems": problems}
+        return doc["exit_code"]
+    finally:
+        teardown = ctx.teardown()
+        doc |= {"run_dir": str(run), "display": ctx.display, "geometry": args.geometry, "reps": args.reps,
+                "idle_seconds": args.idle_seconds, "idle_samples": args.idle_samples, "samples": args.samples,
+                "start_cycles": args.start_cycles, "minimize_cycles": args.minimize_cycles,
+                "drag_cycles": args.drag_cycles, "target_bytes": mem.TARGET_BYTES,
+                "binaries": {label: {name: {"path": str(bins[label] / name),
+                                            "sha256": perf.sha256(bins[label] / name)}
+                                     for name in ("flamewm", "flamewm-shell")}
+                             for label in LABELS},
+                "started_utc": started, "finished_utc": ap.utc_now(), "teardown": teardown, "sets": sets}
+        if not teardown["ok"]:
+            doc["verdict"], doc["exit_code"] = "FAILED", 1
+        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        if doc.get("markdown"):
+            (run / "result.md").write_text(doc["markdown"], encoding="utf-8")
+            print(doc["markdown"])
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw = sys.argv[1:] if argv is None else list(argv)
+    args = parse_args(raw)
+    inner = os.environ.get("FLAMEWM_PERF_INNER") == "1"
+    if args.run_dir is None:
+        # Pin the run id before the re-exec so the child (which validates the run dir) sees the same path.
+        args.run_dir = f"/tmp/claude-1000/mem-phase-runs/{ap.utc_now()}"
+        raw = [*raw, "--run-dir", args.run_dir]
+    run = Path(args.run_dir).expanduser().absolute()
+    if inner:
+        ap.validate_inner_run_dir(run)
+    else:
+        ap.validate_run_dir(run)
+    for label in LABELS:
+        for name in ("flamewm", "flamewm-shell"):
+            binary = Path(getattr(args, f"{label}_bin_dir")) / name
+            if not os.access(binary, os.X_OK):
+                print(f"error: binary not executable: {binary}", file=sys.stderr)
+                return 2
+    missing = [name for name in ("Xephyr", "xwininfo", "xprop", "xdpyinfo", "gdbus") if shutil.which(name) is None]
+    if missing or not os.environ.get("DISPLAY"):
+        print(f"ENVIRONMENT_BLOCKED: missing tools {missing} or host DISPLAY unset", file=sys.stderr)
+        return 3
+    run.mkdir(parents=True, exist_ok=True)
+    os.chmod(run, 0o700)
+    if inner:
+        return run_inner(args, run)
+    (run / base.RUN_OWNER_MARKER).write_text(f"owner-pid={os.getpid()}\ncreated={ap.utc_now()}\n", encoding="ascii")
+    if shutil.which("dbus-run-session") is None:
+        print("error: dbus-run-session not found on PATH", file=sys.stderr)
+        return 3
+    child = subprocess.Popen(["dbus-run-session", "--", sys.executable, str(Path(__file__).resolve()), *raw],
+                             env=dict(os.environ, FLAMEWM_PERF_INNER="1"))
+    code = child.wait()
+    print(run / "result.json")
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
