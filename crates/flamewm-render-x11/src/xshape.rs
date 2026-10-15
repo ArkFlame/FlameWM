@@ -206,33 +206,7 @@ pub(crate) fn clip_spans(spans: &[(u32, u32, u32)], clip: ClipRect) -> Vec<(u32,
 /// with corner radius `radius` (already clamped to half the min side).
 /// Coverage spans from `native::coverage` reuse this rasterization so the
 /// Shape bounding mask and the painted pixels agree.
-pub(crate) fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32, u32)> {
-    if width == 0 || height == 0 {
-        return Vec::new();
-    }
-    if radius <= 1 {
-        return (0..height).map(|row| (row, 0, width)).collect();
-    }
-    let mut spans = Vec::with_capacity(height as usize);
-    for row in 0..height {
-        // Outer-edge distance folds top/bottom corners symmetrically.
-        let corner_row = row.min(height - 1 - row);
-        let inset = if corner_row >= radius {
-            0
-        } else {
-            let r = f64::from(radius);
-            let dy = r - (f64::from(corner_row) + 0.5);
-            let dx = (r * r - dy * dy).max(0.0).sqrt();
-            // Floor matches the `XRenderBackend`/`fill_rounded_rect` corner
-            // rasterization: mask spans and painted pixels use one formula.
-            (r - dx).floor().clamp(0.0, r) as u32
-        };
-        let start = inset.min(width);
-        let end = width.saturating_sub(inset).max(start);
-        spans.push((row, start, end));
-    }
-    spans
-}
+pub(crate) use crate::native::rounded::spans as rounded_mask_spans;
 
 /// Row spans for a border-only ring: the rounded outer rect of `width`x`height` (corner radius
 /// `radius_px`) minus the inner rounded rect inset by `border_px` (at least 2 px so the ring is

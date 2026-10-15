@@ -967,17 +967,7 @@ fn upload_argb32(
 /// Rounded-corner row-inset formula shared with the XRender fill path and
 /// the XShape mask spans: floor(r - dx) at pixel-row centers.
 pub fn external_rounded_row_inset(width: u32, height: u32, radius: u32, row: u32) -> u32 {
-    if radius <= 1 || width == 0 || height == 0 {
-        return 0;
-    }
-    let corner_row = row.min(height.saturating_sub(1).saturating_sub(row));
-    if corner_row >= radius {
-        return 0;
-    }
-    let r = f64::from(radius);
-    let dy = r - (f64::from(corner_row) + 0.5);
-    let dx = (r * r - dy * dy).max(0.0).sqrt();
-    (r - dx).floor().clamp(0.0, r) as u32
+    crate::native::rounded::row_inset(width, height, radius, row)
 }
 
 /// Xft font-pattern probe used by tests: preferred family first, then

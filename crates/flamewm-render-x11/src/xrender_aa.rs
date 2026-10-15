@@ -191,7 +191,7 @@ pub(crate) unsafe fn fill_rounded_rect(
     if width == 0 || height == 0 || color.a == 0 {
         return Ok(());
     }
-    let radius = radius.round().max(0.0).min((width.min(height) / 2) as f32) as u32;
+    let radius = crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
     if radius <= 1 {
         // SAFETY: validated inputs above.
         return unsafe { fill_box(backend, x, y, width, height, color) };
@@ -261,7 +261,7 @@ pub(crate) unsafe fn stroke_rounded_rect(
     }
     let thickness = stroke_width.round().clamp(1.0, 8.0) as u32;
     let thickness = thickness.min(width / 2).min(height / 2).max(1);
-    let radius = radius.round().max(0.0).min((width.min(height) / 2) as f32) as u32;
+    let radius = crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
 
     for row in 0..height {
         for &(start, len, coverage) in &stroke_row_runs(width, height, radius, thickness, row) {

@@ -6,6 +6,8 @@
 
 use flamewm_render_core::{PaintCommand, Rect};
 
+use super::rounded::row_inset;
+
 /// One opaque-ish horizontal run: y row, x start, x end (exclusive).
 pub type CoverageSpan = (u32, u32, u32);
 
@@ -162,19 +164,7 @@ fn push_rect_spans(
     let r = (radius.round().max(0.0) as u32).min(w / 2).min(h / 2);
     for row in y0..y1 {
         let local = row - y0;
-        let inset = if r <= 1 {
-            0
-        } else {
-            let corner = local.min(h - 1 - local);
-            if corner >= r {
-                0
-            } else {
-                let rf = f64::from(r);
-                let dy = rf - (f64::from(corner) + 0.5);
-                let dx = (rf * rf - dy * dy).max(0.0).sqrt();
-                (rf - dx).floor().clamp(0.0, rf) as u32
-            }
-        };
+        let inset = row_inset(w, h, r, local);
         let s = (x0 + inset).min(x1);
         let e = x1.saturating_sub(inset).max(s);
         if e > s {
