@@ -507,13 +507,30 @@ pub fn project_context_menu(
     Ok(())
 }
 
+/// Char budget for the media popup title. The title box is 276px wide with
+/// 10px padding per side (256px usable) at 13px / weight 600; ~7.8px per glyph
+/// gives ~32 glyphs. The render compiler has no text-overflow, so the ellipsis
+/// is applied here. Counted with `chars()`, so multibyte text never splits.
+const MEDIA_TITLE_MAX_CHARS: usize = 32;
+
+/// Returns `title` unchanged when it fits `MEDIA_TITLE_MAX_CHARS`; otherwise
+/// keeps the leading chars, trims trailing whitespace and appends `…` so the
+/// total stays within the budget.
+#[must_use]
+fn fit_media_title(title: &str) -> String {
+    if title.chars().count() <= MEDIA_TITLE_MAX_CHARS {
+        return title.to_owned();
+    }
+    let kept: String = title.chars().take(MEDIA_TITLE_MAX_CHARS - 1).collect();
+    format!("{}…", kept.trim_end())
+}
+
 pub fn project_media(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
 ) -> Result<(), String> {
     let view = crate::taskbar::status::media::project(&snapshot.system);
-    document.text("media-title", snapshot.system.media.title.clone())?;
-    document.text("media-artist", snapshot.system.media.artist.clone())?;
+    document.text("media-title", fit_media_title(&snapshot.system.media.title))?;
     document.visible(
         "media-play-icon",
         matches!(
@@ -528,6 +545,20 @@ pub fn project_media(
             Some(flamewm_ui_core::IconRole::MediaPause)
         ),
     )?;
+    let (can_previous, can_play_pause, can_next) =
+        flamewm_shell_core::StatusPopovers::from_snapshot(&snapshot.system)
+            .media
+            .map_or((false, false, false), |media| {
+                (media.can_previous, media.can_play_pause, media.can_next)
+            });
+    for (enabled, disabled, active) in [
+        ("media-previous", "media-previous-disabled", can_previous),
+        ("media-playpause", "media-playpause-disabled", can_play_pause),
+        ("media-next", "media-next-disabled", can_next),
+    ] {
+        document.visible(enabled, active)?;
+        document.visible(disabled, !active)?;
+    }
     Ok(())
 }
 
@@ -1169,6 +1200,186 @@ mod clock_display_tests {
         assert_eq!(defaults.format, ClockFormat::TwentyFour);
         assert!(!defaults.show_seconds);
         assert!(defaults.show_date);
+    }
+}
+
+#[cfg(test)]
+mod media_projection_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MediaDoc {
+        texts: HashMap<String, String>,
+        visible: HashMap<String, bool>,
+    }
+
+    impl UiDocumentAccess for MediaDoc {
+        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            self.texts.insert(id.to_owned(), text);
+            Ok(())
+        }
+        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+        fn visible(&mut self, id: &str, v: bool) -> Result<(), String> {
+            self.visible.insert(id.to_owned(), v);
+            Ok(())
+        }
+        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn background_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn border_clear(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn layer(&mut self, _: &str, _: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
+            Ok(())
+        }
+        fn overflow(
+            &mut self,
+            _: &str,
+            _: flamewm_ui_x11::Overflow,
+            _: flamewm_ui_x11::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+            Ok(())
+        }
+        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    // REGRESSION: the popup has one title row and no artist line, so project_media
+    // must not write `media-artist` (the compiled artifact no longer has that node).
+    #[test]
+    fn media_projects_title_only_without_artist_node() {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.media.title = "Song Title".to_owned();
+        snapshot.system.media.artist = "Some Artist".to_owned();
+        let mut document = MediaDoc::default();
+
+        project_media(&mut document, &snapshot).expect("media projection must succeed");
+
+        assert_eq!(
+            document.texts.get("media-title").map(String::as_str),
+            Some("Song Title")
+        );
+        assert!(
+            !document.texts.contains_key("media-artist"),
+            "artist line was removed from media.html"
+        );
+    }
+
+    fn media_title_text(title: &str) -> String {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.media.title = title.to_owned();
+        let mut document = MediaDoc::default();
+        project_media(&mut document, &snapshot).expect("media projection must succeed");
+        document
+            .texts
+            .get("media-title")
+            .cloned()
+            .expect("media-title must be written")
+    }
+
+    #[test]
+    fn media_title_short_is_unchanged() {
+        assert_eq!(media_title_text("Song Title"), "Song Title");
+        let exact = "a".repeat(MEDIA_TITLE_MAX_CHARS);
+        assert_eq!(media_title_text(&exact), exact);
+    }
+
+    #[test]
+    fn media_title_long_ascii_is_truncated_with_ellipsis_within_budget() {
+        let long = format!("{} tail words that keep going", "Abcdefghij ".repeat(5));
+        let fitted = media_title_text(&long);
+        assert!(fitted.ends_with('…'), "{fitted:?}");
+        assert!(fitted.chars().count() <= MEDIA_TITLE_MAX_CHARS, "{fitted:?}");
+        assert!(fitted.starts_with("Abcdefghij Abcdefghij"), "{fitted:?}");
+        assert!(!fitted.contains("  "), "{fitted:?}");
+    }
+
+    #[test]
+    fn media_title_trims_whitespace_before_ellipsis() {
+        // Budget keeps 31 chars: 30 'x' plus one space, which must be trimmed.
+        let title = format!("{}     {}", "x".repeat(30), "y".repeat(10));
+        let fitted = media_title_text(&title);
+        assert_eq!(fitted, format!("{}…", "x".repeat(30)));
+    }
+
+    #[test]
+    fn media_title_multibyte_and_emoji_do_not_panic_and_end_on_char_boundary() {
+        let title = "🎵 Ünïcødé 日本語のタイトル 🎶 ".repeat(4);
+        let fitted = media_title_text(&title);
+        assert!(fitted.ends_with('…'), "{fitted:?}");
+        assert!(fitted.chars().count() <= MEDIA_TITLE_MAX_CHARS, "{fitted:?}");
+        assert!(std::str::from_utf8(fitted.as_bytes()).is_ok());
+    }
+
+    // REGRESSION: a disabled control must show only its action-less twin; the
+    // enabled button (which carries data-action) must be hidden, and vice versa.
+    #[test]
+    fn media_controls_swap_to_disabled_twins_by_capability() {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.media.availability = flamewm_api::system::ServiceAvailability::Available;
+        snapshot.system.media.can_next = true;
+        snapshot.system.media.can_play = true;
+        let mut document = MediaDoc::default();
+
+        project_media(&mut document, &snapshot).expect("media projection must succeed");
+
+        let visible = |id: &str| document.visible.get(id).copied();
+        assert_eq!(visible("media-next"), Some(true));
+        assert_eq!(visible("media-next-disabled"), Some(false));
+        assert_eq!(visible("media-playpause"), Some(true));
+        assert_eq!(visible("media-playpause-disabled"), Some(false));
+        assert_eq!(visible("media-previous"), Some(false));
+        assert_eq!(visible("media-previous-disabled"), Some(true));
+    }
+
+    #[test]
+    fn media_controls_all_disabled_without_player() {
+        let snapshot = crate::ShellSnapshot::default();
+        let mut document = MediaDoc::default();
+
+        project_media(&mut document, &snapshot).expect("media projection must succeed");
+
+        for id in ["media-previous", "media-playpause", "media-next"] {
+            assert_eq!(document.visible.get(id).copied(), Some(false), "{id}");
+        }
+        for id in [
+            "media-previous-disabled",
+            "media-playpause-disabled",
+            "media-next-disabled",
+        ] {
+            assert_eq!(document.visible.get(id).copied(), Some(true), "{id}");
+        }
     }
 }
 

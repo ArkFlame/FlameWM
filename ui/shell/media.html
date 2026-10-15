@@ -7,18 +7,14 @@
 </head>
 <body class="popup-body">
   <section id="media-popup" class="tray-popup media-popup" data-action="popup.surface">
-    <div class="popup-title">Now Playing</div>
-    <div class="media-now">
-      <div class="album-art"></div>
-      <div class="media-copy">
-        <div id="media-title" class="media-title">&#8203;</div>
-        <div id="media-artist" class="popup-subtitle">&#8203;</div>
-      </div>
-    </div>
+    <div id="media-title" class="media-title">&#8203;</div>
     <div class="media-controls">
-      <button class="media-control" data-action="media.previous"><img class="symbolic-icon" src="assets/breeze/media-skip-backward.svg"></button>
-      <button class="media-control" data-action="media.playpause"><img class="symbolic-icon" id="media-play-icon" src="assets/breeze/media-playback-start.svg"><img class="symbolic-icon" id="media-pause-icon" src="assets/breeze/media-playback-pause.svg"></button>
-      <button class="media-control" data-action="media.next"><img class="symbolic-icon" src="assets/breeze/media-skip-forward.svg"></button>
+      <button class="media-control" id="media-previous" data-action="media.previous"><img class="symbolic-icon" src="assets/breeze/media-skip-backward.svg"></button>
+      <div class="media-control is-disabled" id="media-previous-disabled"><img class="symbolic-icon" src="assets/breeze/media-skip-backward.svg"></div>
+      <button class="media-control" id="media-playpause" data-action="media.playpause"><img class="symbolic-icon" id="media-play-icon" src="assets/breeze/media-playback-start.svg"><img class="symbolic-icon" id="media-pause-icon" src="assets/breeze/media-playback-pause.svg"></button>
+      <div class="media-control is-disabled" id="media-playpause-disabled"><img class="symbolic-icon" src="assets/breeze/media-playback-start.svg"></div>
+      <button class="media-control" id="media-next" data-action="media.next"><img class="symbolic-icon" src="assets/breeze/media-skip-forward.svg"></button>
+      <div class="media-control is-disabled" id="media-next-disabled"><img class="symbolic-icon" src="assets/breeze/media-skip-forward.svg"></div>
     </div>
   </section>
 </body>

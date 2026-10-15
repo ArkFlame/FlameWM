@@ -433,6 +433,9 @@ impl ShellLoop {
             return None;
         }
         let snapshot = self.shell.snapshot();
+        if let Some(command) = action.strip_prefix("media.") {
+            return media_system_request(&snapshot.system.media, snapshot.system.revision, command);
+        }
         let audio_row = if matches!(action, "volume.mute" | "volume.down" | "volume.up") {
             flamewm_shell::taskbar::status::audio::default_endpoint_row(&snapshot.system.audio)
         } else if let Some((kind_slot, _)) = action
@@ -1631,6 +1634,30 @@ fn pager_cell_window_rect(node: (f32, f32, f32, f32), origin: (f32, f32)) -> [u6
     ]
 }
 
+/// Maps a `media.*` node action to an MPRIS system request for the active
+/// player. The host checks the live generation, so only the bus name and the
+/// snapshot revision are carried.
+fn media_system_request(
+    media: &flamewm_api::system::MediaSnapshot,
+    expected_revision: u64,
+    command: &str,
+) -> Option<ControlRequest> {
+    if media.active_bus_name.is_empty() {
+        return None;
+    }
+    let bus_name = media.active_bus_name.clone();
+    let action = match command {
+        "previous" => flamewm_api::system::SystemAction::Previous { bus_name },
+        "playpause" => flamewm_api::system::SystemAction::PlayPause { bus_name },
+        "next" => flamewm_api::system::SystemAction::Next { bus_name },
+        _ => return None,
+    };
+    Some(ControlRequest::SystemAction {
+        action,
+        expected_revision,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     fn production_source() -> &'static str {
@@ -1638,6 +1665,63 @@ mod tests {
             .split_once("\n#[cfg(test)]\nmod tests")
             .map(|(source, _)| source)
             .expect("app tests must have a production section")
+    }
+
+    #[test]
+    fn media_node_actions_route_to_active_player_with_revision() {
+        let media = flamewm_api::system::MediaSnapshot {
+            active_bus_name: "org.mpris.MediaPlayer2.test".to_owned(),
+            ..Default::default()
+        };
+        let bus = "org.mpris.MediaPlayer2.test";
+        let cases = [
+            (
+                "previous",
+                flamewm_api::system::SystemAction::Previous {
+                    bus_name: bus.to_owned(),
+                },
+            ),
+            (
+                "playpause",
+                flamewm_api::system::SystemAction::PlayPause {
+                    bus_name: bus.to_owned(),
+                },
+            ),
+            (
+                "next",
+                flamewm_api::system::SystemAction::Next {
+                    bus_name: bus.to_owned(),
+                },
+            ),
+        ];
+        for (command, expected) in cases {
+            match super::media_system_request(&media, 42, command) {
+                Some(super::ControlRequest::SystemAction {
+                    action,
+                    expected_revision,
+                }) => {
+                    assert_eq!(format!("{action:?}"), format!("{expected:?}"), "{command}");
+                    assert_eq!(expected_revision, 42, "{command}");
+                }
+                _ => panic!("media.{command} must produce a SystemAction request"),
+            }
+        }
+    }
+
+    #[test]
+    fn media_node_actions_without_player_or_unknown_command_are_dropped() {
+        let no_player = flamewm_api::system::MediaSnapshot::default();
+        for command in ["previous", "playpause", "next"] {
+            assert!(
+                super::media_system_request(&no_player, 1, command).is_none(),
+                "media.{command} without an active player must be dropped"
+            );
+        }
+        let media = flamewm_api::system::MediaSnapshot {
+            active_bus_name: "org.mpris.MediaPlayer2.test".to_owned(),
+            ..Default::default()
+        };
+        assert!(super::media_system_request(&media, 1, "stop").is_none());
     }
 
     #[test]
