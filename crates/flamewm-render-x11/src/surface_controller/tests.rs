@@ -332,6 +332,73 @@ mod tests {
     }
 
     #[test]
+    fn slide_out_keeps_grab_only_for_shown_slide_popups() {
+        let slide = Some(SlideConfig::slide(SlideEdge::Bottom, 200));
+        let fade = Some(SlideConfig::fade(SlideEdge::Bottom, 200));
+        assert!(slide_out_keeps_grab(slide, true), "shown slide keeps grab during slide-out");
+        assert!(!slide_out_keeps_grab(slide, false), "unmapped popup releases at once");
+        assert!(!slide_out_keeps_grab(fade, true), "fade releases at once");
+        assert!(!slide_out_keeps_grab(None, true), "no transition releases at once");
+    }
+
+    /// Replays hide() then the landing: returns how many times the grab was released.
+    fn grab_releases(slide: Option<SlideConfig>, shown: bool) -> (u32, u32) {
+        let mut grabbed = true;
+        let mut at_hide = 0;
+        if !slide_out_keeps_grab(slide, shown) {
+            grabbed = false;
+            at_hide += 1;
+        }
+        let mut at_landing = 0;
+        if landing_releases_grab(false, grabbed) {
+            grabbed = false;
+            at_landing += 1;
+        }
+        assert!(!grabbed, "grab must not outlive the close");
+        (at_hide, at_landing)
+    }
+
+    #[test]
+    fn slide_hide_keeps_grab_until_landing_then_releases_exactly_once() {
+        let slide = Some(SlideConfig::slide(SlideEdge::Bottom, 200));
+        assert_eq!(grab_releases(slide, true), (0, 1));
+        // A landed opening never releases, and a second landing finds nothing left to release.
+        assert!(!landing_releases_grab(true, true), "opening landing keeps grab");
+        assert!(!landing_releases_grab(false, false), "second landing has nothing to release");
+    }
+
+    #[test]
+    fn fade_lamp_and_none_release_at_hide_not_at_landing() {
+        let fade = Some(SlideConfig::fade(SlideEdge::Bottom, 200));
+        let lamp = Some(SlideConfig::lamp(SlideEdge::Bottom, 200, (0, 0, 10, 10)));
+        for slide in [fade, lamp, None] {
+            assert_eq!(grab_releases(slide, true), (1, 0), "{slide:?} releases at hide");
+        }
+    }
+
+    #[test]
+    fn begin_overlay_hide_never_touches_the_grab() {
+        // Overlay close owns only the visual flight; grab release stays in hide() and landing.
+        let source = include_str!("slide.rs");
+        let start = source.find("pub(super) fn begin_overlay_hide(").expect("begin_overlay_hide present");
+        let body = &source[start..];
+        let end = body.find("\n    /// Final root-space rect").expect("body end marker");
+        let body = &body[..end];
+        assert!(!body.contains("release_grab"), "overlay hide must not release the grab");
+        assert!(!body.contains("pointer_grabbed"), "overlay hide must not touch the grab flag");
+        assert!(!body.contains("release_popup_presses"), "overlay hide must not release presses");
+    }
+
+    #[test]
+    fn outside_press_is_swallowed_only_while_sliding_out() {
+        let closing = Some(SlideKind { edge: SlideEdge::Bottom, opening: false });
+        let opening = Some(SlideKind { edge: SlideEdge::Bottom, opening: true });
+        assert!(slide_out_swallows_press(closing), "second outside press during slide-out is ignored");
+        assert!(!slide_out_swallows_press(opening), "a reversed open still dismisses");
+        assert!(!slide_out_swallows_press(None), "settled popup dismisses normally");
+    }
+
+    #[test]
     fn popup_backdrop_square_corners_stay_opaque() {
         let mut words = vec![0xff10_2030_u32; 12 * 12];
         round_backdrop_words(&mut words, 12, 12, 0);
