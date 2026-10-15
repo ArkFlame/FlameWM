@@ -236,7 +236,9 @@ impl LayoutEngine {
             };
         }
         let mut z_order: Vec<u32> = (0..document.document.nodes.len() as u32).collect();
-        z_order.sort_by_key(|index| (document.effective_z_index(*index), *index as i64));
+        // Keys are unique (index tiebreak), so unstable sort yields the same
+        // order as the stable sort without its scratch allocation.
+        z_order.sort_unstable_by_key(|index| (document.effective_z_index(*index), *index as i64));
         LayoutResult {
             boxes,
             contents,
@@ -393,14 +395,14 @@ impl<'a> Engine<'a> {
         forced_w: Option<f32>,
         forced_h: Option<f32>,
     ) -> (f32, f32) {
-        let node = self.document.document.nodes[index as usize].clone();
+        let kind = self.document.document.nodes[index as usize].kind;
         let style = self.style(index);
         if style.display == Display::None {
             self.boxes[index as usize].rect = Rect::default();
             return (0.0, 0.0);
         }
 
-        if node.kind == NodeKind::Text || node.kind == NodeKind::Image {
+        if kind == NodeKind::Text || kind == NodeKind::Image {
             let (measured_w, measured_h) = self.measure_node(index, avail_w, avail_h);
             let width =
                 forced_w.unwrap_or_else(|| style.width.resolve(avail_w).unwrap_or(measured_w));

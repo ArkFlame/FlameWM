@@ -176,7 +176,7 @@ pub fn build_paint_commands_with_scroll(
                             style.text_wrap,
                             style.break_anywhere,
                         );
-                        for (line_index, line) in laid.lines.iter().enumerate() {
+                        for (line_index, line) in laid.lines.into_iter().enumerate() {
                             if line.text.is_empty() {
                                 continue;
                             }
@@ -186,7 +186,7 @@ pub fn build_paint_commands_with_scroll(
                                 color,
                                 size: style.font_size,
                                 weight: style.font_weight,
-                                text: line.text.clone(),
+                                text: line.text,
                             });
                         }
                     }
