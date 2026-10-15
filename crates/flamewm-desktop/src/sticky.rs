@@ -23,6 +23,8 @@ use crate::{
 const STICKY_SLOTS: usize = projection::STICKY_SLOT_COUNT;
 /// Coalesced save delay: every mutation within this window shares one write.
 const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
+/// Upper bound for the exponential retry delay after failed saves.
+const PERSIST_RETRY_CAP: Duration = Duration::from_secs(30);
 
 fn sticky_edit_counter() -> &'static CounterPoint {
     static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
@@ -54,6 +56,8 @@ pub(crate) struct StickyState {
     persist_pending: bool,
     persist_armed: bool,
     persist_due: Option<Instant>,
+    /// Consecutive failed saves; drives the retry backoff and resets on success.
+    persist_failures: u32,
     /// Reactor wake deadline; set to `persist_due` while a save is armed.
     wake: WakeDeadline,
 }
@@ -69,6 +73,7 @@ impl StickyState {
             persist_pending: false,
             persist_armed: false,
             persist_due: None,
+            persist_failures: 0,
             wake: WakeDeadline::default(),
         }
     }
@@ -76,10 +81,14 @@ impl StickyState {
     /// Marks a save pending and publishes its due time to the reactor wake deadline,
     /// so dispatch wakes exactly when the coalesced save is due.
     fn arm_persist(&mut self, now: Instant) {
+        self.arm_persist_after(now, PERSIST_DEBOUNCE);
+    }
+
+    fn arm_persist_after(&mut self, now: Instant, delay: Duration) {
         self.persist_pending = true;
         if !self.persist_armed {
             self.persist_armed = true;
-            let due = now + PERSIST_DEBOUNCE;
+            let due = now + delay;
             self.persist_due = Some(due);
             self.wake.set(Some(due));
         }
@@ -99,10 +108,16 @@ impl StickyState {
         }
     }
 
-    /// Re-arms a save whose write failed, so the next debounce window retries it.
-    /// Uses the normal debounce delay (never zero), so a persistent failure cannot spin.
+    /// Re-arms a save whose write failed. The retry delay doubles per consecutive
+    /// failure from PERSIST_DEBOUNCE up to PERSIST_RETRY_CAP, so a persistent failure
+    /// cannot spin and does not retry at a fixed rate forever.
     fn persist_failed(&mut self, now: Instant) {
-        self.arm_persist(now);
+        self.persist_failures = self.persist_failures.saturating_add(1);
+        let shift = (self.persist_failures - 1).min(16);
+        let delay = PERSIST_DEBOUNCE
+            .saturating_mul(1u32 << shift)
+            .min(PERSIST_RETRY_CAP);
+        self.arm_persist_after(now, delay);
     }
 }
 
@@ -155,8 +170,9 @@ pub(crate) fn flush_persist_if_due(
         return Ok(());
     }
     let result = persist(state);
-    if result.is_err() {
-        state.sticky.persist_failed(now);
+    match result {
+        Ok(()) => state.sticky.persist_failures = 0,
+        Err(_) => state.sticky.persist_failed(now),
     }
     result
 }
@@ -173,7 +189,9 @@ fn schedule_persist(state: &mut DesktopState) {
 
 pub(crate) fn flush_now(state: &DesktopState) {
     if state.sticky.persist_pending {
-        let _ = sticky_persistence::persist(&state.sticky.path, &state.sticky.store);
+        if let Err(error) = sticky_persistence::persist(&state.sticky.path, &state.sticky.store) {
+            eprintln!("desktop: sticky notes flush failed: {error:?}; pending save kept");
+        }
     }
 }
 
@@ -585,7 +603,10 @@ mod tests {
 
     use flamewm_desktop_core::sticky::StickyNoteStore;
 
-    use super::{PERSIST_DEBOUNCE, StickyState, is_note_body_action, sticky_drag_exceeded};
+    use super::{
+        PERSIST_DEBOUNCE, PERSIST_RETRY_CAP, StickyState, is_note_body_action,
+        sticky_drag_exceeded,
+    };
 
     fn state() -> StickyState {
         StickyState::new(StickyNoteStore::default(), PathBuf::from("unused"), true)
@@ -642,6 +663,25 @@ mod tests {
         assert_eq!(state.wake.get(), Some(failed_at + PERSIST_DEBOUNCE));
         assert!(!state.take_due(failed_at));
         assert!(state.take_due(failed_at + PERSIST_DEBOUNCE));
+    }
+
+    #[test]
+    fn repeated_failures_back_off_exponentially_up_to_the_cap() {
+        let mut state = state();
+        let mut now = Instant::now();
+        state.arm_persist(now);
+        let mut delays = Vec::new();
+        for _ in 0..10 {
+            now = state.persist_due.expect("armed");
+            assert!(state.take_due(now));
+            state.persist_failed(now);
+            delays.push(state.persist_due.expect("re-armed") - now);
+        }
+        assert_eq!(delays[0], PERSIST_DEBOUNCE);
+        assert_eq!(delays[1], PERSIST_DEBOUNCE * 2);
+        assert_eq!(delays[2], PERSIST_DEBOUNCE * 4);
+        assert_eq!(delays[9], PERSIST_RETRY_CAP);
+        assert!(delays.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]
