@@ -256,7 +256,7 @@ fn project_panel_critical(
         surfaces.panel_outputs(),
         |handle, view| {
             runtime.with_document(handle, |document| {
-                async_projection::project_panel_async(document, view, None)
+                async_projection::project_panel_async(document, view, None, &mut Default::default())
             })
         },
     )

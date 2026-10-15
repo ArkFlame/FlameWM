@@ -2225,72 +2225,7 @@ mod audio_routing_tests {
 mod battery_popup_tests {
     use super::*;
     use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
-    use flamewm_ui_x11::{RuntimeImage, UiColor};
-
-    #[derive(Default)]
-    struct TextDoc {
-        texts: std::collections::HashMap<String, String>,
-    }
-
-    impl UiDocumentAccess for TextDoc {
-        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
-            self.texts.insert(id.to_owned(), text);
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn layer(&mut self, _: &str, _: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
-            Ok(())
-        }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: flamewm_ui_x11::Overflow,
-            _: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
-            Ok(())
-        }
-    }
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
 
     fn power(cpu_percent: Option<u8>) -> PowerSnapshot {
         PowerSnapshot {
@@ -2313,7 +2248,7 @@ mod battery_popup_tests {
 
     #[test]
     fn battery_menu_projects_cpu_text_and_refreshes_when_cpu_changes() {
-        let mut doc = TextDoc::default();
+        let mut doc = RecordingUiDoc::default();
         crate::projection::project_battery_menu(&mut doc, &power(Some(37)), 268.0)
             .expect("battery menu projects");
         assert_eq!(

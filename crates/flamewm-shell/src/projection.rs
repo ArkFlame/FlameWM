@@ -83,16 +83,13 @@ pub fn taskbar_css_width(device_width: i32, scale_percent: u16) -> f32 {
 /// layout viewport at 125% scale.
 pub(crate) fn project_taskbar_height(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
+    view: PanelView<'_>,
 ) -> Result<(), String> {
-    let Some(panel) = snapshot.panels.panels.first() else {
+    let Some(panel) = view.panel else {
         return Ok(());
     };
-    let scale_percent = snapshot
-        .displays
-        .outputs
-        .iter()
-        .find(|output| output.id == panel.output && output.connected)
+    let scale_percent = view
+        .output
         .map(|output| output.shell_scale_percent)
         .unwrap_or(100);
     document.size(
@@ -102,29 +99,44 @@ pub(crate) fn project_taskbar_height(
     )
 }
 
-/// Narrows `snapshot` to one panel record: only that record's output and
-/// panel stay in the view, so the existing panel projection reads the
-/// record's own geometry and output scale. Everything else is shared.
-#[must_use]
-pub fn panel_record_view(
-    snapshot: &ShellSnapshot,
-    output: &flamewm_api::display::OutputSnapshot,
-    panel: &flamewm_api::panels::PanelSnapshot,
-) -> ShellSnapshot {
-    let mut view = snapshot.clone();
-    view.displays.outputs = vec![output.clone()];
-    view.panels.panels = vec![panel.clone()];
-    view
+/// Borrowed single-panel view. `output` and `panel` are the record's own
+/// entries (or the first panel for full-snapshot callers); everything else
+/// is read from the shared snapshot without cloning it.
+#[derive(Clone, Copy)]
+pub struct PanelView<'a> {
+    pub snapshot: &'a ShellSnapshot,
+    pub output: Option<&'a flamewm_api::display::OutputSnapshot>,
+    pub panel: Option<&'a flamewm_api::panels::PanelSnapshot>,
+}
+
+impl<'a> PanelView<'a> {
+    /// First panel of the snapshot, with its connected output.
+    #[must_use]
+    pub fn first(snapshot: &'a ShellSnapshot) -> Self {
+        let panel = snapshot.panels.panels.first();
+        let output = panel.and_then(|panel| {
+            snapshot
+                .displays
+                .outputs
+                .iter()
+                .find(|output| output.id == panel.output && output.connected)
+        });
+        Self {
+            snapshot,
+            output,
+            panel,
+        }
+    }
 }
 
 /// Calls `project` once per panel record, in order, with that record's
-/// narrowed view of the live snapshot. A record whose connected output or
+/// borrowed view of the live snapshot. A record whose connected output or
 /// panel is absent from the snapshot is skipped; sync removes its surface.
 /// The first error stops the walk.
 pub fn for_each_panel_record<K, E>(
     snapshot: &ShellSnapshot,
     records: impl IntoIterator<Item = (K, flamewm_api::OutputId)>,
-    mut project: impl FnMut(K, &ShellSnapshot) -> Result<(), E>,
+    mut project: impl FnMut(K, PanelView<'_>) -> Result<(), E>,
 ) -> Result<(), E> {
     for (key, output_id) in records {
         let Some(output) = snapshot
@@ -143,8 +155,14 @@ pub fn for_each_panel_record<K, E>(
         else {
             continue;
         };
-        let view = panel_record_view(snapshot, output, panel);
-        project(key, &view)?;
+        project(
+            key,
+            PanelView {
+                snapshot,
+                output: Some(output),
+                panel: Some(panel),
+            },
+        )?;
     }
     Ok(())
 }
@@ -154,20 +172,21 @@ pub fn project(
     snapshot: &ShellSnapshot,
     icon_resolver: &mut IconResolver,
 ) -> Result<(), String> {
-    project_panel(document, snapshot, icon_resolver)
+    project_panel(document, PanelView::first(snapshot), icon_resolver)
 }
 
 pub fn project_panel(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
+    view: PanelView<'_>,
     icon_resolver: &mut IconResolver,
 ) -> Result<(), String> {
-    project_taskbar_height(document, snapshot)?;
+    let snapshot = view.snapshot;
+    project_taskbar_height(document, view)?;
     let states = task_visual_states_on_output(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
-        snapshot.panels.panels.first().map(|panel| &panel.output),
+        view.panel.map(|panel| &panel.output),
     );
     let status = crate::taskbar::status::project(&snapshot.system).views;
     let workspaces = project_workspaces(snapshot.workspaces.as_ref());
@@ -757,7 +776,7 @@ mod panel_template_tests {
                 visible: true,
                 geometry: flamewm_api::Rect::new(0, 551, 1350, 90),
             });
-        project_taskbar_height(&mut document, &snapshot)
+        project_taskbar_height(&mut document, PanelView::first(&snapshot))
             .expect("taskbar size projects from the panel snapshot");
         project_clock_at(&mut document, Local::now(), ClockDisplay::default())
             .expect("clock projects");
@@ -914,14 +933,20 @@ mod panel_template_tests {
                     project(document, snapshot, &mut resolver).expect("sync panel projects");
                 }),
                 ("async full refresh", |document, snapshot| {
-                    crate::async_projection::project_panel_async(document, snapshot, None)
+                    crate::async_projection::project_panel_async(
+                        document,
+                        PanelView::first(snapshot),
+                        None,
+                        &mut Default::default(),
+                    )
                         .expect("async panel projects");
                 }),
                 ("async system scope", |document, snapshot| {
                     crate::async_projection::project_panel_for_changed(
                         document,
-                        snapshot,
+                        PanelView::first(snapshot),
                         None,
+                        &mut Default::default(),
                         crate::runtime::ChangedDomains {
                             system: true,
                             ..crate::runtime::ChangedDomains::default()
@@ -1032,10 +1057,12 @@ mod panel_template_tests {
     fn full_panel_projection_succeeds_on_real_artifact() {
         let mut document =
             flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
+        let snapshot = crate::ShellSnapshot::default();
         crate::async_projection::project_panel_async(
             &mut document,
-            &crate::ShellSnapshot::default(),
+            PanelView::first(&snapshot),
             None,
+            &mut Default::default(),
         )
         .unwrap_or_else(|error| panic!("full panel projection refused: {error}"));
     }
@@ -1082,11 +1109,11 @@ mod panel_record_tests {
                 ("primary", OutputId::new("A")),
                 ("secondary", OutputId::new("B")),
             ],
-            |key: &str, view: &ShellSnapshot| -> Result<(), String> {
+            |key: &str, view: PanelView<'_>| -> Result<(), String> {
                 seen.push((
                     key,
-                    view.panels.panels[0].geometry,
-                    view.displays.outputs[0].shell_scale_percent,
+                    view.panel.expect("panel").geometry,
+                    view.output.expect("output").shell_scale_percent,
                 ));
                 Ok(())
             },
@@ -1113,7 +1140,7 @@ mod panel_record_tests {
         let mut seen = Vec::new();
 
         snapshot.displays.outputs[1].connected = false;
-        for_each_panel_record(&snapshot, records.clone(), |key, _| {
+        for_each_panel_record(&snapshot, records.iter().cloned(), |key, _| {
             seen.push(key);
             Ok::<_, String>(())
         })
@@ -1126,10 +1153,10 @@ mod panel_record_tests {
             seen.push(key);
             if key == "secondary" {
                 assert_eq!(
-                    view.panels.panels[0].geometry,
+                    view.panel.expect("panel").geometry,
                     Rect::new(1920, 1036, 1920, 44)
                 );
-                assert_eq!(view.displays.outputs[0].shell_scale_percent, 175);
+                assert_eq!(view.output.expect("output").shell_scale_percent, 175);
             }
             Ok::<_, String>(())
         })

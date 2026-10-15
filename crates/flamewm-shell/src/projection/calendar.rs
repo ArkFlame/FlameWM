@@ -118,7 +118,7 @@ pub fn project_calendar(
 #[cfg(test)]
 mod calendar_tests {
     use super::*;
-    use std::collections::HashMap;
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
 
     /// Flame accent red (#ef4048 family) that must not appear in any calendar projection.
     const FLAME_RED: UiColor = UiColor {
@@ -136,84 +136,8 @@ mod calendar_tests {
         assert_eq!(taskbar_css_height(34), 34.0);
     }
 
-    #[derive(Default)]
-    struct FakeDocument {
-        texts: HashMap<String, String>,
-        backgrounds: HashMap<String, UiColor>,
-        foregrounds: HashMap<String, UiColor>,
-        cleared: Vec<String>,
-    }
-
-    impl UiDocumentAccess for FakeDocument {
-        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
-            self.texts.insert(id.to_owned(), text);
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn toggle(&mut self, _track: &str, _knob: &str, _checked: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _id: &str, _left: f32, _top: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-            self.backgrounds.insert(id.to_owned(), color);
-            Ok(())
-        }
-        fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-            self.foregrounds.insert(id.to_owned(), color);
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, id: &str) -> Result<(), String> {
-            self.backgrounds.remove(id);
-            self.cleared.push(id.to_owned());
-            Ok(())
-        }
-        fn border_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn layer(
-            &mut self,
-            _id: &str,
-            _layer: flamewm_ui_core::style::UiLayer,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-        fn overflow(
-            &mut self,
-            _id: &str,
-            _x: flamewm_ui_x11::Overflow,
-            _y: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
     /// Every color the projection wrote, across backgrounds and foregrounds.
-    fn all_colors(document: &FakeDocument) -> Vec<UiColor> {
+    fn all_colors(document: &RecordingUiDoc) -> Vec<UiColor> {
         document
             .backgrounds
             .values()
@@ -254,7 +178,7 @@ mod calendar_tests {
             .iter()
             .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
             .expect("known date is a current-month cell");
-        let mut document = FakeDocument::default();
+        let mut document = RecordingUiDoc::default();
         project_calendar(&mut document, &state, today).expect("projection succeeds");
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
@@ -269,7 +193,7 @@ mod calendar_tests {
         for view in ["calendar.view.days", "calendar.view.months", "calendar.view.years"] {
             let mut state = crate::calendar::CalendarState::for_today(today);
             state.apply(view, today);
-            let mut document = FakeDocument::default();
+            let mut document = RecordingUiDoc::default();
             project_calendar(&mut document, &state, today).expect("projection succeeds");
             let colors = all_colors(&document);
             assert!(!colors.is_empty(), "{view} projects colors");
@@ -290,7 +214,7 @@ mod calendar_tests {
         for view in ["calendar.view.months", "calendar.view.years"] {
             let mut state = crate::calendar::CalendarState::for_today(today);
             state.apply(view, today);
-            let mut document = FakeDocument::default();
+            let mut document = RecordingUiDoc::default();
             project_calendar(&mut document, &state, today).expect("projection succeeds");
             let today_fill = if view == "calendar.view.months" {
                 document.backgrounds.get("calendar-pick-month-10")
@@ -334,7 +258,7 @@ mod calendar_tests {
             .iter()
             .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
             .expect("known date is a current-month cell");
-        let mut document = FakeDocument::default();
+        let mut document = RecordingUiDoc::default();
         project_calendar(&mut document, &state, today).expect("projection succeeds");
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         let tile = format!("calendar-day-{}", today_index + 1);
@@ -374,7 +298,7 @@ mod calendar_tests {
 
     #[test]
     fn reprojection_clears_previous_marker_and_moves_selection() {
-        let mut document = FakeDocument::default();
+        let mut document = RecordingUiDoc::default();
         let first = crate::calendar::CalendarState::for_today((2026, 9, 7));
         project_calendar(&mut document, &first, (2026, 9, 7)).expect("first projection succeeds");
         let second = crate::calendar::CalendarState::for_today((2026, 9, 8));
@@ -402,7 +326,7 @@ mod calendar_tests {
         let today = (2026, 10, 13);
         let mut state = crate::calendar::CalendarState::for_today(today);
         state.apply("calendar.view.months", today);
-        let mut document = FakeDocument::default();
+        let mut document = RecordingUiDoc::default();
         project_calendar(&mut document, &state, today).expect("projection succeeds");
         assert_eq!(
             document

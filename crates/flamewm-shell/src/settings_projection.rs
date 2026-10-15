@@ -332,89 +332,7 @@ fn rgb(value: u32, alpha: u8) -> UiColor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flamewm_ui_core::style::UiLayer;
-    use flamewm_ui_x11::{Overflow, RuntimeImage};
-    use std::collections::HashMap;
-
-    #[derive(Default)]
-    struct RecordingDocument {
-        backgrounds: HashMap<String, UiColor>,
-        variables: HashMap<String, UiColor>,
-        images: HashMap<String, (u32, u32)>,
-        radii: HashMap<String, f32>,
-    }
-
-    impl UiDocumentAccess for RecordingDocument {
-        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-            self.images
-                .insert(id.to_owned(), (image.width, image.height));
-            Ok(())
-        }
-        fn image_reset(&mut self, id: &str) -> Result<(), String> {
-            self.images.remove(id);
-            Ok(())
-        }
-        fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
-            self.radii.insert(id.to_owned(), radius_px);
-            Ok(())
-        }
-        fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-            self.backgrounds.insert(id.to_owned(), color);
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_family(&mut self, _: String) -> Result<(), String> {
-            Ok(())
-        }
-        fn overflow(&mut self, _: &str, _: Overflow, _: Overflow) -> Result<(), String> {
-            Ok(())
-        }
-        fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
-            Ok(())
-        }
-        fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
-            self.variables.insert(name.to_owned(), color);
-            Ok(())
-        }
-    }
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
 
     #[test]
     fn osd_projection_applies_surface_fill_and_accent_token() {
@@ -426,7 +344,7 @@ mod tests {
             "accent".to_owned(),
             SettingValue::Text("#00ff00".to_owned()),
         );
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Osd).expect("osd projection");
         assert_eq!(doc.backgrounds["osd"], surface_background(&snapshot));
         assert_eq!(doc.backgrounds["osd"].a, 102);
@@ -451,7 +369,7 @@ mod tests {
         snapshot
             .values
             .insert("accentOpacity".to_owned(), SettingValue::Percent(50));
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
         assert_eq!(
             doc.backgrounds["start-menu"],
@@ -481,7 +399,7 @@ mod tests {
         snapshot
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(0));
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
         assert_eq!(doc.backgrounds["start-menu"].a, 0);
         assert_eq!(doc.backgrounds["start-search-box"].a, 255);
@@ -489,7 +407,7 @@ mod tests {
 
     #[test]
     fn default_projection_keeps_accent_tokens_at_stylesheet_values() {
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
         let accent = UiColor {
             r: 0xef,
@@ -556,7 +474,7 @@ mod tests {
 
     #[test]
     fn popup_and_start_corner_radius_follow_decoration_setting() {
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project_menu_background(
             &mut doc,
             &snapshot_with("decoration", "rounded"),
@@ -597,7 +515,7 @@ mod tests {
         snapshot
             .values
             .insert("startMenuOpacity".to_owned(), SettingValue::Percent(90));
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project_menu_background(&mut doc, &snapshot, "audio-popup").expect("popup");
         assert_eq!(
             doc.backgrounds["audio-popup"],
@@ -625,7 +543,7 @@ mod tests {
         snapshot
             .values
             .insert("surfaceBlurPercent".to_owned(), SettingValue::Percent(15));
-        let mut doc = RecordingDocument::default();
+        let mut doc = RecordingUiDoc::default();
         project(&mut doc, &snapshot, SurfaceKind::Panel).expect("panel");
         assert_eq!(
             doc.backgrounds["taskbar"],
@@ -651,7 +569,7 @@ mod tests {
     #[test]
     fn configured_start_icon_projects_a_square_raster_into_the_panel_node() {
         let path = write_ppm_fixture("ok.ppm");
-        let mut document = RecordingDocument::default();
+        let mut document = RecordingUiDoc::default();
         project_start_icon(&mut document, Some(path.display().to_string())).expect("project");
         let _ = std::fs::remove_file(&path);
         // A 2x2 source must be scaled to the 25px box, not kept at natural size.
@@ -661,7 +579,7 @@ mod tests {
     #[test]
     fn clearing_custom_start_icon_reverts_live_to_packaged_default() {
         let path = write_ppm_fixture("clear.ppm");
-        let mut document = RecordingDocument::default();
+        let mut document = RecordingUiDoc::default();
         project_start_icon(&mut document, Some(path.display().to_string())).expect("apply");
         let _ = std::fs::remove_file(&path);
         assert_eq!(document.images.get(START_ICON_ID), Some(&(25, 25)));
@@ -671,7 +589,7 @@ mod tests {
 
     #[test]
     fn missing_none_or_unsupported_start_icon_keeps_the_packaged_default() {
-        let mut document = RecordingDocument::default();
+        let mut document = RecordingUiDoc::default();
         project_start_icon(&mut document, None).expect("none");
         project_start_icon(&mut document, Some("/nonexistent/start.png".to_owned()))
             .expect("missing");

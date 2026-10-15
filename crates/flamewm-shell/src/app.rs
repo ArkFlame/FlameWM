@@ -7,6 +7,7 @@ use flamewm_control_core::ControlRequest;
 use flamewm_platform::panel::TaskbarFrame;
 use flamewm_shell::async_projection::{self, StartViewNote};
 use flamewm_shell::icon_loader::{DependentSurface, IconLoader, IconTarget};
+use flamewm_shell::projection::PanelView;
 use flamewm_shell::start::StartCategory;
 use flamewm_shell::taskbar::tasks::icon_geometry::{
     self, IconGeometrySink, IconGeometryTracker, IconRect,
@@ -103,6 +104,7 @@ pub(crate) struct ShellLoop {
     pub(crate) settings_cache: Option<SettingsSnapshot>,
     pub(crate) settings_projection_pending: bool,
     pub(crate) icon_loader: Option<IconLoader>,
+    pub(crate) task_icon_cache: async_projection::TaskIconCache,
     pub(crate) loader_root: std::path::PathBuf,
     pub(crate) start_view: StartViewNote,
     pub(crate) quick_control: flamewm_shell::quick_controls::QuickControlSupervisor,
@@ -159,6 +161,7 @@ impl ShellLoop {
             settings_cache: None,
             settings_projection_pending: false,
             icon_loader: None,
+            task_icon_cache: Default::default(),
             loader_root,
             start_view: StartViewNote::default(),
             quick_control,
@@ -996,6 +999,7 @@ impl ShellLoop {
                 }
             } else {
                 let loader = &mut self.icon_loader;
+                let icon_cache = &mut self.task_icon_cache;
                 let panel_outputs = self.surfaces.panel_outputs();
                 let projected = projection::for_each_panel_record(
                     &snapshot,
@@ -1006,6 +1010,7 @@ impl ShellLoop {
                                 document,
                                 view,
                                 loader.as_mut(),
+                                icon_cache,
                                 changed,
                             )
                         })
@@ -1159,6 +1164,7 @@ impl ShellLoop {
         }
         self.apply_taskbar_backdrop(runtime);
         let loader = &mut self.icon_loader;
+        let icon_cache = &mut self.task_icon_cache;
         let changed = flamewm_shell::runtime::ChangedDomains {
             panels: true,
             ..Default::default()
@@ -1171,6 +1177,7 @@ impl ShellLoop {
                         document,
                         view,
                         loader.as_mut(),
+                        icon_cache,
                         changed,
                     )
                 })
@@ -1271,6 +1278,7 @@ impl ShellLoop {
                 loader_present,
             ) {
                 let mut loader = self.icon_loader.as_mut();
+                let icon_cache = &mut self.task_icon_cache;
                 let changed = flamewm_shell::runtime::ChangedDomains {
                     windows: true,
                     ..Default::default()
@@ -1281,8 +1289,9 @@ impl ShellLoop {
                     let result = runtime.with_document(handle, |document| {
                         async_projection::project_panel_for_changed(
                             document,
-                            &snapshot,
+                            PanelView::first(&snapshot),
                             loader.as_deref_mut(),
+                            icon_cache,
                             changed,
                         )
                     });
@@ -1555,6 +1564,7 @@ impl ShellLoop {
             ..Default::default()
         };
         let loader = &mut self.icon_loader;
+        let icon_cache = &mut self.task_icon_cache;
         let _ = projection::for_each_panel_record(
             &shell_snapshot,
             self.surfaces.panel_outputs(),
@@ -1564,6 +1574,7 @@ impl ShellLoop {
                         document,
                         view,
                         loader.as_mut(),
+                        icon_cache,
                         task_changed,
                     )
                 })

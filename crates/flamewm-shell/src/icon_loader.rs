@@ -2,6 +2,7 @@
 //! Main thread never resolves synchronously; it try_sends requests and
 //! drains completed rasters per tick. No X calls happen in the worker.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
@@ -47,18 +48,27 @@ fn resolve_icon_raster(
 pub fn icon_name_candidates(name: &str) -> Vec<String> {
     let raw = name.trim();
     let class_segment = raw.rsplit('.').next().unwrap_or(raw);
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::with_capacity(4);
     for candidate in [
-        raw.to_owned(),
-        raw.to_ascii_lowercase(),
-        class_segment.to_owned(),
-        class_segment.to_ascii_lowercase(),
+        Cow::Borrowed(raw),
+        lowercase_if_needed(raw),
+        Cow::Borrowed(class_segment),
+        lowercase_if_needed(class_segment),
     ] {
-        if !candidate.is_empty() && !out.contains(&candidate) {
-            out.push(candidate);
+        if !candidate.is_empty() && !out.iter().any(|seen| seen == candidate.as_ref()) {
+            out.push(candidate.into_owned());
         }
     }
     out
+}
+
+/// ASCII-lowercases `s`, allocating only when it contains an uppercase byte.
+fn lowercase_if_needed(s: &str) -> Cow<'_, str> {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 /// Generic application glyph used when an application name misses. Brand

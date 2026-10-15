@@ -5,10 +5,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::OnceLock;
 
 use flamewm_api::session::SessionCapabilities;
+use flamewm_api::DesktopAppId;
 use flamewm_shell_core::StartModel;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::icon_loader::{IconLoader, IconTarget};
+use crate::projection::PanelView;
 use crate::start::StartCategory;
 use crate::taskbar::workspaces::{
     project as project_workspaces, slot_position, visible_page, PAGE_SIZE,
@@ -24,12 +26,23 @@ const ICON_CACHE_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
 pub type IconCacheKey = (String, u32, u32);
 
+struct IconCacheEntry {
+    image: RuntimeImage,
+    /// Stamp of the most recent insert/get; matches this entry's newest `order` record.
+    stamp: u64,
+}
+
+/// LRU via lazy recency records: `order` holds `(key, stamp)` pairs pushed on
+/// every insert/get. A record is live only if its stamp equals the entry's
+/// current stamp; stale records are skipped on eviction and compacted away
+/// once they outnumber live entries, keeping every operation amortized O(1).
 struct IconCache {
     entry_budget: usize,
     byte_budget: usize,
     bytes: usize,
-    entries: HashMap<IconCacheKey, RuntimeImage>,
-    order: VecDeque<IconCacheKey>,
+    clock: u64,
+    entries: HashMap<IconCacheKey, IconCacheEntry>,
+    order: VecDeque<(IconCacheKey, u64)>,
 }
 
 fn image_bytes(image: &RuntimeImage) -> usize {
@@ -46,9 +59,15 @@ impl IconCache {
             entry_budget: entry_budget.max(1),
             byte_budget,
             bytes: 0,
+            clock: 0,
             entries: HashMap::new(),
             order: VecDeque::new(),
         }
+    }
+
+    fn next_stamp(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
     }
 
     fn clear(&mut self) {
@@ -58,20 +77,23 @@ impl IconCache {
     }
 
     fn remove(&mut self, key: &IconCacheKey) {
-        if let Some(image) = self.entries.remove(key) {
-            self.bytes -= image_bytes(&image);
-            if let Some(position) = self.order.iter().position(|entry| entry == key) {
-                self.order.remove(position);
-            }
+        if let Some(entry) = self.entries.remove(key) {
+            self.bytes -= image_bytes(&entry.image);
         }
     }
 
+    /// Membership test that does not touch LRU recency.
+    fn contains(&self, key: &IconCacheKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
     fn get(&mut self, key: &IconCacheKey) -> Option<RuntimeImage> {
-        let image = self.entries.get(key)?.clone();
-        if let Some(position) = self.order.iter().position(|entry| entry == key) {
-            self.order.remove(position);
-        }
-        self.order.push_back(key.clone());
+        let stamp = self.next_stamp();
+        let entry = self.entries.get_mut(key)?;
+        entry.stamp = stamp;
+        let image = entry.image.clone();
+        self.order.push_back((key.clone(), stamp));
+        self.compact_order();
         Some(image)
     }
 
@@ -84,14 +106,29 @@ impl IconCache {
             return;
         }
         while self.entries.len() >= self.entry_budget || self.bytes + size > self.byte_budget {
-            let Some(oldest) = self.order.front().cloned() else {
+            let Some((oldest, stamp)) = self.order.pop_front() else {
                 break;
             };
-            self.remove(&oldest);
+            if self.entries.get(&oldest).is_some_and(|entry| entry.stamp == stamp) {
+                self.remove(&oldest);
+            }
         }
+        let stamp = self.next_stamp();
         self.bytes += size;
-        self.order.push_back(key.clone());
-        self.entries.insert(key, image);
+        self.order.push_back((key.clone(), stamp));
+        self.entries.insert(key, IconCacheEntry { image, stamp });
+        self.compact_order();
+    }
+
+    /// Drops stale recency records once they dominate, bounding `order` to
+    /// roughly twice the live entry count.
+    fn compact_order(&mut self) {
+        if self.order.len() <= 2 * self.entries.len() + 16 {
+            return;
+        }
+        let entries = &self.entries;
+        self.order
+            .retain(|(key, stamp)| entries.get(key).is_some_and(|entry| entry.stamp == *stamp));
     }
 }
 
@@ -347,6 +384,12 @@ fn cached_image(name: &str, w: u32, h: u32) -> Option<RuntimeImage> {
     icon_cache().lock().ok()?.get(&(name.to_owned(), w, h))
 }
 
+fn cached_contains(name: &str, w: u32, h: u32) -> bool {
+    icon_cache()
+        .lock()
+        .is_ok_and(|cache| cache.contains(&(name.to_owned(), w, h)))
+}
+
 pub fn note_icon_result(name: &str, w: u32, h: u32, image: RuntimeImage) {
     if let Ok(mut cache) = icon_cache().lock() {
         cache.insert((name.to_owned(), w, h), image);
@@ -432,17 +475,77 @@ fn schedule_visible(
 /// its own resolves through a desktop entry whose `StartupWMClass` matches
 /// its WM_CLASS-derived name; otherwise the state's name is used unchanged.
 fn task_icon_name(
+    cache: &mut TaskIconCache,
     state: &flamewm_shell_core::TaskVisualState,
     applications: &[flamewm_api::applications::DesktopApplication],
 ) -> String {
+    if let Some(entry) = cache
+        .resolved
+        .iter()
+        .find(|entry| entry.app_id == state.app_id && entry.icon_in == state.icon_name)
+    {
+        return entry.icon_out.clone();
+    }
     let has_own_entry = applications
         .iter()
         .any(|application| application.id == state.app_id);
-    if has_own_entry {
-        return state.icon_name.clone();
+    let icon_out = if has_own_entry {
+        state.icon_name.clone()
+    } else {
+        desktop_icon_for_wm_class(applications, &state.icon_name)
+            .unwrap_or_else(|| state.icon_name.clone())
+    };
+    cache.resolved.retain(|entry| entry.app_id != state.app_id);
+    cache.resolved.push(ResolvedTaskIcon {
+        app_id: state.app_id.clone(),
+        icon_in: state.icon_name.clone(),
+        icon_out: icon_out.clone(),
+    });
+    icon_out
+}
+
+/// One resolved task icon, keyed by app_id and the state icon it came from.
+struct ResolvedTaskIcon {
+    app_id: DesktopAppId,
+    icon_in: String,
+    icon_out: String,
+}
+
+/// Task icon resolutions valid for one applications list. `sync` drops every
+/// entry when the list's icon-relevant fields differ from the last refresh.
+/// Owned by the caller (app state), passed to each task-slot projection.
+#[derive(Default)]
+pub struct TaskIconCache {
+    /// (id, icon_name, startup_wm_class) of the list the entries were built from.
+    applications: Vec<(DesktopAppId, String, String)>,
+    resolved: Vec<ResolvedTaskIcon>,
+}
+
+impl TaskIconCache {
+    fn sync(&mut self, applications: &[flamewm_api::applications::DesktopApplication]) {
+        let unchanged = self.applications.len() == applications.len()
+            && self
+                .applications
+                .iter()
+                .zip(applications)
+                .all(|((id, icon, wm_class), app)| {
+                    *id == app.id && *icon == app.icon_name && *wm_class == app.startup_wm_class
+                });
+        if unchanged {
+            return;
+        }
+        self.applications = applications
+            .iter()
+            .map(|app| {
+                (
+                    app.id.clone(),
+                    app.icon_name.clone(),
+                    app.startup_wm_class.clone(),
+                )
+            })
+            .collect();
+        self.resolved.clear();
     }
-    desktop_icon_for_wm_class(applications, &state.icon_name)
-        .unwrap_or_else(|| state.icon_name.clone())
 }
 
 /// Desktop-entry `Icon=` whose `StartupWMClass` equals one lookup candidate
@@ -490,15 +593,11 @@ fn empty_image(w: u32, h: u32) -> RuntimeImage {
 /// cold start / snapshot replace.
 pub fn project_panel_async(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
-    mut loader: Option<&mut IconLoader>,
+    view: PanelView<'_>,
+    loader: Option<&mut IconLoader>,
+    icon_cache: &mut TaskIconCache,
 ) -> Result<(), String> {
-    project_panel_scoped(
-        document,
-        snapshot,
-        loader.as_deref_mut(),
-        &PanelScope::full(),
-    )
+    project_panel_scoped(document, view, loader, icon_cache, &PanelScope::full())
 }
 
 /// Subset of panel nodes a changed domain may reproject. Windows owns
@@ -578,22 +677,18 @@ pub fn task_icon_prime_still_armed(
 /// full panel.
 pub fn project_panel_for_changed(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
+    view: PanelView<'_>,
     loader: Option<&mut IconLoader>,
+    icon_cache: &mut TaskIconCache,
     changed: crate::runtime::ChangedDomains,
 ) -> Result<(), String> {
     let scope = PanelScope::for_changed(changed);
     if scope == PanelScope::none() {
         return Ok(());
     }
-    project_panel_scoped(document, snapshot, loader, &scope)
+    project_panel_scoped(document, view, loader, icon_cache, &scope)
 }
 
-/// Output of the panel whose task slots this document shows (first panel,
-/// matching `projection::project_panel`). `None` lists every task entry.
-fn shown_panel_output(snapshot: &ShellSnapshot) -> Option<&flamewm_api::OutputId> {
-    snapshot.panels.panels.first().map(|panel| &panel.output)
-}
 
 /// WindowsChanged -> task slots only. Resolves task visual states (cheap
 /// in-memory join, no fetch) and projects labels/icon/visibility/background
@@ -601,17 +696,20 @@ fn shown_panel_output(snapshot: &ShellSnapshot) -> Option<&flamewm_api::OutputId
 /// a focus-only window update never reprojects the full panel.
 pub fn project_task_slots_async(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
+    view: PanelView<'_>,
     mut loader: Option<&mut IconLoader>,
+    icon_cache: &mut TaskIconCache,
 ) -> Result<(), String> {
     let _span = crate::runtime::shell_span("shell.tasks.project").start();
     bump_task_view_epoch();
+    let snapshot = view.snapshot;
     let states = flamewm_shell_core::task_visual_states_on_output(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
-        shown_panel_output(snapshot),
+        view.panel.map(|panel| &panel.output),
     );
+    icon_cache.sync(&snapshot.applications);
     // Task-slot nodes only: labels, icons, line visibility, backgrounds,
     // slot visibility. Pager/tray/geometry untouched.
     for index in 0..TASK_SLOT_COUNT {
@@ -634,7 +732,7 @@ pub fn project_task_slots_async(
                 &icon_id,
                 &mut loader.as_deref_mut(),
                 IconTarget::TaskSlot(index as u8),
-                &task_icon_name(state, &snapshot.applications),
+                &task_icon_name(icon_cache, state, &snapshot.applications),
                 25,
                 25,
             )?;
@@ -770,14 +868,15 @@ pub fn project_status_tray_async(
 /// labels, icons, or backgrounds.
 pub fn project_panel_geometry(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
+    view: PanelView<'_>,
 ) -> Result<(), String> {
-    crate::projection::project_taskbar_height(document, snapshot)?;
+    let snapshot = view.snapshot;
+    crate::projection::project_taskbar_height(document, view)?;
     let states = flamewm_shell_core::task_visual_states_on_output(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
-        shown_panel_output(snapshot),
+        view.panel.map(|panel| &panel.output),
     );
     for index in 0..TASK_SLOT_COUNT {
         document.visible(
@@ -804,32 +903,30 @@ pub fn project_panel_geometry(
 
 fn project_panel_scoped(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
-    mut loader: Option<&mut IconLoader>,
+    view: PanelView<'_>,
+    loader: Option<&mut IconLoader>,
+    icon_cache: &mut TaskIconCache,
     scope: &PanelScope,
 ) -> Result<(), String> {
     if scope.task_slots {
-        project_task_slots_async(document, snapshot, loader.as_deref_mut())?;
-        // Task slots consumed the loader borrow; re-borrow is not needed
-        // because no other scoped pass uses icons. Pass None onward.
-        return project_panel_scoped_tail(document, snapshot, scope);
+        project_task_slots_async(document, view, loader, icon_cache)?;
     }
-    project_panel_scoped_tail(document, snapshot, scope)
+    project_panel_scoped_tail(document, view, scope)
 }
 
 fn project_panel_scoped_tail(
     document: &mut impl UiDocumentAccess,
-    snapshot: &ShellSnapshot,
+    view: PanelView<'_>,
     scope: &PanelScope,
 ) -> Result<(), String> {
     if scope.geometry {
-        project_panel_geometry(document, snapshot)?;
+        project_panel_geometry(document, view)?;
     }
     if scope.pager {
-        project_pager_async(document, snapshot)?;
+        project_pager_async(document, view.snapshot)?;
     }
     if scope.tray {
-        project_status_tray_async(document, snapshot)?;
+        project_status_tray_async(document, view.snapshot)?;
     }
     if scope.full_clock() {
         crate::projection::project_clock(document)?;
@@ -857,7 +954,7 @@ pub fn prewarm_start_tail(
     let applications = crate::projection::start_visible_results(model, category, query);
     let (_, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
     for application in applications.iter().skip(last).take(8) {
-        if cached_image(&application.icon_name, 20, 20).is_some() {
+        if cached_contains(&application.icon_name, 20, 20) {
             continue;
         }
         loader.request_low(
@@ -1253,19 +1350,19 @@ mod tests {
         };
         snapshot.windows = vec![window_on(1, "A"), window_on(2, "B")];
         let mut doc = FakeDoc::default();
-        project_task_slots_async(&mut doc, &snapshot, None).expect("projects");
+        project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&false));
         // Window 1 moved A->B; window 2 is already on B. Panel A lists neither.
         snapshot.windows[0].output = OutputId::new("B");
         let mut doc = FakeDoc::default();
-        project_task_slots_async(&mut doc, &snapshot, None).expect("panel A projects");
+        project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("panel A projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&false));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&false));
         // Panel B lists both.
         snapshot.panels.panels[0].output = OutputId::new("B");
         let mut doc = FakeDoc::default();
-        project_task_slots_async(&mut doc, &snapshot, None).expect("panel B projects");
+        project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("panel B projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&true));
     }
@@ -1290,7 +1387,7 @@ mod tests {
             }
         );
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         for index in 0..8 {
             assert!(
                 doc.visible
@@ -1318,7 +1415,7 @@ mod tests {
             ..ChangedDomains::default()
         };
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert!(doc.visible.contains_key("workspace-1"), "pager projected");
         assert!(
             !doc.visible.contains_key("task-slot-1"),
@@ -1340,7 +1437,7 @@ mod tests {
             ..ChangedDomains::default()
         };
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert!(doc.visible.contains_key("tray-volume"), "tray projected");
         assert!(
             !doc.visible.contains_key("task-slot-1"),
@@ -1362,7 +1459,7 @@ mod tests {
             ..ChangedDomains::default()
         };
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert!(
             doc.visible.contains_key("task-slot-1"),
             "geometry owns slot count"
@@ -1397,7 +1494,7 @@ mod tests {
             ..ChangedDomains::default()
         };
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-050"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-caution"), Some(&false));
@@ -1406,21 +1503,21 @@ mod tests {
         snapshot.system.power.percent = 87;
         snapshot.system.power.state = PowerState::Unknown;
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&false));
 
         // Charging shows the charging glyph, at 80% too.
         snapshot.system.power.percent = 45;
         snapshot.system.power.state = PowerState::Charging;
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-050-charging"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-050"), Some(&false));
 
         snapshot.system.power.percent = 80;
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, changed).expect("projects");
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-080-charging"), Some(&true));
     }
@@ -1431,7 +1528,7 @@ mod tests {
         use crate::runtime::ChangedDomains;
         let snapshot = ShellSnapshot::default();
         let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, &snapshot, None, ChangedDomains::default())
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), ChangedDomains::default())
             .expect("noop ok");
         assert!(doc.visible.is_empty(), "empty scope touches nothing");
     }
@@ -1459,6 +1556,47 @@ mod tests {
             height: side,
             pixels: vec![0; side as usize * side as usize * 4],
         }
+    }
+
+    #[test]
+    fn icon_cache_contains_does_not_touch_lru_order() {
+        let mut cache = IconCache::new(2);
+        let first = ("first".to_owned(), 1, 1);
+        let second = ("second".to_owned(), 1, 1);
+        let third = ("third".to_owned(), 1, 1);
+        cache.insert(first.clone(), test_image("first"));
+        cache.insert(second.clone(), test_image("second"));
+        assert!(cache.contains(&first));
+        assert!(!cache.contains(&third));
+        cache.insert(third.clone(), test_image("third"));
+
+        // `first` was only probed, so it stays the least-recent entry.
+        assert!(!cache.contains(&first), "contains must not refresh recency");
+        assert!(cache.contains(&second));
+        assert!(cache.contains(&third));
+    }
+
+    #[test]
+    fn icon_cache_get_refreshes_order_across_many_touches() {
+        let mut cache = IconCache::new(3);
+        let keys: Vec<IconCacheKey> = ["a", "b", "c"]
+            .iter()
+            .map(|name| ((*name).to_owned(), 1, 1))
+            .collect();
+        for key in &keys {
+            cache.insert(key.clone(), test_image(&key.0));
+        }
+        // Hammer one key so stale recency records pile up and get compacted.
+        for _ in 0..100 {
+            assert!(cache.get(&keys[0]).is_some());
+        }
+        assert!(cache.order.len() <= 2 * cache.entries.len() + 16 + 1);
+        // Recency now: b (oldest), c, a. Next insert evicts b.
+        cache.insert(("d".to_owned(), 1, 1), test_image("d"));
+        assert!(!cache.contains(&keys[1]), "least-recent live entry evicted");
+        assert!(cache.contains(&keys[0]));
+        assert!(cache.contains(&keys[2]));
+        assert_eq!(cache.bytes, 3 * 4);
     }
 
     #[test]
@@ -1499,7 +1637,7 @@ mod tests {
         let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let mut doc = FakeDoc::default();
-        project_panel_async(&mut doc, &snapshot, None).expect("projects");
+        project_panel_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("projects");
         // No loader/cache: rows apply the Flame fallback synchronously, so
         // images are present but no worker request could be queued.
         assert!(doc.images.is_empty(), "no task states, no icon nodes");
