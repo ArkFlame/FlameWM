@@ -353,6 +353,59 @@ where
     }
 }
 
+/// Device-px corner radius of a popup, the same value the retained shape mask uses
+/// (`app::render::backdrop_corner_radius_px`, duplicated here because that module is private).
+fn popup_backdrop_radius_px(document: &RuntimeDocument, width: u32, height: u32) -> u32 {
+    let radius =
+        flamewm_render_core::paint::root_corner_radius(document, flamewm_render_core::InteractionState::default());
+    flamewm_render_core::paint::surface_shape_pixels(width, height, radius * document.ui_scale()).2
+}
+
+/// Anti-aliased coverage (0..=1) of pixel `(px, py)` inside a `width` x `height` rounded rect.
+/// Pixel centres are sampled, so the arc has a one-pixel ramp rather than a hard edge.
+fn rounded_coverage(px: u32, py: u32, width: u32, height: u32, radius: u32) -> f32 {
+    if radius == 0 {
+        return 1.0;
+    }
+    let (w, h) = (width as f32, height as f32);
+    let r = (radius as f32).min(w / 2.0).min(h / 2.0);
+    let lx = px as f32 + 0.5;
+    let ly = py as f32 + 0.5;
+    let cx = lx.clamp(r, w - r);
+    let cy = ly.clamp(r, h - r);
+    let dist = ((lx - cx).powi(2) + (ly - cy).powi(2)).sqrt();
+    (r + 0.5 - dist).clamp(0.0, 1.0)
+}
+
+/// A popup hide that starts a slide-out keeps its pointer grab until the slide lands.
+fn slide_out_keeps_grab(slide: Option<SlideConfig>, shown: bool) -> bool {
+    shown && slide.is_some_and(|config| config.transition == PopupTransition::Slide)
+}
+
+/// Outside presses during a slide-out are ignored: the popup is already closing and must not
+/// dismiss again while its grab is still held.
+fn slide_out_swallows_press(active: Option<SlideKind>) -> bool {
+    active.is_some_and(|kind| !kind.opening)
+}
+
+/// Masks an opaque ARGB snapshot (0xAARRGGBB, row-major) to the rounded shape, writing
+/// premultiplied words so corners outside the arc are transparent in every channel.
+fn round_backdrop_words(words: &mut [u32], width: u32, height: u32, radius: u32) {
+    if width == 0 {
+        return;
+    }
+    for (index, word) in words.iter_mut().enumerate() {
+        let index = index as u32;
+        let coverage = rounded_coverage(index % width, index / width, width, height, radius);
+        if coverage >= 1.0 {
+            continue;
+        }
+        let alpha = (coverage * 255.0).round() as u32;
+        let premul = |shift: u32| ((*word >> shift) & 0xff) * alpha / 255;
+        *word = (alpha << 24) | (premul(16) << 16) | (premul(8) << 8) | premul(0);
+    }
+}
+
 struct SurfaceInstance {
     app: X11App,
     document: RuntimeDocument,
@@ -1154,7 +1207,9 @@ impl SurfaceController {
         let owner = self
             .surfaces
             .iter()
-            .find(|(_, instance)| instance.app.pointer_grabbed)
+            .find(|(id, instance)| {
+                instance.app.pointer_grabbed && !slide_out_swallows_press(self.slides.kind(id.get()))
+            })
             .map(|(id, instance)| {
                 (*id, instance.origin, (instance.app.width, instance.app.height), instance.document.ui_scale())
             });
@@ -1396,9 +1451,26 @@ impl SurfaceController {
         Ok(())
     }
 
-    pub fn hide(&mut self, id: SurfaceId) -> Result<(), String> {
+    /// Releases this popup's pointer grab and restores focus. Idempotent.
+    fn release_grab(&mut self, id: SurfaceId) -> Result<(), String> {
         let display = self.display;
         let root = self.root_window();
+        let instance = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        if instance.app.pointer_grabbed {
+            unsafe {
+                release_popup_presses(display, root, &mut self.press_selection, id);
+                popup_restore_focus(display, &mut instance.app);
+            }
+            instance.app.pointer_grabbed = false;
+        }
+        Ok(())
+    }
+
+    pub fn hide(&mut self, id: SurfaceId) -> Result<(), String> {
+        let display = self.display;
         let now = Instant::now();
         let key = id.get();
         let (slide, shown) = {
@@ -1406,15 +1478,13 @@ impl SurfaceController {
                 .surfaces
                 .get_mut(&id)
                 .ok_or_else(|| format!("unknown surface {}", id.0))?;
-            if instance.app.pointer_grabbed {
-                unsafe {
-                    release_popup_presses(display, root, &mut self.press_selection, id);
-                    popup_restore_focus(display, &mut instance.app);
-                }
-                instance.app.pointer_grabbed = false;
-            }
             (instance.slide, instance.shown)
         };
+        // A slide-out keeps the grab so an outside press during the close is still captured;
+        // advance_motion releases it when the slide lands.
+        if !slide_out_keeps_grab(slide, shown) {
+            self.release_grab(id)?;
+        }
         if let Some(config) = slide.filter(|config| config.transition != PopupTransition::Slide) {
             if self.begin_overlay_hide(id, config, shown, now)? {
                 unsafe { XFlush(display) };
@@ -1442,6 +1512,7 @@ impl SurfaceController {
             }
         }
         // No slide, or the timeline refused the transition: unmap immediately.
+        self.release_grab(id)?;
         self.slides.cancel(key);
         let instance = self.instance_mut(id)?;
         unsafe {
@@ -1702,6 +1773,14 @@ impl SurfaceController {
                 // Back on top: the popup sits against the panel, so the raise is invisible.
                 unsafe { XRaiseWindow(display, window) };
             } else {
+                // Slide-out landed: release the grab held since hide() started the close.
+                if instance.app.pointer_grabbed {
+                    unsafe {
+                        release_popup_presses(display, root, &mut self.press_selection, *id);
+                        popup_restore_focus(display, &mut instance.app);
+                    }
+                    instance.app.pointer_grabbed = false;
+                }
                 unsafe { XUnmapWindow(display, window) };
                 instance.shown = false;
                 instance.slide_drawn = None;
@@ -2052,7 +2131,10 @@ impl SurfaceController {
             return Ok(());
         };
         let (width, height) = (capture.width, capture.height);
-        let words = crate::backdrop::blurred_argb_words(width, height, capture.pixels, opacity, blur);
+        let mut words =
+            crate::backdrop::blurred_argb_words(width, height, capture.pixels, opacity, blur);
+        let radius = popup_backdrop_radius_px(&instance.document, width, height);
+        round_backdrop_words(&mut words, width, height, radius);
         // SAFETY: the popup's display and backbuffer are live and the window is still unmapped.
         let installed = unsafe { instance.app.set_surface_backdrop(&words, width, height) };
         if installed.is_err() {
@@ -2766,6 +2848,53 @@ mod tests {
         other.anchor((0, 0, 10, 10));
         assert_eq!(geometry_trace_snapshot(other.txn).len(), 1);
         assert_eq!(geometry_trace_snapshot(trace.txn).len(), 7);
+    }
+
+    #[test]
+    fn popup_backdrop_corners_are_transparent_and_centre_untouched() {
+        let mut words = vec![0xff80_8080_u32; 12 * 12];
+        round_backdrop_words(&mut words, 12, 12, 6);
+        assert_eq!(words[0] >> 24, 0, "top-left corner outside the arc");
+        assert_eq!(words[11] >> 24, 0, "top-right corner outside the arc");
+        assert_eq!(words[11 * 12] >> 24, 0, "bottom-left corner outside the arc");
+        assert_eq!(words[11 * 12 + 11] >> 24, 0, "bottom-right corner outside the arc");
+        assert_eq!(words[6 * 12 + 6], 0xff80_8080, "centre keeps the snapshot");
+        assert!(
+            words.iter().any(|w| (1..0xff).contains(&(w >> 24))),
+            "arc has anti-aliased partial alpha"
+        );
+        for word in &words {
+            let alpha = word >> 24;
+            for shift in [0, 8, 16] {
+                assert!(((word >> shift) & 0xff) <= alpha, "premultiplied: {word:#010x}");
+            }
+        }
+    }
+
+    #[test]
+    fn slide_out_keeps_grab_only_for_shown_slide_popups() {
+        let slide = Some(SlideConfig::slide(SlideEdge::Bottom, 200));
+        let fade = Some(SlideConfig::fade(SlideEdge::Bottom, 200));
+        assert!(slide_out_keeps_grab(slide, true), "shown slide keeps grab during slide-out");
+        assert!(!slide_out_keeps_grab(slide, false), "unmapped popup releases at once");
+        assert!(!slide_out_keeps_grab(fade, true), "fade releases at once");
+        assert!(!slide_out_keeps_grab(None, true), "no transition releases at once");
+    }
+
+    #[test]
+    fn outside_press_is_swallowed_only_while_sliding_out() {
+        let closing = Some(SlideKind { edge: SlideEdge::Bottom, opening: false });
+        let opening = Some(SlideKind { edge: SlideEdge::Bottom, opening: true });
+        assert!(slide_out_swallows_press(closing), "second outside press during slide-out is ignored");
+        assert!(!slide_out_swallows_press(opening), "a reversed open still dismisses");
+        assert!(!slide_out_swallows_press(None), "settled popup dismisses normally");
+    }
+
+    #[test]
+    fn popup_backdrop_square_corners_stay_opaque() {
+        let mut words = vec![0xff10_2030_u32; 12 * 12];
+        round_backdrop_words(&mut words, 12, 12, 0);
+        assert!(words.iter().all(|w| *w == 0xff10_2030));
     }
 }
 
