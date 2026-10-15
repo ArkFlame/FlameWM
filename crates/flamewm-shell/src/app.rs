@@ -986,7 +986,7 @@ impl ShellLoop {
         let session = snapshot.session.clone();
         self.ensure_loader();
         // Windows or panels or workspaces own the visible panel document.
-        if changed.windows || changed.workspaces || (changed.panels && !resynced) {
+        if panel_projection_needed(changed, resynced) {
             // C04: workspace/output/panel geometry changes invalidate the
             // helper anchor. F10: when the pre-projection resync above did
             // not fire but panels changed, resync now.
@@ -1023,6 +1023,14 @@ impl ShellLoop {
                     }
                     self.publish_pager_cells(runtime);
                 }
+            }
+        }
+        // Media popup closes when its tray slot is hidden (player gone or idle).
+        let media_gone = changed.system
+            && media_popup_must_close(&snapshot.system, self.surfaces.is_media_open());
+        if media_gone {
+            if let Err(error) = self.close_transients(runtime) {
+                eprintln!("flamewm-shell: media popup close failed (nonfatal): {error:?}");
             }
         }
         // System owns only the currently open in-process status popup.
@@ -1669,6 +1677,22 @@ fn media_system_request(
     })
 }
 
+/// Whether the visible panel document must be re-projected for this change.
+/// System-only changes (media, etc.) project the panel too.
+fn panel_projection_needed(
+    changed: flamewm_shell::runtime::ChangedDomains,
+    resynced: bool,
+) -> bool {
+    changed.windows || changed.workspaces || changed.system || (changed.panels && !resynced)
+}
+
+/// Whether an open media popup must close because media is no longer
+/// shown in the tray (`tray-media` hidden). Uses the same visibility owner
+/// as the panel slot (`status::media::project`).
+fn media_popup_must_close(system: &flamewm_api::system::SystemSnapshot, media_open: bool) -> bool {
+    media_open && !flamewm_shell::taskbar::status::media::project(system).visible
+}
+
 #[cfg(test)]
 mod tests {
     fn production_source() -> &'static str {
@@ -1676,6 +1700,62 @@ mod tests {
             .split_once("\n#[cfg(test)]\nmod tests")
             .map(|(source, _)| source)
             .expect("app tests must have a production section")
+    }
+
+    #[test]
+    fn open_media_popup_closes_when_media_unavailable_or_idle() {
+        use flamewm_api::system::{PlaybackState, ServiceAvailability, SystemSnapshot};
+        let mut system = SystemSnapshot::default();
+        system.media.availability = ServiceAvailability::Unavailable;
+        system.media.playback = PlaybackState::Playing;
+        assert!(
+            super::media_popup_must_close(&system, true),
+            "player gone must close the open media popup"
+        );
+        system.media.availability = ServiceAvailability::Available;
+        system.media.playback = PlaybackState::Unavailable;
+        assert!(
+            super::media_popup_must_close(&system, true),
+            "no playing/paused media must close the open media popup"
+        );
+        system.media.playback = PlaybackState::Playing;
+        assert!(
+            !super::media_popup_must_close(&system, true),
+            "playing media keeps the popup open"
+        );
+        assert!(
+            !super::media_popup_must_close(&system, false),
+            "closed popup is never closed again"
+        );
+    }
+
+    #[test]
+    fn panel_projection_needed_true_for_system_only_change() {
+        let changed = flamewm_shell::runtime::ChangedDomains {
+            system: true,
+            ..Default::default()
+        };
+        assert!(super::panel_projection_needed(changed, false));
+        assert!(super::panel_projection_needed(changed, true));
+    }
+
+    #[test]
+    fn panel_projection_needed_panels_only_when_not_resynced() {
+        let changed = flamewm_shell::runtime::ChangedDomains {
+            panels: true,
+            ..Default::default()
+        };
+        assert!(super::panel_projection_needed(changed, false));
+        assert!(!super::panel_projection_needed(changed, true));
+    }
+
+    #[test]
+    fn panel_projection_needed_false_without_projection_domains() {
+        let changed = flamewm_shell::runtime::ChangedDomains {
+            applications: true,
+            ..Default::default()
+        };
+        assert!(!super::panel_projection_needed(changed, false));
     }
 
     #[test]
