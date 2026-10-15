@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::client::ManagedClient;
-use crate::frame::controller::{ControllerState, FrameEffect, FrameEvent, reduce};
+use crate::frame::controller::{ControllerState, FrameEffect, FrameEvent, reduce, reduce_owned};
 use crate::frame::coords::RootRect;
 use crate::frame::geometry::FrameExtents;
 use crate::frame::model::{FrameRegion, PlacementState};
@@ -52,21 +52,6 @@ impl PointerCommit {
     }
 }
 
-/// Build the region view for one client from the shared registry map.
-#[must_use]
-pub fn region_map_for(
-    by_xid: &HashMap<u32, FrameRegion>,
-    client_children: &[u32],
-) -> HashMap<u32, FrameRegion> {
-    let mut out = HashMap::with_capacity(client_children.len());
-    for xid in client_children {
-        if let Some(region) = by_xid.get(xid).copied() {
-            out.insert(*xid, region);
-        }
-    }
-    out
-}
-
 /// Build a controller snapshot from explicit live state. No hidden reads.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -92,6 +77,14 @@ pub fn build_controller(
 #[must_use]
 pub fn step(state: &ControllerState, event: FrameEvent) -> (ControllerState, PointerCommit) {
     let (next, effects) = reduce(state, event);
+    let commit = PointerCommit::plan(effects);
+    (next, commit)
+}
+
+/// Owned variant of [`step`] for the live pointer hot path: no state clone.
+#[must_use]
+pub fn step_owned(state: ControllerState, event: FrameEvent) -> (ControllerState, PointerCommit) {
+    let (next, effects) = reduce_owned(state, event);
     let commit = PointerCommit::plan(effects);
     (next, commit)
 }

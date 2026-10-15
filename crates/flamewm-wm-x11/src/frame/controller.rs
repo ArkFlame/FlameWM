@@ -268,20 +268,19 @@ fn move_reached_activation(start: RootPoint, current: RootPoint) -> bool {
 }
 
 fn move_step(
-    state: &ControllerState,
+    mut state: ControllerState,
     mut session: MoveSession,
     pointer: RootPoint,
     final_commit: bool,
 ) -> (ControllerState, Vec<FrameEffect>) {
-    let mut next = state.clone();
     let first_activation = !session.anchor.is_activated();
     if first_activation && !move_reached_activation(session.start_pointer, pointer) {
-        return (next, vec![FrameEffect::Noop]);
+        return (state, vec![FrameEffect::Noop]);
     }
 
     let delta = move_delta(session.start_pointer, pointer);
     let req = request(
-        state,
+        &state,
         GeometryReason::InteractiveMove,
         session.start_placement,
         delta,
@@ -289,54 +288,53 @@ fn move_step(
     );
     let plan = plan_move(&req);
     session.anchor.activate();
-    next.session.begin_move(session);
+    state.session.begin_move(session);
 
     if first_activation && state.placement.mode != PlacementMode::Floating {
-        next.placement.mode = PlacementMode::Floating;
-        next.placement.resume = None;
-        next.placement.current = plan.frame;
-        next.placement.floating_restore = plan.frame;
+        state.placement.mode = PlacementMode::Floating;
+        state.placement.resume = None;
+        state.placement.current = plan.frame;
+        state.placement.floating_restore = plan.frame;
         let mut effects = vec![
             FrameEffect::LayoutInput,
             FrameEffect::PaintChrome,
             FrameEffect::ApplyShape,
         ];
         effects.extend(configure_effects(plan.frame, state.extents));
-        return (next, effects);
+        return (state, effects);
     }
 
     if plan.noop && (!final_commit || state.placement.current == session.start_placement.rect) {
-        return (next, vec![FrameEffect::Noop]);
+        return (state, vec![FrameEffect::Noop]);
     }
     let moved = plan.frame != state.placement.current;
-    next.placement.current = plan.frame;
-    if next.placement.mode == PlacementMode::Floating {
-        next.placement.floating_restore = plan.frame;
+    state.placement.current = plan.frame;
+    if state.placement.mode == PlacementMode::Floating {
+        state.placement.floating_restore = plan.frame;
     }
     let mut effects = move_effects(plan.frame, state.extents);
     if moved {
         // Titlebar pixels are frame-relative; repaint after the frame moves.
         effects.push(FrameEffect::PaintChrome);
     }
-    (next, effects)
+    (state, effects)
 }
 
 fn resize_step(
-    state: &ControllerState,
+    mut state: ControllerState,
     session: ResizeSession,
     pointer: RootPoint,
     final_effects: bool,
 ) -> (ControllerState, Vec<FrameEffect>) {
-    let mut next = state.clone();
     if matches!(
         state.placement.mode,
         PlacementMode::Maximized | PlacementMode::Fullscreen
     ) {
-        return (next, vec![FrameEffect::Noop]);
+        return (state, vec![FrameEffect::Noop]);
     }
     let delta = move_delta(session.start_pointer, pointer);
     let req = request(
-        state,
+        &state,
         GeometryReason::InteractiveResize,
         session.start_placement,
         delta,
@@ -345,16 +343,16 @@ fn resize_step(
     let plan = plan_resize(&req);
     let should_commit = !plan.noop || state.placement.current != session.start_placement.rect;
     if !should_commit {
-        return (next, vec![FrameEffect::Noop]);
+        return (state, vec![FrameEffect::Noop]);
     }
 
     if matches!(state.placement.mode, PlacementMode::Snapped(_)) {
-        next.placement.mode = PlacementMode::Floating;
-        next.placement.resume = None;
+        state.placement.mode = PlacementMode::Floating;
+        state.placement.resume = None;
     }
-    next.placement.current = plan.frame;
-    if next.placement.mode == PlacementMode::Floating {
-        next.placement.floating_restore = plan.frame;
+    state.placement.current = plan.frame;
+    if state.placement.mode == PlacementMode::Floating {
+        state.placement.floating_restore = plan.frame;
     }
     let mut effects = if final_effects {
         vec![
@@ -366,23 +364,33 @@ fn resize_step(
         Vec::new()
     };
     effects.extend(configure_effects(plan.frame, state.extents));
-    (next, effects)
+    (state, effects)
 }
 
 /// Pure reducer: one event -> (next state, native effect plan).
+/// Borrowing convenience over [`reduce_owned`]; clones the state once.
 #[must_use]
 pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, Vec<FrameEffect>) {
-    let mut next = state.clone();
+    reduce_owned(state.clone(), event)
+}
+
+/// Pure reducer on owned state: consumes the previous state and returns the
+/// next one without cloning the registry or outputs.
+#[must_use]
+pub fn reduce_owned(
+    mut state: ControllerState,
+    event: FrameEvent,
+) -> (ControllerState, Vec<FrameEffect>) {
     match event {
         FrameEvent::Press { source, pointer } => {
             let target = target_for_xid(&state.registry, state.client, source);
             if !matches!(target.region, FrameRegion::TitleDrag) {
-                next.last_title_click = None;
+                state.last_title_click = None;
             }
             match target.region {
                 FrameRegion::TitleDrag => {
                     let (start_mode, start_rect) = match state.placement.mode {
-                        PlacementMode::Fullscreen => return (next, vec![FrameEffect::Noop]),
+                        PlacementMode::Fullscreen => return (state, vec![FrameEffect::Noop]),
                         PlacementMode::Maximized | PlacementMode::Snapped(_) => {
                             // Re-anchor the floating restore rect to the visible frame.
                             let visible_anchor = move_anchor(pointer, state.placement.current);
@@ -403,7 +411,7 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
                         }
                     };
                     let anchor = move_anchor(pointer, start_rect);
-                    next.session.begin_move(MoveSession {
+                    state.session.begin_move(MoveSession {
                         client: state.client,
                         start_pointer: pointer,
                         start_placement: PlacementSnapshot {
@@ -417,16 +425,16 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
                         window: state.grab,
                         cursor: CursorKind::Move,
                     }];
-                    (next, effects)
+                    (state, effects)
                 }
                 FrameRegion::Resize(edges) => {
                     if matches!(
                         state.placement.mode,
                         PlacementMode::Maximized | PlacementMode::Fullscreen
                     ) {
-                        return (next, vec![FrameEffect::Noop]);
+                        return (state, vec![FrameEffect::Noop]);
                     }
-                    next.session.begin_resize(ResizeSession {
+                    state.session.begin_resize(ResizeSession {
                         client: state.client,
                         start_pointer: pointer,
                         start_placement: PlacementSnapshot {
@@ -440,10 +448,10 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
                         window: state.grab,
                         cursor: cursor_for_region(FrameRegion::Resize(edges)),
                     }];
-                    (next, effects)
+                    (state, effects)
                 }
                 FrameRegion::Control(control) => {
-                    next.session.begin_control(ControlPressSession::new(
+                    state.session.begin_control(ControlPressSession::new(
                         state.client,
                         control,
                         state.grab,
@@ -455,16 +463,16 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
                         },
                         FrameEffect::PaintChrome,
                     ];
-                    (next, effects)
+                    (state, effects)
                 }
-                FrameRegion::Client => (next, vec![FrameEffect::Noop]),
+                FrameRegion::Client => (state, vec![FrameEffect::Noop]),
             }
         }
         FrameEvent::Motion { pointer } => match state.session {
             InteractionSession::Move(m) => move_step(state, m, pointer, false),
             InteractionSession::Resize(r) => resize_step(state, r, pointer, false),
             InteractionSession::ControlPress(_) | InteractionSession::Idle => {
-                (next, vec![FrameEffect::Noop])
+                (state, vec![FrameEffect::Noop])
             }
         },
         FrameEvent::Release { pointer, time_ms } => match state.session {
@@ -494,44 +502,44 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
                 (next, effects)
             }
             InteractionSession::ControlPress(c) => {
-                next.session = InteractionSession::Idle;
+                state.session = InteractionSession::Idle;
                 if !c.armed {
-                    return (next, vec![FrameEffect::Ungrab, FrameEffect::PaintChrome]);
+                    return (state, vec![FrameEffect::Ungrab, FrameEffect::PaintChrome]);
                 }
                 match c.control {
                     FrameControl::MaximizeRestore => {
-                        let (mut out, mut effects) = toggle_max(&next);
+                        let (mut out, mut effects) = toggle_max(state);
                         let mut head = vec![FrameEffect::Ungrab];
                         head.append(&mut effects);
                         out.session = InteractionSession::Idle;
                         (out, head)
                     }
                     FrameControl::Minimize | FrameControl::Close => {
-                        (next, vec![FrameEffect::Ungrab, FrameEffect::PaintChrome])
+                        (state, vec![FrameEffect::Ungrab, FrameEffect::PaintChrome])
                     }
                 }
             }
-            InteractionSession::Idle => (next, vec![FrameEffect::Noop]),
+            InteractionSession::Idle => (state, vec![FrameEffect::Noop]),
         },
         FrameEvent::Enter => {
-            if matches!(next.session, InteractionSession::ControlPress(_)) {
-                next.session.control_enter();
-                (next, vec![FrameEffect::PaintChrome])
+            if matches!(state.session, InteractionSession::ControlPress(_)) {
+                state.session.control_enter();
+                (state, vec![FrameEffect::PaintChrome])
             } else {
-                (next, vec![FrameEffect::Noop])
+                (state, vec![FrameEffect::Noop])
             }
         }
         FrameEvent::Leave => {
-            if matches!(next.session, InteractionSession::ControlPress(_)) {
-                next.session.control_leave();
-                (next, vec![FrameEffect::PaintChrome])
+            if matches!(state.session, InteractionSession::ControlPress(_)) {
+                state.session.control_leave();
+                (state, vec![FrameEffect::PaintChrome])
             } else {
-                (next, vec![FrameEffect::Noop])
+                (state, vec![FrameEffect::Noop])
             }
         }
         FrameEvent::ClientConfigureRequest { root_origin, size } => {
             let req = request(
-                state,
+                &state,
                 GeometryReason::ClientConfigure,
                 PlacementSnapshot {
                     mode: state.placement.mode,
@@ -542,29 +550,29 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
             );
             let plan = plan_client_configure(&req, root_origin, size);
             if plan.noop {
-                return (next, vec![FrameEffect::Noop]);
+                return (state, vec![FrameEffect::Noop]);
             }
-            next.placement.current = plan.frame;
+            state.placement.current = plan.frame;
             let mut effects = vec![FrameEffect::LayoutInput, FrameEffect::PaintChrome];
             effects.extend(configure_effects(plan.frame, state.extents));
-            (next, effects)
+            (state, effects)
         }
         FrameEvent::Snap { target } => {
             let rect = snap_rect(state.work_area, target);
-            next.session = InteractionSession::Idle;
-            if next.placement.mode != PlacementMode::Floating {
-                next.placement.resume = Some(PlacementSnapshot {
-                    mode: next.placement.mode,
-                    rect: next.placement.current,
+            state.session = InteractionSession::Idle;
+            if state.placement.mode != PlacementMode::Floating {
+                state.placement.resume = Some(PlacementSnapshot {
+                    mode: state.placement.mode,
+                    rect: state.placement.current,
                 });
             } else {
-                next.placement.resume = Some(PlacementSnapshot {
+                state.placement.resume = Some(PlacementSnapshot {
                     mode: PlacementMode::Floating,
-                    rect: next.placement.floating_restore,
+                    rect: state.placement.floating_restore,
                 });
             }
-            next.placement.mode = PlacementMode::Snapped(target);
-            next.placement.current = rect;
+            state.placement.mode = PlacementMode::Snapped(target);
+            state.placement.current = rect;
             // Final geometry first, Ungrab last.
             let mut effects = vec![
                 FrameEffect::LayoutInput,
@@ -576,23 +584,17 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
             ];
             effects.extend(configure_effects(rect, state.extents));
             effects.push(FrameEffect::Ungrab);
-            (next, effects)
+            (state, effects)
         }
-        FrameEvent::ToggleMax => {
-            let (out, effects) = toggle_max(&next);
-            (out, effects)
-        }
-        FrameEvent::ToggleFullscreen => {
-            let (out, effects) = toggle_fullscreen(&next);
-            (out, effects)
-        }
+        FrameEvent::ToggleMax => toggle_max(state),
+        FrameEvent::ToggleFullscreen => toggle_fullscreen(state),
         FrameEvent::Cancel => {
             if state.session.is_idle() {
-                (next, vec![FrameEffect::Noop])
+                (state, vec![FrameEffect::Noop])
             } else {
-                next.session.cancel();
+                state.session.cancel();
                 (
-                    next,
+                    state,
                     vec![
                         FrameEffect::Ungrab,
                         FrameEffect::SnapPreview { target: None },
@@ -607,12 +609,11 @@ pub fn reduce(state: &ControllerState, event: FrameEvent) -> (ControllerState, V
 /// same client within the window (same slop) toggles maximize; otherwise it
 /// is recorded as the pending first click.
 fn title_click_release(
-    state: &ControllerState,
+    mut state: ControllerState,
     pointer: RootPoint,
     time_ms: u32,
 ) -> (ControllerState, Vec<FrameEffect>) {
-    let mut next = state.clone();
-    next.session = InteractionSession::Idle;
+    state.session = InteractionSession::Idle;
     let completes = state.last_title_click.is_some_and(|prev| {
         let elapsed = time_ms.wrapping_sub(prev.time_ms);
         let dx = i64::from(pointer.x) - i64::from(prev.pointer.x);
@@ -622,40 +623,39 @@ fn title_click_release(
             && dx * dx + dy * dy <= TITLE_DOUBLE_CLICK_SLOP_PX * TITLE_DOUBLE_CLICK_SLOP_PX
     });
     if !completes {
-        next.last_title_click = Some(TitleClick {
+        state.last_title_click = Some(TitleClick {
             client: state.client,
             time_ms,
             pointer,
         });
-        return (next, vec![FrameEffect::Ungrab]);
+        return (state, vec![FrameEffect::Ungrab]);
     }
-    next.last_title_click = None;
-    toggle_max(&next)
+    state.last_title_click = None;
+    toggle_max(state)
 }
 
-fn toggle_max(state: &ControllerState) -> (ControllerState, Vec<FrameEffect>) {
-    let mut next = state.clone();
-    next.session = InteractionSession::Idle;
+fn toggle_max(mut state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
+    state.session = InteractionSession::Idle;
     if state.placement.mode == PlacementMode::Maximized {
         let snap = state.placement.resume.unwrap_or(PlacementSnapshot {
             mode: PlacementMode::Floating,
             rect: state.placement.floating_restore,
         });
-        next.placement.mode = snap.mode;
-        next.placement.current = snap.rect;
-        next.placement.resume = None;
+        state.placement.mode = snap.mode;
+        state.placement.current = snap.rect;
+        state.placement.resume = None;
     } else {
-        next.placement.resume = Some(PlacementSnapshot {
+        state.placement.resume = Some(PlacementSnapshot {
             mode: state.placement.mode,
             rect: state.placement.current,
         });
         if state.placement.mode == PlacementMode::Floating {
-            next.placement.floating_restore = state.placement.current;
+            state.placement.floating_restore = state.placement.current;
         }
-        next.placement.mode = PlacementMode::Maximized;
-        next.placement.current = state.work_area;
+        state.placement.mode = PlacementMode::Maximized;
+        state.placement.current = state.work_area;
     }
-    let frame = next.placement.current;
+    let frame = state.placement.current;
     // Final geometry first, Ungrab last.
     let mut effects = vec![
         FrameEffect::LayoutInput,
@@ -664,32 +664,31 @@ fn toggle_max(state: &ControllerState) -> (ControllerState, Vec<FrameEffect>) {
     ];
     effects.extend(configure_effects(frame, state.extents));
     effects.push(FrameEffect::Ungrab);
-    (next, effects)
+    (state, effects)
 }
 
-fn toggle_fullscreen(state: &ControllerState) -> (ControllerState, Vec<FrameEffect>) {
-    let mut next = state.clone();
-    next.session = InteractionSession::Idle;
+fn toggle_fullscreen(mut state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
+    state.session = InteractionSession::Idle;
     if state.placement.mode == PlacementMode::Fullscreen {
         let snap = state.placement.resume.unwrap_or(PlacementSnapshot {
             mode: PlacementMode::Floating,
             rect: state.placement.floating_restore,
         });
-        next.placement.mode = snap.mode;
-        next.placement.current = snap.rect;
-        next.placement.resume = None;
+        state.placement.mode = snap.mode;
+        state.placement.current = snap.rect;
+        state.placement.resume = None;
     } else {
-        next.placement.resume = Some(PlacementSnapshot {
+        state.placement.resume = Some(PlacementSnapshot {
             mode: state.placement.mode,
             rect: state.placement.current,
         });
         if state.placement.mode == PlacementMode::Floating {
-            next.placement.floating_restore = state.placement.current;
+            state.placement.floating_restore = state.placement.current;
         }
-        next.placement.mode = PlacementMode::Fullscreen;
-        next.placement.current = state.screen_rect;
+        state.placement.mode = PlacementMode::Fullscreen;
+        state.placement.current = state.screen_rect;
     }
-    let frame = next.placement.current;
+    let frame = state.placement.current;
     // Final geometry first, Ungrab last.
     let mut effects = vec![
         FrameEffect::LayoutInput,
@@ -698,7 +697,7 @@ fn toggle_fullscreen(state: &ControllerState) -> (ControllerState, Vec<FrameEffe
     ];
     effects.extend(configure_effects(frame, state.extents));
     effects.push(FrameEffect::Ungrab);
-    (next, effects)
+    (state, effects)
 }
 
 #[cfg(test)]
