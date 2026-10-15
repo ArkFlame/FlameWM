@@ -42,6 +42,24 @@ class ContentsTests(unittest.TestCase):
         self.assertEqual(deb.find_leaks(["usr/share/flamewm/VERSION"]), [])
 
 
+class DependsTests(unittest.TestCase):
+    CONTROL_IN = Path(__file__).resolve().parent.parent / "packaging/debian/control.in"
+
+    def _control_depends(self):
+        for line in self.CONTROL_IN.read_text().splitlines():
+            if line.startswith("Depends:"):
+                return deb.depend_names(line[len("Depends:"):])
+        self.fail("no Depends line in control.in")
+
+    def test_required_depends_include_dbus_and_pulse(self):
+        self.assertIn("libdbus-1-3", deb.REQUIRED_DEPENDS)
+        self.assertIn("libpulse0", deb.REQUIRED_DEPENDS)
+
+    def test_control_in_depends_cover_required(self):
+        declared = self._control_depends()
+        self.assertEqual([d for d in deb.REQUIRED_DEPENDS if d not in declared], [])
+
+
 class HelperTests(unittest.TestCase):
     def test_depends_names_strip_versions_and_alternatives(self):
         self.assertEqual(deb.depend_names("libx11-6 (>= 2:1.6), libxi6 | libxi7, libxft2"),

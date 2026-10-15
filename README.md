@@ -47,7 +47,7 @@ The defaults below come from `crates/flamewm-platform/src/shortcuts.rs`. Binding
 
 ## Configuration locations
 
-- Settings file: `$XDG_CONFIG_HOME/flamewm/settings.toml` (default `~/.config/flamewm/settings.toml`), per `crates/flamewm-wm-x11/src/runtime.rs:893-901`. `FLAMEWM_CONFIG_DIR` takes precedence over XDG config; `FLAMEWM_SETTINGS_PATH` takes precedence over both.
+- Settings file: `$XDG_CONFIG_HOME/flamewm/settings.toml` (default `~/.config/flamewm/settings.toml`), per `crates/flamewm-wm-x11/src/runtime.rs:892-908`. `FLAMEWM_CONFIG_DIR` takes precedence over XDG config; `FLAMEWM_SETTINGS_PATH` takes precedence over both.
 - Wallpapers: `$XDG_DATA_HOME/flamewm/wallpapers` (default `~/.local/share/flamewm/wallpapers`), per `crates/flamewm-integrations-linux/src/media_store.rs`.
 - Installed read-only assets: `/usr/share/flamewm/` (see `packaging/install-manifest.txt`).
 

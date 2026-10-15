@@ -30,7 +30,7 @@ BINARIES = [
     "flamewm-render-inspect",
     "flamewm-lock",
 ]
-REQUIRED_DEPENDS = ["libx11-6", "libxi6", "libxft2", "libfontconfig1"]
+REQUIRED_DEPENDS = ["libx11-6", "libxi6", "libxft2", "libfontconfig1", "libdbus-1-3", "libpulse0"]
 LEAK_MARKERS = ["build-root", "/run/media", "/home/", "/SDD/"]
 PAM_PATH = "etc/pam.d/flamewm-lock"
 XSESSION_PATH = "usr/share/xsessions/flamewm.desktop"
