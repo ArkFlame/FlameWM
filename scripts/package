@@ -36,6 +36,7 @@ for source in \
     "$ROOT/packaging/debian/copyright"; do
     [[ -f "$source" ]] || fail "missing packaging source: $source"
 done
+[[ -d "$ROOT/LICENSES" ]] || fail "missing packaging source directory: $ROOT/LICENSES"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
@@ -51,6 +52,7 @@ install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
 install -m 0644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/flamewm/LICENSE"
 install -m 0644 "$ROOT/README.md" "$STAGE/usr/share/doc/flamewm/README.md"
+cp -a "$ROOT/LICENSES" "$STAGE/usr/share/doc/flamewm/LICENSES"
 install -m 0644 "$ROOT/docs/INSTALL.md" "$STAGE/usr/share/doc/flamewm/INSTALL.md"
 install -m 0644 "$ROOT/docs/PACKAGING.md" "$STAGE/usr/share/doc/flamewm/PACKAGING.md"
 cp -a "$ROOT/assets" "$STAGE/usr/share/flamewm/assets"

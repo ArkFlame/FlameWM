@@ -37,6 +37,24 @@ while IFS='  ' read -r checksum artifact; do
 done < "$checksums"
 
 printf 'OK package: %s artifacts and SHA256SUMS verified\n' "$version"
+
+deb="$dist/flamewm_${version}_amd64.deb"
+deb_status=NOT_RUN
+if ! command -v dpkg-deb >/dev/null 2>&1 || ! command -v dpkg >/dev/null 2>&1; then
+    printf '%s\n' 'NOT_RUN deb acceptance: dpkg-deb or dpkg not found'
+elif [[ ! -f "$deb" ]]; then
+    printf 'NOT_RUN deb acceptance: no .deb at %s\n' "$deb"
+else
+    printf '%s\n' "GATE deb acceptance: python3 -I tools/flamewm_deb_acceptance.py --deb $deb"
+    python3 -I "$ROOT/tools/flamewm_deb_acceptance.py" --deb "$deb" \
+        || fail 'deb acceptance FAILED or was blocked (see JSON report above)'
+    deb_status=PASS
+fi
+
 printf '%s\n' 'UNEXECUTED runtime gate: ./scripts/xephyr'
 printf '%s\n' 'UNEXECUTED visual gate: ./scripts/verify-visual'
-printf '%s\n' 'RELEASE_GATE PASS: build, metadata, and package proof only'
+if [[ "$deb_status" == PASS ]]; then
+    printf '%s\n' 'RELEASE_GATE PASS: build, metadata, package, and deb acceptance proof'
+else
+    printf '%s\n' 'RELEASE_GATE PARTIAL: deb acceptance NOT_RUN; build, metadata, and package proof only'
+fi
