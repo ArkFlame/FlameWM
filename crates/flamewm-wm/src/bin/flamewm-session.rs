@@ -27,6 +27,11 @@ use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const TICK: Duration = Duration::from_millis(100);
 const STARTUP_GRACE: Duration = Duration::from_millis(500);
+/// Upper bound on the supervisor's idle block. SIGCHLD normally wakes it; this bounds a missed
+/// wakeup (signal-hook drops a wakeup byte if the pipe is full) to one cheap 1 s re-scan.
+/// SIG_IGN note: signal-hook installs its own SIGCHLD handler, so children never inherit SIG_IGN
+/// (exec resets caught signals to SIG_DFL); auto-reaping cannot hide exits from try_wait here.
+const SUPERVISOR_SAFETY_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct Running {
     plan: ProcessPlan,
@@ -232,7 +237,17 @@ fn supporting_wm_check_is_valid(root_support: Option<u32>, self_support: Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{allocator_tuning_defaults, supporting_wm_check_is_valid};
+    use super::{allocator_tuning_defaults, scan_exits, supporting_wm_check_is_valid};
+
+    #[test]
+    fn scan_exits_reports_every_exited_child_before_blocking() {
+        let mixed = scan_exits(3, |index| Ok(if index == 1 { None } else { Some(index as i32) })).unwrap();
+        assert_eq!(mixed, vec![(2, 2), (0, 0)]);
+        let both = scan_exits(2, |index| Ok(Some(index as i32))).unwrap();
+        assert_eq!(both, vec![(1, 1), (0, 0)]);
+        assert!(scan_exits(2, |_| Ok::<Option<i32>, String>(None)).unwrap().is_empty());
+        assert_eq!(scan_exits(2, |_| Err::<Option<i32>, _>("poll".to_owned())), Err("poll".to_owned()));
+    }
 
     #[test]
     fn allocator_tuning_fills_only_unset_keys() {
@@ -261,11 +276,25 @@ mod tests {
     }
 }
 
+/// Polls every child without early exit and returns exits in descending index order, so a
+/// single pass sees all simultaneous exits before the supervisor decides to block.
+fn scan_exits<T>(count: usize, mut poll: impl FnMut(usize) -> Result<Option<T>, String>) -> Result<Vec<(usize, T)>, String> {
+    let mut exits = Vec::new();
+    for index in (0..count).rev() {
+        if let Some(status) = poll(index)? {
+            exits.push((index, status));
+        }
+    }
+    Ok(exits)
+}
+
 fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_plans: &[ProcessPlan], stop_requested: &AtomicBool) -> Result<(), String> {
-        loop {
+    loop {
         check_parent(parent, stop_requested)?;
-        for index in (0..children.len()).rev() {
-            let Some(status) = children[index].child.try_wait().map_err(|error| child_error(&children[index], "supervise", error))? else { continue; };
+        let exits = scan_exits(children.len(), |index| {
+            children[index].child.try_wait().map_err(|error| child_error(&children[index], "supervise", error))
+        })?;
+        if let Some(&(index, status)) = exits.first() {
             if index == 0 && status.success() {
                 children[0].supervisor.request_stop();
                 return Ok(());
@@ -315,9 +344,11 @@ fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_pla
                     ));
                 }
             }
-            break;
+        } else {
+            // No exit pending: block until SIGCHLD/stop or the safety timeout. A handled exit
+            // skips this block and re-scans, so no second simultaneous exit is left as a zombie.
+            wait_for_wakeup(Some(SUPERVISOR_SAFETY_TIMEOUT))?;
         }
-            wait_for_wakeup(None)?;
     }
 }
 
