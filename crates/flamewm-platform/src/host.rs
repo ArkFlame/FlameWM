@@ -10,8 +10,7 @@ use flamewm_api::settings::{SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::{KeyBinding, ShortcutSnapshot};
 use flamewm_api::system::{SystemAction, SystemSnapshot};
 use flamewm_api::wm_features::{
-    FeatureAction, FullscreenMonitorSpan, InteractiveMoveResize, RestackMode, WindowFeature,
-    WindowFeatureSnapshot,
+    FeatureAction, FullscreenMonitorSpan, InteractiveMoveResize, WindowFeature,
 };
 use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_api::{
@@ -29,7 +28,7 @@ use crate::services::session::SessionService;
 use crate::services::settings::SettingsService;
 use crate::services::shortcuts::{ShortcutService, effective_registry};
 use crate::services::windows::WindowService;
-use crate::services::workspaces::{NavigationDirection, WorkspaceService};
+use crate::services::workspaces::WorkspaceService;
 use crate::shortcuts::ShortcutRegistry;
 use crate::system::{SystemActionHandler, SystemService};
 
@@ -281,15 +280,6 @@ impl<E: EnginePorts> PlatformHost<E> {
             .remove(&mut self.engine, index, expected_revision)
     }
 
-    pub fn navigate_workspace(
-        &mut self,
-        direction: NavigationDirection,
-        expected_revision: u64,
-    ) -> FlameResult<()> {
-        self.workspaces
-            .navigate(&mut self.engine, direction, expected_revision)
-    }
-
     pub fn move_window_to_workspace(
         &mut self,
         window: WindowRef,
@@ -297,10 +287,6 @@ impl<E: EnginePorts> PlatformHost<E> {
     ) -> FlameResult<()> {
         self.workspaces
             .move_window(&mut self.engine, window, target)
-    }
-
-    pub fn window_feature_snapshot(&self, window: WindowRef) -> FlameResult<WindowFeatureSnapshot> {
-        self.windows.feature_snapshot(&self.engine, window)
     }
 
     pub fn apply_window_feature(
@@ -321,16 +307,6 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.windows.set_showing_desktop(&mut self.engine, show)?;
         let _ = self.refresh_windows()?;
         Ok(())
-    }
-
-    pub fn restack_window(
-        &mut self,
-        window: WindowRef,
-        mode: RestackMode,
-        sibling: Option<WindowRef>,
-    ) -> FlameResult<()> {
-        self.windows
-            .restack(&mut self.engine, window, mode, sibling)
     }
 
     pub fn set_fullscreen_monitors(
@@ -561,11 +537,6 @@ impl<E: EnginePorts> PlatformHost<E> {
         self.shortcuts.end_capture(&mut self.engine, lease)
     }
 
-    /// Restores grabs from any held capture lease. Used by teardown paths without a lease id.
-    pub fn release_hotkey_capture(&mut self) -> FlameResult<()> {
-        self.shortcuts.release_capture(&mut self.engine)
-    }
-
     /// Grabs the effective shortcut set (persisted hotkeys over defaults) after `start()` loaded
     /// settings. A persisted set that fails validation logs once and grabs the defaults instead.
     pub fn commit_startup_shortcuts(&mut self) -> FlameResult<()> {
@@ -629,15 +600,6 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     pub fn unpin_app(&mut self, app: &DesktopAppId, expected_revision: u64) -> FlameResult<bool> {
         self.panels.unpin_app(app, expected_revision)
-    }
-
-    pub fn reorder_task(
-        &mut self,
-        from: usize,
-        to: usize,
-        expected_revision: u64,
-    ) -> FlameResult<bool> {
-        self.panels.reorder(from, to, expected_revision)
     }
 
     pub fn reorder_task_entry(

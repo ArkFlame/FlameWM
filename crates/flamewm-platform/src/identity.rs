@@ -8,17 +8,6 @@ pub struct AppIdentityInput {
     pub wm_instance: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextAction {
-    Open,
-    Unpin,
-    Pin,
-    Maximize,
-    Minimize,
-    Close,
-    Separator,
-}
-
 #[must_use]
 pub fn normalize_identity(raw: &str) -> String {
     raw.chars()
@@ -51,34 +40,6 @@ pub fn merge_pinned_running(pinned: &[String], running: &[String]) -> Vec<String
         .map(|value| normalize_identity(value))
         .filter(|value| seen.insert(value.clone()))
         .collect()
-}
-
-#[must_use]
-pub fn context_actions(
-    pinned: bool,
-    has_window: bool,
-    visible: bool,
-    maximized: bool,
-) -> Vec<ContextAction> {
-    if pinned && !has_window {
-        return vec![ContextAction::Open, ContextAction::Unpin];
-    }
-    if !pinned && !has_window {
-        return Vec::new();
-    }
-    let mut actions = vec![if pinned {
-        ContextAction::Unpin
-    } else {
-        ContextAction::Pin
-    }];
-    actions.push(ContextAction::Separator);
-    actions.push(if visible && maximized {
-        ContextAction::Minimize
-    } else {
-        ContextAction::Maximize
-    });
-    actions.push(ContextAction::Close);
-    actions
 }
 
 #[cfg(test)]

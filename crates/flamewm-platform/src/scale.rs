@@ -25,11 +25,6 @@ impl ScaleManager {
         self.scales.get(output).copied().unwrap_or(100)
     }
 
-    #[must_use]
-    pub fn to_physical(&self, logical: i32, output: &OutputId) -> i32 {
-        scale_value(logical, self.scale_for(output))
-    }
-
     pub fn cached_physical_size(&mut self, logical: i32, requested_scale: u16) -> i32 {
         let scale = nearest_supported_scale(requested_scale);
         let key = (logical, scale, self.theme_generation);
