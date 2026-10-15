@@ -35,6 +35,8 @@ pub struct ChromeScene {
     pub title_weight: FontWeight,
     pub title_color: (u8, u8, u8),
     pub bg: (u8, u8, u8),
+    /// Straight 8-bit alpha of the titlebar fill (`surfaceOpacity`). Text stays opaque.
+    pub bg_alpha: u8,
     pub title_width: i32,
     pub title_x: f32,
     pub icon_present: bool,
@@ -87,6 +89,7 @@ pub fn plan_scene(
             (text.0 & 0xff) as u8,
         ),
         bg: rgb_channels(bg),
+        bg_alpha: tokens.titlebar_alpha,
         title_width,
         title_x,
         icon_present: false,
@@ -197,6 +200,40 @@ pub fn effects_for(frame_xid: u64, scene: &ChromeScene) -> Vec<ChromeEffect> {
     effects
 }
 
+/// Opaque RGBA titlebar fill for `scene`; flat over the frame background when the frame's
+/// root geometry is unavailable.
+fn titlebar_fill_pixels(
+    renderer: &flamewm_render_x11::ExternalDecorationRenderer,
+    frame_xid: u64,
+    scene: &ChromeScene,
+    height: u32,
+) -> Vec<u8> {
+    use super::titlebar_backdrop::{drag_titlebar_pixels, flat_pixels, titlebar_pixels};
+    match renderer.frame_root_geometry(frame_xid) {
+        Some((origin, root)) => drag_titlebar_pixels(
+            frame_xid,
+            origin,
+            scene.frame_w,
+            height,
+            scene.bg,
+            scene.bg_alpha,
+            scene.tokens.titlebar_blur_percent,
+        )
+        .unwrap_or_else(|| {
+            titlebar_pixels(
+                origin,
+                root,
+                scene.frame_w,
+                height,
+                scene.bg,
+                scene.bg_alpha,
+                scene.tokens.titlebar_blur_percent,
+            )
+        }),
+        None => flat_pixels(scene.frame_w, height, scene.bg, scene.bg_alpha),
+    }
+}
+
 /// Execute a scene against the renderer. Passes 12.0/600 to `draw_title`;
 /// blits the native icon raster and the cached control glyphs at exact
 /// skin control geometry (38px buttons, 16px glyphs, icon slot at 6px
@@ -217,20 +254,23 @@ pub fn render(
     // unchanged: any failure is still returned as an error.
     let retarget_result = renderer.retarget(frame_xid, scene.frame_w, scene.frame_h);
     let titlebar_h = f32::from(WINDOW_CHROME.metrics.titlebar);
-    let fill_result = renderer.fill_rect(
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: scene.frame_w as f32,
-            height: titlebar_h,
-        },
-        Color {
-            r: scene.bg.0,
-            g: scene.bg.1,
-            b: scene.bg.2,
-            a: 255,
-        },
-    );
+    // No compositor: the surface material (`surfaceColor` @ `surfaceOpacity` over the blurred
+    // wallpaper behind the frame) is baked into opaque pixels and blitted. An opaque blit needs
+    // no XRender, so hosts without it paint the same fill.
+    let fill_result = {
+        let pixels = titlebar_fill_pixels(renderer, frame_xid, scene, titlebar_h as u32);
+        renderer.blit_rgba(
+            &pixels,
+            scene.frame_w,
+            titlebar_h as u32,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: scene.frame_w as f32,
+                height: titlebar_h,
+            },
+        )
+    };
     let icon_result = match (&scene.icon, scene.icon_dest) {
         (Some(icon), Some((dest_x, dest_y, dest_edge))) => {
             match crate::chrome::native_icon_rgba(icon, u32::from(scene.icon_edge)) {
@@ -323,8 +363,14 @@ mod tests {
             true,
             &flamewm_skin::recipes::decoration::ChromeTokens::default(),
         );
-        assert_eq!(scene.bg, (0x1b, 0x1e, 0x20));
-        assert_eq!(scene.bg, (0x1b, 0x1e, 0x20));
+        assert_eq!(scene.bg, (0x19, 0x1b, 0x1d));
+        assert_eq!(scene.bg_alpha, 127);
+        assert_eq!(scene.tokens.titlebar_blur_percent, 80);
+        // Unavailable renderer (no XRender, no display): flat opaque fill, no error.
+        let renderer = flamewm_render_x11::ExternalDecorationRenderer::unavailable("test");
+        let px = titlebar_fill_pixels(&renderer, 1, &scene, 2);
+        assert_eq!(px.len(), scene.frame_w as usize * 2 * 4);
+        assert!(px.chunks_exact(4).all(|p| p[3] == 255));
         assert_eq!(PANEL.0, 0x1b1e20);
         assert_eq!(TEXT.0, 0xf1f2f3);
         assert_eq!(scene.title_color, (0xf1, 0xf2, 0xf3));

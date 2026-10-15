@@ -578,6 +578,27 @@ pub fn live_chrome_tokens() -> ChromeTokens {
         .unwrap_or_default()
 }
 
+/// Titlebar fill from the shared Surfaces settings: `surfaceColor` RGB and
+/// `surfaceOpacity` percent as 0..=255 alpha (`percent * 255 / 100`, same mapping as
+/// the desktop menu Surfaces fill). Malformed colour falls back to the skin default;
+/// `surfaceBlurPercent` is the third element (applied by `frame::titlebar_backdrop`).
+fn surface_tokens(snapshot: &SettingsSnapshot) -> (Rgb, u8, u8) {
+    let rgb = match snapshot.values.get("surfaceColor") {
+        Some(SettingValue::Text(value)) => parse_settings_color(value),
+        _ => None,
+    }
+    .unwrap_or(flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB);
+    let percent = match snapshot.values.get("surfaceOpacity") {
+        Some(SettingValue::Percent(value)) => (*value).min(100),
+        _ => 50,
+    };
+    let blur = match snapshot.values.get("surfaceBlurPercent") {
+        Some(SettingValue::Percent(value)) => (*value).min(100),
+        _ => flamewm_skin::recipes::decoration::DEFAULT_SURFACE_BLUR_PERCENT,
+    };
+    (rgb, ((u16::from(percent) * 255) / 100) as u8, blur)
+}
+
 /// Map WM settings onto skin chrome tokens. Empty or malformed colors fall back
 /// to the skin default; an unset, empty, or unknown `titlebarButtonStyle` is `circle`.
 #[must_use]
@@ -591,8 +612,7 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
         "squared" => DecorationStyle::Squared,
         _ => DecorationStyle::Rounded,
     };
-    let titlebar_bg =
-        parse_settings_color(text("titlebarColor")).unwrap_or(ChromeTokens::default().titlebar_bg);
+    let (titlebar_bg, titlebar_alpha, titlebar_blur_percent) = surface_tokens(snapshot);
     // One shape for all three controls; anything but "square" is the circle default.
     let shape = match text("titlebarButtonStyle") {
         "square" => ButtonShape::Square,
@@ -607,7 +627,35 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
     ChromeTokens {
         style,
         titlebar_bg,
+        titlebar_alpha,
+        titlebar_blur_percent,
+        backdrop_revision: crate::frame::titlebar_backdrop::set_wallpaper_source(
+            wallpaper_source_from_settings(snapshot),
+        ),
         buttons: [button("Minimize"), button("Maximize"), button("Close")],
+    }
+}
+
+/// Wallpaper source named by the settings (`wallpaperMode`, `wallpaper`, `wallpaperColor`,
+/// `wallpaperFit`), the same keys the desktop wallpaper owner reads.
+fn wallpaper_source_from_settings(
+    snapshot: &SettingsSnapshot,
+) -> crate::frame::titlebar_backdrop::WallpaperSource {
+    use crate::frame::titlebar_backdrop::WallpaperSource;
+    let text = |key: &str| match snapshot.values.get(key) {
+        Some(SettingValue::Text(value)) => value.as_str(),
+        _ => "",
+    };
+    match text("wallpaperMode") {
+        "solid" => {
+            let rgb = parse_settings_color(text("wallpaperColor")).unwrap_or(Rgb(0x23_2629));
+            WallpaperSource::Solid([(rgb.0 >> 16) as u8, (rgb.0 >> 8) as u8, rgb.0 as u8])
+        }
+        mode => WallpaperSource::Image {
+            // Anything but `custom` is the bundled default (empty path).
+            path: if mode == "custom" { text("wallpaper").to_owned() } else { String::new() },
+            fit: flamewm_image_core::wallpaper::parse(text("wallpaperFit")),
+        },
     }
 }
 
@@ -705,7 +753,10 @@ mod tests {
             .insert("decoration".to_owned(), text("squared"));
         snapshot
             .values
-            .insert("titlebarColor".to_owned(), text("#202326"));
+            .insert("surfaceColor".to_owned(), text("#202326"));
+        snapshot
+            .values
+            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(50));
         snapshot
             .values
             .insert("titlebarButtonStyle".to_owned(), text("square"));
@@ -718,6 +769,7 @@ mod tests {
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(tokens.style, DecorationStyle::Squared);
         assert_eq!(tokens.titlebar_bg, Rgb(0x202326));
+        assert_eq!(tokens.titlebar_alpha, 127);
         assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Square));
         assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x00ff00)));
         assert_eq!(tokens.buttons[0].glyph, None);
@@ -726,6 +778,33 @@ mod tests {
             .insert("titlebarButtonStyle".to_owned(), text("bogus"));
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
+    }
+
+    #[test]
+    fn surface_opacity_maps_to_titlebar_alpha() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        let mut alpha = |percent: u8| {
+            snapshot
+                .values
+                .insert("surfaceOpacity".to_owned(), SettingValue::Percent(percent));
+            chrome_tokens_from_settings(&snapshot).titlebar_alpha
+        };
+        assert_eq!(alpha(0), 0);
+        assert_eq!(alpha(50), 127);
+        assert_eq!(alpha(100), 255);
+        snapshot.values.remove("surfaceOpacity");
+        assert_eq!(chrome_tokens_from_settings(&snapshot).titlebar_alpha, 127);
+    }
+
+    #[test]
+    fn titlebar_color_setting_is_ignored() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("titlebarColor".to_owned(), SettingValue::Text("#202326".to_owned()));
+        let tokens = chrome_tokens_from_settings(&snapshot);
+        assert_eq!(tokens.titlebar_bg, flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB);
+        assert_eq!(tokens.titlebar_alpha, 127);
     }
 
     #[test]

@@ -615,6 +615,10 @@ enum ReleaseAction {
     Snap(crate::frame::model::SnapTarget),
 }
 
+fn drag_activated(session: &InteractionSession) -> bool {
+    matches!(session, InteractionSession::Move(move_session) if move_session.anchor.is_activated())
+}
+
 fn activated_move(session: Option<MoveSession>) -> Option<MoveSession> {
     match session {
         Some(session) if session.anchor.is_activated() => Some(session),
@@ -2192,6 +2196,17 @@ impl<'a, C: Connection> Wm<'a, C> {
         {
             move_counters().record_coalesced(1);
         }
+        // Drag backdrop: freeze the content behind the frame when the move activates; drop it
+        // when the move ends. Crops are taken per step in the titlebar fill.
+        let was_dragging = drag_activated(&controller.session);
+        let now_dragging = drag_activated(&next.session);
+        if !was_dragging && now_dragging {
+            self.begin_drag_backdrop(client);
+        } else if was_dragging && !now_dragging {
+            if let Some(frame) = self.clients.get(&client).map(|state| state.frame) {
+                crate::frame::titlebar_backdrop::end_drag(u64::from(frame));
+            }
+        }
         // Zero-X-configure fast path: controller already returned Noop.
         self.store_controller(client, &next);
         let result = self.execute_effects(client, &commit);
@@ -2200,6 +2215,45 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.publish_window_state(client)?;
         }
         result
+    }
+
+    /// Captures the root once (24-bit LSB only; otherwise the wallpaper is used) and freezes
+    /// the backdrop for the dragged frame.
+    fn begin_drag_backdrop(&self, client: Window) {
+        let Some((frame, outer)) = self.clients.get(&client).map(|state| (state.frame, state.outer))
+        else {
+            return;
+        };
+        let screen = self.screen();
+        let root = (
+            u32::from(screen.width_in_pixels),
+            u32::from(screen.height_in_pixels),
+        );
+        let raw_root = (screen.root_depth == 24
+            && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST)
+            .then(|| {
+                self.conn
+                    .get_image(ImageFormat::Z_PIXMAP,
+                        screen.root,
+                        0,
+                        0,
+                        screen.width_in_pixels,
+                        screen.height_in_pixels,
+                        u32::MAX,
+                    )
+                    .ok()?
+                    .reply()
+                    .ok()
+            })
+            .flatten()
+            .filter(|reply| reply.depth == 24)
+            .map(|reply| reply.data);
+        crate::frame::titlebar_backdrop::begin_drag(
+            u64::from(frame),
+            root,
+            raw_root,
+            (outer.x, outer.y, outer.width, outer.height),
+        );
     }
 
     /// Apply live chrome tokens from the settings sync point. A change
@@ -2932,6 +2986,9 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     fn unmanage(&mut self, window: Window, restore_to_root: bool) -> Result<(), ReplyError> {
         self.snap_preview.hide();
+        if let Some(frame) = self.clients.get(&window).map(|state| state.frame) {
+            crate::frame::titlebar_backdrop::forget(u64::from(frame));
+        }
         // The client is leaving: drop its flight and overlay without applying an end state. A
         // running close keeps its afterimage, which finishes on its own timeline.
         if !animation::survives_unmanage(self.animator.running(window)) {

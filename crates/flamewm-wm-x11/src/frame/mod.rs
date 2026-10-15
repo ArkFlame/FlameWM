@@ -8,3 +8,5 @@ pub mod layout;
 pub mod model;
 pub mod resources;
 pub mod session;
+pub mod titlebar_backdrop;
+mod drag_backdrop;
