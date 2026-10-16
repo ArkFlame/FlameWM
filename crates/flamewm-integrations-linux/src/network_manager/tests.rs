@@ -786,3 +786,13 @@ fn secret_agent_get_secrets_non_dict_connection_replies_invalid_args() {
     let message = secret_agent_call_with(SECRET_AGENT_INTERFACE, GET_SECRETS, &items);
     assert_error_reply(&message, "org.freedesktop.DBus.Error.InvalidArgs");
 }
+
+#[test]
+fn secret_agent_cancel_with_args_replies_invalid_args() {
+    let message = secret_agent_call_with(
+        SECRET_AGENT_INTERFACE,
+        CANCEL_GET_SECRETS,
+        &[MessageItem::Str("unexpected".to_owned())],
+    );
+    assert_error_reply(&message, "org.freedesktop.DBus.Error.InvalidArgs");
+}

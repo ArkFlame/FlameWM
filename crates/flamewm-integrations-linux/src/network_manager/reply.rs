@@ -291,9 +291,11 @@ pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAg
         }
         Some(CANCEL_GET_SECRETS) => {
             if !message.get_items().is_empty() {
-                return Err(FlameError::invalid(
+                return secret_agent_error(
+                    message,
+                    INVALID_ARGS,
                     "NetworkManager SecretAgent CancelGetSecrets arguments are invalid",
-                ));
+                );
             }
             Ok(SecretAgentCall::CancelGetSecrets {
                 reply: (!message.get_no_reply()).then(|| message.method_return()),
@@ -302,15 +304,11 @@ pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAg
         Some(SAVE_SECRETS) | Some(DELETE_SECRETS) => Ok(SecretAgentCall::SendReply {
             reply: (!message.get_no_reply()).then(|| message.method_return()),
         }),
-        _ => {
-            let name = ErrorName::new(UNKNOWN_METHOD)
-                .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
-            let text = CString::new("NetworkManager SecretAgent method is unsupported")
-                .map_err(|_| FlameError::invalid("SecretAgent unknown method text is invalid"))?;
-            Ok(SecretAgentCall::SendReply {
-                reply: (!message.get_no_reply()).then(|| message.error(&name, &text)),
-            })
-        }
+        _ => secret_agent_error(
+            message,
+            UNKNOWN_METHOD,
+            "NetworkManager SecretAgent method is unsupported",
+        ),
     }
 }
 
