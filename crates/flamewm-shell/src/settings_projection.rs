@@ -128,7 +128,11 @@ pub fn project_menu_background(
     root: &str,
 ) -> Result<(), String> {
     document.background(root, surface_background(snapshot))?;
-    document.corner_radius(root, popup_corner_radius(snapshot))
+    document.corner_radius(root, popup_corner_radius(snapshot))?;
+    // Popups own their accent too: the `--accent` token drives the battery bar, and the
+    // Wi-Fi/audio track override reads the global task accent, which must match this snapshot.
+    crate::projection::set_task_accent(accent_color(snapshot));
+    project_accent_tokens(document, snapshot)
 }
 
 /// Popup and menu corner radius from the `decoration` setting: Rounded 12, Squared 0.
@@ -577,6 +581,25 @@ mod tests {
             }
         );
         assert_eq!(taskbar_backdrop_percents(&snapshot), (20, 15));
+    }
+
+    #[test]
+    fn popup_menu_background_projects_live_accent_to_popup_and_task_accent() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "accent".to_owned(),
+            SettingValue::Text("#2080e0".to_owned()),
+        );
+        let mut doc = RecordingUiDoc::default();
+        project_menu_background(&mut doc, &snapshot, "wifi-popup").expect("popup background");
+        let accent = UiColor {
+            r: 0x20,
+            g: 0x80,
+            b: 0xe0,
+            a: 0xff,
+        };
+        assert_eq!(doc.variables["--accent"], accent);
+        assert_eq!(crate::projection::task_accent(), accent);
     }
 
     fn write_ppm_fixture(name: &str) -> std::path::PathBuf {
