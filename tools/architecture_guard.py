@@ -378,8 +378,8 @@ def j7_violations(root):
     paint_text = paint.read_text(encoding="utf-8")
     if "SymbolicForeground" in paint_text and "resolve_color(style.color)" not in paint_text:
         found.add((J7_PAINT_OWNER, "j7-g8-semantic-foreground"))
-    surface_text = _owner_path(root, J7_SURFACE_OWNER).read_text(encoding="utf-8")
-    if "resolve_color(style.color)" not in surface_text:
+    surface = _owner_path(root, J7_SURFACE_OWNER)
+    if "resolve_color(style.color)" not in paint_text:
         found.add((J7_SURFACE_OWNER, "j7-g8-semantic-foreground"))
     found |= j6_violations(root)
     found |= j12_violations(root)
