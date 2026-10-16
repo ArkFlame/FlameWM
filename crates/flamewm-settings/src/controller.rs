@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn about_version_text_is_exact_flamewm_version() {
-        let version = include_str!("../../../FLAMEWM_VERSION").trim();
+        let version = env!("FLAMEWM_SETTINGS_VERSION");
         let mut transport = RecordingTransport::default();
         transport
             .responses
