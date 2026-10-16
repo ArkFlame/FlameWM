@@ -1,5 +1,7 @@
 ![FlameWM](assets/branding/flamewm-wordmark.png)
 
+![FlameWM preview](assets/branding/flamewm-real-screenshot-preview.webp)
+
 # FlameWM
 
 FlameWM is a clean-room, X11-only window manager and desktop shell written in Rust. The shell UI is authored as HTML/CSS and compiled at build time into native Rust rendering, with no browser runtime.
