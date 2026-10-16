@@ -778,16 +778,16 @@ impl ShellLoop {
         // the same task model and image key.
         let mut need_panel = false;
         let mut need_submenu = false;
-        for res in &results {
-            let raster = match &res.raster {
-                Some(r) => r.clone(),
+        for res in results {
+            let raster = match res.raster {
+                Some(r) => r,
                 None => continue,
             };
             let image = flamewm_ui_x11::RuntimeImage {
                 source: raster.source.clone(),
                 width: raster.width,
                 height: raster.height,
-                pixels: raster.pixels.clone(),
+                pixels: raster.pixels,
             };
             async_projection::note_icon_result(
                 &res.name,
