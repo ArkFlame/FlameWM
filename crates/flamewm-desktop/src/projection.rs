@@ -95,6 +95,15 @@ fn wallpaper_stamp(raster: &Rgba8Raster) -> WallpaperStamp {
     }
 }
 
+/// Compares a cached stamp against `raster` without allocating.
+fn wallpaper_matches(stamp: &WallpaperStamp, raster: &Rgba8Raster) -> bool {
+    stamp.source == raster.source
+        && stamp.width == raster.width
+        && stamp.height == raster.height
+        && stamp.pixels_ptr == raster.pixels.as_ptr() as usize
+        && stamp.pixels_len == raster.pixels.len()
+}
+
 /// Sends the image only when it differs from `cache`; the cache advances only
 /// after the document accepts the image, so a failed write is retried.
 fn project_wallpaper_image(
@@ -102,8 +111,7 @@ fn project_wallpaper_image(
     cache: &mut Option<WallpaperStamp>,
     raster: &Rgba8Raster,
 ) -> Result<(), String> {
-    let stamp = wallpaper_stamp(raster);
-    if cache.as_ref() == Some(&stamp) {
+    if cache.as_ref().is_some_and(|stamp| wallpaper_matches(stamp, raster)) {
         return Ok(());
     }
     document.image_rgba8(
@@ -115,7 +123,7 @@ fn project_wallpaper_image(
             pixels: raster.pixels.clone(),
         },
     )?;
-    *cache = Some(stamp);
+    *cache = Some(wallpaper_stamp(raster));
     Ok(())
 }
 

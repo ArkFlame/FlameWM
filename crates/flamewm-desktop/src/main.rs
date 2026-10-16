@@ -1063,8 +1063,9 @@ fn sync_document(
     let _span = sync_point().start();
     render_sync_counter().increment();
     apply_ready_icons(document, state)?;
+    let items: Vec<_> = state.model.items().take(SLOT_COUNT).collect();
     for index in 0..SLOT_COUNT {
-        let item = state.model.items().nth(index);
+        let item = items.get(index).copied();
         if let Some(item) = item {
             let point = state.grid.cell_to_pixel(item.cell);
             let icon = launcher_icon(state, &item.path);
