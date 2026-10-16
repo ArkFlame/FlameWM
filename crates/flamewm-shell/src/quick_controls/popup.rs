@@ -24,6 +24,7 @@ pub fn role_for_kind(kind: QuickControlKind) -> PopupRole {
         QuickControlKind::Network => PopupRole::Network,
         QuickControlKind::Calendar => PopupRole::Calendar,
         QuickControlKind::Battery => PopupRole::Battery,
+        QuickControlKind::Weather => PopupRole::Weather,
     }
 }
 
@@ -157,6 +158,7 @@ mod tests {
             QuickControlKind::Network,
             QuickControlKind::Calendar,
             QuickControlKind::Battery,
+            QuickControlKind::Weather,
         ] {
             let req = request(kind, anchor, output, PanelEdge::Bottom);
             let rect = fit_helper(&req, Size::new(310, 220)).expect("fit");

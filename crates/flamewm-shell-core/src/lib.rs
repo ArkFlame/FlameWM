@@ -136,6 +136,8 @@ pub const MEDIA_POPOVER_SIZE: Size = Size::new(276, 80);
 pub const NETWORK_POPOVER_SIZE: Size = Size::new(461, 453);
 /// Battery popup: 300x132 logical px (matches ui/shell/battery.html root).
 pub const BATTERY_POPOVER_SIZE: Size = Size::new(300, 132);
+/// Weather popup: 300x320 logical px (matches ui/shell/weather.html root).
+pub const WEATHER_POPOVER_SIZE: Size = Size::new(300, 320);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioPopoverModel {

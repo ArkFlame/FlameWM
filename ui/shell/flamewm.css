@@ -260,3 +260,7 @@ input { cursor:text; }
 
 /* J6 symbolic shell controls: recolor monochrome glyphs with inherited foreground. */
 .symbolic-icon { -flamewm-image-treatment: symbolic; }
+
+/* A09 weather tray: condition icon with the integer temperature directly under it. */
+.tray-weather { flex-direction:column; }
+.tray-weather-temp { font-size:10px; color:var(--text); }

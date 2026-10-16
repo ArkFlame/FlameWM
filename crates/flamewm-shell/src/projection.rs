@@ -20,10 +20,12 @@ use flamewm_shell_core::{task_visual_states_on_output, StartModel};
 mod audio;
 mod calendar;
 mod network;
+mod weather;
 
 pub use audio::{project_audio, project_audio_full};
 pub use calendar::project_calendar;
 pub use network::{project_network, project_network_full, project_network_secret};
+pub use weather::{project_weather_popup, project_weather_tray};
 
 const TASK_SLOT_COUNT: usize = 8;
 const START_APP_SLOT_COUNT: usize = 8;
@@ -320,6 +322,8 @@ pub fn project_panel(
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
     document.visible("tray-network", status.network.visible)?;
     project_battery_tray(document, &snapshot.system.power)?;
+    // Stop-gap: no main-process weather feed yet; the entry stays hidden.
+    project_weather_tray(document, &flamewm_shell_core::weather::WeatherState::Disabled, flamewm_shell_core::weather::TemperatureUnit::Celsius)?;
     Ok(())
 }
 

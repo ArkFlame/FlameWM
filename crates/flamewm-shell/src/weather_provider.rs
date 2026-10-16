@@ -215,7 +215,7 @@ impl HttpGet for CurlFetcher {
     fn get(&self, url: &str) -> Result<String, WeatherError> {
         let mut child = Command::new("curl")
             .args(["-sS", "--fail", "--max-time", "8", "--connect-timeout", "4"])
-            .args(["--proto", "=https,http"])
+            .args(["--proto", "=https"])
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

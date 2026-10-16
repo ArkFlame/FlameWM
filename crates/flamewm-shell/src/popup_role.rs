@@ -32,6 +32,7 @@ pub enum PopupRole {
     Network,
     Calendar,
     Battery,
+    Weather,
 }
 
 impl PopupRole {
@@ -46,6 +47,7 @@ impl PopupRole {
             Self::Network => "wifi-popup",
             Self::Calendar => "clock-popup",
             Self::Battery => "battery-popup",
+            Self::Weather => "weather-popup",
         }
     }
 
@@ -59,6 +61,7 @@ impl PopupRole {
             Self::Network => "tray-network",
             Self::Calendar => "clock-button",
             Self::Battery => "tray-battery",
+            Self::Weather => "tray-weather",
         }
     }
 
@@ -75,6 +78,7 @@ impl PopupRole {
             Self::Network => "network",
             Self::Calendar => "calendar",
             Self::Battery => "battery",
+            Self::Weather => "weather",
         }
     }
 
@@ -89,6 +93,7 @@ impl PopupRole {
             Self::Network => Some(QuickControlKind::Network),
             Self::Calendar => Some(QuickControlKind::Calendar),
             Self::Battery => Some(QuickControlKind::Battery),
+            Self::Weather => Some(QuickControlKind::Weather),
         }
     }
 }
@@ -114,6 +119,7 @@ mod popup_contract_tests {
                 include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-calendar.rwr"))
             }
             PopupRole::Battery => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr")),
+            PopupRole::Weather => include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-weather.rwr")),
         }
     }
 
@@ -125,6 +131,7 @@ mod popup_contract_tests {
             PopupRole::Network => Size::new(310, 260),
             PopupRole::Calendar => Size::new(300, 320),
             PopupRole::Battery => flamewm_shell_core::BATTERY_POPOVER_SIZE,
+            PopupRole::Weather => flamewm_shell_core::WEATHER_POPOVER_SIZE,
         }
     }
 
@@ -144,6 +151,7 @@ mod popup_contract_tests {
             PopupRole::Network,
             PopupRole::Calendar,
             PopupRole::Battery,
+            PopupRole::Weather,
         ] {
             let mut document = flamewm_ui_x11::decode_document(artifact_bytes(role))
                 .unwrap_or_else(|error| panic!("{role:?} artifact must decode: {error}"));
@@ -239,6 +247,9 @@ mod tests {
         assert_eq!(PopupRole::Network.intrinsic_node_id(), "wifi-popup");
         assert_eq!(PopupRole::Calendar.intrinsic_node_id(), "clock-popup");
         assert_eq!(PopupRole::Battery.intrinsic_node_id(), "battery-popup");
+        assert_eq!(PopupRole::Weather.intrinsic_node_id(), "weather-popup");
+        assert_eq!(PopupRole::Weather.source_node_id(), "tray-weather");
+        assert_eq!(PopupRole::Weather.semantic_name(), "weather");
     }
 
     #[test]
@@ -290,6 +301,10 @@ mod tests {
         assert_eq!(
             PopupRole::Battery.quick_control_kind(),
             Some(QuickControlKind::Battery)
+        );
+        assert_eq!(
+            PopupRole::Weather.quick_control_kind(),
+            Some(QuickControlKind::Weather)
         );
     }
 }

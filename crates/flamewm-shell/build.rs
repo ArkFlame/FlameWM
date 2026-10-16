@@ -21,6 +21,7 @@ fn main() {
         "calendar.html",
         "osd.html",
         "battery.html",
+        "weather.html",
     ];
     let artifacts = [
         ("flamewm-panel.rwr", "panel.html"),
@@ -32,6 +33,7 @@ fn main() {
         ("flamewm-calendar.rwr", "calendar.html"),
         ("flamewm-osd.rwr", "osd.html"),
         ("flamewm-battery.rwr", "battery.html"),
+        ("flamewm-weather.rwr", "weather.html"),
     ];
 
     println!("cargo:rerun-if-changed={}", css.display());

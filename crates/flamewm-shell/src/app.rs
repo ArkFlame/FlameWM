@@ -326,7 +326,7 @@ impl ShellLoop {
                     // forward to the supervisor, then return immediately.
                     if matches!(
                         name.as_str(),
-                        "volume" | "audio" | "network" | "clock" | "battery"
+                        "volume" | "audio" | "network" | "clock" | "battery" | "weather"
                     ) {
                         self.open_quick_control(runtime, &name);
                         self.end_start_session();
@@ -612,6 +612,7 @@ impl ShellLoop {
             "network" => QuickControlKind::Network,
             "clock" => QuickControlKind::Calendar,
             "battery" => QuickControlKind::Battery,
+            "weather" => QuickControlKind::Weather,
             _ => return,
         };
         let source_id = match kind {
@@ -619,6 +620,7 @@ impl ShellLoop {
             QuickControlKind::Network => "tray-network",
             QuickControlKind::Calendar => "clock-button",
             QuickControlKind::Battery => "tray-battery",
+            QuickControlKind::Weather => "tray-weather",
         };
         // Retained anchor preferred; snapshot geometry is the sole
         // pre-map fallback (same contract as the in-process path).

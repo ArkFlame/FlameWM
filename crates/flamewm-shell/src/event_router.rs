@@ -85,6 +85,7 @@ pub(crate) fn opener_group(action: &str) -> Option<&'static str> {
         TRAY_VOLUME_ACTION => Some("audio"),
         "network.open" => Some("network"),
         "battery.open" => Some("battery"),
+        "weather.open" => Some("weather"),
         "clock.open" => Some("calendar"),
         "media.open" | "media.toggle" => Some("media"),
         _ => None,
@@ -98,6 +99,7 @@ pub(crate) fn quick_popup_group(kind: QuickControlKind) -> &'static str {
         QuickControlKind::Network => "network",
         QuickControlKind::Calendar => "calendar",
         QuickControlKind::Battery => "battery",
+        QuickControlKind::Weather => "weather",
     }
 }
 
@@ -741,6 +743,7 @@ mod tests {
             (QuickControlKind::Network, "network.open"),
             (QuickControlKind::Calendar, "clock.open"),
             (QuickControlKind::Battery, "battery.open"),
+            (QuickControlKind::Weather, "weather.open"),
         ] {
             let group = quick_popup_group(kind);
             assert_eq!(opener_group(opener), Some(group), "{opener}");
@@ -752,7 +755,7 @@ mod tests {
 
     #[test]
     fn press_classification_treats_only_quick_popup_titles_as_inside() {
-        for title in ["FlameWM audio", "FlameWM network", "FlameWM calendar", "FlameWM battery", "FlameWM media"] {
+        for title in ["FlameWM audio", "FlameWM network", "FlameWM calendar", "FlameWM battery", "FlameWM weather", "FlameWM media"] {
             assert!(!raw_press_is_outside_quick_popups(Some(title)), "{title} is inside");
         }
         assert!(raw_press_is_outside_quick_popups(None), "no window under pointer");

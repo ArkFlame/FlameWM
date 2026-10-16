@@ -21,6 +21,11 @@ use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
+use flamewm_shell_core::weather::{
+    WeatherError, WeatherLocation, WeatherProvider, WeatherSettings, WeatherSnapshot, WeatherState,
+};
+use crate::projection::project_weather_popup;
+use crate::weather_provider::{CurlFetcher, OpenMeteo};
 use flamewm_ui_x11::{
     decode_document, ActionPhase, PointerButton, SlideConfig, SurfaceConfig, SurfaceHandle,
     SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
@@ -43,21 +48,24 @@ const AUDIO_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-
 const NETWORK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
 const CALENDAR_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-calendar.rwr"));
 const BATTERY_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr"));
+const WEATHER_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-weather.rwr"));
 
 /// WM_NAME of each helper-hosted quick popup, and of the main-hosted media popup.
 pub const AUDIO_POPUP_TITLE: &str = "FlameWM audio";
 pub const NETWORK_POPUP_TITLE: &str = "FlameWM network";
 pub const CALENDAR_POPUP_TITLE: &str = "FlameWM calendar";
 pub const BATTERY_POPUP_TITLE: &str = "FlameWM battery";
+pub const WEATHER_POPUP_TITLE: &str = "FlameWM weather";
 pub const MEDIA_POPUP_TITLE: &str = "FlameWM media";
 
 /// Every quick-popup title. A press whose top-level window carries one of these
 /// titles lands inside a popup and is not an outside dismissal.
-pub const QUICK_POPUP_TITLES: [&str; 5] = [
+pub const QUICK_POPUP_TITLES: [&str; 6] = [
     AUDIO_POPUP_TITLE,
     NETWORK_POPUP_TITLE,
     CALENDAR_POPUP_TITLE,
     BATTERY_POPUP_TITLE,
+    WEATHER_POPUP_TITLE,
     MEDIA_POPUP_TITLE,
 ];
 
@@ -163,6 +171,8 @@ pub struct QuickControlSnapshot {
     pub settings: SettingsSnapshot,
     /// Clock calendar view state; changed only by `calendar.*` actions.
     pub calendar: crate::calendar::CalendarState,
+    /// Weather settings, state and the refresh scheduler (no polling while disabled).
+    pub weather: WeatherHost,
 }
 
 impl QuickControlSnapshot {
@@ -177,6 +187,7 @@ impl QuickControlSnapshot {
                 network_query: NetworkQuery::default(),
                 network_scroll_offset: 0,
                 calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+                weather: WeatherHost::new(),
                 network_secret_masked_len: 0,
                 network_secret: String::new(),
                 network_secret_request: None,
@@ -208,7 +219,9 @@ impl QuickControlSnapshot {
     /// audio tab/settings projection.
     pub fn store_settings(&mut self, snapshot: SettingsSnapshot) {
         self.settings = snapshot.clone();
-        apply_settings(snapshot, &mut self.audio_settings);
+        apply_settings(snapshot.clone(), &mut self.audio_settings);
+        self.weather
+            .apply_settings(WeatherSettings::from_snapshot(&snapshot));
     }
 }
 
@@ -216,6 +229,118 @@ fn apply_settings(snapshot: SettingsSnapshot, settings: &mut AudioSettings) {
     if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY) {
         settings.raise_maximum = *raise;
     }
+}
+
+/// Minimum spacing between periodic weather fetches (opening the popup always fetches).
+pub const WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+type WeatherResult = Result<WeatherSnapshot, WeatherError>;
+
+/// Weather refresh scheduler. It never fetches while disabled or without a location,
+/// fetches once when the popup opens, then at most every [`WEATHER_REFRESH_INTERVAL`]
+/// while enabled. Network work runs on a worker thread; the UI thread only polls the channel.
+#[derive(Debug, Clone)]
+pub struct WeatherHost {
+    pub settings: WeatherSettings,
+    pub state: WeatherState,
+    fetch_on_open: bool,
+    last_started: Option<std::time::Instant>,
+    /// Shared so the snapshot stays `Clone`; only the UI-thread owner polls it.
+    inflight: Option<Arc<Mutex<std::sync::mpsc::Receiver<WeatherResult>>>>,
+}
+
+impl WeatherHost {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            settings: WeatherSettings::default(),
+            state: WeatherState::Disabled,
+            fetch_on_open: false,
+            last_started: None,
+            inflight: None,
+        }
+    }
+
+    /// Applies settings and resets the visible state to match (disabled or unconfigured).
+    pub fn apply_settings(&mut self, settings: WeatherSettings) {
+        if !settings.enabled {
+            self.inflight = None;
+        }
+        self.settings = settings;
+        let state = std::mem::replace(&mut self.state, WeatherState::Disabled);
+        self.state = state.begin_refresh(&self.settings);
+    }
+
+    /// Called when the weather popup opens: fetch on the next tick.
+    pub fn request_open_fetch(&mut self) {
+        self.fetch_on_open = true;
+    }
+
+    #[must_use]
+    pub fn fetch_due(&self, now: std::time::Instant) -> bool {
+        if !self.settings.enabled || self.settings.location.is_none() || self.inflight.is_some() {
+            return false;
+        }
+        self.fetch_on_open
+            || self
+                .last_started
+                .is_some_and(|started| now.duration_since(started) >= WEATHER_REFRESH_INTERVAL)
+    }
+
+    /// Advances the scheduler: applies a finished fetch, then starts one if due.
+    /// Returns true when the visible state changed.
+    pub fn tick(
+        &mut self,
+        now: std::time::Instant,
+        fetch: impl FnOnce(WeatherLocation) -> std::sync::mpsc::Receiver<WeatherResult>,
+    ) -> bool {
+        let mut changed = false;
+        let polled: Option<WeatherResult> = match self.inflight.as_ref() {
+            None => None,
+            Some(rx) => match rx.lock().map(|guard| guard.try_recv()) {
+                Ok(Ok(result)) => Some(result),
+                Ok(Err(std::sync::mpsc::TryRecvError::Empty)) => None,
+                Ok(Err(std::sync::mpsc::TryRecvError::Disconnected)) | Err(_) => {
+                    Some(Err(WeatherError::Transport))
+                }
+            },
+        };
+        if let Some(result) = polled {
+            self.inflight = None;
+            let state = std::mem::replace(&mut self.state, WeatherState::Disabled);
+            self.state = state.finish_refresh(result);
+            changed = true;
+        }
+        if self.fetch_due(now) {
+            if let Some(location) = self.settings.location.clone() {
+                let state = std::mem::replace(&mut self.state, WeatherState::Disabled);
+                self.state = state.begin_refresh(&self.settings);
+                self.last_started = Some(now);
+                self.fetch_on_open = false;
+                self.inflight = Some(Arc::new(Mutex::new(fetch(location))));
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
+impl Default for WeatherHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Production fetch: Open-Meteo through the curl fetcher, on a worker thread.
+/// If the thread cannot start, the dropped sender reports a transport error.
+fn spawn_weather_fetch(location: WeatherLocation) -> std::sync::mpsc::Receiver<WeatherResult> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("flamewm-weather".to_owned())
+        .spawn(move || {
+            let _ = tx.send(OpenMeteo(CurlFetcher).forecast(&location));
+        });
+    rx
 }
 
 /// Quick-control host state behind the reactor callbacks: one reactor
@@ -633,6 +758,9 @@ fn tick_host(
                 refresh_settings_for_open(state);
                 let snapshot = state.borrow().snapshot.clone();
                 let mut guard = state.borrow_mut();
+                if request.kind == QuickControlKind::Weather {
+                    guard.snapshot.weather.request_open_fetch();
+                }
                 // One helper popup at a time: close the current one first,
                 // timing the real close turn for the slow-open line.
                 let close_start = std::time::Instant::now();
@@ -660,6 +788,13 @@ fn tick_host(
             &guard.snapshot,
             guard.dispatcher.as_ref(),
         );
+    }
+    {
+        let mut guard = state.borrow_mut();
+        let changed = guard.snapshot.weather.tick(std::time::Instant::now(), spawn_weather_fetch);
+        if changed && guard.surfaces.open == Some(QuickControlKind::Weather) {
+            guard.system_reprojection_pending = true;
+        }
     }
     let pending = {
         let mut guard = state.borrow_mut();
@@ -959,6 +1094,7 @@ fn project_snapshot(
                 QuickControlKind::Network => "wifi-popup",
                 QuickControlKind::Calendar => "clock-popup",
                 QuickControlKind::Battery => "battery-popup",
+                QuickControlKind::Weather => "weather-popup",
             };
             crate::settings_projection::project_menu_background(
                 document,
@@ -1002,6 +1138,11 @@ fn project_snapshot(
                 QuickControlKind::Battery => {
                     crate::projection::project_battery_menu(document, &snapshot.system.power, 268.0)
                 }
+                QuickControlKind::Weather => project_weather_popup(
+                    document,
+                    &snapshot.weather.state,
+                    &snapshot.weather.settings,
+                ),
             }
         })
         .map_err(|error| format!("{error:?}"))
@@ -1412,6 +1553,7 @@ pub struct HelperSurfaces {
     pub network: SurfaceHandle,
     pub calendar: SurfaceHandle,
     pub battery: SurfaceHandle,
+    pub weather: SurfaceHandle,
     pub open: Option<QuickControlKind>,
     /// Slide armed for the open popup; `Some` closes it through `hide` (slide-out).
     pub slide: Option<SlideConfig>,
@@ -1423,11 +1565,13 @@ impl HelperSurfaces {
         let network = create_surface(runtime, NETWORK_ARTIFACT, NETWORK_POPUP_TITLE)?;
         let calendar = create_surface(runtime, CALENDAR_ARTIFACT, CALENDAR_POPUP_TITLE)?;
         let battery = create_surface(runtime, BATTERY_ARTIFACT, BATTERY_POPUP_TITLE)?;
+        let weather = create_surface(runtime, WEATHER_ARTIFACT, WEATHER_POPUP_TITLE)?;
         Ok(Self {
             audio,
             network,
             calendar,
             battery,
+            weather,
             open: None,
             slide: None,
         })
@@ -1439,6 +1583,7 @@ impl HelperSurfaces {
             QuickControlKind::Network => self.network,
             QuickControlKind::Calendar => self.calendar,
             QuickControlKind::Battery => self.battery,
+            QuickControlKind::Weather => self.weather,
         }
     }
 
@@ -1473,7 +1618,7 @@ impl HelperSurfaces {
                 first_error = Some(UiBackendError::Renderer(error.to_string()));
             }
         }
-        for surface in [self.audio, self.network, self.calendar, self.battery] {
+        for surface in [self.audio, self.network, self.calendar, self.battery, self.weather] {
             if let Err(error) = runtime.destroy(surface) {
                 eprintln!(
                     "flamewm-quick-control: surface destroy during shutdown failed: {error:?}"
@@ -1568,6 +1713,7 @@ mod tests {
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
             calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+            weather: WeatherHost::new(),
             network_secret_masked_len: 8,
             network_secret: String::new(),
             network_secret_request: None,
@@ -1602,6 +1748,7 @@ mod tests {
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
             calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+            weather: WeatherHost::new(),
             network_secret_masked_len: 0,
             network_secret: String::new(),
             network_secret_request: None,
@@ -1658,6 +1805,7 @@ mod tests {
             network_secret_submit_id: None,
             settings: SettingsSnapshot::new(0),
             calendar: crate::calendar::CalendarState::for_today((2026, 10, 13)),
+            weather: WeatherHost::new(),
         };
 
         // Filtering leaves five rows; the connected provider index 4 is excluded
@@ -1963,6 +2111,7 @@ mod tests {
             network_query: NetworkQuery::default(),
             network_scroll_offset: 0,
             calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+            weather: WeatherHost::new(),
             network_secret_masked_len: 0,
             network_secret: String::new(),
             network_secret_request: None,
@@ -2069,6 +2218,7 @@ mod audio_routing_tests {
             network_secret_submit_id: None,
             settings: SettingsSnapshot::new(0),
             calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+            weather: WeatherHost::new(),
         }
     }
 
@@ -2478,5 +2628,107 @@ mod network_secret_prompt_tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod weather_host_tests {
+    use super::*;
+    use flamewm_shell_core::weather::{TemperatureUnit, WeatherCondition};
+    use std::cell::Cell;
+    use std::time::Instant;
+
+    fn location() -> WeatherLocation {
+        WeatherLocation::new("Berlin", 52.52, 13.41, None).unwrap()
+    }
+
+    fn settings(enabled: bool, with_location: bool) -> WeatherSettings {
+        WeatherSettings {
+            enabled,
+            location: with_location.then(location),
+            units: TemperatureUnit::Celsius,
+        }
+    }
+
+    /// Stands in for the network: a ready fixture, no socket, no thread.
+    fn fixture_rx() -> std::sync::mpsc::Receiver<WeatherResult> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(WeatherSnapshot {
+            location: location(),
+            temperature_c: 9,
+            condition: WeatherCondition::Clear,
+            days: Vec::new(),
+            fetched_at: 1,
+        }))
+        .unwrap();
+        rx
+    }
+
+    #[test]
+    fn disabled_or_unconfigured_never_fetches() {
+        for s in [settings(false, true), settings(true, false), settings(false, false)] {
+            let mut host = WeatherHost::new();
+            host.apply_settings(s);
+            host.request_open_fetch();
+            let calls = Cell::new(0);
+            let start = Instant::now();
+            for step in 0..5 {
+                host.tick(start + WEATHER_REFRESH_INTERVAL * step, |_| {
+                    calls.set(calls.get() + 1);
+                    fixture_rx()
+                });
+            }
+            assert_eq!(calls.get(), 0);
+        }
+        let mut host = WeatherHost::new();
+        host.apply_settings(settings(false, true));
+        assert_eq!(host.state, WeatherState::Disabled);
+    }
+
+    #[test]
+    fn enabled_with_location_fetches_on_open_then_every_thirty_minutes() {
+        let mut host = WeatherHost::new();
+        host.apply_settings(settings(true, true));
+        assert_eq!(host.state, WeatherState::Loading);
+        let calls = Cell::new(0);
+        let start = Instant::now();
+        let fetch = |_: WeatherLocation| {
+            calls.set(calls.get() + 1);
+            fixture_rx()
+        };
+        host.tick(start, fetch);
+        assert_eq!(calls.get(), 0, "no periodic fetch before the popup opens");
+
+        host.request_open_fetch();
+        host.tick(start, fetch);
+        assert_eq!(calls.get(), 1);
+        host.tick(start, fetch);
+        assert!(matches!(host.state, WeatherState::Ready(_)));
+        assert_eq!(calls.get(), 1);
+
+        host.tick(start + Duration::from_secs(29 * 60), fetch);
+        assert_eq!(calls.get(), 1, "still inside the 30 minute window");
+        host.tick(start + WEATHER_REFRESH_INTERVAL, fetch);
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn disabling_drops_the_inflight_fetch_and_stops_refreshing() {
+        let mut host = WeatherHost::new();
+        host.apply_settings(settings(true, true));
+        let calls = Cell::new(0);
+        let start = Instant::now();
+        host.request_open_fetch();
+        host.tick(start, |_| {
+            calls.set(calls.get() + 1);
+            fixture_rx()
+        });
+        host.apply_settings(settings(false, true));
+        assert_eq!(host.state, WeatherState::Disabled);
+        host.tick(start + WEATHER_REFRESH_INTERVAL * 2, |_| {
+            calls.set(calls.get() + 1);
+            fixture_rx()
+        });
+        assert_eq!(calls.get(), 1);
     }
 }

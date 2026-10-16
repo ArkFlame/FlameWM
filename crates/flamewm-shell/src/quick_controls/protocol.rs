@@ -14,6 +14,7 @@ pub enum QuickControlKind {
     Network,
     Calendar,
     Battery,
+    Weather,
 }
 
 impl QuickControlKind {
@@ -24,6 +25,7 @@ impl QuickControlKind {
             Self::Network => "network",
             Self::Calendar => "calendar",
             Self::Battery => "battery",
+            Self::Weather => "weather",
         }
     }
 
@@ -33,6 +35,7 @@ impl QuickControlKind {
             "network" => Ok(Self::Network),
             "calendar" => Ok(Self::Calendar),
             "battery" => Ok(Self::Battery),
+            "weather" => Ok(Self::Weather),
             _ => Err(ProtocolError::UnknownKind(s.to_owned())),
         }
     }
@@ -251,6 +254,23 @@ mod tests {
         }));
         assert!(line.starts_with("OPEN battery "), "{line}");
         assert!(decode_line(&line).is_ok());
+    }
+
+    #[test]
+    fn weather_kind_round_trips_through_its_wire_name() {
+        assert_eq!(QuickControlKind::Weather.as_str(), "weather");
+        assert_eq!(QuickControlKind::parse("weather"), Ok(QuickControlKind::Weather));
+        for cmd in [Command::Open(OpenRequest {
+            kind: QuickControlKind::Weather,
+            anchor: Rect::new(10, 20, 100, 30),
+            work_area: Rect::new(0, 0, 1920, 1040),
+            panel_edge: PanelEdge::Bottom,
+        })] {
+            let line = encode_command(&cmd);
+            assert!(line.starts_with("OPEN weather "), "{line}");
+            assert_eq!(decode_line(&line), Ok(cmd));
+        }
+        assert!(QuickControlKind::parse("Weather").is_err());
     }
 
     #[test]
