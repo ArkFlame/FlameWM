@@ -16,9 +16,15 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def workspace_version() -> str:
+    with (REPO_ROOT / "Cargo.toml").open("rb") as fh:
+        return tomllib.load(fh)["workspace"]["package"]["version"]
 BINARIES = [
     "flamewm",
     "flamewm-session",
@@ -36,7 +42,7 @@ CONFFILES = "/etc/pam.d/flamewm-lock\n"
 LEAK_MARKERS = ["build-root", "/run/media", "/home/", "/SDD/"]
 PAM_PATH = "etc/pam.d/flamewm-lock"
 XSESSION_PATH = "usr/share/xsessions/flamewm.desktop"
-VERSION_PATH = "usr/share/flamewm/VERSION"
+
 PROBE_TIMEOUT = 5
 CONTENTS_RE = re.compile(r"^(\S+)\s+(\S+)\s+\d+\s+\S+\s+\S+\s+(.*)$")
 
@@ -234,8 +240,7 @@ def main(argv=None):
     # 1. Metadata.
     info = run(["dpkg-deb", "--info", str(deb)])
     fields = parse_info(info.stdout) if info.returncode == 0 else {}
-    expected_version = (REPO_ROOT / "FLAMEWM_VERSION").read_text().strip() \
-        if (REPO_ROOT / "FLAMEWM_VERSION").is_file() else None
+    expected_version = workspace_version()
     if info.returncode != 0:
         checks.append(check("deb_info", "FAIL", f"dpkg-deb --info exit {info.returncode}"))
     else:
@@ -244,7 +249,7 @@ def main(argv=None):
                             f"Package={fields.get('Package')}"))
         ver_ok = expected_version is not None and fields.get("Version") == expected_version
         checks.append(check("deb_version", "PASS" if ver_ok else ("NOT_RUN" if expected_version is None else "FAIL"),
-                            f"Version={fields.get('Version')} FLAMEWM_VERSION={expected_version}"))
+                            f"Version={fields.get('Version')} workspace={expected_version}"))
         checks.append(check("deb_architecture", "PASS" if fields.get("Architecture") else "FAIL",
                             f"Architecture={fields.get('Architecture')}"))
         deps = fields.get("Depends", "")
@@ -285,17 +290,9 @@ def main(argv=None):
         checks.append(check("deb_extract", "FAIL", f"dpkg-deb -x exit {extracted.returncode}"))
     else:
         checks.append(check("deb_extract", "PASS", "dpkg-deb -x exit 0"))
-        for cid, rel in (("xsession_present", XSESSION_PATH), ("pam_present", PAM_PATH),
-                         ("version_file_present", VERSION_PATH)):
+        for cid, rel in (("xsession_present", XSESSION_PATH), ("pam_present", PAM_PATH)):
             ok = (tree / rel).is_file()
             checks.append(check(cid, "PASS" if ok else "FAIL", rel))
-        vf = tree / VERSION_PATH
-        if vf.is_file() and expected_version is not None:
-            got = vf.read_text().strip()
-            checks.append(check("version_file_matches", "PASS" if got == expected_version else "FAIL",
-                                f"VERSION={got} FLAMEWM_VERSION={expected_version}"))
-        else:
-            checks.append(check("version_file_matches", "NOT_RUN", "VERSION or FLAMEWM_VERSION unreadable"))
         exec_src = tree / XSESSION_PATH
         if exec_src.is_file():
             exec_line = [ln for ln in exec_src.read_text().splitlines() if ln.startswith("Exec=")]

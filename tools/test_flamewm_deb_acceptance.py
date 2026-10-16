@@ -87,11 +87,11 @@ class HelperTests(unittest.TestCase):
                          ["libx11-6", "libxi6", "libxft2"])
 
     def test_sha256sums_lookup_by_basename(self):
-        table = deb.parse_sha256sums("abc123  .target/dist/flamewm_0.0.9_amd64.deb\n")
-        self.assertEqual(table["flamewm_0.0.9_amd64.deb"], "abc123")
+        table = deb.parse_sha256sums("abc123  .target/dist/flamewm_{v}_amd64.deb\n".format(v=deb.workspace_version()))
+        self.assertEqual(table[f"flamewm_{deb.workspace_version()}_amd64.deb"], "abc123")
 
     def test_info_parser_reads_version(self):
-        self.assertEqual(deb.parse_info(" Package: flamewm\n Version: 0.0.9\n")["Version"], "0.0.9")
+        self.assertEqual(deb.parse_info(f" Package: flamewm\n Version: {deb.workspace_version()}\n")["Version"], deb.workspace_version())
 
 
 if __name__ == "__main__":
