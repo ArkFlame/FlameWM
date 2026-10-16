@@ -191,6 +191,43 @@ impl ExternalDecorationRenderer {
         Ok(())
     }
 
+    /// Root-relative origin of `frame_xid` (a root child) and the root size.
+    /// `None` without a live display or when the geometry query fails.
+    pub fn frame_root_geometry(&self, frame_xid: u64) -> Option<((i32, i32), (u32, u32))> {
+        use std::os::raw::{c_int, c_uint};
+        if self.display.is_null() || frame_xid == 0 {
+            return None;
+        }
+        let (mut root, mut x, mut y): (super::xlib::Window, c_int, c_int) = (0, 0, 0);
+        let (mut w, mut h, mut border, mut depth): (c_uint, c_uint, c_uint, c_uint) = (0, 0, 0, 0);
+        // SAFETY: display is live; out-pointers are valid locals.
+        let ok = unsafe {
+            super::xlib_ext::XGetGeometry(
+                self.display,
+                frame_xid as super::xlib::Drawable,
+                &mut root,
+                &mut x,
+                &mut y,
+                &mut w,
+                &mut h,
+                &mut border,
+                &mut depth,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        // SAFETY: display is live.
+        let (rw, rh) = unsafe {
+            let screen = super::xlib::XDefaultScreen(self.display);
+            (
+                super::xlib::XDisplayWidth(self.display, screen),
+                super::xlib::XDisplayHeight(self.display, screen),
+            )
+        };
+        (rw > 0 && rh > 0).then_some(((x, y), (rw as u32, rh as u32)))
+    }
+
     /// Fill `rect` with `color` on the current target.
     pub fn fill_rect(&mut self, rect: Rect, color: Color) -> Result<(), String> {
         self.target_mut()?.fill_rect(rect, color)

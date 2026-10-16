@@ -3,7 +3,6 @@
 //! Eligibility: only a `Floating` window gets the rounded mask. Snapped,
 //! maximized, fullscreen windows are rectangular.
 
-use super::window_chrome::WINDOW_CHROME;
 use crate::palette::Rgb;
 
 /// Corner radius of the `Rounded` style for floating windows.
@@ -36,11 +35,25 @@ pub struct ButtonTokens {
     pub pressed: Option<Rgb>,
 }
 
+/// Settings default for `surfaceColor` (shared Surfaces RGB).
+pub const DEFAULT_SURFACE_RGB: Rgb = Rgb(0x191b1d);
+/// Settings default for `surfaceOpacity` 50% as an 8-bit alpha (`50 * 255 / 100`).
+pub const DEFAULT_SURFACE_ALPHA: u8 = 127;
+/// Settings default for `surfaceBlurPercent`.
+pub const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
+
 /// Typed chrome style tokens. Index order: minimize, maximize, close.
+/// `titlebar_bg` is the straight RGB of `surfaceColor`; `titlebar_alpha` is the
+/// `surfaceOpacity` percent mapped to 0..=255 (`percent * 255 / 100`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChromeTokens {
     pub style: DecorationStyle,
     pub titlebar_bg: Rgb,
+    pub titlebar_alpha: u8,
+    /// `surfaceBlurPercent` (0..=100): blur of what is behind the titlebar.
+    pub titlebar_blur_percent: u8,
+    /// Bumped when the backdrop source (wallpaper) changes so frames repaint.
+    pub backdrop_revision: u32,
     pub buttons: [ButtonTokens; 3],
 }
 
@@ -48,7 +61,10 @@ impl Default for ChromeTokens {
     fn default() -> Self {
         Self {
             style: DecorationStyle::Rounded,
-            titlebar_bg: WINDOW_CHROME.titlebar_background,
+            titlebar_bg: DEFAULT_SURFACE_RGB,
+            titlebar_alpha: DEFAULT_SURFACE_ALPHA,
+            titlebar_blur_percent: DEFAULT_SURFACE_BLUR_PERCENT,
+            backdrop_revision: 0,
             buttons: [ButtonTokens::default(); 3],
         }
     }
@@ -94,7 +110,8 @@ mod tests {
     #[test]
     fn default_tokens_reproduce_skin_titlebar_and_buttons() {
         let tokens = ChromeTokens::default();
-        assert_eq!(tokens.titlebar_bg, crate::palette::PANEL);
+        assert_eq!(tokens.titlebar_bg, DEFAULT_SURFACE_RGB);
+        assert_eq!(tokens.titlebar_alpha, DEFAULT_SURFACE_ALPHA);
         assert_eq!(tokens.style, DecorationStyle::Rounded);
         assert_eq!(tokens.buttons, [ButtonTokens::default(); 3]);
     }
