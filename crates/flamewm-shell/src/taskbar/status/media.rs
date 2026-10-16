@@ -36,3 +36,32 @@ pub fn intent(snapshot: &SystemSnapshot) -> Option<StatusIntent> {
         ))
     .then_some(StatusIntent::Media)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(availability: ServiceAvailability, playback: PlaybackState) -> SystemSnapshot {
+        let mut system = SystemSnapshot::default();
+        system.media.availability = availability;
+        system.media.playback = playback;
+        system
+    }
+
+    #[test]
+    fn indicator_hidden_without_player_and_shown_when_player_plays() {
+        let none = snapshot(ServiceAvailability::Unavailable, PlaybackState::Unavailable);
+        assert!(!project(&none).visible);
+        assert!(intent(&none).is_none());
+
+        let playing = snapshot(ServiceAvailability::Available, PlaybackState::Playing);
+        assert!(project(&playing).visible);
+        assert_eq!(intent(&playing), Some(StatusIntent::Media));
+    }
+
+    #[test]
+    fn indicator_hidden_when_player_stopped() {
+        let stopped = snapshot(ServiceAvailability::Available, PlaybackState::Stopped);
+        assert!(!project(&stopped).visible);
+    }
+}

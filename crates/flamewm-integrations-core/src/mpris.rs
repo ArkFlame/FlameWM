@@ -194,6 +194,28 @@ mod tests {
     }
 
     #[test]
+    fn appearing_player_becomes_snapshot_and_vanishing_player_clears_it() {
+        let mut controller = MprisController::default();
+        assert_eq!(
+            controller.snapshot().availability,
+            ServiceAvailability::Unavailable
+        );
+
+        controller.player_appeared(player("org.mpris.MediaPlayer2.a", PlaybackState::Playing));
+        assert!(controller.reconcile());
+        let shown = controller.snapshot();
+        assert_eq!(shown.availability, ServiceAvailability::Available);
+        assert_eq!(shown.active_bus_name, "org.mpris.MediaPlayer2.a");
+
+        assert!(controller.player_vanished("org.mpris.MediaPlayer2.a"));
+        assert!(controller.reconcile());
+        assert_eq!(
+            controller.snapshot().availability,
+            ServiceAvailability::Unavailable
+        );
+    }
+
+    #[test]
     fn vanished_active_player_is_reconciled_away() {
         let mut controller = MprisController::default();
         controller.player_appeared(player("org.mpris.MediaPlayer2.a", PlaybackState::Playing));

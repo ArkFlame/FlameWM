@@ -1344,6 +1344,27 @@ mod media_projection_tests {
     }
 
     #[test]
+    fn media_popup_projects_title_and_controls_only_no_artist_node() {
+        let mut snapshot = crate::ShellSnapshot::default();
+        snapshot.system.media.title = "Song Title".to_owned();
+        snapshot.system.media.artist = "Some Artist".to_owned();
+        snapshot.system.media.availability = flamewm_api::system::ServiceAvailability::Available;
+        snapshot.system.media.playback = flamewm_api::system::PlaybackState::Playing;
+        snapshot.system.media.can_previous = true;
+        snapshot.system.media.can_next = true;
+        let mut document = MediaDoc::default();
+
+        project_media(&mut document, &snapshot).expect("media projection must succeed");
+
+        let mut text_ids: Vec<&str> = document.texts.keys().map(String::as_str).collect();
+        text_ids.sort_unstable();
+        assert_eq!(text_ids, ["media-title"], "popup text nodes must be title only");
+        assert!(!document.texts.contains_key("media-artist"));
+        assert_eq!(document.visible.get("media-previous"), Some(&true));
+        assert_eq!(document.visible.get("media-next"), Some(&true));
+    }
+
+    #[test]
     fn media_title_short_is_unchanged() {
         assert_eq!(media_title_text("Song Title"), "Song Title");
         let exact = "a".repeat(MEDIA_TITLE_MAX_CHARS);
