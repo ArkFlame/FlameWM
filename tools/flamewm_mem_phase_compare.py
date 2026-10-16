@@ -5,7 +5,12 @@ Usage:
   tools/flamewm_mem_phase_compare.py --old-bin-dir DIR --new-bin-dir DIR [--run-dir DIR] [--reps N]
       [--idle-seconds S] [--idle-samples N] [--samples N] [--start-cycles N] [--minimize-cycles N]
       [--drag-cycles N] [--settle-seconds S] [--geometry WxH] [--display :N]
-      [--icon-theme-dir PATH | --synthetic-icons N]
+      [--icon-theme-dir PATH | --synthetic-icons N] [--scenario NAME]
+
+Scenario mode (opt-in, --scenario NAME): each repetition restarts WM + Shell once and runs only the phases of
+NAME (see SCENARIOS). Phases that keep the client alive sample it too (pid reported as "client"); the
+client-destroy phase samples alive, stops the client, waits for it to unmanage, then samples again (its
+alive samples are kept as alive_samples). Without --scenario the full sequence above runs unchanged.
 
 Icon theme scenario (opt-in, default none): --icon-theme-dir symlinks an existing theme dir into the run's
 private XDG_DATA_HOME/icons; --synthetic-icons N generates an N-file theme there. Either way the theme name
@@ -54,6 +59,17 @@ import flamewm_settings_acceptance as base  # noqa: E402
 SCHEMA = "flamewm-mem-phase-compare/1"
 LABELS = ("old", "new")
 PHASES = ("cold", "idle", "start", "minimize", "drag")
+ALL_PHASES = (*PHASES, "destroy")
+SCENARIOS = {
+    "idle-only": ("idle",),
+    "minimize-only": ("minimize",),
+    "drag-only": ("drag",),
+    "minimize-then-drag": ("minimize", "drag"),
+    "drag-then-minimize": ("drag", "minimize"),
+    "client-destroy": ("destroy",),
+}
+PROC_NAMES = ("flamewm", "flamewm-shell", "xephyr", "client")
+PROC_METRICS = ("rss", "pss", "private_dirty")
 WS_METRICS = ("rss", "pss", "private_dirty", "threads")   # combined WM+Shell
 XE_METRICS = ("pss", "private_dirty")                      # Xephyr, separate line
 VERDICT_METRICS = ("pss", "rss")
@@ -78,12 +94,23 @@ def combine_ws(round_sample: dict) -> dict[str, int]:
     return {m: wm[m] + shell[m] for m in WS_METRICS}
 
 
+def per_process_rep(samples: list[dict]) -> dict[str, dict[str, float]]:
+    """Median per process over one repetition's samples; a process appears only when it was sampled."""
+    out = {}
+    for name in PROC_NAMES:
+        rows = [s[name] for s in samples if name in s]
+        if rows:
+            out[name] = {m: statistics.median([r[m] for r in rows]) for m in PROC_METRICS}
+    return out
+
+
 def phase_rep_value(samples: list[dict]) -> dict[str, dict[str, float]]:
-    """Median over one repetition's samples of one phase: combined WM+Shell and Xephyr."""
+    """Median over one repetition's samples of one phase: combined WM+Shell, Xephyr and per-process."""
     combos = [combine_ws(s) for s in samples]
     return {
         "wm_shell": {m: statistics.median([c[m] for c in combos]) for m in WS_METRICS},
         "xephyr": {m: statistics.median([s["xephyr"][m] for s in samples]) for m in XE_METRICS},
+        "per_process": per_process_rep(samples),
     }
 
 
@@ -91,16 +118,39 @@ def phase_stats(rep_values: list[dict]) -> dict | None:
     """summarize() (min/median/p95) per metric across repetitions; None when no repetition completed."""
     if not rep_values:
         return None
+    per_process = {}
+    for name in PROC_NAMES:
+        rows = [r["per_process"][name] for r in rep_values if name in r["per_process"]]
+        if rows:
+            per_process[name] = {m: perf.summarize([r[m] for r in rows]) for m in PROC_METRICS}
     return {
         "wm_shell": {m: perf.summarize([r["wm_shell"][m] for r in rep_values]) for m in WS_METRICS},
         "xephyr": {m: perf.summarize([r["xephyr"][m] for r in rep_values]) for m in XE_METRICS},
+        "per_process": per_process,
     }
+
+
+def run_phase_list(names: list[str] | tuple[str, ...], runners: dict) -> dict[str, dict]:
+    """Run each named phase's runner in order; a runner returns a dict with 'samples' (plus extras).
+    A phase that raises a live-part error is recorded as NOT_RUN with its reason and the next phase still runs."""
+    phases: dict[str, dict] = {}
+    for name in names:
+        try:
+            phases[name] = {"status": "ok", **runners[name]()}
+        except (RuntimeError, OSError, ValueError) as exc:
+            phases[name] = {"status": f"NOT_RUN: {exc}", "samples": []}
+    return phases
+
+
+def phases_for(args: argparse.Namespace) -> tuple[str, ...]:
+    """The phases one binary set runs: the named scenario, or the full sequence when none is given."""
+    return SCENARIOS[args.scenario] if args.scenario else PHASES
 
 
 def aggregate(sets: list[dict], label: str) -> dict[str, dict | None]:
     """phase -> phase_stats() for one label. A repetition counts for a phase only when that phase is ok."""
     out: dict[str, dict | None] = {}
-    for phase in PHASES:
+    for phase in ALL_PHASES:
         reps = [phase_rep_value(r["phases"][phase]["samples"])
                 for r in sets
                 if r["label"] == label and r.get("phases", {}).get(phase, {}).get("status") == "ok"]
@@ -112,13 +162,13 @@ def mib_text(value: float) -> str:
     return f"{mem.mib(value):.3f} MiB"
 
 
-def verdict(agg: dict[str, dict | None], target: int = mem.TARGET_BYTES) -> dict:
+def verdict(agg: dict[str, dict | None], target: int = mem.TARGET_BYTES, phases: tuple[str, ...] = PHASES) -> dict:
     """OVER if any measured phase has a combined WM+Shell PSS or RSS median above target, else WITHIN.
     NOT_RUN when no phase was measured; a status gets '+PARTIAL' when some phases were not measured."""
     lines: list[str] = []
     over = False
-    not_run = [p for p in PHASES if agg.get(p) is None]
-    for phase in PHASES:
+    not_run = [p for p in phases if agg.get(p) is None]
+    for phase in phases:
         st = agg.get(phase)
         if st is None:
             lines.append(f"{phase}: NOT_RUN")
@@ -131,7 +181,7 @@ def verdict(agg: dict[str, dict | None], target: int = mem.TARGET_BYTES) -> dict
             flag = "OVER" if above else "WITHIN"
             parts.append(f"{metric.upper()} median {mib_text(s['median'])}, p95 {mib_text(s['p95'])}, {flag}")
         lines.append(f"{phase}: " + "; ".join(parts))
-    if len(not_run) == len(PHASES):
+    if len(not_run) == len(phases):
         status = "NOT_RUN"
     else:
         status = "OVER" if over else "WITHIN"
@@ -160,7 +210,7 @@ def render_markdown(summary: dict, verdicts: dict, reps: int, problems: list[str
         "| phase | metric | old median | old p95 | new median | new p95 | new/old (median) |",
         "|---|---|---|---|---|---|---|",
     ]
-    for phase in PHASES:
+    for phase in ALL_PHASES:
         for metric in WS_METRICS:
             cells = []
             for label in LABELS:
@@ -173,10 +223,21 @@ def render_markdown(summary: dict, verdicts: dict, reps: int, problems: list[str
             r = ratio_or_none(summary["new"][phase], summary["old"][phase], metric)
             lines.append(f"| {phase} | {metric} | " + " | ".join(cells)
                          + f" | {'n/a' if r is None else f'{r:.3f}'} |")
+    lines += ["", "Per process (median across repetitions of the per-repetition median; not in the verdict):", "",
+              "| phase | process | label | RSS median | PSS median | Private_Dirty median |",
+              "|---|---|---|---|---|---|"]
+    for phase in ALL_PHASES:
+        for name in PROC_NAMES:
+            for label in LABELS:
+                st = summary[label][phase]
+                pp = None if st is None else st.get("per_process", {}).get(name)
+                if pp is not None:
+                    lines.append(f"| {phase} | {name} | {label} | {mib_text(pp['rss']['median'])} "
+                                 f"| {mib_text(pp['pss']['median'])} | {mib_text(pp['private_dirty']['median'])} |")
     lines += ["", "Xephyr (private, separate from the verdict):", "",
               "| phase | label | Xephyr PSS median | Xephyr PSS p95 | Xephyr Private_Dirty median | Xephyr Private_Dirty p95 |",
               "|---|---|---|---|---|---|"]
-    for phase in PHASES:
+    for phase in ALL_PHASES:
         for label in LABELS:
             st = summary[label][phase]
             if st is None:
@@ -279,7 +340,27 @@ def start_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Names
     return timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)
 
 
-def minimize_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> list[dict]:
+def live_samples(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> list[dict]:
+    """Samples with the owned client still alive (pid as 'client'), then the client is stopped."""
+    try:
+        return timed_samples([*pids, ("client", s.client.proc.pid)], args.samples, SAMPLE_SPACING_SECONDS)
+    finally:
+        base.Ctx.stop(s.client)
+
+
+def wait_client_gone(s: ap.Session) -> bool:
+    """Poll the X tree until the owned client and its frame are both gone (unmanaged)."""
+    deadline = time.monotonic() + perf.MAP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        client, frame = s.client_frame(s.tree("perf-destroy"))
+        if client is None and frame is None:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def minimize_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace,
+                   live: bool = False) -> list[dict]:
     for n in range(args.minimize_cycles):
         s.spawn_client()
         client, frame = perf.wait_client_frame(s)
@@ -288,13 +369,18 @@ def minimize_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Na
         at = f"{frame['x'] + frame['w'] - 3 * ap.BUTTON_WIDTH + ap.BUTTON_WIDTH // 2},{frame['y'] + 15}"
         code, _ = s.input(click=at)
         unmapped = code == 0 and perf.wait_map_state(s, client["id"], ("IsUnMapped", "IsUnviewable"))
-        base.Ctx.stop(s.client)
+        keep = live and unmapped and n == args.minimize_cycles - 1
+        if not keep:
+            base.Ctx.stop(s.client)
         if not unmapped:
             raise RuntimeError(f"minimize cycle {n}: no unmap within {perf.MAP_TIMEOUT_SECONDS:g}s")
+    if live:
+        return live_samples(s, pids, args)
     return timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)
 
 
-def drag_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> list[dict]:
+def drag_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace,
+               live: bool = False) -> list[dict]:
     """Drag one fresh xclock by its titlebar; each drag starts where the previous one ended."""
     s.spawn_client()
     client, frame = perf.wait_client_frame(s)
@@ -306,32 +392,47 @@ def drag_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namesp
         end_x, end_y = x + step, y + (DRAG_DROP_PX if i % 2 == 0 else 0)
         s.input(drag=f"{x},{y},{end_x},{end_y}")
         x, y = end_x, end_y
+    if live:
+        return live_samples(s, pids, args)
     base.Ctx.stop(s.client)
     return timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)
+
+
+def destroy_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Namespace) -> dict:
+    """Sample the live client, stop it, wait for unmanage, then sample again. 'samples' is the post-unmanage
+    set; 'alive_samples' is the set taken while the client was alive."""
+    s.spawn_client()
+    client, frame = perf.wait_client_frame(s)
+    if client is None or frame is None:
+        raise RuntimeError("xclock or frame not found")
+    alive = timed_samples([*pids, ("client", s.client.proc.pid)], args.samples, SAMPLE_SPACING_SECONDS)
+    base.Ctx.stop(s.client)
+    if not wait_client_gone(s):
+        raise RuntimeError(f"client not unmanaged within {perf.MAP_TIMEOUT_SECONDS:g}s")
+    return {"samples": timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS), "alive_samples": alive}
 
 
 def run_set(s: ap.Session, label: str, bin_dir: Path, args: argparse.Namespace, xephyr_pid: int) -> dict:
     """One binary set on a fresh WM + Shell. Each phase is kept or marked NOT_RUN on its own."""
     args.wm_bin, args.shell_bin = str(bin_dir / "flamewm"), str(bin_dir / "flamewm-shell")
+    names = phases_for(args)
     out: dict = {"label": label, "phases": {}}
     if not s.restart({"surfaceOpacity": "100"}):
-        out["phases"] = {p: {"status": "NOT_RUN: WM or shell exited during restart", "samples": []} for p in PHASES}
+        out["phases"] = {p: {"status": "NOT_RUN: WM or shell exited during restart", "samples": []} for p in names}
         out["reason"] = "WM or shell exited during restart"
         return out
     time.sleep(args.settle_seconds)
     pids = [("flamewm", s.ctx.wm.pid), ("flamewm-shell", s.shell.pid), ("xephyr", xephyr_pid)]
-
-    def record(name: str, fn) -> None:
-        try:
-            out["phases"][name] = {"status": "ok", "samples": fn()}
-        except (RuntimeError, OSError, ValueError) as exc:
-            out["phases"][name] = {"status": f"NOT_RUN: {exc}", "samples": []}
-
-    record("cold", lambda: timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS))
-    record("idle", lambda: timed_samples(pids, args.idle_samples, args.idle_seconds / args.idle_samples))
-    record("start", lambda: start_phase(s, pids, args))
-    record("minimize", lambda: minimize_phase(s, pids, args))
-    record("drag", lambda: drag_phase(s, pids, args))
+    live = args.scenario is not None
+    runners = {
+        "cold": lambda: {"samples": timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS)},
+        "idle": lambda: {"samples": timed_samples(pids, args.idle_samples, args.idle_seconds / args.idle_samples)},
+        "start": lambda: {"samples": start_phase(s, pids, args)},
+        "minimize": lambda: {"samples": minimize_phase(s, pids, args, live)},
+        "drag": lambda: {"samples": drag_phase(s, pids, args, live)},
+        "destroy": lambda: destroy_phase(s, pids, args),
+    }
+    out["phases"] = run_phase_list(names, runners)
     not_ok = [f"{p}: {v['status']}" for p, v in out["phases"].items() if v["status"] != "ok"]
     out["reason"] = "; ".join(not_ok)
     return out
@@ -355,6 +456,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--geometry", default="1280x800")
     p.add_argument("--display", default=None)
     p.add_argument("--client-bin", default="xclock")
+    p.add_argument("--scenario", choices=sorted(SCENARIOS), default=None,
+                   help="run only this phase list on a fresh WM+Shell per binary set (default: full sequence)")
     icons = p.add_mutually_exclusive_group()
     icons.add_argument("--icon-theme-dir", default=None, metavar="PATH",
                        help="existing icon theme dir (contains index.theme), symlinked into the private run")
@@ -379,7 +482,7 @@ def build_doc(sets: list[dict], args: argparse.Namespace) -> tuple[dict, list[st
     if len(sets) != 2 * args.reps:
         problems.append(f"run incomplete: {len(sets)}/{2 * args.reps} binary-set repetitions")
     summary = {label: aggregate(sets, label) for label in LABELS}
-    verdicts = {label: verdict(summary[label]) for label in LABELS}
+    verdicts = {label: verdict(summary[label], phases=phases_for(args)) for label in LABELS}
     markdown = f"Icon theme scenario: {scenario_text(icon_scenario(args))}.\n" + \
         render_markdown(summary, verdicts, args.reps, problems)
     doc = {"summary": summary, "verdicts": verdicts, "problems": problems, "markdown": markdown}
@@ -426,7 +529,8 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
         doc |= {"run_dir": str(run), "display": ctx.display, "geometry": args.geometry, "reps": args.reps,
                 "idle_seconds": args.idle_seconds, "idle_samples": args.idle_samples, "samples": args.samples,
                 "start_cycles": args.start_cycles, "minimize_cycles": args.minimize_cycles,
-                "drag_cycles": args.drag_cycles, "icon_theme": icon_scenario(args),
+                "drag_cycles": args.drag_cycles, "scenario": args.scenario or "default",
+                "icon_theme": icon_scenario(args),
                 "target_bytes": mem.TARGET_BYTES,
                 "binaries": {label: {name: {"path": str(bins[label] / name),
                                             "sha256": perf.sha256(bins[label] / name)}

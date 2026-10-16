@@ -292,5 +292,126 @@ class StageIconScenarioTests(unittest.TestCase):
         self.assertEqual(kde, "[Icons]\nTheme=BigTheme\n")
 
 
+def sample_with_client(wm: int, shell: int, client: int | None) -> dict:
+    s = round_sample(wm, shell, 0)
+    if client is not None:
+        s["client"] = proc(0, client, 10, 1)
+    return s
+
+
+class ScenarioTableTests(unittest.TestCase):
+    def test_table_is_exact(self) -> None:
+        self.assertEqual(mpc.SCENARIOS, {
+            "idle-only": ("idle",),
+            "minimize-only": ("minimize",),
+            "drag-only": ("drag",),
+            "minimize-then-drag": ("minimize", "drag"),
+            "drag-then-minimize": ("drag", "minimize"),
+            "client-destroy": ("destroy",),
+        })
+
+    def test_every_scenario_phase_is_known(self) -> None:
+        for names in mpc.SCENARIOS.values():
+            self.assertTrue(set(names) <= set(mpc.ALL_PHASES))
+
+    def test_default_is_full_sequence_without_destroy(self) -> None:
+        args = mpc.parse_args([])
+        self.assertIsNone(args.scenario)
+        self.assertEqual(mpc.phases_for(args), mpc.PHASES)
+        self.assertNotIn("destroy", mpc.PHASES)
+
+    def test_scenario_flag_selects_its_phases(self) -> None:
+        args = mpc.parse_args(["--scenario", "minimize-then-drag"])
+        self.assertEqual(args.scenario, "minimize-then-drag")
+        self.assertEqual(mpc.phases_for(args), ("minimize", "drag"))
+
+    def test_unknown_scenario_is_rejected(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            mpc.parse_args(["--scenario", "nope"])
+        self.assertEqual(cm.exception.code, 2)
+
+
+class PerProcessTests(unittest.TestCase):
+    def test_medians_per_process_and_missing_client_is_absent(self) -> None:
+        samples = [sample_with_client(10, 0, 100), sample_with_client(30, 0, 300), sample_with_client(20, 0, None)]
+        pp = mpc.phase_rep_value(samples)["per_process"]
+        self.assertEqual(pp["flamewm"]["pss"], 20)            # median of 10, 30, 20
+        self.assertEqual(pp["client"]["pss"], 200)            # only two samples had the client
+        self.assertEqual(pp["xephyr"]["private_dirty"], 50)
+        self.assertNotIn("client", mpc.per_process_rep([sample_with_client(1, 1, None)]))
+
+    def test_phase_stats_summarises_per_process_across_reps(self) -> None:
+        reps = [mpc.phase_rep_value([sample_with_client(v, 0, v * 2)]) for v in (1, 2, 3)]
+        stats = mpc.phase_stats(reps)
+        self.assertEqual(stats["per_process"]["client"]["pss"]["median"], 4)
+        self.assertEqual(stats["per_process"]["client"]["pss"]["n"], 3)
+        self.assertEqual(stats["per_process"]["flamewm"]["rss"]["n"], 3)
+        self.assertEqual(stats["wm_shell"]["pss"]["median"], 2)  # combined numbers unchanged
+
+    def test_no_client_in_any_rep_gives_no_client_entry(self) -> None:
+        reps = [mpc.phase_rep_value([round_sample(1, 1, 1)])]
+        self.assertNotIn("client", mpc.phase_stats(reps)["per_process"])
+
+    def test_markdown_lists_per_process_rows(self) -> None:
+        sets = [rep_row("old", 0, {"drag": [sample_with_client(20, 0, 300)]}),
+                rep_row("new", 0, {"drag": [sample_with_client(10, 0, 100)]})]
+        summary = {label: mpc.aggregate(sets, label) for label in mpc.LABELS}
+        verdicts = {label: mpc.verdict(summary[label]) for label in mpc.LABELS}
+        text = mpc.render_markdown(summary, verdicts, reps=1, problems=[])
+        self.assertIn("| drag | client | old |", text)
+        self.assertIn("| drag | flamewm | new |", text)
+
+
+class PhaseListRunnerTests(unittest.TestCase):
+    def test_runs_only_named_phases_in_order_with_extras(self) -> None:
+        calls: list[str] = []
+
+        def stub(name: str, extra: dict | None = None):
+            def run() -> dict:
+                calls.append(name)
+                return {"samples": [name], **(extra or {})}
+            return run
+
+        runners = {"minimize": stub("minimize"), "drag": stub("drag"),
+                   "destroy": stub("destroy", {"alive_samples": ["alive"]})}
+        phases = mpc.run_phase_list(("destroy", "minimize"), runners)
+        self.assertEqual(calls, ["destroy", "minimize"])
+        self.assertEqual(phases["destroy"], {"status": "ok", "samples": ["destroy"], "alive_samples": ["alive"]})
+        self.assertEqual(set(phases), {"destroy", "minimize"})
+
+    def test_live_error_becomes_not_run_and_next_phase_still_runs(self) -> None:
+        def broken() -> dict:
+            raise RuntimeError("xclock or frame not found")
+
+        def fine() -> dict:
+            return {"samples": [1]}
+
+        phases = mpc.run_phase_list(("minimize", "drag"), {"minimize": broken, "drag": fine})
+        self.assertEqual(phases["minimize"], {"status": "NOT_RUN: xclock or frame not found", "samples": []})
+        self.assertEqual(phases["drag"], {"status": "ok", "samples": [1]})
+
+    def test_unexpected_error_is_not_swallowed(self) -> None:
+        def bug() -> dict:
+            raise KeyError("bug")
+
+        with self.assertRaises(KeyError):
+            mpc.run_phase_list(("drag",), {"drag": bug})
+
+
+class ScenarioVerdictTests(unittest.TestCase):
+    def test_verdict_covers_only_scenario_phases(self) -> None:
+        agg = {p: None for p in mpc.ALL_PHASES}
+        agg["minimize"] = stats_for(20, 25)
+        v = mpc.verdict(agg, phases=("minimize", "drag"))
+        self.assertEqual(v["not_run_phases"], ["drag"])
+        self.assertEqual(v["status"], "WITHIN+PARTIAL")
+
+    def test_destroy_only_scenario_is_measured_not_not_run(self) -> None:
+        agg = {p: None for p in mpc.ALL_PHASES}
+        agg["destroy"] = stats_for(20, 25)
+        v = mpc.verdict(agg, phases=("destroy",))
+        self.assertEqual(v["status"], "WITHIN")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
