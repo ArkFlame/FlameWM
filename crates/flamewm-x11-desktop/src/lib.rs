@@ -17,7 +17,9 @@ use flamewm_api::input::PointerPosition;
 use flamewm_api::ports::*;
 use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::wm_features::{FeatureAction, WindowFeature, WindowFeatureSnapshot};
-use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
+use flamewm_api::workspace::{
+    WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot, remapped_desktop,
+};
 use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, Size,
     TransactionId, WindowRef, WorkspaceRef,
@@ -599,6 +601,92 @@ mod lock_resolution_tests {
 fn unsupported(message: &'static str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
 }
+
+/// Applies an insert/remove plan as one server-grabbed batch: `_NET_WM_DESKTOP` of every
+/// managed window is remapped first, then `_NET_NUMBER_OF_DESKTOPS`, `_NET_DESKTOP_NAMES`
+/// and `_NET_CURRENT_DESKTOP` are rewritten. Shared by both X11 workspace backends.
+pub fn apply_workspace_plan_to_root(
+    conn: &RustConnection,
+    root: Window,
+    plan: &WorkspacePlan,
+) -> FlameResult<()> {
+    use x11rb::wrapper::ConnectionExt as _;
+    plan.validate()?;
+    let intern = |name: &str| -> FlameResult<Atom> {
+        Ok(conn
+            .intern_atom(false, name.as_bytes())
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?
+            .atom)
+    };
+    let client_list = intern("_NET_CLIENT_LIST")?;
+    let desktop = intern("_NET_WM_DESKTOP")?;
+    let count = intern("_NET_NUMBER_OF_DESKTOPS")?;
+    let names_atom = intern("_NET_DESKTOP_NAMES")?;
+    let current = intern("_NET_CURRENT_DESKTOP")?;
+    let utf8 = intern("UTF8_STRING")?;
+
+    let windows: Vec<Window> = conn
+        .get_property(false, root, client_list, AtomEnum::WINDOW, 0, u32::MAX)
+        .map_err(io_error)?
+        .reply()
+        .map_err(io_error)?
+        .value32()
+        .map_or_else(Vec::new, Iterator::collect);
+    let mut names = Vec::new();
+    for name in &plan.new_names {
+        names.extend_from_slice(name.as_bytes());
+        names.push(0);
+    }
+
+    let writes = || -> FlameResult<()> {
+        for &window in &windows {
+            let reply = conn
+                .get_property(false, window, desktop, AtomEnum::CARDINAL, 0, 1)
+                .map_err(io_error)?
+                .reply()
+                .map_err(io_error)?;
+            let Some(value) = reply.value32().and_then(|mut values| values.next()) else {
+                continue;
+            };
+            if let Some(next) = remapped_desktop(plan, value) {
+                conn.change_property32(
+                    xproto::PropMode::REPLACE,
+                    window,
+                    desktop,
+                    AtomEnum::CARDINAL,
+                    &[next],
+                )
+                .map_err(io_error)?;
+            }
+        }
+        conn.change_property32(
+            xproto::PropMode::REPLACE,
+            root,
+            count,
+            AtomEnum::CARDINAL,
+            &[plan.new_count as u32],
+        )
+        .map_err(io_error)?;
+        conn.change_property8(xproto::PropMode::REPLACE, root, names_atom, utf8, &names)
+            .map_err(io_error)?;
+        conn.change_property32(
+            xproto::PropMode::REPLACE,
+            root,
+            current,
+            AtomEnum::CARDINAL,
+            &[plan.new_active as u32],
+        )
+        .map_err(io_error)?;
+        Ok(())
+    };
+    conn.grab_server().map_err(io_error)?;
+    let result = writes();
+    conn.ungrab_server().map_err(io_error)?;
+    result?;
+    conn.flush().map_err(io_error)
+}
 fn signed(value: u32) -> i32 {
     value as i32
 }
@@ -872,12 +960,10 @@ impl WorkspacePort for X11Desktop {
     }
     fn apply_workspace_plan(&mut self, plan: &WorkspacePlan) -> FlameResult<()> {
         plan.validate()?;
-        if !matches!(plan.kind, WorkspacePlanKind::Activate) {
-            return Err(unsupported(
-                "X11 EWMH cannot atomically apply workspace topology plans",
-            ));
+        if matches!(plan.kind, WorkspacePlanKind::Activate) {
+            return self.activate_workspace(plan.new_active, plan.expected_revision);
         }
-        self.activate_workspace(plan.new_active, plan.expected_revision)
+        apply_workspace_plan_to_root(&self.conn, self.root, plan)
     }
 }
 

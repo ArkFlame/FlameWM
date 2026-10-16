@@ -1,4 +1,5 @@
 use super::*;
+use flamewm_api::workspace::MAX_WORKSPACES;
 
 impl<'a, C: Connection> Wm<'a, C> {
     pub(super) fn switch_workspace(&mut self, target: usize) -> Result<(), ReplyError> {
@@ -81,11 +82,12 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn set_workspace_count(&mut self, requested: usize) -> Result<(), ReplyError> {
-        let requested = requested.clamp(1, 18);
+        let requested = requested.clamp(1, MAX_WORKSPACES);
         if requested == self.workspace_count {
             return Ok(());
         }
         self.snap_preview.hide();
+        crate::bump_workspace_generation();
         let mut moved = Vec::new();
         if requested < self.workspace_count {
             for state in self.clients.values_mut() {

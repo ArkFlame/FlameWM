@@ -1,7 +1,7 @@
 use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
 use flamewm_api::{FlameError, FlameResult};
 
-pub const MAX_WORKSPACES: usize = 1000;
+pub use flamewm_api::workspace::MAX_WORKSPACES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPosition {
@@ -208,6 +208,13 @@ fn normalized_names(snapshot: &WorkspaceSnapshot) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_rejects_at_shared_maximum() {
+        assert_eq!(MAX_WORKSPACES, 18);
+        assert!(WorkspacePlanner::insert_after(&snapshot(MAX_WORKSPACES - 1, 0), 0).is_ok());
+        assert!(WorkspacePlanner::insert_after(&snapshot(MAX_WORKSPACES, 0), 0).is_err());
+    }
 
     fn snapshot(count: usize, active: usize) -> WorkspaceSnapshot {
         WorkspaceSnapshot {

@@ -600,12 +600,12 @@ impl WorkspacePort for X11Desktop {
     }
     fn apply_workspace_plan(&mut self, plan: &WorkspacePlan) -> FlameResult<()> {
         plan.validate()?;
-        if !matches!(plan.kind, WorkspacePlanKind::Activate) {
-            return Err(unsupported(
-                "X11 EWMH cannot atomically apply workspace topology plans",
-            ));
+        if matches!(plan.kind, WorkspacePlanKind::Activate) {
+            return self.activate_workspace(plan.new_active, plan.expected_revision);
         }
-        self.activate_workspace(plan.new_active, plan.expected_revision)
+        // The WM observes these root writes as an external change and adopts the
+        // topology, bumping the workspace generation once (see events.rs).
+        flamewm_x11_desktop::apply_workspace_plan_to_root(&self.conn, self.root, plan)
     }
 }
 

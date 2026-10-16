@@ -1,5 +1,8 @@
 use crate::{ErrorCode, FlameError, FlameResult};
 
+/// Product maximum for workspace count; shared by planner, WM clamp and env override.
+pub const MAX_WORKSPACES: usize = 18;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSnapshot {
     pub revision: u64,
@@ -92,5 +95,51 @@ impl WorkspacePlan {
             ));
         }
         Ok(())
+    }
+}
+
+/// `_NET_WM_DESKTOP` value a window must carry after `plan`, or `None` when unchanged.
+/// Sticky (`0xFFFF_FFFF`) and out-of-range values are left alone.
+#[must_use]
+pub fn remapped_desktop(plan: &WorkspacePlan, desktop: u32) -> Option<u32> {
+    let old = usize::try_from(desktop).ok()?;
+    let new = u32::try_from(*plan.old_to_new.get(old)?).ok()?;
+    (new != desktop).then_some(new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan(kind: WorkspacePlanKind, old_to_new: Vec<usize>, new_count: usize) -> WorkspacePlan {
+        WorkspacePlan {
+            kind,
+            expected_revision: 1,
+            new_revision: 2,
+            old_count: old_to_new.len(),
+            new_count,
+            requested_index: 0,
+            old_to_new,
+            new_active: 0,
+            new_last: None,
+            new_names: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn remapped_desktop_follows_insert_mapping() {
+        let plan = plan(WorkspacePlanKind::Insert, vec![0, 2, 3], 4);
+        assert_eq!(remapped_desktop(&plan, 0), None);
+        assert_eq!(remapped_desktop(&plan, 1), Some(2));
+        assert_eq!(remapped_desktop(&plan, 2), Some(3));
+    }
+
+    #[test]
+    fn remapped_desktop_moves_removed_desktop_to_survivor_and_keeps_sticky() {
+        let plan = plan(WorkspacePlanKind::Remove, vec![0, 1, 1, 2], 3);
+        assert_eq!(remapped_desktop(&plan, 0), None);
+        assert_eq!(remapped_desktop(&plan, 2), Some(1));
+        assert_eq!(remapped_desktop(&plan, 3), Some(2));
+        assert_eq!(remapped_desktop(&plan, u32::MAX), None);
     }
 }

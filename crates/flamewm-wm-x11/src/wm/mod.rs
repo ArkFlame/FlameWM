@@ -255,7 +255,7 @@ impl WmConfig {
             "FLAMEWM_WORKSPACES",
             config.workspaces as u16,
             1,
-            18,
+            flamewm_api::workspace::MAX_WORKSPACES as u16,
         ));
         config
     }
@@ -1938,7 +1938,7 @@ fn desktop_change_is_external(published: Option<u32>, own_current: usize) -> boo
 fn desktop_names_payload(count: usize) -> Vec<u8> {
     let mut names = Vec::new();
     for index in 0..count {
-        names.extend_from_slice(format!("Desktop {}", index + 1).as_bytes());
+        names.extend_from_slice(format!("Workspace {}", index + 1).as_bytes());
         names.push(0);
     }
     names

@@ -253,6 +253,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .and_then(|values| values.first().copied());
                 if desktop_change_is_external(value, self.current_workspace) {
                     crate::bump_workspace_generation();
+                    // Count adoption reads the root current desktop too, so a target
+                    // beyond the old count is picked up when the count arrives.
+                    if let Some(target) = external_desktop_target(value)
+                        .filter(|target| *target < self.workspace_count)
+                    {
+                        self.switch_workspace(target)?;
+                    }
                 }
             } else if atom == self.atoms.net_number_of_desktops
                 || atom == self.atoms.net_desktop_names
@@ -272,10 +279,47 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let own_names = desktop_names_payload(self.workspace_count);
                 if workspace_metadata_is_external(count, &names, self.workspace_count, &own_names)
                 {
-                    crate::bump_workspace_generation();
-                    self.mark_workspaces();
+                    match count.map(|value| value as usize) {
+                        Some(external) if external != self.workspace_count => {
+                            // Adopt the root's current desktop before republishing so the
+                            // metadata publish does not revert an external switch.
+                            let current = self
+                                .read_cardinals(window, self.atoms.net_current_desktop, 1)
+                                .and_then(|values| values.first().copied());
+                            if let Some(value) = current.map(|v| v as usize) {
+                                if value < external {
+                                    self.current_workspace = value;
+                                }
+                            }
+                            // set_workspace_count bumps the workspace generation once.
+                            self.set_workspace_count(external)?;
+                        }
+                        _ => {
+                            crate::bump_workspace_generation();
+                            self.mark_workspaces();
+                        }
+                    }
                 }
             }
+        }
+        if atom == self.atoms.net_wm_desktop && self.clients.contains_key(&window) {
+            // Client-side or transactional desktop rewrites (e.g. a workspace plan
+            // applied off-WM) must update the WM's per-client workspace.
+            let value = self
+                .read_cardinals(window, atom, 1)
+                .and_then(|values| values.first().copied());
+            // Not filtered by the old count: the root count may still be pending. The
+            // count adoption (shrink) moves clients beyond the new count.
+            if let Some(target) = external_desktop_target(value) {
+                if let Some(state) = self.clients.get_mut(&window) {
+                    if state.workspace != target {
+                        state.workspace = target;
+                        self.mark_windows();
+                        self.reconcile_workspace_visibility()?;
+                    }
+                }
+            }
+            return Ok(());
         }
         if (atom == self.atoms.motif_wm_hints || atom == self.atoms.gtk_frame_extents)
             && self.clients.contains_key(&window)
@@ -482,5 +526,38 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         }
         Ok(())
+    }
+}
+
+/// Desktop named by an external `_NET_WM_DESKTOP` / `_NET_CURRENT_DESKTOP` value, filtered
+/// only by the product maximum. Absent and sticky (`0xFFFF_FFFF`) values yield `None`.
+fn external_desktop_target(value: Option<u32>) -> Option<usize> {
+    value
+        .map(|v| v as usize)
+        .filter(|target| *target < flamewm_api::workspace::MAX_WORKSPACES)
+}
+
+#[cfg(test)]
+mod desktop_adoption_tests {
+    use super::*;
+
+    // Root `_NET_NUMBER_OF_DESKTOPS` may be processed after a remapped client
+    // `_NET_WM_DESKTOP`, so the old WM count must not filter an external value.
+    #[test]
+    fn external_target_at_old_count_is_kept_for_either_event_order() {
+        // Client-first: client on old count 3 must still be accepted.
+        assert_eq!(external_desktop_target(Some(3)), Some(3));
+        // Count-first: the same value stays valid after adoption to 4.
+        assert_eq!(external_desktop_target(Some(3)), Some(3));
+    }
+
+    #[test]
+    fn external_target_rejects_absent_sticky_and_beyond_maximum() {
+        assert_eq!(external_desktop_target(None), None);
+        assert_eq!(external_desktop_target(Some(u32::MAX)), None);
+        assert_eq!(
+            external_desktop_target(Some(flamewm_api::workspace::MAX_WORKSPACES as u32)),
+            None
+        );
     }
 }
