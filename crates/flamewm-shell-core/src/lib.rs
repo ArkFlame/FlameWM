@@ -6,6 +6,7 @@ pub mod popup;
 pub mod quickswitch;
 pub mod start_menu;
 pub mod status;
+pub mod weather;
 pub mod workspaces;
 
 use flamewm_api::applications::DesktopApplication;

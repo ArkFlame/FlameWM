@@ -17,6 +17,7 @@ pub mod settings_projection;
 pub mod start;
 pub mod surface_backdrop;
 pub mod status;
+mod weather_provider;
 
 /// The active taskbar status projection is compiled without activating stale
 /// taskbar controllers that target an older control contract.
