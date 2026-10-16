@@ -60,6 +60,11 @@ SCHEMA = "flamewm-mem-phase-compare/1"
 LABELS = ("old", "new")
 PHASES = ("cold", "idle", "start", "minimize", "drag")
 ALL_PHASES = (*PHASES, "destroy")
+# Allocator tuning the session applies to its WM and Shell children (flamewm-session.rs); the mem-phase
+# harness passes it to those children only, leaving the client processes untouched.
+ALLOCATOR_TUNING = (("MALLOC_ARENA_MAX", "2"), ("MALLOC_TRIM_THRESHOLD_", "131072"),
+                    ("MALLOC_MMAP_THRESHOLD_", "131072"))
+WM_SHELL_SPAWNS = frozenset({"flamewm", "flamewm-restart", "flamewm-shell"})
 SCENARIOS = {
     "idle-only": ("idle",),
     "minimize-only": ("minimize",),
@@ -505,8 +510,24 @@ def build_doc(sets: list[dict], args: argparse.Namespace) -> tuple[dict, list[st
     return doc, problems
 
 
+def allocator_env(name: str, env: dict[str, str]) -> dict[str, str]:
+    if name not in WM_SHELL_SPAWNS:
+        return env
+    return {**env, **dict(ALLOCATOR_TUNING)}
+
+
+def tune_wm_shell_spawns(ctx: base.Ctx) -> None:
+    spawn = ctx.spawn
+
+    def tuned(name: str, argv: list[str], env: dict[str, str]) -> base.Owned:
+        return spawn(name, argv, allocator_env(name, env))
+
+    ctx.spawn = tuned
+
+
 def run_inner(args: argparse.Namespace, run: Path) -> int:
     ctx = base.Ctx(run)
+    tune_wm_shell_spawns(ctx)
     sets: list[dict] = []
     started = ap.utc_now()
     bins = {"old": Path(args.old_bin_dir), "new": Path(args.new_bin_dir)}

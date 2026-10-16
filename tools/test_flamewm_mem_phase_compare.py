@@ -61,6 +61,34 @@ def full_agg(pss_mib: float, rss_mib: float) -> dict:
     return {p: stats_for(pss_mib, rss_mib) for p in mpc.PHASES}
 
 
+class AllocatorEnvTests(unittest.TestCase):
+    TUNING = {"MALLOC_ARENA_MAX": "2", "MALLOC_TRIM_THRESHOLD_": "131072", "MALLOC_MMAP_THRESHOLD_": "131072"}
+
+    def test_wm_and_shell_children_get_allocator_tuning(self) -> None:
+        for name in ("flamewm", "flamewm-restart", "flamewm-shell"):
+            env = mpc.allocator_env(name, {"PATH": "/usr/bin"})
+            self.assertEqual({k: env[k] for k in self.TUNING}, self.TUNING, name)
+            self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_other_children_are_not_tuned(self) -> None:
+        self.assertEqual(mpc.allocator_env("flamewm-lock", {"PATH": "/usr/bin"}), {"PATH": "/usr/bin"})
+        self.assertEqual(mpc.allocator_env("xephyr", {}), {})
+
+    def test_spawn_wrapper_tunes_only_wm_and_shell(self) -> None:
+        seen: dict[str, dict[str, str]] = {}
+
+        class FakeCtx:
+            def spawn(self, name: str, argv: list[str], env: dict[str, str]) -> None:
+                seen[name] = env
+
+        ctx = FakeCtx()
+        mpc.tune_wm_shell_spawns(ctx)
+        ctx.spawn("flamewm-shell", [], {"XDG_SESSION_TYPE": "x11"})
+        ctx.spawn("settings-ap04", [], {})
+        self.assertEqual(seen["flamewm-shell"]["MALLOC_ARENA_MAX"], "2")
+        self.assertNotIn("MALLOC_ARENA_MAX", seen["settings-ap04"])
+
+
 class CombineTests(unittest.TestCase):
     def test_sums_wm_and_shell_and_excludes_xephyr(self) -> None:
         combined = mpc.combine_ws(round_sample(wm_pss=10, shell_pss=20, xe_pss=999, wm_rss=30, shell_rss=40))
