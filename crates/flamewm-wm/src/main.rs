@@ -13,7 +13,7 @@ use flamewm_session_core::{
 };
 use flamewm_wm::{
     SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_appearance,
-    persisted_cursor_theme, run, run_with_settings_observer,
+    persisted_cursor_theme, run_with_settings_observer,
 };
 use flamewm_xsettings::{XSettingsInput, X11XSettingsManager, claim_x11_manager, published_settings};
 
@@ -40,7 +40,7 @@ fn main() {
             let (observer, wake) = xsettings_owner(manager, sync);
             run_with_settings_observer(WmConfig::from_env(), observer, wake)
         }
-        None => run(WmConfig::from_env()),
+        None => run_with_settings_observer(WmConfig::from_env(), cursor_only_observer(), None),
     };
     if let Err(error) = result {
         eprintln!("flamewm: {error}");
@@ -318,6 +318,17 @@ fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
         Some(SettingValue::Integer(offset)) => u32::try_from((base + offset).clamp(1, 72)).ok(),
         _ => None,
     }
+}
+
+/// Settings observer used when no XSETTINGS manager is claimed: still applies
+/// the Flame `cursorTheme` to live cursor owners at every settings sync point.
+fn cursor_only_observer() -> SettingsObserver {
+    Box::new(|snapshot: &SettingsSnapshot| {
+        let theme = xsettings_input_from_snapshot(snapshot).cursor_theme;
+        for error in apply_cursor_theme(&theme) {
+            eprintln!("flamewm: cursor theme reload failed: {error}");
+        }
+    })
 }
 
 /// Live XSettings path. Each settings sync point maps the snapshot and

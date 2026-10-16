@@ -1298,6 +1298,13 @@ impl<'a, C: Connection> Wm<'a, C> {
         let renderer = flamewm_render_x11::ExternalDecorationRenderer::open("IBM Plex Sans")
             .ok()
             .map(flamewm_render_x11::ExternalDecorationRenderer::into_cursor_shared);
+        // Root gets the theme cursor at start; the renderer records it, so a live
+        // cursor-theme reload re-defines it with the frames.
+        if let Some(renderer) = renderer.as_ref() {
+            let _ = renderer
+                .borrow_mut()
+                .define_cursor(u64::from(screen.root), flamewm_render_core::CursorKind::Default);
+        }
         let animator = Animator::new(
             renderer
                 .as_ref()

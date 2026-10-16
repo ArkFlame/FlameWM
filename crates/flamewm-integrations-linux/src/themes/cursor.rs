@@ -43,11 +43,24 @@ impl std::error::Error for CursorError {}
 
 /// Load `<theme_root>/cursors/left_ptr` and decode its preview frame.
 pub fn load_left_ptr_preview(theme_root: &Path) -> Result<CursorPreview, CursorError> {
-    let path = theme_root.join("cursors").join("left_ptr");
+    let path = resolve_in_theme_root(theme_root, &theme_root.join("cursors").join("left_ptr"))
+        .map_err(CursorError::Io)?;
     let bytes = read_regular_capped(&path, MAX_FILE_BYTES)
         .map_err(CursorError::Io)?
         .ok_or(CursorError::TooLarge)?;
     parse_xcursor_preview(&bytes)
+}
+
+/// Canonicalizes `path` and accepts it only when it stays under the canonical
+/// `theme_root`, so in-theme symlinks preview and escaping ones are refused.
+fn resolve_in_theme_root(theme_root: &Path, path: &Path) -> std::io::Result<std::path::PathBuf> {
+    let root = std::fs::canonicalize(theme_root)?;
+    let resolved = std::fs::canonicalize(path)?;
+    if resolved.starts_with(&root) {
+        Ok(resolved)
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "left_ptr resolves outside theme root"))
+    }
 }
 
 #[cfg(test)]
@@ -94,16 +107,30 @@ mod tests {
     }
 
     #[test]
-    fn left_ptr_symlink_is_not_followed() {
-        let root = std::env::temp_dir().join(format!("flamewm-cursor-symlink-{}", std::process::id()));
+    fn left_ptr_symlink_escaping_theme_root_is_refused() {
+        let base = std::env::temp_dir().join(format!("flamewm-cursor-escape-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("theme");
+        fs::create_dir_all(root.join("cursors")).expect("cursors dir");
+        fs::write(base.join("outside"), one_pixel_xcursor()).expect("outside file");
+        symlink(base.join("outside"), root.join("cursors").join("left_ptr")).expect("symlink");
+        let err = load_left_ptr_preview(&root).unwrap_err();
+        assert!(matches!(err, CursorError::Io(_)), "escaping left_ptr symlink must be refused: {err:?}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn left_ptr_symlink_inside_theme_root_previews() {
+        let root = std::env::temp_dir().join(format!("flamewm-cursor-inroot-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("cursors")).expect("cursors dir");
-        fs::write(root.join("outside"), b"Xcur").expect("outside file");
-        symlink(root.join("outside"), root.join("cursors").join("left_ptr")).expect("symlink");
-        let err = load_left_ptr_preview(&root).unwrap_err();
-        assert!(matches!(err, CursorError::Io(_)), "symlinked left_ptr must be refused: {err:?}");
+        fs::write(root.join("cursors").join("default"), one_pixel_xcursor()).expect("default");
+        symlink("default", root.join("cursors").join("left_ptr")).expect("symlink");
+        let preview = load_left_ptr_preview(&root).expect("in-root symlink previews");
+        assert_eq!((preview.width, preview.height), (1, 1));
         let _ = fs::remove_dir_all(&root);
     }
+
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> Result<u32, CursorError> {
