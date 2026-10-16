@@ -87,6 +87,10 @@ impl BackdropCache {
         self.entries.len()
     }
 
+    fn contains(&self, key: &BackdropKey) -> bool {
+        self.entries.iter().any(|(k, _)| k == key)
+    }
+
     fn bytes(&self) -> usize {
         self.entries.iter().map(|(_, pixels)| pixels.len()).sum()
     }
@@ -176,6 +180,12 @@ pub fn release_backdrop_canvas() {
 
 fn release_canvas_in(state: &mut State) {
     state.canvas = None;
+}
+
+/// Resident root canvas bytes (0 when released or decode failed).
+#[cfg(test)]
+fn canvas_bytes(state: &State) -> usize {
+    state.canvas.as_ref().and_then(|(_, image)| image.as_ref()).map_or(0, |image| image.pixels.len())
 }
 
 /// Drops everything kept for `owner` (window closed).
@@ -547,8 +557,9 @@ pub fn titlebar_pixels(
     titlebar_fill_in(state, origin, root, (width, height), rgb, alpha, radius)
 }
 
-/// Non-drag fill. The root-sized wallpaper canvas stays resident while hot: a cache hit never
-/// touches it and a miss reuses it. `release_backdrop_canvas` drops it when the transition ends.
+/// Non-drag fill. The root-sized wallpaper canvas is kept across consecutive misses (they reuse
+/// it) and dropped on the first cache hit that is not inside a drag, since hits never read it.
+/// `release_backdrop_canvas` drops it when the transition ends.
 fn titlebar_fill_in(
     state: &mut State,
     origin: (i32, i32),
@@ -567,11 +578,18 @@ fn titlebar_fill_in(
         radius_tenths: (radius * 10.0).round() as u32,
         root,
     };
-    let State { source, canvas, cache, .. } = state;
-    let backdrop = cache.get_or_insert_with(key, || {
-        build_backdrop(source.as_ref(), canvas, key.rect, root, radius)
-    });
-    compose_rgba(backdrop, rgb, alpha)
+    let State { source, canvas, cache, drag, .. } = state;
+    let hit = cache.contains(&key);
+    let out = compose_rgba(
+        cache.get_or_insert_with(key, || build_backdrop(source.as_ref(), canvas, key.rect, root, radius)),
+        rgb,
+        alpha,
+    );
+    // A hit never reads the canvas; drop it unless an active drag may still rebuild misses.
+    if hit && drag.is_none() {
+        *canvas = None;
+    }
+    out
 }
 
 fn build_backdrop(
@@ -934,13 +952,61 @@ mod tests {
         assert!(state.canvas.is_some(), "kept across consecutive miss");
         assert_eq!(state.cache.misses, 2);
         fill(&mut state, (1, 0));
-        assert!(state.canvas.is_some(), "hit leaves canvas untouched");
+        assert!(state.canvas.is_none(), "hit with no drag drops canvas");
         assert_eq!((state.cache.hits, state.cache.misses), (1, 2));
+        fill(&mut state, (2, 0));
+        assert!(state.canvas.is_some(), "rebuilt lazily on miss");
         release_canvas_in(&mut state);
         assert!(state.canvas.is_none(), "released by hook");
-        fill(&mut state, (2, 0));
-        assert!(state.canvas.is_some(), "rebuilt lazily after release on miss");
-        assert_eq!(state.cache.misses, 3);
+        fill(&mut state, (3, 0));
+        assert!(state.canvas.is_some(), "rebuilt lazily after hook release on miss");
+        assert_eq!(state.cache.misses, 4);
+    }
+
+    #[test]
+    fn canvas_bytes_tracked_and_released_after_build_when_hit_needs_none() {
+        let path = std::env::temp_dir().join(format!("flamewm-bytes-{}.ppm", std::process::id()));
+        let mut bytes = b"P6\n7 5\n255\n".to_vec();
+        bytes.extend([90u8, 40, 10].repeat(7 * 5));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut state = State {
+            source: Some(WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill }),
+            ..State::default()
+        };
+        let root = (16, 8);
+        let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
+        fill(&mut state, (0, 0));
+        let canvas = root.0 as usize * root.1 as usize * 4;
+        assert_eq!(canvas_bytes(&state), canvas, "miss builds the root canvas");
+        assert_eq!(state.cache.bytes(), 4 * 2 * 4, "one titlebar backdrop cached");
+        fill(&mut state, (0, 0));
+        assert_eq!(canvas_bytes(&state), 0, "hit releases resident canvas");
+        assert_eq!(state.cache.bytes(), 4 * 2 * 4, "cache untouched by release");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn canvas_retained_through_drag_and_rebuilt_on_miss() {
+        let path = std::env::temp_dir().join(format!("flamewm-drag-keep-{}.ppm", std::process::id()));
+        let mut bytes = b"P6\n7 5\n255\n".to_vec();
+        bytes.extend([90u8, 40, 10].repeat(7 * 5));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut state = State {
+            source: Some(WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill }),
+            ..State::default()
+        };
+        let root = (16, 8);
+        state.drag = build_drag(&mut state, 9, root, None, (0, 0, 2, 2));
+        assert!(state.drag.is_some());
+        let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
+        fill(&mut state, (0, 0));
+        assert!(state.canvas.is_some(), "drag keeps canvas for the miss");
+        fill(&mut state, (0, 0));
+        assert_eq!(canvas_bytes(&state), 16 * 8 * 4, "hit during drag keeps canvas resident");
+        fill(&mut state, (5, 0));
+        assert_eq!((state.cache.hits, state.cache.misses), (1, 2));
+        assert_eq!(canvas_bytes(&state), 16 * 8 * 4, "miss during drag rebuilds without re-decode loss");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
