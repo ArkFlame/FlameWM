@@ -8,6 +8,13 @@ impl<'a, C: Connection> Wm<'a, C> {
         else {
             return;
         };
+        // Opaque titlebars never sample the backdrop: skip the root capture entirely. Drop any
+        // snapshot or kept crop this frame still holds so none outlives a skipped drag.
+        if !crate::frame::titlebar_backdrop::needs_drag_backdrop(self.decoration_tokens.titlebar_alpha)
+        {
+            crate::frame::titlebar_backdrop::forget(u64::from(frame));
+            return;
+        }
         let screen = self.screen();
         let root = (
             u32::from(screen.width_in_pixels),

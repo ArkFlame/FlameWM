@@ -208,7 +208,12 @@ fn titlebar_fill_pixels(
     scene: &ChromeScene,
     height: u32,
 ) -> Vec<u8> {
-    use super::titlebar_backdrop::{drag_titlebar_pixels, flat_pixels, titlebar_pixels};
+    use super::titlebar_backdrop::{
+        drag_titlebar_pixels, flat_pixels, needs_drag_backdrop, titlebar_pixels,
+    };
+    if !needs_drag_backdrop(scene.bg_alpha) {
+        return flat_pixels(scene.frame_w, height, scene.bg, scene.bg_alpha);
+    }
     match renderer.frame_root_geometry(frame_xid) {
         Some((origin, root)) => drag_titlebar_pixels(
             frame_xid,

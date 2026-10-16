@@ -448,6 +448,13 @@ pub fn opacity_percent(alpha: u8) -> u8 {
     ((u32::from(alpha) * 100 + 127) / 255) as u8
 }
 
+/// Whether the titlebar needs the captured backdrop at all. An opaque titlebar (255) is its flat
+/// colour whatever lies behind it, so the drag capture and the wallpaper canvas are skipped.
+#[must_use]
+pub fn needs_drag_backdrop(alpha: u8) -> bool {
+    alpha < 255
+}
+
 /// Flat opaque titlebar over [`FALLBACK_BACKDROP`] (no geometry / no wallpaper).
 #[must_use]
 pub fn flat_pixels(width: u32, height: u32, rgb: (u8, u8, u8), alpha: u8) -> Vec<u8> {
@@ -486,6 +493,9 @@ fn titlebar_fill_in(
     alpha: u8,
     radius: f32,
 ) -> Vec<u8> {
+    if !needs_drag_backdrop(alpha) {
+        return flat_pixels(width, height, rgb, alpha);
+    }
     let key = BackdropKey {
         rect: (origin.0, origin.1, width, height),
         generation: state.generation,
@@ -691,6 +701,54 @@ mod tests {
         let base = wallpaper_base(Some(&image_source), &mut failed, (2, 1));
         assert_eq!(base, [0x1b, 0x1e, 0x20, 255].repeat(2));
         assert_eq!(failed, Some(((2, 1), None)), "failed decode stays cached");
+    }
+
+    #[test]
+    fn needs_drag_backdrop_only_when_titlebar_is_translucent() {
+        assert!(!needs_drag_backdrop(255));
+        assert!(needs_drag_backdrop(254));
+        assert!(needs_drag_backdrop(0));
+    }
+
+    #[test]
+    fn opaque_fill_is_flat_and_never_allocates_canvas() {
+        let mut state = State {
+            source: Some(WallpaperSource::Image {
+                path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
+                fit: WallpaperFit::Fill,
+            }),
+            ..State::default()
+        };
+        let px = titlebar_fill_in(&mut state, (0, 0), (64, 64), (4, 2), (10, 20, 30), 255, 0.0);
+        assert_eq!(px, flat_pixels(4, 2, (10, 20, 30), 255));
+        assert!(state.canvas.is_none(), "opaque titlebar must not compose the root canvas");
+        assert_eq!(state.cache.misses, 0, "opaque titlebar must not build a backdrop");
+    }
+
+    #[test]
+    fn translucent_fill_matches_reference_pipeline() {
+        let rgb = (0, 0, 0);
+        for alpha in [254u8, 0] {
+            let mut solid = State {
+                source: Some(WallpaperSource::Solid([100, 100, 100])),
+                ..State::default()
+            };
+            let px = titlebar_fill_in(&mut solid, (0, 0), (64, 64), (4, 2), rgb, alpha, 0.0);
+            let expected = compose_rgba(&[100, 100, 100, 255].repeat(8), rgb, alpha);
+            assert_eq!(px, expected, "solid source, alpha {alpha}");
+
+            let mut missing = State {
+                source: Some(WallpaperSource::Image {
+                    path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
+                    fit: WallpaperFit::Fill,
+                }),
+                ..State::default()
+            };
+            let px = titlebar_fill_in(&mut missing, (0, 0), (64, 64), (4, 2), rgb, alpha, 0.0);
+            let fallback = FALLBACK_BACKDROP;
+            let expected = compose_rgba(&[fallback[0], fallback[1], fallback[2], 255].repeat(8), rgb, alpha);
+            assert_eq!(px, expected, "undecodable image, alpha {alpha}");
+        }
     }
 
     #[test]
