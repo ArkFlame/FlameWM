@@ -231,6 +231,35 @@ pub(super) fn parse_device_state_changed(
     })
 }
 
+/// Answers a SecretAgent call with a D-Bus error so NetworkManager gets a reply and the reactor
+/// keeps running. Nothing secret-bearing is echoed: only the fixed error name and text.
+fn secret_agent_error(
+    message: &Message,
+    name: &str,
+    text: &str,
+) -> FlameResult<SecretAgentCall> {
+    let name = ErrorName::new(name)
+        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+    let text = CString::new(text)
+        .map_err(|_| FlameError::invalid("SecretAgent error text is invalid"))?;
+    Ok(SecretAgentCall::SendReply {
+        reply: (!message.get_no_reply()).then(|| message.error(&name, &text)),
+    })
+}
+
+fn parse_get_secrets_args(items: &[MessageItem]) -> FlameResult<(String, Vec<String>)> {
+    if items.len() != 5 || !matches!(items[0], MessageItem::Dict(_)) {
+        return Err(FlameError::invalid(
+            "NetworkManager SecretAgent GetSecrets arguments are invalid",
+        ));
+    }
+    let _ = item_object_path(&items[1], "NetworkManager SecretAgent connection path")?;
+    let setting_name = item_string(&items[2], "NetworkManager SecretAgent setting name")?;
+    let hints = item_strings(&items[3], "NetworkManager SecretAgent hints")?;
+    let _ = item_u32(&items[4], "NetworkManager SecretAgent flags")?;
+    Ok((setting_name, hints))
+}
+
 pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAgentCall> {
     if message
         .interface()
@@ -238,22 +267,21 @@ pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAg
         .as_deref()
         != Some(SECRET_AGENT_INTERFACE)
     {
-        return Err(FlameError::invalid(
-            "NetworkManager SecretAgent interface is invalid",
-        ));
+        return secret_agent_error(
+            message,
+            UNKNOWN_INTERFACE,
+            "NetworkManager SecretAgent interface is unsupported",
+        );
     }
     match message.member().map(|value| value.to_string()).as_deref() {
         Some(GET_SECRETS) => {
-            let items = message.get_items();
-            if items.len() != 5 || !matches!(items[0], MessageItem::Dict(_)) {
-                return Err(FlameError::invalid(
+            let Ok((setting_name, hints)) = parse_get_secrets_args(&message.get_items()) else {
+                return secret_agent_error(
+                    message,
+                    INVALID_ARGS,
                     "NetworkManager SecretAgent GetSecrets arguments are invalid",
-                ));
-            }
-            let _ = item_object_path(&items[1], "NetworkManager SecretAgent connection path")?;
-            let setting_name = item_string(&items[2], "NetworkManager SecretAgent setting name")?;
-            let hints = item_strings(&items[3], "NetworkManager SecretAgent hints")?;
-            let _ = item_u32(&items[4], "NetworkManager SecretAgent flags")?;
+                );
+            };
             // An empty key means NetworkManager sent no hints; apply rejects that request.
             Ok(SecretAgentCall::GetSecrets {
                 setting_name,

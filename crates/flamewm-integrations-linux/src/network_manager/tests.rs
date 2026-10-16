@@ -721,3 +721,68 @@ fn secret_agent_unknown_member_replies_unknown_method() {
         _ => panic!("unknown member must produce an UnknownMethod error reply"),
     }
 }
+
+fn secret_agent_call_with(interface: &str, member: &str, items: &[MessageItem]) -> Message {
+    let mut message = Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        SECRET_AGENT_PATH,
+        interface,
+        member,
+    )
+    .expect("valid SecretAgent call");
+    // libdbus aborts on method_return()/error() when the call serial is 0.
+    message.set_serial(1);
+    message.append_items(items);
+    message
+}
+
+fn valid_get_secrets_items() -> Vec<MessageItem> {
+    vec![
+        empty_dict(),
+        MessageItem::ObjectPath(
+            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
+                .expect("valid path"),
+        ),
+        MessageItem::Str("802-11-wireless-security".to_owned()),
+        MessageItem::from(&["psk", "unused"][..]),
+        MessageItem::UInt32(0),
+    ]
+}
+
+fn assert_error_reply(message: &Message, expected: &str) {
+    match parse_secret_agent_call(message).expect("bad SecretAgent call is answered, not fatal") {
+        SecretAgentCall::SendReply {
+            reply: Some(mut reply),
+        } => match reply.as_result() {
+            Err(error) => assert_eq!(error.name(), Some(expected)),
+            Ok(_) => panic!("bad SecretAgent call must produce an error reply"),
+        },
+        _ => panic!("bad SecretAgent call must produce an error reply"),
+    }
+}
+
+#[test]
+fn secret_agent_wrong_interface_replies_unknown_interface() {
+    let message = secret_agent_call_with(
+        "org.example.Wrong",
+        GET_SECRETS,
+        &valid_get_secrets_items(),
+    );
+    assert_error_reply(&message, "org.freedesktop.DBus.Error.UnknownInterface");
+}
+
+#[test]
+fn secret_agent_get_secrets_wrong_arity_replies_invalid_args() {
+    let mut items = valid_get_secrets_items();
+    items.pop();
+    let message = secret_agent_call_with(SECRET_AGENT_INTERFACE, GET_SECRETS, &items);
+    assert_error_reply(&message, "org.freedesktop.DBus.Error.InvalidArgs");
+}
+
+#[test]
+fn secret_agent_get_secrets_non_dict_connection_replies_invalid_args() {
+    let mut items = valid_get_secrets_items();
+    items[0] = MessageItem::Str("not-a-dict".to_owned());
+    let message = secret_agent_call_with(SECRET_AGENT_INTERFACE, GET_SECRETS, &items);
+    assert_error_reply(&message, "org.freedesktop.DBus.Error.InvalidArgs");
+}
