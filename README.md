@@ -25,6 +25,7 @@ Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.vers
 - Settings application with typed settings transactions across the platform services (`crates/flamewm-settings`, `crates/flamewm-platform`).
 - Lock screen with PAM authentication (`crates/flamewm-lock`, `packaging/pam.d/flamewm-lock`).
 - Volume on-screen display driven by the XF86 audio keys.
+- Weather popup with Open-Meteo forecast and location search. Requires network access; the Open-Meteo free tier is for noncommercial use only; attribution is shown in the popup. Disabled by default.
 
 ## X11 limitations
 
@@ -33,6 +34,7 @@ Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.vers
 - The renderer crate (`crates/flamewm-render-x11`) is the explicit Xlib/Xft FFI boundary; the window manager itself uses safe `x11rb` protocol APIs.
 - FlameWM does not replace a display manager. Select it from the session chooser after installation.
 - Multi-output (two-output RandR) layouts have not been tested.
+- Wayland: see [`docs/WAYLAND_BACKEND_FEASIBILITY.md`](docs/WAYLAND_BACKEND_FEASIBILITY.md). Feasibility analysis only; no Wayland support exists.
 
 ## Default shortcuts
 
@@ -112,17 +114,14 @@ tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1
 
 ## Memory
 
-Measurements are from a development machine and are not a release certification. Current figures:
+Measured on a private Xephyr display. Five paired release runs each of an older build and the current build:
 
-| Scenario | Measurement | Notes |
-| --- | --- | --- |
-| Harness, no theme, combined Flame-owned processes (WM + shell) at idle | about 35 MiB RSS; about 21 MiB PSS | Same run. |
-| Real session with an icon theme | about 80 MiB RSS | Scope as reported for the session; PSS not reported. |
-
-- The 34 MiB (35651584 B) threshold in `tools/flamewm_mem_phase_compare.py` is **not reached for RSS** in the figures above. The no-theme harness PSS (about 21 MiB) is below the 40 MiB PSS acceptance target in `docs/PERFORMANCE.md`; the icon-theme session was not evaluated against that target.
-- The X server process is separate and is not included in these figures.
-- Frame-time p95 has **not been measured**.
-- Not run: the installed `.deb`, two-output RandR, and a real NetworkManager session.
+- Combined WM + Shell idle RSS: median about 30.7 MB (older build) and 31.1 MB (current build); maximum 31.23 MB.
+- All 10 runs were under the 34 MiB (35,651,584 B) target.
+- PSS about 14.7 MB.
+- The current build is not measurably smaller than the older build.
+- Not included: the desktop process (about 44 MB RSS) and X server memory.
+- Not measured: real Xorg, frame p95, and full-session numbers.
 
 ## Crate architecture
 
@@ -148,7 +147,7 @@ The `.vendor/` directory holds historical reference corpora only. No active crat
 
 - The workspace package license in [`Cargo.toml`](Cargo.toml) (`workspace.package.license`) is `LGPL-2.0-only`; the full text is in [`LICENSE`](LICENSE). [`packaging/debian/copyright`](packaging/debian/copyright) also declares LGPL-2.0-only.
 - **Known mismatch:** `crates/flamewm-render-compiler/Cargo.toml` declares `license = "MIT"` and [`LICENSES/RustWebRender-MIT.txt`](LICENSES/RustWebRender-MIT.txt) contains MIT text, while the rest of the workspace is LGPL-2.0-only. The license for that crate is pending maintainer confirmation; this README does not resolve it.
-- Third-party notices and icon/theme licenses are in [`LICENSES/`](LICENSES/).
+- Third-party notices and icon/theme licenses are in [`LICENSES/`](LICENSES/). Weather data attribution (Open-Meteo, CC BY 4.0): [`LICENSES/Open-Meteo-CC-BY-4.0.txt`](LICENSES/Open-Meteo-CC-BY-4.0.txt).
 
 ## Documentation
 
