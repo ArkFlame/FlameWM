@@ -17,7 +17,8 @@ const START_ICON_SIZE: u32 = 25;
 /// Largest custom Start icon file read, so a bad path cannot stall the panel.
 const MAX_START_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
-const DEFAULT_ACCENT: u32 = 0xef4048;
+/// Neutral grey until a settings snapshot supplies `accent`.
+const DEFAULT_ACCENT: u32 = 0x7f878e;
 const DEFAULT_ANIMATION_SPEED: i64 = 100;
 const DEFAULT_START_ANIMATION: &str = "slide";
 const DEFAULT_SURFACE_OPACITY: u8 = 50;
@@ -57,10 +58,7 @@ pub fn project(
     document.font_family(font_family)?;
     document.font_size(root, font_size)?;
     document.font_weight(root, if font_bold { 700 } else { 400 })?;
-    // Accent tokens drive CSS var(--accent*) consumers in ui/shell/flamewm.css.
-    document.color_variable("--accent", accent)?;
-    document.color_variable("--accent-soft", accent_tint(snapshot, ACCENT_SOFT_ALPHA))?;
-    document.color_variable("--accent-strong", accent_tint(snapshot, 0xdd))?;
+    project_accent_tokens(document, snapshot)?;
 
     match surface {
         SurfaceKind::Panel => {
@@ -94,6 +92,30 @@ pub fn project(
             // Volume OSD card: the shared surface fill; its outline and pill radius stay in osd.html.
             document.background(root, surface_background(snapshot))?;
         }
+    }
+    Ok(())
+}
+
+/// `ui/shell/flamewm.css` accent-derived tokens with the alpha each keeps in its `:root` default.
+const ACCENT_TOKEN_ALPHAS: [(&str, u8); 9] = [
+    ("--accent", 0xff),
+    ("--accent-soft", ACCENT_SOFT_ALPHA),
+    ("--accent-strong", 0xdd),
+    ("--desktop-hover", 0x26),
+    ("--desktop-hover-border", 0x4d),
+    ("--desktop-selected", 0x47),
+    ("--desktop-selected-border", 0xa6),
+    ("--selection-fill", 0x33),
+    ("--snap-fill", 0x33),
+];
+
+/// Projects every accent-derived token from the live `accent`/`accentOpacity` pair.
+fn project_accent_tokens(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+) -> Result<(), String> {
+    for (name, alpha) in ACCENT_TOKEN_ALPHAS {
+        document.color_variable(name, accent_tint(snapshot, alpha))?;
     }
     Ok(())
 }
@@ -410,9 +432,9 @@ mod tests {
         let mut doc = RecordingUiDoc::default();
         project(&mut doc, &SettingsSnapshot::new(1), SurfaceKind::Start).expect("start projection");
         let accent = UiColor {
-            r: 0xef,
-            g: 0x40,
-            b: 0x48,
+            r: 0x7f,
+            g: 0x87,
+            b: 0x8e,
             a: 255,
         };
         assert_eq!(doc.variables["--accent"], accent);
@@ -689,6 +711,83 @@ mod tests {
     }
 
     #[test]
+    fn accent_change_reprojects_every_accent_derived_token() {
+        const TOKEN_ALPHAS: [(&str, u8); 9] = [
+            ("--accent", 0xff),
+            ("--accent-soft", 0x38),
+            ("--accent-strong", 0xdd),
+            ("--desktop-hover", 0x26),
+            ("--desktop-hover-border", 0x4d),
+            ("--desktop-selected", 0x47),
+            ("--desktop-selected-border", 0xa6),
+            ("--selection-fill", 0x33),
+            ("--snap-fill", 0x33),
+        ];
+        for (hex, rgb) in [
+            ("#3daee9", 0x3daee9_u32),
+            ("#1abc9c", 0x1abc9c),
+            ("#9b59b6", 0x9b59b6),
+        ] {
+            let mut snapshot = SettingsSnapshot::new(1);
+            snapshot
+                .values
+                .insert("accent".to_owned(), SettingValue::Text(hex.to_owned()));
+            let mut doc = RecordingUiDoc::default();
+            project(&mut doc, &snapshot, SurfaceKind::Start).expect("start projection");
+            let base = UiColor {
+                r: (rgb >> 16) as u8,
+                g: (rgb >> 8) as u8,
+                b: rgb as u8,
+                a: 255,
+            };
+            for (name, alpha) in TOKEN_ALPHAS {
+                assert_eq!(doc.variables[name], UiColor { a: alpha, ..base }, "{name} under {hex}");
+            }
+        }
+    }
+
+    fn css_rules(css: &str) -> Vec<(&str, &str)> {
+        css.split('}')
+            .filter_map(|chunk| chunk.split_once('{'))
+            .map(|(selector, body)| (selector.trim(), body))
+            .collect()
+    }
+
+    fn border_radius_px(body: &str) -> Option<f32> {
+        let rest = body.split("border-radius:").nth(1)?;
+        rest.split(';').next()?.trim().trim_end_matches("px").parse().ok()
+    }
+
+    #[test]
+    fn shell_css_has_no_hardcoded_default_red() {
+        let css = include_str!("../../../ui/shell/flamewm.css");
+        for line in css.lines().filter(|line| line.contains("ef4048")) {
+            assert!(line.contains(".swatch-red"), "hardcoded accent outside swatch: {line}");
+        }
+    }
+
+    #[test]
+    fn workspace_pager_rules_stay_square() {
+        let css = include_str!("../../../ui/shell/flamewm.css");
+        let rules = css_rules(css);
+        for (selector, body) in &rules {
+            if selector.contains("workspace-button") {
+                if let Some(radius) = border_radius_px(body) {
+                    assert!(radius <= 1.0, "pager radius {radius}px in `{selector}`");
+                }
+            }
+        }
+        for required in [".workspace-button:hover", ".workspace-button.active"] {
+            let body = rules
+                .iter()
+                .find(|(selector, _)| *selector == required)
+                .map(|(_, body)| *body)
+                .expect(required);
+            assert_eq!(border_radius_px(body), Some(1.0), "{required} radius");
+        }
+    }
+
+    #[test]
     fn accent_carries_accent_opacity_as_alpha() {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
@@ -697,7 +796,7 @@ mod tests {
         let transparent = accent_color(&snapshot);
         assert_eq!(
             (transparent.r, transparent.g, transparent.b, transparent.a),
-            (0xef, 0x40, 0x48, 0)
+            (0x7f, 0x87, 0x8e, 0)
         );
 
         snapshot

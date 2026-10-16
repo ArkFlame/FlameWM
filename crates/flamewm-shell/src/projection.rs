@@ -38,7 +38,7 @@ const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
 /// Accent used for the focused task underline (ARGB), fed by the settings projection so the
 /// underline follows `accent`/`accentOpacity` instead of a fixed colour.
 static TASK_ACCENT_ARGB: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0xFFEF_4048);
+    std::sync::atomic::AtomicU32::new(0xFF7F_878E);
 
 /// Records the accent colour the focused task underline uses from the next task projection on.
 pub fn set_task_accent(color: UiColor) {

@@ -810,6 +810,86 @@ fn percent_alpha(percent: u8) -> u8 {
     ((u16::from(percent) * 255) / 100) as u8
 }
 
+/// Neutral grey until the settings snapshot supplies `accent` (mirrors the shell default).
+const NEUTRAL_ACCENT: u32 = 0x7f878e;
+/// Accent-derived tokens of `ui/shell/flamewm.css`, with the alpha each keeps in its `:root`.
+const ACCENT_TOKEN_ALPHAS: [(&str, u8); 9] = [
+    ("--accent", 0xff),
+    ("--accent-soft", 0x38),
+    ("--accent-strong", 0xdd),
+    ("--desktop-hover", 0x26),
+    ("--desktop-hover-border", 0x4d),
+    ("--desktop-selected", 0x47),
+    ("--desktop-selected-border", 0xa6),
+    ("--selection-fill", 0x33),
+    ("--snap-fill", 0x33),
+];
+
+fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
+    let hex = match snapshot.values.get("accent") {
+        Some(SettingValue::Text(value)) => value.strip_prefix('#').unwrap_or(value),
+        _ => "",
+    };
+    let rgb = if hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        u32::from_str_radix(hex, 16).unwrap_or(NEUTRAL_ACCENT)
+    } else {
+        NEUTRAL_ACCENT
+    };
+    UiColor {
+        r: (rgb >> 16) as u8,
+        g: (rgb >> 8) as u8,
+        b: rgb as u8,
+        a: 255,
+    }
+}
+
+/// Projects the desktop accent tokens; `accentOpacity` scales them like the shell does.
+/// Accent-derived token values for the desktop; `accentOpacity` scales them like the shell does.
+fn accent_token_values(snapshot: &SettingsSnapshot) -> Vec<(&'static str, UiColor)> {
+    let accent = accent_color(snapshot);
+    let opacity = percent_alpha(setting_percent(snapshot, "accentOpacity", 100));
+    ACCENT_TOKEN_ALPHAS
+        .into_iter()
+        .map(|(name, alpha)| {
+            let scaled = ((u16::from(alpha) * u16::from(opacity)) / 255) as u8;
+            (name, UiColor { a: scaled, ..accent })
+        })
+        .collect()
+}
+
+fn project_accent_tokens(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+) -> Result<(), String> {
+    for (name, color) in accent_token_values(snapshot) {
+        document.color_variable(name, color)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod accent_token_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_tokens_follow_live_accent_and_fall_back_to_neutral() {
+        let mut snapshot = SettingsSnapshot::new(1);
+        assert_eq!(accent_color(&snapshot).r, 0x7f);
+        snapshot
+            .values
+            .insert("accent".to_owned(), SettingValue::Text("#9b59b6".to_owned()));
+        let tokens = accent_token_values(&snapshot);
+        let value = |name: &str| tokens.iter().find(|(key, _)| *key == name).map(|(_, c)| *c);
+        assert_eq!(
+            value("--desktop-hover"),
+            Some(UiColor { r: 0x9b, g: 0x59, b: 0xb6, a: 0x26 })
+        );
+        assert_eq!(value("--snap-fill").map(|c| c.a), Some(0x33));
+        assert_eq!(value("--accent"), Some(accent_color(&snapshot)));
+        assert_eq!(tokens.len(), ACCENT_TOKEN_ALPHAS.len());
+    }
+}
+
 fn refresh_settings_projection(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -842,6 +922,7 @@ fn refresh_settings_projection(
         wallpaper,
         &state.wallpaper_loader.state().presentation,
     )?;
+    project_accent_tokens(document, &state.settings)?;
     sync_selection_visuals(document, state)?;
     sticky::sync_sticky(document, state)?;
     for id in projection::MENU_SURFACE_IDS {
@@ -2251,27 +2332,12 @@ fn sync_selection_visuals(
         "DesktopSelectionFillOpacity",
         20,
     ));
+    let accent = accent_color(&state.settings);
     for (index, item) in state.model.items().enumerate() {
         let id = format!("desktop-item-{index}");
         if state.selection.selected().contains(&item.id) {
-            document.background(
-                &id,
-                UiColor {
-                    r: 239,
-                    g: 64,
-                    b: 72,
-                    a: fill_alpha,
-                },
-            )?;
-            document.border(
-                &id,
-                UiColor {
-                    r: 239,
-                    g: 64,
-                    b: 72,
-                    a: 221,
-                },
-            )?;
+            document.background(&id, UiColor { a: fill_alpha, ..accent })?;
+            document.border(&id, UiColor { a: 0xdd, ..accent })?;
         } else {
             document.background_clear(&id)?;
             document.border_clear(&id)?;
