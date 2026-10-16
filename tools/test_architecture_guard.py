@@ -50,6 +50,29 @@ class ArchitectureGuardNegativeTest(unittest.TestCase):
         result = run_guard(self.tmp)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_missing_required_owner_fails_loudly(self) -> None:
+        # Each path is a live owner the checks read; deleting it must not be a silent skip.
+        for owner in (
+            "crates/flamewm-shell/src/app.rs",
+            "crates/flamewm-skin/src/icons.rs",
+            "crates/flamewm-wm-x11/src/frame/controller.rs",
+            "scripts/xephyr",
+            "tools/performance_retention.py",
+        ):
+            with self.subTest(owner=owner):
+                copy = Path(tempfile.mkdtemp(prefix="arch-guard-owner-"))
+                self.addCleanup(shutil.rmtree, copy, ignore_errors=True)
+                for name in COPY_DIRS:
+                    shutil.copytree(ROOT / name, copy / name, ignore=IGNORE, symlinks=True)
+                for name in COPY_FILES:
+                    if (ROOT / name).is_file():
+                        shutil.copy2(ROOT / name, copy / name)
+                (copy / owner).unlink()
+                result = run_guard(copy)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(owner, result.stdout + result.stderr)
+                self.assertNotIn("OK architecture boundary guard", result.stdout)
+
     def test_injected_geometry_and_render_bypass_fails(self) -> None:
         (self.tmp / GEOMETRY_BYPASS).write_text(GEOMETRY_BYPASS_SRC, encoding="utf-8")
         (self.tmp / RENDER_BYPASS).write_text(RENDER_BYPASS_SRC, encoding="utf-8")

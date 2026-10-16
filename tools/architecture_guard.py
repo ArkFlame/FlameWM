@@ -347,11 +347,10 @@ def j7_violations(root):
                 found.add((rel(path), "j7-g3-no-keyed-ppm-asset"))
                 break
     # J7-G4: generic IconResolver fallback must not be .ppm (checked at owner).
-    owner = root / J7_FALLBACK_OWNER
-    if owner.is_file():
-        for line in owner.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("const GENERIC_FALLBACK") and ".ppm" in line:
-                found.add((J7_FALLBACK_OWNER, "j7-g4-no-ppm-fallback"))
+    owner = _owner_path(root, J7_FALLBACK_OWNER)
+    for line in owner.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("const GENERIC_FALLBACK") and ".ppm" in line:
+            found.add((J7_FALLBACK_OWNER, "j7-g4-no-ppm-fallback"))
     # J7-G5: no production magenta-key/FF00FF color-key path.
     for path in _j7_production_sources(root):
         if owned(path):
@@ -369,20 +368,18 @@ def j7_violations(root):
         ):
             found.add((rel(path), "j7-g6-no-filename-treatment"))
     # J7-G7: real app icon path defaults to Original (checked at skin owner).
-    skin = root / J7_TREATMENT_OWNER
-    if skin.is_file():
-        text = skin.read_text(encoding="utf-8")
-        if "IconTreatment::Original" not in text or not re.search(
-            r"Start\s*\|.*Browser|Browser.*Start", text
-        ):
-            found.add((J7_TREATMENT_OWNER, "j7-g7-original-app-icons"))
+    text = _owner_path(root, J7_TREATMENT_OWNER).read_text(encoding="utf-8")
+    if "IconTreatment::Original" not in text or not re.search(
+        r"Start\s*\|.*Browser|Browser.*Start", text
+    ):
+        found.add((J7_TREATMENT_OWNER, "j7-g7-original-app-icons"))
     # J7-G8: shell symbolic icons consume semantic foreground, not Breeze RGB.
-    paint = root / J7_PAINT_OWNER
-    if paint.is_file() and "SymbolicForeground" in paint.read_text(encoding="utf-8"):
-        if "resolve_color(style.color)" not in paint.read_text(encoding="utf-8"):
-            found.add((J7_PAINT_OWNER, "j7-g8-semantic-foreground"))
-    surface = root / J7_SURFACE_OWNER
-    if surface.is_file() and "resolve_color(style.color)" not in paint.read_text(encoding="utf-8"):
+    paint = _owner_path(root, J7_PAINT_OWNER)
+    paint_text = paint.read_text(encoding="utf-8")
+    if "SymbolicForeground" in paint_text and "resolve_color(style.color)" not in paint_text:
+        found.add((J7_PAINT_OWNER, "j7-g8-semantic-foreground"))
+    surface = _owner_path(root, J7_SURFACE_OWNER)
+    if "resolve_color(style.color)" not in paint_text:
         found.add((J7_SURFACE_OWNER, "j7-g8-semantic-foreground"))
     found |= j6_violations(root)
     found |= j12_violations(root)
@@ -412,11 +409,33 @@ def _j6_strip_comments(text: str) -> str:
     return _strip_rust_comments(text)
 
 
+# Owner paths that are intentionally absent. Each entry names why it is gone;
+# any other missing owner is a hard error (stale-path guard).
+OPTIONAL_OWNER_FILES = {
+    "crates/flamewm-wm-x11/src/decoration/paint.rs":
+        "deleted by the J16 cutover; the frame engine is the successor anchor (J12-G14 note)",
+}
+
+
 def _owner_path(root, rel):
     """Return an expected owner file; a missing owner is a hard error, never a silent skip."""
     path = root / rel
     if not path.is_file():
         raise SystemExit(f"ERROR architecture guard: expected owner file missing: {rel}")
+    return path
+
+
+def _owner_text(root, rel):
+    """Owner file text. Only OPTIONAL_OWNER_FILES entries may be absent (read as "")."""
+    if rel in OPTIONAL_OWNER_FILES and not (root / rel).is_file():
+        return ""
+    return _owner_path(root, rel).read_text(encoding="utf-8")
+
+
+def _owner_dir(root, rel):
+    path = root / rel
+    if not path.is_dir():
+        raise SystemExit(f"ERROR architecture guard: expected owner directory missing: {rel}")
     return path
 
 
@@ -428,40 +447,37 @@ def print_j6_warnings(root):
 
 def j6_violations(root):
     found = set()
-    skin = root / J6_SKIN_OWNER
-    if skin.is_file():
-        text = skin.read_text(encoding="utf-8")
-        if re.search(
-            r"Self::Start[^\n]*SymbolicForeground|Start[^\n]{0,80}=>\s*IconTreatment::SymbolicForeground",
-            text,
-        ):
-            found.add((J6_SKIN_OWNER, "j6-g1-start-full-color"))
-        if "Self::Start" in text and "IconTreatment::Original" not in text:
-            found.add((J6_SKIN_OWNER, "j6-g1-start-full-color"))
-    chrome = root / J6_CHROME_FILE
-    if chrome.is_file():
-        text = _j6_strip_comments(chrome.read_text(encoding="utf-8"))
-        if "struct X11ChromePainter" in text:
-            found.add((J6_CHROME_FILE, "j6-g2-no-local-chrome-painter"))
-        if re.search(r"fn draw_title_run", text) and "poly_fill_rectangle" in text:
-            found.add((J6_CHROME_FILE, "j6-g3-no-block-title"))
-        if re.search(r"fn draw_control_glyph", text) and re.search(
-            r"poly_line|poly_rectangle|poly_arc|poly_fill_arc", text
-        ):
-            found.add((J6_CHROME_FILE, "j6-g4-no-procedural-glyphs"))
-    icons = root / J6_ICONS_FILE
-    if icons.is_file():
-        text = _j6_strip_comments(icons.read_text(encoding="utf-8"))
-        pack = text.find("packaged_candidates(name)")
-        theme = text.find("theme_candidates(name")
-        if pack != -1 and theme != -1 and pack < theme:
-            J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g5-system-before-packaged: {J6_ICONS_FILE}")
+    skin = _owner_path(root, J6_SKIN_OWNER)
+    text = skin.read_text(encoding="utf-8")
+    if re.search(
+        r"Self::Start[^\n]*SymbolicForeground|Start[^\n]{0,80}=>\s*IconTreatment::SymbolicForeground",
+        text,
+    ):
+        found.add((J6_SKIN_OWNER, "j6-g1-start-full-color"))
+    if "Self::Start" in text and "IconTreatment::Original" not in text:
+        found.add((J6_SKIN_OWNER, "j6-g1-start-full-color"))
+    chrome = _owner_path(root, J6_CHROME_FILE)
+    text = _j6_strip_comments(chrome.read_text(encoding="utf-8"))
+    if "struct X11ChromePainter" in text:
+        found.add((J6_CHROME_FILE, "j6-g2-no-local-chrome-painter"))
+    if re.search(r"fn draw_title_run", text) and "poly_fill_rectangle" in text:
+        found.add((J6_CHROME_FILE, "j6-g3-no-block-title"))
+    if re.search(r"fn draw_control_glyph", text) and re.search(
+        r"poly_line|poly_rectangle|poly_arc|poly_fill_arc", text
+    ):
+        found.add((J6_CHROME_FILE, "j6-g4-no-procedural-glyphs"))
+    icons = _owner_path(root, J6_ICONS_FILE)
+    text = _j6_strip_comments(icons.read_text(encoding="utf-8"))
+    pack = text.find("packaged_candidates(name)")
+    theme = text.find("theme_candidates(name")
+    if pack != -1 and theme != -1 and pack < theme:
+        J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g5-system-before-packaged: {J6_ICONS_FILE}")
     for rel in J6_MODEL_FILES:
         model_text = _j6_strip_comments(_owner_path(root, rel).read_text(encoding="utf-8"))
         if re.search(r"z_index_overrides|set_z_index|effective_z_index", model_text):
             J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g6-no-new-zindex-store: {rel}")
-    shell = root / J6_SHELL_MAIN
-    if shell.is_file() and re.search(
+    shell = _owner_path(root, J6_SHELL_MAIN)
+    if re.search(
         r"root_pointer\(\s*0(\.0)?\s*,\s*0(\.0)?\s*\)",
         _j6_strip_comments(shell.read_text(encoding="utf-8")),
     ):
@@ -536,7 +552,7 @@ def j11_violations(root):
     code = _j6_strip_comments
 
     def live(path):
-        return code((root / path).read_text(encoding="utf-8")) if (root / path).is_file() else ""
+        return code(_owner_text(root, path))
 
     def prod(path):
         return code(path.read_text(encoding="utf-8"))
@@ -610,8 +626,8 @@ def j11_violations(root):
         ):
             found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
     # J11-G07: retention cleanup defaults opt-out-on (checked in tools).
-    ret = root / "tools/performance_retention.py"
-    if ret.is_file() and 'os.environ.get("FLAMEWM_PERFORMANCE_CLEANUP", "1")' not in ret.read_text(encoding="utf-8"):
+    ret = _owner_path(root, "tools/performance_retention.py")
+    if 'os.environ.get("FLAMEWM_PERFORMANCE_CLEANUP", "1")' not in ret.read_text(encoding="utf-8"):
         found.add(("tools/performance_retention.py", "j11-g07-cleanup-default-on"))
     # J11-G08: no unprefixed env literals.
     for path in _j7_production_sources(root):
@@ -678,7 +694,7 @@ def j12_violations(root):
     code = _j6_strip_comments
 
     def live(path):
-        return code((root / path).read_text(encoding="utf-8")) if (root / path).is_file() else ""
+        return code(_owner_text(root, path))
 
     # J12-G01: invalid clamp(12.0,track) in live code.
     for path in _j7_production_sources(root):
@@ -756,14 +772,13 @@ def j12_violations(root):
     # J12-G12: wallpaper present, CPU out of desktop owner.
     if "wallpaper" not in live(J12_DESKTOP_PROJ).lower():
         found.add((J12_DESKTOP_PROJ, "j12-g12-wallpaper-not-cpu"))
-    desk = root / "crates/flamewm-desktop/src"
-    if desk.exists():
-        for path in sorted(desk.rglob("*.rs")):
-            if _j7_is_test(path):
-                continue
-            if re.search(r"(?i)\bcpu\b", code(path.read_text(encoding="utf-8"))):
-                found.add((relative_path(root, path), "j12-g12-wallpaper-not-cpu"))
-                break
+    desk = _owner_dir(root, "crates/flamewm-desktop/src")
+    for path in sorted(desk.rglob("*.rs")):
+        if _j7_is_test(path):
+            continue
+        if re.search(r"(?i)\bcpu\b", code(path.read_text(encoding="utf-8"))):
+            found.add((relative_path(root, path), "j12-g12-wallpaper-not-cpu"))
+            break
     # J12-G13: .performance stays ignored.
     gitignore = root / ".gitignore"
     if not gitignore.is_file() or ".performance" not in gitignore.read_text(encoding="utf-8"):
@@ -802,7 +817,7 @@ def j10_violations(root):
     code = _j6_strip_comments
 
     def live(path):
-        return code((root / path).read_text(encoding="utf-8")) if (root / path).is_file() else ""
+        return code(_owner_text(root, path))
 
     def prod_sources(base):
         for path in sorted((root / base).rglob("*.rs")):
@@ -810,13 +825,12 @@ def j10_violations(root):
                 yield path
 
     # J10-G01: Xephyr private D-Bus default present.
-    xep = root / "scripts/xephyr"
-    xept = xep.read_text(encoding="utf-8") if xep.is_file() else ""
+    xept = _owner_path(root, "scripts/xephyr").read_text(encoding="utf-8")
     if "FLAMEWM_XEPHYR_PRIVATE_DBUS:-1" not in xept or "dbus-run-session" not in xept:
         found.add(("scripts/xephyr", "j10-g01-private-dbus-default"))
     # J10-G02: shared host-session fallback forbidden in perf gate.
     for perf in ("tools/profile_summary.py", "tools/performance_bundle.py", "tools/performance_retention.py"):
-        text = (root / perf).read_text(encoding="utf-8") if (root / perf).is_file() else ""
+        text = _owner_path(root, perf).read_text(encoding="utf-8")
         if re.search(r"DBUS_SESSION_BUS_ADDRESS|host\.session|host_session", text):
             found.add((perf, "j10-g02-no-host-session-in-perf"))
     # J10-G03 (WARN-only): parent ShellSurfaces still owns helper surfaces pre-J07.
@@ -836,7 +850,7 @@ def j10_violations(root):
     # J10-G06: no start_submenu native surface.
     for target in ("crates/flamewm-shell/src/runtime.rs", "crates/flamewm-shell/src/main.rs",
                    "crates/flamewm-shell/build.rs"):
-        text = live(target) if target.endswith(".rs") else ((root / target).read_text(encoding="utf-8") if (root / target).is_file() else "")
+        text = live(target) if target.endswith(".rs") else _owner_path(root, target).read_text(encoding="utf-8")
         if re.search(r"flamewm-start-submenu|start_submenu.*Surface|Surface.*start_submenu|create_surface\([^)]*submenu", text):
             found.add((target, "j10-g06-no-submenu-surface"))
     # J10-G07: no blocking Child::wait (allow wait_timeout/try_wait/kill+wait).
@@ -903,7 +917,7 @@ def j18_violations(root):
     code = _j6_strip_comments
 
     def live(path):
-        return code((root / path).read_text(encoding="utf-8")) if (root / path).is_file() else ""
+        return code(_owner_text(root, path))
 
     # J18-G01: window-geometry authority lives only in the frame engine.
     # Direct outer-rect writes inside the live wm-x11 crate but outside the
@@ -911,17 +925,16 @@ def j18_violations(root):
     # (e.g. window-core snap math over their own state) are out of scope.
     for rel in J18_GEOMETRY_OWNER_FILES:
         _owner_path(root, rel)
-    wm11 = root / "crates/flamewm-wm-x11/src"
-    if wm11.is_dir():
-        for path in sorted(wm11.rglob("*.rs")):
-            if _j7_is_test(path):
-                continue
-            rel = relative_path(root, path)
-            if rel in J18_GEOMETRY_OWNER_FILES:
-                continue
-            text = code(path.read_text(encoding="utf-8"))
-            if re.search(r"\.outer\s*=", text) or re.search(r"\.restore\s*=", text):
-                found.add((rel, "j18-g01-frame-geometry-owner"))
+    wm11 = _owner_dir(root, "crates/flamewm-wm-x11/src")
+    for path in sorted(wm11.rglob("*.rs")):
+        if _j7_is_test(path):
+            continue
+        rel = relative_path(root, path)
+        if rel in J18_GEOMETRY_OWNER_FILES:
+            continue
+        text = code(path.read_text(encoding="utf-8"))
+        if re.search(r"\.outer\s*=", text) or re.search(r"\.restore\s*=", text):
+            found.add((rel, "j18-g01-frame-geometry-owner"))
     # J18-G02: exactly one live window-geometry/decoration owner pair.
     # A second PlacementState or GeometryPlan struct is a second live owner.
     geo_count = sum(
@@ -985,14 +998,14 @@ def j12h_violations(root):
     code = _j6_strip_comments
 
     def live(path):
-        return code((root / path).read_text(encoding="utf-8")) if (root / path).is_file() else ""
+        return code(_owner_text(root, path))
 
     def desktop_css():
         for name in ("ui/desktop/desktop.css", "ui/shell/flamewm.css"):
             path = root / name
             if path.is_file():
                 return path.read_text(encoding="utf-8")
-        return ""
+        raise SystemExit("ERROR architecture guard: expected owner file missing: ui/desktop/desktop.css or ui/shell/flamewm.css")
 
     paint_core = live("crates/flamewm-render-core/src/paint.rs")
     start_menu = live("crates/flamewm-shell-core/src/start_menu.rs")
@@ -1005,9 +1018,7 @@ def j12h_violations(root):
     audio = live("crates/flamewm-shell/src/taskbar/status/audio.rs")
     network = live("crates/flamewm-shell/src/taskbar/status/network.rs")
     file_actions = live("crates/flamewm-desktop-core/src/file_actions.rs")
-    persist = (root / "crates/flamewm-desktop-core/src/sticky_persistence.rs").read_text(
-        encoding="utf-8"
-    ) if (root / "crates/flamewm-desktop-core/src/sticky_persistence.rs").is_file() else ""
+    persist = _owner_path(root, "crates/flamewm-desktop-core/src/sticky_persistence.rs").read_text(encoding="utf-8")
     ext = live("crates/flamewm-render-x11/src/external_drawable.rs")
     chrome = live("crates/flamewm-wm-x11/src/chrome.rs")
     paint_decor = live("crates/flamewm-wm-x11/src/decoration/paint.rs")
@@ -1062,9 +1073,9 @@ def j12h_violations(root):
     # J12H-G11: event-driven, no poll. Contract anchor lives in doc
     # comments (stripped from code context); refresh_dynamic is owned by
     # app.rs and reconciles the runtime's signal-driven dirty state.
-    raw_main = (root / "crates/flamewm-shell/src/main.rs").read_text(encoding="utf-8") if (root / "crates/flamewm-shell/src/main.rs").is_file() else ""
-    raw_rt = (root / "crates/flamewm-shell/src/runtime.rs").read_text(encoding="utf-8") if (root / "crates/flamewm-shell/src/runtime.rs").is_file() else ""
-    raw_app = (root / "crates/flamewm-shell/src/app.rs").read_text(encoding="utf-8") if (root / "crates/flamewm-shell/src/app.rs").is_file() else ""
+    raw_main = _owner_text(root, "crates/flamewm-shell/src/main.rs")
+    raw_rt = _owner_text(root, "crates/flamewm-shell/src/runtime.rs")
+    raw_app = _owner_text(root, "crates/flamewm-shell/src/app.rs")
     if ("refresh_dynamic" not in app or "register_timer" in main and "workspace" in main.lower().split("register_timer")[0][-200:]
             or ("never polls" not in raw_main.lower() and "no polling" not in raw_rt.lower()
                 and "never polls" not in raw_app.lower() and "no polling" not in raw_app.lower())):
