@@ -29,7 +29,7 @@ input { cursor:text; }
 .window-controls { width:114px; height:31px; display:flex; align-items:center; justify-content:flex-end; }
 .title-button { width:38px; height:31px; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--text); cursor:default; }
 .title-button:hover { background:#3b3f43; }
-.close-button:hover { background:#e81123; border-radius:6px; }
+.close-button:hover { background:var(--accent); border-radius:6px; }
 .title-button img { width:13px; height:13px; }
 .settings-body { width:100%; height:449px; display:flex; }
 .settings-nav { width:192px; height:100%; display:flex; flex-direction:column; position:relative; padding:0; background:var(--sidebar); }

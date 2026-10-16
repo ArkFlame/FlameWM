@@ -61,6 +61,16 @@ pub(crate) fn task_accent() -> UiColor {
     }
 }
 
+/// Active pager cell fill: the live accent at the stylesheet's `--accent-soft` alpha.
+pub(crate) fn pager_active_fill() -> UiColor {
+    let accent = task_accent();
+    UiColor {
+        a: ((u16::from(flamewm_platform::chrome::ACCENT_SOFT_ALPHA) * u16::from(accent.a)) / 255)
+            as u8,
+        ..accent
+    }
+}
+
 pub fn taskbar_css_height(logical_size: u16) -> f32 {
     if logical_size == 0 {
         TASKBAR_DEFAULT_HEIGHT
@@ -271,15 +281,7 @@ pub fn project_panel(
         document.text(&button_id, workspace.label.clone())?;
         document.visible(&button_id, true)?;
         if workspace.active {
-            document.background(
-                &button_id,
-                UiColor {
-                    r: 239,
-                    g: 64,
-                    b: 72,
-                    a: 56,
-                },
-            )?;
+            document.background(&button_id, pager_active_fill())?;
         } else {
             document.background(
                 &button_id,

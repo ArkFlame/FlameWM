@@ -82,6 +82,10 @@ pub fn project_network_full(
             "network-wifi-knob",
             snapshot.system.network.wifi_enabled,
         )?;
+        if snapshot.system.network.wifi_enabled {
+            // The shared toggle recipe paints a fixed skin red; the on-track follows the live accent.
+            document.background("network-wifi-track", crate::projection::task_accent())?;
+        }
         document.visible("network-scan", popover.can_scan)?;
         document.visible("network-disconnect", popover.can_disconnect)?;
         document.visible("network-secret", popover.secret_masked)?;

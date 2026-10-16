@@ -87,6 +87,10 @@ pub fn project_audio_full(
         "audio-raise-knob",
         settings.raise_maximum,
     )?;
+    if settings.raise_maximum {
+        // The shared toggle recipe paints a fixed skin red; the on-track follows the live accent.
+        document.background("audio-raise-track", crate::projection::task_accent())?;
+    }
     Ok(())
 }
 

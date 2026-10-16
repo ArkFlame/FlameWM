@@ -806,15 +806,7 @@ pub fn project_pager_async(
         document.text(&button_id, workspace.label.clone())?;
         document.visible(&button_id, true)?;
         if workspace.active {
-            document.background(
-                &button_id,
-                UiColor {
-                    r: 239,
-                    g: 64,
-                    b: 72,
-                    a: 56,
-                },
-            )?;
+            document.background(&button_id, crate::projection::pager_active_fill())?;
         } else {
             document.background(
                 &button_id,

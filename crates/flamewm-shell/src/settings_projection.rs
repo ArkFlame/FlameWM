@@ -785,6 +785,20 @@ mod tests {
         for line in css.lines().filter(|line| line.contains("ef4048")) {
             assert!(line.contains(".swatch-red"), "hardcoded accent outside swatch: {line}");
         }
+        assert!(!css.contains("e81123"), "close hover still hard-codes a red");
+    }
+
+    #[test]
+    fn shell_rust_projections_have_no_hardcoded_red_fill() {
+        let sources = [
+            include_str!("projection.rs"),
+            include_str!("async_projection.rs"),
+            include_str!("projection/network.rs"),
+            include_str!("projection/audio.rs"),
+        ];
+        for source in sources {
+            assert!(!source.contains("r: 239"), "hardcoded flame red fill in shell projection");
+        }
     }
 
     #[test]

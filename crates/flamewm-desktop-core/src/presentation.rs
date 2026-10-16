@@ -398,6 +398,24 @@ mod tests {
         );
     }
     #[test]
+    fn desktop_css_accent_states_use_live_tokens_only() {
+        let css = include_str!("../../../ui/desktop/desktop.css");
+        for literal in ["ef4048", "EF4048", "239, 64, 72", "239,64,72"] {
+            assert!(!css.contains(literal), "desktop.css hard-codes accent {literal}");
+        }
+        for token in [
+            "var(--desktop-hover)",
+            "var(--desktop-hover-border)",
+            "var(--selection-fill)",
+            "var(--accent-strong)",
+            "var(--accent-soft)",
+            "var(--accent)",
+        ] {
+            assert!(css.contains(token), "desktop.css lacks {token}");
+        }
+    }
+
+    #[test]
     fn watermark_css_offsets_match_core_padding_constants() {
         let css = include_str!("../../../ui/desktop/desktop.css");
         let rule_start = css.find(".watermark {").expect("missing .watermark rule");
