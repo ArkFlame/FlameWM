@@ -4,4 +4,4 @@ ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets
-echo 'OK FlameWM Rust WebRender formatting + Clippy'
+echo 'OK FlameWM formatting + Clippy'

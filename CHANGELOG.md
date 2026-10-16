@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0
+
+### Product and versioning
+
+- Product renamed to FlameWM; the Rust WebRender branch name is no longer used for the product.
+- Version is sourced from the single `FLAMEWM_VERSION` file.
+
+### Fixes
+
+- NetworkManager SaveSecrets/DeleteSecrets and unknown SecretAgent members are answered instead of failing; empty secret hints are never sent.
+- Keep the NetworkManager batch going when a single event fails.
+
+### Refactors and performance
+
+- Shared helpers (D-Bus message items, reconnect backoff, rounded corner geometry, X11 helper bodies, surface fill) replace duplicated code.
+- Micro-optimizations: reused slot id buffers in shell projection, reused blur and backdrop scratch buffers, and fewer per-line allocations in render paths.
+
 ## 0.0.9 — 2026-09-24
 
 ### Platform and desktop integration

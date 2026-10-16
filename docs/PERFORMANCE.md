@@ -33,7 +33,7 @@ The compiler crate uses package-specific `opt-level=2`; parser speed is not stea
 - no stale motion rendered after release;
 - Start/taskbar/window manipulation must not block on disk/network/system commands.
 
-## Measured status (0.0.9)
+## Measured status
 
 Measurements from a development machine. They are not release certification.
 

@@ -1,16 +1,16 @@
 ![FlameWM](assets/branding/flamewm-wordmark.png)
 
-# FlameWM Rust WebRender 0.0.9
+# FlameWM
 
-FlameWM is a clean-room, X11-only window manager and desktop shell written in Rust. This repository is the Rust WebRender branch: the shell UI is authored as HTML/CSS and compiled at build time into native Rust rendering, with no browser runtime.
+FlameWM is a clean-room, X11-only window manager and desktop shell written in Rust. The shell UI is authored as HTML/CSS and compiled at build time into native Rust rendering, with no browser runtime.
 
-FlameWM 0.0.9 supports **X11 sessions only**. Wayland is not supported.
+FlameWM supports **X11 sessions only**. Wayland is not supported.
 
 Version and release history: [`FLAMEWM_VERSION`](FLAMEWM_VERSION), [`Cargo.toml`](Cargo.toml) (`workspace.package.version`), and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Status
 
-- Source-level 0.0.9 release. Remaining product surfaces are tracked in [`docs/TODO.md`](docs/TODO.md).
+- Source-level release. Remaining product surfaces are tracked in [`docs/TODO.md`](docs/TODO.md).
 - FlameWM does not claim parity with the historical IceWM or FlameWM C implementations.
 - Memory has been measured on a development machine only; see [Memory](#memory) for exactly what was and was not measured. The performance contract is in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 
@@ -84,14 +84,14 @@ Visual comparison (`./scripts/verify-visual`) and the other acceptance scripts u
 
 ## Install, upgrade, and uninstall
 
-`./scripts/package` writes `.target/dist/flamewm-0.0.9-linux-x86_64.tar.gz`, `.target/dist/flamewm-0.0.9-source.tar.gz`, and, when `dpkg-deb` is available, `.target/dist/flamewm_0.0.9_amd64.deb`. See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
+`./scripts/package` writes the Linux archive, the source archive, and, when `dpkg-deb` is available, the `.deb` under `.target/dist/` (file names follow the version in `FLAMEWM_VERSION`; for example `flamewm_<version>_amd64.deb`). See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
 **The installed `.deb` (install, upgrade, uninstall) has not been run in this revision.** The steps below are documented from `scripts/package` and `packaging/debian/control.in`; they are not verified acceptance.
 
 Install:
 
 ```bash
-sudo dpkg -i .target/dist/flamewm_0.0.9_amd64.deb
+sudo dpkg -i .target/dist/flamewm_<version>_amd64.deb
 ```
 
 Upgrade: install a newer `flamewm_*_amd64.deb` with the same `dpkg -i` command.
@@ -102,10 +102,10 @@ Uninstall:
 sudo dpkg -r flamewm
 ```
 
-Without `dpkg` (not tested), the Linux archive can be unpacked as root. Its entries are prefixed `flamewm-0.0.9/`, so strip that component:
+Without `dpkg` (not tested), the Linux archive can be unpacked as root. Its entries are prefixed `flamewm-<version>/`, so strip that component:
 
 ```bash
-tar -xzf .target/dist/flamewm-0.0.9-linux-x86_64.tar.gz --strip-components=1 -C /
+tar -xzf .target/dist/flamewm-<version>-linux-x86_64.tar.gz --strip-components=1 -C /
 ```
 
 ## Memory

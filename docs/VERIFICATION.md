@@ -1,4 +1,4 @@
-# Verification — 0.0.9
+# Verification
 
 ## Mandatory target-machine gate
 

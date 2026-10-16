@@ -1,4 +1,4 @@
-# FlameWM Rust WebRender — Complete Product TODO
+# FlameWM — Complete Product TODO
 
 This is the canonical implementation backlog after 0.0.2. A checked item means active production source exists in this branch; it does not mean every runtime corner is verified in the artifact assembly environment.
 
