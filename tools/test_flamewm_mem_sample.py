@@ -95,11 +95,29 @@ class StatsTests(unittest.TestCase):
         report = mod.build_report(pids, rounds, 2, 0.0)
         rss = report["combined"]["rss"]
         self.assertEqual(rss["median_mib"], 38.0)  # (35 + 41) / 2
-        self.assertTrue(rss["median_reached"])
+        self.assertFalse(rss["median_reached"])  # 38 MiB is over the 34 MiB target
         pss = report["combined"]["pss"]
         self.assertEqual(pss["median_mib"], 16.0)
-        self.assertFalse(pss["median_reached"])
+        self.assertTrue(pss["median_reached"])  # 16 MiB is under the target
         self.assertEqual(report["processes"]["wm"]["metrics"]["rss"]["median"], 26 * mib_bytes)
+
+    def test_median_reached_means_at_or_under_target(self):
+        mib_bytes = 1024 * 1024
+        pids = [("wm", 1)]
+
+        def rounds_at(mib):
+            return [
+                {"wm": {"rss": mib * mib_bytes, "pss": mib * mib_bytes, "private_dirty": 0,
+                        "private_clean": 0, "vmhwm": 0, "threads": 1, "comm": "wm", "exe": None}}
+                for _ in range(2)
+            ]
+
+        under = mod.build_report(pids, rounds_at(20), 2, 0.0)["combined"]["rss"]
+        at = mod.build_report(pids, rounds_at(mod.TARGET_MIB), 2, 0.0)["combined"]["rss"]
+        over = mod.build_report(pids, rounds_at(50), 2, 0.0)["combined"]["rss"]
+        self.assertTrue(under["median_reached"])
+        self.assertTrue(at["median_reached"])
+        self.assertFalse(over["median_reached"])
 
 
 class LiveSmokeTests(unittest.TestCase):
