@@ -164,7 +164,7 @@ def build_report(pids, rounds, samples, interval):
             "target_bytes": TARGET_BYTES,
             "target_mib": TARGET_MIB,
             "median_reached": stats["median"] <= TARGET_BYTES,
-            "p95_reached": stats["p95"] >= TARGET_BYTES,
+            "p95_reached": stats["p95"] <= TARGET_BYTES,
         }
 
     return {

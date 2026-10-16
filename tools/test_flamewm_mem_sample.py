@@ -118,6 +118,9 @@ class StatsTests(unittest.TestCase):
         self.assertTrue(under["median_reached"])
         self.assertTrue(at["median_reached"])
         self.assertFalse(over["median_reached"])
+        self.assertTrue(under["p95_reached"])
+        self.assertTrue(at["p95_reached"])
+        self.assertFalse(over["p95_reached"])
 
 
 class LiveSmokeTests(unittest.TestCase):
