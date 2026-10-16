@@ -1,4 +1,5 @@
 ![FlameWM](assets/branding/flamewm-wordmark.png)
+![FlameWM Real Preview Screenshot]<img width="1346" height="637" alt="image" src="https://github.com/user-attachments/assets/7acbd84e-1aa7-4e57-b3e0-f0f7e8a1f68e" />
 
 # FlameWM
 
