@@ -27,13 +27,11 @@ use shared::PendingMode;
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
-use x11rb::protocol::xproto::{
-    self, Atom, AtomEnum, ConnectionExt, Window,
-};
+use x11rb::protocol::xproto::{self, Atom, AtomEnum, ConnectionExt, Window};
 use x11rb::rust_connection::RustConnection;
 
-pub mod shortcuts;
 pub mod shared;
+pub mod shortcuts;
 
 pub const ICONIC_STATE: u32 = 3;
 
@@ -185,7 +183,14 @@ impl X11Desktop {
         shared::root_work_area(|name| self.property32(self.root, name))
     }
     fn send_state(&self, window: Window, atom: Atom, action: FeatureAction) -> FlameResult<()> {
-        shared::send_state(&self.conn, self.root, self.atom("_NET_WM_STATE"), window, atom, action)
+        shared::send_state(
+            &self.conn,
+            self.root,
+            self.atom("_NET_WM_STATE"),
+            window,
+            atom,
+            action,
+        )
     }
     fn text(&self, window: Window, name: &str) -> FlameResult<String> {
         Ok(shared::text_from_bytes(&self.property_bytes(window, name)?))
@@ -1081,7 +1086,14 @@ impl DisplayPort for X11Desktop {
         })
     }
     fn apply_mode(&mut self, output_name: &OutputId, mode: ModeId) -> FlameResult<TransactionId> {
-        shared::apply_mode(&self.conn, self.root, &mut self.pending_mode, &mut self.next_transaction, output_name, mode)
+        shared::apply_mode(
+            &self.conn,
+            self.root,
+            &mut self.pending_mode,
+            &mut self.next_transaction,
+            output_name,
+            mode,
+        )
     }
     fn keep_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
         if self.pending_mode.map(|p| p.transaction) != Some(transaction) {

@@ -6,7 +6,9 @@
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::input::PointerPosition;
 use flamewm_api::wm_features::FeatureAction;
-use flamewm_api::{ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, TransactionId};
+use flamewm_api::{
+    ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, TransactionId,
+};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
@@ -79,9 +81,7 @@ pub fn send_state(
 }
 
 /// `property32` reads a root-window property as 32-bit words for the owner's connection.
-pub fn root_work_area(
-    property32: impl Fn(&str) -> FlameResult<Vec<u32>>,
-) -> FlameResult<Rect> {
+pub fn root_work_area(property32: impl Fn(&str) -> FlameResult<Vec<u32>>) -> FlameResult<Rect> {
     let desktop = property32("_NET_CURRENT_DESKTOP")?
         .first()
         .copied()
