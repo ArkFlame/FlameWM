@@ -15,8 +15,9 @@ use crate::{appearance_environment, SessionPaths};
 /// Breeze color scheme names shipped with Plasma (`/usr/share/color-schemes`).
 pub const KDE_COLOR_SCHEME_DARK: &str = "BreezeDark";
 pub const KDE_COLOR_SCHEME_LIGHT: &str = "BreezeLight";
-/// `org.freedesktop.appearance color-scheme` values (portal/GSettings), recorded
-/// for a future owned channel; not written by this module.
+/// `org.freedesktop.appearance color-scheme` values (portal/GSettings). Returned
+/// by [`portal_color_scheme`] as data for a future portal backend; this module
+/// never writes portal or GSettings state.
 pub const PORTAL_COLOR_SCHEME_DARK: u32 = 1;
 pub const PORTAL_COLOR_SCHEME_LIGHT: u32 = 2;
 const DEFAULT_XDG_CONFIG_DIRS: &str = "/etc/xdg";
@@ -85,6 +86,24 @@ pub fn kde_platform_theme_installed(existing_env: &BTreeMap<String, String>) -> 
                 .iter()
                 .any(|plugin| root.join("platformthemes").join(plugin).is_file())
         })
+}
+
+/// Portal `color-scheme` value for a Dark/Light mode; `None` for System, which
+/// follows the host preference and is never pinned by this session.
+#[must_use]
+pub const fn portal_color_scheme(mode: AppearanceMode) -> Option<u32> {
+    match mode {
+        AppearanceMode::Dark => Some(PORTAL_COLOR_SCHEME_DARK),
+        AppearanceMode::Light => Some(PORTAL_COLOR_SCHEME_LIGHT),
+        AppearanceMode::System => None,
+    }
+}
+
+/// GTK3/GTK4 `settings.ini` body for a Dark/Light mode. Only the prefer-dark key
+/// is written; no `gtk-theme-name` is set, so the installed theme stays with XSETTINGS.
+fn gtk_settings_ini(mode: AppearanceMode) -> String {
+    let prefer_dark = u8::from(mode.prefers_dark());
+    format!("[Settings]\ngtk-application-prefer-dark-theme={prefer_dark}\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,8 +217,10 @@ pub fn plan_appearance(
     let mut environment = appearance_environment(mode);
     let mut owned_files = BTreeMap::new();
     let mut toolkits = BTreeMap::new();
+    // libadwaita reads org.freedesktop.appearance color-scheme from the portal, which
+    // has no session-owned backend; the owned settings.ini is not claimed as applied.
     let gtk4 = ToolkitStatus::Unsupported(
-        "no session-scoped color-scheme channel; portal/GSettings writes would change host state",
+        "libadwaita follows portal color-scheme; no session portal backend exists",
     );
     let gtk3 = match (mode, probe.xsettings_owned, probe.gtk3_theme_installed) {
         (AppearanceMode::System, _, _) => {
@@ -246,6 +267,16 @@ pub fn plan_appearance(
             // The guard above ensures the scheme file was read.
             let colors = color_scheme.unwrap_or_default();
             owned_files.insert(PathBuf::from("kdeglobals"), colors);
+            // GTK reads these through the same owned XDG_CONFIG_DIRS prefix; the
+            // user's own gtk-*/settings.ini still wins per key.
+            owned_files.insert(
+                PathBuf::from("gtk-3.0/settings.ini"),
+                gtk_settings_ini(mode),
+            );
+            owned_files.insert(
+                PathBuf::from("gtk-4.0/settings.ini"),
+                gtk_settings_ini(mode),
+            );
             // Owned root is listed first; the user's ~/.config/kdeglobals still
             // wins per key, and an inherited XDG_CONFIG_DIRS is kept after it.
             let inherited = existing_env
@@ -304,6 +335,9 @@ pub fn materialize_owned_files(plan: &AppearancePlan) -> io::Result<()> {
         let mut temp_name = relative.as_os_str().to_owned();
         temp_name.push(".tmp");
         let temp = plan.owned_root.join(temp_name);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(&temp, content)?;
         std::fs::rename(&temp, &target)?;
     }
@@ -696,5 +730,78 @@ mod tests {
         assert!(!paths.config_home.join("kdeglobals").exists());
         assert!(!owned_appearance_root(&paths).exists());
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn gtk_settings_ini_prefers_dark_only_for_dark_mode() {
+        let home = isolated_home("gtk-ini");
+        let paths = paths_for(&home);
+        let dark = plan_appearance(
+            &paths,
+            &BTreeMap::new(),
+            AppearanceMode::Dark,
+            QT_PLUGIN_PRESENT,
+        );
+        let light = plan_appearance(
+            &paths,
+            &BTreeMap::new(),
+            AppearanceMode::Light,
+            QT_PLUGIN_PRESENT,
+        );
+        for key in ["gtk-3.0/settings.ini", "gtk-4.0/settings.ini"] {
+            assert_eq!(
+                dark.owned_files.get(Path::new(key)).map(String::as_str),
+                Some("[Settings]\ngtk-application-prefer-dark-theme=1\n"),
+                "{key} dark"
+            );
+            assert_eq!(
+                light.owned_files.get(Path::new(key)).map(String::as_str),
+                Some("[Settings]\ngtk-application-prefer-dark-theme=0\n"),
+                "{key} light"
+            );
+        }
+        assert!(!dark.environment.contains_key("GTK_THEME"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn gtk_settings_are_written_under_owned_root_only() {
+        let home = isolated_home("gtk-materialize");
+        let paths = paths_for(&home);
+        let plan = plan_appearance(
+            &paths,
+            &BTreeMap::new(),
+            AppearanceMode::Dark,
+            QT_PLUGIN_PRESENT,
+        );
+        materialize_owned_files(&plan).expect("materialize");
+        let root = owned_appearance_root(&paths);
+        assert_eq!(
+            std::fs::read_to_string(root.join("gtk-3.0/settings.ini")).expect("gtk3"),
+            "[Settings]\ngtk-application-prefer-dark-theme=1\n"
+        );
+        assert!(root.join("gtk-4.0/settings.ini").is_file());
+        assert!(!root.join("gtk-3.0/settings.ini.tmp").exists());
+        assert!(!home.join(".config/gtk-3.0").exists(), "host gtk config");
+        assert!(!home.join(".config/gtk-4.0").exists(), "host gtk config");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn inherited_qt_override_suppresses_owned_gtk_settings_with_kdeglobals() {
+        let home = isolated_home("gtk-override");
+        let paths = paths_for(&home);
+        let fusion = BTreeMap::from([("QT_QPA_PLATFORMTHEME".to_owned(), "fusion".to_owned())]);
+        let plan = plan_appearance(&paths, &fusion, AppearanceMode::Dark, QT_PLUGIN_PRESENT);
+        assert!(plan.owned_files.is_empty());
+        assert!(!plan.environment.contains_key("XDG_CONFIG_DIRS"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn portal_color_scheme_maps_dark_light_and_leaves_system_unpinned() {
+        assert_eq!(portal_color_scheme(AppearanceMode::Dark), Some(1));
+        assert_eq!(portal_color_scheme(AppearanceMode::Light), Some(2));
+        assert_eq!(portal_color_scheme(AppearanceMode::System), None);
     }
 }
