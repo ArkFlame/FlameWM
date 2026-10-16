@@ -562,6 +562,9 @@ impl ExternalDrawableTarget {
             (view.display, view.gc, view.screen)
         };
         let drawable = self.drawable;
+        // Built at most once per call: reused for the upload on miss and for
+        // the no-XRender alpha check below.
+        let mut built: Option<Vec<u32>> = None;
         let pixmap = match self.image_cache.get(&key).copied() {
             Some(cached) => {
                 self.image_lru_touch(key);
@@ -582,12 +585,14 @@ impl ExternalDrawableTarget {
                         return Err("no 32-bit TrueColor visual for external blit".to_string());
                     }
                 };
+                let words = argb();
                 if let Err(error) =
-                    upload_argb32(view_display, view_gc, fresh, visual, &argb(), w, h)
+                    upload_argb32(view_display, view_gc, fresh, visual, &words, w, h)
                 {
                     unsafe { self.allocator.free_pixmap(view_display, fresh, bytes) };
                     return Err(error);
                 }
+                built = Some(words);
                 self.image_cache.insert(
                     key,
                     ExternalCachedImage {
@@ -632,7 +637,11 @@ impl ExternalDrawableTarget {
             )
         };
         // Without XRender there is no true alpha; report it explicitly.
-        if argb().iter().any(|word| word >> 24 != 255) {
+        let has_alpha = match &built {
+            Some(words) => has_non_opaque_word(words),
+            None => has_non_opaque_word(&argb()),
+        };
+        if has_alpha {
             return Err("external alpha blit requires XRender (unavailable)".to_string());
         }
         Ok(())
@@ -1031,9 +1040,20 @@ pub fn use_cstring_title(title: &str) -> Result<CString, String> {
     CString::new(title).map_err(|_| "title contains NUL".to_string())
 }
 
+fn has_non_opaque_word(words: &[u32]) -> bool {
+    words.iter().any(|word| word >> 24 != 255)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_opaque_detection_reads_alpha_byte() {
+        assert!(!has_non_opaque_word(&[0xFF00_0000, 0xFFFF_FFFF]));
+        assert!(has_non_opaque_word(&[0xFF00_0000, 0x80FF_FFFF]));
+        assert!(!has_non_opaque_word(&[]));
+    }
 
     #[test]
     fn measure_matches_layout_estimate() {
