@@ -6,6 +6,7 @@
 //! flagged NEVER-COUNTS-AS-PASS for R02/R03. Every scenario reports which
 //! path produced its verdict.
 
+pub mod clipboard;
 pub mod debug_retention;
 pub mod explicit_layout;
 pub mod explicit_shell;
@@ -347,9 +348,14 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         let (pass, detail) = explicit_tray::run_toggle(canary, args);
         results.push(run("tray-toggle-explicit", pass, detail));
     }
+    // Explicit-only cross-client clipboard (CLIPBOARD+PRIMARY, TARGETS, INCR); never part of `all`.
+    if scenario == "clipboard" {
+        let (pass, detail) = clipboard::run(canary, args);
+        results.push(run("clipboard-cross-client", pass, detail));
+    }
     if results.is_empty() {
         crate::fail(
-            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|snap-border|s1|s2|s3|s4|xtest-self-check|explicit-taskbar-menu|explicit-desktop-settings|explicit-audio-tabs|explicit-osd|explicit-audio-apps|explicit-window-overflow|explicit-window-clamp|explicit-tray-toggle|all)",
+            "j07 unknown --scenario (popup|move|resize|regressions|chrome|max-snap|workspaces|retention|t15|t16|t17|t18|t15-t18|t21|t22|t21-t22|reactor|reactor-presentation|snap-border|s1|s2|s3|s4|xtest-self-check|explicit-taskbar-menu|explicit-desktop-settings|explicit-audio-tabs|explicit-osd|explicit-audio-apps|explicit-window-overflow|explicit-window-clamp|explicit-tray-toggle|clipboard|all)",
         );
     }
     let pass = results.iter().all(|(_, ok, _)| *ok);
