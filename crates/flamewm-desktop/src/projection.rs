@@ -658,6 +658,37 @@ mod tests {
     }
 
     #[test]
+    fn directory_item_icon_resolves_to_packaged_folder_not_document_edit() {
+        use std::path::Path;
+        let packaged_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("workspace root");
+        let missing_data = std::env::temp_dir().join("flamewm-projection-no-such-data-dir");
+        let mut resolver = IconResolver::new(
+            packaged_root.clone(),
+            vec!["hicolor".to_owned()],
+            vec![missing_data],
+            0,
+        );
+        let name = icon_name(DesktopItemKind::Directory);
+        assert_eq!(name, "folder");
+        let raster = resolver
+            .prepare_semantic(name, IconSize::new(ICON_TILE_PX, ICON_TILE_PX))
+            .expect("directory icon must resolve");
+        assert_eq!(
+            Path::new(&raster.source),
+            packaged_root.join("assets/web/breeze/folder.svg").as_path(),
+            "directory must render folder.svg, not the file pencil"
+        );
+        assert_ne!(
+            ParallelIconService::icon_key(DesktopItemKind::Directory, None),
+            ParallelIconService::icon_key(DesktopItemKind::File, None),
+            "directory and file slots must not share an icon cache key"
+        );
+    }
+
+    #[test]
     fn tile_geometry_stays_centered_in_generated_tile() {
         assert_eq!(DESKTOP_TILE_WIDTH, 82.0);
         assert_eq!(DESKTOP_TILE_HEIGHT, 82.0);

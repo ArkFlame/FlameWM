@@ -790,6 +790,28 @@ impl IconResolver {
         result
     }
 
+    /// Packaged-first probe: uncached `is_file` on purpose, so a packaged
+    /// hit never builds theme candidates. Keeps the first rasterise error.
+    fn probe_packaged(
+        &mut self,
+        candidate: &Candidate,
+        size: IconSize,
+        candidate_error: &mut Option<RasterError>,
+    ) -> Option<Rgba8Raster> {
+        if !candidate.path.is_file() {
+            return None;
+        }
+        match self.cached_rasterize(&candidate.path, size, candidate.origin) {
+            Ok(raster) => Some(raster),
+            Err(error) => {
+                if candidate_error.is_none() {
+                    *candidate_error = Some(error);
+                }
+                None
+            }
+        }
+    }
+
     fn path_exists(&mut self, path: &Path) -> bool {
         let generation = self.theme_generation;
         if let Some(hit) = self.theme_caches.cached_exists(path, generation) {
@@ -837,16 +859,8 @@ impl IconResolver {
             let packaged = self.packaged_candidates(name);
             let mut candidate_error: Option<RasterError> = None;
             for candidate in &packaged {
-                if !candidate.path.is_file() {
-                    continue;
-                }
-                match self.cached_rasterize(&candidate.path, size, candidate.origin) {
-                    Ok(raster) => return Ok(raster),
-                    Err(error) => {
-                        if candidate_error.is_none() {
-                            candidate_error = Some(error);
-                        }
-                    }
+                if let Some(raster) = self.probe_packaged(candidate, size, &mut candidate_error) {
+                    return Ok(raster);
                 }
             }
             let mut candidates = Vec::new();
@@ -914,18 +928,10 @@ impl IconResolver {
             // pays thousands of stat calls for theme candidates enumerated
             // after it. `path_exists` caching still covers theme probes.
             if candidate.origin == IconOrigin::PackagedBreeze {
-                if !candidate.path.is_file() {
-                    continue;
+                if let Some(raster) = self.probe_packaged(candidate, size, &mut candidate_error) {
+                    return Ok(raster);
                 }
-                match self.cached_rasterize(&candidate.path, size, candidate.origin) {
-                    Ok(raster) => return Ok(raster),
-                    Err(error) => {
-                        if candidate_error.is_none() {
-                            candidate_error = Some(error);
-                        }
-                        continue;
-                    }
-                }
+                continue;
             }
             if !self.path_exists(&candidate.path) {
                 continue;

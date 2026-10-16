@@ -1926,10 +1926,9 @@ fn step(value: &str) -> Option<i8> {
 }
 
 /// Color rows in the Appearance page: action target and the `#RRGGBB` setting.
-const COLOR_TARGETS: [(&str, &str); 4] = [
+const COLOR_TARGETS: [(&str, &str); 3] = [
     ("surface", "surfaceColor"),
     ("accent", "accent"),
-    ("titlebar", "titlebarColor"),
     ("lockbackground", "lockBackgroundColor"),
 ];
 
@@ -2766,10 +2765,11 @@ mod value_text_tests {
             parse_action("settings.color.lockbackground.preset.5"),
             Ok(SettingsAction::ColorSwatch { key: "lockBackgroundColor", value: "#9B59B6" })
         ));
-        assert!(matches!(
-            parse_action("settings.picker.open.titlebar"),
-            Ok(SettingsAction::ColorPickerOpen("titlebarColor"))
-        ));
+        assert!(
+            parse_action("settings.picker.open.titlebar").is_err(),
+            "titlebar has no colour target"
+        );
+        assert!(parse_action("settings.color.titlebar.preset.0").is_err());
         assert!(matches!(
             parse_action("settings.picker.pick.0.0"),
             Ok(SettingsAction::ColorPickerPick(value)) if value == "#F7C9C9"

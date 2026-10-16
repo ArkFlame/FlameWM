@@ -81,6 +81,53 @@ class PamRuntimeTests(unittest.TestCase):
         self.assertEqual(len(deb.check_conffiles("")), 1)
 
 
+def _asset_entries(skip=()):
+    lines = []
+    for theme in deb.ICON_THEMES:
+        if theme not in skip:
+            lines.append(f"-rw-r--r-- root/root 10 2026-10-13 06:54 ./usr/share/icons/{theme}/index.theme")
+    lines.append("-rw-r--r-- root/root 10 2026-10-13 06:54 ./usr/share/doc/flamewm/LICENSES/THEMES.md")
+    lines.append("-rw-r--r-- root/root 10 2026-10-13 06:54 ./usr/share/doc/flamewm/copyright")
+    return deb.parse_contents("\n".join(lines))
+
+
+def _by_id(checks):
+    return {c["id"]: c["status"] for c in checks}
+
+
+class SharedAssetTests(unittest.TestCase):
+    def test_all_assets_present_pass(self):
+        status = _by_id(deb.check_shipped_assets(_asset_entries()))
+        self.assertEqual(set(status.values()), {"PASS"})
+        for theme in deb.ICON_THEMES:
+            self.assertEqual(status[f"icon_theme_{theme}"], "PASS")
+        self.assertEqual(status["doc_licenses_present"], "PASS")
+        self.assertEqual(status["doc_copyright_present"], "PASS")
+
+    def test_missing_icon_theme_fails_only_that_theme(self):
+        status = _by_id(deb.check_shipped_assets(_asset_entries(skip=("candy-icons",))))
+        self.assertEqual(status["icon_theme_candy-icons"], "FAIL")
+        self.assertEqual(status["icon_theme_McMojave-circle"], "PASS")
+
+    def test_theme_directory_entry_alone_is_not_files(self):
+        entries = deb.parse_contents("drwxr-xr-x root/root 0 2026-10-13 06:54 ./usr/share/icons/candy-icons/")
+        status = _by_id(deb.check_shipped_assets(entries))
+        self.assertEqual(status["icon_theme_candy-icons"], "FAIL")
+
+    def test_empty_licenses_dir_fails(self):
+        entries = deb.parse_contents("drwxr-xr-x root/root 0 2026-10-13 06:54 ./usr/share/doc/flamewm/LICENSES/")
+        self.assertEqual(_by_id(deb.check_shipped_assets(entries))["doc_licenses_present"], "FAIL")
+
+    def test_missing_copyright_fails(self):
+        entries = deb.parse_contents("-rw-r--r-- root/root 10 2026-10-13 06:54 ./usr/share/doc/flamewm/LICENSE")
+        self.assertEqual(_by_id(deb.check_shipped_assets(entries))["doc_copyright_present"], "FAIL")
+
+    def test_check_ids_are_stable(self):
+        ids = [c["id"] for c in deb.check_shipped_assets([])]
+        self.assertEqual(ids, [f"icon_theme_{t}" for t in deb.ICON_THEMES]
+                         + ["doc_licenses_present", "doc_copyright_present"])
+
+
 class HelperTests(unittest.TestCase):
     def test_depends_names_strip_versions_and_alternatives(self):
         self.assertEqual(deb.depend_names("libx11-6 (>= 2:1.6), libxi6 | libxi7, libxft2"),

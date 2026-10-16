@@ -280,7 +280,6 @@ pub struct ProductSettings {
     pub start_menu_blur_percent: u8,
     pub accent_opacity: u8,
     pub decoration: String,
-    pub titlebar_color: String,
     pub titlebar_button_style: String,
     pub titlebar_minimize_color: String,
     pub titlebar_minimize_hover_color: String,
@@ -369,7 +368,6 @@ impl Default for ProductSettings {
             start_menu_blur_percent: 80,
             accent_opacity: 100,
             decoration: "rounded".to_owned(),
-            titlebar_color: "#1b1e20".to_owned(),
             titlebar_button_style: "circle".to_owned(),
             titlebar_minimize_color: String::new(),
             titlebar_minimize_hover_color: String::new(),
@@ -532,7 +530,6 @@ impl ProductSettings {
             return invalid("cursorSize must be 24, 32, 48 or 64");
         }
         validate_color(&self.start_menu_color, false, "startMenuColor")?;
-        validate_color(&self.titlebar_color, false, "titlebarColor")?;
         for (value, name) in [
             (&self.titlebar_minimize_color, "titlebarMinimizeColor"),
             (
@@ -703,6 +700,8 @@ impl ConfigStore {
                 "titlebarMinimizeStyle" | "titlebarMaximizeStyle" | "titlebarCloseStyle" => {
                     legacy_square_flags.push(legacy_button_style_is_square(value)?);
                 }
+                // Legacy titlebar background colour: tolerated and ignored, never stored or written.
+                "titlebarColor" => {}
                 // Legacy taskbar surface keys: read only, promoted to surface* below.
                 "taskbarColor" => snapshot.taskbar_color = Slot::from_text(value, key)?,
                 "taskbarOpacity" => snapshot.taskbar_opacity = Slot::from_text(value, key)?,
@@ -1159,7 +1158,6 @@ stable_settings! {
     (false, appearance, "cursorSize", cursor_size),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
-    (false, windows, "titlebarColor", titlebar_color),
     (false, windows, "titlebarButtonStyle", titlebar_button_style),
     (false, windows, "titlebarMinimizeColor", titlebar_minimize_color),
     (false, windows, "titlebarMinimizeHoverColor", titlebar_minimize_hover_color),
@@ -1865,7 +1863,6 @@ mod tests {
         assert_eq!(defaults.taskbar_opacity, 50);
         assert_eq!(defaults.accent_opacity, 100);
         assert_eq!(defaults.decoration, "rounded");
-        assert_eq!(defaults.titlebar_color, "#1b1e20");
         assert_eq!(defaults.titlebar_button_style, "circle");
         assert!(defaults.titlebar_close_color.is_empty());
         assert!(defaults.cursor_theme.is_empty());
@@ -1889,7 +1886,6 @@ mod tests {
         let old = "revision=3\naccent=#EF4048\ntaskbarColor=#191b1d\nfutureFeature=kept\n";
         let parsed = store.parse_snapshot(old).expect("old file");
         assert_eq!(parsed.animation_speed, 100);
-        assert_eq!(parsed.titlebar_color, "#1b1e20");
         let text = ConfigStore::serialize(&parsed);
         assert!(!text.contains("titlebar"));
         assert!(text.contains("futureFeature=kept\n"));
@@ -1897,10 +1893,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_titlebar_color_is_tolerated_ignored_and_never_written() {
+        let store = ConfigStore::default();
+        // Old files carry titlebarColor; even an invalid value must not error or touch surface*.
+        for value in ["#A0B0C0", "#12345"] {
+            let legacy = store
+                .parse_snapshot(&format!(
+                    "revision=3\ntitlebarColor={value}\nsurfaceColor=#445566\n"
+                ))
+                .expect("legacy titlebarColor tolerated");
+            assert_eq!(legacy.surface_color, "#445566");
+            assert_eq!(
+                legacy.surface_opacity,
+                ProductSettings::default().surface_opacity
+            );
+            let text = ConfigStore::serialize(&legacy);
+            assert!(!text.contains("titlebarColor"), "{text}");
+            assert!(
+                !legacy.unknown_keys.contains_key("titlebarColor"),
+                "legacy key is ignored, not kept as unknown"
+            );
+        }
+        assert!(stable_setting("titlebarColor").is_none());
+    }
+
+    #[test]
     fn new_appearance_keys_round_trip_when_set() {
         let store = ConfigStore::default();
         let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\naccentOpacity=40\n\
-            decoration=ios\ntitlebarColor=#A0B0C0\n\
+            decoration=ios\n\
             titlebarMinimizeHoverColor=#FFFFFF\ncursorTheme=Adwaita\nanimationsEnabled=false\n\
             titlebarButtonStyle=square\n\
             animationSpeed=150\nstartAnimationEnabled=0\nfutureFeature=kept\n";
@@ -2083,7 +2104,6 @@ mod tests {
         let store = ConfigStore::default();
         for line in [
             "startMenuColor=red",
-            "titlebarColor=#12345",
             "titlebarCloseColor=#GGGGGG",
             "startMenuOpacity=101",
             "accentOpacity=101",

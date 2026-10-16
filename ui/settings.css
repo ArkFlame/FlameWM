@@ -29,7 +29,7 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .select-box { min-width:156px; height:32px; padding:0 12px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .select-box:active { background:#111315; }
 .segment-control { display:flex; justify-content:flex-end; align-items:center; gap:4px; min-width:0; }
-.segment { width:72px; height:32px; padding:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
+.segment { width:84px; height:32px; padding:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .segment:hover { border-color:var(--accent); }
 .wallpaper-actions { display:flex; align-items:center; gap:8px; }
 .wallpaper-setting { flex-direction:column; align-items:stretch; }

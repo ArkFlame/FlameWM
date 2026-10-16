@@ -2069,7 +2069,6 @@ mod tests {
         let mut snapshot = SettingsSnapshot::new(7);
         for key in [
             "surfaceColor",
-            "titlebarColor",
             "lockBackgroundColor",
             "accent",
         ] {
@@ -2172,7 +2171,7 @@ mod tests {
         let (mut application, requests) = color_session("#191B1D", 1);
         let mut document = ProbeDocument::default();
         application
-            .handle_action(&release("settings.picker.open.titlebar"), &mut document)
+            .handle_action(&release("settings.picker.open.surface"), &mut document)
             .expect("open picker");
         for text in ["#", "3", "d", "A", "e", "E", "9"] {
             application
@@ -2183,7 +2182,7 @@ mod tests {
             .handle_action(&typed("\n"), &mut document)
             .expect("enter");
         assert_eq!(
-            last_apply(&requests, "titlebarColor").as_deref(),
+            last_apply(&requests, "surfaceColor").as_deref(),
             Some("#3DAEE9")
         );
 
@@ -2195,7 +2194,7 @@ mod tests {
             .handle_action(&release("settings.picker.close"), &mut document)
             .expect("close");
         application
-            .handle_action(&release("settings.picker.open.titlebar"), &mut document)
+            .handle_action(&release("settings.picker.open.surface"), &mut document)
             .expect("reopen");
         for text in ["1", "2", "3", "4", "5"] {
             application

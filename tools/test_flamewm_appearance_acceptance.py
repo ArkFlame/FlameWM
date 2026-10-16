@@ -473,5 +473,27 @@ class StopCaseClientsTests(unittest.TestCase):
                     proc.wait(timeout=5)
 
 
+class InteriorPaletteCellTests(unittest.TestCase):
+    W = 20
+    CELL = "#3DAEE9"
+
+    def setUp(self) -> None:
+        self.px = [(0, 0, 0)] * (self.W * self.W)
+        for y in range(4, 16):
+            for x in range(4, 16):
+                self.px[y * self.W + x] = (0x3D, 0xAE, 0xE9)
+
+    def test_anti_aliased_corner_pixel_is_rejected(self) -> None:
+        # (4, 4) carries the cell colour but its -3 neighbours fall on the black background.
+        self.assertTrue(ap.colour_matches(self.px[4 * self.W + 4], self.CELL))
+        self.assertFalse(ap.interior_cell_pixel(self.px, self.W, 4, 4, self.CELL))
+
+    def test_interior_pixel_is_accepted(self) -> None:
+        self.assertTrue(ap.interior_cell_pixel(self.px, self.W, 9, 9, self.CELL))
+
+    def test_voluntary_total_is_none_for_missing_process(self) -> None:
+        self.assertIsNone(ap.voluntary_switches_total(2 ** 30))
+
+
 if __name__ == "__main__":
     unittest.main()

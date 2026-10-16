@@ -100,6 +100,29 @@ def check_conffiles(text):
     return [f"conffiles={text!r} expected={CONFFILES!r}"]
 
 
+ICON_THEMES = ["FlameWM-Breeze-Dark", "McMojave-circle", "McMojave-cursors", "candy-icons"]
+LICENSES_PREFIX = "usr/share/doc/flamewm/LICENSES/"
+COPYRIGHT_PATH = "usr/share/doc/flamewm/copyright"
+
+
+def check_shipped_assets(entries):
+    """Return checks for icon themes, doc/LICENSES and copyright from --contents entries."""
+    paths = [p for _, _, p in entries]
+    checks = []
+    for theme in ICON_THEMES:
+        prefix = f"usr/share/icons/{theme}/"
+        present = any(p.startswith(prefix) and p != prefix.rstrip("/") for p in paths)
+        checks.append(check(f"icon_theme_{theme}", "PASS" if present else "FAIL",
+                            f"{prefix} has files" if present else f"{prefix} missing or empty"))
+    licenses = [p for p in paths if p.startswith(LICENSES_PREFIX) and p != LICENSES_PREFIX.rstrip("/")]
+    checks.append(check("doc_licenses_present", "PASS" if licenses else "FAIL",
+                        f"{len(licenses)} files under {LICENSES_PREFIX}" if licenses
+                        else f"{LICENSES_PREFIX} missing or empty"))
+    has_copyright = COPYRIGHT_PATH in paths
+    checks.append(check("doc_copyright_present", "PASS" if has_copyright else "FAIL", COPYRIGHT_PATH))
+    return checks
+
+
 def find_leaks(paths):
     return [p for p in paths if any(mk in p for mk in LEAK_MARKERS)]
 
@@ -282,6 +305,7 @@ def main(argv=None):
         leaks = find_leaks([p for _, _, p in entries])
         checks.append(check("no_path_leakage", "PASS" if not leaks else "FAIL",
                             f"leaking paths: {leaks[:10]}" if leaks else "no build/home paths"))
+        checks.extend(check_shipped_assets(entries))
 
     # 3. Extraction and required data files.
     tree = work / "tree"

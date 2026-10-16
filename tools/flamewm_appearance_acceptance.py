@@ -184,6 +184,17 @@ def voluntary_switches(pid: int) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def voluntary_switches_total(pid: int) -> int | None:
+    """Sum of voluntary_ctxt_switches over every thread in /proc/PID/task; threads that exit mid-window are skipped."""
+    try:
+        tids = list(Path(f"/proc/{pid}/task").iterdir())
+    except OSError:
+        return None
+    counts = [voluntary_switches(int(tid.name)) for tid in tids if tid.name.isdigit()]
+    counts = [c for c in counts if c is not None]
+    return sum(counts) if counts else None
+
+
 def entry(sid: str, status: str, reason: str = "", evidence: list | None = None, commands: list | None = None) -> dict:
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}")
@@ -600,7 +611,7 @@ def ap04(s: Session) -> dict:
 
 
 def ap05(s: Session) -> dict:
-    if not s.restart({"titlebarColor": "#1B1E20", "surfaceOpacity": "100"}):
+    if not s.restart({"surfaceColor": "#1B1E20", "surfaceOpacity": "100"}):
         return entry("AP05", FAIL, "WM or shell exited during restart")
     s.spawn_client()
     _, frame = s.client_frame(s.tree("AP05-start"))
@@ -654,7 +665,7 @@ def ap05(s: Session) -> dict:
             fails.append(f"{name} hover repainted a neighbouring button ({leaked}/{close_leak} px)")
 
     custom = "#00FF00"
-    if not s.restart({"titlebarColor": "#1B1E20", "surfaceOpacity": "100", "titlebarCloseHoverColor": custom}):
+    if not s.restart({"surfaceColor": "#1B1E20", "surfaceOpacity": "100", "titlebarCloseHoverColor": custom}):
         return entry("AP05", FAIL, "WM or shell exited during custom restart", [str(path)])
     _, frame2 = s.client_frame(s.tree("AP05-custom"))
     if frame2 is None:
@@ -1449,22 +1460,35 @@ def ap09(s: Session) -> dict:
         return entry("AP09", FAIL, "WM or shell exited during restart")
     time.sleep(s.args.settle_seconds)
     pids = {"flamewm": s.ctx.wm.pid, "flamewm-shell": s.shell.pid}
-    start = {n: (base.parse_proc_metrics(p), voluntary_switches(p)) for n, p in pids.items()}
-    time.sleep(IDLE_SECONDS)
-    per, ev, fails = {}, [], []
-    for name, pid in pids.items():
-        now_metrics, now_vol = base.parse_proc_metrics(pid), voluntary_switches(pid)
-        before_metrics, before_vol = start[name]
-        alive = now_metrics is not None and before_metrics is not None and now_vol is not None and before_vol is not None
-        if not alive:
-            fails.append(f"{name} not observable or exited")
-            continue
-        cpu = (now_metrics["cpu_ticks"] - before_metrics["cpu_ticks"]) / CLK_TCK
-        wake = now_vol - before_vol
-        per[name] = (cpu, wake)
-        ev.append(f"{name}: cpu_seconds={cpu:.3f} voluntary_wakeups={wake} over {IDLE_SECONDS:g}s")
-        if idle_verdict(cpu, wake, True) == FAIL:
-            fails.append(f"{name} idle cpu {cpu:.3f}s / wakeups {wake}")
+    # Control: a sleeping child sampled over the same window, so the wakeup counters have a floor.
+    control = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(600)"])
+    try:
+        start = {n: (base.parse_proc_metrics(p), voluntary_switches(p), voluntary_switches_total(p))
+                 for n, p in {**pids, "control-sleeper": control.pid}.items()}
+        time.sleep(IDLE_SECONDS)
+        per, ev, fails = {}, [], []
+        for name, pid in {**pids, "control-sleeper": control.pid}.items():
+            now_metrics, now_vol, now_total = base.parse_proc_metrics(pid), voluntary_switches(pid), voluntary_switches_total(pid)
+            before_metrics, before_vol, before_total = start[name]
+            total_wake = now_total - before_total if now_total is not None and before_total is not None else "n/a"
+            alive = now_metrics is not None and before_metrics is not None and now_vol is not None and before_vol is not None
+            if name == "control-sleeper":
+                ev.append(f"control-sleeper: voluntary_wakeups_total={total_wake} over {IDLE_SECONDS:g}s"
+                          + ("" if alive else " (control not observable)"))
+                continue
+            if not alive:
+                fails.append(f"{name} not observable or exited")
+                continue
+            cpu = (now_metrics["cpu_ticks"] - before_metrics["cpu_ticks"]) / CLK_TCK
+            wake = now_vol - before_vol
+            per[name] = (cpu, wake)
+            ev.append(f"{name}: cpu_seconds={cpu:.3f} voluntary_wakeups_leader={wake} "
+                      f"voluntary_wakeups_total={total_wake} over {IDLE_SECONDS:g}s")
+            if idle_verdict(cpu, wake, True) == FAIL:
+                fails.append(f"{name} idle cpu {cpu:.3f}s / wakeups {wake}")
+    finally:
+        control.kill()
+        control.wait()
     if fails:
         return entry("AP09", FAIL, "; ".join(fails), ev, ["/proc/<pid>/stat", "/proc/<pid>/status"])
     return entry("AP09", PASS, "", ev, ["/proc/<pid>/stat", "/proc/<pid>/status"])
@@ -1903,6 +1927,14 @@ def centre(blob: tuple[int, int, int, int, int]) -> tuple[int, int]:
     return (blob[0] + blob[2]) // 2, (blob[1] + blob[3]) // 2
 
 
+def interior_cell_pixel(px: list, width: int, x: int, y: int, hex_value: str) -> bool:
+    """True when the 3x3 grid at offsets -3/0/+3 around (x, y) all match `hex_value`.
+
+    Rejects anti-aliased corner and edge pixels, whose neighbours fall outside the solid cell."""
+    return all(colour_matches(px[(y + dy) * width + (x + dx)], hex_value)
+               for dx in (-3, 0, 3) for dy in (-3, 0, 3))
+
+
 def preset_rows(px: list, width: int, rect: tuple[int, int, int, int]) -> list[dict]:
     """Rows of circles: each row holds vivid preset blobs whose centres share one band."""
     found = []
@@ -2007,7 +2039,8 @@ def color_picker_check(s: Session) -> tuple[list, list]:
             for x in range(255, 705, 2):
                 pixel = px_open[y * width + x]
                 h = hex_of(pixel)
-                if h not in ("#000000", "#FFFFFF") and max(pixel) - min(pixel) > 60 and h not in PICKER_VIVID_PRESETS:
+                if h not in ("#000000", "#FFFFFF") and max(pixel) - min(pixel) > 60 and h not in PICKER_VIVID_PRESETS \
+                        and interior_cell_pixel(px_open, width, x, y, h):
                     palette_hexes.append((x, y, h))
         if not palette_hexes:
             return ev, fails + ["no palette cell colours found in the open picker"]

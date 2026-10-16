@@ -11,6 +11,7 @@ pub mod icons;
 pub mod media_store;
 pub mod mpris;
 pub mod network_manager;
+pub mod network_slot;
 pub mod portal_file_chooser;
 pub mod power;
 pub mod pulse;
@@ -26,6 +27,7 @@ pub use mpris::{MprisProvider, MprisProviderState};
 pub use network_manager::{
     NetworkManagerProperties, NetworkManagerProvider, NetworkManagerProviderState,
 };
+pub use network_slot::NetworkManagerSlot;
 pub use portal_file_chooser::PortalFileChooser;
 pub use power::PowerProvider;
 
@@ -43,7 +45,7 @@ pub enum LinuxIntegrationSource {
 
 /// The single owner of Linux integration provider lifecycles.
 pub struct LinuxIntegrationRuntime {
-    network_manager: NetworkManagerProvider,
+    network_manager: NetworkManagerSlot,
     mpris: MprisProvider,
     power: PowerProvider,
     started: bool,
@@ -53,7 +55,7 @@ impl LinuxIntegrationRuntime {
     /// Connect both optional providers without creating a second event loop.
     pub fn connect() -> FlameResult<Self> {
         Ok(Self {
-            network_manager: NetworkManagerProvider::connect()?,
+            network_manager: NetworkManagerSlot::connect()?,
             mpris: MprisProvider::connect()?,
             power: PowerProvider::connect()?,
             started: false,
@@ -86,13 +88,13 @@ impl LinuxIntegrationRuntime {
     }
 
     #[must_use]
-    pub fn network_manager(&self) -> &NetworkManagerProvider {
-        &self.network_manager
+    pub fn network_manager(&self) -> Option<&NetworkManagerProvider> {
+        self.network_manager.provider()
     }
 
     #[must_use]
-    pub fn network_manager_mut(&mut self) -> &mut NetworkManagerProvider {
-        &mut self.network_manager
+    pub fn network_manager_mut(&mut self) -> Option<&mut NetworkManagerProvider> {
+        self.network_manager.provider_mut()
     }
 
     #[must_use]

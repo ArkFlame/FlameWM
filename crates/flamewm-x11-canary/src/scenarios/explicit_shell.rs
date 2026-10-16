@@ -577,12 +577,14 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
     )
 }
 
-/// B15 OSD contract mirrored from `crates/flamewm-shell/src/osd.rs` (source wins).
+/// B15 OSD contract mirrored from `crates/flamewm-shell/src/osd.rs` (source wins) at 1x:
+/// `OSD_WIDTH`/`OSD_HEIGHT` 215x37, `TRACK_X` 40, `TRACK_W` 129, `TRACK_H` 5 (track row 16..21),
+/// icon `left:13px` 16px wide, so the icon scan spans x 0..35 (`ui/shell/osd.html`).
 const OSD_TITLE: &str = "FlameWM volume";
-const OSD_BODY: (u32, u32) = (430, 74);
-const OSD_TRACK_X: u32 = 80;
-const OSD_TRACK_W: u32 = 258;
-const OSD_ICON_W: u32 = 70;
+const OSD_BODY: (u32, u32) = (215, 37);
+const OSD_TRACK_X: u32 = 40;
+const OSD_TRACK_W: u32 = 129;
+const OSD_ICON_W: u32 = 35;
 const OSD_VOLUME_MAX: f64 = 150.0;
 const OSD_FILL_TOLERANCE: f64 = 0.03;
 const OSD_HIDE_LIMIT: Duration = Duration::from_millis(1500);
@@ -768,7 +770,7 @@ fn fill_fraction(empty: &[u8], cap: &[u8], w: u32, row: u32) -> f64 {
     n as f64 / f64::from(OSD_TRACK_W)
 }
 
-/// B15 explicit-osd: each volume level shows the card at 430x74, centred, with a
+/// B15 explicit-osd: each volume level shows the card at 215x37, centred, with a
 /// track fill of level/150; muted shows an empty track; the card hides within 1.5 s;
 /// two changes within 300 ms show one card; focus is unchanged; clicks pass through.
 pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
@@ -853,7 +855,7 @@ pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
         let cap = grab(canary, rect);
         let _ = screenshot(&dir, &format!("b15-osd-{label}.png"));
         checks.push((
-            "osd-body-430x74",
+            "osd-body-215x37",
             size_ok,
             format!("level={label} size={}x{}", card.width, card.height),
         ));

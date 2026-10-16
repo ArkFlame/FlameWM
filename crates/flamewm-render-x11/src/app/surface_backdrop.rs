@@ -127,6 +127,8 @@ impl X11App {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NodeBackdropKey {
     pub(crate) rect: (i32, i32, u32, u32),
+    /// Clipped capture size (w, h); changes with the scene size, so a resize misses.
+    pub(crate) clip: (u32, u32),
     pub(crate) radius: u32,
     pub(crate) blur_percent: u8,
     pub(crate) revision: u64,
@@ -262,6 +264,7 @@ impl X11App {
         };
         let key = NodeBackdropKey {
             rect,
+            clip: (clip.2, clip.3),
             radius,
             blur_percent,
             revision,
@@ -316,6 +319,7 @@ mod tests {
     fn key(blur: u8, revision: u64) -> NodeBackdropKey {
         NodeBackdropKey {
             rect: (10, 20, 40, 30),
+            clip: (40, 30),
             radius: 6,
             blur_percent: blur,
             revision,
@@ -366,6 +370,15 @@ mod tests {
         assert_eq!(cache.hit(3, key(80, 2)), None, "revision change misses");
         assert_eq!(cache.hit(3, key(40, 1)), None, "blur change misses");
         assert_eq!(cache.store(3, key(40, 1), 8), Some(7), "replaced pixmap returned");
+    }
+
+    #[test]
+    fn cache_misses_when_clip_size_changes() {
+        let mut cache = NodeBackdropCache::default();
+        let mut resized = key(80, 1);
+        resized.clip = (30, 30);
+        assert_eq!(cache.store(3, key(80, 1), 7), None);
+        assert_eq!(cache.hit(3, resized), None, "scene resize with same rect misses");
     }
 
     #[test]
