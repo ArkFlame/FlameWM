@@ -180,7 +180,7 @@ impl BlankDesktopAction {
             Self::CreateNewFolder => "Create New Folder",
             Self::NewStickyNote => "New Sticky Note",
             Self::AddVirtualDesktop => "Add Virtual Desktop",
-            Self::DesktopAndWallpaper => "Desktop and Wallpaper",
+            Self::DesktopAndWallpaper => flamewm_ui_core::context_menu::SETTINGS_ROW_LABEL,
         }
     }
 }
@@ -486,6 +486,20 @@ mod tests {
         assert_eq!(
             desktop_label_lines("   ", 76.0, 13.0),
             [String::new(), String::new()]
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod settings_row_contract_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_settings_row_uses_shared_flamewm_settings_label() {
+        assert_eq!(
+            BlankDesktopAction::DesktopAndWallpaper.label(),
+            flamewm_ui_core::context_menu::SETTINGS_ROW_LABEL
         );
     }
 }

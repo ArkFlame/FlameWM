@@ -6,7 +6,7 @@ use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconServic
 use flamewm_integrations_linux::icons::{
     IconKey, IconLookupPurpose, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
-use flamewm_ui_core::context_menu::{shape_radius, surface_fill};
+use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
@@ -155,11 +155,7 @@ pub fn project_menu_surface(
             a: fill.alpha,
         },
     )?;
-    let squared = matches!(
-        snapshot.values.get("decoration"),
-        Some(SettingValue::Text(value)) if value == "squared"
-    );
-    document.corner_radius(id, shape_radius(!squared) as f32)?;
+    document.corner_radius(id, menu_surface(snapshot).radius as f32)?;
     // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
     let blur = match snapshot.values.get("surfaceBlurPercent") {
         Some(SettingValue::Percent(value)) => (*value).min(100),

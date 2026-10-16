@@ -367,10 +367,15 @@ impl ShellLoop {
                     self.close_quick_control_nonfatal();
                     {
                         let _project = shell_stage!("shell.context.open.project");
+                        let settings = self
+                            .settings_cache
+                            .clone()
+                            .unwrap_or_else(|| flamewm_api::settings::SettingsSnapshot::new(0));
                         runtime.with_document(self.surfaces.task_menu, |document| {
                             projection::project_context_menu(
                                 document,
                                 self.shell.snapshot(),
+                                &settings,
                                 Some(&state),
                             )
                         })?;

@@ -2506,6 +2506,7 @@ mod general_settings_tests {
         let html = include_str!("../../../ui/desktop/index.html");
         assert_eq!(html.matches("id=\"menu-row-settings\"").count(), 1);
         assert!(html.contains("<span>FlameWM Settings</span>"));
+        assert!(html.contains("src=\"assets/breeze/preferences-desktop.svg\"><span>FlameWM Settings</span>"));
         assert!(!html.contains("Desktop and Wallpaper"));
     }
 }

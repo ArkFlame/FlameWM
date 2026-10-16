@@ -1,6 +1,7 @@
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
 use flamewm_api::workspace::WorkspaceSnapshot;
+use flamewm_ui_core::context_menu::{settings_row, MenuRow};
 use flamewm_ui_core::MenuEntry;
 
 pub use flamewm_shell_core::menu_policy::{
@@ -141,13 +142,8 @@ pub fn workspace_action(
 pub const TASKBAR_ROW_SETTINGS: &str = "taskbar-settings";
 
 #[must_use]
-pub fn taskbar_menu() -> Vec<MenuEntry> {
-    vec![MenuEntry::Action {
-        id: TASKBAR_ROW_SETTINGS.to_owned(),
-        label: "FlameWM Settings".to_owned(),
-        icon: None,
-        enabled: true,
-    }]
+pub fn taskbar_menu() -> Vec<MenuRow> {
+    vec![settings_row(TASKBAR_ROW_SETTINGS)]
 }
 
 /// Visible context-menu row count for a menu kind. Row identity is the
@@ -178,18 +174,22 @@ pub use flamewm_shell_core::menu_policy::row_identity;
 #[cfg(test)]
 mod taskbar_menu_tests {
     use super::*;
+    use flamewm_ui_core::context_menu::{settings_row, MenuRowKind};
 
     #[test]
     fn taskbar_background_menu_has_exactly_one_flamewm_settings_row() {
-        let entries = taskbar_menu();
-        assert_eq!(entries.len(), 1);
-        match &entries[0] {
-            MenuEntry::Action { id, label, .. } => {
-                assert_eq!(id, TASKBAR_ROW_SETTINGS);
-                assert_eq!(label, "FlameWM Settings");
-            }
-            other => panic!("taskbar row must be an action, got {other:?}"),
-        }
+        let rows = taskbar_menu();
+        assert_eq!(rows, vec![settings_row(TASKBAR_ROW_SETTINGS)]);
+        assert_eq!(rows[0].kind, MenuRowKind::Action);
+        assert_eq!(rows[0].label, "FlameWM Settings");
+        assert_eq!(rows[0].icon, Some("preferences-desktop"));
     }
 
+    #[test]
+    fn taskbar_html_uses_shared_labels_and_settings_icon() {
+        let html = include_str!("../../../../ui/shell/task-menu.html");
+        assert!(html.contains("<div>Add Virtual Desktop</div>"));
+        assert!(!html.contains("Create New Virtual Desktop"));
+        assert!(html.contains("preferences-desktop.svg\" width=\"16\" height=\"16\"><div>FlameWM Settings</div>"));
+    }
 }

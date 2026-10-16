@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use chrono::{DateTime, Datelike, Local};
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::session::SessionCapabilities;
+use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::system::ServiceAvailability;
 use flamewm_integrations_linux::icons::{IconResolver, IconSize, Rgb8Raster};
 use flamewm_platform::settings::ClockFormat;
@@ -486,8 +487,13 @@ pub fn start_application_name_for_slot(
 pub fn project_context_menu(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
+    settings: &SettingsSnapshot,
     state: Option<&crate::ContextMenuState>,
 ) -> Result<(), String> {
+    // Shared menu surface (radius + fill) from the Surfaces settings, same owner as desktop menus.
+    let surface = flamewm_ui_core::context_menu::menu_surface(settings);
+    document.background("task-menu", crate::settings_projection::surface_background(settings))?;
+    document.corner_radius("task-menu", surface.radius as f32)?;
     for id in [
         "context-task-activate",
         "context-task-close",
@@ -525,10 +531,8 @@ pub fn project_context_menu(
             }
         }
         crate::ContextMenuKind::Taskbar => {
-            for entry in crate::taskbar::context_menu::taskbar_menu() {
-                if let flamewm_ui_core::MenuEntry::Action { id, .. } = entry {
-                    document.visible(&format!("context-{id}"), true)?;
-                }
+            for row in crate::taskbar::context_menu::taskbar_menu() {
+                document.visible(&format!("context-{}", row.id), true)?;
             }
         }
     }

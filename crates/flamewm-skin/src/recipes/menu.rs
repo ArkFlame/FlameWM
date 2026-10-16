@@ -18,6 +18,6 @@ pub const CONTEXT_MENU: MenuRecipe = MenuRecipe {
     row_height: 31,
     separator_width: 185,
     padding: 5,
-    radius: 4,
+    radius: 12,
     hover: ACCENT_SOFT,
 };

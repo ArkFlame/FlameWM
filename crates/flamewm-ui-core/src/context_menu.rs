@@ -127,6 +127,62 @@ fn parse_rgb(text: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// Shared row model for desktop and taskbar context menus (single owner: this module).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuRowKind {
+    Action,
+    Header,
+    Separator,
+}
+
+/// One context-menu row. `icon` is a freedesktop icon name, resolved by the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuRow {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub icon: Option<&'static str>,
+    pub enabled: bool,
+    pub visible: bool,
+    pub kind: MenuRowKind,
+}
+
+pub const SETTINGS_ROW_ID: &str = "flamewm-settings";
+pub const SETTINGS_ROW_LABEL: &str = "FlameWM Settings";
+pub const SETTINGS_ROW_ICON: &str = "preferences-desktop";
+
+/// The "FlameWM Settings" row, identical on the desktop and taskbar menus.
+#[must_use]
+pub const fn settings_row(id: &'static str) -> MenuRow {
+    MenuRow {
+        id,
+        label: SETTINGS_ROW_LABEL,
+        icon: Some(SETTINGS_ROW_ICON),
+        enabled: true,
+        visible: true,
+        kind: MenuRowKind::Action,
+    }
+}
+
+/// Container surface for every context-menu root: corner radius and fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuSurface {
+    pub radius: i32,
+    pub fill: SurfaceFill,
+}
+
+/// Projected surface for a menu root from the Surfaces settings (`decoration`, `surfaceColor`, `surfaceOpacity`).
+#[must_use]
+pub fn menu_surface(snapshot: &SettingsSnapshot) -> MenuSurface {
+    let squared = matches!(
+        snapshot.values.get("decoration"),
+        Some(SettingValue::Text(value)) if value == "squared"
+    );
+    MenuSurface {
+        radius: shape_radius(!squared),
+        fill: surface_fill(snapshot),
+    }
+}
+
 /// Pointer-anchored menu rect clamped inside the work area/output.
 #[must_use]
 pub fn menu_rect(work_area: Rect, anchor: Point, size: Size) -> Rect {
@@ -231,5 +287,38 @@ mod tests {
         let fill = surface_fill(&snapshot);
         assert_eq!(fill.alpha, 127);
         assert_eq!(fill.rgb, 0x191b1d);
+    }
+}
+
+#[cfg(test)]
+mod shared_row_tests {
+    use super::*;
+
+    #[test]
+    fn settings_row_is_the_single_flamewm_settings_contract() {
+        let row = settings_row(SETTINGS_ROW_ID);
+        assert_eq!(row.label, "FlameWM Settings");
+        assert_eq!(row.icon, Some("preferences-desktop"));
+        assert_eq!(row.kind, MenuRowKind::Action);
+        assert!(row.enabled);
+        assert!(row.visible);
+    }
+
+    #[test]
+    fn menu_surface_radius_follows_decoration_setting() {
+        let rounded = menu_surface(&SettingsSnapshot::new(1));
+        assert_eq!(rounded.radius, 12);
+        assert_eq!(
+            rounded.fill,
+            SurfaceFill {
+                rgb: 0x191b1d,
+                alpha: 127
+            }
+        );
+        let mut squared = SettingsSnapshot::new(1);
+        squared
+            .values
+            .insert("decoration".into(), SettingValue::Text("squared".into()));
+        assert_eq!(menu_surface(&squared).radius, 0);
     }
 }
