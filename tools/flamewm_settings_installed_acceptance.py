@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +27,6 @@ REQUIRED_BINARIES = (
     "flamewm-render-inspect",
 )
 REQUIRED_FILES = tuple(f"usr/bin/{binary}" for binary in REQUIRED_BINARIES) + (
-    "usr/share/flamewm/VERSION",
     "usr/share/flamewm/assets/web/flamewm-icon.svg",
     "usr/share/flamewm/assets/web/github.svg",
     "usr/share/flamewm/assets/web/paypal.svg",
@@ -101,10 +101,10 @@ def validate_prefix(raw: str) -> tuple[Path, dict[str, str], str]:
     prefix = Path(raw).expanduser().resolve(strict=True)
     if not prefix.is_dir() or prefix == Path("/") or prefix == Path("/usr"):
         raise ValueError("--prefix must be an owned extracted package directory, never / or /usr")
-    expected = (ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
-    version_path = prefix / "usr/share/flamewm/VERSION"
-    if version_path.read_text(encoding="utf-8").strip() != expected:
-        raise ValueError(f"staged VERSION does not match worktree FLAMEWM_VERSION ({expected})")
+    with (ROOT / "Cargo.toml").open("rb") as fh:
+        expected = tomllib.load(fh)["workspace"]["package"]["version"]
+    if not expected:
+        raise ValueError("Cargo.toml workspace.package.version is empty")
     for relative in REQUIRED_FILES:
         path = prefix / relative
         if not path.is_file() or not inside(path.resolve(), prefix):
