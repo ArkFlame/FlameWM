@@ -6,6 +6,7 @@
 use std::process::Child;
 
 use super::protocol::{encode_command, Command, OpenRequest};
+use flamewm_shell_core::weather::WeatherFeed;
 
 pub const DEFAULT_MAX_RESTARTS: u32 = 3;
 
@@ -131,6 +132,12 @@ impl QuickControlSupervisor {
             Ok(()) => Ok(()),
             Err(e) => Err(classify_write_error(e)),
         }
+    }
+
+    /// Pushes the weather feed to the popup host over the same stdin line channel as OPEN.
+    /// WouldBlock is nonfatal backpressure; the caller may retry on a later tick.
+    pub fn push_weather(&mut self, feed: WeatherFeed) -> Result<(), SupervisorError> {
+        self.send(&Command::Weather(feed))
     }
 
     /// OPEN coalesces to newest: the newest request replaces any stalled

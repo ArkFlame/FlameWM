@@ -322,8 +322,6 @@ pub fn project_panel(
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
     document.visible("tray-network", status.network.visible)?;
     project_battery_tray(document, &snapshot.system.power)?;
-    // Stop-gap: no main-process weather feed yet; the entry stays hidden.
-    project_weather_tray(document, &flamewm_shell_core::weather::WeatherState::Disabled, flamewm_shell_core::weather::TemperatureUnit::Celsius)?;
     Ok(())
 }
 

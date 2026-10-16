@@ -122,6 +122,10 @@ pub(crate) struct ShellLoop {
     pub(crate) icon_geometry: IconGeometryTracker,
     /// Volume OSD: one retained overlay, driven by the audio snapshot.
     pub(crate) osd: flamewm_shell::osd::OsdController,
+    /// Weather scheduler: the only owner of weather fetches. Pushes its feed to the popup host.
+    pub(crate) weather: flamewm_shell::weather_host::WeatherHost,
+    /// Set when the tray or the popup host must receive the current weather feed.
+    pub(crate) weather_feed_pending: bool,
 }
 
 impl ShellLoop {
@@ -168,6 +172,8 @@ impl ShellLoop {
             task_icon_prime_armed: true,
             icon_geometry: IconGeometryTracker::default(),
             osd: flamewm_shell::osd::OsdController::default(),
+            weather: flamewm_shell::weather_host::WeatherHost::new(),
+            weather_feed_pending: true,
         }
     }
 
@@ -195,6 +201,10 @@ impl ShellLoop {
             return;
         }
         self.settings_revision = snapshot.revision;
+        self.weather.apply_settings(
+            flamewm_shell_core::weather::WeatherSettings::from_snapshot(&snapshot),
+        );
+        self.weather_feed_pending = true;
         let theme = crate::settings_projection::icon_theme_name(Some(&snapshot));
         if let Some(loader) = self.icon_loader.as_mut() {
             if loader.set_theme(&theme) {
@@ -631,6 +641,11 @@ impl ShellLoop {
         // vertically inside it, so they never cover the panel strip.
         let work_area = self.surfaces.work_area();
         let panel_edge = self.surfaces.panel_edge();
+        if kind == QuickControlKind::Weather {
+            // Fetch on this open; the feed goes out before OPEN on the same ordered channel.
+            self.weather.request_open_fetch();
+            self.push_weather_feed();
+        }
         flamewm_shell::quick_controls::host::open_via_supervisor_nonfatal(
             &mut self.quick_control,
             kind,
@@ -1351,6 +1366,7 @@ impl ShellLoop {
         self.apply_start_launch_outcomes(runtime)?;
         self.refresh_dynamic(runtime);
         self.project_settings(runtime)?;
+        self.tick_weather(runtime);
         // Signal-queued controls (StartMenuToggleRequested -> ToggleStart) arrive
         // on the control-signal fd, not an X event, so no event route drains
         // them. Drain through the same apply_controls the click path uses, then
@@ -1526,6 +1542,42 @@ impl ShellLoop {
         let frame = taskbar_frame(settings);
         if let Err(error) = self.surfaces.apply_dock_frame(runtime, frame) {
             eprintln!("flamewm-shell: {error}");
+        }
+    }
+
+    /// Weather tick: no timers and no fetch while disabled. Projects the tray and pushes
+    /// the feed only when the scheduler changed or a settings snapshot arrived.
+    fn tick_weather(&mut self, runtime: &mut SurfaceRuntime) {
+        let changed = self.weather.tick(
+            std::time::Instant::now(),
+            flamewm_shell::weather_host::spawn_weather_fetch,
+        );
+        if !(changed || self.weather_feed_pending) {
+            return;
+        }
+        self.weather_feed_pending = false;
+        let feed = self.weather.feed();
+        let units = feed.settings.units;
+        let projected = runtime.with_document(self.surfaces.panel(), |document| {
+            projection::project_weather_tray(document, &feed.state, units)
+        });
+        if let Err(error) = projected {
+            eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
+        }
+        let _ = runtime.redraw(self.surfaces.panel());
+        self.push_weather_feed();
+    }
+
+    /// Nonblocking feed push. A full pipe re-arms the pending flag for the next tick;
+    /// no running popup host is not an error (its first OPEN carries the feed).
+    fn push_weather_feed(&mut self) {
+        let feed = self.weather.feed();
+        match self.quick_control.push_weather(feed) {
+            Ok(()) => self.weather_feed_pending = false,
+            Err(flamewm_shell::quick_controls::SupervisorError::WouldBlock) => {
+                self.weather_feed_pending = true;
+            }
+            Err(error) => eprintln!("flamewm-shell: weather feed not sent (nonfatal): {error}"),
         }
     }
 

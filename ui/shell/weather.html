@@ -7,26 +7,39 @@
   <style>
     body { margin:0px; }
     .tray-popup.weather-popup { position:absolute; left:0px; top:0px; width:300px; height:320px; box-sizing:border-box; padding:0px; gap:0px; display:flex; flex-direction:column; border-radius:8px; background:var(--surface); }
-    .weather-location { position:absolute; left:20px; top:12px; width:260px; height:18px; font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; }
-    .weather-icon { position:absolute; left:20px; top:36px; width:56px; height:56px; }
-    .weather-temp { position:absolute; left:96px; top:34px; width:180px; height:52px; font-size:44px; font-weight:400; color:var(--text); white-space:nowrap; overflow:hidden; }
-    .weather-condition { position:absolute; left:96px; top:88px; width:180px; height:18px; font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; }
-    .weather-state { position:absolute; left:20px; top:112px; width:260px; height:16px; font-size:12px; color:var(--accent); white-space:nowrap; overflow:hidden; }
+    .weather-search { position:absolute; left:20px; top:8px; width:260px; height:22px; box-sizing:border-box; background:#1b1d20; border:1px solid #353638; border-radius:4px; overflow:hidden; }
+    .weather-search input { position:absolute; left:0px; top:0px; width:100%; height:100%; box-sizing:border-box; background:transparent; color:transparent; border:0px solid #00000000; padding:0px 8px; }
+    .weather-search-value { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; font-size:12px; color:#f1f2f3; white-space:nowrap; overflow:hidden; }
+    .weather-search-placeholder { position:absolute; left:8px; top:0px; right:8px; height:100%; display:flex; align-items:center; font-size:12px; color:#aeb4bb; }
+    .weather-location { position:absolute; left:20px; top:38px; width:260px; height:18px; font-size:13px; color:var(--text); white-space:nowrap; overflow:hidden; }
+    .weather-icon { position:absolute; left:20px; top:62px; width:56px; height:56px; }
+    .weather-temp { position:absolute; left:96px; top:60px; width:180px; height:52px; font-size:44px; font-weight:400; color:var(--text); white-space:nowrap; overflow:hidden; }
+    .weather-condition { position:absolute; left:96px; top:114px; width:180px; height:18px; font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; }
+    .weather-state { position:absolute; left:20px; top:134px; width:260px; height:16px; font-size:12px; color:var(--accent); white-space:nowrap; overflow:hidden; }
     .weather-day-name { position:absolute; left:20px; width:60px; height:18px; font-size:12px; color:var(--text); }
     .weather-day-icon { position:absolute; left:100px; width:18px; height:18px; }
     .weather-day-range { position:absolute; left:132px; width:148px; height:18px; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-    .weather-attribution { position:absolute; left:20px; top:298px; width:260px; height:14px; font-size:10px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-    .weather-row-1 { top:136px; }
-    .weather-row-2 { top:158px; }
-    .weather-row-3 { top:180px; }
-    .weather-row-4 { top:202px; }
-    .weather-row-5 { top:224px; }
-    .weather-row-6 { top:246px; }
-    .weather-row-7 { top:268px; }
+    .weather-search-status { position:absolute; left:20px; top:154px; width:260px; height:16px; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+    .weather-result { position:absolute; left:20px; width:260px; height:20px; font-size:12px; color:var(--text); white-space:nowrap; overflow:hidden; }
+    .weather-offline-veil { position:absolute; left:0px; top:36px; width:300px; height:256px; }
+    .weather-attribution { position:absolute; left:20px; top:300px; width:260px; height:14px; font-size:10px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+    .weather-row-1 { top:154px; }
+    .weather-row-2 { top:174px; }
+    .weather-row-3 { top:194px; }
+    .weather-row-4 { top:214px; }
+    .weather-row-5 { top:234px; }
+    .weather-row-6 { top:254px; }
+    .weather-row-7 { top:274px; }
+    .weather-result-1 { top:154px; }
+    .weather-result-2 { top:176px; }
+    .weather-result-3 { top:198px; }
+    .weather-result-4 { top:220px; }
+    .weather-result-5 { top:242px; }
   </style>
 </head>
 <body class="popup-body">
   <section id="weather-popup" class="tray-popup weather-popup" data-action="popup.surface">
+    <div class="weather-search"><div id="weather-search-placeholder" class="weather-search-placeholder">Search for a city</div><div id="weather-search-value" class="weather-search-value">&#8203;</div><input id="weather-search-input" type="text" aria-label="Search for a city" data-action="weather.location.focus"></div>
     <span id="weather-location" class="weather-location">&#8203;</span>
     <img class="symbolic-icon weather-icon" id="weather-icon-clear" src="assets/breeze/weather-clear.svg">
     <img class="symbolic-icon weather-icon" id="weather-icon-few-clouds" src="assets/breeze/weather-few-clouds.svg">
@@ -117,6 +130,13 @@
     <img class="symbolic-icon weather-day-icon weather-row-7" id="weather-day-7-icon-snow" src="assets/breeze/weather-snow.svg">
     <img class="symbolic-icon weather-day-icon weather-row-7" id="weather-day-7-icon-storm" src="assets/breeze/weather-storm.svg">
     <img class="symbolic-icon weather-day-icon weather-row-7" id="weather-day-7-icon-none-available" src="assets/breeze/weather-none-available.svg">
+    <div id="weather-offline-veil" class="weather-offline-veil"></div>
+    <span id="weather-result-1" class="weather-result weather-result-1" data-action="weather.location.pick.0">&#8203;</span>
+    <span id="weather-result-2" class="weather-result weather-result-2" data-action="weather.location.pick.1">&#8203;</span>
+    <span id="weather-result-3" class="weather-result weather-result-3" data-action="weather.location.pick.2">&#8203;</span>
+    <span id="weather-result-4" class="weather-result weather-result-4" data-action="weather.location.pick.3">&#8203;</span>
+    <span id="weather-result-5" class="weather-result weather-result-5" data-action="weather.location.pick.4">&#8203;</span>
+    <span id="weather-search-status" class="weather-search-status">&#8203;</span>
     <span id="weather-attribution" class="weather-attribution">&#8203;</span>
   </section>
 </body>

@@ -5,6 +5,7 @@
 //! [`WeatherCondition::icon_name`], one node per condition.
 
 use super::*;
+use crate::weather_host::{LocationSearch, SearchStatus};
 use flamewm_shell_core::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
 
 /// Rows in the popup forecast list.
@@ -180,13 +181,41 @@ pub fn project_weather_tray(
     document.text("tray-weather-temp", view.temperature)
 }
 
+/// Location picker rows shown in place of the forecast rows.
+pub const WEATHER_RESULT_ROWS: usize = 5;
+
+/// A snapshot shown from cache while the last refresh failed is dimmed.
+#[must_use]
+pub fn offline_dimmed(state: &WeatherState) -> bool {
+    matches!(state, WeatherState::Offline(Some(_)))
+}
+
+/// The picker replaces the forecast rows while it has results or a status to show.
+#[must_use]
+pub fn picker_open(search: &LocationSearch) -> bool {
+    !search.results.is_empty() || search.status != SearchStatus::Idle
+}
+
+fn search_status_text(status: SearchStatus) -> &'static str {
+    match status {
+        SearchStatus::Idle => "",
+        SearchStatus::Searching => "Searching...",
+        SearchStatus::NoMatches => "No matches",
+        SearchStatus::Failed => "Search failed",
+    }
+}
+
 /// Weather popup body for every state, with the Open-Meteo attribution.
+/// `veil` is the surface colour used to dim an offline snapshot.
 pub fn project_weather_popup(
     document: &mut impl UiDocumentAccess,
     state: &WeatherState,
     settings: &WeatherSettings,
+    search: &LocationSearch,
+    veil: UiColor,
 ) -> Result<(), String> {
     let view = popup_view(state, settings);
+    let picker = picker_open(search);
     document.text("weather-location", view.location)?;
     document.text("weather-temp", view.temperature)?;
     document.text("weather-condition", condition_label(view.condition).to_owned())?;
@@ -199,21 +228,49 @@ pub fn project_weather_popup(
     }
     for row in 1..=WEATHER_DAY_ROWS {
         let day = view.days.get(row - 1);
+        let shown = day.is_some() && !picker;
         document.text(
             &format!("weather-day-{row}-name"),
             day.map_or_else(String::new, |d| d.weekday.to_owned()),
         )?;
+        document.visible(&format!("weather-day-{row}-name"), shown)?;
         document.text(
             &format!("weather-day-{row}-range"),
             day.map_or_else(String::new, |d| d.range.clone()),
         )?;
+        document.visible(&format!("weather-day-{row}-range"), shown)?;
         for condition in WEATHER_CONDITIONS {
             document.visible(
                 &format!("weather-day-{row}-icon-{}", icon_suffix(condition)),
-                day.is_some_and(|d| d.condition == condition),
+                shown && day.is_some_and(|d| d.condition == condition),
             )?;
         }
     }
+    document.visible("weather-offline-veil", offline_dimmed(state))?;
+    document.background(
+        "weather-offline-veil",
+        UiColor { a: 160, ..veil },
+    )?;
+    document.text("weather-search-value", search.query.clone())?;
+    document.visible("weather-search-placeholder", search.query.is_empty())?;
+    for row in 1..=WEATHER_RESULT_ROWS {
+        let location = search.results.get(row - 1).filter(|_| picker);
+        document.text(
+            &format!("weather-result-{row}"),
+            location.map_or_else(String::new, |l| match l.country.as_deref() {
+                Some(country) => format!("{}, {country}", l.name),
+                None => l.name.clone(),
+            }),
+        )?;
+        document.visible(&format!("weather-result-{row}"), location.is_some())?;
+    }
+    let status = if picker && search.results.is_empty() {
+        search_status_text(search.status)
+    } else {
+        ""
+    };
+    document.text("weather-search-status", status.to_owned())?;
+    document.visible("weather-search-status", !status.is_empty())?;
     document.text(
         "weather-attribution",
         crate::weather_provider::OPEN_METEO_ATTRIBUTION.to_owned(),
@@ -356,6 +413,8 @@ mod tests {
             &mut doc,
             &WeatherState::Ready(snapshot(2)),
             &settings(TemperatureUnit::Celsius),
+            &LocationSearch::default(),
+            UiColor { r: 0, g: 0, b: 0, a: 255 },
         )
         .unwrap();
         assert_eq!(doc.texts["weather-day-1-name"], "Fri");
@@ -367,6 +426,45 @@ mod tests {
             crate::weather_provider::OPEN_METEO_ATTRIBUTION
         );
         assert_eq!(doc.texts["weather-state"], "");
+    }
+
+    #[test]
+    fn picker_replaces_forecast_rows_and_offline_snapshot_is_veiled() {
+        let mut search = LocationSearch::default();
+        search.results = vec![berlin()];
+        let veil = UiColor { r: 1, g: 2, b: 3, a: 255 };
+        let mut doc = Recorder::default();
+        project_weather_popup(
+            &mut doc,
+            &WeatherState::Offline(Some(snapshot(2))),
+            &settings(TemperatureUnit::Celsius),
+            &search,
+            veil,
+        )
+        .unwrap();
+        assert!(!doc.visible["weather-day-1-name"]);
+        assert_eq!(doc.texts["weather-result-1"], "Berlin, Germany");
+        assert!(doc.visible["weather-result-1"]);
+        assert!(!doc.visible["weather-result-2"]);
+        assert!(doc.visible["weather-offline-veil"]);
+        assert_eq!(doc.backgrounds["weather-offline-veil"].a, 160);
+        assert!(!doc.visible["weather-search-status"]);
+
+        let mut searching = LocationSearch::default();
+        searching.status = SearchStatus::Searching;
+        let mut busy = Recorder::default();
+        project_weather_popup(
+            &mut busy,
+            &WeatherState::Ready(snapshot(2)),
+            &settings(TemperatureUnit::Celsius),
+            &searching,
+            veil,
+        )
+        .unwrap();
+        assert_eq!(busy.texts["weather-search-status"], "Searching...");
+        assert!(busy.visible["weather-search-status"]);
+        assert!(!busy.visible["weather-offline-veil"]);
+        assert!(!busy.visible["weather-day-1-name"]);
     }
 
     #[test]

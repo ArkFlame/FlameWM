@@ -17,6 +17,7 @@ pub mod settings_projection;
 pub mod start;
 pub mod surface_backdrop;
 pub mod status;
+pub mod weather_host;
 mod weather_provider;
 
 /// The active taskbar status projection is compiled without activating stale

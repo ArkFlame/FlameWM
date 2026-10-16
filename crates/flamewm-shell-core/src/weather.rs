@@ -267,6 +267,215 @@ fn decode_location(text: &str) -> Option<WeatherLocation> {
     WeatherLocation::new(parts.next()?, latitude, longitude, country).ok()
 }
 
+/// Main shell -> quick-control popup host: the settings and state the popup projects.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeatherFeed {
+    pub settings: WeatherSettings,
+    pub state: WeatherState,
+}
+
+impl Default for WeatherFeed {
+    fn default() -> Self {
+        Self {
+            settings: WeatherSettings::default(),
+            state: WeatherState::Disabled,
+        }
+    }
+}
+
+/// Feed fields are joined by U+001F; snapshot fields by U+001E. Labels reject
+/// control characters, so neither separator can appear inside a value.
+const FEED_SEP: char = '\u{1f}';
+const SNAPSHOT_SEP: char = '\u{1e}';
+
+impl WeatherFeed {
+    /// `enabled`, `units`, `location`, state tag, state payload.
+    #[must_use]
+    pub fn encode(&self) -> String {
+        let (tag, payload) = match &self.state {
+            WeatherState::Disabled => ("disabled", String::new()),
+            WeatherState::Unconfigured => ("unconfigured", String::new()),
+            WeatherState::Loading => ("loading", String::new()),
+            WeatherState::Ready(s) => ("ready", encode_snapshot(s)),
+            WeatherState::Offline(Some(s)) => ("offline", encode_snapshot(s)),
+            WeatherState::Offline(None) => ("offline-none", String::new()),
+            WeatherState::Error(error) => ("error", error_tag(*error).to_owned()),
+        };
+        let units = match self.settings.units {
+            TemperatureUnit::Celsius => "celsius",
+            TemperatureUnit::Fahrenheit => "fahrenheit",
+        };
+        let location = self
+            .settings
+            .location
+            .as_ref()
+            .map(encode_location)
+            .unwrap_or_default();
+        [
+            if self.settings.enabled { "1" } else { "0" },
+            units,
+            &location,
+            tag,
+            &payload,
+        ]
+        .join(&FEED_SEP.to_string())
+    }
+
+    #[must_use]
+    pub fn decode(text: &str) -> Option<Self> {
+        let fields: Vec<&str> = text.split(FEED_SEP).collect();
+        let [enabled, units, location, tag, payload] = fields.as_slice() else {
+            return None;
+        };
+        let settings = WeatherSettings {
+            enabled: match *enabled {
+                "1" => true,
+                "0" => false,
+                _ => return None,
+            },
+            units: match *units {
+                "celsius" => TemperatureUnit::Celsius,
+                "fahrenheit" => TemperatureUnit::Fahrenheit,
+                _ => return None,
+            },
+            location: if location.is_empty() {
+                None
+            } else {
+                Some(decode_location(location)?)
+            },
+        };
+        let state = match *tag {
+            "disabled" => WeatherState::Disabled,
+            "unconfigured" => WeatherState::Unconfigured,
+            "loading" => WeatherState::Loading,
+            "ready" => WeatherState::Ready(decode_snapshot(payload)?),
+            "offline" => WeatherState::Offline(Some(decode_snapshot(payload)?)),
+            "offline-none" => WeatherState::Offline(None),
+            "error" => WeatherState::Error(decode_error_tag(payload)?),
+            _ => return None,
+        };
+        Some(Self { settings, state })
+    }
+}
+
+fn encode_snapshot(s: &WeatherSnapshot) -> String {
+    let days = s
+        .days
+        .iter()
+        .map(|d| {
+            format!(
+                "{}|{}|{}|{}",
+                d.date,
+                condition_tag(d.condition),
+                d.min_c,
+                d.max_c
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    [
+        s.temperature_c.to_string(),
+        condition_tag(s.condition).to_owned(),
+        s.fetched_at.to_string(),
+        days,
+        encode_location(&s.location),
+    ]
+    .join(&SNAPSHOT_SEP.to_string())
+}
+
+fn decode_snapshot(text: &str) -> Option<WeatherSnapshot> {
+    let mut parts = text.splitn(5, SNAPSHOT_SEP);
+    let temperature_c = parts.next()?.parse().ok()?;
+    let condition = condition_from_tag(parts.next()?)?;
+    let fetched_at = parts.next()?.parse().ok()?;
+    let days_text = parts.next()?;
+    let location = decode_location(parts.next()?)?;
+    let days = if days_text.is_empty() {
+        Vec::new()
+    } else {
+        days_text
+            .split(';')
+            .map(decode_day)
+            .collect::<Option<Vec<_>>>()?
+    };
+    Some(WeatherSnapshot {
+        location,
+        temperature_c,
+        condition,
+        days,
+        fetched_at,
+    })
+}
+
+fn decode_day(text: &str) -> Option<DayForecast> {
+    let mut parts = text.split('|');
+    let date = parts.next()?;
+    let condition = condition_from_tag(parts.next()?)?;
+    let min_c = parts.next()?.parse().ok()?;
+    let max_c = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(DayForecast {
+        date: date.to_owned(),
+        condition,
+        min_c,
+        max_c,
+    })
+}
+
+fn condition_tag(condition: WeatherCondition) -> &'static str {
+    match condition {
+        WeatherCondition::Clear => "clear",
+        WeatherCondition::FewClouds => "few-clouds",
+        WeatherCondition::Overcast => "overcast",
+        WeatherCondition::Fog => "fog",
+        WeatherCondition::Drizzle => "drizzle",
+        WeatherCondition::Rain => "rain",
+        WeatherCondition::Snow => "snow",
+        WeatherCondition::Storm => "storm",
+        WeatherCondition::Unknown => "unknown",
+    }
+}
+
+fn condition_from_tag(tag: &str) -> Option<WeatherCondition> {
+    [
+        WeatherCondition::Clear,
+        WeatherCondition::FewClouds,
+        WeatherCondition::Overcast,
+        WeatherCondition::Fog,
+        WeatherCondition::Drizzle,
+        WeatherCondition::Rain,
+        WeatherCondition::Snow,
+        WeatherCondition::Storm,
+        WeatherCondition::Unknown,
+    ]
+    .into_iter()
+    .find(|c| condition_tag(*c) == tag)
+}
+
+fn error_tag(error: WeatherError) -> &'static str {
+    match error {
+        WeatherError::InvalidLocation(_) => "invalid-location",
+        WeatherError::InvalidQuery => "invalid-query",
+        WeatherError::Transport => "transport",
+        WeatherError::TooLarge => "too-large",
+        WeatherError::Parse(_) => "parse",
+    }
+}
+
+/// Static detail is not carried on the wire; the popup shows only the generic line.
+fn decode_error_tag(tag: &str) -> Option<WeatherError> {
+    Some(match tag {
+        "invalid-location" => WeatherError::InvalidLocation("feed"),
+        "invalid-query" => WeatherError::InvalidQuery,
+        "transport" => WeatherError::Transport,
+        "too-large" => WeatherError::TooLarge,
+        "parse" => WeatherError::Parse("feed"),
+        _ => return None,
+    })
+}
+
 pub trait HttpGet {
     fn get(&self, url: &str) -> Result<String, WeatherError>;
 }
@@ -274,6 +483,92 @@ pub trait HttpGet {
 pub trait WeatherProvider {
     fn forecast(&self, location: &WeatherLocation) -> Result<WeatherSnapshot, WeatherError>;
     fn search(&self, query: &str) -> Result<Vec<WeatherLocation>, WeatherError>;
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use super::*;
+
+    fn berlin() -> WeatherLocation {
+        WeatherLocation::new("Berlin", 52.52, 13.41, Some("Germany")).unwrap()
+    }
+
+    fn snapshot() -> WeatherSnapshot {
+        WeatherSnapshot {
+            location: berlin(),
+            temperature_c: -3,
+            condition: WeatherCondition::Snow,
+            days: vec![
+                DayForecast {
+                    date: "2026-10-16".to_owned(),
+                    condition: WeatherCondition::Drizzle,
+                    min_c: -5,
+                    max_c: 2,
+                },
+                DayForecast {
+                    date: "2026-10-17".to_owned(),
+                    condition: WeatherCondition::Storm,
+                    min_c: 0,
+                    max_c: 9,
+                },
+            ],
+            fetched_at: 1_800_000_000,
+        }
+    }
+
+    fn feed(state: WeatherState) -> WeatherFeed {
+        WeatherFeed {
+            settings: WeatherSettings {
+                enabled: true,
+                location: Some(berlin()),
+                units: TemperatureUnit::Fahrenheit,
+            },
+            state,
+        }
+    }
+
+    #[test]
+    fn every_state_round_trips_through_the_wire() {
+        let states = [
+            WeatherState::Disabled,
+            WeatherState::Unconfigured,
+            WeatherState::Loading,
+            WeatherState::Ready(snapshot()),
+            WeatherState::Offline(Some(snapshot())),
+            WeatherState::Offline(None),
+            WeatherState::Error(WeatherError::Transport),
+            WeatherState::Error(WeatherError::TooLarge),
+        ];
+        for state in states {
+            let original = feed(state);
+            let text = original.encode();
+            assert!(text.len() < 4000, "feed too long for one protocol line");
+            assert_eq!(WeatherFeed::decode(&text), Some(original));
+        }
+    }
+
+    #[test]
+    fn settings_without_location_round_trip() {
+        let original = WeatherFeed {
+            settings: WeatherSettings::default(),
+            state: WeatherState::Disabled,
+        };
+        assert_eq!(WeatherFeed::decode(&original.encode()), Some(original));
+    }
+
+    #[test]
+    fn malformed_feed_is_rejected() {
+        for bad in [
+            "",
+            "1\x1fcelsius\x1f\x1fbogus\x1f",
+            "2\x1fcelsius\x1f\x1fdisabled\x1f",
+            "1\x1fkelvin\x1f\x1fdisabled\x1f",
+            "1\x1fcelsius\x1fnot-a-location\x1fdisabled\x1f",
+            "1\x1fcelsius\x1f\x1fready\x1fwarm",
+        ] {
+            assert_eq!(WeatherFeed::decode(bad), None, "accepted {bad:?}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@
 //! secret field, and unit tests assert encoded lines never echo a secret token.
 
 use flamewm_api::{PanelEdge, Rect};
+use flamewm_shell_core::weather::WeatherFeed;
 
 pub const MAX_LINE_LEN: usize = 4096;
 
@@ -50,11 +51,13 @@ pub struct OpenRequest {
 }
 
 /// Parent -> child commands. Deliberately secret-free by construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Open(OpenRequest),
     Close,
     Shutdown,
+    /// Main-shell weather settings and state for the popup to project.
+    Weather(WeatherFeed),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +69,7 @@ pub enum ProtocolError {
     UnknownEdge(String),
     BadArity { expected: usize, got: usize },
     BadInt(String),
+    BadWeather,
 }
 
 impl core::fmt::Display for ProtocolError {
@@ -80,6 +84,7 @@ impl core::fmt::Display for ProtocolError {
                 write!(f, "bad arity: expected {expected} fields, got {got}")
             }
             Self::BadInt(v) => write!(f, "bad integer: {v}"),
+            Self::BadWeather => write!(f, "bad weather feed"),
         }
     }
 }
@@ -136,9 +141,10 @@ fn parse_rect(parts: &[&str]) -> Result<Rect, ProtocolError> {
 
 #[must_use]
 pub fn encode_command(cmd: &Command) -> String {
-    match *cmd {
+    match cmd {
         Command::Close => "CLOSE".to_owned(),
         Command::Shutdown => "SHUTDOWN".to_owned(),
+        Command::Weather(feed) => format!("WEATHER {}", feed.encode()),
         Command::Open(req) => format!(
             "OPEN {} {} {} {} {} {} {} {} {} {}",
             req.kind.as_str(),
@@ -163,6 +169,12 @@ pub fn decode_line(line: &str) -> Result<Command, ProtocolError> {
     let line = line.trim();
     if line.is_empty() {
         return Err(ProtocolError::Empty);
+    }
+    // Feed payloads use control-character separators and are not whitespace-split.
+    if let Some(payload) = line.strip_prefix("WEATHER ") {
+        return WeatherFeed::decode(payload)
+            .map(Command::Weather)
+            .ok_or(ProtocolError::BadWeather);
     }
     let parts: Vec<&str> = line.split_ascii_whitespace().collect();
     match parts[0] {
@@ -274,6 +286,24 @@ mod tests {
     }
 
     #[test]
+    fn weather_feed_round_trips_as_one_line() {
+        use flamewm_shell_core::weather::{TemperatureUnit, WeatherFeed, WeatherSettings, WeatherState};
+        let cmd = Command::Weather(WeatherFeed {
+            settings: WeatherSettings {
+                enabled: true,
+                location: None,
+                units: TemperatureUnit::Fahrenheit,
+            },
+            state: WeatherState::Unconfigured,
+        });
+        let line = encode_command(&cmd);
+        assert!(line.starts_with("WEATHER "), "{line:?}");
+        assert!(!line.contains('\n'));
+        assert_eq!(decode_line(&line), Ok(cmd));
+        assert_eq!(decode_line("WEATHER 9\u{1f}x"), Err(ProtocolError::BadWeather));
+    }
+
+    #[test]
     fn oversized_line_rejected() {
         let big = "X".repeat(MAX_LINE_LEN + 1);
         assert_eq!(decode_line(&big), Err(ProtocolError::TooLong(big.len())));
@@ -292,7 +322,7 @@ mod tests {
         // exactly these three variants.
         fn assert_shape(c: &Command) {
             match *c {
-                Command::Open(_) | Command::Close | Command::Shutdown => {}
+                Command::Open(_) | Command::Close | Command::Shutdown | Command::Weather(_) => {}
             }
         }
         let c = sample();

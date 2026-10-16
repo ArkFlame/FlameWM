@@ -866,8 +866,6 @@ pub fn project_status_tray_async(
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
     document.visible("tray-network", status.network.visible)?;
     crate::projection::project_battery_tray(document, &snapshot.system.power)?;
-    // Stop-gap: no main-process weather feed yet; the entry stays hidden.
-    crate::projection::project_weather_tray(document, &flamewm_shell_core::weather::WeatherState::Disabled, flamewm_shell_core::weather::TemperatureUnit::Celsius)?;
     Ok(())
 }
 
