@@ -487,4 +487,20 @@ mod tests {
         assert_eq!(state.deadline(), Some(t1 + HOLD));
         assert!(!state.expire(t1 + HOLD - Duration::from_millis(1)));
     }
+
+    /// The backdrop/XShape mask radius is read from the document ROOT (`body`) only,
+    /// so the card radius must be declared on the root rule, not just on `.osd-card`.
+    #[test]
+    fn osd_root_declares_card_corner_radius() {
+        let source = include_str!("../../../ui/shell/osd.html");
+        let body_rule = source
+            .split("body {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("osd.html declares a body rule");
+        assert!(
+            body_rule.contains(&format!("border-radius:{OSD_RADIUS}px")),
+            "body rule must carry border-radius:{OSD_RADIUS}px, got: {body_rule}"
+        );
+    }
 }
