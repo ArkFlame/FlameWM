@@ -412,12 +412,20 @@ def destroy_phase(s: ap.Session, pids: list[tuple[str, int]], args: argparse.Nam
     return {"samples": timed_samples(pids, args.samples, SAMPLE_SPACING_SECONDS), "alive_samples": alive}
 
 
+def surface_settings(args: argparse.Namespace) -> dict[str, str]:
+    """Settings snapshot values for the surface; blur is written only when --surface-blur is given."""
+    values = {"surfaceOpacity": str(args.surface_opacity)}
+    if args.surface_blur is not None:
+        values["surfaceBlurPercent"] = str(args.surface_blur)
+    return values
+
+
 def run_set(s: ap.Session, label: str, bin_dir: Path, args: argparse.Namespace, xephyr_pid: int) -> dict:
     """One binary set on a fresh WM + Shell. Each phase is kept or marked NOT_RUN on its own."""
     args.wm_bin, args.shell_bin = str(bin_dir / "flamewm"), str(bin_dir / "flamewm-shell")
     names = phases_for(args)
     out: dict = {"label": label, "phases": {}}
-    if not s.restart({"surfaceOpacity": "100"}):
+    if not s.restart(surface_settings(args)):
         out["phases"] = {p: {"status": "NOT_RUN: WM or shell exited during restart", "samples": []} for p in names}
         out["reason"] = "WM or shell exited during restart"
         return out
@@ -463,7 +471,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                        help="existing icon theme dir (contains index.theme), symlinked into the private run")
     icons.add_argument("--synthetic-icons", type=int, default=None, metavar="N",
                        help="generate an N-file synthetic icon theme in the private run")
+    p.add_argument("--surface-opacity", type=int, default=100, metavar="N",
+                   help="taskbar surfaceOpacity written into the settings snapshot (0..100, default 100)")
+    p.add_argument("--surface-blur", type=int, default=None, metavar="N",
+                   help="taskbar surfaceBlurPercent written into the settings snapshot (0..100; default: not written)")
     args = p.parse_args(argv)
+    if not 0 <= args.surface_opacity <= 100:
+        p.error("--surface-opacity must be 0..100")
+    if args.surface_blur is not None and not 0 <= args.surface_blur <= 100:
+        p.error("--surface-blur must be 0..100")
     counts = (args.reps, args.idle_samples, args.samples, args.start_cycles, args.minimize_cycles, args.drag_cycles)
     if min(counts) < 1 or args.idle_seconds <= 0:
         p.error("reps, sample, cycle counts and idle-seconds must be positive")
@@ -531,6 +547,8 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                 "start_cycles": args.start_cycles, "minimize_cycles": args.minimize_cycles,
                 "drag_cycles": args.drag_cycles, "scenario": args.scenario or "default",
                 "icon_theme": icon_scenario(args),
+                "settings": {"surfaceOpacity": args.surface_opacity,
+                             "surfaceBlurPercent": args.surface_blur},
                 "target_bytes": mem.TARGET_BYTES,
                 "binaries": {label: {name: {"path": str(bins[label] / name),
                                             "sha256": perf.sha256(bins[label] / name)}

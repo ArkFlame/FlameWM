@@ -413,5 +413,44 @@ class ScenarioVerdictTests(unittest.TestCase):
         self.assertEqual(v["status"], "WITHIN")
 
 
+class SurfaceSettingsTests(unittest.TestCase):
+    def parse(self, *argv: str):
+        return mpc.parse_args(list(argv))
+
+    def rejects(self, *argv: str) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            self.parse(*argv)
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_defaults_keep_opacity_100_and_do_not_write_blur(self) -> None:
+        args = self.parse()
+        self.assertEqual(args.surface_opacity, 100)
+        self.assertIsNone(args.surface_blur)
+        self.assertEqual(mpc.surface_settings(args), {"surfaceOpacity": "100"})
+
+    def test_values_are_validated_to_0_100(self) -> None:
+        for bad in (("--surface-opacity", "-1"), ("--surface-opacity", "101"),
+                    ("--surface-blur", "-1"), ("--surface-blur", "101")):
+            self.rejects(*bad)
+        self.assertEqual(self.parse("--surface-opacity", "0", "--surface-blur", "100").surface_blur, 100)
+
+    def test_values_reach_the_settings_writer(self) -> None:
+        args = self.parse("--surface-opacity", "50", "--surface-blur", "80")
+        self.assertEqual(mpc.surface_settings(args), {"surfaceOpacity": "50", "surfaceBlurPercent": "80"})
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.values = None
+
+            def restart(self, values: dict[str, str]) -> bool:
+                self.values = values
+                return False
+
+        fake = FakeSession()
+        out = mpc.run_set(fake, "new", Path("/nonexistent"), args, 0)
+        self.assertEqual(fake.values, {"surfaceOpacity": "50", "surfaceBlurPercent": "80"})
+        self.assertEqual(out["reason"], "WM or shell exited during restart")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
