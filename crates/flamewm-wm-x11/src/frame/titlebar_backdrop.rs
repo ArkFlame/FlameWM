@@ -99,6 +99,8 @@ struct DragBackdrop {
     blurred: Option<Blurred>,
     /// Blur work buffers reused by every move step of this drag.
     scratch: BlurScratch,
+    /// Padded crop reused by every blur of this drag.
+    crop: Vec<u8>,
 }
 
 /// Blurred titlebar crop: `(origin x, origin y, w, h, radius tenths, wallpaper generation)`.
@@ -185,7 +187,8 @@ pub fn forget(owner: u64) {
 }
 
 fn end_drag_in(state: &mut State, owner: u64) {
-    if let Some(drag) = state.drag.take_if(|drag| drag.owner == owner) {
+    if let Some(mut drag) = state.drag.take_if(|drag| drag.owner == owner) {
+        drag.snapshot.release();
         state.retained = drag.blurred.map(|blurred| (owner, blurred));
     }
 }
@@ -243,7 +246,15 @@ fn titlebar_in(
         } else {
             let region_w = width + DRAG_SLACK;
             let region_h = height + DRAG_SLACK;
-            let region = blur_region(&mut drag.scratch, &drag.snapshot, cell, region_w, region_h, radius);
+            let region = blur_region(
+                &mut drag.scratch,
+                &drag.snapshot,
+                cell,
+                region_w,
+                region_h,
+                radius,
+                &mut drag.crop,
+            );
             drag.blurred = Some(Blurred { key, cell, region });
         }
         let blurred = drag.blurred.as_ref()?;
@@ -297,19 +308,20 @@ fn blur_region(
     w: u32,
     h: u32,
     radius: f32,
+    crop: &mut Vec<u8>,
 ) -> Vec<u8> {
     let pad = radius.ceil() as u32;
     let (pw, ph) = (w + 2 * pad, h + 2 * pad);
-    let mut region = snapshot.crop_clamped(origin.0 - pad as i32, origin.1 - pad as i32, pw, ph);
+    snapshot.crop_clamped_into(origin.0 - pad as i32, origin.1 - pad as i32, pw, ph, crop);
     if radius > 0.0 {
-        if let Err(error) = gaussian_blur_rgba_with(scratch, &mut region, pw, ph, radius) {
+        if let Err(error) = gaussian_blur_rgba_with(scratch, crop, pw, ph, radius) {
             eprintln!("flamewm-wm-x11: drag backdrop blur skipped: {error:?}");
         }
     }
     let mut out = Vec::with_capacity(w as usize * h as usize * 4);
     for row in 0..h {
         let start = (((row + pad) * pw + pad) * 4) as usize;
-        out.extend_from_slice(&region[start..start + w as usize * 4]);
+        out.extend_from_slice(&crop[start..start + w as usize * 4]);
     }
     out
 }
@@ -326,7 +338,8 @@ fn blur_crop(
     radius: f32,
 ) -> Vec<u8> {
     let cell = drag_cell(origin);
-    let region = blur_region(scratch, snapshot, cell, w + DRAG_SLACK, h + DRAG_SLACK, radius);
+    let mut crop = Vec::new();
+    let region = blur_region(scratch, snapshot, cell, w + DRAG_SLACK, h + DRAG_SLACK, radius, &mut crop);
     slice_region(&region, w + DRAG_SLACK, origin, cell, w, h)
 }
 
@@ -339,18 +352,17 @@ fn build_drag(
 ) -> Option<DragBackdrop> {
     let (rw, rh) = root;
     let (mx, my, mw, mh) = mask;
-    // Masked first: it reads the canvas, which `wallpaper_base` may consume as the base.
-    let masked = wallpaper_rect(state.source.as_ref(), &mut state.canvas, mask, root);
-    let base = match captured {
-        Some(pixels) if pixels.len() == rw as usize * rh as usize * 4 => pixels,
-        _ => wallpaper_base(state.source.as_ref(), &mut state.canvas, root),
-    };
+    let captured = captured.filter(|pixels| pixels.len() == rw as usize * rh as usize * 4);
+    // Masked first: without a capture it reads the canvas, which `wallpaper_base` may consume.
+    let masked = mask_pixels(state.source.as_ref(), &mut state.canvas, mask, root, captured.is_some());
+    let base = captured.unwrap_or_else(|| wallpaper_base(state.source.as_ref(), &mut state.canvas, root));
     let layer = Layer { x: mx, y: my, w: mw, h: mh, rgba: &masked };
     DragSnapshot::build((0, 0), rw, rh, base, &[layer]).ok().map(|snapshot| DragBackdrop {
         owner,
         snapshot,
         blurred: None,
         scratch: BlurScratch::new(),
+        crop: Vec::new(),
     })
 }
 
@@ -385,6 +397,59 @@ fn wallpaper_base(
         other => *canvas = other,
     }
     wallpaper_rect(source, canvas, (0, 0, root.0, root.1), root)
+}
+
+/// Wallpaper pixels for the frame `mask`. With a root capture present, an image mask is composed
+/// from the decoded natural image, so no root canvas is built or kept. Otherwise, or when that is
+/// refused, it comes from the cached root canvas.
+fn mask_pixels(
+    source: Option<&WallpaperSource>,
+    canvas: &mut Option<((u32, u32), Option<RgbaImage>)>,
+    mask: (i32, i32, u32, u32),
+    root: (u32, u32),
+    has_capture: bool,
+) -> Vec<u8> {
+    if has_capture {
+        if let Some(WallpaperSource::Image { path, fit }) = source {
+            let natural = wallpaper::decode_file(&wallpaper_file(path)).ok();
+            if let Some(pixels) =
+                natural.and_then(|natural| masked_from_natural(&natural, *fit, mask, root))
+            {
+                return pixels;
+            }
+        }
+    }
+    wallpaper_rect(source, canvas, mask, root)
+}
+
+/// Root-relative `mask` pixels from the decoded `natural` image, edge-clamped exactly as
+/// [`wallpaper_rect`] clamps the root canvas. Only the clamped span is composed, via
+/// [`wallpaper::compose_region`]. `None` for an empty mask or root, or a refused composition.
+fn masked_from_natural(
+    natural: &RgbaImage,
+    fit: WallpaperFit,
+    mask: (i32, i32, u32, u32),
+    root: (u32, u32),
+) -> Option<Vec<u8>> {
+    let (x, y, w, h) = mask;
+    if w == 0 || h == 0 || root.0 == 0 || root.1 == 0 {
+        return None;
+    }
+    let clamp = |v: i32, len: u32| v.clamp(0, len as i32 - 1);
+    let (x0, x1) = (clamp(x, root.0), clamp(x + w as i32 - 1, root.0));
+    let (y0, y1) = (clamp(y, root.1), clamp(y + h as i32 - 1, root.1));
+    let (sw, sh) = ((x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32);
+    let span = wallpaper::compose_region(natural, root.0, root.1, fit, (x0, y0, sw, sh))?;
+    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
+    for row in 0..h as i32 {
+        let sy = (clamp(y + row, root.1) - y0) as usize;
+        for col in 0..w as i32 {
+            let sx = (clamp(x + col, root.0) - x0) as usize;
+            let at = (sy * sw as usize + sx) * 4;
+            out.extend_from_slice(&[span.pixels[at], span.pixels[at + 1], span.pixels[at + 2], 255]);
+        }
+    }
+    Some(out)
 }
 
 /// Wallpaper pixels for the root-relative `rect`, edge-clamped; solid or fallback colour when
@@ -560,12 +625,17 @@ fn build_backdrop(
     out
 }
 
-fn compose_canvas(path: &str, fit: WallpaperFit, root: (u32, u32)) -> Option<RgbaImage> {
-    let file = if path.trim().is_empty() {
+/// Wallpaper file for `path`; an empty path is the bundled default.
+fn wallpaper_file(path: &str) -> PathBuf {
+    if path.trim().is_empty() {
         packaged_root().join(DEFAULT_WALLPAPER_PATH)
     } else {
         PathBuf::from(path)
-    };
+    }
+}
+
+fn compose_canvas(path: &str, fit: WallpaperFit, root: (u32, u32)) -> Option<RgbaImage> {
+    let file = wallpaper_file(path);
     let composed = wallpaper::decode_file(&file)
         .map_err(|error| error.to_string())
         .and_then(|natural| {
@@ -882,5 +952,93 @@ mod tests {
         let half = titlebar_pixels((0, 0), (64, 64), 4, 2, (0, 0, 0), 0, 80);
         assert_eq!(&half[..4], &[100, 100, 100, 255]);
         assert_ne!(set_wallpaper_source(WallpaperSource::Solid([1, 2, 3])), g1);
+    }
+
+    const ALL_FITS: [WallpaperFit; 5] = [
+        WallpaperFit::Fill,
+        WallpaperFit::Fit,
+        WallpaperFit::Stretch,
+        WallpaperFit::Center,
+        WallpaperFit::Tile,
+    ];
+
+    /// Opaque, non-uniform 7x5 image so every channel and sampling path is exercised.
+    fn synthetic_natural() -> RgbaImage {
+        let pixels = (0..7u32 * 5)
+            .flat_map(|i| [(i * 37 % 251) as u8, (i * 91 % 253) as u8, (i * 13 % 247) as u8, 255])
+            .collect();
+        RgbaImage { width: 7, height: 5, pixels }
+    }
+
+    const MASKS: [(i32, i32, u32, u32); 7] = [
+        (0, 0, 16, 9),
+        (-3, -2, 6, 5),
+        (14, 8, 4, 4),
+        (-10, -10, 3, 2),
+        (2, 1, 5, 3),
+        (1, 0, 16, 1),
+        (0, 0, 1, 1),
+    ];
+
+    #[test]
+    fn masked_from_natural_matches_root_canvas_pipeline() {
+        let natural = synthetic_natural();
+        for root in [(16, 9), (3, 11), (1, 1)] {
+            for fit in ALL_FITS {
+                let canvas_image = wallpaper::compose(&natural, root.0, root.1, fit).unwrap();
+                let source = WallpaperSource::Image { path: "unused".to_owned(), fit };
+                for mask in MASKS {
+                    let mut canvas = Some((root, Some(canvas_image.clone())));
+                    let old = wallpaper_rect(Some(&source), &mut canvas, mask, root);
+                    let new = masked_from_natural(&natural, fit, mask, root);
+                    assert_eq!(new, Some(old), "root {root:?} {fit:?} mask {mask:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mask_pixels_from_file_matches_canvas_pipeline_and_builds_no_canvas() {
+        let natural = synthetic_natural();
+        let path = std::env::temp_dir().join(format!("flamewm-mask-{}.ppm", std::process::id()));
+        let mut bytes = b"P6\n7 5\n255\n".to_vec();
+        bytes.extend(natural.pixels.chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]));
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(wallpaper::decode_file(&path).is_ok(), "synthetic PPM must decode");
+        let file = path.to_string_lossy().into_owned();
+        for root in [(16, 9), (3, 11), (1, 1)] {
+            for fit in ALL_FITS {
+                let source = WallpaperSource::Image { path: file.clone(), fit };
+                for mask in MASKS {
+                    let mut old_canvas = None;
+                    let old = wallpaper_rect(Some(&source), &mut old_canvas, mask, root);
+                    let mut new_canvas = None;
+                    let new = mask_pixels(Some(&source), &mut new_canvas, mask, root, true);
+                    assert_eq!(new, old, "root {root:?} {fit:?} mask {mask:?}");
+                    assert!(new_canvas.is_none(), "captured drag must not build the root canvas");
+                }
+            }
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn drag_with_capture_keeps_no_root_canvas() {
+        let path = std::env::temp_dir().join(format!("flamewm-drag-{}.ppm", std::process::id()));
+        let mut bytes = b"P6\n7 5\n255\n".to_vec();
+        bytes.extend([90u8, 40, 10].repeat(7 * 5));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut state = State {
+            source: Some(WallpaperSource::Image {
+                path: path.to_string_lossy().into_owned(),
+                fit: WallpaperFit::Fill,
+            }),
+            ..State::default()
+        };
+        let captured = [1u8, 2, 3, 255].repeat(16 * 9);
+        state.drag = build_drag(&mut state, 9, (16, 9), Some(captured), (-2, 3, 5, 4));
+        assert!(state.drag.is_some());
+        assert!(state.canvas.is_none(), "captured drag composes only the mask");
+        std::fs::remove_file(&path).ok();
     }
 }
