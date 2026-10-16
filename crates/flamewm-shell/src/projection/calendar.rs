@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::*;
 
 // Today: neutral translucent white circle on its marker (or Months/Years tile). Selected: opaque
@@ -59,9 +61,14 @@ pub fn project_calendar(
             let grid = state
                 .grid(today)
                 .ok_or_else(|| "invalid calendar month".to_owned())?;
+            let (mut cell_id, mut marker) = (String::new(), String::new());
             for (index, cell) in grid.cells.iter().enumerate() {
-                let cell_id = format!("calendar-day-{}", index + 1);
-                let marker = format!("calendar-day-{}-marker", index + 1);
+                cell_id.clear();
+                write!(cell_id, "calendar-day-{}", index + 1)
+                    .expect("write to String is infallible");
+                marker.clear();
+                write!(marker, "calendar-day-{}-marker", index + 1)
+                    .expect("write to String is infallible");
                 document.text(&marker, cell.day.to_string())?;
                 if cell.month_kind == flamewm_shell_core::CalendarMonth::Current {
                     document.foreground(&marker, CURRENT_FG)?;

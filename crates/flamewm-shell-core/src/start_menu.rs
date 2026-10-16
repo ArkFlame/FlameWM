@@ -280,8 +280,11 @@ impl StartModel {
     }
 
     fn rebuild(&mut self) {
-        self.entries = self.applications.iter().map(StartEntry::build).collect();
-        self.sorted = (0..self.applications.len()).collect();
+        let mut entries = Vec::with_capacity(self.applications.len());
+        entries.extend(self.applications.iter().map(StartEntry::build));
+        self.entries = entries;
+        self.sorted = Vec::with_capacity(self.applications.len());
+        self.sorted.extend(0..self.applications.len());
         self.sorted.sort_by(|&left, &right| {
             self.entries[left]
                 .name

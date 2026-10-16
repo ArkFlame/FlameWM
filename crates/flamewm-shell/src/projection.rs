@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use chrono::{DateTime, Datelike, Local};
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::session::SessionCapabilities;
@@ -190,11 +192,18 @@ pub fn project_panel(
     );
     let status = crate::taskbar::status::project(&snapshot.system).views;
     let workspaces = project_workspaces(snapshot.workspaces.as_ref());
+    let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
+        (String::new(), String::new(), String::new(), String::new());
     for index in 0..TASK_SLOT_COUNT {
-        let slot_id = format!("task-slot-{}", index + 1);
-        let icon_id = format!("task-slot-{}-icon", index + 1);
-        let label_id = format!("task-slot-{}-label", index + 1);
-        let line_id = format!("task-slot-{}-line", index + 1);
+        let n = index + 1;
+        slot_id.clear();
+        write!(slot_id, "task-slot-{n}").expect("write to String is infallible");
+        icon_id.clear();
+        write!(icon_id, "task-slot-{n}-icon").expect("write to String is infallible");
+        label_id.clear();
+        write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
+        line_id.clear();
+        write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
         let state = states.get(index);
         if let Some(state) = state {
             let label = snapshot
