@@ -759,6 +759,27 @@ mod tests {
     }
 
     #[test]
+    fn every_compiled_shell_surface_declares_accent_tokens() {
+        let artifacts: [(&str, &[u8]); 9] = [
+            ("panel", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"))),
+            ("start", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-start.rwr"))),
+            ("task-menu", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-task-menu.rwr"))),
+            ("media", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-media.rwr"))),
+            ("audio", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-audio.rwr"))),
+            ("network", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"))),
+            ("calendar", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-calendar.rwr"))),
+            ("osd", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-osd.rwr"))),
+            ("battery", include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr"))),
+        ];
+        for (surface, bytes) in artifacts {
+            let mut document = flamewm_ui_x11::decode_document(bytes)
+                .unwrap_or_else(|error| panic!("{surface} artifact must decode: {error}"));
+            project_accent_tokens(&mut document, &SettingsSnapshot::new(1))
+                .unwrap_or_else(|error| panic!("{surface} must declare accent tokens: {error}"));
+        }
+    }
+
+    #[test]
     fn shell_css_has_no_hardcoded_default_red() {
         let css = include_str!("../../../ui/shell/flamewm.css");
         for line in css.lines().filter(|line| line.contains("ef4048")) {

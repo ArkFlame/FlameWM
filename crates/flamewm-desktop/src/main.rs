@@ -888,6 +888,17 @@ mod accent_token_tests {
         assert_eq!(value("--accent"), Some(accent_color(&snapshot)));
         assert_eq!(tokens.len(), ACCENT_TOKEN_ALPHAS.len());
     }
+
+    #[test]
+    fn desktop_compiled_document_declares_every_accent_token() {
+        let mut document = decode_document(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/flamewm-desktop.rwr"
+        )))
+        .expect("decode compiled desktop document");
+        project_accent_tokens(&mut document, &SettingsSnapshot::new(1))
+            .expect("every accent token is declared in ui/desktop :root");
+    }
 }
 
 fn refresh_settings_projection(
@@ -922,7 +933,10 @@ fn refresh_settings_projection(
         wallpaper,
         &state.wallpaper_loader.state().presentation,
     )?;
-    project_accent_tokens(document, &state.settings)?;
+    if let Err(error) = project_accent_tokens(document, &state.settings) {
+        // Optional visual tokens must never terminate the desktop at startup.
+        eprintln!("desktop: accent tokens not projected: {error}");
+    }
     sync_selection_visuals(document, state)?;
     sticky::sync_sticky(document, state)?;
     for id in projection::MENU_SURFACE_IDS {
