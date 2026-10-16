@@ -78,22 +78,41 @@ impl DragSnapshot {
     /// Like [`DragSnapshot::crop`], but desktop coordinates outside the root replicate the
     /// nearest root edge pixel instead of transparent black.
     pub fn crop_clamped(&self, x: i32, y: i32, w: u32, h: u32) -> Vec<u8> {
-        let mut out = vec![0u8; w as usize * h as usize * 4];
+        let mut out = Vec::with_capacity(w as usize * h as usize * 4);
+        self.crop_clamped_into(x, y, w, h, &mut out);
+        out
+    }
+
+    /// Same output as [`DragSnapshot::crop_clamped`], written into `out`, which is cleared
+    /// first. Its allocation is reused: repeated crops of the same size do not reallocate.
+    pub fn crop_clamped_into(&self, x: i32, y: i32, w: u32, h: u32, out: &mut Vec<u8>) {
+        let len = w as usize * h as usize * 4;
+        out.clear();
         if self.width == 0 || self.height == 0 {
-            return out;
+            out.resize(len, 0);
+            return;
         }
+        out.reserve(len);
+        let stride = self.width as usize * 4;
         for row in 0..h {
             let sy = (i64::from(y) + i64::from(row) - i64::from(self.origin_y))
                 .clamp(0, i64::from(self.height) - 1) as usize;
+            let src_row = &self.pixels[sy * stride..(sy + 1) * stride];
             for col in 0..w {
                 let sx = (i64::from(x) + i64::from(col) - i64::from(self.origin_x))
                     .clamp(0, i64::from(self.width) - 1) as usize;
-                let s = (sy * self.width as usize + sx) * 4;
-                let d = (row as usize * w as usize + col as usize) * 4;
-                out[d..d + 4].copy_from_slice(&self.pixels[s..s + 4]);
+                out.extend_from_slice(&src_row[sx * 4..sx * 4 + 4]);
             }
         }
-        out
+        debug_assert_eq!(out.len(), len);
+    }
+
+    /// Frees the pixel storage and leaves an empty (0 x 0) snapshot. Later crops return
+    /// transparent black, the same as any empty root.
+    pub fn release(&mut self) {
+        self.width = 0;
+        self.height = 0;
+        self.pixels = Vec::new();
     }
 }
 
@@ -245,6 +264,78 @@ mod tests {
         let snap = DragSnapshot::build((0, 0), 2, 2, base.clone(), &[]).unwrap();
         assert_eq!(snap.crop_clamped(-2, -2, 2, 2), [px(RED), px(RED), px(RED), px(RED)].concat());
         assert_eq!(snap.crop_clamped(1, 1, 2, 1), [px(RED), px(RED)].concat());
+    }
+
+    /// The pre-optimization `crop_clamped`, kept verbatim as the reference output.
+    fn reference_crop_clamped(snap: &DragSnapshot, x: i32, y: i32, w: u32, h: u32) -> Vec<u8> {
+        let mut out = vec![0u8; w as usize * h as usize * 4];
+        if snap.width == 0 || snap.height == 0 {
+            return out;
+        }
+        for row in 0..h {
+            let sy = (i64::from(y) + i64::from(row) - i64::from(snap.origin_y))
+                .clamp(0, i64::from(snap.height) - 1) as usize;
+            for col in 0..w {
+                let sx = (i64::from(x) + i64::from(col) - i64::from(snap.origin_x))
+                    .clamp(0, i64::from(snap.width) - 1) as usize;
+                let s = (sy * snap.width as usize + sx) * 4;
+                let d = (row as usize * w as usize + col as usize) * 4;
+                out[d..d + 4].copy_from_slice(&snap.pixels[s..s + 4]);
+            }
+        }
+        out
+    }
+
+    fn gradient_snapshot(origin: (i32, i32), w: u32, h: u32) -> DragSnapshot {
+        let base: Vec<u8> = (0..w * h)
+            .flat_map(|i| [(i * 37 % 256) as u8, (i * 91 % 256) as u8, (i * 13 % 256) as u8, 255])
+            .collect();
+        DragSnapshot::build(origin, w, h, base, &[]).unwrap()
+    }
+
+    #[test]
+    fn crop_clamped_into_matches_reference_for_edges_origins_and_zero_sizes() {
+        let snaps = [
+            gradient_snapshot((0, 0), 5, 4),
+            gradient_snapshot((-3, -2), 5, 4),
+            gradient_snapshot((100, 40), 1, 1),
+            DragSnapshot::build((7, 7), 0, 0, Vec::new(), &[]).unwrap(),
+            DragSnapshot::build((0, 0), 0, 3, Vec::new(), &[]).unwrap(),
+        ];
+        let mut buf = Vec::new();
+        for snap in &snaps {
+            for &(x, y) in &[(-20, -20), (-3, -2), (-1, 0), (0, 0), (2, 1), (4, 3), (99, 39), (200, 200)] {
+                for &(w, h) in &[(0, 0), (0, 5), (5, 0), (1, 1), (3, 2), (8, 7)] {
+                    let expected = reference_crop_clamped(snap, x, y, w, h);
+                    assert_eq!(snap.crop_clamped(x, y, w, h), expected, "crop_clamped ({x},{y},{w},{h})");
+                    snap.crop_clamped_into(x, y, w, h, &mut buf);
+                    assert_eq!(buf, expected, "crop_clamped_into ({x},{y},{w},{h})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crop_clamped_into_reuses_allocation_across_repeated_crops() {
+        let snap = gradient_snapshot((-10, -10), 64, 48);
+        let mut buf = Vec::new();
+        snap.crop_clamped_into(-5, -5, 40, 36, &mut buf);
+        let cap = buf.capacity();
+        let ptr = buf.as_ptr();
+        for step in 0..200 {
+            snap.crop_clamped_into(step - 20, step % 7 - 3, 40, 36, &mut buf);
+            assert_eq!(buf.len(), 40 * 36 * 4);
+            assert_eq!(buf.capacity(), cap);
+            assert_eq!(buf.as_ptr(), ptr);
+        }
+    }
+
+    #[test]
+    fn release_frees_pixels_and_crops_become_transparent_fallback() {
+        let mut snap = gradient_snapshot((0, 0), 4, 4);
+        snap.release();
+        assert_eq!(snap.pixels.capacity(), 0);
+        assert_eq!(snap.crop_clamped(0, 0, 2, 2), vec![0u8; 16]);
     }
 
     #[test]
