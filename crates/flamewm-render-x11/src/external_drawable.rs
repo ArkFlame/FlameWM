@@ -498,8 +498,14 @@ impl ExternalDrawableTarget {
             dst_h: h,
             palette: OPAQUE_PALETTE,
         };
-        let argb = crate::native::image::scale_and_premultiply(rgba8, src_w, src_h, w, h);
-        self.blit_cached_argb32(key, &argb, w, h, dest, false)
+        self.blit_cached_argb32(
+            key,
+            || crate::native::image::scale_and_premultiply(rgba8, src_w, src_h, w, h),
+            w,
+            h,
+            dest,
+            false,
+        )
     }
 
     /// Semantic-icon draw: source alpha tints `fg` (SymbolicForeground math),
@@ -524,8 +530,14 @@ impl ExternalDrawableTarget {
             dst_h: h,
             palette: [fg.r, fg.g, fg.b, fg.a],
         };
-        let argb = external_symbolic_argb(rgba8, src_w, src_h, w, h, fg);
-        self.blit_cached_argb32(key, &argb, w, h, dest, true)
+        self.blit_cached_argb32(
+            key,
+            || external_symbolic_argb(rgba8, src_w, src_h, w, h, fg),
+            w,
+            h,
+            dest,
+            true,
+        )
     }
 
     /// Shared cached-ARGB32 composite. `require_xrender` keeps the semantic
@@ -533,10 +545,12 @@ impl ExternalDrawableTarget {
     /// On cache hit the pixmap upload is skipped (zero reupload) and the
     /// key is touched MRU; on miss the pixmap goes through the checked
     /// allocator and the oldest entries are evicted within both caps.
-    fn blit_cached_argb32(
+    /// `argb` is built lazily: only on cache miss (upload) or on the
+    /// no-XRender alpha check, so a cache hit on the XRender path allocates nothing.
+    fn blit_cached_argb32<F: Fn() -> Vec<u32>>(
         &mut self,
         key: ExternalImageKey,
-        argb: &[u32],
+        argb: F,
         w: u32,
         h: u32,
         dest: Rect,
@@ -568,7 +582,8 @@ impl ExternalDrawableTarget {
                         return Err("no 32-bit TrueColor visual for external blit".to_string());
                     }
                 };
-                if let Err(error) = upload_argb32(view_display, view_gc, fresh, visual, argb, w, h)
+                if let Err(error) =
+                    upload_argb32(view_display, view_gc, fresh, visual, &argb(), w, h)
                 {
                     unsafe { self.allocator.free_pixmap(view_display, fresh, bytes) };
                     return Err(error);
@@ -617,7 +632,7 @@ impl ExternalDrawableTarget {
             )
         };
         // Without XRender there is no true alpha; report it explicitly.
-        if argb.iter().any(|word| word >> 24 != 255) {
+        if argb().iter().any(|word| word >> 24 != 255) {
             return Err("external alpha blit requires XRender (unavailable)".to_string());
         }
         Ok(())

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_skin::icons::IconRole;
@@ -230,9 +230,9 @@ impl ControlGlyphKey {
 /// mutex guards cross-call sharing, never held across X calls).
 const CONTROL_GLYPH_CACHE_CAPACITY: usize = 32;
 
-fn control_glyph_cache() -> &'static Mutex<HashMap<ControlGlyphKey, flamewm_image_core::RgbaImage>>
-{
-    static CACHE: OnceLock<Mutex<HashMap<ControlGlyphKey, flamewm_image_core::RgbaImage>>> =
+fn control_glyph_cache()
+-> &'static Mutex<HashMap<ControlGlyphKey, Arc<flamewm_image_core::RgbaImage>>> {
+    static CACHE: OnceLock<Mutex<HashMap<ControlGlyphKey, Arc<flamewm_image_core::RgbaImage>>>> =
         OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -248,6 +248,17 @@ pub fn control_glyph_raster(
     material: ControlMaterial,
     look: ControlLook,
 ) -> Option<flamewm_image_core::RgbaImage> {
+    control_glyph_raster_shared(role, edge, material, look).map(|raster| (*raster).clone())
+}
+
+/// Shared form of [`control_glyph_raster`]: a cache hit clones the `Arc`, not the pixels.
+#[must_use]
+pub fn control_glyph_raster_shared(
+    role: ControlRole,
+    edge: u32,
+    material: ControlMaterial,
+    look: ControlLook,
+) -> Option<Arc<flamewm_image_core::RgbaImage>> {
     if edge == 0 || edge > flamewm_image_core::MAX_DIMENSION {
         return None;
     }
@@ -257,7 +268,7 @@ pub fn control_glyph_raster(
     };
     if let Ok(cache) = control_glyph_cache().lock() {
         if let Some(cached) = cache.get(&key) {
-            return Some(cached.clone());
+            return Some(Arc::clone(cached));
         }
     }
     let scheme = control_glyph_scheme(role, material, look);
@@ -280,11 +291,12 @@ pub fn control_glyph_raster(
             }
         }
     }
+    let raster = Arc::new(raster);
     if let Ok(mut cache) = control_glyph_cache().lock() {
         if cache.len() >= CONTROL_GLYPH_CACHE_CAPACITY {
             cache.clear();
         }
-        cache.insert(key, raster.clone());
+        cache.insert(key, Arc::clone(&raster));
     }
     Some(raster)
 }
@@ -423,7 +435,7 @@ pub fn title_baseline(titlebar_height: u16) -> f32 {
 pub struct ControlBlit {
     pub control: crate::frame::model::FrameControl,
     pub role: ControlRole,
-    pub raster: flamewm_image_core::RgbaImage,
+    pub raster: Arc<flamewm_image_core::RgbaImage>,
     pub dest_x: f32,
     pub dest_y: f32,
     pub dest_w: f32,
@@ -470,7 +482,7 @@ pub fn control_blits_for(
             button: tokens.buttons[index],
             titlebar: tokens.titlebar_bg,
         };
-        let Some(raster) = control_glyph_raster(
+        let Some(raster) = control_glyph_raster_shared(
             role,
             u32::from(WINDOW_CHROME.metrics.control_glyph_edge),
             material,
@@ -937,6 +949,26 @@ mod tests {
     }
 
     #[test]
+    fn shared_glyph_raster_matches_owned_output() {
+        let owned = control_glyph_raster(
+            ControlRole::Close,
+            16,
+            ControlMaterial::Hover,
+            ControlLook::default(),
+        )
+        .expect("owned close glyph");
+        let shared = control_glyph_raster_shared(
+            ControlRole::Close,
+            16,
+            ControlMaterial::Hover,
+            ControlLook::default(),
+        )
+        .expect("shared close glyph");
+        assert_eq!((shared.width, shared.height), (owned.width, owned.height));
+        assert_eq!(shared.pixels, owned.pixels);
+    }
+
+    #[test]
     fn control_glyphs_render_from_breeze_assets() {
         for role in [
             ControlRole::Minimize,
@@ -997,7 +1029,7 @@ mod tests {
                 control_glyph_raster(hovered[index].role, edge, *material, ControlLook::default())
                     .expect("control raster");
             assert_eq!(
-                hovered[index].raster, raster,
+                *hovered[index].raster, raster,
                 "{control:?} must use {material:?} material on close hover"
             );
             let (h, r) = (&hovered[index], &rest[index]);
@@ -1016,7 +1048,7 @@ mod tests {
             )
             .expect("control raster");
             assert_eq!(
-                blit.raster, raster,
+                *blit.raster, raster,
                 "no hover must select Rest material for every control"
             );
             assert_eq!(blit.control, hovered[index].control);
