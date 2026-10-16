@@ -55,5 +55,5 @@ fi
 runtime_lib libXrender.so.1 Xrender
 runtime_lib libXi.so.6 Xi
 if [[ $fail -ne 0 ]]; then exit 1; fi
-VERSION="$(tr -d '[:space:]' < FLAMEWM_VERSION)"
+VERSION="$(./scripts/version)"
 echo "OK FlameWM Render $VERSION doctor"

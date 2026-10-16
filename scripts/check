@@ -17,5 +17,5 @@ if find . -path './.target' -prune -o -path './.vendor' -prune -o -type f \( -in
   echo 'ERROR: active package contains font binaries' >&2
   exit 1
 fi
-VERSION="$(tr -d '[:space:]' < FLAMEWM_VERSION)"
+VERSION="$(./scripts/version)"
 echo "OK FlameWM Render $VERSION independent workspace + native WM + compiled shell"

@@ -51,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,11 @@ except ImportError:
 HAVE_PIL = Image is not None
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def workspace_version() -> str:
+    with (ROOT / "Cargo.toml").open("rb") as fh:
+        return tomllib.load(fh)["workspace"]["package"]["version"]
 SCHEMA_VERSION = 2
 SCHEMA = "flamewm-settings-acceptance/2"
 PAGES = ("appearance", "desktop", "taskbar", "displays", "fonts", "hotkeys", "about")
@@ -3538,7 +3544,7 @@ def run_ss13(ctx: Ctx, args: argparse.Namespace) -> dict:
     if tesseract is None:
         details["live_ocr_reason"] = "tesseract not on PATH; live About version read not performed"
     else:
-        version = (ROOT / "FLAMEWM_VERSION").read_text(encoding="utf-8").strip()
+        version = workspace_version()
         reads = [ss13_live_version(shot, size, tesseract, version, ctx.run / "shots")
                  for shot, size in zip(shots, SIZES)]
         details["live_ocr"] = reads

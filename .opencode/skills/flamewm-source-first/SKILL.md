@@ -5,7 +5,7 @@ description: Read authoritative local source, contracts, and current call paths 
 
 ## Required sequence
 
-1. Read repository `AGENTS.md`, `FLAMEWM_VERSION`, `.opencode/HARNESS.md`, `.opencode/ROUTES.md`, and applicable `.agents` contract and handoff.
+1. Read repository `AGENTS.md`, the workspace version (`scripts/version`), `.opencode/HARNESS.md`, `.opencode/ROUTES.md`, and applicable `.agents` contract and handoff.
 2. Inspect Git state before claiming paths or proposing edits. Preserve concurrent and unrelated changes.
 3. Locate canonical owner, public contract, callers, tests, configuration, and runtime entry point with repository search. Read complete relevant functions, not only matching lines.
 4. Treat current source and fresh command output as authority. Plans, comments, historical code, and external advice are supporting evidence only.

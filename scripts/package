@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
-VERSION="$(tr -d '[:space:]' < "$ROOT/FLAMEWM_VERSION")"
+VERSION="$("$ROOT/scripts/version")"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 BUILD_DIR="$ROOT/.target/release"
 DIST="$ROOT/.target/dist"
@@ -13,7 +13,7 @@ DEB="$DIST/flamewm_${VERSION}_amd64.deb"
 
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 
-[[ -n "$VERSION" ]] || fail 'FLAMEWM_VERSION is empty'
+[[ -n "$VERSION" ]] || fail 'workspace version is empty'
 [[ -d "$BUILD_DIR" ]] || fail "missing release directory: $BUILD_DIR"
 mkdir -p "$DIST"
 rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$VERSION.tar.gz" "$DIST/SHA256SUMS"
@@ -25,7 +25,6 @@ done
 for source in \
     "$ROOT/LICENSE" \
     "$ROOT/README.md" \
-    "$ROOT/FLAMEWM_VERSION" \
     "$ROOT/docs/INSTALL.md" \
     "$ROOT/docs/PACKAGING.md" \
     "$ROOT/packaging/flamewm.desktop" \
@@ -47,7 +46,6 @@ for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-sett
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
 install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
-install -m 0644 "$ROOT/FLAMEWM_VERSION" "$STAGE/usr/share/flamewm/VERSION"
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
 install -m 0644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/flamewm/LICENSE"

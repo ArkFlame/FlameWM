@@ -1,6 +1,6 @@
 # FlameWM Agent Governance
 
-Before substantive work, read `FLAMEWM_VERSION`, `.opencode/HARNESS.md`, and
+Before substantive work, read the workspace version (`scripts/version`, from `Cargo.toml`), `.opencode/HARNESS.md`, and
 `.opencode/ROUTES.md`; load routed skills and record route evidence. Read
 `.agents/README.md`, `.agents/CONTRACTS.md`, and `.agents/JOBS.md` for assigned
 work.

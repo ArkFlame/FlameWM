@@ -6,7 +6,7 @@ FlameWM is a clean-room, X11-only window manager and desktop shell written in Ru
 
 FlameWM supports **X11 sessions only**. Wayland is not supported.
 
-Version and release history: [`FLAMEWM_VERSION`](FLAMEWM_VERSION), [`Cargo.toml`](Cargo.toml) (`workspace.package.version`), and [`CHANGELOG.md`](CHANGELOG.md).
+Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.version`), and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Status
 
@@ -84,7 +84,7 @@ Visual comparison (`./scripts/verify-visual`) and the other acceptance scripts u
 
 ## Install, upgrade, and uninstall
 
-`./scripts/package` writes the Linux archive, the source archive, and, when `dpkg-deb` is available, the `.deb` under `.target/dist/` (file names follow the version in `FLAMEWM_VERSION`; for example `flamewm_<version>_amd64.deb`). See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
+`./scripts/package` writes the Linux archive, the source archive, and, when `dpkg-deb` is available, the `.deb` under `.target/dist/` (file names follow the workspace version printed by `scripts/version`; for example `flamewm_<version>_amd64.deb`). See [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
 **The installed `.deb` (install, upgrade, uninstall) has not been run in this revision.** The steps below are documented from `scripts/package` and `packaging/debian/control.in`; they are not verified acceptance.
 

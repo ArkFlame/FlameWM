@@ -13,7 +13,7 @@
 
 For an existing-image comparison, use `scripts/verify-visual --reference` with `FLAMEWM_VISUAL_CURRENT` and `FLAMEWM_VISUAL_REFERENCE` set to image paths. This mode does not launch a session; metrics are advisory unless both comparison thresholds are set.
 
-The current repository version is recorded in `FLAMEWM_VERSION`. Historical references to 0.0.2 describe the earlier project layout.
+The current repository version is `[workspace.package].version` in `Cargo.toml`, printed by `scripts/version`. Historical references to 0.0.2 describe the earlier project layout.
 
 ## Work on the correct owner
 

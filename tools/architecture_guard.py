@@ -474,7 +474,7 @@ J11_MOVE_RESIZE_OWNER = "crates/flamewm-render-x11/src/surface_controller.rs"
 J11_XLIB_DECL = "crates/flamewm-render-x11/src/xlib.rs"
 J11_ENV_OK = re.compile(
     r"^(FLAMEWM_[A-Z0-9_]+|XDG_[A-Z0-9_]+|XCURSOR_[A-Z0-9_]+|DESKTOP_SESSION"
-    r"|HOME|PATH|TERMINAL|CARGO_MANIFEST_DIR|OUT_DIR)$"
+    r"|HOME|PATH|TERMINAL|CARGO_MANIFEST_DIR|CARGO_PKG_VERSION|OUT_DIR)$"
 )
 
 

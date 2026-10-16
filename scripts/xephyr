@@ -95,7 +95,7 @@ if [[ -z "${RWR_FONT_FILES:-}" ]]; then
   files="$(./scripts/prepare-ibm-plex || true)"
   [[ -n "$files" ]] && export RWR_FONT_FILES="$files"
 fi
-VERSION="$(tr -d '[:space:]' < "$ROOT/FLAMEWM_VERSION")"
+VERSION="$("$ROOT/scripts/version")"
 
 OUTPUT_DIR="${FLAMEWM_XEPHYR_OUTPUT_DIR:-$ROOT/.target/flamewm}"
 mkdir -p "$OUTPUT_DIR"

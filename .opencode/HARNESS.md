@@ -1,6 +1,6 @@
 # FlameWM Harness
 
-Before substantive work: read `AGENTS.md`, `FLAMEWM_VERSION`, this file, and
+Before substantive work: read `AGENTS.md`, the workspace version (`scripts/version`), this file, and
 `ROUTES.md`; inspect current source and Git state; select/load route skills.
 Source and executed runtime evidence outrank docs, plans, and references.
 

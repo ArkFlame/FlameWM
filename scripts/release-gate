@@ -9,15 +9,15 @@ fail() {
     exit 1
 }
 
-version="$(tr -d '[:space:]' < FLAMEWM_VERSION)"
-[[ -n "$version" ]] || fail 'FLAMEWM_VERSION is empty'
+version="$(./scripts/version)"
+[[ -n "$version" ]] || fail 'workspace version is empty'
 printf 'RELEASE_GATE %s\n' "$version"
 printf '%s\n' 'GATE native checks: ./scripts/check'
 ./scripts/check
 
 grep -Fqx "version = \"$version\"" Cargo.toml \
     || fail "workspace package version must be $version"
-printf 'OK metadata: FLAMEWM_VERSION and workspace are %s\n' "$version"
+printf 'OK metadata: workspace version is %s\n' "$version"
 
 printf '%s\n' 'GATE package assembly: ./scripts/package'
 ./scripts/package
