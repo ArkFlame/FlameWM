@@ -45,6 +45,7 @@ pub struct BlurScratch {
     down: Vec<f32>,
     acc: Vec<f32>,
     taps: Vec<(usize, usize, f32)>,
+    padded: Vec<u8>,
 }
 
 impl BlurScratch {
@@ -129,7 +130,9 @@ pub fn frosted_backdrop_with(
     let max_x = i64::from(src.width) - 1;
     let max_y = i64::from(src.height) - 1;
 
-    let mut padded = vec![0u8; pw * ph * 4];
+    let mut padded = std::mem::take(&mut scratch.padded);
+    padded.clear();
+    padded.resize(pw * ph * 4, 0);
     for py in 0..ph {
         let sy = (i64::from(crop.y) + py as i64 - pad as i64).clamp(0, max_y) as usize;
         for px in 0..pw {
@@ -147,6 +150,7 @@ pub fn frosted_backdrop_with(
         let row = ((y + pad) * pw + pad) * 4;
         out[y * cw * 4..(y + 1) * cw * 4].copy_from_slice(&padded[row..row + cw * 4]);
     }
+    scratch.padded = padded;
     if let Some(tint) = tint {
         for pixel in out.chunks_exact_mut(4) {
             composite_over(pixel, tint);
@@ -686,6 +690,34 @@ mod tests {
             assert_eq!(fresh.pixels, reused.pixels, "radius {radius}");
             assert_eq!((fresh.width, fresh.height), (reused.width, reused.height));
         }
+    }
+
+    #[test]
+    fn frosted_backdrop_dirty_scratch_matches_fresh() {
+        let src = RgbaImage::from_rgba8(40, 30, noisy(40, 30)).unwrap();
+        let crop = Rect {
+            x: 2,
+            y: 1,
+            width: 17,
+            height: 11,
+        };
+        let mut scratch = BlurScratch::new();
+        // Leave a large, non-zero padded buffer behind so reuse must re-zero it.
+        let _ = frosted_backdrop_with(
+            &mut scratch,
+            &src,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 30,
+            },
+            20.0,
+            None,
+        );
+        let fresh = frosted_backdrop(&src, crop, 6.0, None);
+        let reused = frosted_backdrop_with(&mut scratch, &src, crop, 6.0, None);
+        assert_eq!(fresh.pixels, reused.pixels);
     }
 
     #[test]

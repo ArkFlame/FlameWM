@@ -187,11 +187,21 @@ fn char_chunks(text: &str, font_size: f32, avail_width: f32) -> Vec<String> {
     } else {
         ((avail_width / char_w).floor() as usize).max(1)
     };
-    let chars: Vec<char> = text.chars().collect();
-    chars
-        .chunks(per_line)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut count = 0;
+    for ch in text.chars() {
+        current.push(ch);
+        count += 1;
+        if count == per_line {
+            chunks.push(std::mem::take(&mut current));
+            count = 0;
+        }
+    }
+    if count > 0 {
+        chunks.push(current);
+    }
+    chunks
 }
 
 #[cfg(test)]
