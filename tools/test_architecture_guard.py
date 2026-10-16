@@ -25,6 +25,7 @@ GEOMETRY_BYPASS = "crates/flamewm-wm-x11/src/bypass_geometry.rs"
 GEOMETRY_BYPASS_SRC = "pub fn nudge(s: &mut State, r: Rect) { s.outer = r; }\n"
 RENDER_BYPASS = "crates/flamewm-wm-x11/src/bypass_render.rs"
 RENDER_BYPASS_SRC = "pub fn draw(x: Ctx) { paint::paint_frame(x); }\n"
+SURFACE_OWNER = "crates/flamewm-render-x11/src/native/target.rs"
 
 
 def run_guard(root: Path) -> subprocess.CompletedProcess:
@@ -80,6 +81,23 @@ class ArchitectureGuardNegativeTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("j18-g01-frame-geometry-owner", result.stderr)
         self.assertIn("j18-g04-no-old-decoration-paint", result.stderr)
+
+    def test_j7_surface_owner_checks_its_own_text(self) -> None:
+        # J7-G8 reads the surface owner's own text, not paint.rs: a surface file
+        # lacking the semantic-foreground token fails; one containing it does not.
+        surface = self.tmp / SURFACE_OWNER
+        original = surface.read_text(encoding="utf-8")
+        surface.write_text(original + "\n// no foreground token here\n", encoding="utf-8")
+        result = run_guard(self.tmp)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("j7-g8-semantic-foreground", result.stdout + result.stderr)
+
+        surface.write_text(
+            original + "\nfn fg(style: &Style) { resolve_color(style.color); }\n",
+            encoding="utf-8",
+        )
+        result = run_guard(self.tmp)
+        self.assertNotIn("j7-g8-semantic-foreground", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
