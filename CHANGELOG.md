@@ -5,7 +5,6 @@
 ### Product and versioning
 
 - Product renamed to FlameWM; the Rust WebRender branch name is no longer used for the product.
-- Version is sourced from the single `FLAMEWM_VERSION` file.
 
 ### Fixes
 
