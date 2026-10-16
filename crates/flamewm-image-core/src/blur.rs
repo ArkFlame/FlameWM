@@ -17,6 +17,10 @@ const MIN_BLUR_RADIUS: f32 = 0.5;
 const DOWNSCALE_RADIUS: f32 = 12.0;
 /// Integer downscale factor used above `DOWNSCALE_RADIUS`.
 const DOWNSCALE_FACTOR: usize = 4;
+/// Columns per vertical-pass band in `box_vertical`.
+const VERTICAL_BAND: usize = 8;
+/// Extra float capacity tolerated before `fit_f32` releases memory.
+const SHRINK_SLACK: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlurError {
@@ -38,20 +42,29 @@ pub struct Rect {
 }
 
 /// Reusable float work buffers. Keep one per thread to avoid per-call allocation.
+/// Buffers hold only what the current blur needs; `release` drops all capacity.
 #[derive(Debug, Default)]
 pub struct BlurScratch {
+    /// Premultiplied region, blurred in place (radius <= `DOWNSCALE_RADIUS`).
     work: Vec<f32>,
-    tmp: Vec<f32>,
+    /// Box-downscaled premultiplied copy (radius > `DOWNSCALE_RADIUS`).
     down: Vec<f32>,
-    acc: Vec<f32>,
+    /// One row copy for in-place horizontal passes.
+    line: Vec<f32>,
+    /// Column-band copy plus accumulator for vertical passes.
+    band: Vec<f32>,
     taps: Vec<(usize, usize, f32)>,
-    padded: Vec<u8>,
 }
 
 impl BlurScratch {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Frees all retained buffer capacity. The next blur reallocates as needed.
+    pub fn release(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -77,7 +90,18 @@ pub fn gaussian_blur_rgba_with(
     if radius_px < MIN_BLUR_RADIUS {
         return Ok(());
     }
-    blur_straight(scratch, pixels, width as usize, height as usize, radius_px);
+    let (w, h) = (width as usize, height as usize);
+    let factor = blur_stage(
+        scratch,
+        |x, y| {
+            let i = (y * w + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        },
+        w,
+        h,
+        radius_px,
+    );
+    blur_emit(scratch, factor, w, h, Window { x: 0, y: 0, w, h }, pixels);
     Ok(())
 }
 
@@ -124,33 +148,39 @@ pub fn frosted_backdrop_with(
     };
     let cw = crop.width.clamp(1, MAX_DIMENSION) as usize;
     let ch = crop.height.clamp(1, MAX_DIMENSION) as usize;
-    let pw = cw + 2 * pad;
-    let ph = ch + 2 * pad;
+    let (pw, ph) = (cw + 2 * pad, ch + 2 * pad);
     let src_w = src.width as usize;
     let max_x = i64::from(src.width) - 1;
     let max_y = i64::from(src.height) - 1;
-
-    let mut padded = std::mem::take(&mut scratch.padded);
-    padded.clear();
-    padded.resize(pw * ph * 4, 0);
-    for py in 0..ph {
+    // Padded-grid sample: crop origin shifted by `pad`, clamped to the source.
+    let sample = |px: usize, py: usize| -> [u8; 4] {
+        let sx = (i64::from(crop.x) + px as i64 - pad as i64).clamp(0, max_x) as usize;
         let sy = (i64::from(crop.y) + py as i64 - pad as i64).clamp(0, max_y) as usize;
-        for px in 0..pw {
-            let sx = (i64::from(crop.x) + px as i64 - pad as i64).clamp(0, max_x) as usize;
-            let si = (sy * src_w + sx) * 4;
-            let di = (py * pw + px) * 4;
-            padded[di..di + 4].copy_from_slice(&src.pixels[si..si + 4]);
+        let si = (sy * src_w + sx) * 4;
+        [
+            src.pixels[si],
+            src.pixels[si + 1],
+            src.pixels[si + 2],
+            src.pixels[si + 3],
+        ]
+    };
+    let mut out = vec![0u8; cw * ch * 4];
+    if blur {
+        let factor = blur_stage(scratch, sample, pw, ph, radius);
+        let win = Window {
+            x: pad,
+            y: pad,
+            w: cw,
+            h: ch,
+        };
+        blur_emit(scratch, factor, pw, ph, win, &mut out);
+    } else {
+        for y in 0..ch {
+            for x in 0..cw {
+                out[(y * cw + x) * 4..][..4].copy_from_slice(&sample(x, y));
+            }
         }
     }
-    if blur {
-        blur_straight(scratch, &mut padded, pw, ph, radius);
-    }
-    let mut out = vec![0u8; cw * ch * 4];
-    for y in 0..ch {
-        let row = ((y + pad) * pw + pad) * 4;
-        out[y * cw * 4..(y + 1) * cw * 4].copy_from_slice(&padded[row..row + cw * 4]);
-    }
-    scratch.padded = padded;
     if let Some(tint) = tint {
         for pixel in out.chunks_exact_mut(4) {
             composite_over(pixel, tint);
@@ -186,70 +216,105 @@ fn validate(len: usize, width: u32, height: u32, radius_px: f32) -> Result<(), B
     Ok(())
 }
 
-/// Blurs straight RGBA8 `pixels` (w x h) in place. Requires `radius >= 0.5`.
-fn blur_straight(scratch: &mut BlurScratch, pixels: &mut [u8], w: usize, h: usize, radius: f32) {
+/// Source window (in padded-grid coordinates) written by `blur_emit`.
+#[derive(Clone, Copy)]
+struct Window {
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+}
+
+/// Blurs the `w` x `h` grid whose straight RGBA8 pixels are `sample(x, y)`, leaving
+/// float state in `scratch`. Returns the downscale factor (1 = full resolution).
+/// Requires `radius >= 0.5`.
+fn blur_stage(
+    scratch: &mut BlurScratch,
+    sample: impl Fn(usize, usize) -> [u8; 4],
+    w: usize,
+    h: usize,
+    radius: f32,
+) -> usize {
     let sigma = radius / 2.0;
     if radius <= DOWNSCALE_RADIUS {
-        scratch.work.resize(w * h * 4, 0.0);
-        for (src, dst) in pixels.chunks_exact(4).zip(scratch.work.chunks_exact_mut(4)) {
-            premultiply_pixel(src, dst);
+        fit_f32(&mut scratch.work, w * h * 4);
+        for (i, dst) in scratch.work.chunks_exact_mut(4).enumerate() {
+            premultiply_pixel(&sample(i % w, i / w), dst);
         }
         blur_boxes(
             &mut scratch.work,
-            &mut scratch.tmp,
-            &mut scratch.acc,
+            &mut scratch.line,
+            &mut scratch.band,
             w,
             h,
             sigma,
         );
-        for (src, dst) in scratch.work.chunks_exact(4).zip(pixels.chunks_exact_mut(4)) {
-            unpremultiply_pixel(src, dst);
+        return 1;
+    }
+    let (dw, dh) = (w.div_ceil(DOWNSCALE_FACTOR), h.div_ceil(DOWNSCALE_FACTOR));
+    fit_f32(&mut scratch.down, dw * dh * 4);
+    box_downsample_premultiplied(&sample, w, h, &mut scratch.down, dw, dh, DOWNSCALE_FACTOR);
+    blur_boxes(
+        &mut scratch.down,
+        &mut scratch.line,
+        &mut scratch.band,
+        dw,
+        dh,
+        sigma / DOWNSCALE_FACTOR as f32,
+    );
+    DOWNSCALE_FACTOR
+}
+
+/// Writes window `win` of the grid staged by `blur_stage` (`w` x `h`, `factor`)
+/// as straight RGBA8 into `dst` (`win.w` x `win.h`).
+fn blur_emit(
+    scratch: &mut BlurScratch,
+    factor: usize,
+    w: usize,
+    h: usize,
+    win: Window,
+    dst: &mut [u8],
+) {
+    if factor == 1 {
+        for j in 0..win.h {
+            for i in 0..win.w {
+                let si = ((win.y + j) * w + win.x + i) * 4;
+                let di = (j * win.w + i) * 4;
+                unpremultiply_pixel(&scratch.work[si..si + 4], &mut dst[di..di + 4]);
+            }
         }
         return;
     }
-    let factor = DOWNSCALE_FACTOR;
-    let dw = w.div_ceil(factor);
-    let dh = h.div_ceil(factor);
-    scratch.down.resize(dw * dh * 4, 0.0);
-    box_downsample_premultiplied(pixels, w, h, &mut scratch.down, dw, dh, factor);
-    blur_boxes(
-        &mut scratch.down,
-        &mut scratch.tmp,
-        &mut scratch.acc,
-        dw,
-        dh,
-        sigma / factor as f32,
-    );
-    bilinear_upscale_straight(
-        &scratch.down,
-        dw,
-        dh,
-        pixels,
-        w,
-        h,
-        factor,
-        &mut scratch.taps,
-    );
+    let (dw, dh) = (w.div_ceil(factor), h.div_ceil(factor));
+    bilinear_upscale_straight(&scratch.down, dw, dh, factor, win, dst, &mut scratch.taps);
+}
+
+/// Resizes `buf` to `len` zeroed floats. Capacity far above `len` is released so
+/// buffers follow the current request instead of the largest one ever seen.
+fn fit_f32(buf: &mut Vec<f32>, len: usize) {
+    buf.clear();
+    if buf.capacity() > len.saturating_mul(2).saturating_add(SHRINK_SLACK) {
+        buf.shrink_to(len);
+    }
+    buf.resize(len, 0.0);
 }
 
 /// Three box passes (horizontal then vertical each) approximating a Gaussian.
-/// Result is left in `buf`.
+/// Result is left in `buf`; `line` and `band` are pass-local scratch.
 fn blur_boxes(
     buf: &mut [f32],
-    tmp: &mut Vec<f32>,
-    acc: &mut Vec<f32>,
+    line: &mut Vec<f32>,
+    band: &mut Vec<f32>,
     w: usize,
     h: usize,
     sigma: f32,
 ) {
-    tmp.resize(buf.len(), 0.0);
-    acc.resize(w * 4, 0.0);
     for r in box_radii(sigma) {
         if r == 0 {
             continue;
         }
-        box_horizontal(buf, tmp, w, h, r);
-        box_vertical(tmp, buf, acc, w, h, r);
+        box_horizontal(buf, line, w, r);
+        box_vertical(buf, band, w, h, r);
     }
 }
 
@@ -283,63 +348,80 @@ fn clamp_index(index: isize, last: isize) -> usize {
     index.clamp(0, last) as usize
 }
 
-fn box_horizontal(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize) {
+/// Horizontal box pass over each row of `buf` (`w` px wide), in place. Each row is
+/// copied to `line` first so the sliding window reads unmodified inputs.
+fn box_horizontal(buf: &mut [f32], line: &mut Vec<f32>, w: usize, r: usize) {
     let stride = w * 4;
+    fit_f32(line, stride);
     let inv = 1.0 / (2 * r + 1) as f32;
     let ri = r as isize;
     let last = w as isize - 1;
-    for y in 0..h {
-        let row = &src[y * stride..(y + 1) * stride];
-        let out = &mut dst[y * stride..(y + 1) * stride];
+    for row in buf.chunks_exact_mut(stride) {
+        line.copy_from_slice(row);
         let mut sum = [0.0f32; 4];
         for k in -ri..=ri {
             let p = clamp_index(k, last) * 4;
             for c in 0..4 {
-                sum[c] += row[p + c];
+                sum[c] += line[p + c];
             }
         }
         for x in 0..w {
             let o = x * 4;
             for c in 0..4 {
-                out[o + c] = sum[c] * inv;
+                row[o + c] = sum[c] * inv;
             }
             let add = clamp_index(x as isize + ri + 1, last) * 4;
             let sub = clamp_index(x as isize - ri, last) * 4;
             for c in 0..4 {
-                sum[c] += row[add + c] - row[sub + c];
+                sum[c] += line[add + c] - line[sub + c];
             }
         }
     }
 }
 
-fn box_vertical(src: &[f32], dst: &mut [f32], acc: &mut [f32], w: usize, h: usize, r: usize) {
+/// Vertical box pass over `buf` (`w` x `h`), in place. Columns are processed in
+/// bands of `VERTICAL_BAND`: each band is copied to `band`, so every output element
+/// sees the same operations in the same order as an unbanded pass.
+fn box_vertical(buf: &mut [f32], band: &mut Vec<f32>, w: usize, h: usize, r: usize) {
     let stride = w * 4;
     let inv = 1.0 / (2 * r + 1) as f32;
     let ri = r as isize;
     let last = h as isize - 1;
-    acc.fill(0.0);
-    for k in -ri..=ri {
-        let o = clamp_index(k, last) * stride;
-        for (a, s) in acc.iter_mut().zip(&src[o..o + stride]) {
-            *a += *s;
+    let bstride = VERTICAL_BAND * 4;
+    fit_f32(band, h * bstride + bstride);
+    let (col, acc) = band.split_at_mut(h * bstride);
+    for x0 in (0..w).step_by(VERTICAL_BAND) {
+        let n = VERTICAL_BAND.min(w - x0) * 4;
+        let off = x0 * 4;
+        for y in 0..h {
+            col[y * bstride..y * bstride + n]
+                .copy_from_slice(&buf[y * stride + off..y * stride + off + n]);
         }
-    }
-    for y in 0..h {
-        let out = &mut dst[y * stride..(y + 1) * stride];
-        for (d, a) in out.iter_mut().zip(acc.iter()) {
-            *d = *a * inv;
+        let acc = &mut acc[..n];
+        acc.fill(0.0);
+        for k in -ri..=ri {
+            let o = clamp_index(k, last) * bstride;
+            for (a, s) in acc.iter_mut().zip(&col[o..o + n]) {
+                *a += *s;
+            }
         }
-        let add = clamp_index(y as isize + ri + 1, last) * stride;
-        let sub = clamp_index(y as isize - ri, last) * stride;
-        for i in 0..stride {
-            acc[i] += src[add + i] - src[sub + i];
+        for y in 0..h {
+            let out = &mut buf[y * stride + off..y * stride + off + n];
+            for (d, a) in out.iter_mut().zip(acc.iter()) {
+                *d = *a * inv;
+            }
+            let add = clamp_index(y as isize + ri + 1, last) * bstride;
+            let sub = clamp_index(y as isize - ri, last) * bstride;
+            for i in 0..n {
+                acc[i] += col[add + i] - col[sub + i];
+            }
         }
     }
 }
 
-/// Box-averages straight RGBA8 `src` (w x h), premultiplied, into `dst` (dw x dh).
+/// Box-averages the premultiplied `w` x `h` grid `sample(x, y)` into `dst` (dw x dh).
 fn box_downsample_premultiplied(
-    src: &[u8],
+    sample: &impl Fn(usize, usize) -> [u8; 4],
     w: usize,
     h: usize,
     dst: &mut [f32],
@@ -354,9 +436,8 @@ fn box_downsample_premultiplied(
             let mut sum = [0.0f32; 4];
             for y in y0..y1 {
                 for x in x0..x1 {
-                    let si = (y * w + x) * 4;
                     let mut premul = [0.0f32; 4];
-                    premultiply_pixel(&src[si..si + 4], &mut premul);
+                    premultiply_pixel(&sample(x, y), &mut premul);
                     for c in 0..4 {
                         sum[c] += premul[c];
                     }
@@ -372,34 +453,33 @@ fn box_downsample_premultiplied(
 }
 
 /// Bilinear upscale of premultiplied `src` (sw x sh) into straight RGBA8 `dst`
-/// (dw x dh), where each source pixel covers `factor` destination pixels.
-/// `taps` caches per-column source indices and weights.
-#[allow(clippy::too_many_arguments)]
+/// (`win.w` x `win.h`), covering grid window `win` where each source pixel spans
+/// `factor` grid pixels. `taps` caches per-column source indices and weights.
 fn bilinear_upscale_straight(
     src: &[f32],
     sw: usize,
     sh: usize,
-    dst: &mut [u8],
-    dw: usize,
-    dh: usize,
     factor: usize,
+    win: Window,
+    dst: &mut [u8],
     taps: &mut Vec<(usize, usize, f32)>,
 ) {
     let f = factor as f32;
     taps.clear();
-    for x in 0..dw {
+    for x in win.x..win.x + win.w {
         let sx = (((x as f32 + 0.5) / f) - 0.5).clamp(0.0, (sw - 1) as f32);
         let x0 = sx.floor() as usize;
         taps.push((x0, (x0 + 1).min(sw - 1), sx - x0 as f32));
     }
-    for y in 0..dh {
+    for j in 0..win.h {
+        let y = win.y + j;
         let sy = (((y as f32 + 0.5) / f) - 0.5).clamp(0.0, (sh - 1) as f32);
         let y0 = sy.floor() as usize;
         let y1 = (y0 + 1).min(sh - 1);
         let ty = sy - y0 as f32;
         let row0 = &src[y0 * sw * 4..(y0 + 1) * sw * 4];
         let row1 = &src[y1 * sw * 4..(y1 + 1) * sw * 4];
-        let out = &mut dst[y * dw * 4..(y + 1) * dw * 4];
+        let out = &mut dst[j * win.w * 4..(j + 1) * win.w * 4];
         for (o, &(x0, x1, tx)) in out.chunks_exact_mut(4).zip(taps.iter()) {
             let a = pixel_f32(row0, x0);
             let b = pixel_f32(row0, x1);
@@ -527,8 +607,8 @@ mod tests {
 
             blur_boxes(
                 &mut scratch.work,
-                &mut scratch.tmp,
-                &mut scratch.acc,
+                &mut scratch.line,
+                &mut scratch.band,
                 N,
                 N,
                 radius / 2.0,
@@ -783,6 +863,356 @@ mod tests {
             assert!((i32::from(p[0]) - 127).abs() <= 1, "{p:?}");
             assert_eq!(p[3], 255);
         }
+    }
+
+    /// Previous implementation (full f32 `tmp`, u8 `padded`, unbanded passes), kept
+    /// verbatim as the byte-exactness oracle.
+    mod oracle {
+        use crate::RgbaImage;
+        use crate::blur::{
+            BlurError, DOWNSCALE_FACTOR, DOWNSCALE_RADIUS, MAX_BLUR_RADIUS, MIN_BLUR_RADIUS, Rect,
+            box_radii, clamp_index, composite_over, pixel_f32, premultiply_pixel,
+            unpremultiply_pixel, validate,
+        };
+
+        pub fn gaussian_blur_rgba(
+            pixels: &mut [u8],
+            width: u32,
+            height: u32,
+            radius_px: f32,
+        ) -> Result<(), BlurError> {
+            validate(pixels.len(), width, height, radius_px)?;
+            if radius_px < MIN_BLUR_RADIUS {
+                return Ok(());
+            }
+            blur_straight(pixels, width as usize, height as usize, radius_px);
+            Ok(())
+        }
+
+        pub fn frosted_backdrop(
+            src: &RgbaImage,
+            crop: Rect,
+            radius_px: f32,
+            tint: Option<[u8; 4]>,
+        ) -> RgbaImage {
+            if src.width == 0 || src.height == 0 {
+                return RgbaImage {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![0, 0, 0, 0],
+                };
+            }
+            let radius = if radius_px.is_nan() {
+                0.0
+            } else {
+                radius_px.clamp(0.0, MAX_BLUR_RADIUS)
+            };
+            let blur = radius >= MIN_BLUR_RADIUS;
+            let pad = if blur {
+                (2.0 * radius).ceil() as usize
+            } else {
+                0
+            };
+            let cw = crop.width.clamp(1, crate::MAX_DIMENSION) as usize;
+            let ch = crop.height.clamp(1, crate::MAX_DIMENSION) as usize;
+            let pw = cw + 2 * pad;
+            let ph = ch + 2 * pad;
+            let src_w = src.width as usize;
+            let max_x = i64::from(src.width) - 1;
+            let max_y = i64::from(src.height) - 1;
+            let mut padded = vec![0u8; pw * ph * 4];
+            for py in 0..ph {
+                let sy = (i64::from(crop.y) + py as i64 - pad as i64).clamp(0, max_y) as usize;
+                for px in 0..pw {
+                    let sx = (i64::from(crop.x) + px as i64 - pad as i64).clamp(0, max_x) as usize;
+                    let si = (sy * src_w + sx) * 4;
+                    let di = (py * pw + px) * 4;
+                    padded[di..di + 4].copy_from_slice(&src.pixels[si..si + 4]);
+                }
+            }
+            if blur {
+                blur_straight(&mut padded, pw, ph, radius);
+            }
+            let mut out = vec![0u8; cw * ch * 4];
+            for y in 0..ch {
+                let row = ((y + pad) * pw + pad) * 4;
+                out[y * cw * 4..(y + 1) * cw * 4].copy_from_slice(&padded[row..row + cw * 4]);
+            }
+            if let Some(tint) = tint {
+                for pixel in out.chunks_exact_mut(4) {
+                    composite_over(pixel, tint);
+                }
+            }
+            RgbaImage {
+                width: cw as u32,
+                height: ch as u32,
+                pixels: out,
+            }
+        }
+
+        fn blur_straight(pixels: &mut [u8], w: usize, h: usize, radius: f32) {
+            let sigma = radius / 2.0;
+            let mut tmp = Vec::new();
+            let mut acc = Vec::new();
+            if radius <= DOWNSCALE_RADIUS {
+                let mut work = vec![0.0f32; w * h * 4];
+                for (src, dst) in pixels.chunks_exact(4).zip(work.chunks_exact_mut(4)) {
+                    premultiply_pixel(src, dst);
+                }
+                blur_boxes(&mut work, &mut tmp, &mut acc, w, h, sigma);
+                for (src, dst) in work.chunks_exact(4).zip(pixels.chunks_exact_mut(4)) {
+                    unpremultiply_pixel(src, dst);
+                }
+                return;
+            }
+            let factor = DOWNSCALE_FACTOR;
+            let dw = w.div_ceil(factor);
+            let dh = h.div_ceil(factor);
+            let mut down = vec![0.0f32; dw * dh * 4];
+            box_downsample_premultiplied(pixels, w, h, &mut down, dw, dh, factor);
+            blur_boxes(&mut down, &mut tmp, &mut acc, dw, dh, sigma / factor as f32);
+            let mut taps = Vec::new();
+            bilinear_upscale_straight(&down, dw, dh, pixels, w, h, factor, &mut taps);
+        }
+
+        fn blur_boxes(
+            buf: &mut [f32],
+            tmp: &mut Vec<f32>,
+            acc: &mut Vec<f32>,
+            w: usize,
+            h: usize,
+            sigma: f32,
+        ) {
+            tmp.resize(buf.len(), 0.0);
+            acc.resize(w * 4, 0.0);
+            for r in box_radii(sigma) {
+                if r == 0 {
+                    continue;
+                }
+                box_horizontal(buf, tmp, w, h, r);
+                box_vertical(tmp, buf, acc, w, h, r);
+            }
+        }
+
+        fn box_horizontal(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize) {
+            let stride = w * 4;
+            let inv = 1.0 / (2 * r + 1) as f32;
+            let ri = r as isize;
+            let last = w as isize - 1;
+            for y in 0..h {
+                let row = &src[y * stride..(y + 1) * stride];
+                let out = &mut dst[y * stride..(y + 1) * stride];
+                let mut sum = [0.0f32; 4];
+                for k in -ri..=ri {
+                    let p = clamp_index(k, last) * 4;
+                    for c in 0..4 {
+                        sum[c] += row[p + c];
+                    }
+                }
+                for x in 0..w {
+                    let o = x * 4;
+                    for c in 0..4 {
+                        out[o + c] = sum[c] * inv;
+                    }
+                    let add = clamp_index(x as isize + ri + 1, last) * 4;
+                    let sub = clamp_index(x as isize - ri, last) * 4;
+                    for c in 0..4 {
+                        sum[c] += row[add + c] - row[sub + c];
+                    }
+                }
+            }
+        }
+
+        fn box_vertical(
+            src: &[f32],
+            dst: &mut [f32],
+            acc: &mut [f32],
+            w: usize,
+            h: usize,
+            r: usize,
+        ) {
+            let stride = w * 4;
+            let inv = 1.0 / (2 * r + 1) as f32;
+            let ri = r as isize;
+            let last = h as isize - 1;
+            acc.fill(0.0);
+            for k in -ri..=ri {
+                let o = clamp_index(k, last) * stride;
+                for (a, s) in acc.iter_mut().zip(&src[o..o + stride]) {
+                    *a += *s;
+                }
+            }
+            for y in 0..h {
+                let out = &mut dst[y * stride..(y + 1) * stride];
+                for (d, a) in out.iter_mut().zip(acc.iter()) {
+                    *d = *a * inv;
+                }
+                let add = clamp_index(y as isize + ri + 1, last) * stride;
+                let sub = clamp_index(y as isize - ri, last) * stride;
+                for i in 0..stride {
+                    acc[i] += src[add + i] - src[sub + i];
+                }
+            }
+        }
+
+        fn box_downsample_premultiplied(
+            src: &[u8],
+            w: usize,
+            h: usize,
+            dst: &mut [f32],
+            dw: usize,
+            dh: usize,
+            factor: usize,
+        ) {
+            for dy in 0..dh {
+                let (y0, y1) = (dy * factor, (dy * factor + factor).min(h));
+                for dx in 0..dw {
+                    let (x0, x1) = (dx * factor, (dx * factor + factor).min(w));
+                    let mut sum = [0.0f32; 4];
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let si = (y * w + x) * 4;
+                            let mut premul = [0.0f32; 4];
+                            premultiply_pixel(&src[si..si + 4], &mut premul);
+                            for c in 0..4 {
+                                sum[c] += premul[c];
+                            }
+                        }
+                    }
+                    let inv = 1.0 / ((y1 - y0) * (x1 - x0)) as f32;
+                    let di = (dy * dw + dx) * 4;
+                    for c in 0..4 {
+                        dst[di + c] = sum[c] * inv;
+                    }
+                }
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn bilinear_upscale_straight(
+            src: &[f32],
+            sw: usize,
+            sh: usize,
+            dst: &mut [u8],
+            dw: usize,
+            dh: usize,
+            factor: usize,
+            taps: &mut Vec<(usize, usize, f32)>,
+        ) {
+            let f = factor as f32;
+            taps.clear();
+            for x in 0..dw {
+                let sx = (((x as f32 + 0.5) / f) - 0.5).clamp(0.0, (sw - 1) as f32);
+                let x0 = sx.floor() as usize;
+                taps.push((x0, (x0 + 1).min(sw - 1), sx - x0 as f32));
+            }
+            for y in 0..dh {
+                let sy = (((y as f32 + 0.5) / f) - 0.5).clamp(0.0, (sh - 1) as f32);
+                let y0 = sy.floor() as usize;
+                let y1 = (y0 + 1).min(sh - 1);
+                let ty = sy - y0 as f32;
+                let row0 = &src[y0 * sw * 4..(y0 + 1) * sw * 4];
+                let row1 = &src[y1 * sw * 4..(y1 + 1) * sw * 4];
+                let out = &mut dst[y * dw * 4..(y + 1) * dw * 4];
+                for (o, &(x0, x1, tx)) in out.chunks_exact_mut(4).zip(taps.iter()) {
+                    let a = pixel_f32(row0, x0);
+                    let b = pixel_f32(row0, x1);
+                    let c = pixel_f32(row1, x0);
+                    let d = pixel_f32(row1, x1);
+                    let mut premul = [0.0f32; 4];
+                    for ch in 0..4 {
+                        let top = a[ch] + (b[ch] - a[ch]) * tx;
+                        let bottom = c[ch] + (d[ch] - c[ch]) * tx;
+                        premul[ch] = top + (bottom - top) * ty;
+                    }
+                    unpremultiply_pixel(&premul, o);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gaussian_blur_matches_previous_implementation() {
+        let mut scratch = BlurScratch::new();
+        for (w, h) in [(61u32, 9u32), (37, 29), (13, 7), (1280, 31), (1, 1)] {
+            let original = noisy(w, h);
+            for radius in [3.0f32, 12.0, 13.0, 19.0, 24.0] {
+                let mut expected = original.clone();
+                oracle::gaussian_blur_rgba(&mut expected, w, h, radius).unwrap();
+                let mut got = original.clone();
+                gaussian_blur_rgba_with(&mut scratch, &mut got, w, h, radius).unwrap();
+                assert_eq!(got, expected, "{w}x{h} radius {radius}");
+            }
+        }
+    }
+
+    #[test]
+    fn frosted_backdrop_matches_previous_implementation() {
+        let src = RgbaImage::from_rgba8(41, 23, noisy(41, 23)).unwrap();
+        let crops = [
+            Rect {
+                x: -5,
+                y: 3,
+                width: 25,
+                height: 13,
+            },
+            Rect {
+                x: 30,
+                y: -7,
+                width: 11,
+                height: 31,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 41,
+                height: 23,
+            },
+            Rect {
+                x: 3,
+                y: 2,
+                width: 1,
+                height: 1,
+            },
+        ];
+        let mut scratch = BlurScratch::new();
+        for crop in crops {
+            for radius in [0.0f32, 3.0, 12.0, 13.0, 19.0, 24.0] {
+                for tint in [None, Some([10, 20, 30, 100])] {
+                    let expected = oracle::frosted_backdrop(&src, crop, radius, tint);
+                    let got = frosted_backdrop_with(&mut scratch, &src, crop, radius, tint);
+                    assert_eq!((got.width, got.height), (expected.width, expected.height));
+                    assert_eq!(
+                        got.pixels, expected.pixels,
+                        "crop {crop:?} radius {radius} tint {tint:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scratch_capacity_tracks_current_request_and_releases() {
+        let mut scratch = BlurScratch::new();
+        let mut big = noisy(1280, 31);
+        gaussian_blur_rgba_with(&mut scratch, &mut big, 1280, 31, 12.0).unwrap();
+        assert!(scratch.work.capacity() >= 1280 * 31 * 4);
+
+        let mut small = noisy(16, 16);
+        gaussian_blur_rgba_with(&mut scratch, &mut small, 16, 16, 3.0).unwrap();
+        assert!(scratch.work.capacity() <= 2 * 16 * 16 * 4 + SHRINK_SLACK);
+
+        let mut again = noisy(16, 16);
+        gaussian_blur_rgba_with(&mut scratch, &mut again, 16, 16, 3.0).unwrap();
+        let settled = scratch.work.capacity();
+        gaussian_blur_rgba_with(&mut scratch, &mut again, 16, 16, 3.0).unwrap();
+        assert_eq!(scratch.work.capacity(), settled);
+
+        scratch.release();
+        assert_eq!(scratch.work.capacity(), 0);
+        assert_eq!(scratch.line.capacity(), 0);
+        assert_eq!(scratch.band.capacity(), 0);
+        assert_eq!(scratch.down.capacity(), 0);
     }
 
     #[test]
