@@ -93,6 +93,7 @@ use flamewm_api::shortcuts::{
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
     ACTION_WORKSPACE_UP,
 };
+use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP};
 use flamewm_platform::system::MediaAudioKey;
 use flamewm_window_core::{
@@ -258,6 +259,48 @@ impl WmConfig {
             flamewm_api::workspace::MAX_WORKSPACES as u16,
         ));
         config
+    }
+}
+
+impl WmConfig {
+    /// Starts from the persisted workspace count; `FLAMEWM_WORKSPACES` still wins when set.
+    #[must_use]
+    pub fn with_persisted_workspaces(self, settings_path: &std::path::Path) -> Self {
+        let env_set = env::var_os("FLAMEWM_WORKSPACES").is_some_and(|value| !value.is_empty());
+        let persisted = load_persisted_count(&count_store_path(settings_path));
+        self.resolve_workspaces(env_set, persisted)
+    }
+
+    fn resolve_workspaces(mut self, env_set: bool, persisted: Option<usize>) -> Self {
+        if let (false, Some(count)) = (env_set, persisted) {
+            self.workspaces = count;
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod workspace_count_tests {
+    use super::WmConfig;
+
+    #[test]
+    fn persisted_count_applies_only_without_env_override() {
+        let base = WmConfig::default();
+        assert_eq!(base.resolve_workspaces(false, Some(7)).workspaces, 7);
+        assert_eq!(base.resolve_workspaces(true, Some(7)).workspaces, 4);
+        assert_eq!(base.resolve_workspaces(false, None).workspaces, 4);
+    }
+
+    #[test]
+    fn start_path_reads_persisted_count_from_settings_dir() {
+        let dir = std::env::temp_dir().join(format!("flamewm-wm-start-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let settings = dir.join("settings.toml");
+        std::fs::write(dir.join("workspaces.conf"), "workspaces.count=6\n").expect("write");
+        let config = WmConfig::default().with_persisted_workspaces(&settings);
+        assert_eq!(config.workspaces, 6);
+        assert_eq!(WmConfig::default().resolve_workspaces(true, Some(6)).workspaces, 4);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

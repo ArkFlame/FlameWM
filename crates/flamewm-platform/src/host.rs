@@ -28,7 +28,7 @@ use crate::services::session::SessionService;
 use crate::services::settings::SettingsService;
 use crate::services::shortcuts::{ShortcutService, effective_registry};
 use crate::services::windows::WindowService;
-use crate::services::workspaces::WorkspaceService;
+use crate::services::workspaces::{WorkspaceService, count_store_path};
 use crate::shortcuts::ShortcutRegistry;
 use crate::system::{SystemActionHandler, SystemService};
 
@@ -61,7 +61,7 @@ impl<E: EnginePorts> PlatformHost<E> {
             started: false,
             generation: 0,
             windows: WindowService::default(),
-            workspaces: WorkspaceService,
+            workspaces: WorkspaceService::new(count_store_path(&settings_path)),
             displays: DisplayService::default(),
             panels: PanelService::default(),
             settings: SettingsService::new(settings_path),

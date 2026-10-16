@@ -130,6 +130,7 @@ fn run_session(
     flamewm_profiler::init_process("flamewm-wm");
     flamewm_debug::init_process("wm");
     let (settings_path, settings_source) = settings_path();
+    let config = config.with_persisted_workspaces(&settings_path);
     eprintln!(
         "flamewm-wm: settings path={} source={settings_source}",
         settings_path.display()

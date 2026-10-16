@@ -3,6 +3,9 @@ use crate::{ErrorCode, FlameError, FlameResult};
 /// Product maximum for workspace count; shared by planner, WM clamp and env override.
 pub const MAX_WORKSPACES: usize = 18;
 
+/// Key of the persisted workspace count, written by the platform workspace service.
+pub const WORKSPACE_COUNT_KEY: &str = "workspaces.count";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSnapshot {
     pub revision: u64,
