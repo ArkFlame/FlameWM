@@ -46,24 +46,14 @@ use flamewm_api::{
 };
 use flamewm_applications::{ApplicationCatalog, WindowApplicationIdentity};
 use flamewm_x11_desktop::shortcuts::{ShortcutGrabs, XGrabBackend, read_keyboard_table};
+use flamewm_x11_desktop::shared::{self, PendingMode};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
 use x11rb::protocol::xproto::{
-    self, Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask, Window,
+    self, Atom, AtomEnum, ConnectionExt, Window,
 };
 use x11rb::rust_connection::RustConnection;
-
-#[derive(Debug, Clone, Copy)]
-struct PendingMode {
-    transaction: TransactionId,
-    crtc: randr::Crtc,
-    output: randr::Output,
-    old_mode: randr::Mode,
-    old_x: i16,
-    old_y: i16,
-    old_rotation: randr::Rotation,
-}
 
 /// Process-wide workspace revision fence. `Wm` advances it on desktop root
 /// property changes; `X11Desktop` is rebuilt per event, so the counter must
@@ -209,25 +199,7 @@ impl X11Desktop {
             .collect())
     }
     fn client_message(&self, window: Window, name: &str, data: [u32; 5]) -> FlameResult<()> {
-        let event = ClientMessageEvent {
-            response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
-            format: 32,
-            sequence: 0,
-            window,
-            type_: self.atom(name),
-            data: ClientMessageData::from(data),
-        };
-        self.conn
-            .send_event(
-                false,
-                self.root,
-                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-                event,
-            )
-            .map_err(io_error)?
-            .check()
-            .map_err(io_error)?;
-        self.flush()
+        shared::client_message(&self.conn, self.root, window, self.atom(name), data)
     }
     fn bump_generation(&self, window: Window) -> u64 {
         let next = self.next_generation.get().max(1);
@@ -263,40 +235,13 @@ impl X11Desktop {
         Ok(window)
     }
     fn root_work_area(&self) -> FlameResult<Rect> {
-        let desktop = self
-            .property32(self.root, "_NET_CURRENT_DESKTOP")?
-            .first()
-            .copied()
-            .unwrap_or(0) as usize;
-        let values = self.property32(self.root, "_NET_WORKAREA")?;
-        let start = desktop
-            .checked_mul(4)
-            .ok_or_else(|| FlameError::unavailable("root _NET_WORKAREA is invalid"))?;
-        if values.len() < start.saturating_add(4) {
-            return Err(FlameError::unavailable("root _NET_WORKAREA is unavailable"));
-        }
-        let area = Rect::new(
-            signed(values[start]),
-            signed(values[start + 1]),
-            values[start + 2] as i32,
-            values[start + 3] as i32,
-        );
-        area.is_valid()
-            .then_some(area)
-            .ok_or_else(|| FlameError::unavailable("root _NET_WORKAREA is invalid"))
+        shared::root_work_area(|name| self.property32(self.root, name))
     }
     fn send_state(&self, window: Window, atom: Atom, action: FeatureAction) -> FlameResult<()> {
-        let action = match action {
-            FeatureAction::Remove => 0,
-            FeatureAction::Add => 1,
-            FeatureAction::Toggle => 2,
-        };
-        self.client_message(window, "_NET_WM_STATE", [action, atom, 0, 1, 0])
+        shared::send_state(&self.conn, self.root, self.atom("_NET_WM_STATE"), window, atom, action)
     }
     fn text(&self, window: Window, name: &str) -> FlameResult<String> {
-        Ok(String::from_utf8_lossy(&self.property_bytes(window, name)?)
-            .trim_end_matches('\0')
-            .to_owned())
+        Ok(shared::text_from_bytes(&self.property_bytes(window, name)?))
     }
 }
 
@@ -661,24 +606,7 @@ impl WorkspacePort for X11Desktop {
 
 impl InputPort for X11Desktop {
     fn root_pointer(&self) -> FlameResult<PointerPosition> {
-        let reply = self
-            .conn
-            .query_pointer(self.root)
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?;
-        Ok(PointerPosition {
-            root: Point::new(i32::from(reply.root_x), i32::from(reply.root_y)),
-            output: self
-                .display_snapshot()?
-                .outputs
-                .into_iter()
-                .find(|o| {
-                    o.geometry
-                        .contains(Point::new(i32::from(reply.root_x), i32::from(reply.root_y)))
-                })
-                .map(|o| o.id),
-        })
+        shared::root_pointer(&self.conn, self.root, || self.display_snapshot())
     }
 }
 
@@ -1011,79 +939,7 @@ impl DisplayPort for X11Desktop {
         })
     }
     fn apply_mode(&mut self, output_name: &OutputId, mode: ModeId) -> FlameResult<TransactionId> {
-        if self.pending_mode.is_some() {
-            return Err(FlameError::new(
-                ErrorCode::Busy,
-                "RandR mode transaction already pending",
-            ));
-        }
-        let resources = self
-            .conn
-            .randr_get_screen_resources_current(self.root)
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?;
-        for output in resources.outputs {
-            let info = self
-                .conn
-                .randr_get_output_info(output, resources.config_timestamp)
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?;
-            if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED)
-                || String::from_utf8_lossy(&info.name) != output_name.as_str()
-            {
-                continue;
-            }
-            let crtc = info.crtc;
-            if crtc == 0 || !info.modes.contains(&(mode.0 as u32)) {
-                return Err(FlameError::new(
-                    ErrorCode::InvalidArgument,
-                    "RandR output or mode is not active",
-                ));
-            }
-            let old = self
-                .conn
-                .randr_get_crtc_info(crtc, resources.config_timestamp)
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?;
-            let reply = self
-                .conn
-                .randr_set_crtc_config(
-                    crtc,
-                    CURRENT_TIME,
-                    resources.config_timestamp,
-                    old.x,
-                    old.y,
-                    mode.0 as u32,
-                    old.rotation,
-                    &old.outputs,
-                )
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?;
-            if u8::from(reply.status) != u8::from(randr::SetConfig::SUCCESS) {
-                return Err(FlameError::new(
-                    ErrorCode::EngineRejected,
-                    "RandR rejected mode change",
-                ));
-            }
-            self.next_transaction = self.next_transaction.saturating_add(1).max(1);
-            let transaction = TransactionId(self.next_transaction);
-            self.pending_mode = Some(PendingMode {
-                transaction,
-                crtc,
-                output,
-                old_mode: old.mode,
-                old_x: old.x,
-                old_y: old.y,
-                old_rotation: old.rotation,
-            });
-            self.flush()?;
-            return Ok(transaction);
-        }
-        Err(FlameError::not_found("RandR output not found"))
+        shared::apply_mode(&self.conn, self.root, &mut self.pending_mode, &mut self.next_transaction, output_name, mode)
     }
     fn keep_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
         if self.pending_mode.map(|p| p.transaction) != Some(transaction) {
