@@ -10,6 +10,11 @@ pub(super) enum SecretAgentCall {
     CancelGetSecrets {
         reply: Option<Message>,
     },
+    /// A reply owed to NetworkManager that changes no secret state: an empty return for
+    /// SaveSecrets/DeleteSecrets (the agent stores nothing), or UnknownMethod for other members.
+    SendReply {
+        reply: Option<Message>,
+    },
 }
 
 pub(super) struct SecretContext {

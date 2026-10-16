@@ -170,6 +170,7 @@ fn secret_agent_parser_preserves_requested_setting_without_secret_data() {
             assert_eq!(secret_key, "psk");
         }
         SecretAgentCall::CancelGetSecrets { .. } => panic!("GetSecrets parsed as cancel"),
+        SecretAgentCall::SendReply { .. } => panic!("GetSecrets parsed as reply"),
     }
 }
 
@@ -196,6 +197,7 @@ fn secret_agent_parser_marks_hintless_get_secrets_as_empty_key() {
     match parse_secret_agent_call(&message).expect("valid SecretAgent call") {
         SecretAgentCall::GetSecrets { secret_key, .. } => assert!(secret_key.is_empty()),
         SecretAgentCall::CancelGetSecrets { .. } => panic!("GetSecrets parsed as cancel"),
+        SecretAgentCall::SendReply { .. } => panic!("GetSecrets parsed as reply"),
     }
 }
 
@@ -660,4 +662,62 @@ fn failing_secret_event_does_not_abort_remaining_batch() {
         Ok(())
     });
     assert_eq!(applied, 2, "second queued event was never dispatched");
+}
+
+fn peer_call(member: &str) -> Message {
+    let mut message = Message::new_method_call(
+        NETWORK_MANAGER_SERVICE,
+        SECRET_AGENT_PATH,
+        SECRET_AGENT_INTERFACE,
+        member,
+    )
+    .expect("valid SecretAgent call");
+    // libdbus aborts on method_return()/error() when the call serial is 0.
+    message.set_serial(1);
+    message.append_items(&[
+        empty_dict(),
+        MessageItem::ObjectPath(
+            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
+                .expect("valid path"),
+        ),
+    ]);
+    message
+}
+
+#[test]
+fn secret_agent_save_secrets_replies_with_empty_return() {
+    let message = peer_call("SaveSecrets");
+    match parse_secret_agent_call(&message).expect("SaveSecrets is not fatal") {
+        SecretAgentCall::SendReply { reply: Some(reply) } => {
+            assert_eq!(reply.msg_type(), MessageType::MethodReturn);
+            assert!(reply.get_items().is_empty());
+        }
+        _ => panic!("SaveSecrets must produce a method return"),
+    }
+}
+
+#[test]
+fn secret_agent_delete_secrets_replies_with_empty_return() {
+    let message = peer_call("DeleteSecrets");
+    match parse_secret_agent_call(&message).expect("DeleteSecrets is not fatal") {
+        SecretAgentCall::SendReply { reply: Some(reply) } => {
+            assert_eq!(reply.msg_type(), MessageType::MethodReturn);
+            assert!(reply.get_items().is_empty());
+        }
+        _ => panic!("DeleteSecrets must produce a method return"),
+    }
+}
+
+#[test]
+fn secret_agent_unknown_member_replies_unknown_method() {
+    let message = peer_call("FutureMethod");
+    match parse_secret_agent_call(&message).expect("unknown member is not fatal") {
+        SecretAgentCall::SendReply {
+            reply: Some(mut reply),
+        } => match reply.as_result() {
+            Err(error) => assert_eq!(error.name(), Some(UNKNOWN_METHOD)),
+            Ok(_) => panic!("unknown member must produce an error reply"),
+        },
+        _ => panic!("unknown member must produce an UnknownMethod error reply"),
+    }
 }
