@@ -491,6 +491,19 @@ mod slide_motion_tests {
     const SIZE: (u32, u32) = (300, 400);
 
     #[test]
+    fn closing_landing_frame_stays_off_the_panel_edge() {
+        // Close timeline runs progress 1.0 -> 0.0; its landed frame is the off-edge end frame,
+        // never the fully visible origin (that frame would flash before the unmap).
+        for edge in [SlideEdge::Bottom, SlideEdge::Top, SlideEdge::Left, SlideEdge::Right] {
+            let landed = landing_frame_origin(FINAL, SIZE, edge, 0.0);
+            assert_eq!(landed, slide_origin(FINAL, SIZE, edge, 0.0), "{edge:?}");
+            assert_ne!(landed, FINAL, "{edge:?}");
+        }
+        // Opening landing still snaps to the final origin.
+        assert_eq!(landing_frame_origin(FINAL, SIZE, SlideEdge::Bottom, 1.0), FINAL);
+    }
+
+    #[test]
     fn slide_origin_starts_off_the_panel_edge_per_edge() {
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Bottom, 0.0), (100, 900));
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Top, 0.0), (100, 100));

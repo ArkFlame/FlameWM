@@ -143,6 +143,12 @@ pub(super) fn slide_origin(final_origin: (i32, i32), size: (u32, u32), edge: Sli
     )
 }
 
+/// Window origin for one slide frame. The timeline's end progress is exact (1.0 opened, 0.0 closed),
+/// so the landed frame needs no snap: a closed slide ends off the panel edge, never on its origin.
+pub(super) fn landing_frame_origin(final_origin: (i32, i32), size: (u32, u32), edge: SlideEdge, progress: f32) -> (i32, i32) {
+    slide_origin(final_origin, size, edge, progress)
+}
+
 /// Frame wait while any slide is active; `None` keeps the reactor fully idle.
 pub(super) fn motion_frame_wait(active: bool) -> Option<Duration> {
     active.then_some(FRAME_INTERVAL)

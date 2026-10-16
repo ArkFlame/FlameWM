@@ -1227,11 +1227,7 @@ impl SurfaceController {
             }
             let window = instance.app.window;
             let size = (instance.app.width, instance.app.height);
-            let (x, y) = if finished {
-                instance.origin
-            } else {
-                slide_origin(instance.origin, size, active.edge, progress)
-            };
+            let (x, y) = landing_frame_origin(instance.origin, size, active.edge, progress);
             if instance.slide_drawn != Some((x, y)) {
                 unsafe { XMoveResizeWindow(display, window, x, y, size.0, size.1) };
                 instance.slide_drawn = Some((x, y));
