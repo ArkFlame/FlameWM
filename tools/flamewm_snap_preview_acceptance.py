@@ -24,7 +24,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-ACCENT = (0xEF, 0x40, 0x48)
+# Neutral WM default accent (live_settings.rs); the ring follows the configured
+# `accent` setting, so pass --accent to match it.
+DEFAULT_ACCENT = (0x7F, 0x87, 0x8E)
 FORBIDDEN_DISPLAYS = {":97"} | {f":{n}" for n in range(123, 131)}
 DISPLAY_RE = re.compile(r"^:(131)$")
 
@@ -84,11 +86,23 @@ def classify_interior(
     }
 
 
-def classify_ring(ring: list[tuple[int, int, int]], tol: int = 24) -> dict:
+def parse_accent(text: str) -> tuple[int, int, int]:
+    """Parse the configured `accent` setting, `#RRGGBB` or bare `RRGGBB`."""
+    digits = text.removeprefix("#")
+    if len(digits) != 6 or any(c not in "0123456789abcdefABCDEF" for c in digits):
+        raise ValueError(f"accent must be #RRGGBB, got {text!r}")
+    return (int(digits[0:2], 16), int(digits[2:4], 16), int(digits[4:6], 16))
+
+
+def classify_ring(
+    ring: list[tuple[int, int, int]],
+    accent: tuple[int, int, int] = DEFAULT_ACCENT,
+    tol: int = 24,
+) -> dict:
     if not ring:
         raise ValueError("ring sample must be non-empty")
-    accent = sum(1 for p in ring if close(p, ACCENT, tol))
-    return {"samples": len(ring), "accent_fraction": accent / len(ring)}
+    matches = sum(1 for p in ring if close(p, accent, tol))
+    return {"samples": len(ring), "accent_fraction": matches / len(ring)}
 
 
 def verdict(interior: dict, ring: dict, rects_ok: bool) -> str:
@@ -193,7 +207,14 @@ def find_preview(display: str) -> tuple[int, tuple[int, int, int, int]] | None:
     return None
 
 
-def run(display: str, grab: tuple[int, int], target_x: int, out_dir: Path, hold: float) -> int:
+def run(
+    display: str,
+    grab: tuple[int, int],
+    target_x: int,
+    out_dir: Path,
+    hold: float,
+    accent: tuple[int, int, int],
+) -> int:
     if display in FORBIDDEN_DISPLAYS or not DISPLAY_RE.match(display):
         print(f"refusing display {display}: only :131 is allowed for this harness", file=sys.stderr)
         return 2
@@ -224,14 +245,14 @@ def run(display: str, grab: tuple[int, int], target_x: int, out_dir: Path, hold:
     (out_dir / "held.xwd").write_bytes(subprocess.run(
         ["xwd", "-root", "-silent", "-display", display], capture_output=True, check=True).stdout)
 
-    report = evaluate(before, held, (px, py, pw, ph), rects)
+    report = evaluate(before, held, (px, py, pw, ph), rects, accent)
     report["shape_rects"] = rects
     report["negative_control"] = None
 
     pointer.set_full_bounding(win, pw, ph)
     time.sleep(0.3)
     neg = screenshot(display)
-    report["negative_control"] = evaluate(before, neg, (px, py, pw, ph), [(0, 0, pw, ph)])
+    report["negative_control"] = evaluate(before, neg, (px, py, pw, ph), [(0, 0, pw, ph)], accent)
     pointer.button(False)
 
     for key, value in report.items():
@@ -239,7 +260,7 @@ def run(display: str, grab: tuple[int, int], target_x: int, out_dir: Path, hold:
     return 0 if report["verdict"] == "PASS_SEE_THROUGH" else 1
 
 
-def evaluate(before: Image, held: Image, geo, rects) -> dict:
+def evaluate(before: Image, held: Image, geo, rects, accent: tuple[int, int, int]) -> dict:
     px, py, pw, ph = geo
     border = 2
     # Interior sample: band below the dragged window (which sits at the top-left of the zone) and
@@ -250,7 +271,7 @@ def evaluate(before: Image, held: Image, geo, rects) -> dict:
     interior_before = region_pixels(before, (sx, sy, sw, sh))
     left_ring = region_pixels(held, (px + 20, py, max(1, pw - 40), border))
     interior = classify_interior(interior_now, interior_before)
-    ring = classify_ring(left_ring)
+    ring = classify_ring(left_ring, accent)
     rects_ok = shape_is_ring(rects, pw, ph, border) if pw <= 2000 and ph <= 2000 else False
     return {
         "preview_geometry": geo,
@@ -268,9 +289,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-x", type=int, default=1, help="x to drag toward the left edge")
     parser.add_argument("--hold", type=float, default=1.5)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--accent",
+        type=parse_accent,
+        default=DEFAULT_ACCENT,
+        help="configured accent #RRGGBB the ring must match (default: WM neutral)",
+    )
     args = parser.parse_args(argv)
     gx, gy = (int(v) for v in args.grab.split(","))
-    return run(args.display, (gx, gy), args.target_x, args.out, args.hold)
+    return run(args.display, (gx, gy), args.target_x, args.out, args.hold, args.accent)
 
 
 if __name__ == "__main__":

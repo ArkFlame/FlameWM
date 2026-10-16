@@ -24,7 +24,7 @@ class SamplerTests(unittest.TestCase):
         result = acc.classify_interior(black, behind)
         self.assertEqual(result["black_fraction"], 1.0)
         self.assertEqual(
-            acc.verdict(result, acc.classify_ring([acc.ACCENT] * 10), True),
+            acc.verdict(result, acc.classify_ring([acc.DEFAULT_ACCENT] * 10), True),
             "FAIL_BLACK_INTERIOR",
         )
 
@@ -32,11 +32,22 @@ class SamplerTests(unittest.TestCase):
         # Accent blended over black at alpha 0xdd: the pre-fix translucent border.
         dark = (207, 55, 62)
         self.assertEqual(acc.classify_ring([dark] * 8)["accent_fraction"], 0.0)
-        self.assertEqual(acc.classify_ring([acc.ACCENT] * 8)["accent_fraction"], 1.0)
+        self.assertEqual(acc.classify_ring([acc.DEFAULT_ACCENT] * 8)["accent_fraction"], 1.0)
+
+    def test_ring_matches_configured_accent_not_hardcoded_red(self):
+        blue = acc.parse_accent("#123456")
+        self.assertEqual(acc.classify_ring([blue] * 8, blue)["accent_fraction"], 1.0)
+        self.assertEqual(acc.classify_ring([(0xEF, 0x40, 0x48)] * 8, blue)["accent_fraction"], 0.0)
+
+    def test_parse_accent_accepts_hash_and_bare_hex_and_rejects_garbage(self):
+        self.assertEqual(acc.parse_accent("#EF4048"), (0xEF, 0x40, 0x48))
+        self.assertEqual(acc.parse_accent("7f878e"), (0x7F, 0x87, 0x8E))
+        with self.assertRaises(ValueError):
+            acc.parse_accent("#GG0000")
 
     def test_verdict_requires_ring_rects_and_both_samples(self):
         good_interior = acc.classify_interior([(1, 2, 3)] * 20, [(1, 2, 3)] * 20)
-        good_ring = acc.classify_ring([acc.ACCENT] * 20)
+        good_ring = acc.classify_ring([acc.DEFAULT_ACCENT] * 20)
         self.assertEqual(acc.verdict(good_interior, good_ring, True), "PASS_SEE_THROUGH")
         self.assertEqual(acc.verdict(good_interior, good_ring, False), "FAIL_SHAPE_NOT_RING")
         bad_interior = acc.classify_interior([(0, 0, 0)] * 20, [(100, 150, 200)] * 20)
@@ -75,8 +86,8 @@ class SamplerTests(unittest.TestCase):
         self.assertEqual(img.rgb(1, 1), (12, 11, 10))
 
     def test_refuses_forbidden_displays(self):
-        self.assertEqual(acc.run(":97", (0, 0), 0, Path("/tmp/claude-1000/x"), 0), 2)
-        self.assertEqual(acc.run(":125", (0, 0), 0, Path("/tmp/claude-1000/x"), 0), 2)
+        self.assertEqual(acc.run(":97", (0, 0), 0, Path("/tmp/claude-1000/x"), 0, acc.DEFAULT_ACCENT), 2)
+        self.assertEqual(acc.run(":125", (0, 0), 0, Path("/tmp/claude-1000/x"), 0, acc.DEFAULT_ACCENT), 2)
 
 
 if __name__ == "__main__":

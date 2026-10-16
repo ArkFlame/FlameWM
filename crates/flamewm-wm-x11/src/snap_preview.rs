@@ -14,6 +14,8 @@ use flamewm_ui_x11::{
 };
 use flamewm_window_core::SnapTarget;
 
+use crate::live_settings;
+
 const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-snap-preview.rwr"));
 
 /// Default fill opacity retained for the WM/settings interface. The
@@ -24,10 +26,6 @@ pub const DEFAULT_PREVIEW_OPACITY_PERCENT: u8 = 20;
 /// cannot affect the deterministic border-only surface.
 pub(crate) fn set_live_opacity(_opacity_percent: u8) {}
 
-/// Accent red backing the preview border (`#ef4048`), shared with desktop
-/// selection styling.
-pub const ACCENT_RGB: (u8, u8, u8) = backdrop::BACKDROP_ACCENT_RGB;
-
 /// Ring width matches the `.snap-preview` CSS border (2px); the preview has no corner radius.
 const RING_BORDER_PX: u32 = backdrop::BACKDROP_BORDER_WIDTH_PX;
 const RING_RADIUS_PX: u32 = 0;
@@ -35,15 +33,11 @@ const RING_RADIUS_PX: u32 = 0;
 const FILL_NODE: &str = "snap-preview";
 const BACKDROP_NODE: &str = "snap-preview-backdrop";
 
-/// Opaque accent: with no compositor the ring is blended over the window's black backing, so a
-/// translucent alpha would render as a dark red instead of `#ef4048`.
+/// Opaque live system accent: with no compositor the ring is blended over the window's black
+/// backing, so a translucent alpha would render as a dark tint instead of the accent.
 fn border_color() -> UiColor {
-    UiColor {
-        r: ACCENT_RGB.0,
-        g: ACCENT_RGB.1,
-        b: ACCENT_RGB.2,
-        a: 0xff,
-    }
+    let (r, g, b) = live_settings::accent_rgb();
+    UiColor { r, g, b, a: 0xff }
 }
 
 fn apply_border_only_style(document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -223,6 +217,26 @@ mod tests {
     }
 
     #[test]
+    fn snap_preview_css_default_is_neutral_not_red() {
+        let css = include_str!("../ui/snap-preview.css").to_ascii_lowercase();
+        assert!(!css.contains("ef4048"), "snap preview CSS still hard-codes the red accent");
+        assert!(css.contains("#7f878e"), "snap preview CSS default must be the neutral accent");
+    }
+
+    #[test]
+    fn snap_border_follows_stored_accent() {
+        let mut snapshot = flamewm_api::settings::SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "accent".into(),
+            flamewm_api::settings::SettingValue::Text("#123456".into()),
+        );
+        crate::live_settings::sync(&snapshot);
+        let border = border_color();
+        assert_eq!((border.r, border.g, border.b, border.a), (0x12, 0x34, 0x56, 0xff));
+        crate::live_settings::sync(&flamewm_api::settings::SettingsSnapshot::new(1));
+    }
+
+    #[test]
     fn hidden_at_init() {
         let preview = SnapPreviewSurface::new();
         assert!(!preview.visible());
@@ -271,29 +285,16 @@ mod tests {
     #[test]
     fn repeated_document_styling_keeps_deterministic_border_only_material() {
         let mut document = decode_document(COMPILED_UI).expect("compiled snap preview decodes");
-        let expected_border = border_color();
         for cycle in 0..20 {
             apply_border_only_style(&mut document)
                 .unwrap_or_else(|error| panic!("border-only document styling {cycle}: {error}"));
-            assert_eq!(
-                border_color(),
-                expected_border,
-                "border material at cycle {cycle}"
-            );
+            assert_eq!(border_color().a, 0xff, "border material at cycle {cycle}");
         }
     }
 
     #[test]
     fn border_color_is_stable_and_does_not_depend_on_fill_opacity() {
-        assert_eq!(
-            border_color(),
-            UiColor {
-                r: ACCENT_RGB.0,
-                g: ACCENT_RGB.1,
-                b: ACCENT_RGB.2,
-                a: 0xff,
-            }
-        );
+        assert_eq!(border_color().a, 0xff);
         assert_eq!(DEFAULT_PREVIEW_OPACITY_PERCENT, 20);
     }
 }
