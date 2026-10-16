@@ -6,6 +6,8 @@ use flamewm_api::system::{
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+use crate::backoff::next_reconnect_delay_ms;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessPoint {
     pub path: String,
@@ -388,21 +390,13 @@ impl NetworkController {
     }
 
     pub fn next_reconnect_delay_ms(&mut self) -> Option<u64> {
-        if !self.reconnect_pending || self.reconnect_attempts >= self.backoff.maximum_attempts {
-            self.reconnect_pending = false;
-            return None;
-        }
-        let shift = u32::from(self.reconnect_attempts.min(7));
-        let delay = self
-            .backoff
-            .initial_ms
-            .saturating_mul(1_u64 << shift)
-            .min(self.backoff.maximum_ms);
-        self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
-        if self.reconnect_attempts >= self.backoff.maximum_attempts {
-            self.reconnect_pending = false;
-        }
-        Some(delay)
+        next_reconnect_delay_ms(
+            self.backoff.initial_ms,
+            self.backoff.maximum_ms,
+            self.backoff.maximum_attempts,
+            &mut self.reconnect_attempts,
+            &mut self.reconnect_pending,
+        )
     }
 
     fn validate_generation(&self, caller_generation: u64) -> FlameResult<()> {
