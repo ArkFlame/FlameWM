@@ -1295,14 +1295,7 @@ mod media_projection_tests {
         fn layer(&mut self, _: &str, _: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
             Ok(())
         }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: flamewm_ui_x11::Overflow,
-            _: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
+        crate::noop_document_overflow!();
         fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
             Ok(())
         }

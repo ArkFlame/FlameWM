@@ -556,6 +556,19 @@ fn replace_image(
 mod tests {
     use super::*;
 
+    macro_rules! noop_overflow {
+        () => {
+            fn overflow(
+                &mut self,
+                _: &str,
+                _: flamewm_ui_x11::Overflow,
+                _: flamewm_ui_x11::Overflow,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+        };
+    }
+
     #[test]
     fn projection_caret_is_display_only_and_model_stays_raw() {
         assert_eq!(caret_text("abc", true), "abc|");
@@ -767,14 +780,7 @@ mod tests {
         fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: flamewm_ui_x11::Overflow,
-            _: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
+        noop_overflow!();
         fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
             Ok(())
         }
@@ -843,14 +849,7 @@ mod tests {
         fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: flamewm_ui_x11::Overflow,
-            _: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
+        noop_overflow!();
         fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
             Ok(())
         }
@@ -1072,14 +1071,7 @@ mod tests {
         fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: flamewm_ui_x11::Overflow,
-            _: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
+        noop_overflow!();
         fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
             Ok(())
         }
@@ -1141,14 +1133,7 @@ mod tests {
         fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
             Ok(())
         }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: flamewm_ui_x11::Overflow,
-            _: flamewm_ui_x11::Overflow,
-        ) -> Result<(), String> {
-            Ok(())
-        }
+        noop_overflow!();
         fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
             Ok(())
         }
