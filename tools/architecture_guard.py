@@ -578,7 +578,7 @@ def j11_violations(root):
         or "prepare_path(" in wm
         or "resolve_app_icon_via" in wm
     ):
-        found.add(("crates/flamewm-wm-x11/src/wm.rs", "j11-g05-no-sync-icon-resolver"))
+        found.add(("crates/flamewm-wm-x11/src/wm/mod.rs", "j11-g05-no-sync-icon-resolver"))
     # J11-G06: frame chrome paints through the frame-engine owner
     # (paint_chrome / chrome_runtime cached scene_for+paint_cached bridge).
     # The retired Wm::draw_frame painter was deleted in the J16 cutover.
@@ -752,7 +752,7 @@ def j12_violations(root):
         if p.suffix == ".rs"
     )
     if not (count == 1 or (count == 0 and frame_count == 1)):
-        found.add(("crates/flamewm-wm-x11/src/decoration/manager.rs", "j12-g11-single-decoration-manager"))
+        found.add(("crates/flamewm-wm-x11/src/frame/resources.rs", "j12-g11-single-decoration-manager"))
     # J12-G12: wallpaper present, CPU out of desktop owner.
     if "wallpaper" not in live(J12_DESKTOP_PROJ).lower():
         found.add((J12_DESKTOP_PROJ, "j12-g12-wallpaper-not-cpu"))
@@ -776,19 +776,13 @@ def j12_violations(root):
     if "FlameWM-Breeze-Dark" not in session or "XCURSOR" not in session:
         found.add((J12_SESSION, "j12-g14-breeze-cursor-intact"))
     frame_res = live("crates/flamewm-wm-x11/src/frame/resources.rs")
-    paint_decor_path = root / "crates/flamewm-wm-x11/src/decoration/paint.rs"
-    paint_decor = live("crates/flamewm-wm-x11/src/decoration/paint.rs")
     if "cursor_for_region" not in frame_res:
         found.add((
             "crates/flamewm-wm-x11/src/frame/resources.rs",
             "j12-g14-breeze-cursor-intact",
         ))
-    elif paint_decor_path.is_file():
-        if "Breeze-Dark" not in paint_decor:
-            found.add((
-                "crates/flamewm-wm-x11/src/decoration/paint.rs",
-                "j12-g14-breeze-cursor-intact",
-            ))
+    if "Breeze-Dark" not in session:
+        found.add((J12_SESSION, "j12-g14-breeze-cursor-intact"))
     found |= j12h_violations(root)
     found |= j10_violations(root)
     found |= j18_violations(root)
@@ -897,14 +891,10 @@ J18_GEOMETRY_OWNER_FILES = (
 J18_HIT_OWNER_FILES = (
     "crates/flamewm-wm-x11/src/frame/input.rs",
     "crates/flamewm-wm-x11/src/frame/controller.rs",
-    "crates/flamewm-wm-x11/src/decoration/interaction.rs",
-    "crates/flamewm-wm-x11/src/decoration/manager.rs",
 )
 J18_TITLE_OWNER_FILES = (
     "crates/flamewm-wm-x11/src/frame/chrome.rs",
     "crates/flamewm-render-x11/src/external_decoration.rs",
-    "crates/flamewm-wm-x11/src/decoration/manager.rs",
-    "crates/flamewm-wm-x11/src/decoration/paint.rs",
 )
 
 

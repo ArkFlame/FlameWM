@@ -16,6 +16,9 @@ import architecture_guard as g
 
 def make_root(files: dict[str, str]) -> Path:
     tmp = Path(tempfile.mkdtemp(prefix="j18-"))
+    # Owner files required by J11/J18 must exist; default them to empty.
+    for rel in (*g.J18_GEOMETRY_OWNER_FILES, g.J11_FRAME_PATH_OWNER):
+        files.setdefault(rel, "")
     for rel, text in files.items():
         p = tmp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -50,12 +53,12 @@ def check_negative_old_paint_and_raw_title() -> None:
         "crates/flamewm-wm-x11/src/frame/model.rs": "pub struct PlacementState { pub a: u32 }\n",
         "crates/flamewm-wm-x11/src/frame/geometry.rs": "pub struct GeometryPlan { pub a: u32 }\n",
         "crates/flamewm-wm-x11/src/frame/input.rs": "pub fn target_for_xid() {}\n",
-        "crates/flamewm-wm-x11/src/wm.rs": "fn a() { paint::paint_frame(x); }\n",
+        "crates/flamewm-wm-x11/src/wm/mod.rs": "fn a() { paint::paint_frame(x); }\n",
         "crates/flamewm-wm-x11/src/extra.rs": "fn b() { r.draw_title(x); }\n",
     })
     found = g.j18_violations(root)
     caps = {c for _, c in found}
-    # wm.rs is a geometry owner, not a title owner, so its paint call trips G04.
+    # wm/mod.rs is a geometry owner, not a title owner, so its paint call trips G04.
     assert "j18-g04-no-old-decoration-paint" in caps, f"J18-G04 must reject, got {found}"
     assert "j18-g05-no-raw-title-renderer" in caps, f"J18-G05 must reject, got {found}"
 
@@ -65,7 +68,7 @@ def check_negative_outer_write() -> None:
         "crates/flamewm-wm-x11/src/frame/model.rs": "pub struct PlacementState { pub a: u32 }\n",
         "crates/flamewm-wm-x11/src/frame/geometry.rs": "pub struct GeometryPlan { pub a: u32 }\n",
         "crates/flamewm-wm-x11/src/frame/input.rs": "pub fn target_for_xid() {}\n",
-        "crates/flamewm-wm-x11/src/decoration/paint.rs": "pub fn paint_frame() {}\n",
+        "crates/flamewm-wm-x11/src/frame/resources.rs": "pub fn paint_frame() {}\n",
         "crates/flamewm-wm-x11/src/stray.rs": "fn b(s: &mut S) { s.outer = r; }\n",
     })
     found = g.j18_violations(root)
