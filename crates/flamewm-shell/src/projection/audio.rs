@@ -1,4 +1,5 @@
 use super::*;
+use super::calendar::ACTIVE_TAB_FILL;
 use crate::taskbar::status::audio::{AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
 
 pub fn project_audio(
@@ -26,8 +27,13 @@ pub fn project_audio_full(
     scroll_offset: u32,
 ) -> Result<(), String> {
     let devices = tab == flamewm_shell_core::status::AudioTab::Devices;
-    document.visible("audio-tab-devices-bg", devices)?;
-    document.visible("audio-tab-apps-bg", !devices)?;
+    for (id, active) in [("audio-tab-devices", devices), ("audio-tab-apps", !devices)] {
+        if active {
+            document.background(id, ACTIVE_TAB_FILL)?;
+        } else {
+            document.background_clear(id)?;
+        }
+    }
     // Rows come from the tab-filtered, scroll-windowed list shared with host routing.
     let rows =
         crate::taskbar::status::audio::visible_rows(&snapshot.system.audio, tab, scroll_offset);
@@ -113,6 +119,7 @@ mod audio_template_tests {
         widths: std::collections::HashMap<String, f32>,
         positions: std::collections::HashMap<String, (f32, f32)>,
         toggles: std::collections::HashMap<String, bool>,
+        backgrounds: std::collections::HashMap<String, UiColor>,
     }
 
     struct AudioRecorder<'a> {
@@ -149,13 +156,19 @@ mod audio_template_tests {
             self.recorded.toggles.insert(track_id.to_owned(), checked);
             UiDocumentAccess::toggle(self.document, track_id, knob_id, checked)
         }
+        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.recorded.backgrounds.insert(id.to_owned(), color);
+            UiDocumentAccess::background(self.document, id, color)
+        }
+        fn background_clear(&mut self, id: &str) -> Result<(), String> {
+            self.recorded.backgrounds.remove(id);
+            UiDocumentAccess::background_clear(self.document, id)
+        }
         forward!(
             image_rgb8(id: &str, image: RuntimeImage),
             image_rgba8(id: &str, image: RuntimeImage),
-            background(id: &str, color: UiColor),
             border(id: &str, color: UiColor),
             foreground(id: &str, color: UiColor),
-            background_clear(id: &str),
             border_clear(id: &str),
             foreground_clear(id: &str),
             font_size(id: &str, size_px: f32),
@@ -311,8 +324,16 @@ mod audio_template_tests {
         assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&true));
         assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&false));
         assert_eq!(recorded.visible.get("audio-slot-3"), Some(&false));
-        assert_eq!(recorded.visible.get("audio-tab-apps-bg"), Some(&true));
-        assert_eq!(recorded.visible.get("audio-tab-devices-bg"), Some(&false));
+        assert_eq!(recorded.backgrounds.get("audio-tab-apps"), Some(&ACTIVE_TAB_FILL));
+        assert_eq!(recorded.backgrounds.get("audio-tab-devices"), None);
+    }
+
+    #[test]
+    fn devices_tab_active_fill_matches_calendar_tab_mechanism() {
+        let recorded = fixture(AudioTab::Devices, false);
+        assert_eq!(recorded.backgrounds.get("audio-tab-devices"), Some(&ACTIVE_TAB_FILL));
+        assert_eq!(recorded.backgrounds.get("audio-tab-apps"), None);
+        assert!(!recorded.visible.contains_key("audio-tab-devices-bg"));
     }
 
     #[test]

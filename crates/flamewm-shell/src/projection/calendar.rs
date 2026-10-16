@@ -2,15 +2,15 @@ use std::fmt::Write as _;
 
 use super::*;
 
-// Today: neutral translucent white circle on its marker (or Months/Years tile). Selected: opaque
-// neutral gray rounded tile on the cell, so both can show together and stay distinguishable.
+// Today: neutral translucent white circle on its marker (or Months/Years tile). Only the active
+// view tab carries the opaque neutral gray fill; the selected date/month/year has no fill.
 const TODAY_NEUTRAL: UiColor = UiColor {
     r: 255,
     g: 255,
     b: 255,
     a: 56,
 };
-const SELECTED_TILE: UiColor = UiColor {
+pub(super) const ACTIVE_TAB_FILL: UiColor = UiColor {
     r: 64,
     g: 68,
     b: 72,
@@ -49,7 +49,7 @@ pub fn project_calendar(
     .map(|(id, tab)| (id, tab == view))
     {
         if active {
-            document.background(id, SELECTED_TILE)?;
+            document.background(id, ACTIVE_TAB_FILL)?;
         } else {
             document.background_clear(id)?;
         }
@@ -81,11 +81,7 @@ pub fn project_calendar(
                 } else {
                     document.background_clear(&marker)?;
                 }
-                if state.selected == Some((cell.year, cell.month, cell.day)) {
-                    document.background(&cell_id, SELECTED_TILE)?;
-                } else {
-                    document.background_clear(&cell_id)?;
-                }
+                document.background_clear(&cell_id)?;
             }
         }
         CalendarView::Months => {
@@ -95,8 +91,6 @@ pub fn project_calendar(
                 document.foreground(&id, CURRENT_FG)?;
                 if state.year == today.0 && month == today.1 {
                     document.background(&id, TODAY_NEUTRAL)?;
-                } else if month == state.month {
-                    document.background(&id, SELECTED_TILE)?;
                 } else {
                     document.background_clear(&id)?;
                 }
@@ -111,8 +105,6 @@ pub fn project_calendar(
                 document.foreground(&id, CURRENT_FG)?;
                 if year == today.0 {
                     document.background(&id, TODAY_NEUTRAL)?;
-                } else if year == state.year {
-                    document.background(&id, SELECTED_TILE)?;
                 } else {
                     document.background_clear(&id)?;
                 }
@@ -215,22 +207,82 @@ mod calendar_tests {
         }
     }
 
+    /// Asserts every projected pick tile carries no fill except the today marker.
+    fn assert_only_today_filled(document: &RecordingUiDoc, ids: impl Iterator<Item = String>) {
+        for id in ids {
+            match document.backgrounds.get(&id) {
+                None => {}
+                Some(color) => assert_eq!(*color, TODAY_NEUTRAL, "{id} has a non-today fill"),
+            }
+        }
+    }
+
     #[test]
-    fn today_and_selected_are_distinct_in_days_months_years() {
+    fn selected_month_has_no_fill_and_only_today_is_marked() {
         let today = (2026, 10, 13);
-        for view in ["calendar.view.months", "calendar.view.years"] {
+        let mut state = crate::calendar::CalendarState::for_today(today);
+        state.apply("calendar.view.months", today);
+        state.month = 3;
+        let mut document = RecordingUiDoc::default();
+        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        assert_only_today_filled(&document, (1..=12u8).map(|m| format!("calendar-pick-month-{m}")));
+        assert_eq!(document.backgrounds.get("calendar-pick-month-10"), Some(&TODAY_NEUTRAL));
+        assert!(document.cleared.contains(&"calendar-pick-month-3".to_owned()));
+    }
+
+    #[test]
+    fn selected_year_has_no_fill_and_only_today_is_marked() {
+        let today = (2026, 10, 13);
+        let mut state = crate::calendar::CalendarState::for_today(today);
+        state.apply("calendar.view.years", today);
+        state.year = 2027;
+        let mut document = RecordingUiDoc::default();
+        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        assert_only_today_filled(&document, (1..=12).map(|s| format!("calendar-pick-year-{s}")));
+        let slot = today.0 - crate::calendar::year_page_start(today.0) + 1;
+        assert_eq!(
+            document.backgrounds.get(&format!("calendar-pick-year-{slot}")),
+            Some(&TODAY_NEUTRAL),
+        );
+    }
+
+    #[test]
+    fn selected_day_cell_has_no_fill() {
+        let today = (2026, 10, 13);
+        let mut state = crate::calendar::CalendarState::for_today(today);
+        state.selected = Some((2026, 10, 20));
+        let grid = state.grid(today).expect("valid grid");
+        let index = grid
+            .cells
+            .iter()
+            .position(|cell| cell.year == 2026 && cell.month == 10 && cell.day == 20)
+            .expect("selected date is in grid");
+        let mut document = RecordingUiDoc::default();
+        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let cell = format!("calendar-day-{}", index + 1);
+        assert_eq!(document.backgrounds.get(&cell), None, "selected cell has no fill");
+        assert!(document.cleared.contains(&cell), "selected cell paint is cleared");
+    }
+
+    #[test]
+    fn active_view_tab_keeps_fill_and_inactive_tabs_are_cleared() {
+        let today = (2026, 10, 13);
+        for (view, active) in [
+            ("calendar.view.days", "calendar-tab-days"),
+            ("calendar.view.months", "calendar-tab-months"),
+            ("calendar.view.years", "calendar-tab-years"),
+        ] {
             let mut state = crate::calendar::CalendarState::for_today(today);
             state.apply(view, today);
             let mut document = RecordingUiDoc::default();
             project_calendar(&mut document, &state, today).expect("projection succeeds");
-            let today_fill = if view == "calendar.view.months" {
-                document.backgrounds.get("calendar-pick-month-10")
-            } else {
-                let slot = today.0 - crate::calendar::year_page_start(today.0) + 1;
-                document.backgrounds.get(&format!("calendar-pick-year-{slot}"))
-            };
-            assert!(today_fill.is_some(), "{view} marks today");
-            assert_ne!(today_fill, Some(&SELECTED_TILE));
+            assert_eq!(document.backgrounds.get(active), Some(&ACTIVE_TAB_FILL), "{view}");
+            for tab in ["calendar-tab-days", "calendar-tab-months", "calendar-tab-years"]
+                .into_iter()
+                .filter(|tab| *tab != active)
+            {
+                assert_eq!(document.backgrounds.get(tab), None, "{tab} inactive");
+            }
         }
     }
 
@@ -244,19 +296,19 @@ mod calendar_tests {
     }
 
     #[test]
-    fn today_marker_styling_differs_from_selected_tile() {
+    fn today_marker_styling_differs_from_day_cell() {
         let marker = css_rule("calendar-day-marker");
         let tile = css_rule("calendar-day");
         assert_ne!(
             css_px(marker, "border-radius"),
             css_px(tile, "border-radius"),
-            "today circle is not the selected rounded tile",
+            "today circle is not the rounded day cell",
         );
-        assert_ne!(TODAY_NEUTRAL, SELECTED_TILE);
+        assert_ne!(TODAY_NEUTRAL, ACTIVE_TAB_FILL);
     }
 
     #[test]
-    fn today_marker_and_selected_tile_show_together_without_red() {
+    fn today_marker_stays_while_selected_cell_has_no_fill() {
         let today = (2026, 9, 7);
         let state = crate::calendar::CalendarState::for_today(today);
         let grid = state.grid(today).expect("valid grid");
@@ -270,7 +322,7 @@ mod calendar_tests {
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         let tile = format!("calendar-day-{}", today_index + 1);
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
-        assert_eq!(document.backgrounds.get(&tile), Some(&SELECTED_TILE));
+        assert_eq!(document.backgrounds.get(&tile), None, "selected cell has no fill");
         let red_markers = document
             .backgrounds
             .iter()
@@ -322,10 +374,8 @@ mod calendar_tests {
             document.backgrounds.get("calendar-day-9-marker"),
             Some(&TODAY_NEUTRAL),
         );
-        assert_eq!(
-            document.backgrounds.get("calendar-day-9"),
-            Some(&SELECTED_TILE)
-        );
+        assert_eq!(document.backgrounds.get("calendar-day-9"), None, "selected cell has no fill");
+        assert!(document.cleared.iter().any(|id| id == "calendar-day-9"));
     }
 
     #[test]

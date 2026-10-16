@@ -10,10 +10,8 @@
     .audio-header { position:relative; height:48px; display:flex; flex-direction:row; align-items:center; padding:0px 14px; gap:10px; }
     .audio-back { width:28px; height:28px; background:transparent; border-width:0px; border-radius:6px; }
     .audio-back .symbolic-icon { width:16px; height:16px; }
-    .audio-tabs { height:44px; padding:6px 14px 6px 14px; display:flex; flex-direction:row; gap:6px; }
-    .audio-tab { position:relative; flex-grow:1; height:32px; background:#26282a; border-width:0px; border-radius:8px; color:var(--text); font-size:13px; }
-    .audio-tab-bg { position:absolute; left:0px; top:0px; right:0px; bottom:0px; background:#333436; border-radius:8px; }
-    .audio-tab-label { position:relative; }
+    .audio-tabs { height:44px; padding:4px 14px 6px 14px; display:flex; flex-direction:row; gap:4px; }
+    .audio-tab { flex:1; height:34px; padding:0px; display:flex; align-items:center; justify-content:center; background:transparent; border-width:0px; border-radius:6px; font-size:14px; font-weight:700; color:#f0f0f0; }
     .audio-list { position:relative; height:336px; overflow-y:auto; }
     .audio-group { position:relative; width:459px; height:84px; }
     .audio-slot-label { position:absolute; left:58px; top:10px; font-size:13px; font-weight:700; color:var(--text); }
@@ -41,8 +39,8 @@
       <div class="popup-title">Audio Volume</div>
     </div>
     <div class="audio-tabs">
-      <button id="audio-tab-devices" class="audio-tab" data-action="audio.tab.devices"><span id="audio-tab-devices-bg" class="audio-tab-bg"></span><span class="audio-tab-label">Devices</span></button>
-      <button id="audio-tab-apps" class="audio-tab" data-action="audio.tab.apps"><span id="audio-tab-apps-bg" class="audio-tab-bg"></span><span class="audio-tab-label">Applications</span></button>
+      <button id="audio-tab-devices" class="audio-tab" data-action="audio.tab.devices">Devices</button>
+      <button id="audio-tab-apps" class="audio-tab" data-action="audio.tab.apps">Applications</button>
     </div>
     <div id="audio-list" class="audio-list" data-scroll="audio-list">
       <div id="audio-empty" class="audio-empty">&#8203;</div>
