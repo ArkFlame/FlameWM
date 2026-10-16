@@ -448,14 +448,14 @@ fn object_path(value: String) -> FlameResult<dbus::Path<'static>> {
     dbus::Path::new(value).map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
 }
 
-fn one_string(items: &[MessageItem], context: &str) -> FlameResult<String> {
+pub(crate) fn one_string(items: &[MessageItem], context: &str) -> FlameResult<String> {
     items
         .first()
         .ok_or_else(|| FlameError::invalid(context))
         .and_then(|item| item_string(item, context))
 }
 
-fn item_string(item: &MessageItem, context: &str) -> FlameResult<String> {
+pub(crate) fn item_string(item: &MessageItem, context: &str) -> FlameResult<String> {
     match item {
         MessageItem::Str(value) => Ok(value.clone()),
         _ => Err(FlameError::invalid(context)),
@@ -469,26 +469,24 @@ fn item_object_path(item: &MessageItem, context: &str) -> FlameResult<String> {
     }
 }
 
-fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
+pub(crate) fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
     let MessageItem::Array(values) = item else {
         return Err(FlameError::invalid(context));
     };
     values
-        .clone()
-        .into_vec()
-        .into_iter()
-        .map(|value| item_string(&value, context))
+        .iter()
+        .map(|value| item_string(value, context))
         .collect()
 }
 
-fn item_bool(item: &MessageItem, context: &str) -> FlameResult<bool> {
+pub(crate) fn item_bool(item: &MessageItem, context: &str) -> FlameResult<bool> {
     match item {
         MessageItem::Bool(value) => Ok(*value),
         _ => Err(FlameError::invalid(context)),
     }
 }
 
-fn item_u32(item: &MessageItem, context: &str) -> FlameResult<u32> {
+pub(crate) fn item_u32(item: &MessageItem, context: &str) -> FlameResult<u32> {
     match item {
         MessageItem::UInt32(value) => Ok(*value),
         _ => Err(FlameError::invalid(context)),
@@ -521,7 +519,7 @@ fn item_bytes(item: &MessageItem, context: &str) -> FlameResult<Vec<u8>> {
         .collect()
 }
 
-fn unwrap_variant(item: MessageItem) -> MessageItem {
+pub(crate) fn unwrap_variant(item: MessageItem) -> MessageItem {
     match item {
         MessageItem::Variant(value) => unwrap_variant(*value),
         item => item,

@@ -15,6 +15,7 @@ use dbus::strings::Signature;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
 use flamewm_image_core::ImageSourceFormat;
+use crate::network_manager::{item_string, item_strings, item_u32, unwrap_variant};
 
 pub const PORTAL_SERVICE: &str = "org.freedesktop.portal.Desktop";
 pub const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -401,37 +402,6 @@ fn one_object_path(items: &[MessageItem], context: &str) -> FlameResult<String> 
     match &items[0] {
         MessageItem::ObjectPath(value) => Ok(value.to_string()),
         _ => Err(FlameError::invalid(context)),
-    }
-}
-
-fn item_string(item: &MessageItem, context: &str) -> FlameResult<String> {
-    match item {
-        MessageItem::Str(value) => Ok(value.clone()),
-        _ => Err(FlameError::invalid(context)),
-    }
-}
-
-fn item_u32(item: &MessageItem, context: &str) -> FlameResult<u32> {
-    match item {
-        MessageItem::UInt32(value) => Ok(*value),
-        _ => Err(FlameError::invalid(context)),
-    }
-}
-
-fn item_strings(item: &MessageItem, context: &str) -> FlameResult<Vec<String>> {
-    let MessageItem::Array(values) = item else {
-        return Err(FlameError::invalid(context));
-    };
-    values
-        .iter()
-        .map(|value| item_string(value, context))
-        .collect()
-}
-
-fn unwrap_variant(item: MessageItem) -> MessageItem {
-    match item {
-        MessageItem::Variant(value) => unwrap_variant(*value),
-        item => item,
     }
 }
 
