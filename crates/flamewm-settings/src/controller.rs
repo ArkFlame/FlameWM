@@ -778,21 +778,11 @@ mod tests {
     #[test]
     fn decoration_option_buttons_write_exact_values_and_highlight_the_snapshot() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
-                1, "rounded",
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
-                2, "squared",
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
-                3, "rounded",
-            ))));
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(decoration_snapshot(1, "rounded"))),
+            Ok(ControlResponse::Settings(decoration_snapshot(2, "squared"))),
+            Ok(ControlResponse::Settings(decoration_snapshot(3, "rounded"))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
@@ -844,18 +834,10 @@ mod tests {
     #[test]
     fn application_appearance_buttons_write_exact_values_and_highlight_the_snapshot() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
-                1,
-                Some("dark"),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
-                2,
-                Some("light"),
-            ))));
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(appearance_snapshot(1, Some("dark")))),
+            Ok(ControlResponse::Settings(appearance_snapshot(2, Some("light")))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -900,16 +882,10 @@ mod tests {
     #[test]
     fn external_decoration_change_moves_the_highlight_without_a_write() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
-                1, "rounded",
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
-                2, "squared",
-            ))));
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(decoration_snapshot(1, "rounded"))),
+            Ok(ControlResponse::Settings(decoration_snapshot(2, "squared"))),
+        ]);
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
         application
