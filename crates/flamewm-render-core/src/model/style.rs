@@ -125,10 +125,6 @@ impl PointerButton {
         }
     }
 
-    #[must_use]
-    pub const fn is_wheel(self) -> bool {
-        matches!(self, Self::WheelUp | Self::WheelDown)
-    }
 }
 
 /// Overflow behavior per axis.
@@ -345,19 +341,6 @@ impl RuntimeDocument {
         Ok(())
     }
 
-    pub fn set_opacity(&mut self, id: &str, opacity: f32) -> Result<(), String> {
-        if !opacity.is_finite() {
-            return Err("runtime opacity must be finite".to_string());
-        }
-        self.override_entry(id)?.opacity = Some(opacity.clamp(0.0, 1.0));
-        Ok(())
-    }
-
-    pub fn set_flex_direction(&mut self, id: &str, direction: FlexDirection) -> Result<(), String> {
-        self.override_entry(id)?.flex_direction = Some(direction);
-        Ok(())
-    }
-
     pub fn set_overflow(&mut self, id: &str, x: Overflow, y: Overflow) -> Result<(), String> {
         let entry = self.override_entry(id)?;
         entry.overflow_x = Some(x);
@@ -387,25 +370,6 @@ impl RuntimeDocument {
 
     pub fn set_font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
         self.override_entry(id)?.font_weight = Some(weight.clamp(100, 900));
-        Ok(())
-    }
-
-    pub fn set_ui_font(
-        &mut self,
-        family: impl Into<String>,
-        size_offset: f32,
-        bold: bool,
-    ) -> Result<(), String> {
-        let family = family.into();
-        if family.trim().is_empty() {
-            return Err("UI font family cannot be empty".to_string());
-        }
-        if !size_offset.is_finite() {
-            return Err("UI font size offset must be finite".to_string());
-        }
-        self.set_ui_font_family(family)?;
-        self.ui_font_size_offset = size_offset.clamp(-3.0, 6.0);
-        self.ui_font_bold = bold;
         Ok(())
     }
 
