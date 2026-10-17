@@ -106,7 +106,13 @@ impl ShortcutService {
         self.require_revision(expected_revision)?;
         let mut candidate = self.registry.clone();
         edit(&mut candidate)?;
-        self.commit_candidate(port, candidate)
+        if candidate == self.registry {
+            return Ok(());
+        }
+        Self::stage_and_commit(port, candidate.bindings())?;
+        self.registry = candidate;
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
     }
 
     /// Startup grab of the effective set through the same prepare/commit port path as `apply`.
@@ -179,7 +185,7 @@ impl ShortcutService {
         if self.capture.is_none() {
             return Ok(());
         }
-        self.restore_grabs(port)?;
+        Self::stage_and_commit(port, self.registry.bindings())?;
         self.capture = None;
         Ok(())
     }
@@ -208,10 +214,6 @@ impl ShortcutService {
         Ok(())
     }
 
-    fn restore_grabs<P: ShortcutPort>(&self, port: &mut P) -> FlameResult<()> {
-        Self::stage_and_commit(port, self.registry.bindings())
-    }
-
     fn require_idle(&self) -> FlameResult<()> {
         match &self.capture {
             None => Ok(()),
@@ -220,20 +222,6 @@ impl ShortcutService {
                 "shortcut changes are refused while hotkey capture is active",
             )),
         }
-    }
-
-    fn commit_candidate<P: ShortcutPort>(
-        &mut self,
-        port: &mut P,
-        candidate: ShortcutRegistry,
-    ) -> FlameResult<()> {
-        if candidate == self.registry {
-            return Ok(());
-        }
-        Self::stage_and_commit(port, candidate.bindings())?;
-        self.registry = candidate;
-        self.revision = self.revision.saturating_add(1);
-        Ok(())
     }
 
     /// Stages `desired` on the port and commits it. A failure at either step rolls the port back and
