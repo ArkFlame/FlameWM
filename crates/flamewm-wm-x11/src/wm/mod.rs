@@ -1745,7 +1745,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let session = self.session_of(client);
         let children = res.children();
         let regions = children.map(|xid| self.registry.lookup_by_xid(xid).map(|target| target.region));
-        let outputs = self.output_work_areas.iter().map(|output| to_root_rect(output.geometry));
+        let outputs = self.output_work_areas.iter().map(|output| RootRect::from_legacy(output.geometry));
         let (region_map, outputs) = {
             let geometry = self.controller_geometry.fetch(client, children, regions, outputs);
             (geometry.region_map.clone(), geometry.outputs.clone())
@@ -1785,7 +1785,7 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Output geometries in root coordinates: the bound for drags (windows may overflow the work area).
     fn output_root_rects(&self) -> Vec<RootRect> {
-        self.output_work_areas.iter().map(|output| to_root_rect(output.geometry)).collect()
+        self.output_work_areas.iter().map(|output| RootRect::from_legacy(output.geometry)).collect()
     }
 
     fn store_controller(&mut self, client: Window, controller: &ControllerState) {
@@ -1827,19 +1827,10 @@ fn rehome_outer(mode: PlacementMode, outer: Rect, outputs: &[OutputWorkArea], gl
             outer.clamp_inside(work_area_for_rect_in(outputs, global, outer))
         }
         PlacementMode::Floating => {
-            let rects: Vec<RootRect> = outputs.iter().map(|output| to_root_rect(output.geometry)).collect();
-            from_root_rect(keep_on_outputs(to_root_rect(outer), &rects, to_root_rect(global)))
+            let rects: Vec<RootRect> = outputs.iter().map(|output| RootRect::from_legacy(output.geometry)).collect();
+            from_root_rect(keep_on_outputs(RootRect::from_legacy(outer), &rects, RootRect::from_legacy(global)))
         }
     }
-}
-
-fn to_root_rect(rect: Rect) -> RootRect {
-    RootRect::new(
-        rect.x,
-        rect.y,
-        i32::try_from(rect.width).unwrap_or(i32::MAX),
-        i32::try_from(rect.height).unwrap_or(i32::MAX),
-    )
 }
 
 fn from_root_rect(rect: RootRect) -> Rect {
