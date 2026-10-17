@@ -593,12 +593,7 @@ mod tests {
         fn font_family(&mut self, _: String) -> Result<(), String> {
             Ok(())
         }
-        fn overflow(
-            &mut self,
-            _: &str,
-            _: Overflow,
-            _: Overflow,
-        ) -> Result<(), String> {
+        fn overflow(&mut self, _: &str, _: Overflow, _: Overflow) -> Result<(), String> {
             Ok(())
         }
         fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
