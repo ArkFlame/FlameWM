@@ -700,7 +700,11 @@ mod tests {
     }
 
     fn release(x: i32, y: i32) -> FrameEvent {
-        FrameEvent::Release { pointer: RootPoint::new(x, y), time_ms: 0 }
+        release_at(x, y, 0)
+    }
+
+    fn release_at(x: i32, y: i32, time_ms: u32) -> FrameEvent {
+        FrameEvent::Release { pointer: RootPoint::new(x, y), time_ms }
     }
 
     fn floating_state() -> ControllerState {
@@ -845,13 +849,7 @@ mod tests {
         time_ms: u32,
     ) -> (ControllerState, Vec<FrameEffect>) {
         let (pressed, _) = reduce(state, press(1, x, y));
-        reduce(
-            &pressed,
-            FrameEvent::Release {
-                pointer: RootPoint::new(x, y),
-                time_ms,
-            },
-        )
+        reduce(&pressed, release_at(x, y, time_ms))
     }
 
     #[test]
@@ -919,13 +917,7 @@ mod tests {
         let (s1, _) = title_click(&s0, 150, 120, 1000);
         let (s2, _) = reduce(&s1, press(1, 150, 120));
         let (s3, _) = reduce(&s2, motion(200, 170));
-        let (s4, _) = reduce(
-            &s3,
-            FrameEvent::Release {
-                pointer: RootPoint::new(200, 170),
-                time_ms: 1200,
-            },
-        );
+        let (s4, _) = reduce(&s3, release_at(200, 170, 1200));
         assert_eq!(s4.placement.mode, PlacementMode::Floating);
         assert!(s4.last_title_click.is_none());
         let (s5, _) = title_click(&s4, 200, 170, 1300);
@@ -937,13 +929,7 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = title_click(&s0, 150, 120, 1000);
         let (s2, _) = reduce(&s1, press(2, 500, 400));
-        let (s3, _) = reduce(
-            &s2,
-            FrameEvent::Release {
-                pointer: RootPoint::new(500, 400),
-                time_ms: 1100,
-            },
-        );
+        let (s3, _) = reduce(&s2, release_at(500, 400, 1100));
         assert!(s3.last_title_click.is_none());
         let (s4, _) = title_click(&s3, 150, 120, 1200);
         assert_eq!(s4.placement.mode, PlacementMode::Floating);
