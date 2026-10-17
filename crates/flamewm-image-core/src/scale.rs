@@ -84,11 +84,13 @@ fn scale_bilinear(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]
             let x1 = (x0 + 1).min(src_w - 1);
             let fx = (source_x - x0 as f32).clamp(0.0, 1.0);
             let output_index = (y * target_w + x) * 4;
+            let (p00, p10) = ((y0 * src_w + x0) * 4, (y0 * src_w + x1) * 4);
+            let (p01, p11) = ((y1 * src_w + x0) * 4, (y1 * src_w + x1) * 4);
             for channel in 0..4 {
-                let a = f32::from(sample(source, x0, y0, channel, src_w));
-                let b = f32::from(sample(source, x1, y0, channel, src_w));
-                let c = f32::from(sample(source, x0, y1, channel, src_w));
-                let d = f32::from(sample(source, x1, y1, channel, src_w));
+                let a = f32::from(source.pixels[p00 + channel]);
+                let b = f32::from(source.pixels[p10 + channel]);
+                let c = f32::from(source.pixels[p01 + channel]);
+                let d = f32::from(source.pixels[p11 + channel]);
                 let value = a * (1.0 - fx) * (1.0 - fy)
                     + b * fx * (1.0 - fy)
                     + c * (1.0 - fx) * fy
@@ -151,10 +153,6 @@ fn scale_area(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]) {
             }
         }
     }
-}
-
-fn sample(source: &RgbaImage, x: usize, y: usize, channel: usize, stride: usize) -> u8 {
-    source.pixels[(y * stride + x) * 4 + channel]
 }
 
 #[cfg(test)]
