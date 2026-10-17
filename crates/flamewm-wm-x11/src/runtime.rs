@@ -143,42 +143,13 @@ fn run_session(
         return Err(error.into());
     }
     let provider_error = Rc::new(RefCell::new(None));
-    let mut network_registration = match register_provider(
-        &reactor,
-        &integrations,
-        &provider_error,
-        LinuxIntegrationSource::NetworkManager,
-    ) {
-        Ok(registration) => registration,
-        Err(error) => {
-            integrations.borrow_mut().stop();
-            return Err(error);
-        }
+    let register = |source| {
+        register_provider(&reactor, &integrations, &provider_error, source)
+            .inspect_err(|_| integrations.borrow_mut().stop())
     };
-    let mut mpris_registration = match register_provider(
-        &reactor,
-        &integrations,
-        &provider_error,
-        LinuxIntegrationSource::Mpris,
-    ) {
-        Ok(registration) => registration,
-        Err(error) => {
-            integrations.borrow_mut().stop();
-            return Err(error);
-        }
-    };
-    let mut power_registration = match register_provider(
-        &reactor,
-        &integrations,
-        &provider_error,
-        LinuxIntegrationSource::Power,
-    ) {
-        Ok(registration) => registration,
-        Err(error) => {
-            integrations.borrow_mut().stop();
-            return Err(error);
-        }
-    };
+    let mut network_registration = register(LinuxIntegrationSource::NetworkManager)?;
+    let mut mpris_registration = register(LinuxIntegrationSource::Mpris)?;
+    let mut power_registration = register(LinuxIntegrationSource::Power)?;
     let (audio_sender, audio_receiver) = mpsc::sync_channel::<AudioSnapshot>(32);
     let (audio_reader, mut audio_writer) = match UnixStream::pair() {
         Ok(pair) => pair,
@@ -549,23 +520,21 @@ where
 /// Persisted `cursorTheme` from the settings file at startup, before the session
 /// environment is applied. `None` when the file is missing or unparsable.
 pub fn persisted_cursor_theme() -> Option<String> {
-    let (path, _) = settings_path();
-    let text = std::fs::read_to_string(path).ok()?;
-    let settings = flamewm_platform::settings::ConfigStore::default()
-        .parse_snapshot(&text)
-        .ok()?;
-    Some(settings.cursor_theme)
+    persisted_settings().map(|settings| settings.cursor_theme)
 }
 
 /// Persisted `appearance` from the settings file at startup. `None` when the
 /// file is missing or unparsable.
 pub fn persisted_appearance() -> Option<AppearanceMode> {
+    persisted_settings().map(|settings| settings.appearance)
+}
+
+fn persisted_settings() -> Option<flamewm_platform::settings::ProductSettings> {
     let (path, _) = settings_path();
     let text = std::fs::read_to_string(path).ok()?;
-    let settings = flamewm_platform::settings::ConfigStore::default()
+    flamewm_platform::settings::ConfigStore::default()
         .parse_snapshot(&text)
-        .ok()?;
-    Some(settings.appearance)
+        .ok()
 }
 
 /// Single settings sync point: applies the WM-owned snapshot effects, then
@@ -677,6 +646,14 @@ where
     Ok(signals)
 }
 
+/// Records `error` in `slot` unless an earlier error in this turn is already kept.
+fn keep_first_error<T>(slot: &RefCell<Option<T>>, error: T) {
+    let mut slot = slot.borrow_mut();
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+}
+
 fn any_from_flame(error: flamewm_api::FlameError) -> AnyError {
     Box::new(std::io::Error::new(
         std::io::ErrorKind::Other,
@@ -709,13 +686,13 @@ fn register_control(
         interest_for(watch.events),
         move |_, readiness| {
             if readiness.error || readiness.hangup {
-                let mut control_error = control_error.borrow_mut();
-                if control_error.is_none() {
-                    *control_error = Some(Box::new(io::Error::new(
+                keep_first_error(
+                    &control_error,
+                    Box::new(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         "control D-Bus FD closed",
-                    )));
-                }
+                    )),
+                );
                 return FdAction::Remove;
             }
             if !(readiness.readable || readiness.writable) {
@@ -729,10 +706,7 @@ fn register_control(
             let displays_before = host.cached_display_snapshot();
             let result = control.on_ready(host, now_ms.get());
             if let Err(error) = result {
-                let mut control_error = control_error.borrow_mut();
-                if control_error.is_none() {
-                    *control_error = Some(Box::new(error));
-                }
+                keep_first_error(&control_error, Box::new(error));
                 FdAction::Remove
             } else {
                 publish_settings_snapshot(&settings_observer, &host.settings_snapshot());
@@ -750,10 +724,7 @@ fn register_control(
                 }
                 for signal in &signals {
                     if let Err(error) = control.emit_signal(signal) {
-                        let mut control_error = control_error.borrow_mut();
-                        if control_error.is_none() {
-                            *control_error = Some(Box::new(error));
-                        }
+                        keep_first_error(&control_error, Box::new(error));
                         return FdAction::Remove;
                     }
                 }
@@ -845,10 +816,7 @@ fn register_provider(
         interest_for(watch.events),
         move |_, _| {
             if let Err(error) = integrations.borrow_mut().on_ready(source) {
-                let mut provider_error = provider_error.borrow_mut();
-                if provider_error.is_none() {
-                    *provider_error = Some(error);
-                }
+                keep_first_error(&provider_error, error);
             }
             FdAction::Continue
         },
