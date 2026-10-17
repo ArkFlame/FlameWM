@@ -242,7 +242,6 @@ fn run_session(
                     }
                 })
                 .map_err(|error| {
-                    drop(pulse.clone());
                     integrations.borrow_mut().stop();
                     AnyError::from(io::Error::new(io::ErrorKind::Other, error.to_string()))
                 })?,
@@ -269,33 +268,22 @@ fn run_session(
             icon_index,
         ),
     ));
-    let icon_fd = icon_service.borrow().wake_fd();
-    let _icon_registration = if let Some(icon_fd) = icon_fd {
-        let icon_service_for_wake = Rc::clone(&icon_service);
-        Some(reactor.borrow_mut().register_raw_fd_with_action(
-            icon_fd,
-            Interest::READ,
-            move |_, _| {
-                icon_service_for_wake.borrow_mut().wake_drain();
-                FdAction::Continue
-            },
-        )?)
-    } else {
+    let Some(icon_fd) = icon_service.borrow().wake_fd() else {
         return Err(Box::new(io::Error::new(io::ErrorKind::Other, "IconService wake FD unavailable")));
     };
+    let icon_service_for_wake = Rc::clone(&icon_service);
+    let _icon_registration = reactor.borrow_mut().register_raw_fd_with_action(icon_fd, Interest::READ, move |_, _| {
+        icon_service_for_wake.borrow_mut().wake_drain();
+        FdAction::Continue
+    })?;
     // Settings owner wake: SelectionClear on the manager connection is observed
     // without waiting for the next publish. A failed registration leaves the WM
     // running without live XSettings wake, like a refused claim.
-    let _settings_wake_registration = match settings_wake {
-        Some(wake) => match register_settings_wake(&reactor, wake) {
-            Ok(token) => Some(token),
-            Err(error) => {
-                eprintln!("flamewm: XSettings wake not registered: {error}");
-                None
-            }
-        },
-        None => None,
-    };
+    let _settings_wake_registration = settings_wake.and_then(|wake| {
+        register_settings_wake(&reactor, wake)
+            .inspect_err(|error| eprintln!("flamewm: XSettings wake not registered: {error}"))
+            .ok()
+    });
     let catalog_for_hook = std::sync::Arc::clone(&catalog);
     let started = Instant::now();
     let mut host_started = false;
@@ -1275,12 +1263,8 @@ mod tests {
     fn work_area_only_emits_nothing() {
         let mut host = FakeEngine::new().host();
         let only_area = WmChangeSet {
-            windows: false,
-            workspaces: false,
-            panels: false,
             work_area: true,
-            start_menu_toggle: false,
-            media_audio_key: None,
+            ..change(false, false, false)
         };
         let signals = collect_wm_signals(&mut host, only_area).expect("collect");
         assert!(signals.is_empty());
