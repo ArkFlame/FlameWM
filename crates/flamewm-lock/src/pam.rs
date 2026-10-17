@@ -130,32 +130,16 @@ struct DynamicPam {
 impl DynamicPam {
     fn load_from(names: &[&str]) -> Result<Self, String> {
         let handle = open_any(names)?;
-        let resolve = |symbol: &'static [u8]| -> Result<*mut c_void, String> {
-            // SAFETY: `handle` is a live dlopen handle and `symbol` is NUL-terminated.
-            let raw = unsafe { dlsym(handle, symbol.as_ptr() as *const c_char) };
-            if raw.is_null() {
-                Err(format!(
-                    "missing symbol {}",
-                    String::from_utf8_lossy(&symbol[..symbol.len() - 1])
-                ))
-            } else {
-                Ok(raw)
-            }
-        };
+        // SAFETY: each symbol is a documented libpam entry point; `F` is a fn pointer
+        // type matching its C signature.
         let resolved = (|| -> Result<Self, String> {
-            // SAFETY: each symbol is a documented libpam entry point; the cast
-            // matches its C signature and the pointer width is checked by the type.
             unsafe {
                 Ok(Self {
                     handle,
-                    start: std::mem::transmute::<*mut c_void, PamStartFn>(resolve(b"pam_start\0")?),
-                    authenticate: std::mem::transmute::<*mut c_void, PamCallFn>(resolve(
-                        b"pam_authenticate\0",
-                    )?),
-                    acct_mgmt: std::mem::transmute::<*mut c_void, PamCallFn>(resolve(
-                        b"pam_acct_mgmt\0",
-                    )?),
-                    end: std::mem::transmute::<*mut c_void, PamCallFn>(resolve(b"pam_end\0")?),
+                    start: resolve(handle, b"pam_start\0")?,
+                    authenticate: resolve(handle, b"pam_authenticate\0")?,
+                    acct_mgmt: resolve(handle, b"pam_acct_mgmt\0")?,
+                    end: resolve(handle, b"pam_end\0")?,
                 })
             }
         })();
@@ -308,6 +292,21 @@ unsafe fn free_responses(array: *mut PamResponse, count: usize) {
     unsafe { free(array as *mut c_void) };
 }
 
+/// # Safety
+/// `handle` must be a live dlopen handle and `F` a fn pointer type matching the symbol.
+unsafe fn resolve<F: Copy>(handle: *mut c_void, symbol: &'static [u8]) -> Result<F, String> {
+    // SAFETY: `handle` is live and `symbol` is NUL-terminated.
+    let raw = unsafe { dlsym(handle, symbol.as_ptr() as *const c_char) };
+    if raw.is_null() {
+        return Err(format!(
+            "missing symbol {}",
+            String::from_utf8_lossy(&symbol[..symbol.len() - 1])
+        ));
+    }
+    // SAFETY: `F` is a pointer-sized fn pointer type per the caller contract.
+    Ok(unsafe { std::mem::transmute_copy::<*mut c_void, F>(&raw) })
+}
+
 fn open_any(names: &[&str]) -> Result<*mut c_void, String> {
     for name in names {
         let c_name = CString::new(*name).map_err(|error| error.to_string())?;
@@ -396,12 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn expired_account_is_not_unlocked() {
-        let mut session = mock(Ok(()), PAM_SUCCESS, 13);
-        assert_eq!(run_flow(&mut session), Outcome::Denied);
-    }
-
-    #[test]
     fn pam_start_failure_is_unavailable() {
         let mut session = mock(Err(PAM_SYSTEM_ERR), PAM_SUCCESS, PAM_SUCCESS);
         assert_eq!(run_flow(&mut session), Outcome::Unavailable);
@@ -443,11 +436,13 @@ mod tests {
     }
 
     #[test]
-    fn new_token_required_after_valid_password_stays_locked() {
+    fn expired_or_new_token_required_after_valid_password_stays_locked() {
         const PAM_NEW_AUTHTOK_REQD: c_int = 12;
-        let mut session = mock(Ok(()), PAM_SUCCESS, PAM_NEW_AUTHTOK_REQD);
-        assert_eq!(run_flow(&mut session), Outcome::Denied);
-        assert_eq!(session.ended_with, Some(PAM_AUTH_ERR));
+        for acct in [13, PAM_NEW_AUTHTOK_REQD] {
+            let mut session = mock(Ok(()), PAM_SUCCESS, acct);
+            assert_eq!(run_flow(&mut session), Outcome::Denied);
+            assert_eq!(session.ended_with, Some(PAM_AUTH_ERR));
+        }
     }
 
     #[test]
