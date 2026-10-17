@@ -626,14 +626,10 @@ fn osd_cards(canary: &Canary) -> Vec<WinInfo> {
         .collect()
 }
 
-fn osd_visible(canary: &Canary) -> Option<WinInfo> {
-    viewable(canary, OSD_TITLE)
-}
-
 fn wait_osd_shown(canary: &Canary, timeout: Duration) -> Option<WinInfo> {
     let mut found = None;
     wait_for(timeout, || {
-        found = osd_visible(canary);
+        found = viewable(canary, OSD_TITLE);
         found.is_some()
     });
     found
@@ -643,7 +639,7 @@ fn wait_osd_shown(canary: &Canary, timeout: Duration) -> Option<WinInfo> {
 fn wait_osd_hidden(canary: &Canary, since: Instant, limit: Duration) -> Option<Duration> {
     let end = since + limit;
     loop {
-        if osd_visible(canary).is_none() {
+        if viewable(canary, OSD_TITLE).is_none() {
             return Some(since.elapsed());
         }
         if Instant::now() >= end {
@@ -924,18 +920,12 @@ pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
     let mut ids = std::collections::BTreeSet::new();
     while rapid_start.elapsed() < Duration::from_millis(400) {
         let cards = osd_cards(canary);
-        for card in cards
+        let visible: Vec<_> = cards
             .iter()
             .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-        {
-            ids.insert(card.id);
-        }
-        max_visible = max_visible.max(
-            cards
-                .iter()
-                .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-                .count(),
-        );
+            .collect();
+        ids.extend(visible.iter().map(|w| w.id));
+        max_visible = max_visible.max(visible.len());
         sleep(Duration::from_millis(20));
     }
     let _ = wait_osd_hidden(
@@ -956,7 +946,7 @@ pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
     let clicked_card =
         set_sink_percent(50) && wait_osd_shown(canary, Duration::from_millis(1000)).is_some();
     let through = clicked_card
-        && osd_visible(canary).is_some_and(|card| {
+        && viewable(canary, OSD_TITLE).is_some_and(|card| {
             let cx = card.x + card.width as i16 / 2;
             let cy = card.y + card.height as i16 / 2;
             real_click(canary, cx, cy, 1)
