@@ -139,7 +139,7 @@ impl SystemService {
         }
         match &action {
             SystemAction::SetVolume(action) => {
-                if action.percent > 150 {
+                if action.percent > MAX_VOLUME_PERCENT {
                     return Err(FlameError::new(
                         ErrorCode::InvalidArgument,
                         "audio volume must be in 0..=150",
@@ -215,12 +215,8 @@ impl SystemService {
             return false;
         }
         *field = update;
-        self.bump_revision();
-        true
-    }
-
-    fn bump_revision(&mut self) {
         self.snapshot.revision = self.snapshot.revision.saturating_add(1).max(1);
+        true
     }
 
     fn validate_audio_generation(
