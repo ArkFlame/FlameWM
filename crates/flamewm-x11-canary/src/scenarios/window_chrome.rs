@@ -13,7 +13,7 @@ fn checkerboard(
     h: u16,
     cells: u16,
 ) -> (u32, u32, u8, u8, u8) {
-    let cells = cells.max(2).min(8);
+    let cells = cells.clamp(2, 8);
     let cw = (w / cells).max(1);
     let ch = (h / cells).max(1);
     let (mut delivered, mut non_black, mut n) = (0, 0, 0u64);
@@ -38,13 +38,7 @@ fn checkerboard(
         }
     }
     let nn = n.max(1);
-    (
-        delivered,
-        non_black,
-        (sum[0] / nn) as u8,
-        (sum[1] / nn) as u8,
-        (sum[2] / nn) as u8,
-    )
+    (delivered, non_black, (sum[0] / nn) as u8, (sum[1] / nn) as u8, (sum[2] / nn) as u8)
 }
 
 pub fn run_t09_t10(canary: &crate::Canary, args: &[String]) -> (bool, String) {
