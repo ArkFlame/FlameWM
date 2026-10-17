@@ -1726,48 +1726,9 @@ mod tests {
     use flamewm_shell_core::popup::measured_popup_rect;
     use flamewm_ui_core::popover::{PopoverAlign, PopoverEdge};
 
-    #[test]
-    fn secret_never_in_logs_or_protocol() {
-        // The helper snapshot carries only a masked length, never the
-        // secret value; the protocol type carries no secret field.
-        let snapshot = QuickControlSnapshot {
-            system: flamewm_api::system::SystemSnapshot::default(),
-            audio_tab: AudioTab::Devices,
-            audio_settings: AudioSettings::default(),
-            audio_drag_slot: None,
-            audio_scroll_offset: 0,
-            network_query: NetworkQuery::default(),
-            network_scroll_offset: 0,
-            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
-            weather: WeatherFeed::default(),
-            weather_search: LocationSearch::default(),
-            network_secret_masked_len: 8,
-            network_secret: String::new(),
-            network_secret_request: None,
-            network_secret_focused: false,
-            network_filter_focused: false,
-            network_secret_error: false,
-            network_secret_submit_id: None,
-            settings: SettingsSnapshot::new(0),
-        };
-        let debug = format!("{snapshot:?}");
-        assert!(
-            !debug.contains("s3cr3t"),
-            "snapshot debug must not carry a secret"
-        );
-        let line = super::super::protocol::encode_command(&Command::Open(OpenRequest {
-            kind: QuickControlKind::Network,
-            anchor: flamewm_api::Rect::new(0, 0, 1, 1),
-            work_area: flamewm_api::Rect::new(0, 0, 10, 10),
-            panel_edge: flamewm_api::PanelEdge::Bottom,
-            dock: None,
-        }));
-        assert!(!line.contains("s3cr3t"));
-    }
-
-    #[test]
-    fn system_snapshot_update_is_direct_and_deduplicated() {
-        let mut quick = QuickControlSnapshot {
+    /// Every field at its default, so fixtures only spell out what they change.
+    pub(super) fn blank_snapshot() -> QuickControlSnapshot {
+        QuickControlSnapshot {
             system: flamewm_api::system::SystemSnapshot::default(),
             audio_tab: AudioTab::default(),
             audio_settings: AudioSettings::default(),
@@ -1786,7 +1747,36 @@ mod tests {
             network_secret_error: false,
             network_secret_submit_id: None,
             settings: SettingsSnapshot::new(0),
+        }
+    }
+
+    #[test]
+    fn secret_never_in_logs_or_protocol() {
+        // The helper snapshot carries only a masked length, never the
+        // secret value; the protocol type carries no secret field.
+        let snapshot = QuickControlSnapshot {
+            audio_tab: AudioTab::Devices,
+            network_secret_masked_len: 8,
+            ..blank_snapshot()
         };
+        let debug = format!("{snapshot:?}");
+        assert!(
+            !debug.contains("s3cr3t"),
+            "snapshot debug must not carry a secret"
+        );
+        let line = super::super::protocol::encode_command(&Command::Open(OpenRequest {
+            kind: QuickControlKind::Network,
+            anchor: flamewm_api::Rect::new(0, 0, 1, 1),
+            work_area: flamewm_api::Rect::new(0, 0, 10, 10),
+            panel_edge: flamewm_api::PanelEdge::Bottom,
+            dock: None,
+        }));
+        assert!(!line.contains("s3cr3t"));
+    }
+
+    #[test]
+    fn system_snapshot_update_is_direct_and_deduplicated() {
+        let mut quick = blank_snapshot();
         let mut next = quick.system.clone();
         next.revision = 7;
         assert!(apply_system_snapshot(&mut quick, next.clone()));
@@ -2133,26 +2123,7 @@ mod tests {
     /// background colour, alpha and backdrop percents, so the next open uses the new values.
     #[test]
     fn settings_change_between_opens_changes_menu_background() {
-        let mut snapshot = QuickControlSnapshot {
-            system: flamewm_api::system::SystemSnapshot::default(),
-            audio_tab: AudioTab::default(),
-            audio_settings: AudioSettings::default(),
-            audio_drag_slot: None,
-            audio_scroll_offset: 0,
-            network_query: NetworkQuery::default(),
-            network_scroll_offset: 0,
-            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
-            weather: WeatherFeed::default(),
-            weather_search: LocationSearch::default(),
-            network_secret_masked_len: 0,
-            network_secret: String::new(),
-            network_secret_request: None,
-            network_secret_focused: false,
-            network_filter_focused: false,
-            network_secret_error: false,
-            network_secret_submit_id: None,
-            settings: SettingsSnapshot::new(0),
-        };
+        let mut snapshot = blank_snapshot();
         let first = background_for(&snapshot.settings);
         let mut changed = SettingsSnapshot::new(1);
         changed
@@ -2309,21 +2280,7 @@ mod audio_routing_tests {
             system,
             audio_tab: tab,
             audio_settings: AudioSettings { raise_maximum },
-            audio_drag_slot: None,
-            audio_scroll_offset: 0,
-            network_query: NetworkQuery::default(),
-            network_scroll_offset: 0,
-            network_secret_masked_len: 0,
-            network_secret: String::new(),
-            network_secret_request: None,
-            network_secret_focused: false,
-            network_filter_focused: false,
-            network_secret_error: false,
-            network_secret_submit_id: None,
-            settings: SettingsSnapshot::new(0),
-            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
-            weather: WeatherFeed::default(),
-            weather_search: LocationSearch::default(),
+            ..super::tests::blank_snapshot()
         }
     }
 
