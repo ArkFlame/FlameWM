@@ -174,8 +174,7 @@ fn project_start_icon(
     path: Option<String>,
 ) -> Result<(), String> {
     // Clearing (or a path that no longer loads) drops any previously applied custom raster.
-    let image = path.as_deref().and_then(|path| load_start_icon(path).ok());
-    match image {
+    match path.as_deref().and_then(|path| load_start_icon(path).ok()) {
         Some(image) => document.image_rgba8(START_ICON_ID, image),
         None => document.image_reset(START_ICON_ID),
     }
@@ -351,9 +350,8 @@ fn percent_setting(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
 }
 
 fn color_setting(snapshot: &SettingsSnapshot, key: &str, default: u32) -> UiColor {
-    let value = match snapshot.values.get(key) {
-        Some(SettingValue::Text(value)) => value,
-        _ => return rgb(default, 255),
+    let Some(SettingValue::Text(value)) = snapshot.values.get(key) else {
+        return rgb(default, 255);
     };
     // Stored values carry `#`; the bare six-digit form is accepted too.
     let parsed = if value.starts_with('#') {
