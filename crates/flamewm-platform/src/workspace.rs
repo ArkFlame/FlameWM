@@ -18,7 +18,7 @@ impl TwoRowTopology {
     }
 
     #[must_use]
-    pub fn index_to_position(index: usize, total: usize) -> GridPosition {
+    fn index_to_position(index: usize, total: usize) -> GridPosition {
         if total == 0 {
             return GridPosition { row: 0, column: 0 };
         }
@@ -30,7 +30,7 @@ impl TwoRowTopology {
     }
 
     #[must_use]
-    pub fn position_to_index(row: usize, column: usize, total: usize) -> usize {
+    fn position_to_index(row: usize, column: usize, total: usize) -> usize {
         if total == 0 {
             return 0;
         }
