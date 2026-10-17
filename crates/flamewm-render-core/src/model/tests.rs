@@ -1,79 +1,78 @@
 use super::*;
 
+fn fixture_node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> CompiledNode {
+    CompiledNode {
+        kind,
+        parent: None,
+        first_child: None,
+        next_sibling: None,
+        id: id.to_string(),
+        action: String::new(),
+        text: text.to_string(),
+        image,
+        style: Style::default(),
+        hover_style: None,
+        active_style: None,
+    }
+}
+
+fn fixture_document(nodes: Vec<CompiledNode>, assets: Vec<ImageAsset>) -> RuntimeDocument {
+    RuntimeDocument::new(CompiledDocument {
+        source_fingerprint: 0,
+        root: 0,
+        variables: Vec::new(),
+        assets,
+        nodes,
+    })
+    .expect("fixture document validates")
+}
+
 #[cfg(test)]
 mod ui_scale_tests {
     use super::*;
 
     fn clickable_document() -> RuntimeDocument {
-        let root = CompiledNode {
-            kind: NodeKind::Element,
-            parent: None,
-            first_child: Some(1),
-            next_sibling: None,
-            id: String::new(),
-            action: String::new(),
-            text: String::new(),
-            image: None,
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        };
-        let button = CompiledNode {
-            kind: NodeKind::Element,
-            parent: Some(0),
-            first_child: None,
-            next_sibling: None,
-            id: "button".to_string(),
-            action: "activate".to_string(),
-            text: String::new(),
-            image: None,
-            style: Style {
-                width: Length::Px(40.0),
-                height: Length::Px(20.0),
-                background: ColorValue::Literal(Color::WHITE),
-                ..Style::default()
-            },
-            hover_style: None,
-            active_style: None,
-        };
-        RuntimeDocument::new(CompiledDocument {
-            source_fingerprint: 0,
-            root: 0,
-            variables: Vec::new(),
-            assets: Vec::new(),
-            nodes: vec![root, button],
-        })
-        .expect("fixture document validates")
+        fixture_document(
+            vec![
+                CompiledNode {
+                    first_child: Some(1),
+                    ..fixture_node(NodeKind::Element, "", "", None)
+                },
+                CompiledNode {
+                    parent: Some(0),
+                    action: "activate".to_string(),
+                    style: Style {
+                        width: Length::Px(40.0),
+                        height: Length::Px(20.0),
+                        background: ColorValue::Literal(Color::WHITE),
+                        ..Style::default()
+                    },
+                    ..fixture_node(NodeKind::Element, "button", "", None)
+                },
+            ],
+            Vec::new(),
+        )
     }
 
     fn labelled_document() -> RuntimeDocument {
-        let node = |kind, parent: Option<u32>, first_child: Option<u32>, id: &str, text: &str| {
-            CompiledNode {
-                kind,
-                parent,
-                first_child,
-                next_sibling: None,
-                id: id.to_string(),
-                action: String::new(),
-                text: text.to_string(),
-                image: None,
-                style: Style::default(),
-                hover_style: None,
-                active_style: None,
-            }
-        };
-        RuntimeDocument::new(CompiledDocument {
-            source_fingerprint: 0,
-            root: 0,
-            variables: Vec::new(),
-            assets: Vec::new(),
-            nodes: vec![
-                node(NodeKind::Element, None, Some(1), "", ""),
-                node(NodeKind::Element, Some(0), Some(2), "label", ""),
-                node(NodeKind::Text, Some(1), None, "", "12:00"),
+        fixture_document(
+            vec![
+                CompiledNode {
+                    first_child: Some(1),
+                    ..fixture_node(NodeKind::Element, "", "", None)
+                },
+                CompiledNode {
+                    parent: Some(0),
+                    first_child: Some(2),
+                    ..fixture_node(NodeKind::Element, "label", "", None)
+                },
+                CompiledNode {
+                    parent: Some(1),
+                    ..fixture_node(NodeKind::Text, "", "12:00", None)
+                },
             ],
-        })
-        .expect("fixture document validates")
+            Vec::new(),
+        )
     }
 
     #[test]
@@ -193,40 +192,13 @@ mod image_replace_tests {
             height: 1,
             pixels: vec![10, 20, 30, 255, 40, 50, 60, 255],
         };
-        let image_node = CompiledNode {
-            kind: NodeKind::Image,
-            parent: None,
-            first_child: None,
-            next_sibling: None,
-            id: "icon".to_string(),
-            action: String::new(),
-            text: String::new(),
-            image: Some(0),
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        };
-        let text_node = CompiledNode {
-            kind: NodeKind::Text,
-            parent: None,
-            first_child: None,
-            next_sibling: None,
-            id: "label".to_string(),
-            action: String::new(),
-            text: "hi".to_string(),
-            image: None,
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        };
-        RuntimeDocument::new(CompiledDocument {
-            source_fingerprint: 0,
-            root: 0,
-            variables: Vec::new(),
-            assets: vec![asset],
-            nodes: vec![image_node, text_node],
-        })
-        .expect("fixture document validates")
+        fixture_document(
+            vec![
+                fixture_node(NodeKind::Image, "icon", "", Some(0)),
+                fixture_node(NodeKind::Text, "label", "hi", None),
+            ],
+            vec![asset],
+        )
     }
 
     #[test]
@@ -314,27 +286,13 @@ mod image_replace_tests {
             height: 1,
             pixels: vec![9, 9, 9, 255],
         };
-        let mk = |id: &str| CompiledNode {
-            kind: NodeKind::Image,
-            parent: None,
-            first_child: None,
-            next_sibling: None,
-            id: id.to_string(),
-            action: String::new(),
-            text: String::new(),
-            image: Some(0),
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        };
-        RuntimeDocument::new(CompiledDocument {
-            source_fingerprint: 0,
-            root: 0,
-            variables: Vec::new(),
-            assets: vec![asset],
-            nodes: vec![mk("a"), mk("b")],
-        })
-        .expect("fixture validates")
+        fixture_document(
+            vec![
+                fixture_node(NodeKind::Image, "a", "", Some(0)),
+                fixture_node(NodeKind::Image, "b", "", Some(0)),
+            ],
+            vec![asset],
+        )
     }
 
     #[test]
@@ -390,45 +348,27 @@ mod image_replace_tests {
 mod idempotent_mutation_tests {
     use super::*;
 
-    fn node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> CompiledNode {
-        CompiledNode {
-            kind,
-            parent: None,
-            first_child: None,
-            next_sibling: None,
-            id: id.to_string(),
-            action: String::new(),
-            text: text.to_string(),
-            image,
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        }
-    }
-
     fn fixture() -> RuntimeDocument {
-        let mut label = node(NodeKind::Element, "label", "", None);
-        label.first_child = Some(2);
-        let mut root = node(NodeKind::Element, "", "", None);
-        root.first_child = Some(1);
-        RuntimeDocument::new(CompiledDocument {
-            source_fingerprint: 0,
-            root: 0,
-            variables: Vec::new(),
-            assets: vec![ImageAsset {
+        fixture_document(
+            vec![
+                CompiledNode {
+                    first_child: Some(1),
+                    ..fixture_node(NodeKind::Element, "", "", None)
+                },
+                CompiledNode {
+                    first_child: Some(2),
+                    ..fixture_node(NodeKind::Element, "label", "", None)
+                },
+                fixture_node(NodeKind::Text, "", "12:00", None),
+                fixture_node(NodeKind::Image, "icon", "", Some(0)),
+            ],
+            vec![ImageAsset {
                 source: "old".to_string(),
                 width: 1,
                 height: 1,
                 pixels: vec![1, 2, 3, 255],
             }],
-            nodes: vec![
-                root,
-                label,
-                node(NodeKind::Text, "", "12:00", None),
-                node(NodeKind::Image, "icon", "", Some(0)),
-            ],
-        })
-        .expect("fixture validates")
+        )
     }
 
     #[test]
