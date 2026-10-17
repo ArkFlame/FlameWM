@@ -572,12 +572,16 @@ mod tests {
             .collect()
     }
 
+    fn blur_ok(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
+        gaussian_blur_rgba(pixels, width, height, radius).unwrap();
+    }
+
     #[test]
     fn radius_zero_is_bit_exact_no_op() {
         let original = noisy(17, 9);
         for radius in [0.0f32, 0.49, -3.0] {
             let mut pixels = original.clone();
-            gaussian_blur_rgba(&mut pixels, 17, 9, radius).unwrap();
+            blur_ok(&mut pixels, 17, 9, radius);
             assert_eq!(pixels, original, "radius {radius}");
         }
     }
@@ -587,7 +591,7 @@ mod tests {
         for rgba in [[200, 100, 50, 255], [200, 100, 50, 128], [0, 0, 0, 0]] {
             for radius in [0.5f32, 3.0, 11.0, 12.5, 24.0, 40.0, 64.0] {
                 let mut pixels = solid(37, 29, rgba);
-                gaussian_blur_rgba(&mut pixels, 37, 29, radius).unwrap();
+                blur_ok(&mut pixels, 37, 29, radius);
                 assert!(
                     pixels.chunks_exact(4).all(|p| p == rgba),
                     "rgba {rgba:?} radius {radius}"
@@ -655,7 +659,7 @@ mod tests {
                 pixels.extend_from_slice(&[v, v, v, 255]);
             }
         }
-        gaussian_blur_rgba(&mut pixels, W, H, 8.0).unwrap();
+        blur_ok(&mut pixels, W, H, 8.0);
         for y in 0..H {
             assert_eq!(
                 pixel_at(&pixels, W, 0, y),
@@ -683,7 +687,7 @@ mod tests {
                 }
             }
         }
-        gaussian_blur_rgba(&mut pixels, N, N, 4.0).unwrap();
+        blur_ok(&mut pixels, N, N, 4.0);
         let mut seen_translucent = false;
         for x in N / 2..N / 2 + 4 {
             let p = pixel_at(&pixels, N, x, N / 2);
@@ -707,8 +711,8 @@ mod tests {
         for radius in [2.0f32, 9.0, 20.0, 50.0] {
             let mut first = original.clone();
             let mut second = original.clone();
-            gaussian_blur_rgba(&mut first, 73, 41, radius).unwrap();
-            gaussian_blur_rgba(&mut second, 73, 41, radius).unwrap();
+            blur_ok(&mut first, 73, 41, radius);
+            blur_ok(&mut second, 73, 41, radius);
             assert_eq!(first, second, "radius {radius}");
         }
     }
@@ -720,7 +724,7 @@ mod tests {
         let mut reused = original.clone();
         gaussian_blur_rgba_with(&mut scratch, &mut reused, 40, 30, 20.0).unwrap();
         let mut fresh = original.clone();
-        gaussian_blur_rgba(&mut fresh, 40, 30, 20.0).unwrap();
+        blur_ok(&mut fresh, 40, 30, 20.0);
         assert_eq!(reused, fresh);
     }
 
