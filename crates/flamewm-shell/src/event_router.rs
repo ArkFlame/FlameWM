@@ -28,6 +28,14 @@ fn general_settings_launch(action: &str) -> Option<&'static str> {
     (action == TASKBAR_MENU_SETTINGS_ACTION).then_some(GENERAL_SETTINGS_PROGRAM)
 }
 
+/// Slot number (1-based in the action id) after `prefix`; `None` for other actions.
+fn slot_of(action: &str, prefix: &str) -> Option<usize> {
+    action
+        .strip_prefix(prefix)
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|slot| slot.checked_sub(1))
+}
+
 /// Non-primary releases are dropped, except an outside release: a right-button press outside an
 /// open shell popup must dismiss it (the right-click that opens another menu replaces this one).
 fn non_primary_release_is_dropped(action: &str, is_release: bool, button: PointerButton) -> bool {
@@ -171,7 +179,6 @@ impl ShellLoop {
         // never activate on Secondary.
         let button = PointerButton::from_raw_x(event.action.button);
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown) {
-            self.apply_wheel_scroll(&event, runtime);
             return Ok(());
         }
         let release_inside = event.action.phase == ActionPhase::Release && event.action.inside;
@@ -250,38 +257,6 @@ impl ShellLoop {
                 // C04: geometry-invalidating or menu-opening paths also drop
                 // any helper popup on the same turn (nonfatal, loop survives).
                 self.close_quick_control_nonfatal();
-                return self.apply_controls(runtime);
-            }
-        }
-
-        // context menus here.
-        if false {
-            if let Some(slot) = action
-                .strip_prefix("task.slot.")
-                .and_then(|value| value.parse::<usize>().ok())
-                .and_then(|slot| slot.checked_sub(1))
-            {
-                self.shell.open_task_context_at_slot(
-                    slot,
-                    Some(
-                        self.surfaces
-                            .root_pointer(runtime, event.action.x, event.action.y),
-                    ),
-                );
-                return self.apply_controls(runtime);
-            }
-            if let Some(slot) = action
-                .strip_prefix("workspace.")
-                .and_then(|value| value.parse::<usize>().ok())
-                .and_then(|slot| slot.checked_sub(1))
-            {
-                self.shell.open_workspace_context_at_slot(
-                    slot,
-                    Some(
-                        self.surfaces
-                            .root_pointer(runtime, event.action.x, event.action.y),
-                    ),
-                );
                 return self.apply_controls(runtime);
             }
         }
@@ -369,22 +344,14 @@ impl ShellLoop {
             return Ok(());
         }
 
-        if let Some(slot) = action
-            .strip_prefix("start.app.")
-            .and_then(|value| value.parse::<usize>().ok())
-            .and_then(|slot| slot.checked_sub(1))
-        {
+        if let Some(slot) = slot_of(action, "start.app.") {
             if event.action.phase == ActionPhase::Release && event.action.inside {
                 self.launch_start_slot(runtime, slot)?;
             }
             return Ok(());
         }
 
-        if let Some(slot) = action
-            .strip_prefix("task.slot.")
-            .and_then(|value| value.parse::<usize>().ok())
-            .and_then(|slot| slot.checked_sub(1))
-        {
+        if let Some(slot) = slot_of(action, "task.slot.") {
             if event.action.phase == ActionPhase::Release && event.action.inside {
                 self.click_task_slot(runtime, slot)?;
             }
@@ -453,10 +420,7 @@ impl ShellLoop {
             self.set_task_insert_marker(runtime, None);
             return true;
         }
-        let slot = action
-            .strip_prefix("task.slot.")
-            .and_then(|value| value.parse::<usize>().ok())
-            .and_then(|slot| slot.checked_sub(1));
+        let slot = slot_of(action, "task.slot.");
         match event.action.phase {
             ActionPhase::Press => {
                 let primary = matches!(
@@ -530,11 +494,7 @@ impl ShellLoop {
         if action == "start.search" || action.starts_with("start.app.") {
             return Ok(());
         }
-        if let Some(slot) = action
-            .strip_prefix("task.slot.")
-            .and_then(|value| value.parse::<usize>().ok())
-            .and_then(|slot| slot.checked_sub(1))
-        {
+        if let Some(slot) = slot_of(action, "task.slot.") {
             self.shell.open_task_context_at_slot(
                 slot,
                 Some(
@@ -545,11 +505,7 @@ impl ShellLoop {
             self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
-        if let Some(slot) = action
-            .strip_prefix("workspace.")
-            .and_then(|value| value.parse::<usize>().ok())
-            .and_then(|slot| slot.checked_sub(1))
-        {
+        if let Some(slot) = slot_of(action, "workspace.") {
             self.shell.open_workspace_context_at_slot(
                 slot,
                 Some(
@@ -569,31 +525,6 @@ impl ShellLoop {
             return self.apply_controls(runtime);
         }
         Ok(())
-    }
-
-    fn apply_wheel_scroll(&mut self, event: &SurfaceEvent, _runtime: &mut SurfaceRuntime) {
-        let button = PointerButton::from_raw_x(event.action.button);
-        let delta = match button {
-            PointerButton::WheelUp => -48.0,
-            PointerButton::WheelDown => 48.0,
-            _ => return,
-        };
-        let action = event.action.action.as_str();
-        let node: u32 = match action {
-            value if value.starts_with("audio.") || value == "popup.surface" => 1,
-            value if value.starts_with("network.") => 2,
-            value if value.starts_with("start.") => 3,
-            _ => return,
-        };
-        let _ = (delta, node);
-        let _ = flamewm_ui_core::range::RangeSpec::new(0.0, 100.0, 1.0, 50.0);
-        let _ = flamewm_ui_core::scroll::ScrollStore::default();
-        let _ = flamewm_ui_core::virtual_list::VirtualListModel {
-            row_count: 0,
-            row_height: 1,
-            viewport_height: 1,
-            scroll_offset: 0,
-        };
     }
 }
 
