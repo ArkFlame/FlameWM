@@ -140,26 +140,11 @@ fn profile_parser_ignores_non_wireless_profiles() {
 
 #[test]
 fn secret_agent_parser_preserves_requested_setting_without_secret_data() {
-    let mut message = Message::new_method_call(
-        NETWORK_MANAGER_SERVICE,
-        SECRET_AGENT_PATH,
+    let message = secret_agent_call_with(
         SECRET_AGENT_INTERFACE,
         GET_SECRETS,
-    )
-    .expect("valid SecretAgent call");
-    // libdbus aborts on method_return() when the call serial is 0; use a
-    // synthetic nonzero serial so the parser can own a real reply.
-    message.set_serial(1);
-    message.append_items(&[
-        empty_dict(),
-        MessageItem::ObjectPath(
-            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
-                .expect("valid path"),
-        ),
-        MessageItem::Str("802-11-wireless-security".to_owned()),
-        MessageItem::from(&["psk", "unused"][..]),
-        MessageItem::UInt32(0),
-    ]);
+        &valid_get_secrets_items(),
+    );
     match parse_secret_agent_call(&message).expect("valid SecretAgent call") {
         SecretAgentCall::GetSecrets {
             setting_name,
@@ -176,24 +161,9 @@ fn secret_agent_parser_preserves_requested_setting_without_secret_data() {
 
 #[test]
 fn secret_agent_parser_marks_hintless_get_secrets_as_empty_key() {
-    let mut message = Message::new_method_call(
-        NETWORK_MANAGER_SERVICE,
-        SECRET_AGENT_PATH,
-        SECRET_AGENT_INTERFACE,
-        GET_SECRETS,
-    )
-    .expect("valid SecretAgent call");
-    message.set_serial(1);
-    message.append_items(&[
-        empty_dict(),
-        MessageItem::ObjectPath(
-            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
-                .expect("valid path"),
-        ),
-        MessageItem::Str("802-11-wireless-security".to_owned()),
-        MessageItem::from(&[] as &[&str]),
-        MessageItem::UInt32(0),
-    ]);
+    let mut items = valid_get_secrets_items();
+    items[3] = MessageItem::from(&[] as &[&str]);
+    let message = secret_agent_call_with(SECRET_AGENT_INTERFACE, GET_SECRETS, &items);
     match parse_secret_agent_call(&message).expect("valid SecretAgent call") {
         SecretAgentCall::GetSecrets { secret_key, .. } => assert!(secret_key.is_empty()),
         SecretAgentCall::CancelGetSecrets { .. } => panic!("GetSecrets parsed as cancel"),
@@ -664,62 +634,36 @@ fn failing_secret_event_does_not_abort_remaining_batch() {
     assert_eq!(applied, 2, "second queued event was never dispatched");
 }
 
-fn peer_call(member: &str) -> Message {
-    let mut message = Message::new_method_call(
-        NETWORK_MANAGER_SERVICE,
-        SECRET_AGENT_PATH,
-        SECRET_AGENT_INTERFACE,
-        member,
+fn settings_item() -> MessageItem {
+    MessageItem::ObjectPath(
+        object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned()).expect("valid path"),
     )
-    .expect("valid SecretAgent call");
-    // libdbus aborts on method_return()/error() when the call serial is 0.
-    message.set_serial(1);
-    message.append_items(&[
-        empty_dict(),
-        MessageItem::ObjectPath(
-            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
-                .expect("valid path"),
-        ),
-    ]);
-    message
 }
 
-#[test]
-fn secret_agent_save_secrets_replies_with_empty_return() {
-    let message = peer_call("SaveSecrets");
-    match parse_secret_agent_call(&message).expect("SaveSecrets is not fatal") {
+fn peer_call(member: &str) -> Message {
+    secret_agent_call_with(SECRET_AGENT_INTERFACE, member, &[empty_dict(), settings_item()])
+}
+
+fn assert_empty_return(message: &Message) {
+    match parse_secret_agent_call(message).expect("call is not fatal") {
         SecretAgentCall::SendReply { reply: Some(reply) } => {
             assert_eq!(reply.msg_type(), MessageType::MethodReturn);
             assert!(reply.get_items().is_empty());
         }
-        _ => panic!("SaveSecrets must produce a method return"),
+        _ => panic!("call must produce an empty method return"),
     }
 }
 
 #[test]
-fn secret_agent_delete_secrets_replies_with_empty_return() {
-    let message = peer_call("DeleteSecrets");
-    match parse_secret_agent_call(&message).expect("DeleteSecrets is not fatal") {
-        SecretAgentCall::SendReply { reply: Some(reply) } => {
-            assert_eq!(reply.msg_type(), MessageType::MethodReturn);
-            assert!(reply.get_items().is_empty());
-        }
-        _ => panic!("DeleteSecrets must produce a method return"),
+fn secret_agent_save_and_delete_secrets_reply_with_empty_return() {
+    for member in ["SaveSecrets", "DeleteSecrets"] {
+        assert_empty_return(&peer_call(member));
     }
 }
 
 #[test]
 fn secret_agent_unknown_member_replies_unknown_method() {
-    let message = peer_call("FutureMethod");
-    match parse_secret_agent_call(&message).expect("unknown member is not fatal") {
-        SecretAgentCall::SendReply {
-            reply: Some(mut reply),
-        } => match reply.as_result() {
-            Err(error) => assert_eq!(error.name(), Some(UNKNOWN_METHOD)),
-            Ok(_) => panic!("unknown member must produce an error reply"),
-        },
-        _ => panic!("unknown member must produce an UnknownMethod error reply"),
-    }
+    assert_error_reply(&peer_call("FutureMethod"), UNKNOWN_METHOD);
 }
 
 fn secret_agent_call_with(interface: &str, member: &str, items: &[MessageItem]) -> Message {
@@ -739,10 +683,7 @@ fn secret_agent_call_with(interface: &str, member: &str, items: &[MessageItem]) 
 fn valid_get_secrets_items() -> Vec<MessageItem> {
     vec![
         empty_dict(),
-        MessageItem::ObjectPath(
-            object_path("/org/freedesktop/NetworkManager/Settings/1".to_owned())
-                .expect("valid path"),
-        ),
+        settings_item(),
         MessageItem::Str("802-11-wireless-security".to_owned()),
         MessageItem::from(&["psk", "unused"][..]),
         MessageItem::UInt32(0),
