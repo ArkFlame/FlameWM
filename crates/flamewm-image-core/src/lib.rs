@@ -232,8 +232,6 @@ pub fn unpremultiply_swapped_to_rgba(premultiplied: &[u8]) -> Vec<u8> {
         );
         if a == 0 {
             pixels.extend_from_slice(&[0, 0, 0, 0]);
-        } else if a == 255 {
-            pixels.extend_from_slice(&[r as u8, g as u8, b as u8, 255]);
         } else {
             pixels.extend_from_slice(&[
                 ((r * 255 + a / 2) / a).min(255) as u8,
@@ -268,26 +266,15 @@ mod tests {
 
     #[test]
     fn unknown_extension_resolves_to_none() {
-        assert_eq!(
-            ImageSourceFormat::from_extension(Path::new("icon.bmp")),
-            None
-        );
-        assert_eq!(
-            ImageSourceFormat::from_extension(Path::new("icon.JPG")),
-            Some(ImageSourceFormat::Jpeg)
-        );
-        assert_eq!(
-            ImageSourceFormat::from_extension(Path::new("anim.gif")),
-            Some(ImageSourceFormat::Gif)
-        );
-        assert_eq!(
-            ImageSourceFormat::from_extension(Path::new("icon.SVG")),
-            Some(ImageSourceFormat::Svg)
-        );
-        assert_eq!(
-            ImageSourceFormat::from_extension(Path::new("wallpaper.WEBP")),
-            Some(ImageSourceFormat::Webp)
-        );
+        for (name, expected) in [
+            ("icon.bmp", None),
+            ("icon.JPG", Some(ImageSourceFormat::Jpeg)),
+            ("anim.gif", Some(ImageSourceFormat::Gif)),
+            ("icon.SVG", Some(ImageSourceFormat::Svg)),
+            ("wallpaper.WEBP", Some(ImageSourceFormat::Webp)),
+        ] {
+            assert_eq!(ImageSourceFormat::from_extension(Path::new(name)), expected);
+        }
     }
 
     #[test]
