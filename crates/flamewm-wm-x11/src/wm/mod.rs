@@ -1340,21 +1340,18 @@ impl<'a, C: Connection> Wm<'a, C> {
         let ready = self.icon_service.borrow_mut().drain_ready();
         for result in ready {
             let requesters = self.icon_requests.remove(&result.key).unwrap_or_default();
-            if let Ok(raster) = result.result {
-                for (client_id, token) in requesters {
-                    let Some(client) = self.clients.get_mut(&client_id) else { continue };
-                    if !icon_completion_matches(
-                        client.icon_request_token,
-                        client.catalog_icon_key.as_ref(),
-                        token,
-                        &result.key,
-                    )
-                    { continue; }
-                    client.icon = crate::decoration::cache::catalog_icon_image(&raster);
-                    client.icon_fallback = client.icon.is_none().then(|| "catalog-raster-invalid".to_owned());
-                    self.mark_windows();
-                    let _ = self.paint_chrome(client_id);
+            let Ok(raster) = result.result else { continue };
+            for (client_id, token) in requesters {
+                let Some(client) = self.clients.get_mut(&client_id) else { continue };
+                if !icon_completion_matches(
+                    client.icon_request_token, client.catalog_icon_key.as_ref(), token, &result.key,
+                ) {
+                    continue;
                 }
+                client.icon = crate::decoration::cache::catalog_icon_image(&raster);
+                client.icon_fallback = client.icon.is_none().then(|| "catalog-raster-invalid".to_owned());
+                self.mark_windows();
+                let _ = self.paint_chrome(client_id);
             }
         }
 
@@ -1408,11 +1405,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         let job = IconJob { key: key.clone(), priority: IconPriority::High };
         if let Some(Ok(raster)) = service.cached(&key) {
-            if let Some(client) = self.clients.get_mut(&client_id) {
-                if client.icon_request_token == token && client.catalog_icon_key.as_ref() == Some(&key) {
-                    client.icon = crate::decoration::cache::catalog_icon_image(&raster);
-                    client.icon_fallback = None;
-                }
+            if let Some(client) = self.clients.get_mut(&client_id).filter(|client| {
+                client.icon_request_token == token && client.catalog_icon_key.as_ref() == Some(&key)
+            }) {
+                client.icon = crate::decoration::cache::catalog_icon_image(&raster);
+                client.icon_fallback = None;
             }
             return;
         }
@@ -1507,21 +1504,17 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn work_area(&self) -> Rect {
-        let mut strut = [0_u32; 4];
-        for dock in self.dock_struts.values() {
-            if dock[0] > 0 && dock[5] >= dock[4] && dock[4] < self.screen_rect.height {
-                strut[0] = strut[0].max(dock[0]);
+        let (height, width) = (self.screen_rect.height, self.screen_rect.width);
+        // (extent, start, end, limit) per edge: left, top, right, bottom.
+        let edges = [(0, 4, 5, height), (1, 6, 7, height), (2, 8, 9, width), (3, 10, 11, width)];
+        let mut strut = self.dock_struts.values().fold([0_u32; 4], |mut strut, dock| {
+            for (edge, (extent, start, end, limit)) in edges.into_iter().enumerate() {
+                if dock[extent] > 0 && dock[end] >= dock[start] && dock[start] < limit {
+                    strut[edge] = strut[edge].max(dock[extent]);
+                }
             }
-            if dock[1] > 0 && dock[7] >= dock[6] && dock[6] < self.screen_rect.height {
-                strut[1] = strut[1].max(dock[1]);
-            }
-            if dock[2] > 0 && dock[9] >= dock[8] && dock[8] < self.screen_rect.width {
-                strut[2] = strut[2].max(dock[2]);
-            }
-            if dock[3] > 0 && dock[11] >= dock[10] && dock[10] < self.screen_rect.width {
-                strut[3] = strut[3].max(dock[3]);
-            }
-        }
+            strut
+        });
         if strut == [0; 4] {
             strut[3] = u32::from(self.config.panel_reserve);
         }
@@ -1851,14 +1844,14 @@ fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> Option<usiz
     }) {
         return Some(index);
     }
-    let mut best: Option<(usize, u64)> = None;
-    for (index, output) in outputs.iter().enumerate() {
-        let area = rect_overlap_area(rect, output.geometry);
-        if area > 0 && best.map_or(true, |(_, score)| area > score) {
-            best = Some((index, area));
-        }
-    }
-    best.map(|(index, _)| index).or_else(|| outputs.iter().position(|output| output.primary))
+    outputs
+        .iter()
+        .enumerate()
+        .map(|(index, output)| (index, rect_overlap_area(rect, output.geometry)))
+        .filter(|&(_, area)| area > 0)
+        .max_by_key(|&(index, area)| (area, std::cmp::Reverse(index)))
+        .map(|(index, _)| index)
+        .or_else(|| outputs.iter().position(|output| output.primary))
 }
 
 fn resolve_frame_event_source(registry: &FrameRegistry, event: Window, child: Window) -> Window {
