@@ -1281,6 +1281,8 @@ pub fn xdg_data_search_dirs(
 mod tests {
     use super::*;
 
+    const HICOLOR_16_INDEX: &str = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+
     #[test]
     fn xdg_data_search_dirs_never_yields_relative_home_paths() {
         let empty = OsStr::new("");
@@ -1319,7 +1321,7 @@ mod tests {
 
     #[test]
     fn svg_fixture_preserves_alpha_with_nonblack_pixel() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/flamewm-icon.svg");
+        let path = workspace_root().join("assets/web/flamewm-icon.svg");
         let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("SVG fixture");
         assert_eq!((raster.width, raster.height), (8, 8));
         assert_eq!(raster.pixels.len(), 8 * 8 * 4);
@@ -1333,7 +1335,7 @@ mod tests {
 
     #[test]
     fn png_fixture_preserves_alpha_with_nonblack_pixel() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/flamewm.png");
+        let path = workspace_root().join("assets/web/flamewm.png");
         let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("PNG fixture");
         assert_eq!((raster.width, raster.height), (8, 8));
         assert_eq!(raster.pixels.len(), 8 * 8 * 4);
@@ -1347,8 +1349,7 @@ mod tests {
 
     #[test]
     fn webp_fixture_uses_shared_image_core_raster_contract() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/branding/flamewm-wallpaper.webp");
+        let path = workspace_root().join("assets/branding/flamewm-wallpaper.webp");
         let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("WebP fixture");
         assert_eq!((raster.width, raster.height), (8, 8));
         assert_eq!(raster.pixels.len(), 8 * 8 * 4);
@@ -1375,18 +1376,12 @@ mod tests {
         assert_eq!(raster.pixels, vec![255, 0, 255, 255]);
         // A magenta pixel decodes fully opaque: it is ordinary content.
         assert_eq!(raster.alpha_at(0, 0), Some(255));
-        let svg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/flamewm-icon.svg");
+        let svg = workspace_root().join("assets/web/flamewm-icon.svg");
         let svg_raster = rasterize_path(&svg, IconSize::new(16, 8)).expect("SVG fixture");
-        let magenta_count = svg_raster
-            .pixels
-            .chunks_exact(4)
-            .filter(|pixel| pixel[..3] == [255, 0, 255])
-            .count();
         let transparent_nonmagenta = svg_raster
             .pixels
             .chunks_exact(4)
             .any(|pixel| pixel[3] == 0 && pixel[..3] != [255, 0, 255]);
-        let _ = magenta_count;
         assert!(
             transparent_nonmagenta || svg_raster.pixels.chunks_exact(4).all(|p| p[3] == 255),
             "alpha channel, not magenta, decides transparency"
@@ -1403,9 +1398,7 @@ mod tests {
             GENERIC_FALLBACK.ends_with(".svg") || GENERIC_FALLBACK.ends_with(".png"),
             "fallback must be svg/png: {GENERIC_FALLBACK}"
         );
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../")
-            .join(GENERIC_FALLBACK);
+        let path = workspace_root().join(GENERIC_FALLBACK);
         assert!(path.is_file(), "fallback asset missing: {}", path.display());
         let raster = rasterize_path(&path, IconSize::new(16, 8)).expect("fallback raster");
         assert_eq!(raster.pixels.len(), 8 * 8 * 4);
@@ -1501,11 +1494,7 @@ mod tests {
             "Child",
             "[Icon Theme]\nDirectories=48x48/apps\nInherits=Parent\n\n[48x48/apps]\nSize=48\nType=Fixed\n",
         );
-        write_theme(
-            &dir,
-            "Parent",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        write_theme(&dir, "Parent", HICOLOR_16_INDEX);
         write_ppm(
             &dir.join("icons/Child/48x48/apps/j2-exact.ppm"),
             [200, 10, 10],
@@ -1534,11 +1523,7 @@ mod tests {
             "Child",
             "[Icon Theme]\nDirectories=32x32/apps\nInherits=Parent\n\n[32x32/apps]\nSize=32\nType=Fixed\n",
         );
-        write_theme(
-            &dir,
-            "Parent",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        write_theme(&dir, "Parent", HICOLOR_16_INDEX);
         write_ppm(
             &dir.join("icons/Child/32x32/apps/j2-near.ppm"),
             [200, 10, 10],
@@ -1567,11 +1552,7 @@ mod tests {
             "Child",
             "[Icon Theme]\nDirectories=16x16/apps\nInherits=Parent\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
         );
-        write_theme(
-            &dir,
-            "Parent",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        write_theme(&dir, "Parent", HICOLOR_16_INDEX);
         write_ppm(
             &dir.join("icons/Parent/16x16/apps/j2-parent.ppm"),
             [10, 200, 10],
@@ -1620,16 +1601,8 @@ mod tests {
     #[test]
     fn hicolor_is_final_fallback() {
         let dir = test_dir("j2-hicolor");
-        write_theme(
-            &dir,
-            "Lonely",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
-        write_theme(
-            &dir,
-            "hicolor",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        write_theme(&dir, "Lonely", HICOLOR_16_INDEX);
+        write_theme(&dir, "hicolor", HICOLOR_16_INDEX);
         write_ppm(
             &dir.join("icons/hicolor/16x16/apps/j2-hi.ppm"),
             [10, 200, 10],
@@ -1651,11 +1624,7 @@ mod tests {
         let dir = test_dir("j2-xdg");
         let data_a = dir.join("data-a");
         let data_b = dir.join("data-b");
-        write_theme(
-            &data_b,
-            "XdgTheme",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        write_theme(&data_b, "XdgTheme", HICOLOR_16_INDEX);
         write_ppm(
             &data_b.join("icons/XdgTheme/16x16/apps/j2-xdg.ppm"),
             [200, 10, 10],
@@ -1699,14 +1668,9 @@ mod tests {
         let breeze_dir = packaged.join("assets/web/breeze");
         fs::create_dir_all(&breeze_dir).expect("breeze dir");
         // Packaged semantic asset wins over an identical system theme icon.
-        let svg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/flamewm-icon.svg");
-        let bytes = fs::read(svg).expect("svg fixture");
-        fs::write(breeze_dir.join("j2-sem.svg"), &bytes).expect("packaged breeze");
-        write_theme(
-            &data,
-            "hicolor",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        let svg = workspace_root().join("assets/web/flamewm-icon.svg");
+        fs::copy(svg, breeze_dir.join("j2-sem.svg")).expect("packaged breeze");
+        write_theme(&data, "hicolor", HICOLOR_16_INDEX);
         write_ppm(
             &data.join("icons/hicolor/16x16/apps/j2-sem.ppm"),
             [10, 200, 10],
@@ -1717,14 +1681,6 @@ mod tests {
             .prepare_semantic("j2-sem", IconSize::new(16, 16))
             .expect("semantic icon");
         assert_eq!(raster.origin, IconOrigin::PackagedBreeze);
-        // Application purpose never consults packaged semantic assets first.
-        let resolver = IconResolver::new(
-            packaged,
-            vec!["hicolor".to_owned()],
-            vec![test_dir("j2-unused")],
-            0,
-        );
-        let _ = resolver;
     }
 
     #[test]
@@ -1733,14 +1689,9 @@ mod tests {
         let data = test_dir("j2-app-data");
         let breeze_dir = packaged.join("assets/web/breeze");
         fs::create_dir_all(&breeze_dir).expect("breeze dir");
-        let svg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/flamewm-icon.svg");
-        let bytes = fs::read(svg).expect("svg fixture");
-        fs::write(breeze_dir.join("j2-app.svg"), &bytes).expect("packaged breeze");
-        write_theme(
-            &data,
-            "hicolor",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        let svg = workspace_root().join("assets/web/flamewm-icon.svg");
+        fs::copy(svg, breeze_dir.join("j2-app.svg")).expect("packaged breeze");
+        write_theme(&data, "hicolor", HICOLOR_16_INDEX);
         write_ppm(
             &data.join("icons/hicolor/16x16/apps/j2-app.ppm"),
             [10, 200, 10],
@@ -1756,9 +1707,8 @@ mod tests {
     #[test]
     fn live_theme_switch_a_b_a_never_serves_stale_image() {
         let dir = test_dir("c3-switch");
-        let index_text = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
-        write_theme(&dir, "ThemeA", index_text);
-        write_theme(&dir, "ThemeB", index_text);
+        write_theme(&dir, "ThemeA", HICOLOR_16_INDEX);
+        write_theme(&dir, "ThemeB", HICOLOR_16_INDEX);
         write_ppm(&dir.join("icons/ThemeA/16x16/apps/c3-switch.ppm"), [200, 10, 10]);
         write_ppm(&dir.join("icons/ThemeB/16x16/apps/c3-switch.ppm"), [10, 200, 10]);
         let size = IconSize::new(16, 16);
@@ -1791,11 +1741,7 @@ mod tests {
     #[test]
     fn cache_invalidates_on_theme_generation() {
         let dir = test_dir("j2-cache");
-        write_theme(
-            &dir,
-            "hicolor",
-            "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
-        );
+        write_theme(&dir, "hicolor", HICOLOR_16_INDEX);
         write_ppm(
             &dir.join("icons/hicolor/16x16/apps/j2-cached.ppm"),
             [10, 200, 10],
@@ -1897,7 +1843,6 @@ mod tests {
     fn corrupt_candidate_keeps_fallback_reason() {
         let dir = test_dir("fallback");
         let bad = dir.join("bad.ppm");
-        fs::create_dir_all(&dir).expect("temp dir");
         fs::write(&bad, b"not a ppm").expect("temp bad ppm");
         let mut resolver = IconResolver::new(workspace_root(), Vec::new(), Vec::new(), 0);
         let raster = resolver
