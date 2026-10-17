@@ -2892,6 +2892,31 @@ mod cursor_reload_tests {
 }
 
 #[cfg(test)]
+mod test_transport {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
+    use flamewm_settings_core::ControlTransport;
+
+    #[derive(Default)]
+    pub(super) struct ScriptedTransport {
+        pub(super) responses: VecDeque<Result<ControlResponse, ControlError>>,
+        pub(super) requests: Rc<RefCell<Vec<ControlRequest>>>,
+    }
+
+    impl ControlTransport for ScriptedTransport {
+        fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
+            self.requests.borrow_mut().push(request);
+            self.responses
+                .pop_front()
+                .expect("scripted response was not queued")
+        }
+    }
+}
+
+#[cfg(test)]
 mod value_text_tests {
     use super::*;
 
@@ -3193,31 +3218,15 @@ mod value_text_tests {
 #[cfg(test)]
 mod display_pager_fixture_tests {
     use std::cell::RefCell;
-    use std::collections::VecDeque;
     use std::rc::Rc;
 
     use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
     use flamewm_api::{Rect, Size};
     use flamewm_control_core::{ControlRequest, ControlResponse};
-    use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS};
+    use flamewm_settings_core::DISPLAY_MODE_SLOTS;
 
+    use super::test_transport::ScriptedTransport;
     use super::*;
-
-    #[derive(Default)]
-    struct FixtureTransport {
-        responses: VecDeque<ControlResponse>,
-        requests: Rc<RefCell<Vec<ControlRequest>>>,
-    }
-
-    impl ControlTransport for FixtureTransport {
-        fn call(
-            &mut self,
-            request: ControlRequest,
-        ) -> Result<ControlResponse, ControlError> {
-            self.requests.borrow_mut().push(request);
-            Ok(self.responses.pop_front().expect("fixture response"))
-        }
-    }
 
     fn five_output_twelve_mode_snapshot() -> DisplaySnapshot {
         let outputs = (0..5_u64)
@@ -3254,15 +3263,15 @@ mod display_pager_fixture_tests {
 
     #[test]
     fn five_outputs_and_twelve_modes_are_reached_through_pager_actions() {
-        let mut transport = FixtureTransport::default();
+        let mut transport = ScriptedTransport::default();
         let requests = Rc::new(RefCell::new(Vec::new()));
         transport.requests = requests.clone();
         transport
             .responses
-            .push_back(ControlResponse::Displays(five_output_twelve_mode_snapshot()));
+            .push_back(Ok(ControlResponse::Displays(five_output_twelve_mode_snapshot())));
         transport
             .responses
-            .push_back(ControlResponse::Transaction(flamewm_api::TransactionId(7)));
+            .push_back(Ok(ControlResponse::Transaction(flamewm_api::TransactionId(7))));
         let mut app = SettingsApplication::new(transport);
         app.client.refresh_displays().expect("display snapshot");
         app.reconcile_pages();
@@ -3338,27 +3347,14 @@ mod display_pager_fixture_tests {
 
 #[cfg(test)]
 mod accent_node_tests {
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::BTreeMap;
 
     use flamewm_api::settings::{SettingValue, SettingsSnapshot};
-    use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
-    use flamewm_settings_core::ControlTransport;
+    use flamewm_control_core::ControlResponse;
     use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
+    use super::test_transport::ScriptedTransport;
     use super::{ACCENT_NODE_IDS, SettingsApplication, solid_color};
-
-    #[derive(Default)]
-    struct QueueTransport {
-        responses: VecDeque<Result<ControlResponse, ControlError>>,
-    }
-
-    impl ControlTransport for QueueTransport {
-        fn call(&mut self, _request: ControlRequest) -> Result<ControlResponse, ControlError> {
-            self.responses
-                .pop_front()
-                .expect("accent test response was not queued")
-        }
-    }
 
     #[derive(Default)]
     struct ColorDocument {
@@ -3428,7 +3424,7 @@ mod accent_node_tests {
         }
     }
 
-    fn application_with_accent(accent: &str) -> SettingsApplication<QueueTransport> {
+    fn application_with_accent(accent: &str) -> SettingsApplication<ScriptedTransport> {
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot
             .values
@@ -3436,7 +3432,7 @@ mod accent_node_tests {
         snapshot
             .values
             .insert("animationsEnabled".to_owned(), SettingValue::Boolean(true));
-        let mut transport = QueueTransport::default();
+        let mut transport = ScriptedTransport::default();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(snapshot)));
