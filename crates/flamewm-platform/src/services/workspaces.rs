@@ -8,9 +8,6 @@ use flamewm_api::{ErrorCode, FlameError, FlameResult, WindowRef};
 
 use crate::workspace::{TwoRowTopology, WorkspacePlanner};
 
-/// Workspace count used when no valid persisted count or env override exists.
-pub const DEFAULT_WORKSPACE_COUNT: usize = 4;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationDirection {
     Left,
