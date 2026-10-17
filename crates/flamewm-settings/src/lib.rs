@@ -3462,19 +3462,13 @@ mod accent_node_tests {
     fn accent_registry_covers_every_toggle_on_twin_in_markup() {
         let html = include_str!("../../../ui/settings.html");
         let marker = "toggle toggle-on\" id=\"";
-        let mut rest = html;
-        let mut found = 0;
-        let mut missing = Vec::new();
-        while let Some(index) = rest.find(marker) {
-            let after = &rest[index + marker.len()..];
-            let id = &after[..after.find('"').expect("closed toggle id")];
-            found += 1;
-            if !ACCENT_NODE_IDS.contains(&id) {
-                missing.push(id);
-            }
-            rest = after;
-        }
-        assert!(found > 0, "no toggle-on ids found in settings.html");
+        let ids: Vec<&str> = html
+            .split(marker)
+            .skip(1)
+            .map(|after| &after[..after.find('"').expect("closed toggle id")])
+            .collect();
+        assert!(!ids.is_empty(), "no toggle-on ids found in settings.html");
+        let missing: Vec<&str> = ids.into_iter().filter(|id| !ACCENT_NODE_IDS.contains(id)).collect();
         assert!(missing.is_empty(), "toggle-on ids missing from ACCENT_NODE_IDS: {missing:?}");
     }
 }
