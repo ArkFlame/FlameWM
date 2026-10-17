@@ -180,10 +180,20 @@ fn request(
     }
 }
 
+/// Client-root notify for `frame`; the client rect is clamped to >= 1 px.
+fn notify_root(frame: RootRect, extents: FrameExtents) -> FrameEffect {
+    let root: ClientRootRect = frame_to_client_root(frame, extents);
+    FrameEffect::NotifyClientRoot {
+        x: root.x,
+        y: root.y,
+        w: root.w.max(1) as u32,
+        h: root.h.max(1) as u32,
+    }
+}
+
 /// Full plan split: frame root rect + client local size + client root notify.
 fn configure_effects(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
     let local = frame_to_client_local(frame, extents);
-    let root: ClientRootRect = frame_to_client_root(frame, extents);
     vec![
         FrameEffect::ConfigureFrameRoot {
             x: frame.x,
@@ -197,32 +207,41 @@ fn configure_effects(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect>
             w: local.w.max(1) as u32,
             h: local.h.max(1) as u32,
         },
-        FrameEffect::NotifyClientRoot {
-            x: root.x,
-            y: root.y,
-            w: root.w.max(1) as u32,
-            h: root.h.max(1) as u32,
-        },
+        notify_root(frame, extents),
     ]
+}
+
+/// Layout, chrome and shape, then the full configure plan.
+fn full_configure(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
+    let mut effects = vec![
+        FrameEffect::LayoutInput,
+        FrameEffect::PaintChrome,
+        FrameEffect::ApplyShape,
+    ];
+    effects.extend(configure_effects(frame, extents));
+    effects
 }
 
 /// Move plan: position-only frame origin + root notify. No client
 /// configure, no layout, no paint, no shape. Position-only by type:
 /// `MoveFrameRoot` carries no w/h so a move cannot resize.
 fn move_effects(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
-    let root: ClientRootRect = frame_to_client_root(frame, extents);
     vec![
         FrameEffect::MoveFrameRoot {
             x: frame.x,
             y: frame.y,
         },
-        FrameEffect::NotifyClientRoot {
-            x: root.x,
-            y: root.y,
-            w: root.w.max(1) as u32,
-            h: root.h.max(1) as u32,
-        },
+        notify_root(frame, extents),
     ]
+}
+
+/// Release tail: final geometry first, Ungrab last. A no-op release only ungrabs.
+fn release_effects(mut effects: Vec<FrameEffect>) -> Vec<FrameEffect> {
+    if effects == [FrameEffect::Noop] {
+        return vec![FrameEffect::Ungrab];
+    }
+    effects.push(FrameEffect::Ungrab);
+    effects
 }
 
 fn snap_rect(work_area: RootRect, target: SnapTarget) -> RootRect {
@@ -298,12 +317,7 @@ fn move_step(
         state.placement.resume = None;
         state.placement.current = plan.frame;
         state.placement.floating_restore = plan.frame;
-        let mut effects = vec![
-            FrameEffect::LayoutInput,
-            FrameEffect::PaintChrome,
-            FrameEffect::ApplyShape,
-        ];
-        effects.extend(configure_effects(plan.frame, state.extents));
+        let effects = full_configure(plan.frame, state.extents);
         return (state, effects);
     }
 
@@ -357,16 +371,11 @@ fn resize_step(
     if state.placement.mode == PlacementMode::Floating {
         state.placement.floating_restore = plan.frame;
     }
-    let mut effects = if final_effects {
-        vec![
-            FrameEffect::LayoutInput,
-            FrameEffect::PaintChrome,
-            FrameEffect::ApplyShape,
-        ]
+    let effects = if final_effects {
+        full_configure(plan.frame, state.extents)
     } else {
-        Vec::new()
+        configure_effects(plan.frame, state.extents)
     };
-    effects.extend(configure_effects(plan.frame, state.extents));
     (state, effects)
 }
 
@@ -483,26 +492,16 @@ pub fn reduce_owned(
                 if !m.anchor.is_activated() && !move_reached_activation(m.start_pointer, pointer) {
                     return title_click_release(state, pointer, time_ms);
                 }
-                let (mut next, mut effects) = move_step(state, m, pointer, true);
+                let (mut next, effects) = move_step(state, m, pointer, true);
                 next.session = InteractionSession::Idle;
                 next.last_title_click = None;
-                if effects == vec![FrameEffect::Noop] {
-                    return (next, vec![FrameEffect::Ungrab]);
-                }
-                // Final geometry first, Ungrab last. Move is position-only:
-                // no layout/paint/shape, just MoveFrameRoot + notify.
-                effects.push(FrameEffect::Ungrab);
-                (next, effects)
+                // Move is position-only: no layout/paint/shape, just MoveFrameRoot + notify.
+                (next, release_effects(effects))
             }
             InteractionSession::Resize(r) => {
-                let (mut next, mut effects) = resize_step(state, r, pointer, true);
+                let (mut next, effects) = resize_step(state, r, pointer, true);
                 next.session = InteractionSession::Idle;
-                if effects == vec![FrameEffect::Noop] {
-                    return (next, vec![FrameEffect::Ungrab]);
-                }
-                // Final geometry first, Ungrab last.
-                effects.push(FrameEffect::Ungrab);
-                (next, effects)
+                (next, release_effects(effects))
             }
             InteractionSession::ControlPress(c) => {
                 state.session = InteractionSession::Idle;
@@ -638,9 +637,14 @@ fn title_click_release(
     toggle_max(state)
 }
 
-fn toggle_max(mut state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
+/// Enter `mode` at `rect`, or return to the resume snapshot when already in it.
+fn toggle_placement(
+    mut state: ControllerState,
+    mode: PlacementMode,
+    rect: RootRect,
+) -> (ControllerState, Vec<FrameEffect>) {
     state.session = InteractionSession::Idle;
-    if state.placement.mode == PlacementMode::Maximized {
+    if state.placement.mode == mode {
         let snap = state.placement.resume.unwrap_or(PlacementSnapshot {
             mode: PlacementMode::Floating,
             rect: state.placement.floating_restore,
@@ -656,52 +660,22 @@ fn toggle_max(mut state: ControllerState) -> (ControllerState, Vec<FrameEffect>)
         if state.placement.mode == PlacementMode::Floating {
             state.placement.floating_restore = state.placement.current;
         }
-        state.placement.mode = PlacementMode::Maximized;
-        state.placement.current = state.work_area;
+        state.placement.mode = mode;
+        state.placement.current = rect;
     }
-    let frame = state.placement.current;
-    // Final geometry first, Ungrab last.
-    let mut effects = vec![
-        FrameEffect::LayoutInput,
-        FrameEffect::PaintChrome,
-        FrameEffect::ApplyShape,
-    ];
-    effects.extend(configure_effects(frame, state.extents));
+    let mut effects = full_configure(state.placement.current, state.extents);
     effects.push(FrameEffect::Ungrab);
     (state, effects)
 }
 
-fn toggle_fullscreen(mut state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
-    state.session = InteractionSession::Idle;
-    if state.placement.mode == PlacementMode::Fullscreen {
-        let snap = state.placement.resume.unwrap_or(PlacementSnapshot {
-            mode: PlacementMode::Floating,
-            rect: state.placement.floating_restore,
-        });
-        state.placement.mode = snap.mode;
-        state.placement.current = snap.rect;
-        state.placement.resume = None;
-    } else {
-        state.placement.resume = Some(PlacementSnapshot {
-            mode: state.placement.mode,
-            rect: state.placement.current,
-        });
-        if state.placement.mode == PlacementMode::Floating {
-            state.placement.floating_restore = state.placement.current;
-        }
-        state.placement.mode = PlacementMode::Fullscreen;
-        state.placement.current = state.screen_rect;
-    }
-    let frame = state.placement.current;
-    // Final geometry first, Ungrab last.
-    let mut effects = vec![
-        FrameEffect::LayoutInput,
-        FrameEffect::PaintChrome,
-        FrameEffect::ApplyShape,
-    ];
-    effects.extend(configure_effects(frame, state.extents));
-    effects.push(FrameEffect::Ungrab);
-    (state, effects)
+fn toggle_max(state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
+    let work_area = state.work_area;
+    toggle_placement(state, PlacementMode::Maximized, work_area)
+}
+
+fn toggle_fullscreen(state: ControllerState) -> (ControllerState, Vec<FrameEffect>) {
+    let screen_rect = state.screen_rect;
+    toggle_placement(state, PlacementMode::Fullscreen, screen_rect)
 }
 
 #[cfg(test)]
@@ -824,23 +798,14 @@ mod tests {
     #[test]
     fn press_motion_release_move() {
         let s0 = floating_state();
-        let (s1, e1) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
+        let (s1, e1) = reduce(&s0, press(1, 150, 120));
         assert!(matches!(s1.session, InteractionSession::Move(_)));
         assert!(e1.iter().any(|e| matches!(e, FrameEffect::Grab { .. })));
-        let (s2, e2) = reduce(
-            &s1,
-            motion(200, 170),
-        );
+        let (s2, e2) = reduce(&s1, motion(200, 170));
         assert_eq!(s2.placement.current, RootRect::new(150, 150, 400, 300));
         assert!(has_move_frame(&e2, 150, 150));
         assert!(!has_any_frame_root(&e2));
-        let (s3, e3) = reduce(
-            &s2,
-            release(200, 170),
-        );
+        let (s3, e3) = reduce(&s2, release(200, 170));
         assert!(s3.session.is_idle());
         assert!(e3.contains(&FrameEffect::Ungrab));
         assert_eq!(s3.placement.current, RootRect::new(150, 150, 400, 300));
@@ -849,21 +814,12 @@ mod tests {
     #[test]
     fn press_motion_release_resize() {
         let s0 = floating_state();
-        let (s1, e1) = reduce(
-            &s0,
-            press(2, 500, 400),
-        );
+        let (s1, e1) = reduce(&s0, press(2, 500, 400));
         assert!(matches!(s1.session, InteractionSession::Resize(_)));
         assert!(e1.iter().any(|e| matches!(e, FrameEffect::Grab { .. })));
-        let (s2, _) = reduce(
-            &s1,
-            motion(550, 460),
-        );
+        let (s2, _) = reduce(&s1, motion(550, 460));
         assert_eq!(s2.placement.current, RootRect::new(100, 100, 450, 360));
-        let (s3, e3) = reduce(
-            &s2,
-            release(550, 460),
-        );
+        let (s3, e3) = reduce(&s2, release(550, 460));
         assert!(s3.session.is_idle());
         assert!(e3.contains(&FrameEffect::Ungrab));
         assert!(e3.contains(&FrameEffect::ApplyShape));
@@ -873,15 +829,9 @@ mod tests {
     #[test]
     fn control_click_toggles_max() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(3, 300, 110),
-        );
+        let (s1, _) = reduce(&s0, press(3, 300, 110));
         assert!(matches!(s1.session, InteractionSession::ControlPress(_)));
-        let (s2, e2) = reduce(
-            &s1,
-            release(300, 110),
-        );
+        let (s2, e2) = reduce(&s1, release(300, 110));
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
         assert_eq!(s2.placement.current, WA);
         assert!(e2.contains(&FrameEffect::Ungrab));
@@ -894,10 +844,7 @@ mod tests {
         y: i32,
         time_ms: u32,
     ) -> (ControllerState, Vec<FrameEffect>) {
-        let (pressed, _) = reduce(
-            state,
-            press(1, x, y),
-        );
+        let (pressed, _) = reduce(state, press(1, x, y));
         reduce(
             &pressed,
             FrameEvent::Release {
@@ -970,14 +917,8 @@ mod tests {
     fn title_drag_between_clicks_breaks_pair() {
         let s0 = floating_state();
         let (s1, _) = title_click(&s0, 150, 120, 1000);
-        let (s2, _) = reduce(
-            &s1,
-            press(1, 150, 120),
-        );
-        let (s3, _) = reduce(
-            &s2,
-            motion(200, 170),
-        );
+        let (s2, _) = reduce(&s1, press(1, 150, 120));
+        let (s3, _) = reduce(&s2, motion(200, 170));
         let (s4, _) = reduce(
             &s3,
             FrameEvent::Release {
@@ -995,10 +936,7 @@ mod tests {
     fn non_title_press_clears_pending_title_click() {
         let s0 = floating_state();
         let (s1, _) = title_click(&s0, 150, 120, 1000);
-        let (s2, _) = reduce(
-            &s1,
-            press(2, 500, 400),
-        );
+        let (s2, _) = reduce(&s1, press(2, 500, 400));
         let (s3, _) = reduce(
             &s2,
             FrameEvent::Release {
@@ -1014,10 +952,7 @@ mod tests {
     #[test]
     fn cancel_aborts_move() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
         let (s2, e2) = reduce(&s1, FrameEvent::Cancel);
         assert!(s2.session.is_idle());
         assert_eq!(s2.placement.current, START);
@@ -1058,21 +993,12 @@ mod tests {
     fn noop_geometry_yields_noop() {
         let s0 = floating_state();
         // Motion with zero delta while moving: plan equals start -> Noop.
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
-        let (s2, e2) = reduce(
-            &s1,
-            motion(150, 120),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let (s2, e2) = reduce(&s1, motion(150, 120));
         assert_eq!(e2, vec![FrameEffect::Noop]);
         assert_eq!(s2.placement.current, START);
         // Bare configure with no movement on idle session -> Noop path.
-        let (_, e3) = reduce(
-            &s0,
-            motion(0, 0),
-        );
+        let (_, e3) = reduce(&s0, motion(0, 0));
         assert_eq!(e3, vec![FrameEffect::Noop]);
     }
 
@@ -1112,14 +1038,8 @@ mod tests {
     #[test]
     fn effect_order_move_motion_has_no_layout_or_paint() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
-        let (_, e2) = reduce(
-            &s1,
-            motion(200, 170),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let (_, e2) = reduce(&s1, motion(200, 170));
         assert_eq!(e2.len(), 3);
         assert!(matches!(
             e2[0],
@@ -1146,14 +1066,8 @@ mod tests {
     #[test]
     fn effect_order_resize_release_has_frame_client_layout_chrome() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(2, 500, 400),
-        );
-        let (s2, e_motion) = reduce(
-            &s1,
-            motion(550, 460),
-        );
+        let (s1, _) = reduce(&s0, press(2, 500, 400));
+        let (s2, e_motion) = reduce(&s1, motion(550, 460));
         // Resize motion carries frame + local + root notify.
         assert_eq!(count_local(&e_motion), 1);
         assert!(
@@ -1161,10 +1075,7 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, FrameEffect::ConfigureClientLocal { x: 0, y: 31, .. }))
         );
-        let (_, e3) = reduce(
-            &s2,
-            release(550, 460),
-        );
+        let (_, e3) = reduce(&s2, release(550, 460));
         assert!(e3.contains(&FrameEffect::LayoutInput));
         assert!(e3.contains(&FrameEffect::PaintChrome));
         assert!(e3.contains(&FrameEffect::ApplyShape));
@@ -1199,18 +1110,9 @@ mod tests {
     #[test]
     fn effect_order_release_geometry_precedes_ungrab() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
-        let (s2, _) = reduce(
-            &s1,
-            motion(200, 170),
-        );
-        let (s3, e3) = reduce(
-            &s2,
-            release(200, 170),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let (s2, _) = reduce(&s1, motion(200, 170));
+        let (s3, e3) = reduce(&s2, release(200, 170));
         assert_eq!(s3.placement.current, RootRect::new(150, 150, 400, 300));
         assert_eq!(*e3.last().expect("nonempty"), FrameEffect::Ungrab);
         let tail_move = e3
@@ -1236,10 +1138,7 @@ mod tests {
     #[test]
     fn move_thousand_samples_zero_client_local() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
         let mut total_local = 0;
         let mut total_configure_root = 0;
         let mut total_layout = 0;
@@ -1251,10 +1150,7 @@ mod tests {
         for i in 0..1000 {
             let dx = (i % 100) - 50;
             let dy = ((i * 7) % 100) - 50;
-            let (_, e) = reduce(
-                &s1,
-                motion(150 + dx, 120 + dy),
-            );
+            let (_, e) = reduce(&s1, motion(150 + dx, 120 + dy));
             // Move motion emits either Noop (zero/non-plan delta) or exactly
             // [MoveFrameRoot, NotifyClientRoot, PaintChrome]; nothing else is representable.
             if e == vec![FrameEffect::Noop] {
@@ -1304,20 +1200,11 @@ mod tests {
     #[test]
     fn post_activation_move_repaints_chrome_after_frame_move() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
-        let (s2, _) = reduce(
-            &s1,
-            motion(200, 170),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let (s2, _) = reduce(&s1, motion(200, 170));
         // Post-activation step whose frame position changes: titlebar must
         // repaint live, ordered after the frame move.
-        let (s3, e3) = reduce(
-            &s2,
-            motion(230, 190),
-        );
+        let (s3, e3) = reduce(&s2, motion(230, 190));
         assert_eq!(s3.placement.current, RootRect::new(180, 170, 400, 300));
         let move_pos = e3
             .iter()
@@ -1332,24 +1219,15 @@ mod tests {
             "PaintChrome must follow MoveFrameRoot"
         );
         // Repeated pointer position leaves the frame unchanged: no repaint.
-        let (_, e4) = reduce(
-            &s3,
-            motion(230, 190),
-        );
+        let (_, e4) = reduce(&s3, motion(230, 190));
         assert!(!e4.contains(&FrameEffect::PaintChrome));
     }
 
     #[test]
     fn resize_still_uses_full_configure_frame_root() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(2, 500, 400),
-        );
-        let (_, e) = reduce(
-            &s1,
-            motion(550, 460),
-        );
+        let (s1, _) = reduce(&s0, press(2, 500, 400));
+        let (_, e) = reduce(&s1, motion(550, 460));
         assert!(
             e.iter()
                 .any(|fx| matches!(fx, FrameEffect::ConfigureFrameRoot { .. })),
@@ -1363,14 +1241,8 @@ mod tests {
         // Start (100,100) + delta (300,100) => frame (400,200); client local
         // stays (0,titlebar), synthetic root = (400,231) size (400,269).
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
-        let (s2, e2) = reduce(
-            &s1,
-            motion(450, 220),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let (s2, e2) = reduce(&s1, motion(450, 220));
         assert_eq!(s2.placement.current, RootRect::new(400, 200, 400, 300));
         assert!(matches!(
             e2[1],
@@ -1386,14 +1258,8 @@ mod tests {
     #[test]
     fn resize_right_and_bottom_right_local_origin_constant() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(2, 500, 400),
-        );
-        let (_, e) = reduce(
-            &s1,
-            motion(550, 460),
-        );
+        let (s1, _) = reduce(&s0, press(2, 500, 400));
+        let (_, e) = reduce(&s1, motion(550, 460));
         assert!(
             e.iter()
                 .any(|fx| matches!(fx, FrameEffect::ConfigureClientLocal { x: 0, y: 31, .. }))
@@ -1495,14 +1361,8 @@ mod tests {
     #[test]
     fn t01_title_motion_below_four_pixels_is_pending() {
         let s0 = floating_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 150, 120),
-        );
-        let (s2, _effects) = reduce(
-            &s1,
-            motion(153, 120),
-        );
+        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let (s2, _effects) = reduce(&s1, motion(153, 120));
         assert!(matches!(s1.session, InteractionSession::Move(_)));
         assert_eq!(s1.placement, s0.placement);
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
@@ -1523,14 +1383,8 @@ mod tests {
     #[test]
     fn t02_title_motion_at_four_pixels_activates_from_snapshot() {
         let s0 = maximized_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
-        let (s2, effects) = reduce(
-            &s1,
-            motion(964, 20),
-        );
+        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let (s2, effects) = reduce(&s1, motion(964, 20));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert_eq!(
             (s2.placement.current.w, s2.placement.current.h),
@@ -1551,10 +1405,7 @@ mod tests {
     #[test]
     fn t03_maximized_press_has_floating_pending_snapshot() {
         let s0 = maximized_state();
-        let (s1, effects) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
+        let (s1, effects) = reduce(&s0, press(1, 960, 20));
         assert_eq!(s1.placement, s0.placement);
         assert!(effects.contains(&FrameEffect::Grab {
             window: 71,
@@ -1588,10 +1439,7 @@ mod tests {
     #[test]
     fn t04_snapped_press_has_floating_pending_snapshot() {
         let s0 = snapped_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 500, 20),
-        );
+        let (s1, _) = reduce(&s0, press(1, 500, 20));
         assert_eq!(s1.placement, s0.placement);
         match s1.session {
             InteractionSession::Move(session) => {
@@ -1621,14 +1469,8 @@ mod tests {
     #[test]
     fn t05_maximized_first_drag_away_restores_with_full_configure() {
         let s0 = maximized_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
-        let (s2, effects) = reduce(
-            &s1,
-            motion(965, 25),
-        );
+        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let (s2, effects) = reduce(&s1, motion(965, 25));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert_eq!(
             (s2.placement.current.w, s2.placement.current.h),
@@ -1653,14 +1495,8 @@ mod tests {
     #[test]
     fn t06_snapped_first_drag_away_restores_with_full_configure() {
         let s0 = snapped_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 500, 20),
-        );
-        let (s2, effects) = reduce(
-            &s1,
-            motion(505, 25),
-        );
+        let (s1, _) = reduce(&s0, press(1, 500, 20));
+        let (s2, effects) = reduce(&s1, motion(505, 25));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert_eq!(
             (s2.placement.current.w, s2.placement.current.h),
@@ -1684,18 +1520,9 @@ mod tests {
     #[test]
     fn t07_second_motion_after_restore_is_position_only() {
         let s0 = maximized_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
-        let (s2, _) = reduce(
-            &s1,
-            motion(965, 25),
-        );
-        let (s3, effects) = reduce(
-            &s2,
-            motion(985, 45),
-        );
+        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let (s2, _) = reduce(&s1, motion(965, 25));
+        let (s3, effects) = reduce(&s2, motion(985, 45));
         assert_eq!(s3.placement.mode, PlacementMode::Floating);
         assert_eq!(
             (s3.placement.current.w, s3.placement.current.h),
@@ -1723,17 +1550,11 @@ mod tests {
             } else {
                 SCREEN
             };
-            let (s1, press_effects) = reduce(
-                &s0,
-                press(2, 1900, 1050),
-            );
+            let (s1, press_effects) = reduce(&s0, press(2, 1900, 1050));
             assert!(s1.session.is_idle(), "mode {mode:?}");
             assert_eq!(s1.placement, s0.placement, "mode {mode:?}");
             assert_eq!(press_effects, vec![FrameEffect::Noop], "mode {mode:?}");
-            let (s2, motion_effects) = reduce(
-                &s1,
-                motion(1950, 1100),
-            );
+            let (s2, motion_effects) = reduce(&s1, motion(1950, 1100));
             assert_eq!(s2.placement, s0.placement, "mode {mode:?}");
             assert_eq!(motion_effects, vec![FrameEffect::Noop], "mode {mode:?}");
         }
@@ -1748,20 +1569,11 @@ mod tests {
     #[test]
     fn t09_snapped_resize_exits_once_and_stays_floating() {
         let s0 = snapped_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(2, 960, 1080),
-        );
-        let (s2, first_effects) = reduce(
-            &s1,
-            motion(965, 1085),
-        );
+        let (s1, _) = reduce(&s0, press(2, 960, 1080));
+        let (s2, first_effects) = reduce(&s1, motion(965, 1085));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&first_effects));
-        let (s3, second_effects) = reduce(
-            &s2,
-            motion(985, 1105),
-        );
+        let (s3, second_effects) = reduce(&s2, motion(985, 1105));
         assert_eq!(s3.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&second_effects));
     }
@@ -1775,14 +1587,8 @@ mod tests {
     #[test]
     fn t11_maximized_pending_motion_preserves_mode_rect_invariant() {
         let s0 = maximized_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
-        let (s2, _effects) = reduce(
-            &s1,
-            motion(963, 20),
-        );
+        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let (s2, _effects) = reduce(&s1, motion(963, 20));
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
         assert!(!matches!(s2.placement.mode, PlacementMode::Snapped(_)));
     }
@@ -1796,14 +1602,8 @@ mod tests {
     #[test]
     fn t12_snapped_pending_motion_preserves_mode_rect_invariant() {
         let s0 = snapped_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 500, 20),
-        );
-        let (s2, _effects) = reduce(
-            &s1,
-            motion(503, 20),
-        );
+        let (s1, _) = reduce(&s0, press(1, 500, 20));
+        let (s2, _effects) = reduce(&s1, motion(503, 20));
         assert_eq!(s2.placement.mode, PlacementMode::Snapped(SnapTarget::Left));
         assert_eq!(
             (s2.placement.current.w, s2.placement.current.h),
@@ -1822,14 +1622,8 @@ mod tests {
     #[test]
     fn t13_max_restore_activation_has_all_geometry_domains() {
         let s0 = maximized_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
-        let (s2, effects) = reduce(
-            &s1,
-            motion(964, 24),
-        );
+        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let (s2, effects) = reduce(&s1, motion(964, 24));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&effects));
         assert!(
@@ -1848,19 +1642,10 @@ mod tests {
     #[test]
     fn t14_restore_then_motion_has_one_full_then_position_only_plan() {
         let s0 = maximized_state();
-        let (s1, _) = reduce(
-            &s0,
-            press(1, 960, 20),
-        );
-        let (s2, first_effects) = reduce(
-            &s1,
-            motion(965, 25),
-        );
+        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let (s2, first_effects) = reduce(&s1, motion(965, 25));
         assert!(has_full_configure(&first_effects));
-        let (_, second_effects) = reduce(
-            &s2,
-            motion(985, 45),
-        );
+        let (_, second_effects) = reduce(&s2, motion(985, 45));
         assert_position_only(&second_effects);
     }
 
