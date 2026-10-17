@@ -40,7 +40,6 @@ impl MoveAnchor {
     }
 
     /// Horizontal anchor fraction clamped to `0..=1`.
-    #[cfg(test)]
     #[must_use]
     pub fn fraction(self) -> f32 {
         if self.frac_den == 0 {
@@ -101,18 +100,13 @@ impl ControlPressSession {
 }
 
 /// Interaction session state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum InteractionSession {
+    #[default]
     Idle,
     ControlPress(ControlPressSession),
     Move(MoveSession),
     Resize(ResizeSession),
-}
-
-impl Default for InteractionSession {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl InteractionSession {
@@ -194,11 +188,7 @@ pub fn maximized_restore_rect(
     vert_off: i32,
     titlebar_h: i32,
 ) -> RootRect {
-    let frac = if frac_den == 0 {
-        0.0_f32
-    } else {
-        (frac_num as f32 / frac_den as f32).clamp(0.0, 1.0)
-    };
+    let frac = MoveAnchor::new(frac_num, frac_den, 0).fraction();
     let titlebar_h = titlebar_h.max(0);
     let vert = vert_off.clamp(0, titlebar_h);
     let dx = (frac * restore.w as f32).round() as i32;
