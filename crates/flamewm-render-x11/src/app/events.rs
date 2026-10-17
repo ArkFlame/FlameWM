@@ -374,9 +374,7 @@ impl X11App {
                             document.ui_scale(), ActionPhase::Motion, button, (motion.x, motion.y),
                             hover == Some(index), motion.time as u64, None,
                         );
-                        if fire_node(on_action, document, &mut buffers, index, &mut event)? {
-                            self.mark_full();
-                        } else if changed {
+                        if fire_node(on_action, document, &mut buffers, index, &mut event)? || changed {
                             self.mark_full();
                         }
                     } else if changed {
@@ -534,12 +532,9 @@ impl X11App {
                             let is_title_move =
                                 name.starts_with("window.") && name.ends_with(".move");
                             let double_title = is_title_move
-                                && self
-                                    .last_title_press
-                                    .map(|(last_index, last_time)| {
-                                        last_index == index && now.saturating_sub(last_time) <= 350
-                                    })
-                                    .unwrap_or(false);
+                                && self.last_title_press.is_some_and(|(last_index, last_time)| {
+                                    last_index == index && now.saturating_sub(last_time) <= 350
+                                });
                             if double_title {
                                 let maximize = name
                                     .strip_prefix("window.")
@@ -669,11 +664,10 @@ impl X11App {
             // Coalesce: at most one redraw_if_dirty per drained event.
             // Damage marks above merge (max coverage); Expose presented
             // directly. single_event returns after that single paint.
+            unsafe { self.redraw_if_dirty(document)? };
             if self.single_event {
-                unsafe { self.redraw_if_dirty(document)? };
                 return Ok(());
             }
-            unsafe { self.redraw_if_dirty(document)? };
         }
     }
 
