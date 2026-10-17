@@ -172,12 +172,7 @@ impl Cursor<'_> {
     }
 
     fn varint(&mut self) -> io::Result<u64> {
-        let (buf, at) = (self.buf, &mut self.at);
-        decode_varint(|| {
-            let b = *buf.get(*at).ok_or_else(|| corrupt("truncated block header"))?;
-            *at += 1;
-            Ok(b)
-        })
+        decode_varint(|| self.byte())
     }
 }
 

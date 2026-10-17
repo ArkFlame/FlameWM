@@ -83,12 +83,7 @@ impl NetworkManagerProvider {
                 if snapshot.active_path.is_empty() {
                     return Err(unsupported("no active NetworkManager connection"));
                 }
-                let message = method_call(
-                    NETWORK_MANAGER_SERVICE,
-                    NETWORK_MANAGER_ROOT,
-                    NETWORK_MANAGER_INTERFACE,
-                    DEACTIVATE_CONNECTION,
-                )?
+                let message = root_call(DEACTIVATE_CONNECTION)?
                 .append1(
                     dbus::Path::new(snapshot.active_path.clone())
                         .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?,
@@ -111,16 +106,7 @@ impl NetworkManagerProvider {
                     let _ = self
                         .controller
                         .request_connect_open(&access_point_path, snapshot.generation)?;
-                    let ssid = self
-                        .access_points
-                        .get(&access_point_path)
-                        .map(|access_point| access_point.ssid.clone())
-                        .ok_or_else(|| {
-                            FlameError::new(
-                                ErrorCode::NotFound,
-                                "NetworkManager access point was not found",
-                            )
-                        })?;
+                    let ssid = self.ssid_for_access_point(&access_point_path)?;
                     self.queue_add_and_activate_open(ssid, device, access_point_path)
                 } else {
                     let _ = self
@@ -209,12 +195,7 @@ impl NetworkManagerProvider {
     }
 
     pub(super) fn queue_devices(&mut self, generation: u64) -> FlameResult<()> {
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            NETWORK_MANAGER_ROOT,
-            NETWORK_MANAGER_INTERFACE,
-            GET_DEVICES,
-        )?;
+        let message = root_call(GET_DEVICES)?;
         self.queue(message, PendingRequest::Devices { generation })
     }
 
@@ -270,12 +251,7 @@ impl NetworkManagerProvider {
     }
 
     pub(super) fn queue_profile_settings(&mut self, generation: u64, profile: String) -> FlameResult<()> {
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            &profile,
-            "org.freedesktop.NetworkManager.Settings.Connection",
-            "GetSettings",
-        )?;
+        let message = profile_call(&profile, "GetSettings")?;
         self.queue(
             message,
             PendingRequest::ProfileSettings {
@@ -292,12 +268,7 @@ impl NetworkManagerProvider {
         device: String,
         access_point: String,
     ) -> FlameResult<()> {
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            NETWORK_MANAGER_ROOT,
-            NETWORK_MANAGER_INTERFACE,
-            ACTIVATE_CONNECTION,
-        )?
+        let message = root_call(ACTIVATE_CONNECTION)?
         .append3(
             object_path(profile)?,
             object_path(device)?,
@@ -314,12 +285,7 @@ impl NetworkManagerProvider {
         access_point: String,
         secret: String,
     ) -> FlameResult<()> {
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            &profile,
-            SETTINGS_CONNECTION_INTERFACE,
-            GET_SETTINGS,
-        )?;
+        let message = profile_call(&profile, GET_SETTINGS)?;
         self.queue(
             message,
             PendingRequest::SavedSettings {
@@ -353,12 +319,7 @@ impl NetworkManagerProvider {
     }
 
     pub(super) fn queue_delete_profile(&mut self, profile: String) -> FlameResult<()> {
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            &profile,
-            SETTINGS_CONNECTION_INTERFACE,
-            DELETE,
-        )?;
+        let message = profile_call(&profile, DELETE)?;
         self.queue(message, PendingRequest::Action)
     }
 
@@ -368,36 +329,17 @@ impl NetworkManagerProvider {
         device: String,
         access_point: String,
     ) -> FlameResult<()> {
-        let wireless = MessageItem::from_dict(
-            vec![("ssid".to_owned(), MessageItem::from(ssid.as_bytes()))]
-                .into_iter()
-                .map(Ok::<_, FlameError>),
-        )
-        .map_err(|_| FlameError::invalid("NetworkManager open wireless settings are invalid"))?;
-        let connection = MessageItem::from_dict(
-            vec![
-                ("id".to_owned(), MessageItem::Str(ssid)),
-                (
-                    "type".to_owned(),
-                    MessageItem::Str("802-11-wireless".to_owned()),
-                ),
-            ]
-            .into_iter()
-            .map(Ok::<_, FlameError>),
-        )
-        .map_err(|_| FlameError::invalid("NetworkManager open connection settings are invalid"))?;
+        let wireless = string_dict(
+            "open wireless",
+            vec![("ssid".to_owned(), MessageItem::from(ssid.as_bytes()))],
+        )?;
+        let connection = string_dict("open connection", connection_entries(ssid))?;
         let settings = MessageItem::new_dict(vec![
             (MessageItem::Str("connection".to_owned()), connection),
             (MessageItem::Str("802-11-wireless".to_owned()), wireless),
         ])
         .map_err(|_| FlameError::invalid("NetworkManager open settings are invalid"))?;
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            NETWORK_MANAGER_ROOT,
-            NETWORK_MANAGER_INTERFACE,
-            ADD_AND_ACTIVATE_CONNECTION,
-        )?
-        .append3(settings, object_path(device)?, object_path(access_point)?);
+        let message = add_and_activate_message(settings, device, access_point)?;
         self.queue(message, PendingRequest::Action)
     }
 
@@ -409,58 +351,27 @@ impl NetworkManagerProvider {
         access_point: String,
         secret: String,
     ) -> FlameResult<()> {
-        let wireless = MessageItem::from_dict(
-            vec![("ssid".to_owned(), MessageItem::from(ssid.as_bytes()))]
-                .into_iter()
-                .map(Ok::<_, FlameError>),
-        )
-        .map_err(|_| FlameError::invalid("NetworkManager secure wireless settings are invalid"))?;
+        let wireless = string_dict(
+            "secure wireless",
+            vec![("ssid".to_owned(), MessageItem::from(ssid.as_bytes()))],
+        )?;
         // psk-flags NONE (0) stores the password in the profile, so it survives a successful connect.
-        let security = MessageItem::from_dict(
+        let security = string_dict(
+            "secure wireless security",
             vec![
-                (
-                    "key-mgmt".to_owned(),
-                    MessageItem::Str("wpa-psk".to_owned()),
-                ),
+                ("key-mgmt".to_owned(), MessageItem::Str("wpa-psk".to_owned())),
                 ("psk".to_owned(), MessageItem::Str(secret)),
                 ("psk-flags".to_owned(), MessageItem::UInt32(0)),
-            ]
-            .into_iter()
-            .map(Ok::<_, FlameError>),
-        )
-        .map_err(|_| {
-            FlameError::invalid("NetworkManager secure wireless security settings are invalid")
-        })?;
-        let connection = MessageItem::from_dict(
-            vec![
-                ("id".to_owned(), MessageItem::Str(ssid)),
-                (
-                    "type".to_owned(),
-                    MessageItem::Str("802-11-wireless".to_owned()),
-                ),
-            ]
-            .into_iter()
-            .map(Ok::<_, FlameError>),
-        )
-        .map_err(|_| {
-            FlameError::invalid("NetworkManager secure connection settings are invalid")
-        })?;
+            ],
+        )?;
+        let connection = string_dict("secure connection", connection_entries(ssid))?;
         let settings = MessageItem::new_dict(vec![
             (MessageItem::Str("connection".to_owned()), connection),
             (MessageItem::Str("802-11-wireless".to_owned()), wireless),
-            (
-                MessageItem::Str("802-11-wireless-security".to_owned()),
-                security,
-            ),
+            (MessageItem::Str("802-11-wireless-security".to_owned()), security),
         ])
         .map_err(|_| FlameError::invalid("NetworkManager secure settings are invalid"))?;
-        let message = method_call(
-            NETWORK_MANAGER_SERVICE,
-            NETWORK_MANAGER_ROOT,
-            NETWORK_MANAGER_INTERFACE,
-            ADD_AND_ACTIVATE_CONNECTION,
-        )?
-        .append3(settings, object_path(device)?, object_path(access_point)?);
+        let message = add_and_activate_message(settings, device, access_point)?;
         self.queue(message, PendingRequest::AddAndActivateSecure { attempt })
     }
 
@@ -494,14 +405,30 @@ impl NetworkManagerProvider {
         }
         let device = self.device_for_access_point(&access_point)?;
         let profile = self.profile_for_access_point(&access_point)?;
-        let attempt = self
-            .attempts
-            .begin(access_point.clone(), device.clone(), false);
-        if let Err(error) = self.queue_activate_connection(attempt, profile, device, access_point) {
+        self.queue_attempt(access_point.clone(), device.clone(), false, |this, attempt| {
+            this.queue_activate_connection(attempt, profile, device, access_point)
+        })
+    }
+
+    /// Begin an attempt and queue its request; a failed queue clears the attempt.
+    fn queue_attempt(
+        &mut self,
+        access_point: String,
+        device: String,
+        secured: bool,
+        queue: impl FnOnce(&mut Self, u64) -> FlameResult<()>,
+    ) -> FlameResult<()> {
+        let attempt = self.attempts.begin(access_point, device, secured);
+        let result = queue(self, attempt);
+        self.clear_attempt_on_error(result)
+    }
+
+    /// A request that failed to queue must not leave its attempt pending.
+    pub(super) fn clear_attempt_on_error<T>(&mut self, result: FlameResult<T>) -> FlameResult<T> {
+        if result.is_err() {
             self.attempts.clear();
-            return Err(error);
         }
-        Ok(())
+        result
     }
 
     /// Open the password prompt for an unknown secured network. Nothing reaches NetworkManager
@@ -595,16 +522,9 @@ impl NetworkManagerProvider {
             return Err(unsupported("unexpected NetworkManager secret intent"));
         };
         self.secret_prompt = None;
-        let attempt = self
-            .attempts
-            .begin(access_point.clone(), device.clone(), false);
-        if let Err(error) =
-            self.queue_saved_settings(attempt, profile, device, access_point, secret)
-        {
-            self.attempts.clear();
-            return Err(error);
-        }
-        Ok(())
+        self.queue_attempt(access_point.clone(), device.clone(), false, |this, attempt| {
+            this.queue_saved_settings(attempt, profile, device, access_point, secret)
+        })
     }
 
     /// Validate the request and lookups first so a failed lookup leaves the prompt intact.
@@ -624,16 +544,9 @@ impl NetworkManagerProvider {
             return Err(unsupported("unexpected NetworkManager secret intent"));
         };
         self.secret_prompt = None;
-        let attempt = self
-            .attempts
-            .begin(access_point.clone(), device.clone(), true);
-        if let Err(error) =
-            self.queue_add_and_activate_secure(attempt, ssid, device, access_point, secret)
-        {
-            self.attempts.clear();
-            return Err(error);
-        }
-        Ok(())
+        self.queue_attempt(access_point.clone(), device.clone(), true, |this, attempt| {
+            this.queue_add_and_activate_secure(attempt, ssid, device, access_point, secret)
+        })
     }
 
     pub(super) fn apply_attempt_effect(&mut self, effect: AttemptEffect) -> FlameResult<()> {
@@ -781,13 +694,41 @@ pub(super) fn wireless_security_with_secret(security: MessageItem, secret: &str)
 
 /// `Settings.Connection.Update(a{sa{sv}})` on one saved profile.
 pub(super) fn update_connection_message(profile: &str, settings: MessageItem) -> FlameResult<Message> {
-    Ok(method_call(
-        NETWORK_MANAGER_SERVICE,
-        profile,
-        SETTINGS_CONNECTION_INTERFACE,
-        UPDATE,
-    )?
-    .append1(settings))
+    Ok(profile_call(profile, UPDATE)?.append1(settings))
+}
+
+fn root_call(member: &str) -> FlameResult<Message> {
+    method_call(NETWORK_MANAGER_SERVICE, NETWORK_MANAGER_ROOT, NETWORK_MANAGER_INTERFACE, member)
+}
+
+fn profile_call(profile: &str, member: &str) -> FlameResult<Message> {
+    method_call(NETWORK_MANAGER_SERVICE, profile, SETTINGS_CONNECTION_INTERFACE, member)
+}
+
+/// Build a string-keyed settings dictionary; `what` names it in the invalid-settings error.
+fn string_dict(what: &str, entries: Vec<(String, MessageItem)>) -> FlameResult<MessageItem> {
+    MessageItem::from_dict(entries.into_iter().map(Ok::<_, FlameError>))
+        .map_err(|_| FlameError::invalid(format!("NetworkManager {what} settings are invalid")))
+}
+
+/// The `connection` section shared by open and secured AddAndActivateConnection.
+fn connection_entries(ssid: String) -> Vec<(String, MessageItem)> {
+    vec![
+        ("id".to_owned(), MessageItem::Str(ssid)),
+        ("type".to_owned(), MessageItem::Str("802-11-wireless".to_owned())),
+    ]
+}
+
+fn add_and_activate_message(
+    settings: MessageItem,
+    device: String,
+    access_point: String,
+) -> FlameResult<Message> {
+    Ok(root_call(ADD_AND_ACTIVATE_CONNECTION)?.append3(
+        settings,
+        object_path(device)?,
+        object_path(access_point)?,
+    ))
 }
 
 pub(super) fn secret_reply(

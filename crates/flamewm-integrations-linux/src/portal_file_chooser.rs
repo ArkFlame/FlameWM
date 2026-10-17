@@ -102,14 +102,8 @@ impl PortalFileChooser {
         let expected_request_path = self.expected_request_path(&handle_token)?;
         self.add_response_match(&expected_request_path)?;
         let options = options(&handle_token)?;
-        let call = Message::new_method_call(
-            PORTAL_SERVICE,
-            PORTAL_PATH,
-            FILE_CHOOSER_INTERFACE,
-            OPEN_FILE,
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
-        .append3(parent_window.to_owned(), title.to_owned(), options);
+        let call = method_call(PORTAL_SERVICE, PORTAL_PATH, FILE_CHOOSER_INTERFACE, OPEN_FILE)?
+            .append3(parent_window.to_owned(), title.to_owned(), options);
         let reply = self.pump.send_with_reply(call, self.timeout)?;
         let request_path = one_object_path(&reply.get_items(), "portal OpenFile handle")?;
         if request_path != expected_request_path {
@@ -132,13 +126,12 @@ impl PortalFileChooser {
         let match_rule = format!(
             "type='signal',path='{request_path}',interface='{REQUEST_INTERFACE}',member='{RESPONSE}'"
         );
-        let add_match = Message::new_method_call(
+        let add_match = method_call(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
             "org.freedesktop.DBus",
             "AddMatch",
-        )
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?
+        )?
         .append1(match_rule);
         self.pump.send_with_reply(add_match, self.timeout)?;
         Ok(())
@@ -219,22 +212,14 @@ fn file_chooser_options(
                     ])
                 })
                 .collect::<Vec<_>>();
-            let patterns = MessageItem::Array(
-                MessageItemArray::new(patterns, signature("a(us)")?).map_err(|error| {
-                    FlameError::invalid(format!("portal filter patterns are invalid: {error:?}"))
-                })?,
-            );
+            let patterns = array_item(patterns, "a(us)", "portal filter patterns")?;
             Ok(MessageItem::Struct(vec![
                 MessageItem::Str((*name).to_owned()),
                 patterns,
             ]))
         })
         .collect::<FlameResult<Vec<_>>>()?;
-    let filters = MessageItem::Array(
-        MessageItemArray::new(filters, signature("a(sa(us))")?).map_err(|error| {
-            FlameError::invalid(format!("portal filters are invalid: {error:?}"))
-        })?,
-    );
+    let filters = array_item(filters, "a(sa(us))", "portal filters")?;
     MessageItem::from_dict(
         vec![
             ("multiple".to_owned(), MessageItem::Bool(false)),
@@ -251,9 +236,21 @@ fn file_chooser_options(
     )
 }
 
+fn method_call(service: &str, path: &str, interface: &str, member: &str) -> FlameResult<Message> {
+    Message::new_method_call(service, path, interface, member)
+        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))
+}
+
 fn signature(value: &'static str) -> FlameResult<Signature<'static>> {
     Signature::new(value)
         .map_err(|error| FlameError::invalid(format!("invalid D-Bus signature: {error}")))
+}
+
+/// Wrap items in a D-Bus array of `signature_value`; `what` names it in the invalid error.
+fn array_item(items: Vec<MessageItem>, signature_value: &'static str, what: &str) -> FlameResult<MessageItem> {
+    MessageItemArray::new(items, signature(signature_value)?)
+        .map(MessageItem::Array)
+        .map_err(|error| FlameError::invalid(format!("{what} are invalid: {error:?}")))
 }
 
 fn validate_parent_window(parent_window: &str) -> FlameResult<()> {

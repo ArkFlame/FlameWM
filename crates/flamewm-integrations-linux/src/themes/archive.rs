@@ -2,9 +2,9 @@
 
 use std::fs::File;
 use std::io::{self, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
-use super::import::{ImportError, MAX_ENTRIES, MAX_TOTAL_BYTES};
+use super::import::{ImportError, MAX_ENTRIES, MAX_TOTAL_BYTES, check_cancel};
 use super::xz::XzReader;
 
 const BLOCK: usize = 512;
@@ -28,9 +28,7 @@ pub(crate) fn read_decoded(
     let mut out = Vec::new();
     let mut chunk = vec![0u8; DECODE_CHUNK];
     loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ImportError::Cancelled);
-        }
+        check_cancel(cancel)?;
         let n = match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => n,
@@ -79,9 +77,7 @@ pub(crate) fn parse(
     let mut gnu_name: Option<Vec<u8>> = None;
     let mut gnu_link: Option<Vec<u8>> = None;
     while offset < archive.len() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ImportError::Cancelled);
-        }
+        check_cancel(cancel)?;
         let header = archive
             .get(offset..offset + BLOCK)
             .ok_or_else(|| ImportError::Corrupt("truncated tar header".into()))?;

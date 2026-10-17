@@ -108,9 +108,7 @@ pub fn install_theme(
     if !options.overwrite && fs::symlink_metadata(&dest).is_ok() {
         return Err(ImportError::IdCollision(plan.id));
     }
-    if cancel.load(Ordering::Relaxed) {
-        return Err(ImportError::Cancelled);
-    }
+    check_cancel(cancel)?;
     fs::create_dir_all(icons_dir)?;
     // Best effort: a failed sweep must not block the import.
     let _ = sweep_stale(icons_dir, STALE_AGE);
@@ -127,6 +125,14 @@ pub fn install_theme(
         kind: plan.kind,
         root: dest,
     })
+}
+
+/// Stop a long import step once the caller has cancelled.
+pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<(), ImportError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ImportError::Cancelled);
+    }
+    Ok(())
 }
 
 fn stamp() -> u128 {
@@ -181,9 +187,7 @@ fn commit(
     overwrite: bool,
     cancel: &AtomicBool,
 ) -> Result<(), ImportError> {
-    if cancel.load(Ordering::Relaxed) {
-        return Err(ImportError::Cancelled);
-    }
+    check_cancel(cancel)?;
     if fs::symlink_metadata(dest).is_err() {
         fs::rename(staging, dest)?;
         return Ok(());
@@ -214,9 +218,7 @@ fn write_plan(
         .iter()
         .filter(|(_, k)| matches!(k, PlanKind::Symlink(_) | PlanKind::HardLink(_)));
     for (rel, kind) in real.chain(links) {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ImportError::Cancelled);
-        }
+        check_cancel(cancel)?;
         let path = staging.join(rel);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -256,9 +258,7 @@ fn walk_folder(root: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, Import
     let mut stack: Vec<(std::path::PathBuf, Vec<u8>, usize)> = vec![(root.to_path_buf(), Vec::new(), 0)];
     while let Some((dir, prefix, depth)) = stack.pop() {
         for item in fs::read_dir(&dir)? {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(ImportError::Cancelled);
-            }
+            check_cancel(cancel)?;
             let item = item?;
             if depth + 1 > MAX_DEPTH {
                 return Err(ImportError::TooDeep);
@@ -416,9 +416,7 @@ fn build_plan(
 ) -> Result<Plan, ImportError> {
     let mut files: BTreeMap<String, PlanKind> = BTreeMap::new();
     for entry in raw {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(ImportError::Cancelled);
-        }
+        check_cancel(cancel)?;
         let Some(rel) = sanitize_path(&entry.path)? else {
             continue;
         };

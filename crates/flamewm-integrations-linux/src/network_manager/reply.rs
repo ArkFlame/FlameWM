@@ -339,14 +339,17 @@ pub(super) fn parse_properties_changed(items: Vec<MessageItem>, path: String) ->
     })
 }
 
-pub(super) fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManagerProperties> {
+/// Entries of a dictionary reply item; `what` names it in the not-a-dictionary error.
+fn dict_entries(item: Option<&MessageItem>, what: &str) -> FlameResult<Vec<(MessageItem, MessageItem)>> {
     let Some(MessageItem::Dict(dict)) = item else {
-        return Err(FlameError::invalid(
-            "NetworkManager properties are not a dictionary",
-        ));
+        return Err(FlameError::invalid(format!("{what} are not a dictionary")));
     };
+    Ok(dict.clone().into_vec())
+}
+
+pub(super) fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManagerProperties> {
     let mut properties = NetworkManagerProperties::default();
-    for (key, value) in dict.clone().into_vec() {
+    for (key, value) in dict_entries(item, "NetworkManager properties")? {
         let key = item_string(&key, "NetworkManager property name")?;
         let value = unwrap_variant(value);
         match key.as_str() {
@@ -376,15 +379,10 @@ pub(super) struct DeviceProperties {
 }
 
 pub(super) fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult<DeviceProperties> {
-    let Some(MessageItem::Dict(dict)) = item else {
-        return Err(FlameError::invalid(
-            "NetworkManager device properties are not a dictionary",
-        ));
-    };
     let mut is_wifi = false;
     let mut active_connection = String::new();
     let mut active_access_point = String::new();
-    for (key, value) in dict.clone().into_vec() {
+    for (key, value) in dict_entries(item, "NetworkManager device properties")? {
         let key = item_string(&key, "NetworkManager device property name")?;
         let value = unwrap_variant(value);
         match key.as_str() {
@@ -406,16 +404,11 @@ pub(super) fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult
 }
 
 pub(super) fn parse_access_point_properties(item: Option<&MessageItem>) -> FlameResult<AccessPointProperties> {
-    let Some(MessageItem::Dict(dict)) = item else {
-        return Err(FlameError::invalid(
-            "NetworkManager access point properties are not a dictionary",
-        ));
-    };
     let mut properties = AccessPointProperties::default();
     let mut flags = 0_u32;
     let mut wpa_flags = 0_u32;
     let mut rsn_flags = 0_u32;
-    for (key, value) in dict.clone().into_vec() {
+    for (key, value) in dict_entries(item, "NetworkManager access point properties")? {
         let key = item_string(&key, "NetworkManager access point property name")?;
         let value = unwrap_variant(value);
         match key.as_str() {
@@ -434,12 +427,7 @@ pub(super) fn parse_access_point_properties(item: Option<&MessageItem>) -> Flame
 }
 
 pub(super) fn parse_profile_ssid(item: Option<&MessageItem>) -> FlameResult<Option<String>> {
-    let Some(MessageItem::Dict(sections)) = item else {
-        return Err(FlameError::invalid(
-            "NetworkManager profile settings are not a dictionary",
-        ));
-    };
-    for (section, value) in sections.clone().into_vec() {
+    for (section, value) in dict_entries(item, "NetworkManager profile settings")? {
         if item_string(&section, "NetworkManager profile section")? != "802-11-wireless" {
             continue;
         }
@@ -622,24 +610,10 @@ impl NetworkManagerProvider {
                         FlameError::invalid("NetworkManager profile settings reply is invalid")
                     })
                     .and_then(|item| saved_profile_update_settings(item.clone(), &secret));
-                let settings = match settings {
-                    Ok(settings) => settings,
-                    Err(error) => {
-                        self.attempts.clear();
-                        return Err(error);
-                    }
-                };
-                if let Err(error) = self.queue_update_saved_profile(
-                    attempt,
-                    profile,
-                    device,
-                    access_point,
-                    settings,
-                ) {
-                    self.attempts.clear();
-                    return Err(error);
-                }
-                Ok(())
+                let settings = self.clear_attempt_on_error(settings)?;
+                let queued =
+                    self.queue_update_saved_profile(attempt, profile, device, access_point, settings);
+                self.clear_attempt_on_error(queued)
             }
             PendingRequest::UpdateSavedProfile {
                 attempt,
@@ -650,13 +624,8 @@ impl NetworkManagerProvider {
                 if !self.attempts.is_current(attempt) {
                     return Ok(());
                 }
-                if let Err(error) =
-                    self.queue_activate_connection(attempt, profile, device, access_point)
-                {
-                    self.attempts.clear();
-                    return Err(error);
-                }
-                Ok(())
+                let queued = self.queue_activate_connection(attempt, profile, device, access_point);
+                self.clear_attempt_on_error(queued)
             }
             PendingRequest::AddAndActivateSecure { attempt } => {
                 let Some(item) = items.first() else {
