@@ -65,12 +65,7 @@ struct Atoms {
 
 fn intern_atoms<C: Connection>(conn: &C) -> Result<Atoms, String> {
     let get = |name: &[u8]| -> Result<Atom, String> {
-        Ok(conn
-            .intern_atom(false, name)
-            .map_err(err)?
-            .reply()
-            .map_err(err)?
-            .atom)
+        Ok(conn.intern_atom(false, name).map_err(err)?.reply().map_err(err)?.atom)
     };
     Ok(Atoms {
         clipboard: get(b"CLIPBOARD")?,
@@ -230,27 +225,20 @@ fn owner_main(
                 else {
                     continue;
                 };
+                // Past the end, the empty slice is the INCR terminator.
                 let offset = pending[idx].2;
+                let end = (offset + chunk).min(big.len());
+                conn.change_property8(
+                    PropMode::REPLACE,
+                    note.window,
+                    note.atom,
+                    atoms.utf8,
+                    &big[offset..end],
+                )
+                .map_err(err)?;
                 if offset < big.len() {
-                    let end = (offset + chunk).min(big.len());
-                    conn.change_property8(
-                        PropMode::REPLACE,
-                        note.window,
-                        note.atom,
-                        atoms.utf8,
-                        &big[offset..end],
-                    )
-                    .map_err(err)?;
                     pending[idx].2 = end;
                 } else {
-                    conn.change_property8(
-                        PropMode::REPLACE,
-                        note.window,
-                        note.atom,
-                        atoms.utf8,
-                        &[],
-                    )
-                    .map_err(err)?;
                     pending.swap_remove(idx);
                     report.served += 1;
                 }
@@ -409,13 +397,12 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Ok(a) => a,
         Err(e) => return (false, format!("scenario=clipboard atoms failed: {e}")),
     };
-    let (stop, owner_handle, ready_rx) = {
-        let stop = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
-        let stop_t = Arc::clone(&stop);
-        let handle = thread::spawn(move || owner_main(atoms, tx, stop_t));
-        (stop, handle, rx)
-    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, ready_rx) = mpsc::channel();
+    let owner_handle = thread::spawn({
+        let stop = Arc::clone(&stop);
+        move || owner_main(atoms, tx, stop)
+    });
     let owner_wid = match ready_rx.recv_timeout(WAIT) {
         Ok(Ok(wid)) => wid,
         Ok(Err(e)) => {
