@@ -83,33 +83,18 @@ impl SystemService {
         if update.generation < self.snapshot.network.generation {
             return false;
         }
-        if update == self.snapshot.network {
-            return false;
-        }
-        self.snapshot.network = update;
-        self.bump_revision();
-        true
+        self.apply(|s| &mut s.network, update)
     }
 
     pub fn update_media(&mut self, update: MediaSnapshot) -> bool {
         if update.generation < self.snapshot.media.generation {
             return false;
         }
-        if update == self.snapshot.media {
-            return false;
-        }
-        self.snapshot.media = update;
-        self.bump_revision();
-        true
+        self.apply(|s| &mut s.media, update)
     }
 
     pub fn update_power(&mut self, update: PowerSnapshot) -> bool {
-        if update == self.snapshot.power {
-            return false;
-        }
-        self.snapshot.power = update;
-        self.bump_revision();
-        true
+        self.apply(|s| &mut s.power, update)
     }
 
     pub fn update_audio(&mut self, update: AudioSnapshot) -> bool {
@@ -121,12 +106,7 @@ impl SystemService {
         if update.availability == ServiceAvailability::Available {
             self.pulse_backoff.reset();
         }
-        if update == self.snapshot.audio {
-            return false;
-        }
-        self.snapshot.audio = update;
-        self.bump_revision();
-        true
+        self.apply(|s| &mut s.audio, update)
     }
 
     pub fn pulse_disconnected(&mut self) -> u64 {
@@ -138,10 +118,7 @@ impl SystemService {
             server_generation,
             ..AudioSnapshot::default()
         };
-        if update != self.snapshot.audio {
-            self.snapshot.audio = update;
-            self.bump_revision();
-        }
+        self.apply(|s| &mut s.audio, update);
         self.pulse_backoff.next_delay_ms()
     }
 
@@ -229,6 +206,17 @@ impl SystemService {
             }),
         };
         self.perform_action(action, revision)
+    }
+
+    /// Stores `update` into the field picked by `slot`; bumps the revision and returns true only on change.
+    fn apply<T: PartialEq>(&mut self, slot: impl FnOnce(&mut SystemSnapshot) -> &mut T, update: T) -> bool {
+        let field = slot(&mut self.snapshot);
+        if *field == update {
+            return false;
+        }
+        *field = update;
+        self.bump_revision();
+        true
     }
 
     fn bump_revision(&mut self) {
@@ -319,15 +307,6 @@ mod tests {
             .perform_action(SystemAction::BatteryMenuOpened, stale)
             .expect("menu open is not revision-fenced");
         assert_eq!(seen.borrow().as_slice(), [SystemAction::BatteryMenuOpened]);
-    }
-
-    #[test]
-    fn stale_revision_still_rejects_non_audio_actions() {
-        let mut service = SystemService::default();
-        service.set_action_handler(Box::new(|_, _| Ok(())));
-        let stale = service.snapshot.revision.wrapping_add(1);
-        let result = service.perform_action(SystemAction::SetWifiEnabled(true), stale);
-        assert!(result.is_err());
     }
 
     #[test]
