@@ -1258,6 +1258,13 @@ mod tests {
         ConfigStore::default().parse_snapshot(text)
     }
 
+    /// Serializes `parsed`, asserts it reloads to the same settings, and returns the text.
+    fn assert_round_trip(parsed: &ProductSettings) -> String {
+        let text = ConfigStore::serialize(parsed);
+        assert_eq!(load(&text).expect("round trip"), *parsed);
+        text
+    }
+
     /// Each line, set on an otherwise default file, must be rejected as `InvalidArgument`.
     fn assert_rejected<S: AsRef<str>>(lines: &[S]) {
         for line in lines {
@@ -1304,9 +1311,8 @@ mod tests {
         let parsed = load("revision=2\niconTheme=*:-HighContrast\n")
             .expect("explicit icon theme");
         assert_eq!(parsed.icon_theme, "*:-HighContrast");
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("iconTheme=*:-HighContrast\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1375,9 +1381,8 @@ mod tests {
             parsed.avatar_image,
             "/home/u/.local/share/flamewm/wallpapers/avatar-0123456789abcdef.png"
         );
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("avatarImage=/home/u/"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1485,10 +1490,9 @@ mod tests {
             .expect("bounds are valid");
         assert_eq!(parsed.lock_background_blur_percent, 100);
         assert_eq!(parsed.lock_background_dim_percent, 80);
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("lockBackgroundBlurPercent=100\n"));
         assert!(text.contains("lockBackgroundDimPercent=80\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
 
         let zero = load("revision=2\nlockBackgroundBlurPercent=0\nlockBackgroundDimPercent=0\n")
             .expect("zero is valid");
@@ -1537,10 +1541,9 @@ mod tests {
         assert!(!parsed.lock_show_username);
         assert_eq!(parsed.lock_timeout_minutes, 240);
         assert!(!parsed.lock_on_suspend);
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("lockClockFormat=12h\n"));
         assert!(text.contains("lockShowDate=false\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1604,10 +1607,9 @@ mod tests {
         assert_eq!(parsed.taskbar_floating_radius, 0);
         assert!((parsed.taskbar_backdrop().radius_px - 0.0).abs() < 1e-6);
         assert!((parsed.start_menu_backdrop().radius_px - 0.0).abs() < 1e-6);
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("taskbarStyle=classic\n"));
         assert!(text.contains("surfaceBlurPercent=100\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1674,10 +1676,9 @@ mod tests {
                 display_off_minutes: 240,
             }
         );
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("screensaverMode=none\n"));
         assert!(text.contains("screensaverSpanMonitors=true\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1737,10 +1738,9 @@ mod tests {
         let old = "revision=3\naccent=#EF4048\ntaskbarColor=#191b1d\nfutureFeature=kept\n";
         let parsed = load(old).expect("old file");
         assert_eq!(parsed.animation_speed, 100);
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(!text.contains("titlebar"));
         assert!(text.contains("futureFeature=kept\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1920,12 +1920,11 @@ mod tests {
             parse("titlebarButtonStyle=circle\ntitlebarCloseStyle=square").titlebar_button_style,
             "circle"
         );
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("titlebarButtonStyle=square\n"));
         assert!(!text.contains("titlebarMinimizeStyle"));
         assert!(!text.contains("titlebarCloseStyle"));
         assert!(!text.contains("titlebarMaximizeStyle"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -2138,13 +2137,12 @@ mod tests {
         assert!(!parsed.taskbar_show_date);
         assert!(!parsed.snap_preview_enabled);
         assert!(parsed.focus_follows_mouse);
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("wallpaperFit=tile\n"));
         assert!(text.contains("cursorSize=64\n"));
         assert!(text.contains("taskbarClockFormat=12h\n"));
         assert!(text.contains("taskbarShowSeconds=true\n"));
         assert!(text.contains("snapPreviewEnabled=false\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -2209,11 +2207,10 @@ mod tests {
         assert_eq!(parsed.weather_units, "fahrenheit");
         assert_eq!(parsed.weather_location, location);
         assert!(parsed.unknown_keys.is_empty(), "weather keys must not fall into unknown_keys");
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         // Default-on weather is not written; an explicit off must survive a round trip.
         assert!(!text.contains("weatherEnabled"));
         assert!(text.contains("weatherUnits=fahrenheit\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
         let off = load("revision=2\nweatherEnabled=false\n")
             .expect("explicit off");
         assert!(!off.weather_enabled);
@@ -2277,11 +2274,10 @@ mod tests {
         assert!(!parsed.taskbar_show_clock);
         assert!(!parsed.taskbar_show_workspaces);
         assert!(parsed.taskbar_battery_only_when_relevant);
-        let text = ConfigStore::serialize(&parsed);
+        let text = assert_round_trip(&parsed);
         assert!(text.contains("taskbarShowWeather=false\n"));
         assert!(text.contains("taskbarShowClock=false\n"));
         assert!(text.contains("taskbarBatteryOnlyWhenRelevant=true\n"));
-        assert_eq!(load(&text).expect("round trip"), parsed);
 
         let explicit_on = load("revision=2\ntaskbarShowWeather=true\ntaskbarShowClock=true\n")
             .expect("explicit default-on values");
