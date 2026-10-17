@@ -4,7 +4,7 @@ use flamewm_desktop_core::model::DesktopItemKind;
 use flamewm_desktop_core::presentation::desktop_label_lines;
 use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconService};
 use flamewm_integrations_linux::icons::{
-    IconKey, IconLookupPurpose, IconRequest, IconResolver, IconSize, Rgba8Raster,
+    IconKey, IconLookupPurpose, IconOrigin, IconRequest, IconResolver, IconSize, Rgba8Raster,
 };
 use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
 use flamewm_ui_core::style::UiLayer;
@@ -436,7 +436,6 @@ pub fn project_drag_ghost_icon(
 /// cache miss; the worker result overwrites it. Not a placeholder shape: a
 /// real RGBA8 raster in the tile's selected semantic slot.
 fn flame_fallback_raster() -> Rgba8Raster {
-    use flamewm_integrations_linux::icons::IconOrigin;
     let pixels = ICON_TILE_PX as usize * ICON_TILE_PX as usize;
     let mut bytes = Vec::with_capacity(pixels * 4);
     for _ in 0..pixels {
@@ -621,16 +620,8 @@ mod tests {
             let selector = format!("sticky-resize-{corner}");
             assert_eq!(css_px(css, &selector, "width"), 10, "{selector} width");
             assert_eq!(css_px(css, &selector, "height"), 10, "{selector} height");
-            assert_eq!(
-                css_px(css, &selector, horizontal),
-                -6,
-                "{selector} {horizontal}"
-            );
-            assert_eq!(
-                css_px(css, &selector, vertical),
-                -6,
-                "{selector} {vertical}"
-            );
+            assert_eq!(css_px(css, &selector, horizontal), -6, "{selector} {horizontal}");
+            assert_eq!(css_px(css, &selector, vertical), -6, "{selector} {vertical}");
         }
     }
 
@@ -665,17 +656,11 @@ mod tests {
             .expect("file icon must resolve");
         assert_ne!(
             raster.origin,
-            flamewm_integrations_linux::icons::IconOrigin::PackagedFallback,
+            IconOrigin::PackagedFallback,
             "file icon must not fall through to the brand fallback"
         );
-        assert_ne!(
-            raster.origin,
-            flamewm_integrations_linux::icons::IconOrigin::PackagedFlame,
-        );
-        assert_eq!(
-            raster.origin,
-            flamewm_integrations_linux::icons::IconOrigin::PackagedBreeze
-        );
+        assert_ne!(raster.origin, IconOrigin::PackagedFlame);
+        assert_eq!(raster.origin, IconOrigin::PackagedBreeze);
         let expected = packaged_root
             .join("assets/web/breeze")
             .join(format!("{name}.svg"));
@@ -772,14 +757,8 @@ mod tests {
             icon_candidates(DesktopItemKind::DesktopLauncher, None),
             vec!["desktop".to_owned(), String::new()]
         );
-        assert_eq!(
-            launcher_icon_name(DesktopItemKind::File, Some("  ")),
-            "document-edit"
-        );
-        assert_eq!(
-            launcher_icon_name(DesktopItemKind::File, Some("editor")),
-            "editor"
-        );
+        assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("  ")), "document-edit");
+        assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("editor")), "editor");
     }
 
     struct LayerProbe {
@@ -902,10 +881,7 @@ mod tests {
 
     #[test]
     fn desktop_menu_radius_defaults_to_rounded_twelve() {
-        for snapshot in [
-            menu_snapshot(None, None),
-            menu_snapshot(Some("rounded"), None),
-        ] {
+        for snapshot in [menu_snapshot(None, None), menu_snapshot(Some("rounded"), None)] {
             let mut probe = MenuShapeProbe::default();
             project_menu_surface(&mut probe, "desktop-menu", &snapshot).expect("project menu");
             assert_eq!(probe.corners, vec![("desktop-menu".to_owned(), 12.0)]);
@@ -979,9 +955,7 @@ mod tests {
         ] {
             let mut probe = VisibilityProbe::default();
             project_background(&mut probe, wallpaper.as_ref(), &image).expect("project image");
-            assert!(probe
-                .shown
-                .contains(&"desktop-wallpaper-selection".to_owned()));
+            assert!(probe.shown.contains(&"desktop-wallpaper-selection".to_owned()));
             assert!(probe.shown.contains(&"desktop-watermark".to_owned()));
             assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
         }
@@ -993,9 +967,7 @@ mod tests {
             &WallpaperPresentation::DefaultBlackWatermark,
         )
         .expect("project reset fallback");
-        assert!(reset
-            .hidden
-            .contains(&"desktop-wallpaper-selection".to_owned()));
+        assert!(reset.hidden.contains(&"desktop-wallpaper-selection".to_owned()));
         assert!(reset.shown.contains(&"desktop-watermark".to_owned()));
     }
 
@@ -1103,9 +1075,7 @@ mod tests {
         }
         assert!(probe.shown.is_empty());
         // Showing one restores its authored display; unrelated nodes untouched.
-        probe
-            .visible("desktop-menu", true)
-            .expect("show restores authored display");
+        probe.visible("desktop-menu", true).expect("show restores authored display");
         assert_eq!(probe.shown, vec!["desktop-menu".to_owned()]);
     }
 
@@ -1177,27 +1147,11 @@ mod tests {
 
     #[test]
     fn icon_purpose_routes_launcher_override_to_application() {
-        use flamewm_integrations_linux::icons::IconLookupPurpose;
-        assert_eq!(
-            icon_purpose(DesktopItemKind::DesktopLauncher, true),
-            IconLookupPurpose::Application
-        );
-        assert_eq!(
-            icon_purpose(DesktopItemKind::DesktopLauncher, false),
-            IconLookupPurpose::Semantic
-        );
-        assert_eq!(
-            icon_purpose(DesktopItemKind::Directory, true),
-            IconLookupPurpose::Semantic
-        );
-        assert_eq!(
-            icon_purpose(DesktopItemKind::File, false),
-            IconLookupPurpose::Semantic
-        );
-        assert_eq!(
-            icon_purpose(DesktopItemKind::TrashPseudo, false),
-            IconLookupPurpose::Semantic
-        );
+        assert_eq!(icon_purpose(DesktopItemKind::DesktopLauncher, true), IconLookupPurpose::Application);
+        assert_eq!(icon_purpose(DesktopItemKind::DesktopLauncher, false), IconLookupPurpose::Semantic);
+        assert_eq!(icon_purpose(DesktopItemKind::Directory, true), IconLookupPurpose::Semantic);
+        assert_eq!(icon_purpose(DesktopItemKind::File, false), IconLookupPurpose::Semantic);
+        assert_eq!(icon_purpose(DesktopItemKind::TrashPseudo, false), IconLookupPurpose::Semantic);
     }
 
     /// Polls `apply_icon_theme` until the requested chain is installed.
