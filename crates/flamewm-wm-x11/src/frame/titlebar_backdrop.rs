@@ -329,12 +329,8 @@ fn blur_region(
             eprintln!("flamewm-wm-x11: drag backdrop blur skipped: {error:?}");
         }
     }
-    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-    for row in 0..h {
-        let start = (((row + pad) * pw + pad) * 4) as usize;
-        out.extend_from_slice(&crop[start..start + w as usize * 4]);
-    }
-    out
+    // `origin` sits `pad` inside the padded region, whose top-left is `origin - pad`.
+    slice_region(crop, pw, origin, (origin.0 - pad as i32, origin.1 - pad as i32), w, h)
 }
 
 /// Fresh reference blur of the `w x h` crop at `origin`: the cell region's crop, so it equals
@@ -624,12 +620,7 @@ fn build_backdrop(
             eprintln!("flamewm-wm-x11: titlebar backdrop blur skipped: {error:?}");
         }
     }
-    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-    for row in 0..h {
-        let start = (((row + pad) * pw + pad) * 4) as usize;
-        out.extend_from_slice(&region[start..start + w as usize * 4]);
-    }
-    out
+    slice_region(&region, pw, (x, y), (x - pad as i32, y - pad as i32), w, h)
 }
 
 /// Wallpaper file for `path`; an empty path is the bundled default.
@@ -686,6 +677,17 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let source = WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill };
         (State { source: Some(source), ..State::default() }, path)
+    }
+
+    /// Fill-mode state whose image path never decodes.
+    fn missing_image_state() -> State {
+        State {
+            source: Some(WallpaperSource::Image {
+                path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
+                fit: WallpaperFit::Fill,
+            }),
+            ..State::default()
+        }
     }
 
     #[test]
@@ -806,13 +808,7 @@ mod tests {
 
     #[test]
     fn opaque_fill_is_flat_and_never_allocates_canvas() {
-        let mut state = State {
-            source: Some(WallpaperSource::Image {
-                path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
-                fit: WallpaperFit::Fill,
-            }),
-            ..State::default()
-        };
+        let mut state = missing_image_state();
         let px = titlebar_fill_in(&mut state, (0, 0), (64, 64), (4, 2), (10, 20, 30), 255, 0.0);
         assert_eq!(px, flat_pixels(4, 2, (10, 20, 30), 255));
         assert!(state.canvas.is_none(), "opaque titlebar must not compose the root canvas");
@@ -831,13 +827,7 @@ mod tests {
             let expected = compose_rgba(&[100, 100, 100, 255].repeat(8), rgb, alpha);
             assert_eq!(px, expected, "solid source, alpha {alpha}");
 
-            let mut missing = State {
-                source: Some(WallpaperSource::Image {
-                    path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
-                    fit: WallpaperFit::Fill,
-                }),
-                ..State::default()
-            };
+            let mut missing = missing_image_state();
             let px = titlebar_fill_in(&mut missing, (0, 0), (64, 64), (4, 2), rgb, alpha, 0.0);
             let fallback = FALLBACK_BACKDROP;
             let expected = compose_rgba(&[fallback[0], fallback[1], fallback[2], 255].repeat(8), rgb, alpha);
