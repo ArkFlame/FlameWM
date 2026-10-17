@@ -2967,9 +2967,8 @@ mod tests {
     #[test]
     fn lock_preview_session_action_round_trips_through_wire_dispatch() {
         let request = ControlRequest::SessionAction(SessionAction::LockPreview);
-        let call = encode_call(&request).expect("encode");
+        let call = assert_request_round_trip(&request);
         assert_eq!(call.member, "LockPreview");
-        assert_eq!(decode_call(&call).expect("decode"), request);
         assert_ne!(
             decode_call(&WireCall::new(IFACE_SESSION, "Lock", Vec::new())).expect("decode lock"),
             request
@@ -2979,11 +2978,10 @@ mod tests {
     #[test]
     fn screensaver_preview_session_action_round_trips_additively() {
         let request = ControlRequest::SessionAction(SessionAction::ScreensaverPreview);
-        let call = encode_call(&request).expect("encode");
+        let call = assert_request_round_trip(&request);
         assert_eq!(call.interface, IFACE_SESSION);
         assert_eq!(call.member, "ScreensaverPreview");
         assert!(call.args.is_empty());
-        assert_eq!(decode_call(&call).expect("decode"), request);
         assert_ne!(
             decode_call(&WireCall::new(IFACE_SESSION, "LockPreview", Vec::new())).expect("decode"),
             request
@@ -3007,8 +3005,7 @@ mod tests {
                 uris: vec!["https://example.test".to_owned()],
             },
         };
-        let call = encode_call(&request).expect("encode");
-        assert_eq!(decode_call(&call).expect("decode"), request);
+        let call = assert_request_round_trip(&request);
         assert_reply_round_trip(&call, &ControlResponse::Unit);
     }
 
@@ -3020,8 +3017,7 @@ mod tests {
             ControlRequest::RestoreWindow(WindowRef::new(7, 3)),
             ControlRequest::CloseWindow(WindowRef::new(7, 3)),
         ] {
-            let call = encode_call(&request).expect("encode");
-            assert_eq!(decode_call(&call).expect("decode"), request);
+            let call = assert_request_round_trip(&request);
             assert_reply_round_trip(&call, &ControlResponse::Unit);
         }
     }
@@ -3172,13 +3168,9 @@ mod tests {
 
     #[test]
     fn system_call_round_trips_through_wire_mapping() {
-        let call = encode_call(&ControlRequest::GetSystem).expect("encode");
+        let call = assert_request_round_trip(&ControlRequest::GetSystem);
         assert_eq!(call.interface, IFACE_SYSTEM);
         assert_eq!(call.member, "GetSnapshot");
-        assert_eq!(
-            decode_call(&call).expect("decode"),
-            ControlRequest::GetSystem
-        );
     }
 
     #[test]
@@ -3237,9 +3229,8 @@ mod tests {
             },
             expected_revision: 11,
         };
-        let call = encode_call(&request).expect("encode");
+        let call = assert_request_round_trip(&request);
         assert_eq!(call.member, "ConnectWifi");
-        assert_eq!(decode_call(&call).expect("decode"), request);
         let signal = ControlSignal::SystemChanged { revision: 12 };
         assert_eq!(
             decode_signal(&encode_signal(&signal)).expect("decode signal"),
