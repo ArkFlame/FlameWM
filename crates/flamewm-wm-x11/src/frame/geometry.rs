@@ -276,26 +276,10 @@ pub fn plan_resize(req: &GeometryRequest<'_>) -> GeometryPlan {
     let outer_h = cch.saturating_add(dh.max(0) as u32).max(1) as i32;
 
     // Reconstruct the dragged edge from the fixed edge + constrained size.
-    let x = if req.edges.left {
-        fixed_right.saturating_sub(outer_w)
-    } else {
-        fixed_left
-    };
-    let y = if req.edges.top {
-        fixed_bottom.saturating_sub(outer_h)
-    } else {
-        fixed_top
-    };
-    let w = if req.edges.left || req.edges.right {
-        outer_w
-    } else {
-        s.w
-    };
-    let h = if req.edges.top || req.edges.bottom {
-        outer_h
-    } else {
-        s.h
-    };
+    let x = if req.edges.left { fixed_right.saturating_sub(outer_w) } else { fixed_left };
+    let y = if req.edges.top { fixed_bottom.saturating_sub(outer_h) } else { fixed_top };
+    let w = if req.edges.left || req.edges.right { outer_w } else { s.w };
+    let h = if req.edges.top || req.edges.bottom { outer_h } else { s.h };
     GeometryPlan::of(req, RootRect::new(x, y, w.max(1), h.max(1)))
 }
 
@@ -380,13 +364,8 @@ pub fn plan_client_configure(
     req_client_origin: RootPoint,
     req_client_size: Option<(u32, u32)>,
 ) -> GeometryPlan {
-    match req.start.mode {
-        PlacementMode::Maximized | PlacementMode::Fullscreen => {
-            let mut plan = GeometryPlan::of(req, req.start.rect);
-            plan.noop = true;
-            return plan;
-        }
-        PlacementMode::Floating | PlacementMode::Snapped(_) => {}
+    if matches!(req.start.mode, PlacementMode::Maximized | PlacementMode::Fullscreen) {
+        return GeometryPlan { noop: true, ..GeometryPlan::of(req, req.start.rect) };
     }
     let gravity = WinGravity::of(&req.hints);
     let prev_root = frame_to_client_root(req.start.rect, req.frame_extents);
