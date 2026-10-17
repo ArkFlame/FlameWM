@@ -133,14 +133,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                 *value = values.next().unwrap_or(0);
             }
         }
-        result[4] = 0;
-        result[5] = self.screen_rect.height.saturating_sub(1);
-        result[6] = 0;
-        result[7] = self.screen_rect.height.saturating_sub(1);
-        result[8] = 0;
-        result[9] = self.screen_rect.width.saturating_sub(1);
-        result[10] = 0;
-        result[11] = self.screen_rect.width.saturating_sub(1);
+        let (h, w) = (self.screen_rect.height.saturating_sub(1), self.screen_rect.width.saturating_sub(1));
+        result[4..].copy_from_slice(&[0, h, 0, h, 0, w, 0, w]);
         Ok(result)
     }
 
@@ -199,23 +193,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             hints,
             frame_extents: extents,
         };
-        let initial_plan = crate::frame::geometry::plan_initial_map(
-            &initial_req,
-            RootPoint::new(i32::from(geometry.x), i32::from(geometry.y)),
-            (
-                u32::from(geometry.width).max(1),
-                u32::from(geometry.height).max(1),
-            ),
-        );
+        let origin = RootPoint::new(i32::from(geometry.x), i32::from(geometry.y));
+        let size = (u32::from(geometry.width).max(1), u32::from(geometry.height).max(1));
+        let initial_plan = crate::frame::geometry::plan_initial_map(&initial_req, origin, size);
         let frame_rect = if adopt {
-            crate::frame::geometry::plan_adopt(
-                RootPoint::new(i32::from(geometry.x), i32::from(geometry.y)),
-                (
-                    u32::from(geometry.width).max(1),
-                    u32::from(geometry.height).max(1),
-                ),
-                extents,
-            )
+            crate::frame::geometry::plan_adopt(origin, size, extents)
         } else {
             initial_plan.frame
         };
@@ -282,20 +264,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         )?;
 
         // Create real 12 InputOnly children (8 resize + title-drag + 3 controls).
-        let child_ids: [u32; 12] = [
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-            self.conn.generate_id()?,
-        ];
+        let mut child_ids = [0; 12];
+        for id in &mut child_ids {
+            *id = self.conn.generate_id()?;
+        }
         // Single lifecycle transaction: ids + placements from lifecycle
         // policy; this owner only performs the X create/configure loop.
         let lifecycle_ids = lifecycle::LifecycleIds::new(window, frame, child_ids);
