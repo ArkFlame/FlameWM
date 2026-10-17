@@ -84,20 +84,6 @@ impl ChromePolicy {
         Ok(())
     }
 
-    pub fn set_scale(&mut self, output: OutputId, percent: u16) -> FlameResult<()> {
-        if !matches!(percent, 100 | 125 | 150 | 175 | 200) || !output.is_valid() {
-            return Err(FlameError::new(
-                ErrorCode::InvalidArgument,
-                "invalid output scale",
-            ));
-        }
-        if self.scales.get(&output).copied() != Some(percent) {
-            self.scales.insert(output, percent);
-            self.revision = self.revision.saturating_add(1);
-        }
-        Ok(())
-    }
-
     #[must_use]
     pub fn scale_for(&self, output: &OutputId) -> u16 {
         self.scales.get(output).copied().unwrap_or(100)
