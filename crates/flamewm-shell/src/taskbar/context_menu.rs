@@ -63,30 +63,32 @@ pub fn workspace_menu(
     if index >= snapshot.count {
         return Vec::new();
     }
-    let mut entries = vec![(
-        MenuEntry::Action {
-            id: WORKSPACE_ROW_ACTIVATE.to_owned(),
-            label: "Activate".to_owned(),
-            icon: None,
-            enabled: index != snapshot.active_index,
-        },
-        ContextAction::ActivateWorkspace {
-            index,
-            expected_revision: snapshot.revision,
-        },
-    )];
-    entries.push((
-        MenuEntry::Action {
-            id: WORKSPACE_ROW_INSERT_AFTER.to_owned(),
-            label: "Insert workspace after".to_owned(),
-            icon: None,
-            enabled: true,
-        },
-        ContextAction::InsertWorkspaceAfter {
-            index,
-            expected_revision: snapshot.revision,
-        },
-    ));
+    let mut entries = vec![
+        (
+            MenuEntry::Action {
+                id: WORKSPACE_ROW_ACTIVATE.to_owned(),
+                label: "Activate".to_owned(),
+                icon: None,
+                enabled: index != snapshot.active_index,
+            },
+            ContextAction::ActivateWorkspace {
+                index,
+                expected_revision: snapshot.revision,
+            },
+        ),
+        (
+            MenuEntry::Action {
+                id: WORKSPACE_ROW_INSERT_AFTER.to_owned(),
+                label: "Insert workspace after".to_owned(),
+                icon: None,
+                enabled: true,
+            },
+            ContextAction::InsertWorkspaceAfter {
+                index,
+                expected_revision: snapshot.revision,
+            },
+        ),
+    ];
     if snapshot.count > 1 {
         entries.push((
             MenuEntry::Action {
@@ -124,16 +126,10 @@ pub fn workspace_action(
             index,
             expected_revision: snapshot.revision,
         }),
-        WORKSPACE_ROW_REMOVE => {
-            if snapshot.count > 1 {
-                Some(ContextAction::RemoveWorkspace {
-                    index,
-                    expected_revision: snapshot.revision,
-                })
-            } else {
-                None
-            }
-        }
+        WORKSPACE_ROW_REMOVE => (snapshot.count > 1).then_some(ContextAction::RemoveWorkspace {
+            index,
+            expected_revision: snapshot.revision,
+        }),
         _ => None,
     }
 }
