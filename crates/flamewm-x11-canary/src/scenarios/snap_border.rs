@@ -6,10 +6,13 @@
 use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection as _;
+use x11rb::cookie::VoidCookie;
+use x11rb::errors::ConnectionError;
 use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageData, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
     CreateWindowAux, EventMask, PropMode, WindowClass,
 };
+use x11rb::rust_connection::RustConnection;
 
 use super::interaction_regressions::root_work_area;
 use super::window_interaction::input_surface;
@@ -173,6 +176,11 @@ pub(super) fn send_root_message(
         && canary.conn.flush().is_ok()
 }
 
+/// Wait for a void request's reply-less check (`cookie.check()`), stringifying errors.
+fn checked(cookie: Result<VoidCookie<'_, RustConnection>, ConnectionError>) -> Result<(), String> {
+    cookie.map_err(|e| e.to_string())?.check().map_err(|e| e.to_string())
+}
+
 /// Create and map a top-level client, optionally with fixed WM_NORMAL_HINTS
 /// (`PMinSize|PMaxSize` with min == max). Returns the client window id.
 fn create_client(
@@ -182,38 +190,28 @@ fn create_client(
     fixed: Option<(u32, u32)>,
 ) -> Result<u32, String> {
     let wid = canary.conn.generate_id().map_err(|e| e.to_string())?;
-    canary
-        .conn
-        .create_window(
-            0,
-            wid,
-            canary.root,
-            at.0,
-            at.1,
-            size.0,
-            size.1,
-            0,
-            WindowClass::INPUT_OUTPUT,
-            0,
-            &CreateWindowAux::new(),
-        )
-        .map_err(|e| e.to_string())?
-        .check()
-        .map_err(|e| e.to_string())?;
-    canary
-        .conn
-        .change_property(
-            PropMode::REPLACE,
-            wid,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            8,
-            CLIENT_NAME.len() as u32,
-            CLIENT_NAME.as_bytes(),
-        )
-        .map_err(|e| e.to_string())?
-        .check()
-        .map_err(|e| e.to_string())?;
+    checked(canary.conn.create_window(
+        0,
+        wid,
+        canary.root,
+        at.0,
+        at.1,
+        size.0,
+        size.1,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new(),
+    ))?;
+    checked(canary.conn.change_property(
+        PropMode::REPLACE,
+        wid,
+        AtomEnum::WM_NAME,
+        AtomEnum::STRING,
+        8,
+        CLIENT_NAME.len() as u32,
+        CLIENT_NAME.as_bytes(),
+    ))?;
     if let Some((w, h)) = fixed {
         // WM_SIZE_HINTS: flags, x, y, w, h, min_w, min_h, max_w, max_h, ... (18 words).
         const PMIN_SIZE: u32 = 1 << 4;
@@ -225,27 +223,17 @@ fn create_client(
         words[7] = w;
         words[8] = h;
         let bytes: Vec<u8> = words.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        canary
-            .conn
-            .change_property(
-                PropMode::REPLACE,
-                wid,
-                AtomEnum::WM_NORMAL_HINTS,
-                AtomEnum::WM_SIZE_HINTS,
-                32,
-                words.len() as u32,
-                &bytes,
-            )
-            .map_err(|e| e.to_string())?
-            .check()
-            .map_err(|e| e.to_string())?;
+        checked(canary.conn.change_property(
+            PropMode::REPLACE,
+            wid,
+            AtomEnum::WM_NORMAL_HINTS,
+            AtomEnum::WM_SIZE_HINTS,
+            32,
+            words.len() as u32,
+            &bytes,
+        ))?;
     }
-    canary
-        .conn
-        .map_window(wid)
-        .map_err(|e| e.to_string())?
-        .check()
-        .map_err(|e| e.to_string())?;
+    checked(canary.conn.map_window(wid))?;
     canary.conn.flush().map_err(|e| e.to_string())?;
     Ok(wid)
 }
@@ -424,20 +412,11 @@ pub fn run_s3(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     let restored_snap = settle(2_000, || frame_extents(canary, client), |e| *e == floating);
     let snap_restored = restored_snap == Some(floating);
 
-    let maximized_sent = send_root_message(
-        canary,
-        client,
-        "_NET_WM_STATE",
-        maximize_msg(canary, 1),
-    );
+    let set_max = |action| send_root_message(canary, client, "_NET_WM_STATE", maximize_msg(canary, action));
+    let maximized_sent = set_max(1);
     let maximized = settle(2_000, || frame_extents(canary, client), no_edge_extents);
     let maximized_ok = maximized_sent && maximized.as_ref().is_some_and(no_edge_extents);
-    let unmaximized_sent = send_root_message(
-        canary,
-        client,
-        "_NET_WM_STATE",
-        maximize_msg(canary, 0),
-    );
+    let unmaximized_sent = set_max(0);
     let restored_max = settle(2_000, || frame_extents(canary, client), |e| *e == floating);
     let max_restored = unmaximized_sent && restored_max == Some(floating);
     destroy_client(canary, client);
