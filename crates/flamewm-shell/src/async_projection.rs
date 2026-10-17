@@ -138,59 +138,72 @@ fn icon_cache() -> &'static std::sync::Mutex<IconCache> {
     CACHE.get_or_init(|| std::sync::Mutex::new(IconCache::new(ICON_CACHE_ENTRY_BUDGET)))
 }
 
-fn redundant_hover_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.start.redundant_hover"))
+macro_rules! counter {
+    ($($name:ident = $id:literal;)*) => {$(
+        fn $name() -> &'static flamewm_profiler::CounterPoint {
+            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
+            C.get_or_init(|| flamewm_profiler::CounterPoint::new($id))
+        }
+    )*};
 }
 
-fn request_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.request"))
+counter! {
+    redundant_hover_counter = "shell.start.redundant_hover";
+    request_counter = "shell.icon.request";
+    result_counter = "shell.icon.result";
+    stale_counter = "shell.icon.stale_drop";
+    queue_full_counter = "shell.icon.queue_full";
+    high_counter = "shell.icon.high";
+    low_counter = "shell.icon.low";
+    coalesced_counter = "shell.icon.coalesced";
+    dropped_low_counter = "shell.icon.dropped_low";
+    fallback_counter = "shell.icon.empty_placeholder";
+    prewarm_counter = "shell.icon.prewarm";
 }
 
-fn result_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.result"))
+/// Start and task slot ranges; prewarm sentinels past the range never bind a node.
+fn target_in_range(target: IconTarget) -> bool {
+    match target {
+        IconTarget::StartSlot(n) => u32::from(n) < START_APP_SLOT_COUNT as u32,
+        IconTarget::TaskSlot(n) => u32::from(n) < TASK_SLOT_COUNT as u32,
+    }
 }
 
-fn stale_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.stale_drop"))
+const TASK_LINE_IDLE: UiColor = UiColor {
+    r: 135,
+    g: 145,
+    b: 155,
+    a: 255,
+};
+const PAGER_IDLE_FILL: UiColor = UiColor {
+    r: 36,
+    g: 39,
+    b: 42,
+    a: 255,
+};
+
+fn task_states(view: PanelView<'_>) -> Vec<flamewm_shell_core::TaskVisualState> {
+    let snapshot = view.snapshot;
+    flamewm_shell_core::task_visual_states_on_output(
+        &snapshot.panels,
+        &snapshot.windows,
+        &snapshot.applications,
+        view.panel.map(|panel| &panel.output),
+    )
 }
 
-fn queue_full_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.queue_full"))
-}
-
-fn high_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.high"))
-}
-
-fn low_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.low"))
-}
-
-fn coalesced_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.coalesced"))
-}
-
-fn dropped_low_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.dropped_low"))
-}
-
-fn fallback_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.empty_placeholder"))
-}
-
-fn prewarm_counter() -> &'static flamewm_profiler::CounterPoint {
-    static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-    C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.icon.prewarm"))
+/// Visible-page workspaces paired with their pager slot; those without a slot are skipped.
+fn pager_page_slots(
+    workspaces: &[crate::taskbar::workspaces::WorkspaceView],
+) -> Vec<(usize, &crate::taskbar::workspaces::WorkspaceView)> {
+    visible_page(workspaces)
+        .into_iter()
+        .filter_map(|workspace| {
+            let (row, column) = slot_position(workspace.index, workspaces)?;
+            let slot = row * 2 + column;
+            (slot < PAGE_SIZE).then_some((slot, workspace))
+        })
+        .collect()
 }
 
 /// Exact icon target binding. A worker completion mutates its node only
@@ -284,15 +297,7 @@ pub fn apply_icon_result(
     generation: u64,
     image: RuntimeImage,
 ) -> Result<bool, String> {
-    let slot = match target {
-        IconTarget::StartSlot(n) => u32::from(n),
-        IconTarget::TaskSlot(n) => u32::from(n),
-    };
-    let range = match target {
-        IconTarget::StartSlot(_) => START_APP_SLOT_COUNT as u32,
-        IconTarget::TaskSlot(_) => TASK_SLOT_COUNT as u32,
-    };
-    if slot >= range {
+    if !target_in_range(target) {
         return Ok(false);
     }
     let expected = IconBinding {
@@ -322,14 +327,7 @@ pub fn apply_cached_binding(
     document: &mut impl UiDocumentAccess,
     target: IconTarget,
 ) -> Result<bool, String> {
-    let slot = match target {
-        IconTarget::StartSlot(n) | IconTarget::TaskSlot(n) => u32::from(n),
-    };
-    let range = match target {
-        IconTarget::StartSlot(_) => START_APP_SLOT_COUNT as u32,
-        IconTarget::TaskSlot(_) => TASK_SLOT_COUNT as u32,
-    };
-    if slot >= range {
+    if !target_in_range(target) {
         return Ok(false);
     }
     let bound = bindings()
@@ -409,23 +407,18 @@ pub fn invalidate_icon_cache() {
 }
 
 pub fn note_loader_stats(loader: &IconLoader) {
-    if loader.queue_full_drops > 0 {
-        queue_full_counter().increment_by(loader.queue_full_drops);
-    }
-    if loader.stale_drops > 0 {
-        stale_counter().increment_by(loader.stale_drops);
-    }
-    if loader.high_enqueued > 0 {
-        high_counter().increment_by(loader.high_enqueued);
-    }
-    if loader.low_enqueued > 0 {
-        low_counter().increment_by(loader.low_enqueued);
-    }
-    if loader.coalesced > 0 {
-        coalesced_counter().increment_by(loader.coalesced);
-    }
-    if loader.dropped_low > 0 {
-        dropped_low_counter().increment_by(loader.dropped_low);
+    let bumps = [
+        (queue_full_counter(), loader.queue_full_drops),
+        (stale_counter(), loader.stale_drops),
+        (high_counter(), loader.high_enqueued),
+        (low_counter(), loader.low_enqueued),
+        (coalesced_counter(), loader.coalesced),
+        (dropped_low_counter(), loader.dropped_low),
+    ];
+    for (counter, n) in bumps {
+        if n > 0 {
+            counter.increment_by(n);
+        }
     }
 }
 
@@ -704,12 +697,7 @@ pub fn project_task_slots_async(
     let _span = crate::runtime::shell_span("shell.tasks.project").start();
     bump_task_view_epoch();
     let snapshot = view.snapshot;
-    let states = flamewm_shell_core::task_visual_states_on_output(
-        &snapshot.panels,
-        &snapshot.windows,
-        &snapshot.applications,
-        view.panel.map(|panel| &panel.output),
-    );
+    let states = task_states(view);
     icon_cache.sync(&snapshot.applications);
     // Task-slot nodes only: labels, icons, line visibility, backgrounds,
     // slot visibility. Pager/tray/geometry untouched.
@@ -745,32 +733,13 @@ pub fn project_task_slots_async(
                 25,
             )?;
             document.visible(&line_id, state.running)?;
-            if state.focused {
-                document.background_clear(&slot_id)?;
-                document.background(&line_id, crate::projection::task_accent())?;
-            } else if state.minimized {
-                document.background_clear(&slot_id)?;
-                document.background(
-                    &line_id,
-                    UiColor {
-                        r: 135,
-                        g: 145,
-                        b: 155,
-                        a: 255,
-                    },
-                )?;
+            document.background_clear(&slot_id)?;
+            let line = if state.focused {
+                crate::projection::task_accent()
             } else {
-                document.background_clear(&slot_id)?;
-                document.background(
-                    &line_id,
-                    UiColor {
-                        r: 135,
-                        g: 145,
-                        b: 155,
-                        a: 255,
-                    },
-                )?;
-            }
+                TASK_LINE_IDLE
+            };
+            document.background(&line_id, line)?;
         } else {
             document.text(&label_id, String::new())?;
             document.visible(&line_id, false)?;
@@ -793,31 +762,16 @@ pub fn project_pager_async(
     for index in 0..PAGE_SIZE {
         document.visible(&format!("workspace-{}", index + 1), false)?;
     }
-    let page: Vec<&crate::taskbar::workspaces::WorkspaceView> = visible_page(&workspaces);
-    for workspace in page {
-        let Some((row, column)) = slot_position(workspace.index, &workspaces) else {
-            continue;
-        };
-        let slot = row * 2 + column;
-        if slot >= PAGE_SIZE {
-            continue;
-        }
+    for (slot, workspace) in pager_page_slots(&workspaces) {
         let button_id = format!("workspace-{}", slot + 1);
         document.text(&button_id, workspace.label.clone())?;
         document.visible(&button_id, true)?;
-        if workspace.active {
-            document.background(&button_id, crate::projection::pager_active_fill())?;
+        let fill = if workspace.active {
+            crate::projection::pager_active_fill()
         } else {
-            document.background(
-                &button_id,
-                UiColor {
-                    r: 36,
-                    g: 39,
-                    b: 42,
-                    a: 255,
-                },
-            )?;
-        }
+            PAGER_IDLE_FILL
+        };
+        document.background(&button_id, fill)?;
     }
     Ok(())
 }
@@ -874,12 +828,7 @@ pub fn project_panel_geometry(
 ) -> Result<(), String> {
     let snapshot = view.snapshot;
     crate::projection::project_taskbar_height(document, view)?;
-    let states = flamewm_shell_core::task_visual_states_on_output(
-        &snapshot.panels,
-        &snapshot.windows,
-        &snapshot.applications,
-        view.panel.map(|panel| &panel.output),
-    );
+    let states = task_states(view);
     for index in 0..TASK_SLOT_COUNT {
         document.visible(
             &format!("task-slot-{}", index + 1),
@@ -887,15 +836,9 @@ pub fn project_panel_geometry(
         )?;
     }
     let workspaces = project_workspaces(snapshot.workspaces.as_ref());
-    let page: Vec<&crate::taskbar::workspaces::WorkspaceView> = visible_page(&workspaces);
     let mut visible = [false; PAGE_SIZE];
-    for workspace in &page {
-        if let Some((row, column)) = slot_position(workspace.index, &workspaces) {
-            let slot = row * 2 + column;
-            if slot < PAGE_SIZE {
-                visible[slot] = true;
-            }
-        }
+    for (slot, _) in pager_page_slots(&workspaces) {
+        visible[slot] = true;
     }
     for (index, shown) in visible.iter().enumerate() {
         document.visible(&format!("workspace-{}", index + 1), *shown)?;
@@ -970,30 +913,10 @@ pub fn prewarm_start_tail(
     prewarm_counter().increment();
 }
 
-/// Start unified projection without synchronous resolve: the single
-/// flamewm-start.rwr document carries categories, search, app rows, and
-/// power rows. Labels/visibility immediate; icons cached-or-Flame-fallback
-/// with queued HIGH worker requests. Never resolves on the caller thread.
-pub fn project_start_submenu_async(
-    document: &mut impl UiDocumentAccess,
-    model: &StartModel,
-    category: StartCategory,
-    query: &str,
-    session: &SessionCapabilities,
-    mut loader: Option<&mut IconLoader>,
-) -> Result<(), String> {
-    project_start_unified(
-        document,
-        model,
-        category,
-        query,
-        session,
-        loader.as_deref_mut(),
-    )
-}
-
 /// Unified Start document projection (J04/J07): categories + search +
 /// app rows + power rows in ONE document on the single Start surface.
+/// Labels/visibility immediate; icons cached-or-Flame-fallback with queued
+/// HIGH worker requests. Never resolves on the caller thread.
 pub fn project_start_unified(
     document: &mut impl UiDocumentAccess,
     model: &StartModel,
@@ -1148,15 +1071,6 @@ pub(crate) mod tests {
         }
     }
 
-    fn icon_image(source: &str) -> RuntimeImage {
-        RuntimeImage {
-            source: source.to_owned(),
-            width: 20,
-            height: 20,
-            pixels: vec![1; 20 * 20 * 4],
-        }
-    }
-
     fn icon_test_lock() -> &'static std::sync::Mutex<()> {
         static M: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(()))
@@ -1194,7 +1108,7 @@ pub(crate) mod tests {
             20,
             20,
             7,
-            icon_image("a"),
+            sized_test_image("a", 20),
         )
         .expect("apply ok");
         assert!(applied, "live binding must mutate");
@@ -1216,7 +1130,7 @@ pub(crate) mod tests {
             20,
             20,
             7,
-            icon_image("a"),
+            sized_test_image("a", 20),
         )
         .expect("stale check ok");
         assert!(!applied, "epoch bump must stale the completion");
@@ -1230,12 +1144,6 @@ pub(crate) mod tests {
         test_reset_icon_bindings();
         let mut doc = FakeDoc::default();
         test_record_binding(IconTarget::TaskSlot(1), "icon-a", 25, 25, 3);
-        let icon25 = |source: &str| RuntimeImage {
-            source: source.to_owned(),
-            width: 25,
-            height: 25,
-            pixels: vec![1; 25 * 25 * 4],
-        };
         let wrong_name = apply_icon_result(
             &mut doc,
             IconTarget::TaskSlot(1),
@@ -1243,7 +1151,7 @@ pub(crate) mod tests {
             25,
             25,
             3,
-            icon25("b"),
+            sized_test_image("b", 25),
         )
         .expect("stale check ok");
         assert!(!wrong_name, "key mismatch must stale");
@@ -1254,7 +1162,7 @@ pub(crate) mod tests {
             25,
             25,
             4,
-            icon25("b"),
+            sized_test_image("b", 25),
         )
         .expect("stale check ok");
         assert!(!wrong_gen, "generation mismatch must stale");
@@ -1270,7 +1178,7 @@ pub(crate) mod tests {
         test_record_binding(IconTarget::TaskSlot(1), "icon-a", 25, 25, 3);
         // A projection bumps the task epoch without re-binding this slot.
         bump_task_view_epoch();
-        note_icon_result("icon-a", 25, 25, icon_image("a"));
+        note_icon_result("icon-a", 25, 25, sized_test_image("a", 20));
         let completed = apply_icon_result(
             &mut doc,
             IconTarget::TaskSlot(1),
@@ -1278,7 +1186,7 @@ pub(crate) mod tests {
             25,
             25,
             3,
-            icon_image("a"),
+            sized_test_image("a", 20),
         )
         .expect("stale check ok");
         assert!(!completed, "epoch bump stales the late completion");
@@ -1745,7 +1653,7 @@ pub(crate) mod tests {
         }]);
         let session = SessionCapabilities::default();
         let mut doc = FakeDoc::default();
-        project_start_submenu_async(&mut doc, &model, StartCategory::All, "", &session, None)
+        project_start_unified(&mut doc, &model, StartCategory::All, "", &session, None)
             .expect("projects");
         assert!(
             doc.images.contains(&"start-app-slot-1-icon".to_owned()),
@@ -1759,7 +1667,7 @@ pub(crate) mod tests {
         let model = StartModel::new(Vec::new());
         let session = SessionCapabilities::default();
         let mut doc = FakeDoc::default();
-        project_start_submenu_async(&mut doc, &model, StartCategory::All, "", &session, None)
+        project_start_unified(&mut doc, &model, StartCategory::All, "", &session, None)
             .expect("projects");
         assert_eq!(doc.visible.get("start-app-slot-1"), Some(&false));
     }
