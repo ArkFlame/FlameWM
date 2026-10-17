@@ -1071,16 +1071,16 @@ macro_rules! noop_document_overflow {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use flamewm_api::applications::DesktopApplication;
     use std::collections::HashMap;
 
     #[derive(Default)]
-    struct FakeDoc {
-        texts: HashMap<String, String>,
-        images: Vec<String>,
-        visible: HashMap<String, bool>,
+    pub(crate) struct FakeDoc {
+        pub(crate) texts: HashMap<String, String>,
+        pub(crate) images: Vec<String>,
+        pub(crate) visible: HashMap<String, bool>,
     }
 
     impl UiDocumentAccess for FakeDoc {

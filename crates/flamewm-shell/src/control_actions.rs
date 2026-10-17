@@ -11,8 +11,10 @@ use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flamewm_api::settings::SettingsSnapshot as ApiSettingsSnapshot;
+use flamewm_api::error::ErrorCode;
 use flamewm_control_core::{ControlMutationQueue, ControlRequest, MutationLane};
 use flamewm_control_dbus::MutationDispatcher;
+use flamewm_shell_core::weather::WeatherSettings;
 
 /// Result of a Start-menu launch, correlated back to the app that was asked
 /// to start. `app` is the user-visible application name.
@@ -20,6 +22,23 @@ use flamewm_control_dbus::MutationDispatcher;
 pub enum StartLaunchOutcome {
     Started { invocation: u64, app: String },
     Failed { invocation: u64, app: String, message: String },
+}
+
+/// One weather location pick: the settings transaction, the location it selects
+/// (for the optimistic view), and how many times it was already resubmitted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeatherPick {
+    pub request: ControlRequest,
+    pub settings: WeatherSettings,
+    pub attempt: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeatherPickOutcome {
+    pub id: u64,
+    pub pick: WeatherPick,
+    /// The applied snapshot when the mutation succeeded (carries the new revision).
+    pub result: Result<Option<ApiSettingsSnapshot>, ErrorCode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +56,20 @@ thread_local! {
     static LAUNCH_OUTCOMES: RefCell<VecDeque<StartLaunchOutcome>> = RefCell::new(VecDeque::new());
     static PENDING_NETWORK_SECRETS: RefCell<Vec<(u64, (u64, u64))>> = RefCell::new(Vec::new());
     static NETWORK_SECRET_OUTCOMES: RefCell<VecDeque<NetworkSecretOutcome>> = RefCell::new(VecDeque::new());
+    static PENDING_WEATHER_PICKS: RefCell<Vec<(u64, WeatherPick)>> = RefCell::new(Vec::new());
+    static WEATHER_PICK_OUTCOMES: RefCell<VecDeque<WeatherPickOutcome>> = RefCell::new(VecDeque::new());
+}
+
+/// Enqueue a weather location settings transaction; its result is reported by
+/// [`take_weather_pick_outcomes`]. Never blocks.
+pub fn enqueue_weather_pick(dispatcher: Option<&Arc<MutationDispatcher>>, pick: WeatherPick) -> Option<u64> {
+    let id = enqueue_action(dispatcher, pick.request.clone())?;
+    PENDING_WEATHER_PICKS.with(|pending| pending.borrow_mut().push((id, pick)));
+    Some(id)
+}
+
+pub fn take_weather_pick_outcomes() -> Vec<WeatherPickOutcome> {
+    WEATHER_PICK_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
 
 pub fn enqueue_network_secret(dispatcher: Option<&Arc<MutationDispatcher>>, identity: (u64, u64), request: ControlRequest) -> Option<u64> {
@@ -168,6 +201,22 @@ pub fn drain_results_with_settings(
             let position = pending.iter().position(|(id, _)| *id == result.id)?;
             Some(pending.swap_remove(position).1)
         });
+        let weather_pick = PENDING_WEATHER_PICKS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            let position = pending.iter().position(|(id, _)| *id == result.id)?;
+            Some(pending.swap_remove(position).1)
+        });
+        if let Some(pick) = weather_pick {
+            WEATHER_PICK_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(WeatherPickOutcome {
+                id: result.id,
+                pick,
+                result: match &result.outcome {
+                    Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => Ok(Some(snapshot.clone())),
+                    Ok(_) => Ok(None),
+                    Err(error) => Err(error.code),
+                },
+            }));
+        }
         if let Some(identity) = network_identity {
             NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(NetworkSecretOutcome {
                 id: result.id,

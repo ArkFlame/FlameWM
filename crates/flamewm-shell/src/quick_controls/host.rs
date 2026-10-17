@@ -23,7 +23,7 @@ use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_shell_core::weather::WeatherFeed;
 use crate::projection::project_weather_popup;
-use crate::weather_host::{spawn_location_search, LocationSearch};
+use crate::weather_host::{spawn_location_search, LocationSearch, SearchStatus};
 use flamewm_ui_x11::{
     decode_document, ActionPhase, PointerButton, SlideConfig, SurfaceConfig, SurfaceHandle,
     SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
@@ -230,7 +230,7 @@ impl QuickControlSnapshot {
     /// audio tab/settings projection.
     pub fn store_settings(&mut self, snapshot: SettingsSnapshot) {
         self.settings = snapshot.clone();
-        apply_settings(snapshot.clone(), &mut self.audio_settings);
+        apply_settings(snapshot, &mut self.audio_settings);
     }
 }
 
@@ -461,6 +461,9 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
         reactor
             .register_raw_fd_with_action(watch_fd, calloop::Interest::READ, move |_, _| {
                 crate::control_actions::drain_results(Some(&wake));
+                for outcome in crate::control_actions::take_weather_pick_outcomes() {
+                    finish_weather_pick(&mut outcome_state.borrow_mut(), outcome);
+                }
                 let outcomes = crate::control_actions::take_network_secret_outcomes();
                 if !outcomes.is_empty() {
                     let mut state = outcome_state.borrow_mut();
@@ -501,6 +504,7 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
     let event_state = std::rc::Rc::clone(&state);
     let tick_state = std::rc::Rc::clone(&state);
     let tick_input = Arc::clone(&input);
+    let search_wake = reactor.wake_deadline();
     let run_result = flamewm_ui_x11::run_surface_runtime_with_reactor_access(
         &mut runtime,
         &mut reactor,
@@ -565,6 +569,11 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
                 }
             }
             tick_host(runtime, &tick_state)?;
+            // The geocoding worker has no fd: keep the loop polling until its result lands.
+            let searching = tick_state.borrow().snapshot.weather_search.in_flight();
+            search_wake.set(
+                searching.then(|| std::time::Instant::now() + crate::weather_host::WEATHER_POLL_INTERVAL),
+            );
             if tick_state.borrow().shutdown {
                 // Close and destroy every helper-owned surface. A teardown
                 // error is returned so the owner exits nonzero instead of
@@ -1224,7 +1233,7 @@ pub fn route_helper_event(
                 if let Some(dispatcher) = dispatcher {
                     let request =
                         ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
-                            expected_revision: snapshot.system.revision,
+                            expected_revision: snapshot.settings.revision,
                             changes: vec![flamewm_api::settings::SettingsChange {
                                 key: AudioSettings::SETTINGS_KEY.to_owned(),
                                 value: Some(SettingValue::Boolean(
@@ -1296,28 +1305,87 @@ fn clear_network_secret(snapshot: &mut QuickControlSnapshot) {
     snapshot.network_secret_error = false;
 }
 
-/// Persists the chosen location and enables weather. `to_changes` also writes the
-/// current units (`celsius` unless already set), so the stored state is complete.
-/// The main shell pushes the new feed once the settings snapshot changes.
+/// Persists the chosen location, enables weather, and turns automatic location off so
+/// the IP lookup cannot overwrite the manual pick. The popup shows Loading only after
+/// the settings transaction is accepted (see [`finish_weather_pick`]).
 fn pick_weather_location(
     snapshot: &mut QuickControlSnapshot,
     index: usize,
     dispatcher: Option<&std::sync::Arc<flamewm_control_dbus::MutationDispatcher>>,
 ) {
-    let Some(location) = snapshot.weather_search.results.get(index).cloned() else {
+    let Some(pick) = weather_pick_for(snapshot, index) else {
         return;
     };
     snapshot.weather_search.reset();
+    if crate::control_actions::enqueue_weather_pick(dispatcher, pick).is_none() {
+        snapshot.weather_search.status = SearchStatus::SaveFailed;
+    }
+}
+
+/// The settings transaction for picking result `index`, fenced on the settings revision
+/// (the store's revision), not the system snapshot revision.
+fn weather_pick_for(snapshot: &QuickControlSnapshot, index: usize) -> Option<crate::control_actions::WeatherPick> {
+    let location = snapshot.weather_search.results.get(index).cloned()?;
     let mut settings = snapshot.weather.settings.clone();
     settings.location = Some(location);
     settings.enabled = true;
-    let changes = settings.to_changes();
-    let request = ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
-        expected_revision: snapshot.system.revision,
-        changes,
-        reset_section: None,
+    Some(weather_pick(settings, snapshot.settings.revision, 0))
+}
+
+fn weather_pick(
+    settings: flamewm_shell_core::weather::WeatherSettings,
+    revision: u64,
+    attempt: u8,
+) -> crate::control_actions::WeatherPick {
+    let mut changes = settings.to_changes();
+    changes.push(flamewm_api::settings::SettingsChange {
+        key: crate::weather_auto::AUTO_LOCATION_KEY.to_owned(),
+        value: Some(SettingValue::Boolean(false)),
     });
-    crate::control_actions::enqueue_action(dispatcher, request);
+    crate::control_actions::WeatherPick {
+        request: ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
+            expected_revision: revision,
+            changes,
+            reset_section: None,
+        }),
+        settings,
+        attempt,
+    }
+}
+
+/// Applies one settled weather pick. A stale revision is resubmitted once against the
+/// freshly read settings revision; any other failure is shown in the picker.
+fn finish_weather_pick(state: &mut HostState, outcome: crate::control_actions::WeatherPickOutcome) {
+    match outcome.result {
+        Ok(applied) => {
+            if let Some(settings) = applied {
+                state.snapshot.store_settings(settings);
+            }
+            state.snapshot.weather.settings = outcome.pick.settings.clone();
+            state.snapshot.weather.state = if outcome.pick.settings.enabled {
+                flamewm_shell_core::weather::WeatherState::Loading
+            } else {
+                flamewm_shell_core::weather::WeatherState::Disabled
+            };
+            state.system_reprojection_pending = true;
+        }
+        Err(flamewm_api::error::ErrorCode::StaleRevision) if outcome.pick.attempt == 0 => {
+            if let Ok(client) = ControlClient::connect(BusKind::Session) {
+                state.snapshot.refresh_settings(&client);
+            }
+            let revision = state.snapshot.settings.revision;
+            let retry = weather_pick(outcome.pick.settings, revision, 1);
+            let retried = crate::control_actions::enqueue_weather_pick(state.dispatcher.as_ref(), retry);
+            if retried.is_none() {
+                state.snapshot.weather_search.status = SearchStatus::SaveFailed;
+                state.system_reprojection_pending = true;
+            }
+        }
+        Err(_) => {
+            state.snapshot.weather_search.status = SearchStatus::SaveFailed;
+            state.system_reprojection_pending = true;
+        }
+    }
 }
 
 fn submit_network_secret(
@@ -1486,31 +1554,16 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
     }?;
     let command = action.rsplit('.').next()?;
     let cap = snapshot.audio_settings.max_percent();
-    match command {
-        "up" => crate::taskbar::status::audio::system_action_for_row(
-            system,
-            &row.id,
-            Some(
-                snapshot
-                    .audio_settings
-                    .clamp_percent(row.volume_percent.saturating_add(5)),
-            ),
+    let (percent, muted) = match command {
+        "up" => (
+            Some(snapshot.audio_settings.clamp_percent(row.volume_percent.saturating_add(5))),
             None,
         ),
-        "down" => crate::taskbar::status::audio::system_action_for_row(
-            system,
-            &row.id,
-            Some(row.volume_percent.saturating_sub(5).min(cap)),
-            None,
-        ),
-        "mute" => crate::taskbar::status::audio::system_action_for_row(
-            system,
-            &row.id,
-            None,
-            Some(!row.muted),
-        ),
-        _ => None,
-    }
+        "down" => (Some(row.volume_percent.saturating_sub(5).min(cap)), None),
+        "mute" => (None, Some(!row.muted)),
+        _ => return None,
+    };
+    crate::taskbar::status::audio::system_action_for_row(system, &row.id, percent, muted)
 }
 
 /// Pure helpers for the close-one/close-none contract: take_close_target
@@ -2159,6 +2212,78 @@ mod audio_routing_tests {
     };
 
     // Fake provider: one default output at 50%, one app stream at 30%.
+    struct AcceptingShortcuts;
+
+    impl flamewm_api::ports::ShortcutPort for AcceptingShortcuts {
+        fn prepare_shortcuts(
+            &mut self,
+            _desired: &std::collections::BTreeMap<String, flamewm_api::shortcuts::KeyBinding>,
+        ) -> flamewm_api::FlameResult<()> {
+            Ok(())
+        }
+
+        fn commit_shortcuts(&mut self) -> flamewm_api::FlameResult<()> {
+            Ok(())
+        }
+
+        fn rollback_shortcuts(&mut self) {}
+    }
+
+    /// Pick -> transaction fenced on the store revision -> accepted by the real settings service
+    /// (not a fake) -> the popup feed reads the enabled location. The store has advanced past
+    /// its initial revision, so a transaction fenced on any other revision would be stale.
+    #[test]
+    fn weather_pick_is_accepted_by_real_settings_store_and_enables_feed() {
+        use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
+        use flamewm_platform::services::settings::SettingsService;
+
+        let dir = std::env::temp_dir().join(format!("flamewm-weather-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut service = SettingsService::new(dir.join("settings.conf"));
+        let initial = service.snapshot().revision;
+        service
+            .apply(
+                &mut AcceptingShortcuts,
+                &SettingsTransaction {
+                    expected_revision: initial,
+                    changes: vec![SettingsChange {
+                        key: "taskbarShowClock".to_owned(),
+                        value: Some(SettingValue::Boolean(true)),
+                    }],
+                    reset_section: None,
+                },
+            )
+            .expect("unrelated change");
+        let store_revision = service.snapshot().revision;
+        assert_eq!(store_revision, initial + 1);
+
+        let mut snapshot = quick(AudioTab::Devices, false);
+        snapshot.settings = service.snapshot();
+        snapshot.weather.settings.enabled = true;
+        snapshot.weather_search.results = vec![
+            flamewm_shell_core::weather::WeatherLocation::new("Berlin", 52.52, 13.405, Some("Germany"))
+                .unwrap(),
+        ];
+        let pick = weather_pick_for(&snapshot, 0).expect("pick");
+        let ControlRequest::ApplySettings(transaction) = &pick.request else {
+            panic!("pick must be a settings transaction");
+        };
+        assert_eq!(transaction.expected_revision, store_revision);
+        let applied = service
+            .apply(&mut AcceptingShortcuts, transaction)
+            .expect("real store accepts the pick");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let feed = flamewm_shell_core::weather::WeatherSettings::from_snapshot(&applied);
+        assert!(feed.enabled);
+        assert_eq!(feed.location.as_ref().map(|l| l.name.as_str()), Some("Berlin"));
+        assert_eq!(
+            applied.values.get(crate::weather_auto::AUTO_LOCATION_KEY),
+            Some(&SettingValue::Boolean(false)),
+            "a manual pick turns automatic location off"
+        );
+    }
+
     fn quick(tab: AudioTab, raise_maximum: bool) -> QuickControlSnapshot {
         let mut system = flamewm_api::system::SystemSnapshot::default();
         system.revision = 4;

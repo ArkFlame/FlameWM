@@ -4,7 +4,6 @@ use chrono::{DateTime, Datelike, Local};
 use flamewm_api::applications::DesktopApplication;
 use flamewm_api::session::SessionCapabilities;
 use flamewm_api::settings::SettingsSnapshot;
-use flamewm_api::system::ServiceAvailability;
 use flamewm_integrations_linux::icons::{IconResolver, IconSize, Rgb8Raster};
 use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
@@ -17,6 +16,15 @@ use crate::ShellSnapshot;
 use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
 use flamewm_shell_core::{task_visual_states_on_output, StartModel};
 
+#[cfg(test)]
+macro_rules! forward {
+    ($($method:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
+        $(fn $method(&mut self, $($arg: $ty),*) -> Result<(), String> {
+            UiDocumentAccess::$method(self.document, $($arg),*)
+        })*
+    };
+}
+
 mod audio;
 mod calendar;
 mod network;
@@ -28,7 +36,6 @@ pub use network::{project_network, project_network_full, project_network_secret}
 pub use weather::{project_weather_popup, project_weather_tray};
 
 const TASK_SLOT_COUNT: usize = 8;
-const START_APP_SLOT_COUNT: usize = 8;
 /// Bar height in CSS px used when the panel snapshot carries no logical size.
 /// Matches the `.taskbar` height in ui/shell/flamewm.css.
 const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
@@ -36,7 +43,6 @@ const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
 /// Maps the panel's logical (settings) height to the CSS height of the bar.
 /// A zero logical size falls back to the stylesheet default so 100% output
 /// stays identical to the 44px layout.
-#[must_use]
 /// Accent used for the focused task underline (ARGB), fed by the settings projection so the
 /// underline follows `accent`/`accentOpacity` instead of a fixed colour.
 static TASK_ACCENT_ARGB: std::sync::atomic::AtomicU32 =
@@ -1297,67 +1303,7 @@ mod clock_display_tests {
 #[cfg(test)]
 mod media_projection_tests {
     use super::*;
-    use std::collections::HashMap;
-
-    #[derive(Default)]
-    struct MediaDoc {
-        texts: HashMap<String, String>,
-        visible: HashMap<String, bool>,
-    }
-
-    impl UiDocumentAccess for MediaDoc {
-        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
-            self.texts.insert(id.to_owned(), text);
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
-        fn visible(&mut self, id: &str, v: bool) -> Result<(), String> {
-            self.visible.insert(id.to_owned(), v);
-            Ok(())
-        }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn layer(&mut self, _: &str, _: flamewm_ui_core::style::UiLayer) -> Result<(), String> {
-            Ok(())
-        }
-        crate::noop_document_overflow!();
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
-            Ok(())
-        }
-    }
+    use crate::async_projection::tests::FakeDoc;
 
     // REGRESSION: the popup has one title row and no artist line, so project_media
     // must not write `media-artist` (the compiled artifact no longer has that node).
@@ -1366,7 +1312,7 @@ mod media_projection_tests {
         let mut snapshot = crate::ShellSnapshot::default();
         snapshot.system.media.title = "Song Title".to_owned();
         snapshot.system.media.artist = "Some Artist".to_owned();
-        let mut document = MediaDoc::default();
+        let mut document = FakeDoc::default();
 
         project_media(&mut document, &snapshot).expect("media projection must succeed");
 
@@ -1383,7 +1329,7 @@ mod media_projection_tests {
     fn media_title_text(title: &str) -> String {
         let mut snapshot = crate::ShellSnapshot::default();
         snapshot.system.media.title = title.to_owned();
-        let mut document = MediaDoc::default();
+        let mut document = FakeDoc::default();
         project_media(&mut document, &snapshot).expect("media projection must succeed");
         document
             .texts
@@ -1401,7 +1347,7 @@ mod media_projection_tests {
         snapshot.system.media.playback = flamewm_api::system::PlaybackState::Playing;
         snapshot.system.media.can_previous = true;
         snapshot.system.media.can_next = true;
-        let mut document = MediaDoc::default();
+        let mut document = FakeDoc::default();
 
         project_media(&mut document, &snapshot).expect("media projection must succeed");
 
@@ -1455,7 +1401,7 @@ mod media_projection_tests {
         snapshot.system.media.availability = flamewm_api::system::ServiceAvailability::Available;
         snapshot.system.media.can_next = true;
         snapshot.system.media.can_play = true;
-        let mut document = MediaDoc::default();
+        let mut document = FakeDoc::default();
 
         project_media(&mut document, &snapshot).expect("media projection must succeed");
 
@@ -1471,7 +1417,7 @@ mod media_projection_tests {
     #[test]
     fn media_controls_all_disabled_without_player() {
         let snapshot = crate::ShellSnapshot::default();
-        let mut document = MediaDoc::default();
+        let mut document = FakeDoc::default();
 
         project_media(&mut document, &snapshot).expect("media projection must succeed");
 

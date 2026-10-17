@@ -131,14 +131,6 @@ mod audio_template_tests {
         recorded: Recorded,
     }
 
-    macro_rules! forward {
-        ($($method:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
-            $(fn $method(&mut self, $($arg: $ty),*) -> Result<(), String> {
-                UiDocumentAccess::$method(self.document, $($arg),*)
-            })*
-        };
-    }
-
     impl UiDocumentAccess for AudioRecorder<'_> {
         fn text(&mut self, id: &str, text: String) -> Result<(), String> {
             self.recorded.texts.insert(id.to_owned(), text.clone());

@@ -74,18 +74,19 @@ pub struct WeatherTrayView {
     pub temperature: String,
 }
 
-/// Tray entry: visibility is the `taskbarShowWeather` setting alone, independent
-/// of fetching. Neutral icon and `--` without data (including when disabled).
+/// Tray entry: shown when `taskbarShowWeather` is on and weather is enabled. Enabled
+/// without a location shows the neutral icon and `--` (the popup offers the picker).
 #[must_use]
 pub fn tray_view(state: &WeatherState, units: TemperatureUnit, shown: bool) -> WeatherTrayView {
+    let visible = shown && !matches!(state, WeatherState::Disabled);
     match state {
         WeatherState::Ready(snapshot) | WeatherState::Offline(Some(snapshot)) => WeatherTrayView {
-            visible: shown,
+            visible,
             condition: snapshot.condition,
             temperature: format!("{}\u{b0}", units.convert_c(snapshot.temperature_c)),
         },
         _ => WeatherTrayView {
-            visible: shown,
+            visible,
             condition: WeatherCondition::Unknown,
             temperature: "--".to_owned(),
         },
@@ -199,6 +200,7 @@ fn search_status_text(status: SearchStatus) -> &'static str {
         SearchStatus::Searching => "Searching...",
         SearchStatus::NoMatches => "No matches",
         SearchStatus::Failed => "Search failed",
+        SearchStatus::SaveFailed => "Could not save location",
     }
 }
 
@@ -325,7 +327,6 @@ mod tests {
     #[test]
     fn tray_visibility_follows_setting_not_fetch_state() {
         for state in [
-            WeatherState::Disabled,
             WeatherState::Unconfigured,
             WeatherState::Loading,
             WeatherState::Offline(None),
@@ -369,9 +370,15 @@ mod tests {
         let mut disabled = Recorder::default();
         project_weather_tray(&mut disabled, &WeatherState::Disabled, TemperatureUnit::Celsius, true)
             .unwrap();
-        assert!(disabled.visible["tray-weather"]);
-        assert!(disabled.visible["tray-weather-none-available"]);
-        assert_eq!(disabled.texts["tray-weather-temp"], "--");
+        assert!(!disabled.visible["tray-weather"]);
+        assert!(!disabled.visible["tray-weather-none-available"]);
+
+        let mut unconfigured = Recorder::default();
+        project_weather_tray(&mut unconfigured, &WeatherState::Unconfigured, TemperatureUnit::Celsius, true)
+            .unwrap();
+        assert!(unconfigured.visible["tray-weather"]);
+        assert!(unconfigured.visible["tray-weather-none-available"]);
+        assert_eq!(unconfigured.texts["tray-weather-temp"], "--");
 
         let mut off = Recorder::default();
         project_weather_tray(&mut off, &WeatherState::Disabled, TemperatureUnit::Celsius, false)
@@ -512,7 +519,6 @@ mod panel_tray_tests {
     #[test]
     fn tray_temperature_text_lays_out_inside_button_in_real_panel() {
         let cases = [
-            (WeatherState::Disabled, "--"),
             (WeatherState::Unconfigured, "--"),
             (ready_21c(), "21\u{b0}"),
         ];

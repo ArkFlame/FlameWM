@@ -244,7 +244,7 @@ impl HttpGet for CurlFetcher {
     }
 }
 
-mod json {
+pub(crate) mod json {
     use super::{MAX_JSON_DEPTH, WeatherError};
 
     #[derive(Debug, Clone, PartialEq)]
@@ -483,6 +483,10 @@ mod tests {
         WeatherLocation::new("Berlin", 52.52, 13.41, Some("Germany")).unwrap()
     }
 
+    fn parse(body: &str) -> Result<WeatherSnapshot, WeatherError> {
+        parse_forecast(body, berlin(), 0)
+    }
+
     #[test]
     fn forecast_fixture_parses() {
         let snapshot = parse_forecast(FORECAST_FIXTURE, berlin(), 1234).unwrap();
@@ -501,14 +505,8 @@ mod tests {
     #[test]
     fn forecast_rejects_truncated_json() {
         let truncated = &FORECAST_FIXTURE[..FORECAST_FIXTURE.len() - 10];
-        assert_eq!(
-            parse_forecast(truncated, berlin(), 0),
-            Err(WeatherError::Parse("malformed json"))
-        );
-        assert_eq!(
-            parse_forecast("", berlin(), 0),
-            Err(WeatherError::Parse("malformed json"))
-        );
+        assert_eq!(parse(truncated), Err(WeatherError::Parse("malformed json")));
+        assert_eq!(parse(""), Err(WeatherError::Parse("malformed json")));
         assert_eq!(
             parse_forecast(&format!("{FORECAST_FIXTURE} x"), berlin(), 0),
             Err(WeatherError::Parse("malformed json"))
@@ -519,14 +517,8 @@ mod tests {
     fn forecast_rejects_missing_fields() {
         let no_daily = r#"{"current":{"temperature_2m":1.0,"weather_code":0}}"#;
         let no_temp = r#"{"current":{"weather_code":0},"daily":{"time":[],"weather_code":[],"temperature_2m_max":[],"temperature_2m_min":[]}}"#;
-        assert_eq!(
-            parse_forecast(no_daily, berlin(), 0),
-            Err(WeatherError::Parse("missing field"))
-        );
-        assert_eq!(
-            parse_forecast(no_temp, berlin(), 0),
-            Err(WeatherError::Parse("missing field"))
-        );
+        assert_eq!(parse(no_daily), Err(WeatherError::Parse("missing field")));
+        assert_eq!(parse(no_temp), Err(WeatherError::Parse("missing field")));
     }
 
     #[test]
@@ -545,15 +537,9 @@ mod tests {
             time_not_array.as_str(),
             root_array,
         ] {
-            assert!(matches!(
-                parse_forecast(body, berlin(), 0),
-                Err(WeatherError::Parse(_))
-            ));
+            assert!(matches!(parse(body), Err(WeatherError::Parse(_))));
         }
-        assert_eq!(
-            parse_forecast(&temp_string, berlin(), 0),
-            Err(WeatherError::Parse("wrong type"))
-        );
+        assert_eq!(parse(&temp_string), Err(WeatherError::Parse("wrong type")));
     }
 
     #[test]
@@ -565,10 +551,10 @@ mod tests {
         let frac_code = FORECAST_FIXTURE.replace("\"weather_code\":3}", "\"weather_code\":2.5}");
         let neg_code = FORECAST_FIXTURE.replace("\"weather_code\":3}", "\"weather_code\":-1}");
         for body in [huge_temp, big_temp, big_code.clone(), frac_code, neg_code] {
-            assert!(parse_forecast(&body, berlin(), 0).is_err());
+            assert!(parse(&body).is_err());
         }
         assert_eq!(
-            parse_forecast(&big_code, berlin(), 0),
+            parse(&big_code),
             Err(WeatherError::Parse("value out of range"))
         );
     }
@@ -580,20 +566,11 @@ mod tests {
         let mismatch = FORECAST_FIXTURE.replace("[3,61,71,0,45,95,2]", "[3,61]");
         let bad_date = FORECAST_FIXTURE.replace("2026-10-17", "2026-13-17");
         let inverted = FORECAST_FIXTURE.replace("[14.1,", "[-50.0,");
+        assert_eq!(parse(&eight_days), Err(WeatherError::Parse("day count")));
+        assert_eq!(parse(&mismatch), Err(WeatherError::Parse("day count")));
+        assert_eq!(parse(&bad_date), Err(WeatherError::Parse("bad date")));
         assert_eq!(
-            parse_forecast(&eight_days, berlin(), 0),
-            Err(WeatherError::Parse("day count"))
-        );
-        assert_eq!(
-            parse_forecast(&mismatch, berlin(), 0),
-            Err(WeatherError::Parse("day count"))
-        );
-        assert_eq!(
-            parse_forecast(&bad_date, berlin(), 0),
-            Err(WeatherError::Parse("bad date"))
-        );
-        assert_eq!(
-            parse_forecast(&inverted, berlin(), 0),
+            parse(&inverted),
             Err(WeatherError::Parse("temperature order"))
         );
     }

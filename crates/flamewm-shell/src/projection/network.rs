@@ -140,6 +140,7 @@ pub fn project_network_full(
 #[cfg(test)]
 mod network_template_tests {
     use super::*;
+    use flamewm_api::system::ServiceAvailability;
 
     const NETWORK_ARTIFACT: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
@@ -178,14 +179,6 @@ mod network_template_tests {
         texts: std::collections::HashMap<String, String>,
         visible: std::collections::HashMap<String, bool>,
         toggles: std::collections::HashMap<String, bool>,
-    }
-
-    macro_rules! forward {
-        ($($method:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
-            $(fn $method(&mut self, $($arg: $ty),*) -> Result<(), String> {
-                UiDocumentAccess::$method(self.document, $($arg),*)
-            })*
-        };
     }
 
     impl UiDocumentAccess for NetworkRecorder<'_> {

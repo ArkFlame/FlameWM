@@ -17,6 +17,8 @@ use crate::weather_provider::{CurlFetcher, OpenMeteo};
 
 /// Minimum spacing between periodic weather fetches (opening the popup always fetches).
 pub const WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// Loop cadence while a fetch is in flight; bounded by the curl timeout.
+pub const WEATHER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 type WeatherResult = Result<flamewm_shell_core::weather::WeatherSnapshot, WeatherError>;
 
@@ -91,6 +93,14 @@ impl WeatherHost {
             || self
                 .last_started
                 .is_some_and(|started| now.duration_since(started) >= WEATHER_REFRESH_INTERVAL)
+    }
+
+    /// The next instant the shell loop must wake to poll an in-flight fetch.
+    /// The worker's result has no fd, so without this the loop sleeps until an
+    /// unrelated event and the popup stays on "Loading...".
+    #[must_use]
+    pub fn poll_deadline(&self, now: Instant) -> Option<Instant> {
+        self.inflight.as_ref().map(|_| now + WEATHER_POLL_INTERVAL)
     }
 
     /// Advances the scheduler: applies a finished fetch, then starts one if due.
@@ -169,6 +179,8 @@ pub enum SearchStatus {
     Searching,
     NoMatches,
     Failed,
+    /// The chosen location could not be saved; the picker stays open to retry.
+    SaveFailed,
 }
 
 /// Location picker state in the popup host. The query lives here; the
@@ -193,6 +205,12 @@ impl LocationSearch {
         self.status = SearchStatus::Searching;
         self.inflight = Some(Arc::new(Mutex::new(spawn(query))));
         true
+    }
+
+    /// True while a geocoding request is outstanding and must be polled.
+    #[must_use]
+    pub fn in_flight(&self) -> bool {
+        self.inflight.is_some()
     }
 
     /// Applies a finished search. Returns true when the visible state changed.
@@ -231,9 +249,23 @@ impl LocationSearch {
     }
 }
 
+/// Shared weather test fakes; shared by the sibling `weather_auto` tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::mpsc;
+
+    /// A worker that already finished with `result`; no socket, no thread.
+    pub(crate) fn answer<T>(result: T) -> mpsc::Receiver<T> {
+        let (tx, rx) = mpsc::channel();
+        tx.send(result).unwrap();
+        rx
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::test_support::answer;
     use flamewm_shell_core::weather::{TemperatureUnit, WeatherCondition, WeatherSnapshot};
     use std::cell::Cell;
 
@@ -251,26 +283,19 @@ mod tests {
 
     /// Stands in for the network: a ready fixture, no socket, no thread.
     fn fixture_rx() -> mpsc::Receiver<WeatherResult> {
-        let (tx, rx) = mpsc::channel();
-        tx.send(Ok(WeatherSnapshot {
+        answer(Ok(WeatherSnapshot {
             location: location(),
             temperature_c: 9,
             condition: WeatherCondition::Clear,
             days: Vec::new(),
             fetched_at: 1,
         }))
-        .unwrap();
-        rx
     }
 
     fn search_fixture(
         result: SearchResult,
     ) -> impl FnOnce(String) -> mpsc::Receiver<SearchResult> {
-        move |_| {
-            let (tx, rx) = mpsc::channel();
-            tx.send(result).unwrap();
-            rx
-        }
+        move |_| answer(result)
     }
 
     #[test]
@@ -292,6 +317,33 @@ mod tests {
         let mut host = WeatherHost::new();
         host.apply_settings(settings(false, true));
         assert_eq!(host.state, WeatherState::Disabled);
+    }
+
+    #[test]
+    fn in_flight_fetch_keeps_the_loop_polling_until_the_result_lands() {
+        let mut host = WeatherHost::new();
+        host.apply_settings(settings(true, true));
+        let start = Instant::now();
+        assert_eq!(host.poll_deadline(start), None, "nothing in flight yet");
+        // Worker that has not answered yet: the sender stays alive, so try_recv is Empty.
+        let (tx, rx) = mpsc::channel::<WeatherResult>();
+        let mut pending = Some(rx);
+        host.tick(start, |_| pending.take().expect("one fetch"));
+        assert_eq!(host.poll_deadline(start), Some(start + WEATHER_POLL_INTERVAL));
+        host.tick(start + WEATHER_POLL_INTERVAL, |_| unreachable!("fetch in flight"));
+        assert_eq!(host.state, WeatherState::Loading);
+        assert!(host.poll_deadline(start).is_some());
+        tx.send(Ok(WeatherSnapshot {
+            location: location(),
+            temperature_c: 9,
+            condition: WeatherCondition::Clear,
+            days: Vec::new(),
+            fetched_at: 1,
+        }))
+        .unwrap();
+        assert!(host.tick(start + WEATHER_POLL_INTERVAL, |_| unreachable!()));
+        assert!(matches!(host.state, WeatherState::Ready(_)));
+        assert_eq!(host.poll_deadline(start), None, "idle again after the result");
     }
 
     #[test]
@@ -369,6 +421,22 @@ mod tests {
     }
 
     #[test]
+    fn location_search_in_flight_until_its_result_is_polled() {
+        let mut search = LocationSearch::default();
+        assert!(!search.in_flight());
+        search.query = "Berlin".to_owned();
+        let (tx, rx) = mpsc::channel::<SearchResult>();
+        let mut pending = Some(rx);
+        assert!(search.submit(|_| pending.take().expect("one search")));
+        assert!(search.in_flight(), "helper loop must keep polling while a search runs");
+        assert!(!search.poll(), "no result yet");
+        assert!(search.in_flight());
+        tx.send(Ok(vec![location()])).unwrap();
+        assert!(search.poll());
+        assert!(!search.in_flight());
+    }
+
+    #[test]
     fn location_search_reports_empty_and_failed_results() {
         let mut search = LocationSearch::default();
         search.query = "zzz".to_owned();
@@ -412,6 +480,7 @@ mod flow_tests {
     use flamewm_shell_core::weather::{DayForecast, TemperatureUnit, WeatherCondition, WeatherSnapshot};
     use flamewm_ui_x11::test_support::RecordingUiDoc;
     use flamewm_ui_x11::UiColor;
+    use super::test_support::answer;
     use std::cell::Cell;
 
     const VEIL: UiColor = UiColor { r: 0, g: 0, b: 0, a: 255 };
@@ -443,13 +512,6 @@ mod flow_tests {
                 .collect(),
             fetched_at: 1,
         }
-    }
-
-    /// A worker that already finished with `result`; no socket, no thread.
-    fn answer(result: WeatherResult) -> mpsc::Receiver<WeatherResult> {
-        let (tx, rx) = mpsc::channel();
-        tx.send(result).unwrap();
-        rx
     }
 
     /// Starts one fetch answered by `result`, then polls it on the next tick.

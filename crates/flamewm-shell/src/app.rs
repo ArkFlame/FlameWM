@@ -12,7 +12,7 @@ use flamewm_shell::start::StartCategory;
 use flamewm_shell::taskbar::tasks::icon_geometry::{
     self, IconGeometrySink, IconGeometryTracker, IconRect,
 };
-use flamewm_shell::{projection, start, ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces};
+use flamewm_shell::{projection, ShellControl, ShellRuntime, ShellSnapshot, ShellSurfaces};
 use flamewm_shell_core::clock::ClockDateTracker;
 use flamewm_shell_core::popup::PopupRefusal;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
@@ -69,7 +69,6 @@ macro_rules! shell_stage {
         __point.start()
     }};
 }
-pub(crate) use shell_stage;
 
 /// Popup measurement refusal: layout pending, anchor pending, or transient
 /// pointer-grab contention. Callers swallow these (state untouched).
@@ -127,6 +126,17 @@ pub(crate) struct ShellLoop {
     pub(crate) weather: flamewm_shell::weather_host::WeatherHost,
     /// Set when the tray or the popup host must receive the current weather feed.
     pub(crate) weather_feed_pending: bool,
+    /// Automatic location lookup cadence (opt-in via `autoLocationEnabled`).
+    pub(crate) auto_lookup: flamewm_shell::weather_auto::AutoLookup,
+    /// The reactor's single shared wake slot; the tick publishes the earliest pending deadline.
+    pub(crate) wake: Option<flamewm_reactor::WakeDeadline>,
+    /// Zone this process applied from the automatic time zone; `None` means the system zone.
+    pub(crate) auto_time_zone_applied: Option<String>,
+    /// Set when the process zone changed; the clock and date are re-projected on the next turn.
+    pub(crate) time_zone_changed: bool,
+    /// Second clock projection after a zone change: chrono may still serve the old zone
+    /// for up to a second, so the first projection can be stale.
+    pub(crate) zone_settle_at: Option<std::time::Instant>,
     /// Set when the icon theme changed: open Start re-projects, and the next
     /// Start open re-requests its icons under the new theme.
     pub(crate) start_icons_stale: bool,
@@ -179,6 +189,11 @@ impl ShellLoop {
             osd: flamewm_shell::osd::OsdController::default(),
             weather: flamewm_shell::weather_host::WeatherHost::new(),
             weather_feed_pending: true,
+            auto_lookup: flamewm_shell::weather_auto::AutoLookup::default(),
+            wake: None,
+            auto_time_zone_applied: None,
+            time_zone_changed: false,
+            zone_settle_at: None,
             start_icons_stale: false,
         }
     }
@@ -234,8 +249,103 @@ impl ShellLoop {
         {
             self.close_quick_control_nonfatal();
         }
+        let desired_zone = flamewm_shell::weather_auto::desired_time_zone(&snapshot);
         self.settings_cache = Some(snapshot);
         self.settings_projection_pending = true;
+        self.set_auto_time_zone(desired_zone);
+        // This runs on the settings signal, not an X event: wake the loop so the tick
+        // projects the change now instead of at the next pointer or clock event.
+        self.request_tick();
+    }
+
+    /// Makes the reactor return from dispatch immediately so the next tick runs.
+    fn request_tick(&self) {
+        if let Some(wake) = &self.wake {
+            wake.set(Some(std::time::Instant::now()));
+        }
+    }
+
+    /// Makes `desired` the process zone when it differs from what this shell applied. `None`
+    /// restores the system zone. A failed zone file leaves the current zone unchanged.
+    fn set_auto_time_zone(&mut self, desired: Option<String>) {
+        if desired == self.auto_time_zone_applied {
+            return;
+        }
+        match desired {
+            Some(zone) => {
+                if !flamewm_shell::weather_auto::apply_time_zone(&zone) {
+                    eprintln!("flamewm-shell: time zone not applied (zone file missing or invalid)");
+                    return;
+                }
+                self.auto_time_zone_applied = Some(zone);
+            }
+            None => {
+                flamewm_shell::weather_auto::restore_system_time_zone();
+                self.auto_time_zone_applied = None;
+            }
+        }
+        self.time_zone_changed = true;
+        self.zone_settle_at = Some(std::time::Instant::now() + ZONE_SETTLE);
+    }
+
+    /// Automatic location tick: one lookup on the cadence, then the fix is written as the
+    /// weather location and cached zone. Failures keep the last values and are not fatal.
+    fn tick_auto_location(&mut self) {
+        let Some(enabled) = self
+            .settings_cache
+            .as_ref()
+            .map(|s| flamewm_shell::weather_auto::flag(s, flamewm_shell::weather_auto::AUTO_LOCATION_KEY))
+        else {
+            return;
+        };
+        let online = self.shell.snapshot().system.network.availability
+            == flamewm_api::system::ServiceAvailability::Available;
+        let Some(result) = self.auto_lookup.tick(
+            std::time::Instant::now(),
+            enabled,
+            online,
+            flamewm_shell::weather_auto::spawn_ip_lookup,
+        ) else {
+            return;
+        };
+        match result {
+            Ok(fix) => self.apply_auto_fix(fix),
+            Err(error) => eprintln!("flamewm-shell: automatic location unavailable: {error:?}"),
+        }
+    }
+
+    fn apply_auto_fix(&mut self, fix: flamewm_shell::weather_auto::IpFix) {
+        use flamewm_shell::weather_auto as auto;
+        let Some(snapshot) = self.settings_cache.clone() else {
+            return;
+        };
+        // Re-check: a manual city pick may have turned automatic location off meanwhile.
+        if !auto::flag(&snapshot, auto::AUTO_LOCATION_KEY) {
+            return;
+        }
+        let current = flamewm_shell_core::weather::WeatherSettings::from_snapshot(&snapshot);
+        let mut changes: Vec<flamewm_api::settings::SettingsChange> =
+            auto::location_change(&current, &fix).into_iter().collect();
+        if let Some(zone) = fix.time_zone.as_ref() {
+            if snapshot.values.get(auto::AUTO_TIME_ZONE_KEY)
+                != Some(&SettingValue::Text(zone.clone()))
+            {
+                changes.push(flamewm_api::settings::SettingsChange {
+                    key: auto::AUTO_TIME_ZONE_KEY.to_owned(),
+                    value: Some(SettingValue::Text(zone.clone())),
+                });
+            }
+        }
+        if !changes.is_empty() {
+            self.submit(ControlRequest::ApplySettings(SettingsTransaction {
+                expected_revision: self.settings_revision,
+                changes,
+                reset_section: None,
+            }));
+        }
+        if let Some(zone) = fix.time_zone.filter(|_| auto::flag(&snapshot, auto::AUTO_TIME_ZONE_ENABLED_KEY)) {
+            self.set_auto_time_zone(Some(zone));
+        }
     }
 
     /// J07 nonblocking submit: enqueue onto the mutation queue and return
@@ -415,13 +525,12 @@ impl ShellLoop {
                         runtime.set_popup_backdrop(self.surfaces.task_menu, Some((opacity, blur)))?;
                     }
                     self.context_menu = Some(state.clone());
-                    let snapshot = self.shell.snapshot().clone();
                     let _measure = shell_stage!("shell.context.open.measure");
                     let _place = shell_stage!("shell.context.open.place");
                     let _prepare = shell_stage!("shell.context.open.prepare");
                     let opened = self
                         .surfaces
-                        .open_context_menu(runtime, &state, &snapshot)
+                        .open_context_menu(runtime, &state, self.shell.snapshot())
                         .map_err(UiBackendError::Renderer);
                     let _present = shell_stage!("shell.context.open.present");
                     shell_slow_note("context", started);
@@ -582,7 +691,7 @@ impl ShellLoop {
 
     pub(crate) fn project_network_secret(
         &self,
-        runtime: &mut SurfaceRuntime,
+        _runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
         // J07: the secret editor lives in the helper process; the parent
         // keeps the masked-length-free no-op so keyboard paths stay total.
@@ -606,10 +715,10 @@ impl ShellLoop {
         // already-projected document, so content must land before measure.
         // J07: only media projects in-process; helper kinds are unreachable
         // here (routed to the supervisor before this call).
-        let snapshot = self.shell.snapshot().clone();
+        let snapshot = self.shell.snapshot();
         match name {
             "media" => runtime.with_document(self.surfaces.media, |document| {
-                projection::project_media(document, &snapshot)
+                projection::project_media(document, snapshot)
             })?,
             _ => {}
         }
@@ -1012,15 +1121,17 @@ impl ShellLoop {
     /// changed domain owns.
     pub(crate) fn refresh_dynamic(&mut self, runtime: &mut SurfaceRuntime) {
         use flamewm_shell::runtime::ProjectionKind;
-        let mut changed = self.shell.reconcile_dirty();
+        let changed = self.shell.reconcile_dirty();
         // F10: display geometry change may arrive without a panels dirty
         // flag, so check generation/revision/geometry drift even when no
         // changed domain fired. Sync happens BEFORE next open/projection.
-        let mut snapshot = self.shell.snapshot().clone();
-        let resynced = self.resync_panel_geometry(runtime, &snapshot);
-        if resynced {
-            snapshot = self.shell.snapshot().clone();
-        }
+        // The drift check borrows the snapshot; clone only on the resync path.
+        let resynced = if self.panel_geometry_drifted(self.shell.snapshot()) {
+            let snapshot = self.shell.snapshot().clone();
+            self.resync_panel_geometry(runtime, &snapshot)
+        } else {
+            false
+        };
         if !changed.any() && !resynced {
             return;
         }
@@ -1042,7 +1153,7 @@ impl ShellLoop {
             self.network_secret.clear();
             self.network_secret_request_id = request_id;
         }
-        let mut snapshot = self.shell.snapshot().clone();
+        let snapshot = self.shell.snapshot().clone();
         let start_model = self.start_model.clone();
         let category = self.start_category;
         let query = self.start_query.clone();
@@ -1181,13 +1292,10 @@ impl ShellLoop {
     /// sync the placement context BEFORE the next open/projection,
     /// move_resize the panel native surface when geometry changed,
     /// then reproject the panel. Returns true when a resync happened.
-    pub(crate) fn resync_panel_geometry(
-        &mut self,
-        runtime: &mut SurfaceRuntime,
-        snapshot: &ShellSnapshot,
-    ) -> bool {
+    /// Pure drift check against a borrowed snapshot; no clone, no mutation.
+    fn panel_geometry_drifted(&self, snapshot: &ShellSnapshot) -> bool {
         let (display_generation, panels_revision) = self.surfaces.placement_generation();
-        let geometry_changed = snapshot.displays.generation != display_generation
+        snapshot.displays.generation != display_generation
             || snapshot.panels.revision != panels_revision
             || snapshot
                 .panels
@@ -1195,8 +1303,15 @@ impl ShellLoop {
                 .first()
                 .map(|panel| panel.geometry != self.surfaces.panel_geometry())
                 .unwrap_or(false)
-            || self.surfaces.output_scale_drifted(snapshot);
-        if !geometry_changed {
+            || self.surfaces.output_scale_drifted(snapshot)
+    }
+
+    pub(crate) fn resync_panel_geometry(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        snapshot: &ShellSnapshot,
+    ) -> bool {
+        if !self.panel_geometry_drifted(snapshot) {
             return false;
         }
         // Close popup/quick helper first so no open surface keeps a
@@ -1325,7 +1440,7 @@ impl ShellLoop {
         // with task states and a loader projected successfully.
         if self.task_icon_prime_armed {
             self.ensure_loader();
-            let snapshot = self.shell.snapshot().clone();
+            let snapshot = self.shell.snapshot();
             let task_state_count = flamewm_shell_core::task_visual_states_on_output(
                 &snapshot.panels,
                 &snapshot.windows,
@@ -1352,7 +1467,7 @@ impl ShellLoop {
                     let result = runtime.with_document(handle, |document| {
                         async_projection::project_panel_for_changed(
                             document,
-                            PanelView::first(&snapshot).with_items(items),
+                            PanelView::first(snapshot).with_items(items),
                             loader.as_deref_mut(),
                             icon_cache,
                             changed,
@@ -1380,7 +1495,14 @@ impl ShellLoop {
         // J07: nonblocking helper poll; restart is bounded, failures are
         // nonfatal diagnostics, the shell loop always survives.
         flamewm_shell::quick_controls::host::poll_supervisor_nonfatal(&mut self.quick_control);
-        let clock_fired = clock_due.swap(false, Ordering::Acquire);
+        self.tick_auto_location();
+        let settled = self
+            .zone_settle_at
+            .is_some_and(|at| std::time::Instant::now() >= at);
+        if settled {
+            self.zone_settle_at = None;
+        }
+        let clock_fired = clock_due.swap(false, Ordering::Acquire) | std::mem::take(&mut self.time_zone_changed) | settled;
         if clock_fired {
             let now = Local::now();
             let clock = self
@@ -1418,11 +1540,24 @@ impl ShellLoop {
             runtime.redraw_dirty()?;
         }
         self.tick_osd(runtime);
+        self.publish_wake(std::time::Instant::now());
         Ok(())
     }
 
-    pub(crate) fn attach_osd_wake(&mut self, wake: flamewm_reactor::WakeDeadline) {
-        self.osd.attach_wake(wake);
+    /// Wires the reactor wake slot. OSD, weather and auto-location share it, so the tick publishes
+    /// the earliest of their deadlines in one place (a per-owner set would clobber the other).
+    pub(crate) fn attach_wake(&mut self, wake: flamewm_reactor::WakeDeadline) {
+        self.wake = Some(wake);
+    }
+
+    fn publish_wake(&self, now: std::time::Instant) {
+        let Some(wake) = &self.wake else { return };
+        wake.set(earliest_wake([
+            self.osd.deadline(),
+            self.weather.poll_deadline(now),
+            self.auto_lookup.poll_deadline(now),
+            self.zone_settle_at,
+        ]));
     }
 
     /// Volume OSD: shows the default endpoint's snapshot level when it changes
@@ -1518,14 +1653,8 @@ impl ShellLoop {
                 .map(|value| format!("{value:?}"))
                 .unwrap_or_default()
         };
-        let wallpaper_path = match settings.values.get("wallpaper") {
-            Some(SettingValue::Text(value)) => value.clone(),
-            _ => String::new(),
-        };
-        let fit_name = match settings.values.get("wallpaperFit") {
-            Some(SettingValue::Text(value)) => value.clone(),
-            _ => String::new(),
-        };
+        let wallpaper_path = text_setting(settings, "wallpaper");
+        let fit_name = text_setting(settings, "wallpaperFit");
         let key = match runtime.surface_device_rect(self.surfaces.panel()) {
             Ok(rect) => flamewm_shell::surface_backdrop::CaptureKey {
                 wallpaper: text("wallpaper"),
@@ -1567,10 +1696,7 @@ impl ShellLoop {
     /// Root-sized wallpaper canvas the popup backdrop crops from, so a popup over the taskbar blurs the
     /// wallpaper like the taskbar does, not the dark bar. `None` falls back to a root capture.
     fn popup_wallpaper_canvas(&self, settings: &flamewm_api::settings::SettingsSnapshot) -> Option<(u32, u32, Vec<u8>)> {
-        let text = |key: &str| match settings.values.get(key) {
-            Some(SettingValue::Text(value)) => value.clone(),
-            _ => String::new(),
-        };
+        let text = |key: &str| text_setting(settings, key);
         let (width, height) = flamewm_ui_x11::backdrop::root_geometry().ok()?;
         let canvas = flamewm_shell::surface_backdrop::wallpaper_source(
             &text("wallpaper"),
@@ -1744,6 +1870,14 @@ fn quick_kind_shown(
     }
 }
 
+/// Text value of one setting, or empty when it is absent or not text.
+fn text_setting(settings: &SettingsSnapshot, key: &str) -> String {
+    match settings.values.get(key) {
+        Some(SettingValue::Text(value)) => value.clone(),
+        _ => String::new(),
+    }
+}
+
 /// Flat `taskbarStyle` / `taskbarFloating*` keys as the platform reads them (defaults match
 /// `ProductSettings::default()`).
 fn taskbar_frame(settings: &SettingsSnapshot) -> TaskbarFrame {
@@ -1855,8 +1989,30 @@ fn media_popup_must_close(system: &flamewm_api::system::SystemSnapshot, media_op
     media_open && !flamewm_shell::taskbar::status::media::project(system).visible
 }
 
+/// Chrono's local-zone cache refresh window (chrono 0.4.45 `local/unix.rs`).
+const ZONE_SETTLE: std::time::Duration = std::time::Duration::from_millis(1100);
+
+/// The single shared reactor wake slot takes the earliest pending owner deadline, or none.
+#[must_use]
+fn earliest_wake(
+    deadlines: [Option<std::time::Instant>; 4],
+) -> Option<std::time::Instant> {
+    deadlines.into_iter().flatten().min()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_wake_slot_takes_the_earliest_owner_deadline() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let soon = t0 + Duration::from_millis(100);
+        assert_eq!(super::earliest_wake([None, None, None, None]), None, "idle loop");
+        assert_eq!(super::earliest_wake([Some(t0), None, Some(soon), None]), Some(t0));
+        assert_eq!(super::earliest_wake([None, Some(soon), None, None]), Some(soon));
+        assert_eq!(super::earliest_wake([None, None, None, Some(soon)]), Some(soon));
+    }
+
     fn production_source() -> &'static str {
         include_str!("app.rs")
             .split_once("\n#[cfg(test)]\nmod tests")

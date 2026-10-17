@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::settings::SettingsSnapshot;
 use flamewm_api::Rect;
-use flamewm_reactor::WakeDeadline;
 use flamewm_ui_x11::{
     decode_document, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime,
     UiBackendError, UiDocumentAccess, UiTemplate,
@@ -184,20 +183,20 @@ impl Default for OsdState {
     }
 }
 
-/// Owns the single retained overlay surface and its coalescing state. The
-/// pending deadline is published to the reactor's wake slot, so the shell loop
-/// wakes exactly then; with no deadline the slot is `None` and the loop idles.
+/// Owns the single retained overlay surface and its coalescing state. The shell
+/// loop publishes [`OsdController::deadline`] to the reactor wake slot, so it
+/// wakes exactly then; with no deadline the loop idles.
 #[derive(Default)]
 pub struct OsdController {
     state: OsdState,
     surface: Option<SurfaceHandle>,
-    wake: Option<WakeDeadline>,
 }
 
 impl OsdController {
-    /// Wires the reactor wake slot. Without it the card hides on the next loop wake.
-    pub fn attach_wake(&mut self, wake: WakeDeadline) {
-        self.wake = Some(wake);
+    /// The pending hide deadline, if a card is showing.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.state.deadline()
     }
 
     /// Feeds one snapshot level, hides at the deadline, then re-arms the timer.
@@ -213,9 +212,7 @@ impl OsdController {
         now: Instant,
     ) -> Result<(), UiBackendError> {
         let result = self.observe(runtime, level, work, scale, settings, now);
-        let result = result.and_then(|()| self.expire(runtime, now));
-        self.publish_wake();
-        result
+        result.and_then(|()| self.expire(runtime, now))
     }
 
     fn observe(
@@ -267,13 +264,6 @@ impl OsdController {
         match self.surface {
             Some(surface) if self.state.expire(now) => runtime.hide(surface),
             _ => Ok(()),
-        }
-    }
-
-    /// Publishes the pending deadline to the reactor wake slot.
-    fn publish_wake(&self) {
-        if let Some(wake) = &self.wake {
-            wake.set(self.state.deadline());
         }
     }
 }
