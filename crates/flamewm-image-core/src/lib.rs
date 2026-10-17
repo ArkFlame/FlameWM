@@ -111,9 +111,7 @@ impl RgbaImage {
             return None;
         }
         let mut pixels = Vec::with_capacity(pixel_count * 4);
-        for chunk in rgb.chunks_exact(3) {
-            pixels.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
-        }
+        pixels.extend(rgb.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]));
         Some(Self {
             width,
             height,
@@ -224,22 +222,13 @@ pub fn decode_bytes_at(
 pub fn unpremultiply_swapped_to_rgba(premultiplied: &[u8]) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(premultiplied.len());
     for rgba in premultiplied.chunks_exact(4) {
-        let (r, g, b, a) = (
-            u16::from(rgba[0]),
-            u16::from(rgba[1]),
-            u16::from(rgba[2]),
-            u16::from(rgba[3]),
-        );
+        let a = u16::from(rgba[3]);
         if a == 0 {
             pixels.extend_from_slice(&[0, 0, 0, 0]);
-        } else {
-            pixels.extend_from_slice(&[
-                ((r * 255 + a / 2) / a).min(255) as u8,
-                ((g * 255 + a / 2) / a).min(255) as u8,
-                ((b * 255 + a / 2) / a).min(255) as u8,
-                a as u8,
-            ]);
+            continue;
         }
+        let straight = |c: u8| ((u16::from(c) * 255 + a / 2) / a).min(255) as u8;
+        pixels.extend_from_slice(&[straight(rgba[0]), straight(rgba[1]), straight(rgba[2]), a as u8]);
     }
     pixels
 }
