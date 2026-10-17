@@ -24,7 +24,6 @@ const DPMS_MODE_OFF: u16 = 3;
 const RTLD_NOW: c_int = 2;
 
 const KEYSYM_BACKSPACE: c_ulong = 0xff08;
-const KEYSYM_TAB: c_ulong = 0xff09;
 const KEYSYM_LINEFEED: c_ulong = 0xff0a;
 const KEYSYM_RETURN: c_ulong = 0xff0d;
 const KEYSYM_ESCAPE: c_ulong = 0xff1b;
@@ -326,21 +325,17 @@ impl Session {
         ok
     }
 
-    fn release(&mut self) {
-        if self.grabbed {
-            // SAFETY: display is live until XCloseDisplay in Drop.
-            unsafe {
-                XUngrabKeyboard(self.display, CURRENT_TIME);
-                XFlush(self.display);
-            }
-            self.grabbed = false;
-        }
-    }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.release();
+        if self.grabbed {
+            // SAFETY: display is live until XCloseDisplay below.
+            unsafe {
+                XUngrabKeyboard(self.display, CURRENT_TIME);
+                XFlush(self.display);
+            }
+        }
         // SAFETY: the connection was opened by `open` and is closed exactly once.
         unsafe {
             XCloseDisplay(self.display);
@@ -378,7 +373,6 @@ unsafe fn decode_key(display: *mut Display, event: &XKeyEvent) -> Option<Key> {
         KEYSYM_RETURN | KEYSYM_KP_ENTER | KEYSYM_LINEFEED => Some(Key::Enter),
         KEYSYM_BACKSPACE => Some(Key::Backspace),
         KEYSYM_ESCAPE => Some(Key::Escape),
-        KEYSYM_TAB => None,
         KEYSYM_F1..=KEYSYM_F4 => Some(Key::Function((keysym - KEYSYM_F1) as u8 + 1)),
         0x20..=0x7e | 0xa0..=0xff => char::from_u32(keysym as u32).map(Key::Char),
         KEYSYM_UNICODE_BASE..=0x0110_ffff => {
