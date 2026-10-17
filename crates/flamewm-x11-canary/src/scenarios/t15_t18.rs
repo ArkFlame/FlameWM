@@ -99,6 +99,27 @@ fn frame_matches(frame: &crate::WinInfo, geometry: (i32, i32, u32, u32)) -> bool
         && u32::from(frame.height) == geometry.3
 }
 
+fn geom_of(frame: &crate::WinInfo) -> (i32, i32, u32, u32) {
+    (i32::from(frame.x), i32::from(frame.y), u32::from(frame.width), u32::from(frame.height))
+}
+
+fn clamp_i16(value: i32) -> i16 {
+    value.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+}
+
+fn configure_size(canary: &crate::Canary, window: u32, width: u16, height: u16) -> Option<()> {
+    canary
+        .conn
+        .configure_window(
+            window,
+            &ConfigureWindowAux::new().width(u32::from(width)).height(u32::from(height)),
+        )
+        .ok()?
+        .check()
+        .ok()?;
+    canary.conn.flush().ok()
+}
+
 fn t17_geometry(frame: &crate::WinInfo) -> String {
     format!("{}x{}+{}+{}", frame.width, frame.height, frame.x, frame.y)
 }
@@ -364,6 +385,16 @@ fn t17_failure(
     )
 }
 
+fn t17_setup_failure(
+    canary: &crate::Canary,
+    row: &str,
+    stage: &str,
+    client_id: u32,
+    frame_id: u32,
+) -> (bool, String) {
+    (false, t17_failure(canary, row, stage, client_id, frame_id, "setup_failed", None, true))
+}
+
 fn t17_restore_diagnostic(
     canary: &crate::Canary,
     client_id: u32,
@@ -499,18 +530,7 @@ fn establish_t17_baseline(
     let frame = input_surface(canary, &client)?;
     let (width, height) = t17_baseline_size(&client, &frame, work_area);
     if client.width > width || client.height > height {
-        canary
-            .conn
-            .configure_window(
-                client.id,
-                &ConfigureWindowAux::new()
-                    .width(u32::from(width))
-                    .height(u32::from(height)),
-            )
-            .ok()?
-            .check()
-            .ok()?;
-        canary.conn.flush().ok()?;
+        configure_size(canary, client.id, width, height)?;
         if !wait_until(WAIT_MS, || {
             canary
                 .by_id(client.id)
@@ -569,18 +589,7 @@ fn normalize_t17_baseline(
     let client = canary.by_id(target.id)?;
     let _frame = input_surface(canary, &client)?;
     if client.width != baseline.client.width || client.height != baseline.client.height {
-        canary
-            .conn
-            .configure_window(
-                client.id,
-                &ConfigureWindowAux::new()
-                    .width(u32::from(baseline.client.width))
-                    .height(u32::from(baseline.client.height)),
-            )
-            .ok()?
-            .check()
-            .ok()?;
-        canary.conn.flush().ok()?;
+        configure_size(canary, client.id, baseline.client.width, baseline.client.height)?;
         if !wait_until(WAIT_MS, || {
             canary.by_id(client.id).is_some_and(|current| {
                 current.width == baseline.client.width && current.height == baseline.client.height
@@ -591,15 +600,7 @@ fn normalize_t17_baseline(
     }
     let client = canary.by_id(target.id)?;
     let frame = input_surface(canary, &client)?;
-    if !frame_matches(
-        &frame,
-        (
-            i32::from(baseline.frame.x),
-            i32::from(baseline.frame.y),
-            u32::from(baseline.frame.width),
-            u32::from(baseline.frame.height),
-        ),
-    ) {
+    if !frame_matches(&frame, geom_of(&baseline.frame)) {
         if !xtest_drag_path(canary, title(&frame), title(&baseline.frame), 1, 8) {
             return None;
         }
@@ -608,15 +609,8 @@ fn normalize_t17_baseline(
                 .by_id(target.id)
                 .and_then(|current| input_surface(canary, &current))
                 .is_some_and(|current| {
-                    frame_matches(
-                        &current,
-                        (
-                            i32::from(baseline.frame.x),
-                            i32::from(baseline.frame.y),
-                            u32::from(baseline.frame.width),
-                            u32::from(baseline.frame.height),
-                        ),
-                    ) && current.width == baseline.frame.width
+                    frame_matches(&current, geom_of(&baseline.frame))
+                        && current.width == baseline.frame.width
                         && current.height == baseline.frame.height
                 })
         }) {
@@ -627,15 +621,7 @@ fn normalize_t17_baseline(
     let frame = input_surface(canary, &client)?;
     (client.width == baseline.client.width
         && client.height == baseline.client.height
-        && frame_matches(
-            &frame,
-            (
-                i32::from(baseline.frame.x),
-                i32::from(baseline.frame.y),
-                u32::from(baseline.frame.width),
-                u32::from(baseline.frame.height),
-            ),
-        ))
+        && frame_matches(&frame, geom_of(&baseline.frame)))
     .then_some((client, frame))
 }
 
@@ -789,10 +775,7 @@ pub fn run_t15(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             ),
         );
     };
-    let destination = (
-        area.0.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-        (area.1 + (area.3 / 2) as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-    );
+    let destination = (clamp_i16(area.0), clamp_i16(area.1 + (area.3 / 2) as i32));
     let start = title(&frame);
     let held = hold_drag(canary, start, destination, 8);
     let held_preview = held && wait_until(WAIT_MS, || preview(canary).is_some());
@@ -964,19 +947,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .then(|| establish_t17_baseline(canary, &client, area))
         .flatten()
     else {
-        return (
-            false,
-            t17_failure(
-                canary,
-                &row,
-                "move",
-                client_id,
-                frame_id,
-                "setup_failed",
-                None,
-                true,
-            ),
-        );
+        return t17_setup_failure(canary, &row, "move", client_id, frame_id);
     };
     let initial_client = baseline.client.clone();
     let initial_frame = baseline.frame.clone();
@@ -1025,19 +996,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Ok((resize_reset, _resize_client, resize_frame)) =
         t17_stage_start(canary, client_id, &baseline)
     else {
-        return (
-            false,
-            t17_failure(
-                canary,
-                &row,
-                "resize",
-                client_id,
-                frame_id,
-                "setup_failed",
-                None,
-                true,
-            ),
-        );
+        return t17_setup_failure(canary, &row, "resize", client_id, frame_id);
     };
     let resize_from = bottom_right(&resize_frame);
     let resize_to = t17_resize_target(&resize_frame, baseline_area);
@@ -1078,27 +1037,12 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let Ok((max_reset, max_client, max_before)) = t17_stage_start(canary, client_id, &baseline)
     else {
-        return (
-            false,
-            t17_failure(
-                canary,
-                &row,
-                "maximize",
-                client_id,
-                frame_id,
-                "setup_failed",
-                None,
-                true,
-            ),
-        );
+        return t17_setup_failure(canary, &row, "maximize", client_id, frame_id);
     };
     let max_from = title(&max_before);
     let max_to = (
-        (baseline_area.0 + (baseline_area.2 / 2) as i32)
-            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-        baseline_area
-            .1
-            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+        clamp_i16(baseline_area.0 + (baseline_area.2 / 2) as i32),
+        clamp_i16(baseline_area.1),
     );
     let max_sent = hold_drag(canary, max_from, max_to, 8) && release(canary, max_to);
     let maximized_seen = max_sent && wait_until(WAIT_MS, || maximized_both(canary, client_id));
@@ -1134,14 +1078,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let max_state = wm_state(canary, client_id);
     let restore_from = title(&max_frame);
     let restore_to = (
-        baseline_area
-            .0
-            .saturating_add((baseline_area.2 / 2) as i32)
-            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-        baseline_area
-            .1
-            .saturating_add((baseline_area.3 / 2) as i32)
-            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+        clamp_i16(baseline_area.0.saturating_add((baseline_area.2 / 2) as i32)),
+        clamp_i16(baseline_area.1.saturating_add((baseline_area.3 / 2) as i32)),
     );
     // Mirror the controller's maximized_restore_rect + plan_move path: the
     // release point is root-relative, while the restored size comes from the
@@ -1179,15 +1117,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .then(|| {
             wait_stable_frame(WAIT_MS, || {
                 canary.by_id(frame_id).filter(|frame| {
-                    frame_matches(
-                        frame,
-                        (
-                            i32::from(restore_expected.x),
-                            i32::from(restore_expected.y),
-                            u32::from(restore_expected.width),
-                            u32::from(restore_expected.height),
-                        ),
-                    ) && !maximized(canary, client_id)
+                    frame_matches(frame, geom_of(&restore_expected))
+                        && !maximized(canary, client_id)
                 })
             })
         })
@@ -1234,41 +1165,18 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             ),
         );
     };
-    let restore_geometry = frame_matches(
-        &restored_frame,
-        (
-            i32::from(restore_expected.x),
-            i32::from(restore_expected.y),
-            u32::from(restore_expected.width),
-            u32::from(restore_expected.height),
-        ),
-    );
+    let restore_geometry = frame_matches(&restored_frame, geom_of(&restore_expected));
     let restore_position =
         restored_frame.x == restore_expected.x && restored_frame.y == restore_expected.y;
     let restore_actual = t17_geometry(&restored_frame);
     let Ok((snap_reset, _snap_client, snap_frame)) = t17_stage_start(canary, client_id, &baseline)
     else {
-        return (
-            false,
-            t17_failure(
-                canary,
-                &row,
-                "snap",
-                client_id,
-                frame_id,
-                "setup_failed",
-                None,
-                true,
-            ),
-        );
+        return t17_setup_failure(canary, &row, "snap", client_id, frame_id);
     };
     let snap_from = title(&snap_frame);
     let snap_to = (
-        baseline_area
-            .0
-            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-        (baseline_area.1 + (baseline_area.3 / 2) as i32)
-            .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+        clamp_i16(baseline_area.0),
+        clamp_i16(baseline_area.1 + (baseline_area.3 / 2) as i32),
     );
     let snap_sent = xtest_drag_path(canary, snap_from, snap_to, 1, 8);
     let expected_snap = left_snap_geometry(baseline_area);
@@ -1306,19 +1214,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Ok((titlebar_reset, _titlebar_client, titlebar_initial_frame)) =
         t17_stage_start(canary, client_id, &baseline)
     else {
-        return (
-            false,
-            t17_failure(
-                canary,
-                &row,
-                "titlebar",
-                client_id,
-                frame_id,
-                "setup_failed",
-                None,
-                true,
-            ),
-        );
+        return t17_setup_failure(canary, &row, "titlebar", client_id, frame_id);
     };
     let title_from = title(&titlebar_initial_frame);
     let title_to = (
