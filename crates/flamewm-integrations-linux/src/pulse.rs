@@ -161,18 +161,7 @@ impl PulseAdapter {
         caller_generation: u64,
         caller_server_generation: u64,
     ) -> FlameResult<()> {
-        let snapshot = self.snapshot();
-        if snapshot.server_generation != caller_server_generation {
-            return Err(FlameError::stale("stale PulseAudio server generation"));
-        }
-        let endpoint_id = snapshot
-            .endpoints()
-            .iter()
-            .find(|endpoint| endpoint.kind == AudioEndpointKind::Sink && endpoint.name == sink_name)
-            .map(|endpoint| endpoint.id)
-            .ok_or_else(|| {
-                FlameError::new(ErrorCode::NotFound, "PulseAudio sink no longer exists")
-            })?;
+        let endpoint_id = self.sink_endpoint_id(sink_name, caller_server_generation)?;
         let intent = {
             let controller = lock(&self.controller);
             controller.set_volume(AudioVolumeAction {
@@ -247,18 +236,7 @@ impl PulseAdapter {
         caller_generation: u64,
         caller_server_generation: u64,
     ) -> FlameResult<()> {
-        if self.snapshot().server_generation != caller_server_generation {
-            return Err(FlameError::stale("stale PulseAudio server generation"));
-        }
-        let snapshot = self.snapshot();
-        let endpoint_id = snapshot
-            .endpoints()
-            .iter()
-            .find(|endpoint| endpoint.kind == AudioEndpointKind::Sink && endpoint.name == sink_name)
-            .map(|endpoint| endpoint.id)
-            .ok_or_else(|| {
-                FlameError::new(ErrorCode::NotFound, "PulseAudio sink no longer exists")
-            })?;
+        let endpoint_id = self.sink_endpoint_id(sink_name, caller_server_generation)?;
         let intent = {
             let controller = lock(&self.controller);
             controller.set_mute(AudioMuteAction {
@@ -384,6 +362,20 @@ impl PulseAdapter {
         })
     }
 
+    /// Resolves `sink_name` to its endpoint id in one snapshot, rejecting a stale server generation.
+    fn sink_endpoint_id(&self, sink_name: &str, caller_server_generation: u64) -> FlameResult<u32> {
+        let snapshot = self.snapshot();
+        if snapshot.server_generation != caller_server_generation {
+            return Err(FlameError::stale("stale PulseAudio server generation"));
+        }
+        snapshot
+            .endpoints()
+            .iter()
+            .find(|endpoint| endpoint.kind == AudioEndpointKind::Sink && endpoint.name == sink_name)
+            .map(|endpoint| endpoint.id)
+            .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "PulseAudio sink no longer exists"))
+    }
+
     /// Runs one queued write against a ready context while holding the mainloop lock.
     fn with_ready_context(
         &self,
@@ -506,6 +498,10 @@ fn install_context_locked(
     Ok(())
 }
 
+fn introspector(context_slot: &ContextSlot) -> Option<pulse::context::introspect::Introspector> {
+    context_slot.borrow().as_ref().map(Context::introspect)
+}
+
 fn context_state_changed(
     context_slot: &Weak<RefCell<Option<Context>>>,
     controller: &Arc<Mutex<PulseController>>,
@@ -535,7 +531,7 @@ fn context_state_changed(
                     |_| {},
                 );
             }
-            rearm_timer(timer);
+            restart_timer(timer, RETRY_TIMER_SEED);
             request_reconcile(
                 &Rc::downgrade(&context_slot),
                 controller,
@@ -564,12 +560,8 @@ fn request_reconcile(
     let Some(context_slot) = context_slot.upgrade() else {
         return;
     };
-    let introspector = {
-        let context_ref = context_slot.borrow();
-        let Some(context) = context_ref.as_ref() else {
-            return;
-        };
-        context.introspect()
+    let Some(introspector) = introspector(&context_slot) else {
+        return;
     };
     let sink_context = Rc::downgrade(&context_slot);
     let sink_controller = Arc::clone(controller);
@@ -611,12 +603,8 @@ fn request_audio_lists(
     let Some(context_slot) = context_slot.upgrade() else {
         return;
     };
-    let introspector = {
-        let context_ref = context_slot.borrow();
-        let Some(context) = context_ref.as_ref() else {
-            return;
-        };
-        context.introspect()
+    let Some(introspector) = introspector(&context_slot) else {
+        return;
     };
     let state = Arc::new(Mutex::new(ReconcileState {
         default_sink_name,
@@ -761,7 +749,7 @@ fn retry_connection(
     timer: &Weak<RefCell<Option<PulseTimer>>>,
 ) {
     if lock(controller).snapshot().availability == ServiceAvailability::Available {
-        rearm_timer(timer);
+        restart_timer(timer, RETRY_TIMER_SEED);
         return;
     }
     let generation = {
@@ -808,20 +796,15 @@ fn mark_disconnected(
     let Some(delay) = retry_delay else {
         return;
     };
-    let Some(timer) = timer.upgrade() else {
-        return;
-    };
-    if let Some(timer) = timer.borrow_mut().as_mut() {
-        timer.restart_rt(MonotonicTs::now() + Duration::from_millis(delay));
-    }
+    restart_timer(timer, Duration::from_millis(delay));
 }
 
-fn rearm_timer(timer: &Weak<RefCell<Option<PulseTimer>>>) {
+fn restart_timer(timer: &Weak<RefCell<Option<PulseTimer>>>, delay: Duration) {
     let Some(timer) = timer.upgrade() else {
         return;
     };
     if let Some(timer) = timer.borrow_mut().as_mut() {
-        timer.restart_rt(MonotonicTs::now() + RETRY_TIMER_SEED);
+        timer.restart_rt(MonotonicTs::now() + delay);
     }
 }
 
@@ -906,24 +889,16 @@ mod tests {
     #[test]
     fn stream_identity_maps_proplist_keys_and_sanitizes_text() {
         let mut proplist = pulse::proplist::Proplist::new().expect("proplist must allocate");
-        proplist
-            .set_str("application.name", "  Spotify\t")
-            .expect("set name");
-        proplist
-            .set_str("application.id", "com.spotify.Client")
-            .expect("set id");
-        proplist
-            .set_str("application.icon_name", "spotify-client")
-            .expect("set icon");
-        proplist
-            .set_str("application.process.binary", "spotify")
-            .expect("set binary");
-        proplist
-            .set_str("media.name", "\u{7}\n")
-            .expect("set media");
-        proplist
-            .set_str("media.title", "ignored")
-            .expect("set unrelated");
+        for (key, value) in [
+            ("application.name", "  Spotify\t"),
+            ("application.id", "com.spotify.Client"),
+            ("application.icon_name", "spotify-client"),
+            ("application.process.binary", "spotify"),
+            ("media.name", "\u{7}\n"),
+            ("media.title", "ignored"),
+        ] {
+            proplist.set_str(key, value).expect("set proplist key");
+        }
         let stream = stream_snapshot_from_proplist(4, 9, "Playback".to_owned(), 55, true, |key| {
             proplist.get_str(key)
         });
@@ -1020,13 +995,10 @@ mod tests {
         };
         *timer.borrow_mut() = Some(timer_event);
 
-        let entered = entered_rx.recv_timeout(Duration::from_millis(
-            BackoffConfig::default().initial_ms + 1_000,
-        ));
+        let wait = Duration::from_millis(BackoffConfig::default().initial_ms + 1_000);
+        let entered = entered_rx.recv_timeout(wait);
         let completed = if entered.is_ok() {
-            completed_rx.recv_timeout(Duration::from_millis(
-                BackoffConfig::default().initial_ms + 1_000,
-            ))
+            completed_rx.recv_timeout(wait)
         } else {
             Err(mpsc::RecvTimeoutError::Disconnected)
         };
