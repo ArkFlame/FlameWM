@@ -19,20 +19,16 @@ const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
 const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
 
 fn normalized_modifiers(state: u32) -> Vec<&'static str> {
-    let mut modifiers = Vec::with_capacity(4);
-    if state & CONTROL_MASK != 0 {
-        modifiers.push("Ctrl");
-    }
-    if state & SHIFT_MASK != 0 {
-        modifiers.push("Shift");
-    }
-    if state & MOD1_MASK != 0 {
-        modifiers.push("Alt");
-    }
-    if state & MOD4_MASK != 0 {
-        modifiers.push("Super");
-    }
-    modifiers
+    [
+        (CONTROL_MASK, "Ctrl"),
+        (SHIFT_MASK, "Shift"),
+        (MOD1_MASK, "Alt"),
+        (MOD4_MASK, "Super"),
+    ]
+    .into_iter()
+    .filter(|(mask, _)| state & mask != 0)
+    .map(|(_, name)| name)
+    .collect()
 }
 
 fn canonical_key_name(symbol: u64) -> Cow<'static, str> {
