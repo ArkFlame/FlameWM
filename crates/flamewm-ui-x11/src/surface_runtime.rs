@@ -119,14 +119,6 @@ pub struct SurfaceRuntime {
     /// Retained scroll offsets keyed by (surface, node identity). Survives
     /// relayout; pruned when nodes disappear.
     scroll_offsets: HashMap<(u64, u32), flamewm_render_core::ScrollState>,
-    thumb_drag: Option<ThumbDrag>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ThumbDrag {
-    surface: u64,
-    node: u32,
-    horizontal: bool,
 }
 
 impl SurfaceRuntime {
@@ -134,7 +126,6 @@ impl SurfaceRuntime {
         Ok(Self {
             controller: SurfaceController::new().map_err(UiBackendError::Renderer)?,
             scroll_offsets: HashMap::new(),
-            thumb_drag: None,
         })
     }
     pub fn create_surface(
