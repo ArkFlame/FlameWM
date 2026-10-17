@@ -185,24 +185,7 @@ pub struct ExternalDrawableTarget {
 
 impl Drop for ExternalDrawableTarget {
     fn drop(&mut self) {
-        if self.session.is_null() || self.image_cache.is_empty() {
-            // Keep the image gauge truthful even when there is nothing to free.
-            if self.image_cache.is_empty() {
-                refresh_image_gauge(0);
-            }
-            return;
-        }
-        let display = unsafe { (*self.session).display };
-        for (_, cached) in self.image_cache.drain() {
-            if cached.pixmap != 0 {
-                unsafe {
-                    self.allocator
-                        .free_pixmap(display, cached.pixmap, cached.bytes)
-                };
-            }
-        }
-        self.image_lru.clear();
-        refresh_image_gauge(0);
+        self.free_all_images();
     }
 }
 
@@ -380,29 +363,33 @@ impl ExternalDrawableTarget {
     }
 
     pub fn invalidate_image_cache(&mut self) {
-        if self.session.is_null() {
-            self.image_cache.clear();
-            self.image_lru.clear();
-            refresh_image_gauge(0);
-            return;
-        }
-        let display = unsafe { (*self.session).display };
-        for (_, cached) in self.image_cache.drain() {
-            if cached.pixmap != 0 {
-                unsafe {
-                    self.allocator
-                        .free_pixmap(display, cached.pixmap, cached.bytes)
-                };
-            }
-        }
-        self.image_lru.clear();
-        refresh_image_gauge(self.image_cache_bytes() as u64);
+        self.free_all_images();
     }
 
-    /// MRU touch for the image LRU: hit moves `key` to the back (newest).
-    /// Pure and unit-testable without X.
-    fn image_lru_touch(&mut self, key: ExternalImageKey) {
-        image_lru_touch(&mut self.image_lru, key);
+    /// Drop every cached pixmap (freed when a session is bound), clear the
+    /// LRU, and zero the gauge.
+    fn free_all_images(&mut self) {
+        let display = if self.session.is_null() {
+            ptr::null_mut()
+        } else {
+            unsafe { (*self.session).display }
+        };
+        let cache = std::mem::take(&mut self.image_cache);
+        for (_, cached) in cache {
+            self.free_image(display, cached);
+        }
+        self.image_lru.clear();
+        refresh_image_gauge(0);
+    }
+
+    /// Checked free of one cached pixmap; no-op without a display.
+    fn free_image(&mut self, display: *mut Display, cached: ExternalCachedImage) {
+        if cached.pixmap != 0 && !display.is_null() {
+            unsafe {
+                self.allocator
+                    .free_pixmap(display, cached.pixmap, cached.bytes)
+            };
+        }
     }
 
     /// Evict oldest entries via the allocator until within both caps.
@@ -415,12 +402,7 @@ impl ExternalDrawableTarget {
                 break;
             };
             if let Some(cached) = self.image_cache.remove(&oldest) {
-                if cached.pixmap != 0 && !display.is_null() {
-                    unsafe {
-                        self.allocator
-                            .free_pixmap(display, cached.pixmap, cached.bytes)
-                    };
-                }
+                self.free_image(display, cached);
             }
         }
         refresh_image_gauge(self.image_cache_bytes() as u64);
@@ -568,7 +550,7 @@ impl ExternalDrawableTarget {
         let mut built: Option<Vec<u32>> = None;
         let pixmap = match self.image_cache.get(&key).copied() {
             Some(cached) => {
-                self.image_lru_touch(key);
+                image_lru_touch(&mut self.image_lru, key);
                 cached.pixmap
             }
             None => {
@@ -587,9 +569,7 @@ impl ExternalDrawableTarget {
                     }
                 };
                 let words = argb();
-                if let Err(error) =
-                    upload_argb32(view_display, view_gc, fresh, visual, &words, w, h)
-                {
+                if let Err(error) = upload_argb32(view_display, fresh, visual, &words, w, h) {
                     unsafe { self.allocator.free_pixmap(view_display, fresh, bytes) };
                     return Err(error);
                 }
@@ -601,7 +581,7 @@ impl ExternalDrawableTarget {
                         bytes,
                     },
                 );
-                self.image_lru_touch(key);
+                image_lru_touch(&mut self.image_lru, key);
                 self.enforce_image_limits(view_display);
                 // The fresh pixmap may itself have been evicted under memory
                 // pressure if the single entry exceeds the byte cap; in that
@@ -688,13 +668,11 @@ impl<'a> NativeDrawableRenderer<'a> {
     /// Measure text width in device pixels using the core font fallback.
     /// Returns an estimate when Xft measurement is unavailable.
     pub fn text_measure(&mut self, text: &str, size: f32) -> (f32, f32) {
-        let height = (size.max(1.0) * 1.30).round();
         if unsafe { self.app.font_for_size_pub(size) }.is_some() {
             // Core-font measurement needs the raw XFontStruct pointer, which
             // stays inside X11App; use the layout-compatible estimate here.
         }
-        // Estimate fallback: 0.58em per char (matches layout measure).
-        ((text.chars().count() as f32 * size * 0.58).round(), height)
+        external_text_measure(text, size)
     }
 
     /// Draw text at device-pixel (x, baseline y) via Xft when available.
@@ -922,10 +900,8 @@ pub(crate) fn match_argb32_visual(display: *mut Display, screen: i32) -> Option<
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn upload_argb32(
     display: *mut Display,
-    gc: GC,
     pixmap: Pixmap,
     visual: *mut Visual,
     argb: &[u32],
@@ -957,7 +933,6 @@ fn upload_argb32(
         XFreeGC(display, pixmap_gc);
     };
     unsafe { XDestroyImage(ximage) };
-    let _ = gc;
     Ok(())
 }
 
