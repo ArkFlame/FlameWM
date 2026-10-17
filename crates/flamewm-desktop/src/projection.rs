@@ -391,15 +391,23 @@ fn apply_raster(
     raster: Rgba8Raster,
 ) -> Result<(), String> {
     let selected = icon_semantic(kind);
-    replace_image(
-        document,
+    document.image_rgba8(
         &format!("desktop-glyph-{index}-{selected}"),
         runtime_image(raster),
     )?;
+    set_glyph_visibility(document, index, Some(selected))
+}
+
+/// Shows only the glyph named by `selected`; `None` hides every glyph of the slot.
+fn set_glyph_visibility(
+    document: &mut impl UiDocumentAccess,
+    index: usize,
+    selected: Option<&str>,
+) -> Result<(), String> {
     for icon_kind in ICON_KINDS {
         document.visible(
             &format!("desktop-glyph-{index}-{icon_kind}"),
-            icon_kind == selected,
+            Some(icon_kind) == selected,
         )?;
     }
     Ok(())
@@ -420,9 +428,7 @@ pub fn project_item(
 pub fn clear_item(document: &mut impl UiDocumentAccess, index: usize) -> Result<(), String> {
     let item_id = format!("desktop-item-{index}");
     document.visible(&item_id, false)?;
-    for icon_kind in ICON_KINDS {
-        document.visible(&format!("desktop-glyph-{index}-{icon_kind}"), false)?;
-    }
+    set_glyph_visibility(document, index, None)?;
     project_item_label(document, index, "")
 }
 
@@ -433,19 +439,15 @@ pub fn project_drag_ghost_icon(
     icon_override: Option<&str>,
 ) -> Result<(), String> {
     let key = ParallelIconService::icon_key(kind, icon_override);
-    if let Some(raster) = icons.cached(&key) {
-        replace_image(document, "desktop-drag-ghost-icon", runtime_image(raster))?;
-        document.visible("desktop-drag-ghost-icon", true)?;
-        return Ok(());
-    }
     // Miss: Flame fallback now, HIGH request queued, drain replaces it.
-    replace_image(
-        document,
-        "desktop-drag-ghost-icon",
-        runtime_image(flame_fallback_raster()),
-    )?;
+    let cached = icons.cached(&key);
+    let miss = cached.is_none();
+    let raster = cached.unwrap_or_else(flame_fallback_raster);
+    document.image_rgba8("desktop-drag-ghost-icon", runtime_image(raster))?;
     document.visible("desktop-drag-ghost-icon", true)?;
-    icons.request_high(key);
+    if miss {
+        icons.request_high(key);
+    }
     Ok(())
 }
 
@@ -516,16 +518,8 @@ pub fn project_item_label(
     label: &str,
 ) -> Result<(), String> {
     let [first, second] = desktop_label_lines(label, LABEL_WIDTH_PX, LABEL_FONT_SIZE_PX);
-    set_line_text(document, &format!("desktop-label-{index}-line-1"), first)?;
-    set_line_text(document, &format!("desktop-label-{index}-line-2"), second)
-}
-
-fn set_line_text(
-    document: &mut impl UiDocumentAccess,
-    id: &str,
-    text: String,
-) -> Result<(), String> {
-    document.text(id, text)
+    document.text(&format!("desktop-label-{index}-line-1"), first)?;
+    document.text(&format!("desktop-label-{index}-line-2"), second)
 }
 
 fn icon_semantic(kind: DesktopItemKind) -> &'static str {
@@ -555,14 +549,6 @@ fn runtime_image(raster: Rgba8Raster) -> RuntimeImage {
         height: raster.height,
         pixels: raster.pixels,
     }
-}
-
-fn replace_image(
-    document: &mut impl UiDocumentAccess,
-    id: &str,
-    image: RuntimeImage,
-) -> Result<(), String> {
-    document.image_rgba8(id, image)
 }
 
 #[cfg(test)]
@@ -672,18 +658,26 @@ mod tests {
         assert_ne!(icon_semantic(DesktopItemKind::Directory), "home");
     }
 
-    #[test]
-    fn file_item_semantic_icon_is_packaged_document_not_brand_fallback() {
-        use std::path::Path;
-        let packaged_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let packaged_root = packaged_root.canonicalize().expect("workspace root");
+    /// Resolver over the workspace packaged assets with no user icon data.
+    fn workspace_resolver() -> (PathBuf, IconResolver) {
+        let packaged_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("workspace root");
         let missing_data = std::env::temp_dir().join("flamewm-projection-no-such-data-dir");
-        let mut resolver = IconResolver::new(
+        let resolver = IconResolver::new(
             packaged_root.clone(),
             vec!["hicolor".to_owned()],
             vec![missing_data],
             0,
         );
+        (packaged_root, resolver)
+    }
+
+    #[test]
+    fn file_item_semantic_icon_is_packaged_document_not_brand_fallback() {
+        use std::path::Path;
+        let (packaged_root, mut resolver) = workspace_resolver();
         let name = icon_name(DesktopItemKind::File);
         let raster = resolver
             .prepare_semantic(name, IconSize::new(ICON_TILE_PX, ICON_TILE_PX))
@@ -715,17 +709,7 @@ mod tests {
     #[test]
     fn directory_item_icon_resolves_to_packaged_folder_not_document_edit() {
         use std::path::Path;
-        let packaged_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("workspace root");
-        let missing_data = std::env::temp_dir().join("flamewm-projection-no-such-data-dir");
-        let mut resolver = IconResolver::new(
-            packaged_root.clone(),
-            vec!["hicolor".to_owned()],
-            vec![missing_data],
-            0,
-        );
+        let (packaged_root, mut resolver) = workspace_resolver();
         let name = icon_name(DesktopItemKind::Directory);
         assert_eq!(name, "folder");
         let raster = resolver
@@ -992,6 +976,7 @@ mod tests {
         assert_eq!(rename, menu);
     }
 
+    #[derive(Default)]
     struct VisibilityProbe {
         hidden: Vec<String>,
         shown: Vec<String>,
@@ -1012,10 +997,7 @@ mod tests {
             Some(SettingValue::Text(String::new())),
             Some(SettingValue::Text("custom.webp".to_owned())),
         ] {
-            let mut probe = VisibilityProbe {
-                hidden: Vec::new(),
-                shown: Vec::new(),
-            };
+            let mut probe = VisibilityProbe::default();
             project_background(&mut probe, wallpaper.as_ref(), &image).expect("project image");
             assert!(probe
                 .shown
@@ -1024,10 +1006,7 @@ mod tests {
             assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
         }
 
-        let mut reset = VisibilityProbe {
-            hidden: Vec::new(),
-            shown: Vec::new(),
-        };
+        let mut reset = VisibilityProbe::default();
         project_background(
             &mut reset,
             Some(&SettingValue::Text(String::new())),
@@ -1149,10 +1128,7 @@ mod tests {
 
     #[test]
     fn transient_visibility_hides_all_transient_nodes_before_first_paint() {
-        let mut probe = VisibilityProbe {
-            hidden: Vec::new(),
-            shown: Vec::new(),
-        };
+        let mut probe = VisibilityProbe::default();
         initialize_transient_visibility(&mut probe).expect("hide transients");
         for id in TRANSIENT_HIDDEN_IDS {
             assert!(probe.hidden.contains(&id.to_owned()), "hides {id}");
@@ -1214,10 +1190,7 @@ mod tests {
     #[test]
     fn entry_menu_is_transient_and_topmost_over_items() {
         // Menu surfaces start hidden before first paint (no flash).
-        let mut probe = VisibilityProbe {
-            hidden: Vec::new(),
-            shown: Vec::new(),
-        };
+        let mut probe = VisibilityProbe::default();
         initialize_transient_visibility(&mut probe).expect("hide transients");
         for id in ["desktop-menu", "desktop-entry-menu", "sticky-menu"] {
             assert!(probe.hidden.contains(&id.to_owned()), "hides {id}");
@@ -1259,20 +1232,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn apply_icon_theme_installs_requested_chain_and_bumps_generation() {
-        let mut icons = ParallelIconService::spawn(
-            std::env::temp_dir().join("flamewm-projection-apply-theme-no-such-root"),
-        );
-        let before = THEME_GENERATION.load(Ordering::Acquire);
+    /// Polls `apply_icon_theme` until the requested chain is installed.
+    fn await_icon_theme(icons: &mut ParallelIconService, theme: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !icons.apply_icon_theme("flame-apply-no-such-theme") {
+        while !icons.apply_icon_theme(theme) {
             assert!(
                 std::time::Instant::now() < deadline,
                 "requested icon theme must install within deadline"
             );
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn apply_icon_theme_installs_requested_chain_and_bumps_generation() {
+        let mut icons = ParallelIconService::spawn(
+            std::env::temp_dir().join("flamewm-projection-apply-theme-no-such-root"),
+        );
+        let before = THEME_GENERATION.load(Ordering::Acquire);
+        await_icon_theme(&mut icons, "flame-apply-no-such-theme");
         assert!(THEME_GENERATION.load(Ordering::Acquire) > before);
         assert_eq!(
             icons.service.shared_index().theme_names,
@@ -1288,14 +1266,7 @@ mod tests {
         let mut icons = ParallelIconService::spawn(
             std::env::temp_dir().join("flamewm-projection-watch-after-apply-no-such-root"),
         );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !icons.apply_icon_theme("flame-watch-after-apply-no-such-theme") {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "requested icon theme must install within deadline"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
+        await_icon_theme(&mut icons, "flame-watch-after-apply-no-such-theme");
         for _ in 0..3 {
             icons.refresh_theme();
             assert!(icons.apply_icon_theme("flame-watch-after-apply-no-such-theme"));
