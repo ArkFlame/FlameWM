@@ -406,13 +406,10 @@ impl NetworkManagerProvider {
             })
             .flatten();
         self.status.snapshot.label = header_label_for(connected, !active.is_empty());
-        if let Some(ap) = connected {
-            self.status.snapshot.strength_percent = ap.strength_percent;
-        } else {
-            // Nothing connected: the strongest AP stays in the list; the header makes no claim.
-            let strongest = self.status.visible_access_points.first();
-            self.status.snapshot.strength_percent = strongest.map_or(0, |ap| ap.strength_percent);
-        }
+        // Nothing connected: the strongest AP stays in the list; the header makes no claim.
+        self.status.snapshot.strength_percent = connected
+            .or_else(|| self.status.visible_access_points.first())
+            .map_or(0, |ap| ap.strength_percent);
         let generation = self.controller.generation();
         let _ = self
             .controller
