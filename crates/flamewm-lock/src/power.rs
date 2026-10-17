@@ -385,6 +385,8 @@ mod tests {
         let only_logout = SessionCapabilities { logout: true, ..Default::default() };
         assert!(PowerButton::Other.enabled(only_logout));
         assert!(!PowerButton::Sleep.enabled(only_logout));
+        assert_eq!(Confirmable::Restart.label(), "Restart");
+        assert_eq!(Confirmable::Shutdown.label(), "Shut Down");
     }
 
     #[test]
@@ -472,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn result_ok_returns_idle_and_err_shows_message() {
+    fn result_ok_idle_err_message_and_stale_result_ignored() {
         let mut ok = ui(all_caps());
         ok.handle(PowerEvent::Click(PowerButton::Sleep));
         assert_eq!(ok.handle(PowerEvent::Result(Ok(()))), Effect::None);
@@ -482,13 +484,10 @@ mod tests {
         err.handle(PowerEvent::Click(PowerButton::Sleep));
         err.handle(PowerEvent::Result(Err("nope".into())));
         assert_eq!(err.state(), &PowerState::Error("nope".into()));
-    }
 
-    #[test]
-    fn result_outside_busy_is_ignored() {
-        let mut p = ui(all_caps());
-        p.handle(PowerEvent::Result(Err("late".into())));
-        assert_eq!(p.state(), &PowerState::Idle);
+        let mut late = ui(all_caps());
+        late.handle(PowerEvent::Result(Err("late".into())));
+        assert_eq!(late.state(), &PowerState::Idle);
     }
 
     #[test]
@@ -502,6 +501,7 @@ mod tests {
         assert_eq!(p.state(), &PowerState::Error("boom".into()));
         p.handle(PowerEvent::Tick(Duration::from_millis(1)));
         assert_eq!(p.state(), &PowerState::Idle);
+        assert_eq!(p.handle(PowerEvent::Tick(Duration::from_secs(10))), Effect::None);
     }
 
     #[test]
@@ -511,13 +511,6 @@ mod tests {
         p.handle(PowerEvent::Result(Err("boom".into())));
         assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::Perform(SessionAction::Suspend));
         assert_eq!(p.state(), &PowerState::Busy);
-    }
-
-    #[test]
-    fn tick_in_idle_is_inert() {
-        let mut p = ui(all_caps());
-        assert_eq!(p.handle(PowerEvent::Tick(Duration::from_secs(10))), Effect::None);
-        assert_eq!(p.state(), &PowerState::Idle);
     }
 
     #[test]
@@ -562,12 +555,6 @@ mod tests {
         assert_eq!(ui_action("lock.logout"), Some(PowerEvent::ClickLogout));
         assert_eq!(ui_action("lock.switch-user"), None);
         assert_eq!(ui_action("lock.power.4"), None);
-    }
-
-    #[test]
-    fn confirm_labels_match_the_buttons() {
-        assert_eq!(Confirmable::Restart.label(), "Restart");
-        assert_eq!(Confirmable::Shutdown.label(), "Shut Down");
     }
 
     #[test]
