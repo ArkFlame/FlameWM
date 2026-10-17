@@ -1171,10 +1171,7 @@ fn is_valid_output_id(output: &str) -> bool {
 }
 
 fn validate_color(value: &str, allow_empty: bool, name: &str) -> FlameResult<()> {
-    if allow_empty && value.is_empty() {
-        return Ok(());
-    }
-    if parse_hex_rgb(value).is_some() {
+    if (allow_empty && value.is_empty()) || parse_hex_rgb(value).is_some() {
         return Ok(());
     }
     invalid_owned(format!(
