@@ -402,6 +402,24 @@ mod tests {
     #[test]
     fn three_windows_minimize_restore_close_keep_identity_and_state() {
         use flamewm_api::window::WindowState;
+        fn cycle(
+            strip: &mut TaskStrip,
+            snapshots: &mut [flamewm_api::window::WindowSnapshot],
+            state: WindowState,
+        ) {
+            for snap in snapshots.iter_mut() {
+                let old = snap.reference;
+                snap.state = state;
+                snap.state_generation += 10;
+                snap.reference = WindowRef::new(old.id, snap.state_generation);
+                assert!(strip.remove_window(old));
+                assert!(strip.add_window(snap.app_id.clone(), snap.reference));
+                assert_eq!(
+                    TaskEntryId::window(snap.reference).as_str(),
+                    format!("win:{}:{}", old.id, snap.state_generation)
+                );
+            }
+        }
         let mut strip = TaskStrip::default();
         let apps = [app("a"), app("b"), app("c")];
         let mut snapshots: Vec<flamewm_api::window::WindowSnapshot> = [1u64, 2, 3]
@@ -420,18 +438,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["win:1:1", "win:2:2", "win:3:3"]
         );
-        for snap in snapshots.iter_mut() {
-            let old = snap.reference;
-            snap.state = WindowState::Minimized;
-            snap.state_generation += 10;
-            snap.reference = WindowRef::new(old.id, snap.state_generation);
-            assert!(strip.remove_window(old));
-            assert!(strip.add_window(snap.app_id.clone(), snap.reference));
-            assert_eq!(
-                TaskEntryId::window(snap.reference).as_str(),
-                format!("win:{}:{}", old.id, snap.state_generation)
-            );
-        }
+        cycle(&mut strip, &mut snapshots, WindowState::Minimized);
         assert_eq!(
             snapshots
                 .iter()
@@ -440,18 +447,7 @@ mod tests {
             vec![11, 12, 13]
         );
         assert!(snapshots.iter().all(|s| s.state == WindowState::Minimized));
-        for snap in snapshots.iter_mut() {
-            let old = snap.reference;
-            snap.state = WindowState::Normal;
-            snap.state_generation += 10;
-            snap.reference = WindowRef::new(old.id, snap.state_generation);
-            assert!(strip.remove_window(old));
-            assert!(strip.add_window(snap.app_id.clone(), snap.reference));
-            assert_eq!(
-                TaskEntryId::window(snap.reference).as_str(),
-                format!("win:{}:{}", old.id, snap.state_generation)
-            );
-        }
+        cycle(&mut strip, &mut snapshots, WindowState::Normal);
         assert_eq!(
             snapshots
                 .iter()
@@ -480,13 +476,9 @@ mod tests {
 mod order_invariant_tests {
     use super::*;
 
-    fn app(value: &str) -> DesktopAppId {
-        DesktopAppId::new(value)
-    }
-
     fn live(list: &[(&str, u64, u64)]) -> Vec<(DesktopAppId, WindowRef)> {
         list.iter()
-            .map(|(name, id, generation)| (app(name), WindowRef::new(*id, *generation)))
+            .map(|(name, id, generation)| (DesktopAppId::new(*name), WindowRef::new(*id, *generation)))
             .collect()
     }
 
