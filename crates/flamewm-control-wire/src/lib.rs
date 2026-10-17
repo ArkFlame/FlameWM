@@ -1806,19 +1806,17 @@ fn power_snapshot(dict: &WireDict) -> Result<PowerSnapshot, ControlError> {
         return Ok(PowerSnapshot::default());
     }
     let percent = dict_u32(dict, "powerPercent")?;
-    let cpu_percent = if dict.get("powerCpuPercent").is_some() {
-        Some(
+    let cpu_percent = dict
+        .get("powerCpuPercent")
+        .map(|_| {
             u8::try_from(dict_u32(dict, "powerCpuPercent")?)
-                .map_err(|_| invalid("power cpu percent exceeds u8"))?,
-        )
-    } else {
-        None
-    };
-    let power_rate_mw = if dict.get("powerRateMilliwatts").is_some() {
-        Some(dict_u32(dict, "powerRateMilliwatts")?)
-    } else {
-        None
-    };
+                .map_err(|_| invalid("power cpu percent exceeds u8"))
+        })
+        .transpose()?;
+    let power_rate_mw = dict
+        .get("powerRateMilliwatts")
+        .map(|_| dict_u32(dict, "powerRateMilliwatts"))
+        .transpose()?;
     Ok(PowerSnapshot {
         available: parse_availability(dict_string(dict, "powerAvailability")?)?,
         present: dict_bool(dict, "powerPresent")?,
