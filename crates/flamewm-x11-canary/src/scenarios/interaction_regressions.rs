@@ -375,6 +375,13 @@ where
     x03_observe(canary, pinned, &format!("after-{}", event), root, logs)
 }
 
+fn interpolate(from: (i16, i16), to: (i16, i16), step: u32, steps: u32) -> (i16, i16) {
+    let (step, steps) = (i64::from(step), i64::from(steps));
+    let x = i64::from(from.0) + (i64::from(to.0) - i64::from(from.0)) * step / steps;
+    let y = i64::from(from.1) + (i64::from(to.1) - i64::from(from.1)) * step / steps;
+    (x as i16, y as i16)
+}
+
 fn x03_drag(
     canary: &crate::Canary,
     pinned: PinnedX03,
@@ -392,11 +399,7 @@ fn x03_drag(
     })?;
     let steps = steps.max(1);
     for i in 1..=steps {
-        let i = i64::from(i);
-        let steps = i64::from(steps);
-        let x = i64::from(from.0) + (i64::from(to.0) - i64::from(from.0)) * i / steps;
-        let y = i64::from(from.1) + (i64::from(to.1) - i64::from(from.1)) * i / steps;
-        let point = (x as i16, y as i16);
+        let point = interpolate(from, to, i, steps);
         x03_event(canary, pinned, "motion", point, logs, |canary| {
             xtest_motion(canary, point.0, point.1)
         })?;
@@ -441,6 +444,10 @@ fn x03_failure(pinned: PinnedX03, error: X03ProbeError, logs: &[String]) -> (boo
             logs.join(" | ")
         ),
     )
+}
+
+fn x03_gone(pinned: PinnedX03, what: &str, logs: &[String]) -> (bool, String) {
+    x03_failure(pinned, X03ProbeError::IdentityChange(what.to_owned()), logs)
 }
 
 fn prepare_native_measurement(canary: &crate::Canary, target: &crate::WinInfo) -> bool {
@@ -517,6 +524,10 @@ fn ewmh_available(canary: &crate::Canary) -> bool {
 
 fn active_target(canary: &crate::Canary, target: u32) -> bool {
     canary.active_window() == Some(target)
+}
+
+fn route_on(native_route: Option<u32>, capture_route: bool, client: u32, frame: u32) -> bool {
+    capture_route || native_route == Some(client) || native_route == Some(frame)
 }
 
 fn preview_visible(canary: &crate::Canary) -> Option<crate::WinInfo> {
@@ -710,11 +721,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let mut logs = Vec::with_capacity(48);
     let Ok((_, initial_surface)) = x03_identity(canary, pinned) else {
-        return x03_failure(
-            pinned,
-            X03ProbeError::IdentityChange("target_not_ready_after_pin".to_owned()),
-            &logs,
-        );
+        return x03_gone(pinned, "target_not_ready_after_pin", &logs);
     };
     let floating_title = title(&initial_surface);
     if let Err(error) = x03_observe(
@@ -739,22 +746,12 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         true
     };
     settle_frame(canary, pinned.frame);
-    let Some(floating) = child_of(canary, pinned.client, pinned.frame)
-    else {
-        return x03_failure(
-            pinned,
-            X03ProbeError::IdentityChange("target_gone_after_establish".to_owned()),
-            &logs,
-        );
+    let Some(floating) = child_of(canary, pinned.client, pinned.frame) else {
+        return x03_gone(pinned, "target_gone_after_establish", &logs);
     };
-    let Some(_floating_surface) = child_of(canary, pinned.frame, canary.root)
-    else {
-        return x03_failure(
-            pinned,
-            X03ProbeError::IdentityChange("frame_gone_after_establish".to_owned()),
-            &logs,
-        );
-    };
+    if child_of(canary, pinned.frame, canary.root).is_none() {
+        return x03_gone(pinned, "frame_gone_after_establish", &logs);
+    }
     let selected_before = prepare_native_measurement(canary, &floating);
     let maximized_once = if !reset {
         false
@@ -765,13 +762,8 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         }
     };
     settle_frame(canary, pinned.frame);
-    let Some(max_surface) = child_of(canary, pinned.frame, canary.root)
-    else {
-        return x03_failure(
-            pinned,
-            X03ProbeError::IdentityChange("frame_gone_after_maximize".to_owned()),
-            &logs,
-        );
+    let Some(max_surface) = child_of(canary, pinned.frame, canary.root) else {
+        return x03_gone(pinned, "frame_gone_after_maximize", &logs);
     };
     let max_title = title(&max_surface);
     if let Err(error) = x03_observe(canary, pinned, "after-maximize", max_title, &mut logs) {
@@ -788,21 +780,11 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Err(error) => return x03_failure(pinned, error, &logs),
     };
     let restored = wait_until(500, || !maximized(canary, pinned.client));
-    let Some(after) = child_of(canary, pinned.client, pinned.frame)
-    else {
-        return x03_failure(
-            pinned,
-            X03ProbeError::IdentityChange("target_gone_after_restore".to_owned()),
-            &logs,
-        );
+    let Some(after) = child_of(canary, pinned.client, pinned.frame) else {
+        return x03_gone(pinned, "target_gone_after_restore", &logs);
     };
-    let Some(after_surface) = child_of(canary, pinned.frame, canary.root)
-    else {
-        return x03_failure(
-            pinned,
-            X03ProbeError::IdentityChange("frame_gone_after_restore".to_owned()),
-            &logs,
-        );
+    let Some(after_surface) = child_of(canary, pinned.frame, canary.root) else {
+        return x03_gone(pinned, "frame_gone_after_restore", &logs);
     };
     if let Err(error) = x03_observe(
         canary,
@@ -1037,9 +1019,7 @@ fn release_top_hold_without_snap(canary: &crate::Canary, setup: &TopHoldSetup) -
 }
 
 fn top_hold_stable(setup: &TopHoldSetup, hold: &TopHoldObservation) -> bool {
-    let route_ok = hold.capture_route
-        || hold.native_route == Some(setup.client.id)
-        || hold.native_route == Some(setup.frame.id);
+    let route_ok = route_on(hold.native_route, hold.capture_route, setup.client.id, setup.frame.id);
     setup.activated_floating
         && hold.motion_count >= TOP_HOLD_MOTIONS
         && hold.identity_stable
@@ -1060,9 +1040,7 @@ fn run_x04(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let hold = observe_top_hold(canary, &setup);
     let ewmh_state_unchanged = hold.state_stable;
-    let route_ok = hold.capture_route
-        || hold.native_route == Some(setup.client.id)
-        || hold.native_route == Some(setup.frame.id);
+    let route_ok = route_on(hold.native_route, hold.capture_route, setup.client.id, setup.frame.id);
     let counters_available = unsupported_assertions().is_empty();
     // Compute this verdict before cleanup release.  X04 must prove that the
     // held gesture itself did not release or commit a maximize.
@@ -1119,9 +1097,7 @@ fn run_x05(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Err(error) => return (false, format!("scenario=X05 {error}")),
     };
     let hold = observe_top_hold(canary, &setup);
-    let route_ok = hold.capture_route
-        || hold.native_route == Some(setup.client.id)
-        || hold.native_route == Some(setup.frame.id);
+    let route_ok = route_on(hold.native_route, hold.capture_route, setup.client.id, setup.frame.id);
     let hold_floating = top_hold_stable(&setup, &hold);
     // This is the only release in X05.  It is intentionally after the full
     // top-zone hold observation so the release is the commit under test.
@@ -1448,23 +1424,15 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             } else {
                 let mut motions = true;
                 for step in 1..=8 {
-                    let step = i64::from(step);
-                    let x = i64::from(start.0)
-                        + (i64::from(destination.0) - i64::from(start.0)) * step / 8;
-                    let y = i64::from(start.1)
-                        + (i64::from(destination.1) - i64::from(start.1)) * step / 8;
-                    if !xtest_motion(canary, x as i16, y as i16) {
-                        motions = false;
-                    }
+                    let (x, y) = interpolate(start, destination, step, 8);
+                    motions &= xtest_motion(canary, x, y);
                 }
                 // Sample the route while the drag session remains held.
                 let native_route = x03_native_route(canary);
                 let capture_route = native_route.is_some_and(|window| {
                     x03_interaction_capture_route(canary, window, canary.root_geometry())
                 });
-                let route_observation = capture_route
-                    || native_route == Some(client_id)
-                    || native_route == Some(frame_id);
+                let route_observation = route_on(native_route, capture_route, client_id, frame_id);
                 let released = xtest_button_release(canary, destination.0, destination.1, 1);
                 (
                     motions && released,
@@ -1778,8 +1746,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let capture_route = native_route.is_some_and(|window| {
         x03_interaction_capture_route(canary, window, canary.root_geometry())
     });
-    let route_ok =
-        capture_route || native_route == Some(client_id) || native_route == Some(frame_id);
+    let route_ok = route_on(native_route, capture_route, client_id, frame_id);
     let full_configure_observed = activation_native > 0 && restore_dimensions;
     let position_only_observed = later_native > 0 && later_position_only;
     let assertions = reset_floating
