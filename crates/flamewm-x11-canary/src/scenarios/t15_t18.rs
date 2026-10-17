@@ -121,14 +121,11 @@ fn configure_size(canary: &crate::Canary, window: u32, width: u16, height: u16) 
 }
 
 fn t17_geometry(frame: &crate::WinInfo) -> String {
-    format!("{}x{}+{}+{}", frame.width, frame.height, frame.x, frame.y)
+    t17_geometry_values(geom_of(frame))
 }
 
 fn t17_geometry_values(geometry: (i32, i32, u32, u32)) -> String {
-    format!(
-        "{}x{}+{}+{}",
-        geometry.2, geometry.3, geometry.0, geometry.1
-    )
+    format!("{}x{}+{}+{}", geometry.2, geometry.3, geometry.0, geometry.1)
 }
 
 fn t17_atom_values(values: &[u32]) -> String {
@@ -176,69 +173,58 @@ fn t17_bound(value: String) -> String {
     value.chars().take(160).collect()
 }
 
+fn t17_probe_reply<C, R, E1: std::fmt::Display, E2: std::fmt::Display>(
+    sent: Result<C, E1>,
+    reply: impl FnOnce(C) -> Result<R, E2>,
+) -> Result<R, String> {
+    match sent {
+        Err(error) => Err(format!("error=request:{}", t17_bound(error.to_string()))),
+        Ok(cookie) => {
+            reply(cookie).map_err(|error| format!("error=reply:{}", t17_bound(error.to_string())))
+        }
+    }
+}
+
 fn t17_window_probe(canary: &crate::Canary, window: u32) -> T17WindowProbe {
     let mut probe = T17WindowProbe::default();
-    match canary.conn.get_geometry(window) {
+    match t17_probe_reply(canary.conn.get_geometry(window), |c| c.reply()) {
         Err(error) => {
             probe.x11_error = true;
-            probe.geometry = format!("error=request:{}", t17_bound(error.to_string()));
+            probe.geometry = error;
         }
-        Ok(cookie) => match cookie.reply() {
-            Err(error) => {
-                probe.x11_error = true;
-                probe.geometry = format!("error=reply:{}", t17_bound(error.to_string()));
-            }
-            Ok(reply) => {
-                probe.geometry_values = Some((reply.x, reply.y, reply.width, reply.height));
-                probe.geometry = format!(
-                    "ok=x:{} y:{} width:{} height:{}",
-                    reply.x, reply.y, reply.width, reply.height
-                );
-            }
-        },
+        Ok(reply) => {
+            probe.geometry_values = Some((reply.x, reply.y, reply.width, reply.height));
+            probe.geometry = format!(
+                "ok=x:{} y:{} width:{} height:{}",
+                reply.x, reply.y, reply.width, reply.height
+            );
+        }
     }
-    match canary.conn.get_window_attributes(window) {
+    match t17_probe_reply(canary.conn.get_window_attributes(window), |c| c.reply()) {
         Err(error) => {
             probe.x11_error = true;
-            probe.attributes = format!("error=request:{}", t17_bound(error.to_string()));
+            probe.attributes = error;
         }
-        Ok(cookie) => match cookie.reply() {
-            Err(error) => {
-                probe.x11_error = true;
-                probe.attributes = format!("error=reply:{}", t17_bound(error.to_string()));
-            }
-            Ok(reply) => {
-                let map_state = u8::from(reply.map_state);
-                probe.map_state = Some(map_state);
-                probe.attributes = format!(
-                    "ok=map_state:{} override_redirect:{}",
-                    map_state, reply.override_redirect
-                );
-            }
-        },
+        Ok(reply) => {
+            let map_state = u8::from(reply.map_state);
+            probe.map_state = Some(map_state);
+            probe.attributes = format!(
+                "ok=map_state:{} override_redirect:{}",
+                map_state, reply.override_redirect
+            );
+        }
     }
-    match canary.conn.query_tree(window) {
+    match t17_probe_reply(canary.conn.query_tree(window), |c| c.reply()) {
         Err(error) => {
             probe.x11_error = true;
-            probe.tree = format!("error=request:{}", t17_bound(error.to_string()));
+            probe.tree = error;
         }
-        Ok(cookie) => match cookie.reply() {
-            Err(error) => {
-                probe.x11_error = true;
-                probe.tree = format!("error=reply:{}", t17_bound(error.to_string()));
-            }
-            Ok(reply) => {
-                probe.parent = Some(reply.parent);
-                let children = reply
-                    .children
-                    .iter()
-                    .take(8)
-                    .map(|child| child.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                probe.tree = format!("ok=parent:{} children:[{}]", reply.parent, children);
-            }
-        },
+        Ok(reply) => {
+            probe.parent = Some(reply.parent);
+            let children: Vec<String> =
+                reply.children.iter().take(8).map(ToString::to_string).collect();
+            probe.tree = format!("ok=parent:{} children:[{}]", reply.parent, children.join(","));
+        }
     }
     probe
 }
