@@ -1024,16 +1024,11 @@ fn display_mode(value: &WireValue) -> Result<DisplayMode, ControlError> {
 
 fn shortcut_snapshot(dict: &WireDict) -> Result<ShortcutSnapshot, ControlError> {
     let revision = dict_u64(dict, "revision")?;
-    let mut bindings = BTreeMap::new();
-    for (key, value) in dict {
-        if key == "revision" {
-            continue;
-        }
-        bindings.insert(
-            key.clone(),
-            KeyBinding::assigned(required_string(value, key)?),
-        );
-    }
+    let bindings = dict
+        .iter()
+        .filter(|(key, _)| key.as_str() != "revision")
+        .map(|(key, value)| Ok((key.clone(), KeyBinding::assigned(required_string(value, key)?))))
+        .collect::<Result<BTreeMap<_, _>, ControlError>>()?;
     Ok(ShortcutSnapshot { revision, bindings })
 }
 
