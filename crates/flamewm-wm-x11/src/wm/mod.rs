@@ -2098,9 +2098,8 @@ mod transition_fix_tests {
     /// reach the WM. Before the fix, restore's extra count swallowed that unmap.
     #[test]
     fn restore_does_not_leave_an_ignore_count_that_swallows_a_later_unmap() {
-        let mut ignore_unmap = 0u8;
         // minimize: WM unmaps the frame and expects exactly one UnmapNotify.
-        ignore_unmap = ignore_unmap.saturating_add(1);
+        let mut ignore_unmap = 1u8;
         assert!(consume_expected_unmap(&mut ignore_unmap), "minimize unmap is ours");
         // restore: WM maps the frame; mapping produces no UnmapNotify, so no count is added.
         assert_eq!(ignore_unmap, 0);
@@ -2163,14 +2162,11 @@ mod frame_extents_publish_tests {
     /// Mirrors `set_frame_extents`: a publish is sent only when the value differs.
     fn publish_all(values: &[[u32; 4]]) -> usize {
         let mut published = HashMap::new();
-        let mut sent = 0;
-        for &extents in values {
-            if frame_extents_needs_publish(&published, 7, extents) {
-                sent += 1;
-                published.insert(7, extents);
-            }
-        }
-        sent
+        values.iter().filter(|&&extents| {
+            let needs = frame_extents_needs_publish(&published, 7, extents);
+            if needs { published.insert(7, extents); }
+            needs
+        }).count()
     }
 
     #[test]
