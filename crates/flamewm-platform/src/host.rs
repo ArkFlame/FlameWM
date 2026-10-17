@@ -859,10 +859,7 @@ mod tests {
 
     #[test]
     fn unconfirmed_display_mode_reverts_only_after_deadline_tick() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-display-tick-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("display-tick");
         std::fs::write(&path, "").expect("write settings fixture");
         let mut display = fake_display(100);
         display.outputs[0].modes = vec![
@@ -914,37 +911,20 @@ mod tests {
 
     #[test]
     fn start_applies_persisted_per_output_scale_to_display_snapshot() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-scale-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("scale");
         std::fs::write(&path, "scale.default=125\n").expect("write settings fixture");
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_at(&path, 100);
         let started = host.start();
         let _ = std::fs::remove_file(&path);
         started.expect("host starts");
-        let scale = host
-            .displays
-            .cached()
-            .and_then(|snapshot| snapshot.outputs.first())
-            .map(|output| output.shell_scale_percent);
-        assert_eq!(scale, Some(125));
+        assert_eq!(cached_scale(&host), Some(125));
     }
 
     #[test]
     fn startup_seeded_scale_sizes_panel_like_live_scale_change() {
         use crate::panel::logical_to_physical;
 
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-startup-panel-scale-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("startup-panel-scale");
         std::fs::write(&path, "scale.default=125\ntaskbarHeight=72\ntaskbarStyle=classic\n")
             .expect("write settings fixture");
         let mut display = fake_display(100);
@@ -976,18 +956,9 @@ mod tests {
     fn runtime_scale_setting_resyncs_panel_thickness() {
         use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
 
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-runtime-panel-scale-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("runtime-panel-scale");
         std::fs::write(&path, "").expect("write settings fixture");
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         assert_eq!(host.panels.snapshot().panels[0].geometry.height, 44);
 
@@ -1012,25 +983,10 @@ mod tests {
     fn runtime_scale_setting_updates_display_snapshot_and_rejects_invalid_values() {
         use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
 
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-runtime-scale-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("runtime-scale");
         std::fs::write(&path, "").expect("write settings fixture");
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_at(&path, 100);
         host.start().expect("host starts");
-        let scale_of = |host: &PlatformHost<FakeEngine>| {
-            host.displays
-                .cached()
-                .and_then(|snapshot| snapshot.outputs.first())
-                .map(|output| output.shell_scale_percent)
-        };
         let transaction = |revision: u64, scale: i64| SettingsTransaction {
             expected_revision: revision,
             changes: vec![SettingsChange {
@@ -1043,7 +999,7 @@ mod tests {
         let revision = host.settings_snapshot().revision;
         let applied = host.apply_settings(&transaction(revision, 125));
         assert!(applied.is_ok(), "valid scale applies: {applied:?}");
-        assert_eq!(scale_of(&host), Some(125));
+        assert_eq!(cached_scale(&host), Some(125));
 
         let revision = host.settings_snapshot().revision;
         let rejected = host.apply_settings(&transaction(revision, 133));
@@ -1052,23 +1008,14 @@ mod tests {
             rejected.expect_err("invalid scale is rejected").code,
             ErrorCode::InvalidArgument
         );
-        assert_eq!(scale_of(&host), Some(125));
+        assert_eq!(cached_scale(&host), Some(125));
     }
 
     #[test]
     fn set_shell_scale_resyncs_panel_thickness() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-set-shell-scale-panel-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("set-shell-scale-panel");
         std::fs::write(&path, "").expect("write settings fixture");
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         assert_eq!(host.panels.snapshot().panels[0].geometry.height, 44);
 
@@ -1090,18 +1037,9 @@ mod tests {
 
     #[test]
     fn set_shell_scale_persists_scale_across_restart() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-set-shell-scale-persist-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("set-shell-scale-persist");
         std::fs::write(&path, "").expect("write settings fixture");
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         let revision_before = host.settings_snapshot().revision;
         let generation = host
@@ -1120,24 +1058,12 @@ mod tests {
         drop(host);
 
         // A WM restart re-seeds the display snapshot from the settings file, as at first start.
-        let mut restarted = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut restarted = host_at(&path, 100);
         let started = restarted.start();
         let persisted = std::fs::read_to_string(&path);
         let _ = std::fs::remove_file(&path);
         started.expect("host restarts");
-        let scale = restarted.cached_display_snapshot().and_then(|snapshot| {
-            snapshot
-                .outputs
-                .first()
-                .map(|output| output.shell_scale_percent)
-        });
-        assert_eq!(scale, Some(125));
+        assert_eq!(cached_scale(&restarted), Some(125));
         let persisted = persisted.expect("settings file is written");
         assert!(persisted.contains("scale.default=125\n"), "{persisted}");
     }
@@ -1145,16 +1071,10 @@ mod tests {
     #[test]
     fn failed_shell_scale_persistence_restores_display_scale() {
         // The settings parent becomes a regular file after start, so persistence cannot create it.
-        let dir = hotkey_fixture("scale-rollback-dir");
+        let dir = fixture_path("scale-rollback-dir");
         std::fs::create_dir_all(&dir).expect("create settings dir");
         let path = dir.join("settings.conf");
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display: fake_display(100),
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         std::fs::remove_dir_all(&dir).expect("remove settings dir");
         std::fs::write(&dir, "").expect("replace settings dir with a file");
@@ -1167,34 +1087,34 @@ mod tests {
             .set_shell_scale(&OutputId::new("default"), 125, generation)
             .expect_err("persistence failure is surfaced");
         assert_ne!(error.code, ErrorCode::StaleRevision);
-        let scale = host.cached_display_snapshot().and_then(|snapshot| {
-            snapshot
-                .outputs
-                .first()
-                .map(|output| output.shell_scale_percent)
-        });
-        assert_eq!(scale, Some(100));
+        assert_eq!(cached_scale(&host), Some(100));
         let _ = std::fs::remove_file(&dir);
     }
 
-    fn hotkey_fixture(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-hotkey-{name}-{}.conf",
-            std::process::id()
-        ));
+    fn fixture_path(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("flamewm-host-{name}-{}.conf", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
 
-    /// Starts a host on `path` and grabs its effective shortcut set, as a WM restart would.
-    fn started_hotkey_host(path: &std::path::Path) -> PlatformHost<FakeEngine> {
-        let mut host = PlatformHost::new(
+    fn host_at(path: &std::path::Path, scale: u16) -> PlatformHost<FakeEngine> {
+        PlatformHost::new(
             FakeEngine {
-                display: fake_display(100),
+                display: fake_display(scale),
                 reverted: Vec::new(),
             },
             path.to_path_buf(),
-        );
+        )
+    }
+
+    fn cached_scale(host: &PlatformHost<FakeEngine>) -> Option<u16> {
+        host.cached_display_snapshot()
+            .and_then(|snapshot| snapshot.outputs.first().map(|output| output.shell_scale_percent))
+    }
+
+    /// Starts a host on `path` and grabs its effective shortcut set, as a WM restart would.
+    fn started_hotkey_host(path: &std::path::Path) -> PlatformHost<FakeEngine> {
+        let mut host = host_at(path, 100);
         host.start().expect("host starts");
         host.commit_startup_shortcuts().expect("startup grabs");
         host
@@ -1207,16 +1127,9 @@ mod tests {
     // MUTATION: skip persist_panel_edge or the startup seed and the reloaded panel reports Bottom.
     #[test]
     fn set_panel_edge_persists_edge_across_restart_without_settings_revision_bump() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-host-panel-edge-persist-test-{}.conf",
-            std::process::id()
-        ));
+        let path = fixture_path("panel-edge-persist");
         std::fs::write(&path, "").expect("write settings fixture");
-        let engine = || FakeEngine {
-            display: fake_display(100),
-            reverted: Vec::new(),
-        };
-        let mut host = PlatformHost::new(engine(), path.clone());
+        let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         let settings_revision = host.settings_snapshot().revision;
         let panels_revision = host.panels_snapshot().revision;
@@ -1227,7 +1140,7 @@ mod tests {
 
         let persisted = std::fs::read_to_string(&path).expect("edge is persisted");
         assert!(persisted.contains("panel.edge.default=top\n"), "{persisted}");
-        let mut restarted = PlatformHost::new(engine(), path.clone());
+        let mut restarted = host_at(&path, 100);
         restarted.start().expect("restart starts");
         assert_eq!(restarted.panels_snapshot().panels[0].edge, PanelEdge::Top);
         let _ = std::fs::remove_file(&path);
@@ -1237,7 +1150,7 @@ mod tests {
     fn cleared_hotkey_persists_and_stays_unassigned_after_restart() {
         use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
 
-        let path = hotkey_fixture("clear");
+        let path = fixture_path("hotkey-clear");
         let mut host = started_hotkey_host(&path);
         let revision = host.shortcut_snapshot().revision;
         host.clear_shortcut(ACTION_TOGGLE_START_MENU, revision)
@@ -1266,7 +1179,7 @@ mod tests {
     fn set_shortcut_persists_binding_across_restart() {
         use flamewm_api::shortcuts::ACTION_WINDOW_CLOSE;
 
-        let path = hotkey_fixture("set");
+        let path = fixture_path("hotkey-set");
         let mut host = started_hotkey_host(&path);
         let revision = host.shortcut_snapshot().revision;
         host.set_shortcut(ACTION_WINDOW_CLOSE, "Super+F8", revision)
@@ -1292,7 +1205,7 @@ mod tests {
     fn reset_shortcut_removes_persisted_override_and_restores_default() {
         use flamewm_api::shortcuts::ACTION_WINDOW_CLOSE;
 
-        let path = hotkey_fixture("reset");
+        let path = fixture_path("hotkey-reset");
         std::fs::write(&path, "hotkey.WindowClose=Super+F8\n").expect("write override fixture");
         let mut host = started_hotkey_host(&path);
         assert_eq!(
@@ -1321,7 +1234,7 @@ mod tests {
     fn stale_hotkey_revision_is_refused_without_persisting() {
         use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
 
-        let path = hotkey_fixture("stale");
+        let path = fixture_path("hotkey-stale");
         let mut host = started_hotkey_host(&path);
         let stale = host.shortcut_snapshot().revision + 1;
         let error = host
@@ -1337,7 +1250,7 @@ mod tests {
         use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
 
         // The settings parent becomes a regular file after start, so persistence cannot create it.
-        let dir = hotkey_fixture("rollback-dir");
+        let dir = fixture_path("hotkey-rollback-dir");
         std::fs::create_dir_all(&dir).expect("create settings dir");
         let path = dir.join("settings.conf");
         let mut host = started_hotkey_host(&path);
