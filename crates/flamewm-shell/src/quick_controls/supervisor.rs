@@ -245,6 +245,7 @@ mod tests {
             anchor: Rect::new(0, 0, 10, 10),
             work_area: Rect::new(0, 0, 100, 100),
             panel_edge: PanelEdge::Bottom,
+            dock: None,
         }
     }
 

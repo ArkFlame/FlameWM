@@ -445,7 +445,7 @@ fn open_context_menu(
                 selected_id: Some(note.id.clone()),
             });
             state.pending_delete = None;
-            hide_confirm(document)?;
+            hide_confirm(document, &mut state.menu_rects)?;
             return sync_menu(document, state);
         }
     }
@@ -476,7 +476,7 @@ fn handle_slot(
         }
         match action.phase {
             UiActionPhase::Press => {
-                hide_menus(document)?;
+                hide_menus(document, &mut state.menu_rects)?;
                 state.menu = None;
                 state.sticky.edit = Some(StickyEdit {
                     note_id: note_id.clone(),

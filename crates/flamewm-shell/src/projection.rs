@@ -122,6 +122,35 @@ pub struct PanelView<'a> {
     pub snapshot: &'a ShellSnapshot,
     pub output: Option<&'a flamewm_api::display::OutputSnapshot>,
     pub panel: Option<&'a flamewm_api::panels::PanelSnapshot>,
+    pub items: TaskbarItems,
+}
+
+/// Taskbar item visibility settings. Each flag is the setting alone; the
+/// projection ANDs it with the item's availability. Defaults match
+/// `ProductSettings::default()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskbarItems {
+    pub weather: bool,
+    pub volume: bool,
+    pub network: bool,
+    pub battery: bool,
+    pub battery_only_when_relevant: bool,
+    pub clock: bool,
+    pub workspaces: bool,
+}
+
+impl Default for TaskbarItems {
+    fn default() -> Self {
+        Self {
+            weather: true,
+            volume: true,
+            network: true,
+            battery: true,
+            battery_only_when_relevant: false,
+            clock: true,
+            workspaces: true,
+        }
+    }
 }
 
 impl<'a> PanelView<'a> {
@@ -140,7 +169,14 @@ impl<'a> PanelView<'a> {
             snapshot,
             output,
             panel,
+            items: TaskbarItems::default(),
         }
+    }
+
+    /// Same view with the taskbar item settings applied.
+    #[must_use]
+    pub fn with_items(self, items: TaskbarItems) -> Self {
+        Self { items, ..self }
     }
 }
 
@@ -176,6 +212,7 @@ pub fn for_each_panel_record<K, E>(
                 snapshot,
                 output: Some(output),
                 panel: Some(panel),
+                items: TaskbarItems::default(),
             },
         )?;
     }
@@ -319,11 +356,12 @@ pub fn project_panel(
             Some(flamewm_ui_core::IconRole::MediaPause)
         ),
     )?;
-    document.visible("tray-volume", status.audio.visible)?;
+    document.visible("tray-volume", status.audio.visible && view.items.volume)?;
     document.visible("tray-volume-icon", !status.audio.muted)?;
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
-    document.visible("tray-network", status.network.visible)?;
-    project_battery_tray(document, &snapshot.system.power)?;
+    document.visible("tray-network", status.network.visible && view.items.network)?;
+    project_battery_tray(document, &snapshot.system.power, view.items)?;
+    document.visible("clock-button", view.items.clock)?;
     Ok(())
 }
 
@@ -332,12 +370,16 @@ pub fn project_panel(
 pub fn project_battery_tray(
     document: &mut impl UiDocumentAccess,
     power: &flamewm_api::system::PowerSnapshot,
+    items: TaskbarItems,
 ) -> Result<(), String> {
     use crate::taskbar::status::battery::{glyph_for_percent, tray_visible, BATTERY_GLYPHS};
     use flamewm_api::system::PowerState;
     let charging = power.state == PowerState::Charging;
     let glyph = glyph_for_percent(power.percent);
-    document.visible("tray-battery", tray_visible(power))?;
+    document.visible(
+        "tray-battery",
+        tray_visible(power, items.battery, items.battery_only_when_relevant),
+    )?;
     for candidate in BATTERY_GLYPHS {
         let shown = candidate == glyph;
         document.visible(
@@ -360,13 +402,14 @@ pub fn project_battery_menu(
     track_width: f32,
 ) -> Result<(), String> {
     use crate::taskbar::status::battery::{
-        cpu_text, glyph_for_percent, progress_width, state_text, BATTERY_GLYPHS,
+        cpu_text, glyph_for_percent, progress_width, rate_text, state_text, BATTERY_GLYPHS,
     };
     use flamewm_api::system::PowerState;
     let charging = power.state == PowerState::Charging;
     let glyph = glyph_for_percent(power.percent);
     document.text("battery-percent", format!("{}%", power.percent.min(100)))?;
     document.text("battery-state", state_text(power.state).to_owned())?;
+    document.text("battery-rate", rate_text(power.power_rate_mw))?;
     document.text("battery-cpu", cpu_text(power.cpu_percent))?;
     document.size(
         "battery-progress-fill",
@@ -496,6 +539,7 @@ pub fn project_context_menu(
 ) -> Result<(), String> {
     // Shared menu surface (radius + fill) from the Surfaces settings, same owner as desktop menus.
     let surface = flamewm_ui_core::context_menu::menu_surface(settings);
+    // The shell task-menu popup document holds only the `task-menu` root; desktop roots live in the desktop document.
     document.background("task-menu", crate::settings_projection::surface_background(settings))?;
     document.corner_radius("task-menu", surface.radius as f32)?;
     for id in [
@@ -505,7 +549,6 @@ pub fn project_context_menu(
         "context-workspace-activate",
         "context-workspace-insert-after",
         "context-workspace-remove",
-        "context-taskbar-new-desktop",
         "context-taskbar-settings",
     ] {
         document.visible(id, false)?;
@@ -876,6 +919,7 @@ mod panel_template_tests {
                 percent,
                 state,
                 cpu_percent: None,
+                power_rate_mw: None,
             };
             let mut document =
                 flamewm_ui_x11::decode_document(BATTERY_ARTIFACT).expect("battery artifact must decode");
@@ -918,12 +962,13 @@ mod panel_template_tests {
             percent,
             state,
             cpu_percent: None,
+            power_rate_mw: None,
         };
         let avail = ServiceAvailability::Available;
         let cases: [(PowerSnapshot, Option<&str>); 14] = [
-            (power(avail, true, 87, PowerState::Unknown), None),
+            (power(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
             (power(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
-            (power(avail, true, 45, PowerState::Unknown), None),
+            (power(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
             (power(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
             (power(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
             (power(avail, true, 30, PowerState::Charging), Some("tray-battery-030-charging")),
@@ -1037,12 +1082,14 @@ mod panel_template_tests {
                         percent,
                         state,
                         cpu_percent: None,
+                        power_rate_mw: None,
                     };
                     let charging = state == PowerState::Charging;
-                    let visible = present && state != PowerState::Unknown;
+                    let visible = present;
                     let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
                         .expect("panel artifact must decode");
-                    project_battery_tray(&mut document, &power).expect("tray battery projects");
+                    project_battery_tray(&mut document, &power, TaskbarItems::default())
+                        .expect("tray battery projects");
                     let viewport = (1080.0, 72.0);
                     let width = |id: &str| {
                         document
@@ -1511,5 +1558,111 @@ mod start_category_table_tests {
             assert!(application_matches_category(&app, StartCategory::All));
             assert!(!application_matches_category(&app, StartCategory::Power));
         }
+    }
+}
+
+#[cfg(test)]
+mod task_menu_root_tests {
+    use super::*;
+    use flamewm_ui_core::style::UiLayer;
+    use flamewm_ui_x11::{Overflow, RuntimeImage};
+
+    const TASK_MENU_HTML: &str = include_str!("../../../ui/shell/task-menu.html");
+
+    /// Records `(method, id)` for every write and never fails, so the set is exactly what projection asked for.
+    #[derive(Default)]
+    struct Recorder {
+        writes: Vec<(&'static str, String)>,
+    }
+
+    impl Recorder {
+        fn hit(&mut self, method: &'static str, id: &str) -> Result<(), String> {
+            self.writes.push((method, id.to_owned()));
+            Ok(())
+        }
+    }
+
+    impl UiDocumentAccess for Recorder {
+        fn text(&mut self, id: &str, _: String) -> Result<(), String> {
+            self.hit("text", id)
+        }
+        fn image_rgb8(&mut self, id: &str, _: RuntimeImage) -> Result<(), String> {
+            self.hit("image_rgb8", id)
+        }
+        fn image_rgba8(&mut self, id: &str, _: RuntimeImage) -> Result<(), String> {
+            self.hit("image_rgba8", id)
+        }
+        fn visible(&mut self, id: &str, _: bool) -> Result<(), String> {
+            self.hit("visible", id)
+        }
+        fn toggle(&mut self, track_id: &str, _: &str, _: bool) -> Result<(), String> {
+            self.hit("toggle", track_id)
+        }
+        fn position(&mut self, id: &str, _: f32, _: f32) -> Result<(), String> {
+            self.hit("position", id)
+        }
+        fn size(&mut self, id: &str, _: f32, _: f32) -> Result<(), String> {
+            self.hit("size", id)
+        }
+        fn background(&mut self, id: &str, _: UiColor) -> Result<(), String> {
+            self.hit("background", id)
+        }
+        fn border(&mut self, id: &str, _: UiColor) -> Result<(), String> {
+            self.hit("border", id)
+        }
+        fn foreground(&mut self, id: &str, _: UiColor) -> Result<(), String> {
+            self.hit("foreground", id)
+        }
+        fn background_clear(&mut self, id: &str) -> Result<(), String> {
+            self.hit("background_clear", id)
+        }
+        fn border_clear(&mut self, id: &str) -> Result<(), String> {
+            self.hit("border_clear", id)
+        }
+        fn foreground_clear(&mut self, id: &str) -> Result<(), String> {
+            self.hit("foreground_clear", id)
+        }
+        fn font_size(&mut self, id: &str, _: f32) -> Result<(), String> {
+            self.hit("font_size", id)
+        }
+        fn font_weight(&mut self, id: &str, _: u16) -> Result<(), String> {
+            self.hit("font_weight", id)
+        }
+        fn overflow(&mut self, id: &str, _: Overflow, _: Overflow) -> Result<(), String> {
+            self.hit("overflow", id)
+        }
+        fn layer(&mut self, id: &str, _: UiLayer) -> Result<(), String> {
+            self.hit("layer", id)
+        }
+    }
+
+    fn project_idle() -> Recorder {
+        let mut recorder = Recorder::default();
+        let snapshot = ShellSnapshot::default();
+        let settings = SettingsSnapshot::new(0);
+        project_context_menu(&mut recorder, &snapshot, &settings, None).expect("projection");
+        recorder
+    }
+
+    #[test]
+    fn task_menu_projection_touches_only_existing_roots() {
+        let recorder = project_idle();
+        assert!(!recorder.writes.is_empty());
+        for (method, id) in &recorder.writes {
+            assert!(
+                id == "task-menu" || TASK_MENU_HTML.contains(&format!("id=\"{id}\"")),
+                "{method} writes `{id}`, which the task menu markup does not define"
+            );
+        }
+    }
+
+    #[test]
+    fn task_menu_projection_never_writes_a_border() {
+        let recorder = project_idle();
+        assert!(
+            recorder.writes.iter().all(|(method, _)| !method.starts_with("border")),
+            "task menu frame comes from the shared sheet; projection must not paint a border: {:?}",
+            recorder.writes
+        );
     }
 }

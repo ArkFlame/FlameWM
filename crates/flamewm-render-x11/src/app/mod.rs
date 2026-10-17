@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::ptr;
+use std::rc::Rc;
 
 use flamewm_render_core::{
     ActionEvent, ActionPhase, Color, CursorKind, InteractionState, LayoutEngine, LayoutResult,
@@ -26,15 +28,19 @@ use super::xrender::XRenderBackend;
 use super::xshape::XShapeBridge;
 use super::*;
 use cursor::cursor_shape;
+use cursor_theme::{SurfaceCursor, share_surface_cursor};
+use crate::surface_controller::{RawPressSelection, xi_raw_press_opcode};
 
 mod color;
 mod cursor;
+mod cursor_theme;
 mod events;
 mod geometry;
 mod images;
 mod input;
 mod layout_helpers;
 mod primitives;
+mod raw_press;
 mod render;
 mod scroll;
 mod surface_backdrop;
@@ -137,7 +143,7 @@ pub(crate) struct X11App {
     backbuffer_bytes: usize,
     pub(crate) cursors: HashMap<CursorKind, Cursor>,
     pub(crate) current_cursor: Option<CursorKind>,
-    pub(crate) xcursor: Option<NativeCursorSession>,
+    pub(crate) xcursor: Option<Rc<RefCell<SurfaceCursor>>>,
     pub(crate) fonts: HashMap<u8, *mut XFontStructHead>,
     pub(crate) xft: Option<XftBackend>,
     pub(crate) xrender: Option<XRenderBackend>,
@@ -182,6 +188,10 @@ pub(crate) struct X11App {
     pub(crate) last_title_press: Option<(u32, u64)>,
     pub(crate) single_event: bool,
     pub(crate) close_requested: bool,
+    /// Root-press observer selection; armed only while the app asks for it.
+    pub(crate) press_selection: RawPressSelection,
+    press_observed: bool,
+    raw_presses: Vec<RawPress>,
 }
 impl X11App {
     /// # Safety
@@ -480,7 +490,14 @@ impl X11App {
                     "core-font-cursor"
                 },
             );
-            session
+            share_surface_cursor(
+                SurfaceCursor {
+                    session,
+                    window,
+                    kind: CursorKind::Default,
+                },
+                theme,
+            )
         };
         let presentation = if initially_visible {
             PresentationState::Projected
@@ -561,6 +578,9 @@ impl X11App {
             last_title_press: None,
             single_event: false,
             close_requested: false,
+            press_selection: RawPressSelection::new(unsafe { xi_raw_press_opcode(display) }),
+            press_observed: false,
+            raw_presses: Vec::new(),
         })
     }
 
@@ -577,9 +597,21 @@ impl X11App {
     /// Backend X resources are released while the display is live; the typed
     /// owner must be retained until after `XCloseDisplay`.
     pub(crate) unsafe fn take_deferred_native_libraries(&mut self) -> DeferredNativeLibraryHandles {
+        // The registry holds only a weak handle, so the app's strong handle is unique here.
+        // A shared handle is leaked rather than dropped, keeping the cursor library alive.
+        let xcursor = self
+            .xcursor
+            .take()
+            .and_then(|live| match Rc::try_unwrap(live) {
+                Ok(cell) => Some(cell.into_inner().into_session()),
+                Err(shared) => {
+                    std::mem::forget(shared);
+                    None
+                }
+            });
         unsafe {
             DeferredNativeLibraryHandles::from_backends(
-                self.xcursor.take(),
+                xcursor,
                 self.xft.take(),
                 self.xrender.take(),
                 self.xshape.take(),

@@ -11,7 +11,9 @@
     .battery-percent { position:absolute; left:64px; top:6px; height:52px; font-size:44px; font-weight:400; color:var(--text); }
     .battery-track { position:absolute; left:20px; top:76px; width:260px; height:8px; border-radius:4px; background:#3a3d40; }
     .battery-progress-fill { position:absolute; left:0px; top:0px; width:0px; height:8px; border-radius:4px; background:var(--accent); }
-    .battery-state { position:absolute; left:20px; top:92px; width:260px; height:18px; font-size:14px; color:var(--text); }
+    .battery-status-row { position:absolute; left:20px; top:92px; width:260px; height:18px; display:flex; justify-content:space-between; }
+    .battery-state { width:120px; height:18px; font-size:14px; color:var(--text); }
+    .battery-rate { width:130px; height:18px; font-size:14px; color:var(--muted); justify-content:flex-end; }
     .battery-cpu { position:absolute; left:20px; top:112px; width:260px; height:16px; font-size:12px; color:var(--muted); }
   </style>
 </head>
@@ -41,7 +43,10 @@
     <div id="battery-progress-track" class="battery-track">
       <div id="battery-progress-fill" class="battery-progress-fill"></div>
     </div>
-    <div id="battery-state" class="battery-state">&#8203;</div>
+    <div class="battery-status-row">
+      <div id="battery-state" class="battery-state">&#8203;</div>
+      <div id="battery-rate" class="battery-rate" title="Battery power">&#8203;</div>
+    </div>
     <div id="battery-cpu" class="battery-cpu">&#8203;</div>
   </section>
 </body>

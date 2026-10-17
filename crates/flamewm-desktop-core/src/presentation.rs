@@ -202,8 +202,8 @@ pub fn blank_context_menu(sticky_enabled: bool) -> Vec<BlankDesktopAction> {
 /// Fixed context-menu footprint used for work-area clamping.
 /// Canonical shared row minimum; the outer container minimum is derived in
 /// `context_menu_size` as content width plus shared container padding.
-pub const CONTEXT_MENU_WIDTH: i32 = MIN_ROW_WIDTH + 2 * flamewm_ui_core::context_menu::MENU_PADDING;
-pub const CONTEXT_MENU_ROW_HEIGHT: i32 = flamewm_ui_core::context_menu::ROW_HEIGHT;
+pub const CONTEXT_MENU_WIDTH: i32 = context_menu::MENU_MIN_WIDTH;
+pub const CONTEXT_MENU_ROW_HEIGHT: i32 = context_menu::ROW_HEIGHT;
 
 /// Blank-menu part shape: one row per visible action.
 #[must_use]
@@ -246,9 +246,11 @@ pub fn context_menu_size(parts: &[MenuPart], measured_min_width: i32) -> Size {
 /// Clamp a menu anchor so the menu rect stays inside the work area.
 #[must_use]
 pub fn clamp_menu_anchor(work_area: Rect, anchor: Rect, menu_size: (i32, i32)) -> Rect {
-    let width = menu_size.0.max(0).min(work_area.width.max(0));
-    let height = menu_size.1.max(0).min(work_area.height.max(0));
-    Rect::new(anchor.x, anchor.y, width, height).clamp_inside(work_area)
+    let size = Size::new(
+        menu_size.0.max(0).min(work_area.width.max(0)),
+        menu_size.1.max(0).min(work_area.height.max(0)),
+    );
+    context_menu::menu_rect(work_area, Point::new(anchor.x, anchor.y), size)
 }
 
 /// Menu height for a row count at the shared canonical row height.
@@ -399,9 +401,13 @@ mod tests {
     }
     #[test]
     fn desktop_css_accent_states_use_live_tokens_only() {
-        let css = include_str!("../../../ui/desktop/desktop.css");
+        // Menu hover lives in the shared menu stylesheet; the desktop surface and menus together
+        // must read accent states from live tokens only.
+        let desktop = include_str!("../../../ui/desktop/desktop.css");
+        let menu = include_str!("../../../ui/shared/menu.css");
+        let css = format!("{desktop}\n{menu}");
         for literal in ["ef4048", "EF4048", "239, 64, 72", "239,64,72"] {
-            assert!(!css.contains(literal), "desktop.css hard-codes accent {literal}");
+            assert!(!css.contains(literal), "desktop.css/menu.css hard-code accent {literal}");
         }
         for token in [
             "var(--desktop-hover)",
@@ -411,7 +417,7 @@ mod tests {
             "var(--accent-soft)",
             "var(--accent)",
         ] {
-            assert!(css.contains(token), "desktop.css lacks {token}");
+            assert!(css.contains(token), "desktop.css/menu.css lack {token}");
         }
     }
 

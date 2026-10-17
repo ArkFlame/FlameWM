@@ -199,6 +199,11 @@ impl SurfaceRuntime {
         self.controller.hide(surface.0).map_err(Into::into)
     }
 
+    /// Root dock rect for slide clipping when this process has no Dock surface (`None` clears).
+    pub fn set_external_dock(&mut self, rect: Option<(i32, i32, u32, u32)>) {
+        self.controller.set_external_dock(rect);
+    }
+
     /// Opt-in slide presentation for the next show/hide; `None` keeps the immediate path.
     pub fn set_slide(
         &mut self,
@@ -206,6 +211,16 @@ impl SurfaceRuntime {
         slide: Option<SlideConfig>,
     ) -> Result<(), UiBackendError> {
         self.controller.set_slide(surface.0, slide).map_err(Into::into)
+    }
+
+    /// Root-sized `(width, height, RGBA8)` wallpaper canvas used instead of a root capture for the
+    /// popup's next first-show backdrop; `None` restores the root capture.
+    pub fn set_popup_wallpaper(
+        &mut self,
+        surface: SurfaceHandle,
+        canvas: Option<(u32, u32, Vec<u8>)>,
+    ) -> Result<(), UiBackendError> {
+        self.controller.set_popup_wallpaper(surface.0, canvas).map_err(Into::into)
     }
 
     /// Opt-in `(opacity, blur)` pseudo-transparency backdrop, captured before each first show.

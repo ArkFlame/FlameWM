@@ -27,6 +27,7 @@ pub(super) struct SurfaceInstance {
     pub(super) dock_radius: u32,
     /// `(opacity, blur)` percents for a pseudo-transparency backdrop captured before each first map.
     pub(super) popup_backdrop: Option<(u8, u8)>,
+    pub(super) popup_wallpaper: Option<(u32, u32, Vec<u8>)>,
 }
 
 /// Pure mask decision for a dock window: keep the current shape, round it to `radius`, or
@@ -128,12 +129,28 @@ impl SurfaceController {
         Ok(())
     }
 
-    /// Root rect (x, y, width, height) of the dock panel, if one is mapped.
+    /// Root rect (x, y, width, height) of the dock panel: this controller's own Dock surface,
+    /// else the rect published by `set_external_dock`.
     pub(super) fn dock_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.surfaces
+        let local = self
+            .surfaces
             .values()
             .find(|instance| instance.role == SurfaceRole::Dock)
-            .map(|instance| (instance.origin.0, instance.origin.1, instance.app.width, instance.app.height))
+            .map(|instance| (instance.origin.0, instance.origin.1, instance.app.width, instance.app.height));
+        resolve_dock(local, self.external_dock)
     }
 
+    /// Publishes the root rect of a dock owned by another process (`None` clears it). Only
+    /// consulted when no local Dock surface exists, as in quick-control helpers.
+    pub fn set_external_dock(&mut self, rect: Option<(i32, i32, u32, u32)>) {
+        self.external_dock = rect;
+    }
+}
+
+/// Dock rect for slide clipping: a local Dock surface wins over a published one.
+pub(super) fn resolve_dock(
+    local: Option<(i32, i32, u32, u32)>,
+    external: Option<(i32, i32, u32, u32)>,
+) -> Option<(i32, i32, u32, u32)> {
+    local.or(external)
 }

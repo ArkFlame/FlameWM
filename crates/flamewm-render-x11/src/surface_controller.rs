@@ -166,6 +166,8 @@ pub struct SurfaceController {
     icon_geometry_atom: Atom,
     /// Active slide transitions keyed by surface id. Empty when idle (no frame wakeups).
     slides: Timeline<SlideKind>,
+    /// Dock rect published by a parent process; used only when this controller has no Dock surface.
+    external_dock: Option<(i32, i32, u32, u32)>,
     /// A root child was mapped, unmapped, configured or destroyed since the last `take_root_changed`.
     root_changed: bool,
     /// XInput2 raw-press selection that dismisses popups on outside presses.
@@ -199,6 +201,7 @@ impl SurfaceController {
                 deferred_native_libraries: Vec::new(),
                 icon_geometry_atom: 0,
                 slides: Timeline::new(),
+                external_dock: None,
                 root_changed: false,
                 press_selection: RawPressSelection::new(press_opcode),
                 press_observer_armed: false,
@@ -246,6 +249,7 @@ impl SurfaceController {
             dock_edge: None,
             dock_radius: 0,
             popup_backdrop: None,
+            popup_wallpaper: None,
         };
         // Overlay/passthrough surfaces are excluded from WM client
         // management: override-redirect + empty input region + no grab/focus.
@@ -551,6 +555,12 @@ impl SurfaceController {
             let window = self.instance_mut(id)?.app.window;
             // Slide-out starts above application windows; the panel clip hides the sinking part.
             unsafe { XRaiseWindow(display, window) };
+            // The first close frame is clipped too, not only frames after the first tick.
+            let dock = self.dock_rect();
+            let instance = self.instance_mut(id)?;
+            let origin = instance.slide_drawn.unwrap_or(instance.origin);
+            let clip = panel_clip(dock, origin, (instance.app.width, instance.app.height), config.edge);
+            unsafe { instance.app.refresh_shape_mask_clipped(&instance.document, clip) };
             // A new close starts fully shown; a reversed open continues from its progress.
             if self.slides.start_towards(key, closing, now, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0))
                 == Start::Started
@@ -1017,6 +1027,12 @@ impl SurfaceController {
 
     pub fn has_surfaces(&self) -> bool {
         !self.surfaces.is_empty()
+    }
+
+    fn instance_ref(&self, id: SurfaceId) -> Result<&SurfaceInstance, String> {
+        self.surfaces
+            .get(&id)
+            .ok_or_else(|| format!("unknown surface {}", id.0))
     }
 
     fn instance_mut(&mut self, id: SurfaceId) -> Result<&mut SurfaceInstance, String> {

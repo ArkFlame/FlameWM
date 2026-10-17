@@ -20,10 +20,9 @@ impl X11App {
         }
         // Xcursor backend first (semantic names, cached); core font fallback
         // only when the Xcursor lookup fails.
-        if let Some(xcursor) = self.xcursor.as_mut() {
-            let window = self.window;
-            let resolved = unsafe { xcursor.define(window, kind) };
-            if resolved.is_some() {
+        if let Some(xcursor) = self.xcursor.as_ref() {
+            let resolved = xcursor.borrow_mut().define(kind);
+            if resolved {
                 unsafe { XFlush(self.display) };
                 self.current_cursor = Some(kind);
                 return;

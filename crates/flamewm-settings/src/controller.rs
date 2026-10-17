@@ -1251,6 +1251,49 @@ mod tests {
         }
     }
 
+    fn taskbar_visibility_snapshot(key: &str, value: Option<bool>) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        if let Some(value) = value {
+            snapshot.values.insert(key.to_owned(), SettingValue::Boolean(value));
+        }
+        snapshot
+    }
+
+    #[test]
+    fn taskbar_visibility_twins_show_exactly_one_side_for_missing_default_and_explicit_values() {
+        for (key, on_id, off_id, default) in [
+            ("taskbarShowWeather", "taskbar-weather-on", "taskbar-weather-off", true),
+            ("taskbarShowVolume", "taskbar-volume-on", "taskbar-volume-off", true),
+            ("taskbarShowNetwork", "taskbar-network-on", "taskbar-network-off", true),
+            ("taskbarShowBattery", "taskbar-battery-on", "taskbar-battery-off", true),
+            (
+                "taskbarBatteryOnlyWhenRelevant",
+                "taskbar-battery-relevant-on",
+                "taskbar-battery-relevant-off",
+                false,
+            ),
+            ("taskbarShowClock", "taskbar-clock-on", "taskbar-clock-off", true),
+            ("taskbarShowWorkspaces", "taskbar-workspaces-on", "taskbar-workspaces-off", true),
+            ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", false),
+        ] {
+            for (value, expected_on) in [(None, default), (Some(default), default), (Some(!default), !default)] {
+                let mut transport = RecordingTransport::default();
+                transport.responses.push_back(Ok(ControlResponse::Settings(
+                    taskbar_visibility_snapshot(key, value),
+                )));
+                let mut application = SettingsApplication::new(transport);
+                application
+                    .client_mut()
+                    .refresh_settings()
+                    .expect("settings snapshot");
+                let mut document = ProbeDocument::default();
+                application.sync(&mut document).expect("sync");
+                assert_eq!(document.visible.get(on_id), Some(&expected_on), "{key} {value:?} on");
+                assert_eq!(document.visible.get(off_id), Some(&!expected_on), "{key} {value:?} off");
+            }
+        }
+    }
+
     #[test]
     fn visible_settings_buttons_cannot_be_actionless() {
         let html = include_str!("../../../ui/settings.html");
@@ -1309,6 +1352,19 @@ mod tests {
             ("settings.screensaver-ribbons.sideways", false),
             ("settings.toggle.taskbarShowSeconds", true),
             ("settings.toggle.taskbarShowDate", true),
+            ("settings.toggle.taskbarShowWeather", true),
+            ("settings.toggle.weatherEnabled", true),
+            ("settings.weather.units.celsius", true),
+            ("settings.weather.units.fahrenheit", true),
+            ("settings.weather.units.kelvin", false),
+            ("settings.weather.location.clear", true),
+            ("settings.toggle.taskbarShowVolume", true),
+            ("settings.toggle.taskbarShowNetwork", true),
+            ("settings.toggle.taskbarShowBattery", true),
+            ("settings.toggle.taskbarBatteryOnlyWhenRelevant", true),
+            ("settings.toggle.taskbarShowClock", true),
+            ("settings.toggle.taskbarShowWorkspaces", true),
+            ("settings.toggle.taskbarShowUnknown", false),
             ("settings.toggle.snapPreviewEnabled", true),
             ("settings.toggle.focusFollowsMouse", true),
         ] {
@@ -1863,6 +1919,124 @@ mod tests {
             })
             .collect();
         assert_eq!(written, vec![SettingValue::Text("fit".to_owned())]);
+    }
+
+    #[test]
+    fn weather_units_segments_write_exact_values_and_highlight_the_snapshot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "weatherUnits",
+                SettingValue::Text("celsius".to_owned()),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "weatherUnits",
+                SettingValue::Text("fahrenheit".to_owned()),
+            ))));
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application
+            .sync(&mut document)
+            .expect("sync initial snapshot");
+        assert!(document.highlighted["weather-units-celsius"]);
+        assert!(!document.highlighted["weather-units-fahrenheit"]);
+
+        application
+            .handle_action(&release("settings.weather.units.fahrenheit"), &mut document)
+            .expect("weather units fahrenheit");
+        assert!(document.highlighted["weather-units-fahrenheit"]);
+        assert!(!document.highlighted["weather-units-celsius"]);
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "weatherUnits")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Text("fahrenheit".to_owned())]);
+    }
+
+    #[test]
+    fn weather_location_label_decodes_the_saved_city_and_hides_malformed_values() {
+        use crate::weather_location_label;
+        assert_eq!(weather_location_label("51.5\t-0.12\tGB\tLondon"), "London");
+        assert_eq!(weather_location_label("51.5\t-0.12\t\tSpringfield"), "Springfield");
+        let unset = "Not set - click the weather icon in the taskbar";
+        assert_eq!(weather_location_label(""), unset);
+        assert_eq!(weather_location_label("abc\t-0.12\tGB\tLondon"), unset);
+        assert_eq!(weather_location_label("51.5\t-0.12\tGB\t"), unset);
+    }
+
+    #[test]
+    fn weather_location_clear_writes_empty_and_shows_the_unset_hint() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                1,
+                "weatherLocation",
+                SettingValue::Text("51.5\t-0.12\tGB\tLondon".to_owned()),
+            ))));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                2,
+                "weatherLocation",
+                SettingValue::Text(String::new()),
+            ))));
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        let mut document = ProbeDocument::default();
+        application
+            .sync(&mut document)
+            .expect("sync initial snapshot");
+        assert_eq!(document.texts["weather-location-value"], "London");
+
+        application
+            .handle_action(&release("settings.weather.location.clear"), &mut document)
+            .expect("clear weather location");
+        assert_eq!(
+            document.texts["weather-location-value"],
+            "Not set - click the weather icon in the taskbar"
+        );
+        let written: Vec<SettingValue> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == "weatherLocation")
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, vec![SettingValue::Text(String::new())]);
     }
 
     #[test]

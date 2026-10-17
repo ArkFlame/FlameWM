@@ -14,11 +14,13 @@ fn main() {
         .expect("workspace root");
     let html_path = manifest.join("../../ui/desktop/index.html");
     let css_path = manifest.join("../../ui/desktop/desktop.css");
+    let menu_css_path = manifest.join("../../ui/shared/menu.css");
     let raster = root.join("assets/raster");
     let wallpaper = root.join("assets/wallpapers/fitz-roy-dawn.webp");
     let breeze = root.join("assets/web/breeze");
     println!("cargo:rerun-if-changed={}", html_path.display());
     println!("cargo:rerun-if-changed={}", css_path.display());
+    println!("cargo:rerun-if-changed={}", menu_css_path.display());
     rerun_tree(&breeze);
     println!("cargo:rerun-if-changed={}", wallpaper.display());
     assert!(
@@ -64,7 +66,7 @@ fn main() {
 
     let output = compile_file(
         &staged_ui.join("index.html"),
-        &[css_path],
+        &[css_path, menu_css_path],
         CompileOptions::default(),
     )
     .expect("compile desktop UI");

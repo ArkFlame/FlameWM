@@ -55,9 +55,22 @@ impl WeatherHost {
     }
 
     /// Applies settings and resets the visible state to match (disabled or unconfigured).
+    /// Enabling or choosing a location fetches once on the next tick, so the tray
+    /// shows data without the popup open. A location change drops the old city's
+    /// snapshot and any in-flight fetch for it.
     pub fn apply_settings(&mut self, settings: WeatherSettings) {
-        if !settings.enabled {
+        let location_changed = self.settings.location != settings.location;
+        let became_active = settings.enabled
+            && settings.location.is_some()
+            && (!self.settings.enabled || location_changed);
+        if !settings.enabled || location_changed {
             self.inflight = None;
+        }
+        if location_changed {
+            self.state = WeatherState::Disabled;
+        }
+        if became_active {
+            self.fetch_on_open = true;
         }
         self.settings = settings;
         let state = std::mem::replace(&mut self.state, WeatherState::Disabled);
@@ -293,19 +306,21 @@ mod tests {
             fixture_rx()
         };
         host.tick(start, fetch);
-        assert_eq!(calls.get(), 0, "no periodic fetch before the popup opens");
-
-        host.request_open_fetch();
-        host.tick(start, fetch);
-        assert_eq!(calls.get(), 1);
+        assert_eq!(calls.get(), 1, "enabling with a location fetches once for the tray");
         host.tick(start, fetch);
         assert!(matches!(host.state, WeatherState::Ready(_)));
         assert_eq!(calls.get(), 1);
 
-        host.tick(start + Duration::from_secs(29 * 60), fetch);
-        assert_eq!(calls.get(), 1, "still inside the 30 minute window");
-        host.tick(start + WEATHER_REFRESH_INTERVAL, fetch);
+        host.request_open_fetch();
+        host.tick(start, fetch);
+        assert_eq!(calls.get(), 2, "opening the popup fetches");
+        host.tick(start, fetch);
         assert_eq!(calls.get(), 2);
+
+        host.tick(start + Duration::from_secs(29 * 60), fetch);
+        assert_eq!(calls.get(), 2, "still inside the 30 minute window");
+        host.tick(start + WEATHER_REFRESH_INTERVAL, fetch);
+        assert_eq!(calls.get(), 3);
     }
 
     #[test]
@@ -387,5 +402,157 @@ mod tests {
         assert!(search.query.is_empty());
         assert!(search.results.is_empty());
         assert_eq!(search.status, SearchStatus::Idle);
+    }
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use super::*;
+    use crate::projection::{project_weather_popup, project_weather_tray};
+    use flamewm_shell_core::weather::{DayForecast, TemperatureUnit, WeatherCondition, WeatherSnapshot};
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
+    use flamewm_ui_x11::UiColor;
+    use std::cell::Cell;
+
+    const VEIL: UiColor = UiColor { r: 0, g: 0, b: 0, a: 255 };
+
+    fn berlin() -> WeatherLocation {
+        WeatherLocation::new("Berlin", 52.52, 13.41, Some("Germany")).unwrap()
+    }
+
+    fn enabled_settings() -> WeatherSettings {
+        WeatherSettings {
+            enabled: true,
+            location: Some(berlin()),
+            units: TemperatureUnit::Celsius,
+        }
+    }
+
+    fn week_snapshot() -> WeatherSnapshot {
+        WeatherSnapshot {
+            location: berlin(),
+            temperature_c: 21,
+            condition: WeatherCondition::Clear,
+            days: (0..7)
+                .map(|i| DayForecast {
+                    date: format!("2026-10-{:02}", 16 + i),
+                    condition: WeatherCondition::Rain,
+                    min_c: 3,
+                    max_c: 14,
+                })
+                .collect(),
+            fetched_at: 1,
+        }
+    }
+
+    /// A worker that already finished with `result`; no socket, no thread.
+    fn answer(result: WeatherResult) -> mpsc::Receiver<WeatherResult> {
+        let (tx, rx) = mpsc::channel();
+        tx.send(result).unwrap();
+        rx
+    }
+
+    /// Starts one fetch answered by `result`, then polls it on the next tick.
+    fn refresh(host: &mut WeatherHost, now: Instant, result: WeatherResult) {
+        host.tick(now, |_| answer(result));
+        host.tick(now, |_| unreachable!("a fetch is already in flight"));
+    }
+
+    fn tray_of(host: &WeatherHost) -> RecordingUiDoc {
+        let feed = host.feed();
+        let mut doc = RecordingUiDoc::default();
+        project_weather_tray(&mut doc, &feed.state, feed.settings.units, true).unwrap();
+        doc
+    }
+
+    fn popup_of(host: &WeatherHost) -> RecordingUiDoc {
+        let feed = host.feed();
+        let mut doc = RecordingUiDoc::default();
+        project_weather_popup(
+            &mut doc,
+            &feed.state,
+            &feed.settings,
+            &LocationSearch::default(),
+            VEIL,
+        )
+        .unwrap();
+        doc
+    }
+
+    #[test]
+    fn no_http_before_a_location_is_chosen() {
+        let mut host = WeatherHost::new();
+        host.apply_settings(WeatherSettings {
+            enabled: true,
+            location: None,
+            units: TemperatureUnit::Celsius,
+        });
+        host.request_open_fetch();
+        let calls = Cell::new(0);
+        host.tick(Instant::now(), |_| {
+            calls.set(calls.get() + 1);
+            answer(Ok(week_snapshot()))
+        });
+        assert_eq!(calls.get(), 0);
+        assert_eq!(host.state, WeatherState::Unconfigured);
+        assert_eq!(tray_of(&host).texts["tray-weather-temp"], "--");
+    }
+
+    #[test]
+    fn picked_location_fetches_then_shows_tray_text_and_seven_rows() {
+        let mut host = WeatherHost::new();
+        let calls = Cell::new(0);
+        let now = Instant::now();
+        host.apply_settings(enabled_settings());
+        host.tick(now, |_| {
+            calls.set(calls.get() + 1);
+            answer(Ok(week_snapshot()))
+        });
+        assert_eq!(calls.get(), 1, "enabling with a location fetches once");
+        assert_eq!(host.state, WeatherState::Loading);
+        host.tick(now, |_| unreachable!("a fetch is already in flight"));
+        assert!(matches!(host.state, WeatherState::Ready(_)));
+        assert_eq!(calls.get(), 1);
+
+        let tray = tray_of(&host);
+        assert_eq!(tray.texts["tray-weather-temp"], "21\u{b0}");
+        assert!(tray.visible["tray-weather-clear"]);
+        let popup = popup_of(&host);
+        assert_eq!(popup.texts["weather-temp"], "21\u{b0}");
+        assert!(popup.visible["weather-day-7-name"]);
+        assert!(!popup.visible.contains_key("weather-day-8-name"));
+    }
+
+    #[test]
+    fn failed_refresh_keeps_last_data_offline_and_failed_first_load_shows_error() {
+        let mut host = WeatherHost::new();
+        let now = Instant::now();
+        host.apply_settings(enabled_settings());
+        refresh(&mut host, now, Ok(week_snapshot()));
+        host.request_open_fetch();
+        refresh(&mut host, now, Err(WeatherError::Transport));
+        assert!(matches!(host.state, WeatherState::Offline(Some(_))));
+        assert_eq!(tray_of(&host).texts["tray-weather-temp"], "21\u{b0}");
+        assert_eq!(popup_of(&host).texts["weather-state"], "Offline");
+
+        let mut failed = WeatherHost::new();
+        failed.apply_settings(enabled_settings());
+        refresh(&mut failed, now, Err(WeatherError::Transport));
+        assert_eq!(failed.state, WeatherState::Error(WeatherError::Transport));
+        assert_eq!(tray_of(&failed).texts["tray-weather-temp"], "--");
+        assert_eq!(popup_of(&failed).texts["weather-state"], "Could not load weather");
+    }
+
+    #[test]
+    fn changing_location_drops_the_previous_city_snapshot() {
+        let mut host = WeatherHost::new();
+        let now = Instant::now();
+        host.apply_settings(enabled_settings());
+        refresh(&mut host, now, Ok(week_snapshot()));
+        let mut other = enabled_settings();
+        other.location = Some(WeatherLocation::new("Paris", 48.85, 2.35, None).unwrap());
+        host.apply_settings(other);
+        assert_eq!(host.state, WeatherState::Loading);
+        assert_eq!(tray_of(&host).texts["tray-weather-temp"], "--");
     }
 }

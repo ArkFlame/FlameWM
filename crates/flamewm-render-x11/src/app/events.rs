@@ -2,6 +2,8 @@ use std::borrow::Cow;
 
 use super::input::apply_wheel_scroll;
 use super::*;
+use crate::runtime::{RawPress, RawPressWatch};
+use crate::xinput::{GENERIC_EVENT, generic_cookie};
 use crate::WindowGeometrySlot;
 
 fn keyboard_text(symbol: u64) -> Option<String> {
@@ -220,6 +222,18 @@ impl X11App {
             unsafe { XNextEvent(self.display, event.as_mut_ptr()) };
             // SAFETY: XNextEvent wrote a complete XEvent into the MaybeUninit storage.
             let event = unsafe { event.assume_init() };
+            // Root raw presses carry no window of ours; handle them before the window filter.
+            // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
+            if unsafe { event.type_ } == GENERIC_EVENT {
+                if Some(unsafe { generic_cookie(&event) }.extension) == self.press_selection.opcode() {
+                    // SAFETY: the event is a GenericEvent of the selected XI extension.
+                    unsafe { self.record_raw_press(&event, document.ui_scale()) };
+                }
+                if self.single_event {
+                    return Ok(());
+                }
+                continue;
+            }
             // SAFETY: xany is the common XEvent prefix and is valid for every event type.
             if self.single_event && unsafe { event.xany.window } != self.window {
                 // SAFETY: The event was returned by XNextEvent and remains initialized.
@@ -719,20 +733,25 @@ impl X11App {
         }
     }
 
-    pub(crate) unsafe fn event_loop_with_reactor<F, R>(
+    pub(crate) unsafe fn event_loop_with_reactor<F, R, P>(
         &mut self,
         document: &mut RuntimeDocument,
         on_action: &mut F,
         reactor: &mut Reactor,
         on_reactor: &mut R,
         geometry: &WindowGeometrySlot,
+        press_watch: &RawPressWatch,
+        on_press: &mut P,
     ) -> Result<(), String>
     where
         F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
         R: FnMut(&mut RuntimeDocument) -> Result<(), String>,
+        P: FnMut(&RawPress, &mut RuntimeDocument) -> Result<(), String>,
     {
         // No unconditional redraw on entry; reactor ticks/damage drive paints.
         loop {
+            // SAFETY: the press watch is only read here; sync touches this app's live display.
+            unsafe { self.sync_raw_press_observer(press_watch) };
             // XNextEvent can leave already-read events in Xlib's queue after
             // single_event returns. Avoid blocking on the fd reactor in that case.
             let timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
@@ -758,6 +777,9 @@ impl X11App {
             // SAFETY: The caller owns the live X11 display and app resources.
             unsafe { self.event_loop(document, on_action)? };
             self.single_event = false;
+            // The event may have opened a menu: arm before the next wake.
+            unsafe { self.sync_raw_press_observer(press_watch) };
+            unsafe { self.deliver_raw_presses(document, on_press)? };
             if self.close_requested {
                 return Ok(());
             }

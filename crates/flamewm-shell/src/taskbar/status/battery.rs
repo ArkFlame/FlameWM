@@ -50,15 +50,26 @@ impl BatteryGlyph {
     }
 }
 
-/// Tray visibility: service available, a battery present, and not in the
-/// Unknown ("Not charging": plugged in but not charging, e.g. a charge limit;
-/// also covers a genuine UPower unknown) state. Charging shows the charging
-/// glyph; Discharging, Empty and Full show the normal glyph at any percent.
+/// Tray visibility: the `taskbarShowBattery` setting, service available, and a
+/// battery present. With `only_when_relevant` the Unknown state is also hidden
+/// (UPower unknown). Without it a present battery shows in every state.
+/// Charging shows the charging glyph; the rest show the normal glyph.
 #[must_use]
-pub fn tray_visible(power: &PowerSnapshot) -> bool {
-    power.available == ServiceAvailability::Available
+pub fn tray_visible(power: &PowerSnapshot, enabled: bool, only_when_relevant: bool) -> bool {
+    enabled
+        && power.available == ServiceAvailability::Available
         && power.present
-        && power.state != PowerState::Unknown
+        && !(only_when_relevant && power.state == PowerState::Unknown)
+}
+
+/// Battery energy flow for the menu label. Battery power only, never system
+/// power; empty when the rate is unknown.
+#[must_use]
+pub fn rate_text(rate_mw: Option<u32>) -> String {
+    match rate_mw {
+        Some(milliwatts) => format!("Battery {}.{} W", milliwatts / 1000, (milliwatts % 1000) / 100),
+        None => String::new(),
+    }
 }
 
 /// Bucket rule: 0..=10 is Caution; above that the level rounds UP to the next
@@ -119,32 +130,47 @@ mod tests {
             percent,
             state,
             cpu_percent: None,
+            power_rate_mw: None,
         }
     }
 
     #[test]
-    fn tray_visible_for_every_state_except_unknown() {
+    fn tray_visible_for_every_state_when_not_only_relevant() {
         for percent in [0, 45, 79, 80, 100] {
             for state in [
                 PowerState::Charging,
                 PowerState::Discharging,
                 PowerState::Full,
                 PowerState::Empty,
+                PowerState::Unknown,
             ] {
-                assert!(tray_visible(&power(state, percent)), "{state:?} {percent}");
+                assert!(tray_visible(&power(state, percent), true, false), "{state:?} {percent}");
             }
-            assert!(!tray_visible(&power(PowerState::Unknown, percent)));
         }
     }
 
     #[test]
-    fn tray_hidden_when_battery_missing_or_service_unavailable() {
+    fn only_when_relevant_hides_unknown_state() {
+        assert!(tray_visible(&power(PowerState::Discharging, 40), true, true));
+        assert!(!tray_visible(&power(PowerState::Unknown, 40), true, true));
+    }
+
+    #[test]
+    fn tray_hidden_when_setting_off_battery_missing_or_service_unavailable() {
+        assert!(!tray_visible(&power(PowerState::Discharging, 40), false, false));
         let mut absent = power(PowerState::Discharging, 40);
         absent.present = false;
-        assert!(!tray_visible(&absent));
+        assert!(!tray_visible(&absent, true, false));
         let mut unavailable = power(PowerState::Discharging, 40);
         unavailable.available = ServiceAvailability::Unavailable;
-        assert!(!tray_visible(&unavailable));
+        assert!(!tray_visible(&unavailable, true, false));
+    }
+
+    #[test]
+    fn rate_text_is_battery_power_with_one_decimal_or_empty() {
+        assert_eq!(rate_text(Some(12_345)), "Battery 12.3 W");
+        assert_eq!(rate_text(Some(800)), "Battery 0.8 W");
+        assert_eq!(rate_text(None), "");
     }
 
     #[test]

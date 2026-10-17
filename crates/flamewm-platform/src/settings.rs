@@ -269,6 +269,19 @@ pub struct ProductSettings {
     pub taskbar_clock_format: ClockFormat,
     pub taskbar_show_seconds: bool,
     pub taskbar_show_date: bool,
+    pub taskbar_show_weather: bool,
+    pub taskbar_show_volume: bool,
+    pub taskbar_show_network: bool,
+    pub taskbar_show_battery: bool,
+    /// Whole date/time cluster; `taskbar_show_date` and `taskbar_show_seconds` apply inside it.
+    pub taskbar_show_clock: bool,
+    pub taskbar_show_workspaces: bool,
+    pub taskbar_battery_only_when_relevant: bool,
+    pub weather_enabled: bool,
+    /// Encoded weather location (`lat\tlon\tcountry\tname`); empty means unset.
+    pub weather_location: String,
+    /// `celsius` or `fahrenheit`.
+    pub weather_units: String,
     pub surface_color: String,
     pub surface_opacity: u8,
     pub surface_blur_percent: u8,
@@ -357,6 +370,16 @@ impl Default for ProductSettings {
             taskbar_clock_format: ClockFormat::TwentyFour,
             taskbar_show_seconds: false,
             taskbar_show_date: true,
+            taskbar_show_weather: true,
+            taskbar_show_volume: true,
+            taskbar_show_network: true,
+            taskbar_show_battery: true,
+            taskbar_show_clock: true,
+            taskbar_show_workspaces: true,
+            taskbar_battery_only_when_relevant: false,
+            weather_enabled: false,
+            weather_location: String::new(),
+            weather_units: "celsius".to_owned(),
             surface_color: "#191b1d".to_owned(),
             surface_opacity: 50,
             surface_blur_percent: 80,
@@ -585,6 +608,9 @@ impl ProductSettings {
         validate_color(&self.lock_background_color, false, "lockBackgroundColor")?;
         validate_lock_image_path(&self.lock_background_image, "lockBackgroundImage")?;
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
+        if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {
+            return invalid("weatherUnits must be celsius or fahrenheit");
+        }
         if self.lock_background_blur_percent > 100 {
             return invalid("lockBackgroundBlurPercent must be 0..100");
         }
@@ -988,90 +1014,28 @@ impl Slot for AnimationStyle {
     }
 }
 
-impl Slot for LockClockFormat {
-    fn to_value(&self) -> SettingValue {
-        SettingValue::Text(self.as_str().to_owned())
-    }
+macro_rules! text_enum_slot {
+    ($($ty:ty),*) => {$(
+        impl Slot for $ty {
+            fn to_value(&self) -> SettingValue {
+                SettingValue::Text(self.as_str().to_owned())
+            }
 
-    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
-        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
-    }
+            fn from_text(text: &str, key: &str) -> FlameResult<Self> {
+                Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
+            }
 
-    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
+            fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+                match value {
+                    SettingValue::Text(text) => Self::from_text(text, key),
+                    _ => invalid("setting requires text"),
+                }
+            }
         }
-    }
+    )*};
 }
 
-impl Slot for TaskbarStyle {
-    fn to_value(&self) -> SettingValue {
-        SettingValue::Text(self.as_str().to_owned())
-    }
-
-    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
-        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
-    }
-
-    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
-        }
-    }
-}
-
-impl Slot for BackgroundMode {
-    fn to_value(&self) -> SettingValue {
-        SettingValue::Text(self.as_str().to_owned())
-    }
-
-    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
-        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
-    }
-
-    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
-        }
-    }
-}
-
-impl Slot for WallpaperFit {
-    fn to_value(&self) -> SettingValue {
-        SettingValue::Text(self.as_str().to_owned())
-    }
-
-    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
-        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
-    }
-
-    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
-        }
-    }
-}
-
-impl Slot for ScreensaverMode {
-    fn to_value(&self) -> SettingValue {
-        SettingValue::Text(self.as_str().to_owned())
-    }
-
-    fn from_text(text: &str, key: &str) -> FlameResult<Self> {
-        Self::parse(text).map_or_else(|| invalid_owned(format!("bad {key}")), Ok)
-    }
-
-    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
-        }
-    }
-}
+text_enum_slot!(LockClockFormat, TaskbarStyle, BackgroundMode, WallpaperFit, ScreensaverMode);
 
 impl Slot for AppearanceMode {
     fn to_value(&self) -> SettingValue {
@@ -1152,6 +1116,16 @@ stable_settings! {
     (false, taskbar, "taskbarClockFormat", taskbar_clock_format),
     (false, taskbar, "taskbarShowSeconds", taskbar_show_seconds),
     (false, taskbar, "taskbarShowDate", taskbar_show_date),
+    (false, taskbar, "taskbarShowWeather", taskbar_show_weather),
+    (false, taskbar, "taskbarShowVolume", taskbar_show_volume),
+    (false, taskbar, "taskbarShowNetwork", taskbar_show_network),
+    (false, taskbar, "taskbarShowBattery", taskbar_show_battery),
+    (false, taskbar, "taskbarShowClock", taskbar_show_clock),
+    (false, taskbar, "taskbarShowWorkspaces", taskbar_show_workspaces),
+    (false, taskbar, "taskbarBatteryOnlyWhenRelevant", taskbar_battery_only_when_relevant),
+    (false, weather, "weatherEnabled", weather_enabled),
+    (false, weather, "weatherLocation", weather_location),
+    (false, weather, "weatherUnits", weather_units),
     (false, desktop, "wallpaperFit", wallpaper_fit),
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
@@ -2374,6 +2348,151 @@ mod tests {
                 "{line} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn weather_keys_default_off_and_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert!(!defaults.weather_enabled);
+        assert!(defaults.weather_location.is_empty());
+        assert_eq!(defaults.weather_units, "celsius");
+        let text = ConfigStore::serialize(&defaults);
+        for key in ["weatherEnabled", "weatherLocation", "weatherUnits"] {
+            assert!(!text.contains(key), "{key} must not be written at default");
+        }
+    }
+
+    #[test]
+    fn weather_keys_are_typed_stable_rows_and_round_trip() {
+        let store = ConfigStore::default();
+        let location = "51.5\t-0.12\tGB\tLondon";
+        let parsed = store
+            .parse_snapshot(&format!(
+                "revision=2\nweatherEnabled=true\nweatherUnits=fahrenheit\nweatherLocation={location}\n"
+            ))
+            .expect("valid weather settings");
+        assert!(parsed.weather_enabled);
+        assert_eq!(parsed.weather_units, "fahrenheit");
+        assert_eq!(parsed.weather_location, location);
+        assert!(parsed.unknown_keys.is_empty(), "weather keys must not fall into unknown_keys");
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("weatherEnabled=true\n"));
+        assert!(text.contains("weatherUnits=fahrenheit\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+
+        let stable = |key: &str| super::stable_setting(key).expect("typed weather row");
+        let defaults = ProductSettings::default();
+        assert_eq!(
+            (stable("weatherEnabled").get)(&defaults),
+            flamewm_api::settings::SettingValue::Boolean(false)
+        );
+        let mut settings = parsed.clone();
+        (stable("weatherLocation").set)(&mut settings, &defaults, None, "weatherLocation")
+            .expect("clearing location");
+        assert!(settings.weather_location.is_empty());
+    }
+
+    #[test]
+    fn weather_units_reject_values_other_than_celsius_or_fahrenheit() {
+        let store = ConfigStore::default();
+        assert!(store.parse_snapshot("revision=2\nweatherUnits=kelvin\n").is_err());
+        assert!(store.parse_snapshot("revision=2\nweatherUnits=celsius\n").is_ok());
+    }
+
+    #[test]
+    fn taskbar_widget_defaults_match_contract_and_write_nothing() {
+        let defaults = ProductSettings::default();
+        assert!(defaults.taskbar_show_weather);
+        assert!(defaults.taskbar_show_volume);
+        assert!(defaults.taskbar_show_network);
+        assert!(defaults.taskbar_show_battery);
+        assert!(defaults.taskbar_show_clock);
+        assert!(defaults.taskbar_show_workspaces);
+        assert!(!defaults.taskbar_battery_only_when_relevant);
+        let text = ConfigStore::serialize(&defaults);
+        for key in [
+            "taskbarShowWeather",
+            "taskbarShowVolume",
+            "taskbarShowNetwork",
+            "taskbarShowBattery",
+            "taskbarShowClock",
+            "taskbarShowWorkspaces",
+            "taskbarBatteryOnlyWhenRelevant",
+        ] {
+            assert!(!text.contains(key), "{key} must not be written at default");
+        }
+    }
+
+    #[test]
+    fn taskbar_widget_keys_round_trip_off_and_on_defaults() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot(
+                "revision=2\ntaskbarShowWeather=false\ntaskbarShowVolume=false\n\
+                 taskbarShowNetwork=false\ntaskbarShowBattery=false\n\
+                 taskbarShowClock=false\ntaskbarShowWorkspaces=false\n\
+                 taskbarBatteryOnlyWhenRelevant=true\n",
+            )
+            .expect("valid taskbar widget settings");
+        assert!(!parsed.taskbar_show_weather);
+        assert!(!parsed.taskbar_show_volume);
+        assert!(!parsed.taskbar_show_network);
+        assert!(!parsed.taskbar_show_battery);
+        assert!(!parsed.taskbar_show_clock);
+        assert!(!parsed.taskbar_show_workspaces);
+        assert!(parsed.taskbar_battery_only_when_relevant);
+        let text = ConfigStore::serialize(&parsed);
+        assert!(text.contains("taskbarShowWeather=false\n"));
+        assert!(text.contains("taskbarShowClock=false\n"));
+        assert!(text.contains("taskbarBatteryOnlyWhenRelevant=true\n"));
+        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+
+        let explicit_on = store
+            .parse_snapshot("revision=2\ntaskbarShowWeather=true\ntaskbarShowClock=true\n")
+            .expect("explicit default-on values");
+        assert!(explicit_on.taskbar_show_weather && explicit_on.taskbar_show_clock);
+        let on_text = ConfigStore::serialize(&explicit_on);
+        assert!(!on_text.contains("taskbarShowWeather"));
+        assert!(!on_text.contains("taskbarShowClock"));
+    }
+
+    #[test]
+    fn taskbar_widget_keys_reject_invalid_and_keep_unknown_keys() {
+        let store = ConfigStore::default();
+        assert_eq!(
+            store
+                .parse_snapshot("revision=2\ntaskbarShowNetwork=maybe\n")
+                .expect_err("invalid bool")
+                .code,
+            ErrorCode::InvalidArgument
+        );
+        let parsed = store
+            .parse_snapshot(
+                "revision=2\naccent=#EF4048\ntaskbarShowBattery=false\nfutureFeature=kept\n",
+            )
+            .expect("mixed file");
+        assert_eq!(parsed.accent, "#EF4048");
+        assert!(!parsed.taskbar_show_battery);
+        assert!(parsed.taskbar_show_clock);
+        assert_eq!(
+            parsed.unknown_keys.get("futureFeature").map(String::as_str),
+            Some("kept")
+        );
+    }
+
+    #[test]
+    fn legacy_file_without_taskbar_widget_keys_loads_defaults() {
+        let store = ConfigStore::default();
+        let parsed = store
+            .parse_snapshot("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
+            .expect("legacy taskbar file");
+        assert!(parsed.taskbar_show_weather);
+        assert!(parsed.taskbar_show_volume);
+        assert!(parsed.taskbar_show_network);
+        assert!(parsed.taskbar_show_battery);
+        assert!(parsed.taskbar_show_clock);
+        assert!(parsed.taskbar_show_workspaces);
+        assert!(!parsed.taskbar_battery_only_when_relevant);
     }
 
     #[test]

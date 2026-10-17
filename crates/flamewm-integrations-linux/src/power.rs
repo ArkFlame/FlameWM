@@ -34,6 +34,20 @@ pub fn power_state_from_upower(value: u32) -> PowerState {
     }
 }
 
+fn is_flow_state(state: PowerState) -> bool {
+    matches!(state, PowerState::Charging | PowerState::Discharging)
+}
+
+/// Battery energy flow in integer milliwatts. Only a finite, positive `EnergyRate` while charging or
+/// discharging is reported; zero, negative, non-finite, or other states yield `None`.
+#[must_use]
+pub fn power_rate_mw(state: PowerState, watts: f64) -> Option<u32> {
+    if !is_flow_state(state) || !watts.is_finite() || watts <= 0.0 {
+        return None;
+    }
+    Some((watts * 1000.0).round() as u32)
+}
+
 /// Rounds a UPower percentage to 0..=100; NaN is treated as 0.
 #[must_use]
 pub fn clamp_percent(value: f64) -> u8 {
@@ -308,6 +322,8 @@ impl PowerProvider {
             return;
         };
         let mut snapshot = self.snapshot;
+        let mut energy_rate = None;
+        let mut state_changed = false;
         for (key, value) in dict.iter() {
             let (MessageItem::Str(key), value) = (key, unwrap_variant(value)) else {
                 continue;
@@ -318,10 +334,17 @@ impl PowerProvider {
                 }
                 ("State", MessageItem::UInt32(value)) => {
                     snapshot.state = power_state_from_upower(*value);
+                    state_changed = true;
                 }
                 ("IsPresent", MessageItem::Bool(value)) => snapshot.present = *value,
+                ("EnergyRate", MessageItem::Double(value)) => energy_rate = Some(*value),
                 _ => {}
             }
+        }
+        if let Some(rate) = energy_rate {
+            snapshot.power_rate_mw = power_rate_mw(snapshot.state, rate);
+        } else if state_changed || !is_flow_state(snapshot.state) {
+            snapshot.power_rate_mw = None;
         }
         snapshot.available = ServiceAvailability::Available;
         self.snapshot = snapshot;
@@ -509,5 +532,118 @@ mod tests {
         assert!(!provider.sample_cpu());
         provider.set_battery_menu_open(false);
         assert_eq!(provider.snapshot().cpu_percent, None);
+    }
+
+    fn rate_provider() -> PowerProvider {
+        PowerProvider {
+            pump: None,
+            dormant: UnixStream::pair().expect("pair").0,
+            _peer: UnixStream::pair().expect("pair").0,
+            pending_get_all: None,
+            snapshot: PowerSnapshot::default(),
+            cpu: CpuSampler::default(),
+            menu_open: false,
+            started: false,
+        }
+    }
+
+    fn props(entries: Vec<(&str, MessageItem)>) -> MessageItem {
+        MessageItem::new_dict(
+            entries
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        MessageItem::Str(key.to_owned()),
+                        MessageItem::Variant(Box::new(value)),
+                    )
+                })
+                .collect(),
+        )
+        .expect("dict")
+    }
+
+    fn rate_after(state: u32, rate: Option<f64>) -> Option<u32> {
+        let mut provider = rate_provider();
+        let mut entries = vec![("State", MessageItem::UInt32(state))];
+        if let Some(rate) = rate {
+            entries.push(("EnergyRate", MessageItem::Double(rate)));
+        }
+        provider.apply_properties(Some(&props(entries)));
+        provider.snapshot().power_rate_mw
+    }
+
+    const DISCHARGING: u32 = 2;
+    const CHARGING: u32 = 1;
+
+    #[test]
+    fn energy_rate_absent_is_none() {
+        assert_eq!(rate_after(DISCHARGING, None), None);
+    }
+
+    #[test]
+    fn energy_rate_zero_is_none_never_zero_watts() {
+        assert_eq!(rate_after(DISCHARGING, Some(0.0)), None);
+    }
+
+    #[test]
+    fn energy_rate_discharging_converts_watts_to_milliwatts() {
+        assert_eq!(rate_after(DISCHARGING, Some(12.34)), Some(12340));
+    }
+
+    #[test]
+    fn energy_rate_charging_is_reported() {
+        assert_eq!(rate_after(CHARGING, Some(5.5)), Some(5500));
+    }
+
+    #[test]
+    fn energy_rate_non_finite_is_none() {
+        assert_eq!(rate_after(DISCHARGING, Some(f64::NAN)), None);
+        assert_eq!(rate_after(DISCHARGING, Some(f64::INFINITY)), None);
+        assert_eq!(rate_after(DISCHARGING, Some(f64::NEG_INFINITY)), None);
+    }
+
+    #[test]
+    fn energy_rate_negative_is_none() {
+        assert_eq!(rate_after(DISCHARGING, Some(-3.0)), None);
+    }
+
+    #[test]
+    fn energy_rate_ignored_when_full() {
+        assert_eq!(rate_after(4, Some(12.0)), None);
+    }
+
+    #[test]
+    fn energy_rate_ignored_when_state_unknown() {
+        assert_eq!(rate_after(0, Some(12.0)), None);
+    }
+
+    #[test]
+    fn energy_rate_ignored_without_battery() {
+        let mut provider = rate_provider();
+        provider.apply_properties(Some(&props(vec![
+            ("IsPresent", MessageItem::Bool(false)),
+            ("State", MessageItem::UInt32(0)),
+            ("EnergyRate", MessageItem::Double(0.0)),
+        ])));
+        assert_eq!(provider.snapshot().power_rate_mw, None);
+    }
+
+    #[test]
+    fn energy_rate_follows_properties_changed_updates() {
+        let mut provider = rate_provider();
+        provider.apply_properties(Some(&props(vec![
+            ("State", MessageItem::UInt32(DISCHARGING)),
+            ("EnergyRate", MessageItem::Double(12.34)),
+        ])));
+        assert_eq!(provider.snapshot().power_rate_mw, Some(12340));
+
+        provider.apply_properties(Some(&props(vec![(
+            "EnergyRate",
+            MessageItem::Double(15.0),
+        )])));
+        assert_eq!(provider.snapshot().power_rate_mw, Some(15000));
+
+        provider.apply_properties(Some(&props(vec![("State", MessageItem::UInt32(4))])));
+        assert_eq!(provider.snapshot().power_rate_mw, None);
     }
 }

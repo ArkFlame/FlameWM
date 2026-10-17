@@ -19,6 +19,7 @@ flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 flamewm-debug = { path = "../flamewm-debug" }
+flamewm-session-core = { path = "../flamewm-session-core" }
 flamewm-shell-core = { path = "../flamewm-shell-core" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }

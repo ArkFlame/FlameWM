@@ -28,6 +28,15 @@ fn general_settings_launch(action: &str) -> Option<&'static str> {
     (action == TASKBAR_MENU_SETTINGS_ACTION).then_some(GENERAL_SETTINGS_PROGRAM)
 }
 
+/// Non-primary releases are dropped, except an outside release: a right-button press outside an
+/// open shell popup must dismiss it (the right-click that opens another menu replaces this one).
+fn non_primary_release_is_dropped(action: &str, is_release: bool, button: PointerButton) -> bool {
+    is_release
+        && !matches!(button, PointerButton::Primary)
+        && action != "keyboard.input"
+        && action != OUTSIDE_RELEASE_ACTION
+}
+
 /// What a release outside the active popup does to the quick-control popups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutsideReleaseDecision {
@@ -176,10 +185,7 @@ impl ShellLoop {
         // non-primary pointer releases drops every real Escape press
         // before the keyboard arms below. Exempt them here.
         let is_keyboard = action == "keyboard.input";
-        if event.action.phase == ActionPhase::Release
-            && !matches!(button, PointerButton::Primary)
-            && !is_keyboard
-        {
+        if non_primary_release_is_dropped(action, event.action.phase == ActionPhase::Release, button) {
             return Ok(());
         }
         if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
@@ -606,6 +612,13 @@ mod tests {
     }
 
     #[test]
+    fn taskbar_menu_settings_markup_action_is_the_routed_settings_action() {
+        let html = include_str!("../../../ui/shell/task-menu.html");
+        assert!(html.contains("data-action=\"taskbar.menu.settings\""));
+        assert!(general_settings_launch("taskbar.menu.settings").is_some());
+    }
+
+    #[test]
     fn tray_release_while_audio_open_toggles_closed_without_reopen() {
         assert_eq!(
             outside_release_decision(TRAY_VOLUME_ACTION, true, false, false, true),
@@ -647,6 +660,15 @@ mod tests {
             outside_release_decision("network.open", false, false, false, true),
             OutsideReleaseDecision::Ignore
         );
+    }
+
+    #[test]
+    fn right_button_outside_release_reaches_dismissal_but_other_secondary_releases_drop() {
+        assert!(!non_primary_release_is_dropped(OUTSIDE_RELEASE_ACTION, true, PointerButton::Secondary));
+        assert!(!non_primary_release_is_dropped(OUTSIDE_RELEASE_ACTION, true, PointerButton::Primary));
+        assert!(non_primary_release_is_dropped("network.open", true, PointerButton::Secondary));
+        assert!(!non_primary_release_is_dropped("keyboard.input", true, PointerButton::Other(0)));
+        assert!(!non_primary_release_is_dropped(OUTSIDE_RELEASE_ACTION, false, PointerButton::Secondary));
     }
 
     fn latch_for(group: &'static str, at: Instant) -> Option<DismissLatch> {

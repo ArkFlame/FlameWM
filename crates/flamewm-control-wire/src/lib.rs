@@ -1729,6 +1729,9 @@ pub fn system_dict(snapshot: &SystemSnapshot) -> WireDict {
     if let Some(cpu) = snapshot.power.cpu_percent {
         out.insert("powerCpuPercent".to_owned(), WireValue::U32(u32::from(cpu)));
     }
+    if let Some(milliwatts) = snapshot.power.power_rate_mw {
+        out.insert("powerRateMilliwatts".to_owned(), WireValue::U32(milliwatts));
+    }
     out.insert(
         "audioAvailability".to_owned(),
         WireValue::String(availability_name(snapshot.audio.availability).to_owned()),
@@ -1923,12 +1926,18 @@ fn power_snapshot(dict: &WireDict) -> Result<PowerSnapshot, ControlError> {
     } else {
         None
     };
+    let power_rate_mw = if dict.get("powerRateMilliwatts").is_some() {
+        Some(dict_u32(dict, "powerRateMilliwatts")?)
+    } else {
+        None
+    };
     Ok(PowerSnapshot {
         available: parse_availability(dict_string(dict, "powerAvailability")?)?,
         present: dict_bool(dict, "powerPresent")?,
         percent: u8::try_from(percent).map_err(|_| invalid("power percent exceeds u8"))?,
         state: parse_power_state(dict_string(dict, "powerState")?)?,
         cpu_percent,
+        power_rate_mw,
     })
 }
 
@@ -3284,6 +3293,7 @@ mod tests {
                 percent: 87,
                 state: PowerState::Discharging,
                 cpu_percent: Some(13),
+                power_rate_mw: Some(12340),
             },
         }
     }
@@ -3301,6 +3311,21 @@ mod tests {
             let dict = system_dict(&source);
             assert_eq!(system_snapshot(&dict).expect("decode"), source);
             assert_eq!(dict.contains_key("powerCpuPercent"), cpu_percent.is_some());
+        }
+        for power_rate_mw in [Some(12340), None] {
+            let source = SystemSnapshot {
+                power: PowerSnapshot {
+                    power_rate_mw,
+                    ..system_fixture().power
+                },
+                ..system_fixture()
+            };
+            let dict = system_dict(&source);
+            assert_eq!(system_snapshot(&dict).expect("decode"), source);
+            assert_eq!(
+                dict.contains_key("powerRateMilliwatts"),
+                power_rate_mw.is_some()
+            );
         }
     }
 

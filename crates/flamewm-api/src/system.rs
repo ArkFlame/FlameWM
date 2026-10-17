@@ -165,6 +165,8 @@ pub struct PowerSnapshot {
     pub percent: u8,
     pub state: PowerState,
     pub cpu_percent: Option<u8>,
+    /// Battery energy flow in integer milliwatts; `None` unless charging or discharging with a positive rate.
+    pub power_rate_mw: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

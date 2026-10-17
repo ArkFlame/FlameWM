@@ -70,6 +70,7 @@ mod tests {
         "animation-speed-value",
         "lock-background-image-value",
         "avatar-value",
+        "weather-location-value",
         "lock-bg-blur-value",
         "lock-bg-dim-value",
         "taskbar-size-value",

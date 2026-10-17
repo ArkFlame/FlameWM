@@ -89,7 +89,13 @@ fn execute() -> Result<(), String> {
     {
         let scope = flamewm_profiler::ProfilePoint::new("shell.startup.panel_project");
         let _s = scope.start();
-        project_panel_critical(&mut runtime, &surfaces, &snapshot, &start_model)?;
+        project_panel_critical(
+            &mut runtime,
+            &surfaces,
+            &snapshot,
+            &start_model,
+            settings_projection::taskbar_items(startup_settings.as_ref()),
+        )?;
     }
     // Snapshot before the first map: the bar's own translucent pixels must not be captured.
     if let Err(error) = surfaces.capture_panel_backdrop(&mut runtime) {
@@ -252,13 +258,19 @@ fn project_panel_critical(
     surfaces: &ShellSurfaces,
     snapshot: &ShellSnapshot,
     start_model: &flamewm_shell_core::StartModel,
+    items: projection::TaskbarItems,
 ) -> Result<(), String> {
     projection::for_each_panel_record(
         snapshot,
         surfaces.panel_outputs(),
         |handle, view| {
             runtime.with_document(handle, |document| {
-                async_projection::project_panel_async(document, view, None, &mut Default::default())
+                async_projection::project_panel_async(
+                    document,
+                    view.with_items(items),
+                    None,
+                    &mut Default::default(),
+                )
             })
         },
     )

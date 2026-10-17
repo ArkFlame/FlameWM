@@ -21,6 +21,7 @@ flamewm-debug = { path = "../flamewm-debug" }
 flamewm-image-core = { path = "../flamewm-image-core" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+flamewm-session-core = { path = "../flamewm-session-core" }
 calloop.workspace = true
 inotify.workspace = true
 
@@ -29,3 +30,6 @@ flamewm-render-compiler = { path = "../flamewm-render-compiler" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+flamewm-ui-x11 = { path = "../flamewm-ui-x11", features = ["test-support"] }

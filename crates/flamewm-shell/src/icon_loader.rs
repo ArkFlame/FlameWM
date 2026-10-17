@@ -768,4 +768,57 @@ mod tests {
         assert_eq!(name, "ThemeB");
         assert!(rx.try_recv().is_err(), "exactly one theme message per switch");
     }
+
+    #[test]
+    fn theme_switch_rerequests_old_key_and_rejects_stale_reply() {
+        let (tx, rx) = sync_channel::<WorkerMsg>(8);
+        let (res_tx, res_rx) = sync_channel::<IconResult>(8);
+        let mut loader = loader_with_channels(tx, res_rx);
+        loader.theme = "ThemeA".to_owned();
+        let old_generation = loader.generation();
+
+        loader.request(IconTarget::TaskSlot(0), "app", 24, 24);
+        assert!(loader.set_theme("ThemeB"));
+        let new_generation = loader.generation();
+        assert_ne!(old_generation, new_generation);
+
+        // The key is forgotten by the theme switch, so it re-enqueues.
+        loader.request(IconTarget::TaskSlot(0), "app", 24, 24);
+        let mut icon_generations = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let WorkerMsg::Icon(req) = msg {
+                icon_generations.push(req.generation);
+            }
+        }
+        assert_eq!(icon_generations, vec![old_generation, new_generation]);
+
+        // Old-generation reply for the same key is rejected; new one is accepted.
+        res_tx
+            .try_send(IconResult {
+                target: IconTarget::TaskSlot(0),
+                generation: old_generation,
+                name: "app".to_owned(),
+                width: 24,
+                height: 24,
+                raster: None,
+            })
+            .expect("queue stale");
+        assert!(loader.drain_ready().is_empty());
+        assert_eq!(loader.stale_drops, 1);
+
+        res_tx
+            .try_send(IconResult {
+                target: IconTarget::TaskSlot(0),
+                generation: new_generation,
+                name: "app".to_owned(),
+                width: 24,
+                height: 24,
+                raster: None,
+            })
+            .expect("queue fresh");
+        let ready = loader.drain_ready();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].generation, new_generation);
+        assert_eq!(loader.stale_drops, 1);
+    }
 }

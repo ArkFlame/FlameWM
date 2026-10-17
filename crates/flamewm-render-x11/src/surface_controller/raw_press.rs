@@ -27,7 +27,7 @@ unsafe extern "C" {
 }
 
 /// Selection key of the quick-popup press observer. Never a real surface id.
-pub(super) const PRESS_OBSERVER: SurfaceId = SurfaceId(u64::MAX);
+pub(crate) const PRESS_OBSERVER: SurfaceId = SurfaceId(u64::MAX);
 
 /// One root press seen while the press observer is armed. `child_window_title`
 /// is the WM_NAME of the top-level window under the pointer, if any.
@@ -119,7 +119,7 @@ pub(super) unsafe fn window_title(display: *mut Display, window: Window) -> Opti
 
 /// XInput2 opcode when the server speaks XI 2.0. `None` disables raw dismissal;
 /// FocusOut and Escape still dismiss the popup.
-pub(super) unsafe fn xi_raw_press_opcode(display: *mut Display) -> Option<std::os::raw::c_int> {
+pub(crate) unsafe fn xi_raw_press_opcode(display: *mut Display) -> Option<std::os::raw::c_int> {
     // SAFETY: live connection; out-pointers are locals.
     unsafe {
         let mut opcode: std::os::raw::c_int = 0;

@@ -485,10 +485,18 @@ impl ExternalDecorationRenderer {
     pub fn into_cursor_shared(self) -> Rc<RefCell<Self>> {
         let shared = Rc::new(RefCell::new(self));
         let owner: Rc<RefCell<dyn CursorThemeOwner>> = shared.clone();
-        let in_use = env::var("XCURSOR_THEME").ok();
-        CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().register(&owner, in_use));
+        register_cursor_theme_owner(&owner, env::var("XCURSOR_THEME").ok());
         shared
     }
+}
+
+/// Registers a live cursor owner (weakly) for [`apply_cursor_theme`]. `in_use` is the
+/// theme the owner was opened with.
+pub(crate) fn register_cursor_theme_owner(
+    owner: &Rc<RefCell<dyn CursorThemeOwner>>,
+    in_use: Option<String>,
+) {
+    CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().register(owner, in_use));
 }
 
 /// Process-local owners of Xcursor state. The WM is single-threaded; weak

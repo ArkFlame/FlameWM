@@ -11,7 +11,7 @@ use flamewm_shell_core::StartModel;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::icon_loader::{IconLoader, IconTarget};
-use crate::projection::PanelView;
+use crate::projection::{PanelView, TaskbarItems};
 use crate::start::StartCategory;
 use crate::taskbar::workspaces::{
     project as project_workspaces, slot_position, visible_page, PAGE_SIZE,
@@ -828,6 +828,7 @@ pub fn project_pager_async(
 pub fn project_status_tray_async(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
+    items: TaskbarItems,
 ) -> Result<(), String> {
     let status = crate::taskbar::status::project(&snapshot.system).views;
     document.visible(
@@ -853,11 +854,12 @@ pub fn project_status_tray_async(
             Some(flamewm_ui_core::IconRole::MediaPause)
         ),
     )?;
-    document.visible("tray-volume", status.audio.visible)?;
+    document.visible("tray-volume", status.audio.visible && items.volume)?;
     document.visible("tray-volume-icon", !status.audio.muted)?;
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
-    document.visible("tray-network", status.network.visible)?;
-    crate::projection::project_battery_tray(document, &snapshot.system.power)?;
+    document.visible("tray-network", status.network.visible && items.network)?;
+    crate::projection::project_battery_tray(document, &snapshot.system.power, items)?;
+    document.visible("clock-button", items.clock)?;
     Ok(())
 }
 
@@ -924,9 +926,10 @@ fn project_panel_scoped_tail(
     }
     if scope.pager {
         project_pager_async(document, view.snapshot)?;
+        document.visible("workspace-pager", view.items.workspaces)?;
     }
     if scope.tray {
-        project_status_tray_async(document, view.snapshot)?;
+        project_status_tray_async(document, view.snapshot, view.items)?;
     }
     if scope.full_clock() {
         crate::projection::project_clock(document)?;
@@ -1500,6 +1503,7 @@ mod tests {
             percent: 45,
             state: PowerState::Discharging,
             cpu_percent: None,
+            power_rate_mw: None,
         };
         let changed = ChangedDomains {
             system: true,
@@ -1511,11 +1515,19 @@ mod tests {
         assert_eq!(doc.visible.get("tray-battery-050"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-caution"), Some(&false));
 
-        // Unknown (plugged in, not charging) hides the button.
+        // Unknown (plugged in, not charging) stays shown by default; only the
+        // battery-only-when-relevant setting hides it.
         snapshot.system.power.percent = 87;
         snapshot.system.power.state = PowerState::Unknown;
         let mut doc = FakeDoc::default();
         project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        assert_eq!(doc.visible.get("tray-battery"), Some(&true));
+        let relevant_only = TaskbarItems {
+            battery_only_when_relevant: true,
+            ..TaskbarItems::default()
+        };
+        let mut doc = FakeDoc::default();
+        project_panel_for_changed(&mut doc, PanelView::first(&snapshot).with_items(relevant_only), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&false));
 
         // Charging shows the charging glyph, at 80% too.
@@ -1532,6 +1544,64 @@ mod tests {
         project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-080-charging"), Some(&true));
+    }
+
+    // A08: each cluster item is its setting AND availability; the clock
+    // cluster and workspace pager follow their own settings.
+    #[test]
+    fn taskbar_item_settings_hide_cluster_items_clock_and_pager() {
+        let _guard = icon_test_lock().lock();
+        let snapshot = ShellSnapshot::default();
+        let hidden = TaskbarItems {
+            weather: false,
+            volume: false,
+            network: false,
+            battery: false,
+            battery_only_when_relevant: false,
+            clock: false,
+            workspaces: false,
+        };
+        let mut doc = FakeDoc::default();
+        project_panel_async(
+            &mut doc,
+            PanelView::first(&snapshot).with_items(hidden),
+            None,
+            &mut TaskIconCache::default(),
+        )
+        .expect("projects");
+        for id in ["tray-volume", "tray-network", "tray-battery", "clock-button", "workspace-pager"] {
+            assert_eq!(doc.visible.get(id), Some(&false), "{id}");
+        }
+    }
+
+    // A03: a theme change drops rasters cached under the old theme, so the next
+    // Start or taskbar projection re-requests them instead of reusing old art.
+    #[test]
+    fn theme_change_invalidates_cached_icons() {
+        let _guard = icon_test_lock().lock();
+        note_icon_result("firefox", 20, 20, empty_image(20, 20));
+        assert!(cached_contains("firefox", 20, 20));
+        invalidate_icon_cache();
+        assert!(!cached_contains("firefox", 20, 20));
+    }
+
+    // A08: status cluster order in the panel template.
+    #[test]
+    fn panel_status_cluster_order_is_weather_volume_network_battery_clock() {
+        let html = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ui/shell/panel.html"
+        ))
+        .expect("panel.html");
+        let at = |id: &str| {
+            html.find(&format!("id=\"{id}\""))
+                .unwrap_or_else(|| panic!("{id} missing"))
+        };
+        let order = ["tray-weather", "tray-volume", "tray-network", "tray-battery", "clock-button"]
+            .map(at);
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+        assert!(at("tray-media") < at("tray-weather"));
+        assert!(at("workspace-pager") < at("tray-media"));
     }
 
     #[test]

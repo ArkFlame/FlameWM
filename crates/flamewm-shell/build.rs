@@ -11,6 +11,7 @@ fn main() {
         .and_then(Path::parent)
         .expect("workspace root");
     let css = root.join("ui/shell/flamewm.css");
+    let menu_css = root.join("ui/shared/menu.css");
     let sources = [
         "panel.html",
         "start.html",
@@ -37,6 +38,7 @@ fn main() {
     ];
 
     println!("cargo:rerun-if-changed={}", css.display());
+    println!("cargo:rerun-if-changed={}", menu_css.display());
     for source in sources {
         println!(
             "cargo:rerun-if-changed={}",
@@ -67,7 +69,7 @@ fn main() {
         &staged_assets.join("branding"),
     );
     for (artifact, source) in artifacts {
-        compile_to(&staged_ui.join(source), &out_dir.join(artifact));
+        compile_to(&staged_ui.join(source), &menu_css, &out_dir.join(artifact));
     }
 }
 
@@ -82,8 +84,12 @@ fn stage_tree(source: &Path, dest: &Path) {
     }
 }
 
-fn compile_to(source: &Path, output: &Path) {
-    let compiled = compile_file(source, &[], CompileOptions::default())
+fn compile_to(source: &Path, shared_menu_css: &Path, output: &Path) {
+    let compiled = compile_file(
+        source,
+        &[shared_menu_css.to_path_buf()],
+        CompileOptions::default(),
+    )
         .unwrap_or_else(|error| panic!("failed to compile {}: {error}", source.display()));
     let bytes = encode(&compiled.document).expect("compiled FlameWM UI must encode");
     fs::write(output, bytes).expect("write compiled FlameWM UI artifact");

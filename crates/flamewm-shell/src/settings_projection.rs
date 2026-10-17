@@ -8,7 +8,7 @@ use flamewm_platform::settings::ClockFormat;
 use flamewm_ui_core::context_menu::{shape_radius, surface_fill};
 use flamewm_ui_x11::{RuntimeImage, SlideConfig, SlideEdge, UiColor, UiDocumentAccess};
 
-use crate::projection::{project_clock_at, ClockDisplay};
+use crate::projection::{project_clock_at, ClockDisplay, TaskbarItems};
 
 /// Panel image node that carries the custom Start icon (`ui/shell/panel.html`).
 const START_ICON_ID: &str = "task-start-icon";
@@ -85,7 +85,10 @@ pub fn project(
             // No accent outline: the menu's rounded panes cover the border on three sides, so an
             // accent-coloured border only ever showed as a red line down the left edge.
         }
-        SurfaceKind::TaskMenu | SurfaceKind::Media => {
+        SurfaceKind::TaskMenu => {
+            // Task menu shares the desktop menu frame (ui/shared/menu.css 1px border); no accent outline.
+        }
+        SurfaceKind::Media => {
             document.border(root, accent)?;
         }
         SurfaceKind::Osd => {
@@ -245,6 +248,27 @@ pub fn clock_display(snapshot: &SettingsSnapshot) -> ClockDisplay {
         format,
         show_seconds: bool_setting(snapshot, "taskbarShowSeconds", defaults.show_seconds),
         show_date: bool_setting(snapshot, "taskbarShowDate", defaults.show_date),
+    }
+}
+
+/// Taskbar item visibility keys; a missing snapshot or key means its default.
+pub fn taskbar_items(snapshot: Option<&SettingsSnapshot>) -> TaskbarItems {
+    let defaults = TaskbarItems::default();
+    let Some(snapshot) = snapshot else {
+        return defaults;
+    };
+    TaskbarItems {
+        weather: bool_setting(snapshot, "taskbarShowWeather", defaults.weather),
+        volume: bool_setting(snapshot, "taskbarShowVolume", defaults.volume),
+        network: bool_setting(snapshot, "taskbarShowNetwork", defaults.network),
+        battery: bool_setting(snapshot, "taskbarShowBattery", defaults.battery),
+        battery_only_when_relevant: bool_setting(
+            snapshot,
+            "taskbarBatteryOnlyWhenRelevant",
+            defaults.battery_only_when_relevant,
+        ),
+        clock: bool_setting(snapshot, "taskbarShowClock", defaults.clock),
+        workspaces: bool_setting(snapshot, "taskbarShowWorkspaces", defaults.workspaces),
     }
 }
 

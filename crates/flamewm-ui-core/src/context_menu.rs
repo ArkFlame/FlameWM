@@ -23,9 +23,24 @@ pub const MIN_ROW_WIDTH: i32 = 195;
 pub const ROW_HEIGHT: i32 = 31;
 /// Canonical container padding in px (shell canonical).
 pub const MENU_PADDING: i32 = 5;
-/// Separator vertical footprint: 1px line + 2x5px margin (matches
-/// `.menu-separator { height:1px; margin:5px }`).
-pub const SEPARATOR_HEIGHT: i32 = 11;
+/// Separator line thickness (`.menu-separator { height:1px }`).
+pub const SEPARATOR_LINE: i32 = 1;
+/// Separator margin above and below the line (`.menu-separator { margin:5px }`).
+pub const SEPARATOR_MARGIN: i32 = 5;
+/// Separator vertical footprint: line plus top and bottom margin.
+pub const SEPARATOR_HEIGHT: i32 = SEPARATOR_LINE + 2 * SEPARATOR_MARGIN;
+/// Outer container minimum width: row minimum plus both container paddings.
+pub const MENU_MIN_WIDTH: i32 = MIN_ROW_WIDTH + 2 * MENU_PADDING;
+/// Corner radius of a shell `.menu-row` in px.
+pub const ROW_RADIUS: i32 = 3;
+/// Row icon edge length in px.
+pub const ROW_ICON_SIZE: i32 = 16;
+/// Gap between row icon and label in px.
+pub const ROW_GAP: i32 = 9;
+/// Left inset of row content in px.
+pub const ROW_PADDING_LEFT: i32 = 8;
+/// CSS custom property that fills a hovered row.
+pub const ROW_HOVER_TOKEN: &str = "--accent-soft";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MenuMetrics {
@@ -287,6 +302,124 @@ mod tests {
         let fill = surface_fill(&snapshot);
         assert_eq!(fill.alpha, 127);
         assert_eq!(fill.rgb, 0x191b1d);
+    }
+}
+
+/// Drift guard: the shell and desktop stylesheets must express the canonical
+/// metrics for the properties they already set. Properties not yet expressed
+/// are migrated by the consumer wave, not asserted here.
+#[cfg(test)]
+mod css_contract_tests {
+    use super::*;
+
+    const SHELL_CSS: &str = include_str!("../../../ui/shell/flamewm.css");
+    const DESKTOP_CSS: &str = include_str!("../../../ui/desktop/desktop.css");
+    const MENU_CSS: &str = include_str!("../../../ui/shared/menu.css");
+    const SHELL_BUILD: &str = include_str!("../../flamewm-shell/build.rs");
+    const DESKTOP_BUILD: &str = include_str!("../../flamewm-desktop/build.rs");
+
+    /// Declaration block of the first top-level rule whose selector list contains `selector`.
+    fn rule<'a>(css: &'a str, selector: &str) -> &'a str {
+        let mut rest = css;
+        while let Some(open) = rest.find('{') {
+            let close = rest[open..].find('}').map_or(rest.len(), |i| open + i);
+            if rest[..open].split(',').any(|item| item.trim() == selector) {
+                return &rest[open + 1..close];
+            }
+            rest = &rest[(close + 1).min(rest.len())..];
+        }
+        panic!("rule `{selector}` not found");
+    }
+
+    fn decl<'a>(css: &'a str, selector: &str, property: &str) -> &'a str {
+        rule(css, selector)
+            .split(';')
+            .find_map(|declaration| {
+                let (name, value) = declaration.split_once(':')?;
+                (name.trim() == property).then(|| value.trim())
+            })
+            .unwrap_or_else(|| panic!("`{selector}` has no `{property}`"))
+    }
+
+    fn px(css: &str, selector: &str, property: &str) -> i32 {
+        let raw = decl(css, selector, property);
+        raw.strip_suffix("px")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("`{selector} {property}` is not px: {raw}"))
+    }
+
+    /// Every selector item in `css`, with comments removed.
+    fn selectors(css: &str) -> Vec<String> {
+        let mut plain = String::new();
+        let mut rest = css;
+        while let Some(start) = rest.find("/*") {
+            plain.push_str(&rest[..start]);
+            rest = rest[start..].find("*/").map_or("", |end| &rest[start + end + 2..]);
+        }
+        plain.push_str(rest);
+        let blocks = plain.matches('{').count();
+        plain
+            .split('{')
+            .take(blocks)
+            .flat_map(|head| {
+                head.rsplit('}')
+                    .next()
+                    .unwrap_or("")
+                    .split(',')
+                    .map(|item| item.trim().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shared_menu_expresses_canonical_metrics_once() {
+        let css = MENU_CSS;
+        assert_eq!(px(css, ".context-menu", "min-width"), MENU_MIN_WIDTH);
+        assert_eq!(px(css, ".context-menu", "padding"), MENU_PADDING);
+        assert_eq!(px(css, ".context-menu", "border-radius"), shape_radius(true));
+        assert_eq!(px(css, ".menu-row", "min-width"), MIN_ROW_WIDTH);
+        assert_eq!(px(css, ".menu-row", "height"), ROW_HEIGHT);
+        assert_eq!(px(css, ".menu-row", "padding-left"), ROW_PADDING_LEFT);
+        assert_eq!(px(css, ".menu-row", "gap"), ROW_GAP);
+        assert_eq!(px(css, ".menu-row", "border-radius"), ROW_RADIUS);
+        assert_eq!(px(css, ".menu-row img", "width"), ROW_ICON_SIZE);
+        assert_eq!(px(css, ".menu-row img", "height"), ROW_ICON_SIZE);
+        assert_eq!(px(css, ".menu-header", "min-width"), MIN_ROW_WIDTH);
+        assert_eq!(px(css, ".menu-header", "min-height"), ROW_HEIGHT);
+        assert_eq!(
+            px(css, ".menu-separator", "height") + 2 * px(css, ".menu-separator", "margin"),
+            SEPARATOR_HEIGHT
+        );
+        let hover = format!("var({ROW_HOVER_TOKEN})");
+        assert_eq!(decl(css, ".menu-row:hover", "background"), hover.as_str());
+    }
+
+    #[test]
+    fn menu_rules_are_owned_only_by_shared_sheet() {
+        for owned in [".context-menu", ".menu-row", ".menu-header", ".menu-separator"] {
+            for (name, css) in [("flamewm.css", SHELL_CSS), ("desktop.css", DESKTOP_CSS)] {
+                assert!(
+                    !selectors(css).iter().any(|item| item == owned),
+                    "{name} must not define `{owned}`; it lives in ui/shared/menu.css"
+                );
+            }
+            assert!(selectors(MENU_CSS).iter().any(|item| item == owned));
+        }
+    }
+
+    #[test]
+    fn both_compiled_documents_link_the_shared_menu_sheet() {
+        assert!(SHELL_BUILD.contains("ui/shared/menu.css"));
+        assert!(DESKTOP_BUILD.contains("ui/shared/menu.css"));
+    }
+
+    #[test]
+    fn accent_soft_hover_token_is_identical_across_sheets() {
+        assert_eq!(
+            decl(SHELL_CSS, ":root", ROW_HOVER_TOKEN),
+            decl(DESKTOP_CSS, ":root", ROW_HOVER_TOKEN)
+        );
     }
 }
 

@@ -21,7 +21,7 @@ use flamewm_control_wire::ControlSignal;
 use flamewm_dbus_reactor::BusKind;
 use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
-use flamewm_shell_core::weather::{WeatherFeed, WeatherSettings};
+use flamewm_shell_core::weather::WeatherFeed;
 use crate::projection::project_weather_popup;
 use crate::weather_host::{spawn_location_search, LocationSearch};
 use flamewm_ui_x11::{
@@ -253,6 +253,8 @@ struct HostState {
     queue: VecDeque<Command>,
     /// Set on parent EOF or SHUTDOWN; the tick stops the loop cleanly.
     shutdown: bool,
+    /// Applied live cursor theme for this thread's helper windows.
+    cursor_theme: crate::cursor_theme::CursorThemeSync,
 }
 
 /// Duplicate stdin + O_NONBLOCK on the dup. No unsafe: the std File
@@ -382,6 +384,7 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
         system_reprojection_pending: false,
         queue: VecDeque::new(),
         shutdown: false,
+        cursor_theme: crate::cursor_theme::CursorThemeSync::default(),
     }));
 
     // Nonblocking parent command FD: duplicate the stdin description so
@@ -614,7 +617,13 @@ fn coalesce_commands(queue: &mut VecDeque<Command>) -> VecDeque<Command> {
 /// or call keeps the last snapshot (nonfatal: the popup still opens with the previous values).
 fn refresh_settings_for_open(state: &std::rc::Rc<std::cell::RefCell<HostState>>) {
     match ControlClient::connect(BusKind::Session) {
-        Ok(client) => state.borrow_mut().snapshot.refresh_settings(&client),
+        Ok(client) => {
+            // Windows exist once a popup opens, so the live cursor reload is safe only here.
+            let mut host = state.borrow_mut();
+            host.snapshot.refresh_settings(&client);
+            let HostState { snapshot, cursor_theme, .. } = &mut *host;
+            cursor_theme.sync_snapshot(&snapshot.settings);
+        }
         Err(error) => eprintln!(
             "flamewm-quick-control: settings refresh skipped: {}",
             error.message
@@ -874,6 +883,12 @@ fn open_request(
     if let Err(error) = runtime.set_popup_backdrop(surface, Some(backdrop)) {
         eprintln!("flamewm-quick-control: popup backdrop skipped (nonfatal): {error:?}");
     }
+    // This helper has no Dock surface: the parent's panel rect clips slide transit frames.
+    runtime.set_external_dock(
+        request
+            .dock
+            .map(|dock| (dock.x, dock.y, dock.width.max(0) as u32, dock.height.max(0) as u32)),
+    );
     // Same Start slide preference and speed as the Start menu, on this panel edge.
     let slide = popup_slide(&snapshot.settings, request.panel_edge);
     let slide = match arm_slide(runtime, surface, slide) {
@@ -1281,8 +1296,9 @@ fn clear_network_secret(snapshot: &mut QuickControlSnapshot) {
     snapshot.network_secret_error = false;
 }
 
-/// Persists only the chosen location; the main shell pushes the new feed once the
-/// settings snapshot changes. Other weather settings are left untouched.
+/// Persists the chosen location and enables weather. `to_changes` also writes the
+/// current units (`celsius` unless already set), so the stored state is complete.
+/// The main shell pushes the new feed once the settings snapshot changes.
 fn pick_weather_location(
     snapshot: &mut QuickControlSnapshot,
     index: usize,
@@ -1294,11 +1310,8 @@ fn pick_weather_location(
     snapshot.weather_search.reset();
     let mut settings = snapshot.weather.settings.clone();
     settings.location = Some(location);
-    let changes = settings
-        .to_changes()
-        .into_iter()
-        .filter(|change| change.key == WeatherSettings::LOCATION_KEY)
-        .collect();
+    settings.enabled = true;
+    let changes = settings.to_changes();
     let request = ControlRequest::ApplySettings(flamewm_api::settings::SettingsTransaction {
         expected_revision: snapshot.system.revision,
         changes,
@@ -1640,6 +1653,7 @@ pub fn open_via_supervisor_nonfatal(
     anchor: flamewm_api::Rect,
     work_area: flamewm_api::Rect,
     panel_edge: flamewm_api::PanelEdge,
+    dock: Option<flamewm_api::Rect>,
 ) {
     let _span = crate::runtime::shell_span("shell.quick_control.open_request").start();
     if let Err(error) = supervisor.open(super::protocol::OpenRequest {
@@ -1647,6 +1661,7 @@ pub fn open_via_supervisor_nonfatal(
         anchor,
         work_area,
         panel_edge,
+        dock,
     }) {
         eprintln!("flamewm-shell: quick-control open failed (nonfatal): {error}");
     }
@@ -1692,6 +1707,7 @@ mod tests {
             anchor: flamewm_api::Rect::new(0, 0, 1, 1),
             work_area: flamewm_api::Rect::new(0, 0, 10, 10),
             panel_edge: flamewm_api::PanelEdge::Bottom,
+            dock: None,
         }));
         assert!(!line.contains("s3cr3t"));
     }
@@ -1908,6 +1924,7 @@ mod tests {
             anchor: flamewm_api::Rect::new(0, 0, 10, 10),
             work_area: flamewm_api::Rect::new(0, 0, 100, 100),
             panel_edge: flamewm_api::PanelEdge::Bottom,
+            dock: None,
         })
     }
 
@@ -2347,6 +2364,7 @@ mod battery_popup_tests {
             percent: 80,
             state: PowerState::Discharging,
             cpu_percent,
+            power_rate_mw: None,
         }
     }
 

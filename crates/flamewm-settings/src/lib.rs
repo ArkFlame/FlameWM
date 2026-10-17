@@ -35,6 +35,49 @@ const WEBSITE_URI: &str = "https://wm.arkflame.com";
 const APP_VERSION: &str = env!("FLAMEWM_SETTINGS_VERSION");
 /// Authoritative accent for the native FlameWM preset.
 const DEFAULT_ACCENT: &str = "#EF4048";
+/// Nodes whose compiled colour is the accent and must follow live accent changes.
+/// Every `toggle-on` id in ui/settings.html must be listed here (checked by a test).
+const ACCENT_NODE_IDS: &[&str] = &[
+    "nav-selection-accent",
+    "anim-global-on",
+    "anim-start-on",
+    "anim-window-on",
+    "anim-minimize-on",
+    "anim-maximize-on",
+    "lock-date-on",
+    "lock-username-on",
+    "lock-suspend-on",
+    "sticky-toggle-on",
+    "focus-mouse-on",
+    "snap-preview-on",
+    "taskbar-seconds-on",
+    "taskbar-date-on",
+    "taskbar-weather-on",
+    "taskbar-volume-on",
+    "taskbar-network-on",
+    "taskbar-battery-on",
+    "taskbar-battery-relevant-on",
+    "taskbar-clock-on",
+    "taskbar-workspaces-on",
+    "weather-enabled-on",
+    "font-toggle-on",
+];
+/// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
+const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
+    ("taskbarShowWeather", "taskbar-weather-on", "taskbar-weather-off", true),
+    ("taskbarShowVolume", "taskbar-volume-on", "taskbar-volume-off", true),
+    ("taskbarShowNetwork", "taskbar-network-on", "taskbar-network-off", true),
+    ("taskbarShowBattery", "taskbar-battery-on", "taskbar-battery-off", true),
+    (
+        "taskbarBatteryOnlyWhenRelevant",
+        "taskbar-battery-relevant-on",
+        "taskbar-battery-relevant-off",
+        false,
+    ),
+    ("taskbarShowClock", "taskbar-clock-on", "taskbar-clock-off", true),
+    ("taskbarShowWorkspaces", "taskbar-workspaces-on", "taskbar-workspaces-off", true),
+    ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", false),
+];
 /// Inline status line for failed requests. Optional in the compiled markup.
 const ERROR_NODE: &str = "settings-error";
 /// Version line on the About page. Optional in the compiled markup.
@@ -447,6 +490,8 @@ pub struct SettingsApplication<T: ControlTransport> {
     theme_install: Option<Receiver<theme_picker::InstallOutcome>>,
     theme_status: Option<String>,
     appearance_tab: AppearanceTab,
+    /// Resolved cursor theme last loaded into this window's live cursor owners.
+    applied_cursor_theme: Option<String>,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -466,6 +511,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             theme_install: None,
             theme_status: None,
             appearance_tab: AppearanceTab::Theme,
+            applied_cursor_theme: None,
         }
     }
 
@@ -484,6 +530,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     pub fn refresh(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         self.client.refresh_all().map_err(control_error)?;
+        self.sync_cursor_theme();
         self.reconcile_pages();
         self.sync(document)
     }
@@ -611,8 +658,30 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Clears the inline error and projects the authoritative snapshots. Called
     /// only after a request succeeded.
+    /// Reloads this window's cursor owners when the resolved `cursorTheme` changed. A failed
+    /// reload keeps the previous theme (rollback) and is retried at the next settings snapshot.
+    fn sync_cursor_theme(&mut self) {
+        let Ok(requested) = self.text_setting("cursorTheme") else {
+            return;
+        };
+        let search_path = std::env::var("XCURSOR_PATH").unwrap_or_default();
+        let Some(theme) =
+            cursor_theme_reload(self.applied_cursor_theme.as_deref(), &requested, &search_path)
+        else {
+            return;
+        };
+        let errors = flamewm_ui_x11::apply_cursor_theme(&theme);
+        if errors.is_empty() {
+            self.applied_cursor_theme = Some(theme);
+        }
+        for error in errors {
+            eprintln!("settings: cursor theme reload failed: {error}");
+        }
+    }
+
     fn settle(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         self.error = None;
+        self.sync_cursor_theme();
         self.reconcile_pages();
         self.sync(document)
     }
@@ -1300,6 +1369,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .and_then(|snapshot| snapshot.values.get("accent"))
         {
             document.background("nav-selection", accent_color(accent)?)?;
+            sync_accent_nodes(document, accent)?;
             for name in ["red", "blue", "purple", "teal"] {
                 let palette = accent_for_swatch(name);
                 document.visible(
@@ -1417,6 +1487,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.visible(on_id, enabled == Some(true))?;
             document.visible(off_id, enabled == Some(false))?;
         }
+        for (key, on_id, off_id, default) in SETTING_TWINS {
+            let enabled = match self
+                .client
+                .settings()
+                .and_then(|snapshot| snapshot.values.get(*key))
+            {
+                Some(SettingValue::Boolean(value)) => *value,
+                _ => *default,
+            };
+            document.visible(on_id, enabled)?;
+            document.visible(off_id, !enabled)?;
+        }
         if let Some(SettingValue::Text(family)) = self
             .client
             .settings()
@@ -1425,6 +1507,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.font_family(family.clone())?;
         }
         self.sync_value_text(document)?;
+        self.sync_weather(document)?;
         self.sync_theme_pickers(document)?;
         if let Some(status) = &self.theme_status {
             optional_text(document, "theme-install-status", status.clone());
@@ -1764,6 +1847,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Writes the authoritative value text into every value pill and select
     /// label. Missing snapshot values leave the authored placeholder untouched.
+    /// Highlights the saved units and shows the saved weather city (or the unset hint).
+    fn sync_weather(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let units = self.text_setting("weatherUnits").unwrap_or_else(|_| "celsius".to_owned());
+        let accent = self.accent()?;
+        for (value, id) in [("celsius", "weather-units-celsius"), ("fahrenheit", "weather-units-fahrenheit")] {
+            highlight_segment(document, id, units == value, accent)?;
+        }
+        let location = self.text_setting("weatherLocation").unwrap_or_default();
+        document.text("weather-location-value", weather_location_label(&location))
+    }
+
     fn sync_value_text(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let values = self.client.settings().map(|snapshot| &snapshot.values);
         let percent = |key: &str| {
@@ -2210,6 +2304,15 @@ fn solid_color(value: &str) -> Result<UiColor, String> {
     Ok(UiColor { a: 255, ..accent_color(value)? })
 }
 
+/// Paints every accent-coloured node (selected-sidebar line and ON toggles) with the live accent.
+fn sync_accent_nodes(document: &mut impl UiDocumentAccess, accent: &str) -> Result<(), String> {
+    let color = solid_color(accent)?;
+    for id in ACCENT_NODE_IDS {
+        document.background(id, color)?;
+    }
+    Ok(())
+}
+
 fn accent_color(value: &str) -> Result<UiColor, String> {
     let digits = value
         .strip_prefix('#')
@@ -2295,6 +2398,19 @@ fn parse_theme_action(rest: &str) -> Result<SettingsAction, String> {
     }
 }
 
+/// City name from the shell's stored `lat\tlon\tcountry\tname` location, or the unset hint.
+fn weather_location_label(encoded: &str) -> String {
+    let mut parts = encoded.splitn(4, '\t');
+    let coordinates_ok = [parts.next(), parts.next()]
+        .into_iter()
+        .all(|value| value.is_some_and(|value| value.parse::<f64>().is_ok()));
+    let _country = parts.next();
+    match parts.next() {
+        Some(name) if coordinates_ok && !name.is_empty() => name.to_owned(),
+        _ => "Not set - click the weather icon in the taskbar".to_owned(),
+    }
+}
+
 /// Parses a numeric action suffix that must be one of `choices`; `label` names the setting in errors.
 fn integer_choice_action(
     key: &'static str,
@@ -2348,6 +2464,16 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "lockOnSuspend" => Ok(SettingsAction::Toggle("lockOnSuspend")),
             "taskbarShowSeconds" => Ok(SettingsAction::Toggle("taskbarShowSeconds")),
             "taskbarShowDate" => Ok(SettingsAction::Toggle("taskbarShowDate")),
+            "taskbarShowWeather" => Ok(SettingsAction::Toggle("taskbarShowWeather")),
+            "taskbarShowVolume" => Ok(SettingsAction::Toggle("taskbarShowVolume")),
+            "taskbarShowNetwork" => Ok(SettingsAction::Toggle("taskbarShowNetwork")),
+            "taskbarShowBattery" => Ok(SettingsAction::Toggle("taskbarShowBattery")),
+            "taskbarBatteryOnlyWhenRelevant" => {
+                Ok(SettingsAction::Toggle("taskbarBatteryOnlyWhenRelevant"))
+            }
+            "taskbarShowClock" => Ok(SettingsAction::Toggle("taskbarShowClock")),
+            "taskbarShowWorkspaces" => Ok(SettingsAction::Toggle("taskbarShowWorkspaces")),
+            "weatherEnabled" => Ok(SettingsAction::Toggle("weatherEnabled")),
             "snapPreviewEnabled" => Ok(SettingsAction::Toggle("snapPreviewEnabled")),
             "focusFollowsMouse" => Ok(SettingsAction::Toggle("focusFollowsMouse")),
             _ => Err(format!("unknown toggle '{key}'")),
@@ -2483,6 +2609,18 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             key: "taskbarClockFormat",
             value: "12h",
         }),
+        "settings.weather.units.celsius" => Ok(SettingsAction::TextSelect {
+            key: "weatherUnits",
+            value: "celsius",
+        }),
+        "settings.weather.units.fahrenheit" => Ok(SettingsAction::TextSelect {
+            key: "weatherUnits",
+            value: "fahrenheit",
+        }),
+        "settings.weather.location.clear" => Ok(SettingsAction::TextSelect {
+            key: "weatherLocation",
+            value: "",
+        }),
         "settings.wallpaper.fit" => Ok(SettingsAction::TextCycle {
             key: "wallpaperFit",
             values: &WALLPAPER_FITS,
@@ -2603,6 +2741,31 @@ fn file_name_label(path: &str) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or(path)
         .to_owned()
+}
+
+/// The resolved cursor theme to load, or `None` when `applied` already shows it.
+fn cursor_theme_reload(applied: Option<&str>, requested: &str, search_path: &str) -> Option<String> {
+    let resolved = flamewm_session_core::resolve_cursor_theme(requested, search_path);
+    (applied != Some(resolved.as_str())).then_some(resolved)
+}
+
+#[cfg(test)]
+mod cursor_reload_tests {
+    use super::cursor_theme_reload;
+
+    #[test]
+    fn cursor_reload_only_when_resolved_theme_changes() {
+        let root = std::env::temp_dir().join(format!("flamewm-settings-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Custom").join("cursors")).expect("theme");
+        let search = root.display().to_string();
+        let first = cursor_theme_reload(None, "Custom", &search);
+        assert_eq!(first.as_deref(), Some("Custom"));
+        assert_eq!(cursor_theme_reload(first.as_deref(), "Custom", &search), None);
+        let fallback = flamewm_session_core::resolve_cursor_theme("Missing", &search);
+        assert_eq!(cursor_theme_reload(Some(&fallback), "Missing", &search), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]
@@ -3149,5 +3312,180 @@ mod display_pager_fixture_tests {
         assert!(app.execute(SettingsAction::DisplaySlot(3)).unwrap_err().contains("stale"));
         assert_eq!(requests.borrow().len(), request_count);
         assert_eq!(app.client.ui().pending_display_transaction, pending_before);
+    }
+}
+
+#[cfg(test)]
+mod accent_node_tests {
+    use std::collections::{BTreeMap, VecDeque};
+
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+    use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
+    use flamewm_settings_core::ControlTransport;
+    use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
+
+    use super::{ACCENT_NODE_IDS, SettingsApplication, solid_color};
+
+    #[derive(Default)]
+    struct QueueTransport {
+        responses: VecDeque<Result<ControlResponse, ControlError>>,
+    }
+
+    impl ControlTransport for QueueTransport {
+        fn call(&mut self, _request: ControlRequest) -> Result<ControlResponse, ControlError> {
+            self.responses
+                .pop_front()
+                .expect("accent test response was not queued")
+        }
+    }
+
+    #[derive(Default)]
+    struct ColorDocument {
+        backgrounds: BTreeMap<String, UiColor>,
+    }
+
+    impl UiDocumentAccess for ColorDocument {
+        fn text(&mut self, _id: &str, _text: String) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn position(&mut self, _id: &str, _left: f32, _top: f32) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.backgrounds.insert(id.to_owned(), color);
+            Ok(())
+        }
+
+        fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn background_clear(&mut self, _id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn border_clear(&mut self, _id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn overflow(
+            &mut self,
+            _id: &str,
+            _x: flamewm_ui_x11::Overflow,
+            _y: flamewm_ui_x11::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn layer(
+            &mut self,
+            _id: &str,
+            _layer: flamewm_ui_core::style::UiLayer,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn application_with_accent(accent: &str) -> SettingsApplication<QueueTransport> {
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot
+            .values
+            .insert("accent".to_owned(), SettingValue::Text(accent.to_owned()));
+        snapshot
+            .values
+            .insert("animationsEnabled".to_owned(), SettingValue::Boolean(true));
+        let mut transport = QueueTransport::default();
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Settings(snapshot)));
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("initial snapshot");
+        application
+    }
+
+    #[test]
+    fn accent_nodes_carry_the_active_accent_not_the_compiled_red() {
+        for accent in ["#3DAEE9", "#9B59B6", "#1ABC9C", "#123456"] {
+            let application = application_with_accent(accent);
+            let mut document = ColorDocument::default();
+            application.sync(&mut document).expect("sync");
+            let expected = solid_color(accent).expect("accent");
+            for id in ACCENT_NODE_IDS {
+                assert_eq!(document.backgrounds.get(*id), Some(&expected), "{id} under {accent}");
+            }
+            assert!(!document.backgrounds.contains_key("anim-global-off"));
+        }
+    }
+
+    #[test]
+    fn red_swatch_still_paints_red_accent_nodes() {
+        let application = application_with_accent("#EF4048");
+        let mut document = ColorDocument::default();
+        application.sync(&mut document).expect("sync");
+        for id in ACCENT_NODE_IDS {
+            let color = document.backgrounds.get(*id).expect("accent node painted");
+            assert_eq!((color.r, color.g, color.b, color.a), (0xEF, 0x40, 0x48, 255), "{id}");
+        }
+    }
+
+    #[test]
+    fn accent_registry_covers_every_toggle_on_twin_in_markup() {
+        let html = include_str!("../../../ui/settings.html");
+        let marker = "toggle toggle-on\" id=\"";
+        let mut rest = html;
+        let mut found = 0;
+        let mut missing = Vec::new();
+        while let Some(index) = rest.find(marker) {
+            let after = &rest[index + marker.len()..];
+            let id = &after[..after.find('"').expect("closed toggle id")];
+            found += 1;
+            if !ACCENT_NODE_IDS.contains(&id) {
+                missing.push(id);
+            }
+            rest = after;
+        }
+        assert!(found > 0, "no toggle-on ids found in settings.html");
+        assert!(missing.is_empty(), "toggle-on ids missing from ACCENT_NODE_IDS: {missing:?}");
     }
 }

@@ -51,6 +51,34 @@ impl SurfaceController {
         Ok(())
     }
 
+    /// Sets (or clears with `None`) the root-sized `(width, height, RGBA8)` wallpaper canvas the
+    /// popup's next first-show backdrop is cropped from, instead of a root capture (which would
+    /// blur whatever windows or the taskbar sit under the popup).
+    pub fn set_popup_wallpaper(&mut self, id: SurfaceId, canvas: Option<(u32, u32, Vec<u8>)>) -> Result<(), String> {
+        self.instance_mut(id)?.popup_wallpaper = canvas;
+        Ok(())
+    }
+
+    /// Popup-sized backdrop source: the wallpaper crop under the popup when set, else the root capture.
+    fn popup_backdrop_source(&self, id: SurfaceId) -> Result<crate::backdrop::BackdropCapture, String> {
+        let Some((canvas_w, canvas_h, pixels)) = self.instance_ref(id)?.popup_wallpaper.as_ref() else {
+            return self.capture_root_under(id);
+        };
+        let rect = self.surface_device_rect(id)?;
+        let (x, y) = (rect.x as u32, rect.y as u32);
+        let (w, h) = (rect.width as u32, rect.height as u32);
+        if x.checked_add(w).is_none_or(|end| end > *canvas_w) || y.checked_add(h).is_none_or(|end| end > *canvas_h) {
+            return Err("popup rect lies outside the wallpaper canvas".to_owned());
+        }
+        let stride = *canvas_w as usize * 4;
+        let mut cropped = Vec::with_capacity(w as usize * h as usize * 4);
+        for row in y..y + h {
+            let start = row as usize * stride + x as usize * 4;
+            cropped.extend_from_slice(&pixels[start..start + w as usize * 4]);
+        }
+        Ok(crate::backdrop::BackdropCapture { width: w, height: h, pixels: cropped })
+    }
+
     /// Captures the root under an unmapped popup, blurs it, and installs it beneath the translucent
     /// fills. A blank or uniform capture (root not painted yet) installs nothing: solid colour.
     pub(super) fn install_popup_backdrop(&mut self, id: SurfaceId) -> Result<(), String> {
@@ -58,7 +86,7 @@ impl SurfaceController {
             return Ok(());
         };
         let snapshot = if opacity < 100 {
-            self.capture_root_under(id)
+            self.popup_backdrop_source(id)
                 .ok()
                 .filter(|capture| crate::backdrop::capture_is_ready(&capture.pixels))
         } else {

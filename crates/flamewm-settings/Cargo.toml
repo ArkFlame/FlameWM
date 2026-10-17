@@ -15,6 +15,7 @@ flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-settings-core = { path = "../flamewm-settings-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+flamewm-session-core = { path = "../flamewm-session-core" }
 
 [dev-dependencies]
 flamewm-ui-core = { path = "../flamewm-ui-core" }

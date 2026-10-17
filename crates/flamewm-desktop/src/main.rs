@@ -41,9 +41,10 @@ use flamewm_reactor::{FdAction, Reactor};
 use flamewm_ui_core::context_menu::MenuPart;
 use flamewm_ui_x11::PointerButton;
 use flamewm_ui_x11::{
-    UiActionEvent, UiActionPhase, UiColor, UiControllerEvent, UiDocumentAccess, UiWindowConfig,
-    UiWindowRole, WindowGeometry, WindowGeometrySlot, decode_document, pointer_button_from_raw,
-    root_geometry, run_with_controller_events_role_with_reactor_geometry,
+    RawPress, RawPressWatch, UiActionEvent, UiActionPhase, UiColor, UiControllerEvent,
+    UiDocumentAccess, UiWindowConfig, UiWindowRole, WindowGeometry, WindowGeometrySlot,
+    decode_document, pointer_button_from_raw, root_geometry,
+    run_with_controller_events_role_with_presses_and_reactor_geometry,
 };
 
 mod projection;
@@ -298,6 +299,8 @@ struct DesktopState {
     item_drag: Option<ItemDrag>,
     launchers: BTreeMap<PathBuf, LauncherMeta>,
     menu: Option<MenuState>,
+    /// Rects of the menus and confirm currently shown (logical px); empty when none is open.
+    menu_rects: Vec<Rect>,
     pending_delete: Option<PathBuf>,
     last_click: Option<ClickRecord>,
     dirty: Arc<AtomicBool>,
@@ -310,6 +313,12 @@ struct DesktopState {
     workspace_present_span: Option<flamewm_profiler::SpanGuard>,
     settings: SettingsSnapshot,
     settings_visual_dirty: bool,
+    /// Resolved cursor theme last loaded into the live cursor owners.
+    applied_cursor_theme: Option<String>,
+    /// Last `iconTheme` applied from the settings snapshot.
+    icon_theme: String,
+    /// Set when `iconTheme` changed; cleared once the new theme generation is installed.
+    icon_theme_pending: bool,
     wallpaper_loader: wallpaper_loader::WallpaperLoader,
 }
 
@@ -422,6 +431,7 @@ fn main() -> Result<(), String> {
             item_drag: None,
             launchers: BTreeMap::new(),
             menu: None,
+            menu_rects: Vec::new(),
             pending_delete: None,
             last_click: None,
             dirty: Arc::clone(&dirty),
@@ -434,6 +444,9 @@ fn main() -> Result<(), String> {
             workspace_present_span: None,
             settings,
             settings_visual_dirty: false,
+            applied_cursor_theme: None,
+            icon_theme: String::new(),
+            icon_theme_pending: false,
             wallpaper_loader,
         };
         refresh_launchers(&mut state);
@@ -647,7 +660,9 @@ fn main() -> Result<(), String> {
     // whenever a geometry request is issued. Read back by the resize decision.
     let mut window_rect = surface;
     let geometry_slot = WindowGeometrySlot::default();
-    run_with_controller_events_role_with_reactor_geometry(
+    // Armed while a menu or the delete confirm is open: root presses reach the close path.
+    let press_watch = RawPressWatch::default();
+    run_with_controller_events_role_with_presses_and_reactor_geometry(
         document,
         UiWindowConfig {
             width: surface.width as u32,
@@ -660,23 +675,41 @@ fn main() -> Result<(), String> {
         UiWindowRole::Desktop,
         &mut reactor,
         std::rc::Rc::clone(&geometry_slot),
+        std::rc::Rc::clone(&press_watch),
+        {
+            let press_cell = std::rc::Rc::clone(&state_cell);
+            move |press: &RawPress, document| {
+                let mut guard = press_cell.borrow_mut();
+                let state = &mut *guard;
+                close_menus_on_outside_press(
+                    press,
+                    document,
+                    &mut state.menu_rects,
+                    &mut state.pending_delete,
+                )
+            }
+        },
         {
             let event_cell = std::rc::Rc::clone(&state_cell);
+            let event_watch = std::rc::Rc::clone(&press_watch);
             let mutation_dispatcher = workspace_mutations.clone();
             move |event, document| {
                 let state_cell = &event_cell;
                 let mut state = state_cell.borrow_mut();
                 refresh_settings_projection(document, &mut state)?;
+                refresh_icon_theme(document, &mut state)?;
                 refresh_if_changed(document, &mut state)?;
                 refresh_workspace_projection(document, &mut state)?;
                 apply_pending_icon_results(document, &mut state)?;
                 sticky::poll_persist(document, &mut state)?;
-                match event {
+                let result = match event {
                     UiControllerEvent::Action(action) => {
                         handle_event(action, document, &mut state, mutation_dispatcher.as_ref())
                     }
                     UiControllerEvent::Key(_) => Ok(()),
-                }
+                };
+                event_watch.set(menus_open(&state.menu_rects));
+                result
             }
         },
         {
@@ -684,6 +717,7 @@ fn main() -> Result<(), String> {
             let panels_flag = std::rc::Rc::clone(&panels_dirty);
             let mut current_work_area = work_area;
             let geometry_out = std::rc::Rc::clone(&geometry_slot);
+            let reactor_watch = std::rc::Rc::clone(&press_watch);
             move |document| {
                 if panels_flag.replace(false) {
                     refresh_work_area_after_panel_change(
@@ -695,8 +729,10 @@ fn main() -> Result<(), String> {
                 }
                 let state_cell = &flush_cell;
                 let mut state = state_cell.borrow_mut();
+                reactor_watch.set(menus_open(&state.menu_rects));
                 let _completed_workspace_present = state.workspace_present_span.take();
                 refresh_settings_projection(document, &mut state)?;
+                refresh_icon_theme(document, &mut state)?;
                 refresh_if_changed(document, &mut state)?;
                 refresh_workspace_projection(document, &mut state)?;
                 apply_pending_icon_results(document, &mut state)?;
@@ -799,6 +835,11 @@ fn setting_bool(snapshot: &SettingsSnapshot, key: &str, default: bool) -> bool {
     }
 }
 
+/// True when the snapshot's `iconTheme` differs from the last applied value.
+fn icon_theme_changed(previous: &str, snapshot: &SettingsSnapshot) -> bool {
+    setting_text(snapshot, "iconTheme") != previous
+}
+
 fn setting_percent(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
     match snapshot.values.get(key) {
         Some(SettingValue::Percent(value)) => *value,
@@ -868,6 +909,26 @@ fn project_accent_tokens(
 }
 
 #[cfg(test)]
+mod cursor_reload_tests {
+    use super::cursor_theme_reload;
+
+    #[test]
+    fn cursor_reload_only_when_resolved_theme_changes() {
+        let root = std::env::temp_dir().join(format!("flamewm-desktop-cursor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Custom").join("cursors")).expect("theme");
+        let search = root.display().to_string();
+        let first = cursor_theme_reload(None, "Custom", &search);
+        assert_eq!(first.as_deref(), Some("Custom"));
+        assert_eq!(cursor_theme_reload(first.as_deref(), "Custom", &search), None);
+        // An uninstalled request resolves to the same fallback as the applied theme: no reload.
+        let fallback = flamewm_session_core::resolve_cursor_theme("Missing", &search);
+        assert_eq!(cursor_theme_reload(Some(&fallback), "Missing", &search), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
 mod accent_token_tests {
     use super::*;
 
@@ -901,6 +962,20 @@ mod accent_token_tests {
     }
 }
 
+/// Re-projects every item under a new icon theme generation. The rebuild runs on the icon
+/// worker; the pending flag is polled on each UI tick until that generation is installed.
+/// Results queued for the previous generation never match a re-projected slot key.
+fn refresh_icon_theme(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    if !state.icon_theme_pending || !state.icons.refresh_theme() {
+        return Ok(());
+    }
+    state.icon_theme_pending = false;
+    sync_document(document, state)
+}
+
 fn refresh_settings_projection(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -924,6 +999,10 @@ fn refresh_settings_projection(
             | wallpaper_loader::PollOutcome::Stale { .. } => {}
         }
     }
+    if icon_theme_changed(&state.icon_theme, &state.settings) {
+        state.icon_theme = setting_text(&state.settings, "iconTheme");
+        state.icon_theme_pending = true;
+    }
     // SettingsSnapshotChanged is the live authority for stickyNotesEnabled and
     // DesktopSelectionFillOpacity; wallpaper stays on the bounded loader path.
     state.sticky.notes_enabled = setting_bool(&state.settings, "stickyNotesEnabled", true);
@@ -942,8 +1021,37 @@ fn refresh_settings_projection(
     for id in projection::MENU_SURFACE_IDS {
         projection::project_menu_surface(document, id, &state.settings)?;
     }
+    sync_cursor_theme(state);
     state.settings_visual_dirty = false;
     Ok(())
+}
+
+/// Reloads the live cursor owners when the resolved `cursorTheme` changed. A failed reload
+/// keeps the previous theme (rollback) and is retried at the next settings snapshot.
+fn sync_cursor_theme(state: &mut DesktopState) {
+    if !state.settings.values.contains_key("cursorTheme") {
+        return;
+    }
+    let search_path = std::env::var("XCURSOR_PATH").unwrap_or_default();
+    let requested = setting_text(&state.settings, "cursorTheme");
+    let Some(theme) =
+        cursor_theme_reload(state.applied_cursor_theme.as_deref(), &requested, &search_path)
+    else {
+        return;
+    };
+    let errors = flamewm_ui_x11::apply_cursor_theme(&theme);
+    if errors.is_empty() {
+        state.applied_cursor_theme = Some(theme);
+    }
+    for error in errors {
+        eprintln!("desktop: cursor theme reload failed: {error}");
+    }
+}
+
+/// The resolved cursor theme to load, or `None` when `applied` already shows it.
+fn cursor_theme_reload(applied: Option<&str>, requested: &str, search_path: &str) -> Option<String> {
+    let resolved = flamewm_session_core::resolve_cursor_theme(requested, search_path);
+    (applied != Some(resolved.as_str())).then_some(resolved)
 }
 
 /// Root geometry comes from the actual X root through the X11 runtime owner.
@@ -1157,6 +1265,9 @@ fn sync_document(
 ) -> Result<(), String> {
     let _span = sync_point().start();
     render_sync_counter().increment();
+    if state.icons.refresh_theme() {
+        state.icon_theme_pending = false;
+    }
     apply_ready_icons(document, state)?;
     let items: Vec<_> = state.model.items().take(SLOT_COUNT).collect();
     for index in 0..SLOT_COUNT {
@@ -1212,6 +1323,12 @@ fn apply_pending_icon_results(
     }
     apply_ready_icons(document, state)
 }
+/// A completed icon result applies only to the slot still expecting its exact key
+/// (including theme generation), so results for a replaced theme are dropped.
+fn slot_expects_key(slot: Option<&IconKey>, key: &IconKey) -> bool {
+    slot.is_some_and(|expected| expected == key)
+}
+
 fn apply_ready_icons(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -1223,12 +1340,8 @@ fn apply_ready_icons(
     for (key, raster) in ready {
         let Some(raster) = raster else { continue };
         for index in 0..SLOT_COUNT {
-            let matches = state
-                .icon_slots
-                .get(index)
-                .and_then(|slot| slot.as_ref())
-                .is_some_and(|expected| expected == &key);
-            if !matches {
+            let slot = state.icon_slots.get(index).and_then(|slot| slot.as_ref());
+            if !slot_expects_key(slot, &key) {
                 continue;
             }
             let Some(item) = state.model.items().nth(index) else {
@@ -1334,8 +1447,8 @@ fn cancel_transient(
     sticky::cancel_edit_and_gesture(state);
     hide_drag_ghost(document, state)?;
     document.visible("desktop-selection", false)?;
-    hide_menus(document)?;
-    hide_confirm(document)?;
+    hide_menus(document, &mut state.menu_rects)?;
+    hide_confirm(document, &mut state.menu_rects)?;
     sync_selection_visuals(document, state)?;
     sync_rename_editor(document, state)?;
     sticky::sync_sticky(document, state)
@@ -1362,7 +1475,7 @@ fn handle_surface(
             selected_id: None,
         });
         state.pending_delete = None;
-        hide_confirm(document)?;
+        hide_confirm(document, &mut state.menu_rects)?;
         state.selection_start = None;
         state.selection.clear_rubber();
         document.visible("desktop-selection", false)?;
@@ -1375,8 +1488,8 @@ fn handle_surface(
     }
     match action.phase {
         UiActionPhase::Press => {
-            hide_menus(document)?;
-            hide_confirm(document)?;
+            hide_menus(document, &mut state.menu_rects)?;
+            hide_confirm(document, &mut state.menu_rects)?;
             state.pending_delete = None;
             state.last_click = None;
             sticky::commit_edit(state);
@@ -1460,7 +1573,7 @@ fn handle_item(
             selected_id: Some(item_id),
         });
         state.pending_delete = None;
-        hide_confirm(document)?;
+        hide_confirm(document, &mut state.menu_rects)?;
         sync_selection_visuals(document, state)?;
         return sync_menu(document, state);
     }
@@ -1469,8 +1582,8 @@ fn handle_item(
     }
     match action.phase {
         UiActionPhase::Press => {
-            hide_menus(document)?;
-            hide_confirm(document)?;
+            hide_menus(document, &mut state.menu_rects)?;
+            hide_confirm(document, &mut state.menu_rects)?;
             state.pending_delete = None;
             sticky::commit_edit(state);
             let Some(item) = state.model.items().nth(index) else {
@@ -1736,7 +1849,7 @@ fn handle_menu_action(
                 return sync_menu(document, state);
             };
             state.menu = None;
-            hide_menus(document)?;
+            hide_menus(document, &mut state.menu_rects)?;
             state.pending_delete = Some(path);
             show_confirm(document, state)?;
         }
@@ -1749,12 +1862,12 @@ fn handle_menu_action(
                     .map_err(|error| format!("{error:?}"))?;
                 refresh_launchers(state);
             }
-            hide_confirm(document)?;
+            hide_confirm(document, &mut state.menu_rects)?;
             sync_document(document, state)?;
         }
         "confirm.cancel" => {
             state.pending_delete = None;
-            hide_confirm(document)?;
+            hide_confirm(document, &mut state.menu_rects)?;
         }
         "entry.empty-trash" => {
             empty_home_trash()?;
@@ -1800,7 +1913,7 @@ fn open_rename(
         return sync_menu(document, state);
     };
     state.menu = None;
-    hide_menus(document)?;
+    hide_menus(document, &mut state.menu_rects)?;
     rename_open_counter().increment();
     state.rename = Some(RenameState {
         item_id,
@@ -2027,7 +2140,8 @@ fn entry_row_id(action: EntryMenuAction) -> &'static str {
     }
 }
 
-fn hide_menus(document: &mut impl UiDocumentAccess) -> Result<(), String> {
+fn hide_menus(document: &mut impl UiDocumentAccess, menu_rects: &mut Vec<Rect>) -> Result<(), String> {
+    menu_rects.clear();
     document.visible("desktop-menu", false)?;
     document.visible("desktop-entry-menu", false)?;
     document.visible("sticky-menu", false)?;
@@ -2036,12 +2150,41 @@ fn hide_menus(document: &mut impl UiDocumentAccess) -> Result<(), String> {
     projection::clear_menu_backdrop(document, "sticky-menu")
 }
 
-fn hide_confirm(document: &mut impl UiDocumentAccess) -> Result<(), String> {
+/// Whether any menu or the delete confirm is shown. Gates the root press observer.
+fn menus_open(menu_rects: &[Rect]) -> bool {
+    !menu_rects.is_empty()
+}
+
+/// Whether a root press at logical `(x, y)` lands outside every rect.
+fn press_outside_menus(rects: &[Rect], x: f32, y: f32) -> bool {
+    let (x, y) = (x.round() as i32, y.round() as i32);
+    !rects.iter().any(|rect| x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom())
+}
+
+/// Closes the open menus and delete confirm when a root press lands outside them.
+/// Presses inside a menu belong to its own action path; nothing open means no-op.
+fn close_menus_on_outside_press(
+    press: &RawPress,
+    document: &mut impl UiDocumentAccess,
+    menu_rects: &mut Vec<Rect>,
+    pending_delete: &mut Option<PathBuf>,
+) -> Result<(), String> {
+    if !menus_open(menu_rects) || !press_outside_menus(menu_rects, press.x, press.y) {
+        return Ok(());
+    }
+    hide_menus(document, menu_rects)?;
+    hide_confirm(document, menu_rects)?;
+    *pending_delete = None;
+    Ok(())
+}
+
+fn hide_confirm(document: &mut impl UiDocumentAccess, menu_rects: &mut Vec<Rect>) -> Result<(), String> {
+    menu_rects.clear();
     document.visible("desktop-confirm", false)?;
     projection::clear_menu_backdrop(document, "desktop-confirm")
 }
 
-fn show_confirm(document: &mut impl UiDocumentAccess, state: &DesktopState) -> Result<(), String> {
+fn show_confirm(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> Result<(), String> {
     let parts = confirm_menu_parts();
     let measured = context_menu_size(&parts, flamewm_ui_core::context_menu::MIN_ROW_WIDTH);
     let size = (measured.width, measured.height);
@@ -2057,14 +2200,15 @@ fn show_confirm(document: &mut impl UiDocumentAccess, state: &DesktopState) -> R
     document.position("desktop-confirm", placed.x as f32, placed.y as f32)?;
     document.size("desktop-confirm", placed.width as f32, placed.height as f32)?;
     projection::project_menu_surface(document, "desktop-confirm", &state.settings)?;
+    state.menu_rects.push(placed);
     document.visible("desktop-confirm", true)
 }
 
-fn sync_menu(document: &mut impl UiDocumentAccess, state: &DesktopState) -> Result<(), String> {
+fn sync_menu(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> Result<(), String> {
     let _total = context_open_total_point().start();
     {
         let _close = context_open_close_point().start();
-        hide_menus(document)?;
+        hide_menus(document, &mut state.menu_rects)?;
     }
     let Some(menu) = state.menu.as_ref() else {
         return Ok(());
@@ -2123,7 +2267,7 @@ fn sync_menu(document: &mut impl UiDocumentAccess, state: &DesktopState) -> Resu
 
 fn place_menu_parts(
     document: &mut impl UiDocumentAccess,
-    state: &DesktopState,
+    state: &mut DesktopState,
     id: &str,
     anchor: Point,
     parts: &[MenuPart],
@@ -2140,6 +2284,7 @@ fn place_menu_parts(
     document.size(id, placed.width as f32, placed.height as f32)?;
     // Fill and decoration shape (Rounded 12 / Squared 0) land together in project_menu_surface.
     projection::project_menu_surface(document, id, &state.settings)?;
+    state.menu_rects.push(placed);
     context_open_counter().increment();
     let _present = context_open_present_point().start();
     document.visible(id, true)
@@ -2590,3 +2735,108 @@ mod general_settings_tests {
         assert!(!html.contains("Desktop and Wallpaper"));
     }
 }
+
+#[cfg(test)]
+mod icon_theme_tests {
+    use super::*;
+
+    fn snapshot_with_theme(theme: Option<&str>) -> SettingsSnapshot {
+        let mut snapshot = SettingsSnapshot::new(1);
+        if let Some(theme) = theme {
+            snapshot
+                .values
+                .insert("iconTheme".to_owned(), SettingValue::Text(theme.to_owned()));
+        }
+        snapshot
+    }
+
+    #[test]
+    fn stale_theme_generation_result_is_rejected_after_reprojection() {
+        let current = projection::ParallelIconService::icon_key(DesktopItemKind::File, None);
+        let mut stale = current.clone();
+        stale.theme_generation = current.theme_generation.wrapping_add(1);
+        assert!(slot_expects_key(Some(&current), &current));
+        assert!(!slot_expects_key(Some(&current), &stale));
+        assert!(!slot_expects_key(None, &current));
+    }
+
+    #[test]
+    fn icon_theme_change_detects_new_and_removed_values() {
+        let papirus = snapshot_with_theme(Some("Papirus"));
+        assert!(icon_theme_changed("", &papirus));
+        assert!(!icon_theme_changed("Papirus", &papirus));
+        assert!(icon_theme_changed("PlagueSur", &papirus));
+        assert!(icon_theme_changed("Papirus", &snapshot_with_theme(None)));
+        assert!(!icon_theme_changed("", &snapshot_with_theme(None)));
+    }
+}
+
+#[cfg(test)]
+mod outside_press_tests {
+    use super::*;
+    use flamewm_ui_x11::test_support::RecordingUiDoc;
+
+    fn press(x: f32, y: f32) -> RawPress {
+        RawPress { x, y, button: 1, time_ms: 0 }
+    }
+
+    #[test]
+    fn classification_is_inside_on_rect_and_outside_past_its_exclusive_edges() {
+        let rects = [Rect::new(10, 10, 20, 20)];
+        assert!(!press_outside_menus(&rects, 10.0, 10.0));
+        assert!(!press_outside_menus(&rects, 29.4, 29.4));
+        assert!(press_outside_menus(&rects, 30.0, 15.0));
+        assert!(press_outside_menus(&rects, 15.0, 30.0));
+        assert!(press_outside_menus(&rects, 9.0, 15.0));
+    }
+
+    #[test]
+    fn press_inside_any_open_rect_is_not_outside() {
+        let rects = [Rect::new(0, 0, 10, 10), Rect::new(50, 50, 10, 10)];
+        assert!(!press_outside_menus(&rects, 55.0, 55.0));
+        assert!(press_outside_menus(&rects, 30.0, 30.0));
+    }
+
+    #[test]
+    fn arming_follows_open_menus_only() {
+        assert!(!menus_open(&[]));
+        assert!(menus_open(&[Rect::new(0, 0, 1, 1)]));
+    }
+
+    #[test]
+    fn outside_press_closes_menus_and_clears_pending_delete() {
+        let mut doc = RecordingUiDoc::default();
+        let mut rects = vec![Rect::new(10, 10, 20, 20)];
+        let mut pending = Some(PathBuf::from("/tmp/flamewm-pending"));
+        close_menus_on_outside_press(&press(100.0, 100.0), &mut doc, &mut rects, &mut pending)
+            .expect("close");
+        assert!(rects.is_empty());
+        assert!(pending.is_none());
+        assert_eq!(doc.visible.get("desktop-menu"), Some(&false));
+        assert_eq!(doc.visible.get("desktop-confirm"), Some(&false));
+    }
+
+    #[test]
+    fn inside_press_leaves_menus_and_pending_delete_untouched() {
+        let mut doc = RecordingUiDoc::default();
+        let mut rects = vec![Rect::new(10, 10, 20, 20)];
+        let mut pending = Some(PathBuf::from("/tmp/flamewm-pending"));
+        close_menus_on_outside_press(&press(12.0, 12.0), &mut doc, &mut rects, &mut pending)
+            .expect("inside");
+        assert_eq!(rects, vec![Rect::new(10, 10, 20, 20)]);
+        assert!(pending.is_some());
+        assert!(doc.visible.is_empty());
+    }
+
+    #[test]
+    fn press_while_closed_is_a_noop() {
+        let mut doc = RecordingUiDoc::default();
+        let mut rects = Vec::new();
+        let mut pending = Some(PathBuf::from("/tmp/flamewm-pending"));
+        close_menus_on_outside_press(&press(5.0, 5.0), &mut doc, &mut rects, &mut pending)
+            .expect("closed");
+        assert!(pending.is_some());
+        assert!(doc.visible.is_empty());
+    }
+}
+

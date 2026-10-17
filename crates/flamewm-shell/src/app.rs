@@ -99,6 +99,7 @@ pub(crate) struct ShellLoop {
     pub(crate) date_tracker: ClockDateTracker,
     pub(crate) audio_tab: AudioTab,
     pub(crate) audio_settings: AudioSettings,
+    cursor_theme: flamewm_shell::cursor_theme::CursorThemeSync,
     pub(crate) network_query: NetworkQuery,
     pub(crate) settings_revision: u64,
     pub(crate) settings_cache: Option<SettingsSnapshot>,
@@ -126,6 +127,9 @@ pub(crate) struct ShellLoop {
     pub(crate) weather: flamewm_shell::weather_host::WeatherHost,
     /// Set when the tray or the popup host must receive the current weather feed.
     pub(crate) weather_feed_pending: bool,
+    /// Set when the icon theme changed: open Start re-projects, and the next
+    /// Start open re-requests its icons under the new theme.
+    pub(crate) start_icons_stale: bool,
 }
 
 impl ShellLoop {
@@ -160,6 +164,7 @@ impl ShellLoop {
             date_tracker: ClockDateTracker::new(projection::local_date()),
             audio_tab: AudioTab::default(),
             audio_settings: AudioSettings::default(),
+            cursor_theme: flamewm_shell::cursor_theme::CursorThemeSync::default(),
             network_query: NetworkQuery::default(),
             settings_revision: 0,
             settings_cache: None,
@@ -174,6 +179,7 @@ impl ShellLoop {
             osd: flamewm_shell::osd::OsdController::default(),
             weather: flamewm_shell::weather_host::WeatherHost::new(),
             weather_feed_pending: true,
+            start_icons_stale: false,
         }
     }
 
@@ -201,6 +207,7 @@ impl ShellLoop {
             return;
         }
         self.settings_revision = snapshot.revision;
+        self.cursor_theme.sync_snapshot(&snapshot);
         self.weather.apply_settings(
             flamewm_shell_core::weather::WeatherSettings::from_snapshot(&snapshot),
         );
@@ -210,11 +217,22 @@ impl ShellLoop {
             if loader.set_theme(&theme) {
                 // Re-prime task slots so they re-request under the new theme.
                 self.task_icon_prime_armed = true;
+                // Drop rasters cached under the old theme; Start re-requests.
+                async_projection::invalidate_icon_cache();
+                self.start_icons_stale = true;
             }
         }
         if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY)
         {
             self.audio_settings.raise_maximum = *raise;
+        }
+        // A hidden taskbar item closes its open quick-control popup.
+        let items = crate::settings_projection::taskbar_items(Some(&snapshot));
+        if self
+            .quick_kind_open
+            .is_some_and(|kind| !quick_kind_shown(kind, items))
+        {
+            self.close_quick_control_nonfatal();
         }
         self.settings_cache = Some(snapshot);
         self.settings_projection_pending = true;
@@ -389,6 +407,12 @@ impl ShellLoop {
                                 Some(&state),
                             )
                         })?;
+                        // Translucent fill needs the blurred root under the popup: the popup window is
+                        // shape-backed (no alpha), so without this the fill composites over black.
+                        let (opacity, blur) =
+                            crate::settings_projection::start_backdrop_percents(&settings);
+                        runtime.set_popup_wallpaper(self.surfaces.task_menu, self.popup_wallpaper_canvas(&settings))?;
+                        runtime.set_popup_backdrop(self.surfaces.task_menu, Some((opacity, blur)))?;
                     }
                     self.context_menu = Some(state.clone());
                     let snapshot = self.shell.snapshot().clone();
@@ -617,6 +641,12 @@ impl ShellLoop {
         if self.refuse_popup_on_inconsistent_geometry().is_some() {
             return;
         }
+        // One visible menu at a time: a quick popup dismisses an open shell context menu.
+        if take_context_menu_for_popup(&mut self.context_menu) {
+            if let Err(error) = self.surfaces.close_transients(runtime) {
+                eprintln!("flamewm-shell: close context menu for quick popup failed: {error}");
+            }
+        }
         let kind = match name {
             "volume" | "audio" => QuickControlKind::Audio,
             "network" => QuickControlKind::Network,
@@ -641,6 +671,11 @@ impl ShellLoop {
         // vertically inside it, so they never cover the panel strip.
         let work_area = self.surfaces.work_area();
         let panel_edge = self.surfaces.panel_edge();
+        // Retained panel rect: the helper clips slide transit frames against the dock.
+        let dock = runtime
+            .surface_device_rect(self.surfaces.panel())
+            .ok()
+            .map(|r| flamewm_api::Rect::new(r.x as i32, r.y as i32, r.width as i32, r.height as i32));
         if kind == QuickControlKind::Weather {
             // Fetch on this open; the feed goes out before OPEN on the same ordered channel.
             self.weather.request_open_fetch();
@@ -652,6 +687,7 @@ impl ShellLoop {
             anchor,
             work_area,
             panel_edge,
+            dock,
         );
         self.quick_audio_open = kind == QuickControlKind::Audio;
         self.quick_kind_open = Some(kind);
@@ -689,6 +725,8 @@ impl ShellLoop {
         // C07: project stage only. The caller owns the operation total, so
         // nested totals never double-own one operation.
         let _project = shell_stage!("shell.start.open.project");
+        // This projection re-requests every visible icon under the current theme.
+        self.start_icons_stale = false;
         let start_model = self.start_model.clone();
         let category = self.start_category;
         let query = self.start_query.clone();
@@ -1022,6 +1060,7 @@ impl ShellLoop {
             } else {
                 let loader = &mut self.icon_loader;
                 let icon_cache = &mut self.task_icon_cache;
+                let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
                 let panel_outputs = self.surfaces.panel_outputs();
                 let projected = projection::for_each_panel_record(
                     &snapshot,
@@ -1030,7 +1069,7 @@ impl ShellLoop {
                         runtime.with_document(handle, |document| {
                             async_projection::project_panel_for_changed(
                                 document,
-                                view,
+                                view.with_items(items),
                                 loader.as_mut(),
                                 icon_cache,
                                 changed,
@@ -1082,7 +1121,7 @@ impl ShellLoop {
         }
         // Applications own the unified Start document, only when the app
         // set changed and Start is open; hidden Start stays untouched.
-        if changed.applications && self.start_open {
+        if (changed.applications || self.start_icons_stale) && self.start_open {
             let loader = self.icon_loader.as_mut();
             let projected = runtime.with_document(self.surfaces.start, |document| {
                 async_projection::project_start_unified(
@@ -1191,13 +1230,14 @@ impl ShellLoop {
             panels: true,
             ..Default::default()
         };
+        let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
         let panel_outputs = self.surfaces.panel_outputs();
         let projected =
             projection::for_each_panel_record(snapshot, panel_outputs.clone(), |handle, view| {
                 runtime.with_document(handle, |document| {
                     async_projection::project_panel_for_changed(
                         document,
-                        view,
+                        view.with_items(items),
                         loader.as_mut(),
                         icon_cache,
                         changed,
@@ -1305,13 +1345,14 @@ impl ShellLoop {
                     windows: true,
                     ..Default::default()
                 };
+                let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
                 let panel_outputs = self.surfaces.panel_outputs();
                 let mut projection_ok = true;
                 for (handle, _) in panel_outputs {
                     let result = runtime.with_document(handle, |document| {
                         async_projection::project_panel_for_changed(
                             document,
-                            PanelView::first(&snapshot),
+                            PanelView::first(&snapshot).with_items(items),
                             loader.as_deref_mut(),
                             icon_cache,
                             changed,
@@ -1523,6 +1564,24 @@ impl ShellLoop {
         }
     }
 
+    /// Root-sized wallpaper canvas the popup backdrop crops from, so a popup over the taskbar blurs the
+    /// wallpaper like the taskbar does, not the dark bar. `None` falls back to a root capture.
+    fn popup_wallpaper_canvas(&self, settings: &flamewm_api::settings::SettingsSnapshot) -> Option<(u32, u32, Vec<u8>)> {
+        let text = |key: &str| match settings.values.get(key) {
+            Some(SettingValue::Text(value)) => value.clone(),
+            _ => String::new(),
+        };
+        let (width, height) = flamewm_ui_x11::backdrop::root_geometry().ok()?;
+        let canvas = flamewm_shell::surface_backdrop::wallpaper_source(
+            &text("wallpaper"),
+            flamewm_image_core::wallpaper::parse(&text("wallpaperFit")),
+            (width, height),
+            (0, 0, width, height),
+            &crate::packaged_root(),
+        )?;
+        Some((canvas.width, canvas.height, canvas.pixels))
+    }
+
     /// Installs the Start popup backdrop percents; the snapshot itself is captured on each first show.
     fn apply_start_backdrop(&self, runtime: &mut SurfaceRuntime) {
         let Some(settings) = self.settings_cache.as_ref() else {
@@ -1555,17 +1614,25 @@ impl ShellLoop {
         if !(changed || self.weather_feed_pending) {
             return;
         }
-        self.weather_feed_pending = false;
         let feed = self.weather.feed();
         let units = feed.settings.units;
+        let shown = crate::settings_projection::taskbar_items(self.settings_cache.as_ref()).weather;
         let projected = runtime.with_document(self.surfaces.panel(), |document| {
-            projection::project_weather_tray(document, &feed.state, units)
+            projection::project_weather_tray(document, &feed.state, units, shown)
         });
-        if let Err(error) = projected {
-            eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
-        }
+        // Pending clears only after a successful tray write; failures stay loud and retry.
+        let tray_ok = match projected {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
+                false
+            }
+        };
         let _ = runtime.redraw(self.surfaces.panel());
         self.push_weather_feed();
+        if !tray_ok {
+            self.weather_feed_pending = true;
+        }
     }
 
     /// Nonblocking feed push. A full pipe re-arms the pending flag for the next tick;
@@ -1618,11 +1685,15 @@ impl ShellLoop {
         // The focused task underline takes its colour from the settings accent; re-project the task slots
         // now so a settings change (or a first settings arrival after the last task update) cannot leave it stale.
         let shell_snapshot = self.shell.snapshot();
+        // Taskbar item settings (tray, clock, pager visibility) follow the same reprojection.
         let task_changed = flamewm_shell::runtime::ChangedDomains {
             windows: true,
+            workspaces: true,
+            system: true,
             ..Default::default()
         };
         let loader = &mut self.icon_loader;
+        let items = crate::settings_projection::taskbar_items(self.settings_cache.as_ref());
         let icon_cache = &mut self.task_icon_cache;
         let _ = projection::for_each_panel_record(
             &shell_snapshot,
@@ -1631,7 +1702,7 @@ impl ShellLoop {
                 runtime.with_document(handle, |document| {
                     async_projection::project_panel_for_changed(
                         document,
-                        view,
+                        view.with_items(items),
                         loader.as_mut(),
                         icon_cache,
                         task_changed,
@@ -1655,6 +1726,21 @@ impl ShellLoop {
         self.settings_projection_pending = false;
         self.apply_taskbar_frame(runtime);
         Ok(())
+    }
+}
+
+/// Whether a quick-control popup's taskbar item is still shown under `items`.
+fn quick_kind_shown(
+    kind: flamewm_shell::quick_controls::QuickControlKind,
+    items: flamewm_shell::projection::TaskbarItems,
+) -> bool {
+    use flamewm_shell::quick_controls::QuickControlKind;
+    match kind {
+        QuickControlKind::Audio => items.volume,
+        QuickControlKind::Network => items.network,
+        QuickControlKind::Battery => items.battery,
+        QuickControlKind::Weather => items.weather,
+        QuickControlKind::Calendar => items.clock,
     }
 }
 
@@ -1688,6 +1774,12 @@ fn clear_transient_state_fields(
 ) {
     end_start_session_fields(start_open, start_query);
     *context_menu = None;
+}
+
+/// Opening a quick popup releases the shell context-menu slot. Returns true
+/// when a context menu was open and its surface must be closed.
+fn take_context_menu_for_popup(context_menu: &mut Option<flamewm_shell::ContextMenuState>) -> bool {
+    context_menu.take().is_some()
 }
 
 /// `IconGeometrySink` over the `SurfaceRuntime` facade. Write failures are
@@ -1939,6 +2031,21 @@ mod tests {
         assert!(!start_open);
         assert!(start_query.is_empty(), "close clears the search query");
         assert!(context_menu.is_none());
+    }
+
+    #[test]
+    fn quick_popup_open_takes_and_closes_open_context_menu_only() {
+        let mut context_menu = Some(flamewm_shell::ContextMenuState {
+            kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
+            revision: 1,
+            anchor: None,
+        });
+        assert!(super::take_context_menu_for_popup(&mut context_menu));
+        assert!(context_menu.is_none(), "popup open releases the menu slot");
+        assert!(
+            !super::take_context_menu_for_popup(&mut context_menu),
+            "no surface close is issued when no context menu is open"
+        );
     }
 
     #[test]

@@ -48,6 +48,8 @@ pub struct OpenRequest {
     pub anchor: Rect,
     pub work_area: Rect,
     pub panel_edge: PanelEdge,
+    /// Root rect of the parent's panel dock, so the helper can clip slide transit frames.
+    pub dock: Option<Rect>,
 }
 
 /// Parent -> child commands. Deliberately secret-free by construction.
@@ -145,19 +147,27 @@ pub fn encode_command(cmd: &Command) -> String {
         Command::Close => "CLOSE".to_owned(),
         Command::Shutdown => "SHUTDOWN".to_owned(),
         Command::Weather(feed) => format!("WEATHER {}", feed.encode()),
-        Command::Open(req) => format!(
-            "OPEN {} {} {} {} {} {} {} {} {} {}",
-            req.kind.as_str(),
-            req.anchor.x,
-            req.anchor.y,
-            req.anchor.width,
-            req.anchor.height,
-            req.work_area.x,
-            req.work_area.y,
-            req.work_area.width,
-            req.work_area.height,
-            edge_str(req.panel_edge),
-        ),
+        Command::Open(req) => {
+            // A missing dock encodes as a zero-width rect, which decodes back to `None`.
+            let dock = req.dock.unwrap_or(Rect::new(0, 0, 0, 0));
+            format!(
+                "OPEN {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+                req.kind.as_str(),
+                req.anchor.x,
+                req.anchor.y,
+                req.anchor.width,
+                req.anchor.height,
+                req.work_area.x,
+                req.work_area.y,
+                req.work_area.width,
+                req.work_area.height,
+                edge_str(req.panel_edge),
+                dock.x,
+                dock.y,
+                dock.width,
+                dock.height,
+            )
+        }
     }
 }
 
@@ -181,10 +191,10 @@ pub fn decode_line(line: &str) -> Result<Command, ProtocolError> {
         "CLOSE" if parts.len() == 1 => Ok(Command::Close),
         "SHUTDOWN" if parts.len() == 1 => Ok(Command::Shutdown),
         "OPEN" => {
-            // OPEN <kind> <anchor x4> <work_area x4> <edge> = 11 tokens.
-            if parts.len() != 11 {
+            // OPEN <kind> <anchor x4> <work_area x4> <edge> <dock x4> = 15 tokens.
+            if parts.len() != 15 {
                 return Err(ProtocolError::BadArity {
-                    expected: 11,
+                    expected: 15,
                     got: parts.len(),
                 });
             }
@@ -192,11 +202,13 @@ pub fn decode_line(line: &str) -> Result<Command, ProtocolError> {
             let anchor = parse_rect(&parts[2..6])?;
             let work_area = parse_rect(&parts[6..10])?;
             let panel_edge = parse_edge(parts[10])?;
+            let dock = parse_rect(&parts[11..15])?;
             Ok(Command::Open(OpenRequest {
                 kind,
                 anchor,
                 work_area,
                 panel_edge,
+                dock: (dock.width > 0 && dock.height > 0).then_some(dock),
             }))
         }
         other => Err(ProtocolError::UnknownCommand(other.to_owned())),
@@ -213,6 +225,7 @@ mod tests {
             anchor: Rect::new(10, 20, 100, 30),
             work_area: Rect::new(0, 0, 1920, 1040),
             panel_edge: PanelEdge::Bottom,
+            dock: None,
         })
     }
 
@@ -227,6 +240,7 @@ mod tests {
                 anchor: Rect::new(-5, -5, 1, 1),
                 work_area: Rect::new(0, 0, 800, 600),
                 panel_edge: PanelEdge::Top,
+                dock: Some(Rect::new(0, 1040, 1920, 40)),
             }),
         ] {
             let line = encode_command(&cmd);
@@ -263,6 +277,7 @@ mod tests {
             anchor: Rect::new(10, 20, 100, 30),
             work_area: Rect::new(0, 0, 1920, 1040),
             panel_edge: PanelEdge::Bottom,
+            dock: None,
         }));
         assert!(line.starts_with("OPEN battery "), "{line}");
         assert!(decode_line(&line).is_ok());
@@ -277,6 +292,7 @@ mod tests {
             anchor: Rect::new(10, 20, 100, 30),
             work_area: Rect::new(0, 0, 1920, 1040),
             panel_edge: PanelEdge::Bottom,
+            dock: None,
         })] {
             let line = encode_command(&cmd);
             assert!(line.starts_with("OPEN weather "), "{line}");

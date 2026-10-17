@@ -145,6 +145,7 @@ mod tests {
             anchor,
             work_area: output,
             panel_edge: edge,
+            dock: None,
         }
     }
 

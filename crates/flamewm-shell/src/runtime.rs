@@ -583,7 +583,7 @@ impl ShellRuntime {
                 start::category_for_action(value).map(ShellControl::SelectStartCategory)
             }
             "media.open" | "media.toggle" | "volume.open" | "network.open" | "battery.open"
-            | "clock.open" => Some(ShellControl::OpenPopover(
+            | "clock.open" | "weather.open" => Some(ShellControl::OpenPopover(
                 action.split('.').next().unwrap_or(action).to_owned(),
             )),
             "popover.close" => Some(ShellControl::ClosePopovers),
@@ -1916,9 +1916,11 @@ mod tests {
 
     #[test]
     fn context_menu_size_shrinks_to_visible_rows() {
-        assert_eq!(context_menu_size(1).height, 41);
-        assert_eq!(context_menu_size(2).height, 72);
-        assert_eq!(context_menu_size(3).height, 103);
+        use flamewm_ui_core::context_menu::{MENU_PADDING, ROW_HEIGHT};
+        let height = |rows: i32| 2 * MENU_PADDING + rows * ROW_HEIGHT;
+        assert_eq!(context_menu_size(1).height, height(1));
+        assert_eq!(context_menu_size(2).height, height(2));
+        assert_eq!(context_menu_size(3).height, height(3));
         assert!(context_menu_size(1).height < 180);
         assert!(context_menu_size(3).height < 180);
     }
@@ -1944,6 +1946,19 @@ mod tests {
             output: test_output_id(),
             state_generation: 1,
         }
+    }
+
+    // REGRESSION: the weather tray click must reach the popup opener. Without the
+    // "weather.open" arm, dispatch yields no control and the popup never opens.
+    #[test]
+    fn weather_tray_click_dispatches_open_popover() {
+        let mut runtime = ShellRuntime::default();
+        runtime.dispatch("weather.open");
+        let controls: Vec<_> = runtime.drain_controls().collect();
+        assert!(
+            matches!(controls.as_slice(), [ShellControl::OpenPopover(name)] if name == "weather"),
+            "{controls:?}"
+        );
     }
 
     #[test]

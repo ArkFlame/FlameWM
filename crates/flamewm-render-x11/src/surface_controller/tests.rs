@@ -531,6 +531,17 @@ mod slide_motion_tests {
     }
 
     #[test]
+    fn helper_popup_clips_against_the_published_dock_when_no_local_dock() {
+        // Quick-control helpers have no Dock surface: the parent's panel rect must stand in.
+        let published = Some((0, 1040, 1920, 40));
+        assert_eq!(resolve_dock(None, published), published);
+        assert_eq!(resolve_dock(Some((0, 1000, 1920, 80)), published), Some((0, 1000, 1920, 80)));
+        assert_eq!(resolve_dock(None, None), None);
+        let clip = panel_clip(resolve_dock(None, published), (100, 900), (300, 400), SlideEdge::Bottom);
+        assert_eq!(clip, (0, 0, 300, 140));
+    }
+
+    #[test]
     fn final_frame_is_exact_anchored_origin_for_every_edge() {
         for edge in [SlideEdge::Top, SlideEdge::Bottom, SlideEdge::Left, SlideEdge::Right] {
             assert_eq!(slide_origin(FINAL, SIZE, edge, 1.0), FINAL, "{edge:?}");

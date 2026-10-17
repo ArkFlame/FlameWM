@@ -52,6 +52,21 @@ pub struct WindowGeometry {
 /// and the X11 event loop (taker). Latest request wins; `None` means no-op.
 pub type WindowGeometrySlot = std::rc::Rc<std::cell::Cell<Option<WindowGeometry>>>;
 
+/// One root press observed while the host has armed `RawPressWatch`. Presses
+/// are only observed: they are never grabbed, replayed or consumed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RawPress {
+    /// Root-space position in logical px.
+    pub x: f32,
+    pub y: f32,
+    pub button: u32,
+    pub time_ms: u64,
+}
+
+/// Host request for the root press observer, written by the host's callbacks
+/// and read by the X11 event loop on each turn. `true` arms the observer.
+pub type RawPressWatch = std::rc::Rc<std::cell::Cell<bool>>;
+
 pub fn run_with_controller_events_with_reactor<F, R>(
     document: RuntimeDocument,
     config: X11Config,
@@ -68,21 +83,26 @@ where
         config,
         reactor,
         WindowGeometrySlot::default(),
+        RawPressWatch::default(),
         on_event,
+        |_, _| Ok(()),
         on_reactor,
     )
 }
 
-pub fn run_with_controller_events_with_reactor_geometry<F, R>(
+pub fn run_with_controller_events_with_reactor_geometry<F, P, R>(
     mut document: RuntimeDocument,
     config: X11Config,
     reactor: &mut Reactor,
     geometry: WindowGeometrySlot,
+    press_watch: RawPressWatch,
     mut on_event: F,
+    mut on_press: P,
     mut on_reactor: R,
 ) -> Result<(), String>
 where
     F: FnMut(&ControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
+    P: FnMut(&RawPress, &mut RuntimeDocument) -> Result<(), String>,
     R: FnMut(&mut RuntimeDocument) -> Result<(), String>,
 {
     unsafe {
@@ -117,6 +137,8 @@ where
             reactor,
             &mut on_reactor,
             &geometry,
+            &press_watch,
+            &mut on_press,
         );
         let remove_result = reactor.remove(token).map_err(|error| error.to_string());
         let deferred_native = app.take_deferred_native_libraries();
