@@ -94,16 +94,12 @@ pub fn xtest_drag_path(
         return false;
     }
     let steps = steps.max(1);
-    for i in 1..=steps {
-        let i = i64::from(i);
-        let steps = i64::from(steps);
-        let x = i64::from(from.0) + (i64::from(to.0) - i64::from(from.0)) * i / steps;
-        let y = i64::from(from.1) + (i64::from(to.1) - i64::from(from.1)) * i / steps;
-        if !xtest_motion(canary, x as i16, y as i16) {
-            return false;
-        }
-    }
-    xtest_button_release(canary, to.0, to.1, button)
+    let lerp = |a: i16, b: i16, i: u32| {
+        let (a, b) = (i64::from(a), i64::from(b));
+        (a + (b - a) * i64::from(i) / i64::from(steps)) as i16
+    };
+    (1..=steps).all(|i| xtest_motion(canary, lerp(from.0, to.0, i), lerp(from.1, to.1, i)))
+        && xtest_button_release(canary, to.0, to.1, button)
 }
 
 /// Real click: move the actual pointer and deliver an XTEST button pair.
