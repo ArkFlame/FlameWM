@@ -203,10 +203,6 @@ impl QuickControlSupervisor {
         self.restarts
     }
 
-    #[must_use]
-    pub fn is_running(self: &Self) -> bool {
-        self.child.is_some()
-    }
 }
 
 impl Drop for QuickControlSupervisor {
