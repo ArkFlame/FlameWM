@@ -969,8 +969,7 @@ impl ShellLoop {
                     }
                 }
                 DependentSurface::Start => {
-                    let applied = runtime.with_document(self.surfaces.start, apply);
-                    if matches!(applied, Ok(true)) {
+                    if matches!(runtime.with_document(self.surfaces.start, apply), Ok(true)) {
                         need_submenu = true;
                     }
                 }
@@ -1712,8 +1711,7 @@ impl ShellLoop {
     /// Nonblocking feed push. A full pipe re-arms the pending flag for the next tick;
     /// no running popup host is not an error (its first OPEN carries the feed).
     fn push_weather_feed(&mut self) {
-        let feed = self.weather.feed();
-        match self.quick_control.push_weather(feed) {
+        match self.quick_control.push_weather(self.weather.feed()) {
             Ok(()) => self.weather_feed_pending = false,
             Err(flamewm_shell::quick_controls::SupervisorError::WouldBlock) => {
                 self.weather_feed_pending = true;
