@@ -415,15 +415,9 @@ fn child_dirs(dir: &Path) -> Vec<PathBuf> {
 /// then second child of every parent, and so on.
 fn interleave_by_parent(groups: &[Vec<PathBuf>]) -> Vec<PathBuf> {
     let rounds = groups.iter().map(Vec::len).max().unwrap_or(0);
-    let mut out = Vec::new();
-    for index in 0..rounds {
-        for group in groups {
-            if let Some(path) = group.get(index) {
-                out.push(path.clone());
-            }
-        }
-    }
-    out
+    (0..rounds)
+        .flat_map(|index| groups.iter().filter_map(move |group| group.get(index).cloned()))
+        .collect()
 }
 
 fn log_watch_cap_once() {
