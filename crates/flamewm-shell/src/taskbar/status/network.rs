@@ -196,18 +196,6 @@ pub fn paged_paths_for_page(snapshot: &NetworkSnapshot, page: usize) -> Vec<(usi
         .collect()
 }
 
-/// Snapshot AP count (full model rows, never the paged window).
-#[must_use]
-pub fn snapshot_ap_count(snapshot: &NetworkSnapshot) -> usize {
-    snapshot.access_points.len()
-}
-
-/// Visible-row count for the active page (what projection maps into slots).
-#[must_use]
-pub fn project_visible_count(snapshot: &NetworkSnapshot) -> usize {
-    paged_paths(snapshot).len()
-}
-
 #[must_use]
 pub fn popover(snapshot: &SystemSnapshot) -> Option<NetworkPopoverModel> {
     if snapshot.network.availability != ServiceAvailability::Available {
