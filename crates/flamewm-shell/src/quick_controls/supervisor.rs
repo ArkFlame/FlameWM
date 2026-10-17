@@ -69,10 +69,9 @@ fn coalesce_pending_open(slot: &mut Option<OpenRequest>, req: OpenRequest) {
 fn set_stdin_nonblocking(child: &mut Child) -> Result<(), SupervisorError> {
     use std::os::unix::io::AsFd;
     let stdin = child.stdin.as_mut().ok_or(SupervisorError::NotRunning)?;
-    let flags = rustix::fs::fcntl_getfl(stdin.as_fd())
-        .map_err(|e| SupervisorError::Io(std::io::Error::from_raw_os_error(e.raw_os_error())))?;
-    rustix::fs::fcntl_setfl(stdin.as_fd(), flags | rustix::fs::OFlags::NONBLOCK)
-        .map_err(|e| SupervisorError::Io(std::io::Error::from_raw_os_error(e.raw_os_error())))?;
+    let io = |e: rustix::io::Errno| SupervisorError::Io(e.into());
+    let flags = rustix::fs::fcntl_getfl(stdin.as_fd()).map_err(io)?;
+    rustix::fs::fcntl_setfl(stdin.as_fd(), flags | rustix::fs::OFlags::NONBLOCK).map_err(io)?;
     Ok(())
 }
 
@@ -278,20 +277,24 @@ mod tests {
         assert!(matches!(sup.poll(), Ok(None)));
     }
 
+    /// Supervisor whose child is `sleep 30`: holds the stdin read end open
+    /// without draining, so writes hit backpressure.
+    fn stalled_supervisor() -> QuickControlSupervisor {
+        let mut sup = QuickControlSupervisor::new("sleep".to_owned());
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sleep");
+        set_stdin_nonblocking(&mut child).expect("nonblocking stdin");
+        sup.child = Some(child);
+        sup
+    }
+
     #[test]
     fn full_stdin_pipe_is_nonblocking_wouldblock_immediate() {
-        // `sleep` holds the read end open without draining: writes must
-        // return WouldBlock instead of blocking the parent.
-        let mut sup = QuickControlSupervisor::new("sleep".to_owned());
-        // Spawn `sleep 30` directly to keep the pipe open and undrained.
-        sup.child = Some(
-            std::process::Command::new("sleep")
-                .arg("30")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .expect("spawn sleep"),
-        );
-        set_stdin_nonblocking(sup.child.as_mut().expect("child")).expect("nonblocking stdin");
+        // Writes must return WouldBlock instead of blocking the parent.
+        let mut sup = stalled_supervisor();
         use std::io::Write;
         let stdin = sup.child.as_mut().unwrap().stdin.as_mut().unwrap();
         // Fill the pipe until the kernel refuses; must stay nonblocking.
@@ -330,15 +333,7 @@ mod tests {
     fn open_after_stall_stays_nonblocking() {
         // Direct WouldBlock mapping: a second OPEN after backpressure
         // returns immediately rather than blocking the shell loop.
-        let mut sup = QuickControlSupervisor::new("sleep".to_owned());
-        sup.child = Some(
-            std::process::Command::new("sleep")
-                .arg("30")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .expect("spawn sleep"),
-        );
-        set_stdin_nonblocking(sup.child.as_mut().expect("child")).expect("nonblocking stdin");
+        let mut sup = stalled_supervisor();
         use std::io::Write;
         let chunk = [0u8; 65536];
         for _ in 0..256 {
