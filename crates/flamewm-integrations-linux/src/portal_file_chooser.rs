@@ -393,13 +393,10 @@ fn hex_value(value: u8) -> FlameResult<u8> {
 }
 
 fn one_object_path(items: &[MessageItem], context: &str) -> FlameResult<String> {
-    if items.len() != 1 {
+    let [MessageItem::ObjectPath(value)] = items else {
         return Err(FlameError::invalid(context));
-    }
-    match &items[0] {
-        MessageItem::ObjectPath(value) => Ok(value.to_string()),
-        _ => Err(FlameError::invalid(context)),
-    }
+    };
+    Ok(value.to_string())
 }
 
 #[cfg(test)]
