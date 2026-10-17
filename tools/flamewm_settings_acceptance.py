@@ -717,13 +717,18 @@ def gdbus_argv(method: str, *args: str) -> list[str]:
             "--object-path", "/com/arkflame/FlameWM1", "--method", "com.arkflame.FlameWM1." + method, *args]
 
 
-def dbus_get_snapshot(ctx: Ctx, interface: str) -> tuple[str | None, str]:
-    argv = gdbus_argv(f"{interface}.GetSnapshot")
+def run_gdbus(ctx: Ctx, argv: list[str]) -> tuple[subprocess.CompletedProcess | None, str | None]:
     try:
-        result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
-                                timeout=10, check=False)
+        return subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True, timeout=10, check=False), None
     except (OSError, subprocess.SubprocessError) as error:
         return None, str(error)
+
+
+def dbus_get_snapshot(ctx: Ctx, interface: str) -> tuple[str | None, str]:
+    argv = gdbus_argv(f"{interface}.GetSnapshot")
+    result, error = run_gdbus(ctx, argv)
+    if error is not None:
+        return None, error
     if result.returncode:
         return None, result.stderr.strip() or f"gdbus exited {result.returncode}"
     return result.stdout, shell(argv)
@@ -1034,11 +1039,9 @@ def dbus_apply_accent(ctx: Ctx, revision: int, accent: str) -> tuple[str | None,
 def dbus_apply_settings(ctx: Ctx, revision: int, changes: dict[str, str]) -> tuple[str | None, str, int | None]:
     change = "{" + ", ".join("'" + key + "': <" + value + ">" for key, value in changes.items()) + "}"
     argv = gdbus_argv("Settings.Apply", f"uint64 {revision}", change)
-    try:
-        result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
-                                timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        return str(error), shell(argv), None
+    result, error = run_gdbus(ctx, argv)
+    if error is not None:
+        return error, shell(argv), None
     return (result.stdout if result.returncode == 0 else result.stderr.strip(), shell(argv), result.returncode)
 
 
@@ -1046,9 +1049,8 @@ def dbus_panels_snapshot(ctx: Ctx) -> tuple[str | None, str]:
     return dbus_get_snapshot(ctx, "Panels")
 
 
-def top_level_blocks(body: str) -> list[str]:
-    """Split a gdbus dictionary array body into its top-level {...} blocks, skipping quoted text."""
-    blocks = []
+def brace_spans(body: str):
+    """Yield (start, end) of each top-level {...} group, skipping quoted text."""
     depth = 0
     start = None
     quoted = False
@@ -1071,9 +1073,13 @@ def top_level_blocks(body: str) -> list[str]:
         elif char == "}":
             depth -= 1
             if depth == 0 and start is not None:
-                blocks.append(body[start:index + 1])
+                yield start, index + 1
                 start = None
-    return blocks
+
+
+def top_level_blocks(body: str) -> list[str]:
+    """Split a gdbus dictionary array body into its top-level {...} blocks, skipping quoted text."""
+    return [body[start:end] for start, end in brace_spans(body)]
 
 
 def parse_panels_snapshot(output: str) -> dict | None:
@@ -1610,32 +1616,10 @@ def display_mode_count(snapshot: str) -> int | None:
     first_start = body.find("{")
     if first_start < 0:
         return 0
-    depth = 0
-    quoted = False
-    escaped = False
-    first_end = None
-    for index in range(first_start, len(body)):
-        char = body[index]
-        if quoted:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == "'":
-                quoted = False
-            continue
-        if char == "'":
-            quoted = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                first_end = index + 1
-                break
-    if first_end is None:
+    span = next(brace_spans(body[first_start:]), None)
+    if span is None:
         return None
-    modes = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*?)\]>", body[first_start:first_end], re.DOTALL)
+    modes = re.search(r"['\"]modes['\"]\s*:\s*<\[(.*?)\]>", body[first_start:first_start + span[1]], re.DOTALL)
     if modes is None:
         return None
     mode_body = modes.group(1)
@@ -2500,6 +2484,13 @@ def run_ss04(ctx: Ctx, args: argparse.Namespace) -> dict:
     return entry
 
 
+SS05_MODE_OBSERVATION = {
+    "success": "success_applied_without_input",
+    "cancel": "cancel_preserved_without_error",
+    "error": "error_preserved_and_visible",
+}
+
+
 def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
     """Click the real Wallpaper Choose action against a private XDG portal fixture."""
     observations: dict[str, bool | None] = {
@@ -2577,9 +2568,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                 time.sleep(0.05)
             if not portal_state or not portal_state.get("ready"):
                 case["portal_error"] = (portal_state or {}).get("error") if portal_state else None
-                observations[{"success": "success_applied_without_input",
-                              "cancel": "cancel_preserved_without_error",
-                              "error": "error_preserved_and_visible"}[mode]] = False
+                observations[SS05_MODE_OBSERVATION[mode]] = False
                 case["failure"] = "owned fake portal did not become ready"
                 continue
 
@@ -2601,21 +2590,15 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                     or (geometry.get("width"), geometry.get("height")) != settings_size
                     or before_text is None or before_value is None or before_revision is None):
                 case["failure"] = "Settings client geometry or authoritative wallpaper snapshot unavailable"
-                observations[{"success": "success_applied_without_input",
-                              "cancel": "cancel_preserved_without_error",
-                              "error": "error_preserved_and_visible"}[mode]] = False
+                observations[SS05_MODE_OBSERVATION[mode]] = False
                 continue
             if previous_value is not None and before_value != previous_value:
                 case["failure"] = f"wallpaper changed between scenarios: expected {previous_value!r}, saw {before_value!r}"
-                observations[{"success": "success_applied_without_input",
-                              "cancel": "cancel_preserved_without_error",
-                              "error": "error_preserved_and_visible"}[mode]] = False
+                observations[SS05_MODE_OBSERVATION[mode]] = False
                 continue
             if previous_revision is not None and before_revision != previous_revision:
                 case["failure"] = f"revision changed before scenario: expected {previous_revision}, saw {before_revision}"
-                observations[{"success": "success_applied_without_input",
-                              "cancel": "cancel_preserved_without_error",
-                              "error": "error_preserved_and_visible"}[mode]] = False
+                observations[SS05_MODE_OBSERVATION[mode]] = False
                 continue
 
             before_error = ctx.run / "shots" / f"ss05-{mode}-error-before.png"
@@ -2633,9 +2616,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
             details["commands"].append(click_command)
             if click_code != 0:
                 case["failure"] = f"owned XTEST click failed with exit {click_code}"
-                observations[{"success": "success_applied_without_input",
-                              "cancel": "cancel_preserved_without_error",
-                              "error": "error_preserved_and_visible"}[mode]] = False
+                observations[SS05_MODE_OBSERVATION[mode]] = False
                 continue
 
             invocation_deadline = time.monotonic() + timeout
@@ -2655,9 +2636,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
             case["portal_invocation"] = invocation
             if not invocation or invocation.get("mode") != mode or invocation.get("title") != "Choose Wallpaper":
                 case["failure"] = "Choose click did not produce the expected private FileChooser.OpenFile call"
-                observations[{"success": "success_applied_without_input",
-                              "cancel": "cancel_preserved_without_error",
-                              "error": "error_preserved_and_visible"}[mode]] = False
+                observations[SS05_MODE_OBSERVATION[mode]] = False
                 continue
 
             observed_text = None
@@ -2778,9 +2757,7 @@ def run_ss05(ctx: Ctx, args: argparse.Namespace) -> dict:
                 previous_value, previous_revision = before_value, before_revision
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
             case["failure"] = f"scenario execution error: {error}"
-            observations[{"success": "success_applied_without_input",
-                          "cancel": "cancel_preserved_without_error",
-                          "error": "error_preserved_and_visible"}[mode]] = False
+            observations[SS05_MODE_OBSERVATION[mode]] = False
         finally:
             ctx.stop(settings)
             ctx.stop(portal)
