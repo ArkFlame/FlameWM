@@ -270,7 +270,7 @@ impl ShellRuntime {
     /// any fetch. Every steady-state domain is supplied by a snapshot signal;
     /// this method only consumes dirty flags and never owns a control client.
     pub fn reconcile_dirty(&mut self) -> ChangedDomains {
-        let mut take = |flag: &mut bool, kind: DomainKind| {
+        let take = |flag: &mut bool, kind: DomainKind| {
             let set = std::mem::take(flag);
             if set {
                 domain_reconcile_counter(kind).increment();
