@@ -222,7 +222,7 @@ fn lock_on(
     let (outcome_tx, outcome_rx) = mpsc::channel::<Outcome>();
     let (power_tx, power_rx) = mpsc::channel::<PowerEvent>();
     power::fetch_capabilities_on_worker(power_tx.clone());
-    let (wake_reader, wake_writer) =
+    let (mut wake_reader, wake_writer) =
         UnixStream::pair().map_err(|error| format!("frame pacer socket: {error}"))?;
     let frame_pacer = FramePacer::start(wake_writer)?;
     let mut lock = LockLoop {
@@ -264,18 +264,15 @@ fn lock_on(
 
     let mut reactor = Reactor::new().map_err(|error| format!("create reactor: {error}"))?;
     let key_fd = session.borrow().fd();
-    let key_queue = Rc::clone(&keys);
-    let key_session = Rc::clone(&session);
     reactor
         .register_raw_fd_with_action(key_fd, Interest::READ, move |_, _| {
-            let read = key_session.borrow_mut().read_keys();
-            let mut queue = key_queue.borrow_mut();
+            let read = session.borrow_mut().read_keys();
+            let mut queue = keys.borrow_mut();
             queue.keys.extend(read.keys);
             queue.presses += read.presses;
             FdAction::Continue
         })
         .map_err(|error| format!("watch keyboard events: {error}"))?;
-    let mut wake_reader = wake_reader;
     wake_reader
         .set_nonblocking(true)
         .map_err(|error| format!("frame pacer socket: {error}"))?;
@@ -291,7 +288,6 @@ fn lock_on(
         .register_timer(TICK, true, || {})
         .map_err(|error| format!("register lock tick: {error}"))?;
 
-    let click_queue = Rc::clone(&clicks);
     run_surface_runtime_with_reactor_access(
         runtime,
         &mut reactor,
@@ -299,7 +295,7 @@ fn lock_on(
             // Power icons, the confirm strip and the Other list are action nodes; only
             // a primary press means a click. Queued here, applied in the tick.
             if event.action.phase == ActionPhase::Press && event.action.button == BUTTON_PRIMARY {
-                click_queue.borrow_mut().push(event.action.action);
+                clicks.borrow_mut().push(event.action.action);
             }
             Ok(())
         },
