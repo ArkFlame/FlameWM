@@ -289,15 +289,11 @@ mod tests {
 
     #[test]
     fn failed_control_request_keeps_previous_authoritative_value() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
+        let (_, mut transport) = recording_transport();
         let mut initial = SettingsSnapshot::new(4);
         initial
             .values
             .insert("fontBold".to_owned(), SettingValue::Boolean(false));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(initial)));
@@ -1830,11 +1826,7 @@ mod tests {
 
     #[test]
     fn display_controller_seam_selects_only_authoritative_outputs() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests,
-            ..RecordingTransport::default()
-        };
+        let (_, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Displays(display_snapshot())));
@@ -1853,7 +1845,7 @@ mod tests {
 
     #[test]
     fn font_controller_seam_submits_one_authoritative_change() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
+        let (requests, mut transport) = recording_transport();
         let mut initial = SettingsSnapshot::new(4);
         initial
             .values
@@ -1862,10 +1854,6 @@ mod tests {
         updated
             .values
             .insert("fontBold".to_owned(), SettingValue::Boolean(true));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(initial)));
@@ -1920,7 +1908,7 @@ mod tests {
         SettingsApplication<RecordingTransport>,
         Rc<RefCell<Vec<ControlRequest>>>,
     ) {
-        let requests = Rc::new(RefCell::new(Vec::new()));
+        let (requests, mut transport) = recording_transport();
         let mut snapshot = SettingsSnapshot::new(7);
         for key in [
             "surfaceColor",
@@ -1931,10 +1919,6 @@ mod tests {
                 .values
                 .insert(key.to_owned(), SettingValue::Text(initial.to_owned()));
         }
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
         for _ in 0..=applies {
             transport
                 .responses
@@ -2105,7 +2089,7 @@ mod tests {
 
     #[test]
     fn accent_swatches_dispatch_only_release_inside_events_and_apply_selected_value() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
+        let (requests, mut transport) = recording_transport();
         let initial = SettingsSnapshot::new(1);
         let mut blue = SettingsSnapshot::new(2);
         blue.values.insert(
@@ -2117,10 +2101,6 @@ mod tests {
             "accent".to_owned(),
             SettingValue::Text("#1ABC9C".to_owned()),
         );
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(initial)));
