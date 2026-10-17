@@ -46,18 +46,12 @@ impl ApplicationService {
         self.applications
             .iter()
             .filter(|app| {
-                app.id.as_str().to_lowercase().contains(&needle)
-                    || app.name.to_lowercase().contains(&needle)
-                    || app.generic_name.to_lowercase().contains(&needle)
-                    || app.comment.to_lowercase().contains(&needle)
-                    || app
-                        .keywords
-                        .iter()
-                        .any(|keyword| keyword.to_lowercase().contains(&needle))
-                    || app
-                        .categories
-                        .iter()
-                        .any(|category| category.to_lowercase().contains(&needle))
+                contains(app.id.as_str(), &needle)
+                    || contains(&app.name, &needle)
+                    || contains(&app.generic_name, &needle)
+                    || contains(&app.comment, &needle)
+                    || app.keywords.iter().any(|k| contains(k, &needle))
+                    || app.categories.iter().any(|c| contains(c, &needle))
             })
             .cloned()
             .collect()
@@ -79,4 +73,8 @@ impl ApplicationService {
         }
         port.launch_uri(uri)
     }
+}
+
+fn contains(text: &str, needle: &str) -> bool {
+    text.to_lowercase().contains(needle)
 }

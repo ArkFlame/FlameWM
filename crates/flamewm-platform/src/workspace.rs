@@ -125,12 +125,6 @@ impl WorkspacePlanner {
         }
         let insert_index = clicked + 1;
         let new_count = snapshot.count + 1;
-        let old_to_new = (0..snapshot.count)
-            .map(|old| if old >= insert_index { old + 1 } else { old })
-            .collect::<Vec<_>>();
-
-        let mut names = normalized_names(snapshot);
-        names.insert(insert_index, format!("Workspace {}", insert_index + 1));
         let map_existing = |index: usize| {
             if index >= insert_index {
                 index + 1
@@ -138,6 +132,10 @@ impl WorkspacePlanner {
                 index
             }
         };
+        let old_to_new = (0..snapshot.count).map(map_existing).collect::<Vec<_>>();
+
+        let mut names = normalized_names(snapshot);
+        names.insert(insert_index, format!("Workspace {}", insert_index + 1));
         let plan = WorkspacePlan {
             kind: WorkspacePlanKind::Insert,
             expected_revision: snapshot.revision,

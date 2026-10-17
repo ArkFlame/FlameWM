@@ -52,6 +52,12 @@ impl TaskEntry {
     pub const fn is_pinned_slot(&self) -> bool {
         matches!(self.kind, TaskEntryKind::Pinned { .. })
     }
+
+    fn set_pinned_window(&mut self, window: WindowRef) {
+        self.kind = TaskEntryKind::Pinned {
+            window: Some(window),
+        };
+    }
 }
 
 /// V8 task-strip authority.
@@ -129,9 +135,7 @@ impl TaskStrip {
         if let Some(slot) = self.entries.iter_mut().find(|entry| {
             entry.app == app && matches!(entry.kind, TaskEntryKind::Pinned { window: None })
         }) {
-            slot.kind = TaskEntryKind::Pinned {
-                window: Some(window),
-            };
+            slot.set_pinned_window(window);
             return true;
         }
         self.entries.push(TaskEntry::window(app, window));
@@ -156,9 +160,7 @@ impl TaskStrip {
                 let sibling_entry = self.entries.remove(sibling);
                 if let Some(sibling_window) = sibling_entry.represented_window() {
                     let slot_index = if sibling < index { index - 1 } else { index };
-                    self.entries[slot_index].kind = TaskEntryKind::Pinned {
-                        window: Some(sibling_window),
-                    };
+                    self.entries[slot_index].set_pinned_window(sibling_window);
                 }
             } else {
                 self.entries[index].kind = TaskEntryKind::Pinned { window: None };
@@ -177,9 +179,7 @@ impl TaskStrip {
         if self.is_pinned(&app) {
             return true;
         }
-        self.entries[index].kind = TaskEntryKind::Pinned {
-            window: Some(window),
-        };
+        self.entries[index].set_pinned_window(window);
         true
     }
 
@@ -189,9 +189,7 @@ impl TaskStrip {
         }
         if let Some(index) = self.first_window_index_for_app(&app) {
             if let Some(window) = self.entries[index].represented_window() {
-                self.entries[index].kind = TaskEntryKind::Pinned {
-                    window: Some(window),
-                };
+                self.entries[index].set_pinned_window(window);
             }
         } else {
             self.entries.push(TaskEntry::pinned(app));
