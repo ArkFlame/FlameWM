@@ -70,12 +70,11 @@ impl TaskDrag {
         }
         let to = self.target(x, slot_count);
         if to == self.source || slot_count == 0 {
-            TaskDragRelease::Noop
-        } else {
-            TaskDragRelease::Reorder {
-                from: self.source,
-                to,
-            }
+            return TaskDragRelease::Noop;
+        }
+        TaskDragRelease::Reorder {
+            from: self.source,
+            to,
         }
     }
 }
