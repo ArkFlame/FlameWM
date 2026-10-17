@@ -1254,14 +1254,16 @@ fn io_error(error: io::Error) -> FlameError {
 mod tests {
     use super::*;
 
+    fn load(text: &str) -> FlameResult<ProductSettings> {
+        ConfigStore::default().parse_snapshot(text)
+    }
+
     /// Each line, set on an otherwise default file, must be rejected as `InvalidArgument`.
     fn assert_rejected<S: AsRef<str>>(lines: &[S]) {
-        let store = ConfigStore::default();
         for line in lines {
             let line = line.as_ref();
             assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                load(&format!("revision=2\n{line}\n"))
                     .expect_err(line)
                     .code,
                 ErrorCode::InvalidArgument,
@@ -1283,9 +1285,7 @@ mod tests {
 
     #[test]
     fn unset_icon_theme_defaults_to_plaguesur_and_writes_nothing() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\n")
+        let parsed = load("revision=2\n")
             .expect("valid snapshot");
         assert_eq!(parsed.icon_theme, "PlagueSur");
         assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
@@ -1293,9 +1293,7 @@ mod tests {
 
     #[test]
     fn legacy_explicit_mcmojave_icon_theme_is_kept_verbatim() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\niconTheme=McMojave-circle\n")
+        let parsed = load("revision=2\niconTheme=McMojave-circle\n")
             .expect("legacy icon theme");
         assert_eq!(parsed.icon_theme, "McMojave-circle");
         assert!(ConfigStore::serialize(&parsed).contains("iconTheme=McMojave-circle\n"));
@@ -1303,35 +1301,29 @@ mod tests {
 
     #[test]
     fn explicit_icon_theme_is_kept_and_written() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\niconTheme=*:-HighContrast\n")
+        let parsed = load("revision=2\niconTheme=*:-HighContrast\n")
             .expect("explicit icon theme");
         assert_eq!(parsed.icon_theme, "*:-HighContrast");
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("iconTheme=*:-HighContrast\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
     fn appearance_snapshot_round_trip_defaults_to_dark() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\n")
+        let parsed = load("revision=2\n")
             .expect("valid snapshot");
         assert_eq!(parsed.appearance, AppearanceMode::Dark);
         let text = ConfigStore::serialize(&ProductSettings::default());
         assert!(text.contains("appearance=dark\n"));
-        let reparsed = store.parse_snapshot(&text).expect("round trip");
+        let reparsed = load(&text).expect("round trip");
         assert_eq!(reparsed.appearance, AppearanceMode::Dark);
     }
 
     #[test]
     fn invalid_appearance_value_is_rejected() {
-        let store = ConfigStore::default();
         assert_eq!(
-            store
-                .parse_snapshot("revision=2\nappearance=neon\n")
+            load("revision=2\nappearance=neon\n")
                 .expect_err("bad appearance")
                 .code,
             ErrorCode::InvalidArgument
@@ -1340,9 +1332,7 @@ mod tests {
 
     #[test]
     fn parser_preserves_unknown_compatible_keys() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\nfutureFeature=value\n")
+        let parsed = load("revision=2\nfutureFeature=value\n")
             .expect("valid future key");
         assert_eq!(
             parsed.unknown_keys.get("futureFeature"),
@@ -1379,9 +1369,7 @@ mod tests {
         let defaults = ProductSettings::default();
         assert_eq!(defaults.avatar_image, "");
         assert!(!ConfigStore::serialize(&defaults).contains("avatarImage"));
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\navatarImage=/home/u/.local/share/flamewm/wallpapers/avatar-0123456789abcdef.png\n")
+        let parsed = load("revision=2\navatarImage=/home/u/.local/share/flamewm/wallpapers/avatar-0123456789abcdef.png\n")
             .expect("absolute avatar path");
         assert_eq!(
             parsed.avatar_image,
@@ -1389,7 +1377,7 @@ mod tests {
         );
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("avatarImage=/home/u/"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1405,29 +1393,24 @@ mod tests {
 
     #[test]
     fn background_modes_migrate_from_legacy_values_when_keys_are_absent() {
-        let store = ConfigStore::default();
-        let legacy_wallpaper = store
-            .parse_snapshot("revision=2\nwallpaper=/home/u/a.png\n")
+        let legacy_wallpaper = load("revision=2\nwallpaper=/home/u/a.png\n")
             .expect("legacy wallpaper");
         assert_eq!(legacy_wallpaper.wallpaper_mode, BackgroundMode::Custom);
-        let empty_wallpaper = store.parse_snapshot("revision=2\n").expect("empty wallpaper");
+        let empty_wallpaper = load("revision=2\n").expect("empty wallpaper");
         assert_eq!(empty_wallpaper.wallpaper_mode, BackgroundMode::Default);
-        let custom_lock = store
-            .parse_snapshot("revision=2\nlockBackgroundImage=/home/u/bg.png\n")
+        let custom_lock = load("revision=2\nlockBackgroundImage=/home/u/bg.png\n")
             .expect("custom lock");
         assert_eq!(custom_lock.lock_background_mode, BackgroundMode::Custom);
-        let solid_lock = store
-            .parse_snapshot("revision=2\nlockBackgroundColor=#102030\n")
+        let solid_lock = load("revision=2\nlockBackgroundColor=#102030\n")
             .expect("solid lock");
         assert_eq!(solid_lock.lock_background_mode, BackgroundMode::Solid);
-        let default_lock = store.parse_snapshot("revision=2\n").expect("default lock");
+        let default_lock = load("revision=2\n").expect("default lock");
         assert_eq!(default_lock.lock_background_mode, BackgroundMode::Default);
     }
 
     #[test]
     fn explicit_background_mode_wins_over_saved_path_and_keeps_it() {
-        let parsed = ConfigStore::default()
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\nwallpaperMode=default\nwallpaper=/home/u/a.png\n\
                  lockBackgroundMode=solid\nlockBackgroundImage=/home/u/bg.png\n",
             )
@@ -1440,7 +1423,6 @@ mod tests {
 
     #[test]
     fn background_modes_round_trip_and_clear_differs_from_default() {
-        let store = ConfigStore::default();
         for mode in [BackgroundMode::Default, BackgroundMode::Solid, BackgroundMode::Custom] {
             let mut snapshot = ProductSettings::default();
             snapshot.revision = 9;
@@ -1449,7 +1431,7 @@ mod tests {
             snapshot.lock_background_image = "/home/u/bg.png".to_owned();
             snapshot.lock_background_mode = mode;
             let text = ConfigStore::serialize(&snapshot);
-            let parsed = store.parse_snapshot(&text).expect("round trip");
+            let parsed = load(&text).expect("round trip");
             assert_eq!(parsed.wallpaper_mode, mode);
             assert_eq!(parsed.lock_background_mode, mode);
             assert_eq!(parsed.wallpaper, "/home/u/a.png");
@@ -1468,13 +1450,12 @@ mod tests {
 
     #[test]
     fn invalid_background_mode_and_wallpaper_color_are_rejected() {
-        let store = ConfigStore::default();
         for text in [
             "wallpaperMode=clear\n",
             "lockBackgroundMode=Custom\n",
             "wallpaperColor=red\n",
         ] {
-            assert!(store.parse_snapshot(text).is_err(), "{text} must be rejected");
+            assert!(load(text).is_err(), "{text} must be rejected");
         }
     }
 
@@ -1490,8 +1471,7 @@ mod tests {
 
     #[test]
     fn lock_background_blur_and_dim_legacy_file_loads_defaults() {
-        let parsed = ConfigStore::default()
-            .parse_snapshot("revision=1\nlockBackgroundColor=#102030\n")
+        let parsed = load("revision=1\nlockBackgroundColor=#102030\n")
             .expect("legacy lock file");
         assert_eq!(parsed.lock_background_blur_percent, 40);
         assert_eq!(parsed.lock_background_dim_percent, 25);
@@ -1499,9 +1479,7 @@ mod tests {
 
     #[test]
     fn lock_background_blur_and_dim_round_trip_bounds() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n",
             )
             .expect("bounds are valid");
@@ -1510,10 +1488,9 @@ mod tests {
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("lockBackgroundBlurPercent=100\n"));
         assert!(text.contains("lockBackgroundDimPercent=80\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
 
-        let zero = store
-            .parse_snapshot("revision=2\nlockBackgroundBlurPercent=0\nlockBackgroundDimPercent=0\n")
+        let zero = load("revision=2\nlockBackgroundBlurPercent=0\nlockBackgroundDimPercent=0\n")
             .expect("zero is valid");
         assert_eq!(zero.lock_background_blur_percent, 0);
         assert_eq!(zero.lock_background_dim_percent, 0);
@@ -1547,9 +1524,7 @@ mod tests {
 
     #[test]
     fn lock_screen_round_trips_non_default_values() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\nlockBackgroundColor=#102030\nlockBackgroundImage=/usr/share/bg.png\n\
                  lockClockFormat=12h\nlockShowDate=false\nlockShowUsername=0\n\
                  lockTimeoutMinutes=240\nlockOnSuspend=false\n",
@@ -1565,7 +1540,7 @@ mod tests {
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("lockClockFormat=12h\n"));
         assert!(text.contains("lockShowDate=false\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1589,9 +1564,7 @@ mod tests {
 
     #[test]
     fn lock_timeout_zero_means_never_and_is_accepted() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\nlockTimeoutMinutes=0\n")
+        let parsed = load("revision=2\nlockTimeoutMinutes=0\n")
             .expect("zero timeout is never");
         assert_eq!(parsed.lock_timeout_minutes, 0);
     }
@@ -1620,9 +1593,7 @@ mod tests {
 
     #[test]
     fn taskbar_style_and_blur_round_trip_and_opaque_has_no_radius() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
                  taskbarFloatingRadius=0\nsurfaceBlurPercent=100\nsurfaceOpacity=100\n\
                  startMenuBlurPercent=0\nstartMenuOpacity=50\n",
@@ -1636,7 +1607,7 @@ mod tests {
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("taskbarStyle=classic\n"));
         assert!(text.contains("surfaceBlurPercent=100\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1675,9 +1646,7 @@ mod tests {
 
     #[test]
     fn legacy_file_without_screensaver_keys_loads_defaults() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=1\nlockTimeoutMinutes=5\nlockOnSuspend=false\n")
+        let parsed = load("revision=1\nlockTimeoutMinutes=5\nlockOnSuspend=false\n")
             .expect("legacy lock file");
         assert_eq!(
             parsed.screensaver(),
@@ -1688,9 +1657,7 @@ mod tests {
 
     #[test]
     fn screensaver_round_trips_non_default_values() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\nscreensaverMode=none\nscreensaverAfterLockMinutes=0\n\
                  screensaverNumRibbons=12\nscreensaverRibbonWidthTenths=280\n\
                  screensaverSpanMonitors=true\nscreensaverDisplayOffMinutes=240\n",
@@ -1710,7 +1677,7 @@ mod tests {
         let text = ConfigStore::serialize(&parsed);
         assert!(text.contains("screensaverMode=none\n"));
         assert!(text.contains("screensaverSpanMonitors=true\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1767,23 +1734,20 @@ mod tests {
 
     #[test]
     fn old_settings_file_parses_to_defaults_and_serializes_unchanged() {
-        let store = ConfigStore::default();
         let old = "revision=3\naccent=#EF4048\ntaskbarColor=#191b1d\nfutureFeature=kept\n";
-        let parsed = store.parse_snapshot(old).expect("old file");
+        let parsed = load(old).expect("old file");
         assert_eq!(parsed.animation_speed, 100);
         let text = ConfigStore::serialize(&parsed);
         assert!(!text.contains("titlebar"));
         assert!(text.contains("futureFeature=kept\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
     fn legacy_titlebar_color_is_tolerated_ignored_and_never_written() {
-        let store = ConfigStore::default();
         // Old files carry titlebarColor; even an invalid value must not error or touch surface*.
         for value in ["#A0B0C0", "#12345"] {
-            let legacy = store
-                .parse_snapshot(&format!(
+            let legacy = load(&format!(
                     "revision=3\ntitlebarColor={value}\nsurfaceColor=#445566\n"
                 ))
                 .expect("legacy titlebarColor tolerated");
@@ -1804,13 +1768,12 @@ mod tests {
 
     #[test]
     fn new_appearance_keys_round_trip_when_set() {
-        let store = ConfigStore::default();
         let text = "revision=2\nstartMenuColor=#112233\nstartMenuOpacity=80\naccentOpacity=40\n\
             decoration=ios\n\
             titlebarMinimizeHoverColor=#FFFFFF\ncursorTheme=Adwaita\nanimationsEnabled=false\n\
             titlebarButtonStyle=square\n\
             animationSpeed=150\nstartAnimationEnabled=0\nfutureFeature=kept\n";
-        let parsed = store.parse_snapshot(text).expect("valid new keys");
+        let parsed = load(text).expect("valid new keys");
         assert_eq!(parsed.start_menu_color, "#112233");
         assert_eq!(parsed.start_menu_opacity, 80);
         assert_eq!(parsed.accent_opacity, 40);
@@ -1830,7 +1793,7 @@ mod tests {
         assert!(serialized.contains("animationsEnabled=false\n"));
         assert!(serialized.contains("futureFeature=kept\n"));
         assert_eq!(
-            store.parse_snapshot(&serialized).expect("round trip"),
+            load(&serialized).expect("round trip"),
             parsed
         );
     }
@@ -1843,9 +1806,7 @@ mod tests {
         assert_eq!(defaults.surface_blur_percent, 80);
         assert!(!ConfigStore::serialize(&defaults).contains("surface"));
 
-        let store = ConfigStore::default();
-        let legacy = store
-            .parse_snapshot(
+        let legacy = load(
                 "revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n",
             )
             .expect("legacy taskbar surface");
@@ -1854,8 +1815,7 @@ mod tests {
         assert_eq!(legacy.surface_blur_percent, 30);
         assert_eq!(legacy.taskbar_color, "#112233");
 
-        let explicit = store
-            .parse_snapshot(
+        let explicit = load(
                 "revision=3\nsurfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
             )
             .expect("explicit surface");
@@ -1864,8 +1824,7 @@ mod tests {
         assert_eq!(explicit.surface_blur_percent, 5);
 
         // Legacy taskbar* keys alongside surface* are tolerated on read and ignored for surface values.
-        let tolerated = store
-            .parse_snapshot(
+        let tolerated = load(
                 "revision=3\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n\
                  surfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
             )
@@ -1875,16 +1834,14 @@ mod tests {
         assert_eq!(tolerated.surface_blur_percent, 5);
 
         // Live taskbar backdrop follows surface*, never the legacy taskbar* fields.
-        let split = store
-            .parse_snapshot("revision=5\ntaskbarOpacity=100\ntaskbarBlurPercent=100\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n")
+        let split = load("revision=5\ntaskbarOpacity=100\ntaskbarBlurPercent=100\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n")
             .expect("surface keys win over legacy taskbar keys");
         let backdrop = split.taskbar_backdrop();
         assert_eq!(backdrop.opacity_percent, 10);
         assert_eq!(backdrop.blur_percent, 5);
 
         // Legacy keys are read but never written; the surface pair carries the value forward.
-        let migrated = store
-            .parse_snapshot("revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n")
+        let migrated = load("revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n")
             .expect("legacy taskbar surface");
         let text = ConfigStore::serialize(&migrated);
         assert!(!text.contains("taskbarColor"));
@@ -1895,67 +1852,54 @@ mod tests {
         assert!(text.contains("surfaceBlurPercent=30\n"));
         assert!(stable_setting("taskbarOpacity").is_none());
 
-        let round = store
-            .parse_snapshot(&ConfigStore::serialize(&explicit))
+        let round = load(&ConfigStore::serialize(&explicit))
             .expect("round trip");
         assert_eq!(round, explicit);
         assert!(
-            store
-                .parse_snapshot("revision=4\nsurfaceOpacity=101\n")
+            load("revision=4\nsurfaceOpacity=101\n")
                 .is_err()
         );
         assert!(
-            store
-                .parse_snapshot("revision=4\nsurfaceColor=red\n")
+            load("revision=4\nsurfaceColor=red\n")
                 .is_err()
         );
         assert!(
-            store
-                .parse_snapshot("revision=4\nsurfaceBlurPercent=101\n")
+            load("revision=4\nsurfaceBlurPercent=101\n")
                 .is_err()
         );
     }
 
     #[test]
     fn decoration_ios_parses_as_rounded_and_squared_is_accepted() {
-        let store = ConfigStore::default();
-        let ios = store
-            .parse_snapshot("revision=2\ndecoration=ios\n")
+        let ios = load("revision=2\ndecoration=ios\n")
             .expect("legacy ios");
         assert_eq!(ios.decoration, "rounded");
-        let squared = store
-            .parse_snapshot("revision=2\ndecoration=squared\n")
+        let squared = load("revision=2\ndecoration=squared\n")
             .expect("squared");
         assert_eq!(squared.decoration, "squared");
         assert!(
-            store
-                .parse_snapshot("revision=2\ndecoration=neon\n")
+            load("revision=2\ndecoration=neon\n")
                 .is_err()
         );
     }
 
     #[test]
     fn floating_margin_defaults_to_four_and_stored_value_is_kept() {
-        let store = ConfigStore::default();
         assert_eq!(
-            store
-                .parse_snapshot("revision=2\n")
+            load("revision=2\n")
                 .expect("unset")
                 .taskbar_floating_margin,
             4
         );
-        let legacy = store
-            .parse_snapshot("revision=2\ntaskbarFloatingMargin=8\n")
+        let legacy = load("revision=2\ntaskbarFloatingMargin=8\n")
             .expect("stored 8");
         assert_eq!(legacy.taskbar_floating_margin, 8);
     }
 
     #[test]
     fn legacy_titlebar_button_styles_map_to_one_shape_and_are_never_written() {
-        let store = ConfigStore::default();
         let parse = |body: &str| {
-            store
-                .parse_snapshot(&format!("revision=2\n{body}\n"))
+            load(&format!("revision=2\n{body}\n"))
                 .expect("legacy titlebar styles parse")
         };
         let all_square = "titlebarMinimizeStyle=square\ntitlebarMaximizeStyle=square\n\
@@ -1981,7 +1925,7 @@ mod tests {
         assert!(!text.contains("titlebarMinimizeStyle"));
         assert!(!text.contains("titlebarCloseStyle"));
         assert!(!text.contains("titlebarMaximizeStyle"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -2024,17 +1968,14 @@ mod tests {
         assert!(text.contains("stickyNotesEnabled=0\n"));
         assert!(text.contains("animationsEnabled=false\n"));
         assert!(text.find("fontBold=") < text.find("animationsEnabled="));
-        let reparsed = ConfigStore::default()
-            .parse_snapshot(&text)
+        let reparsed = load(&text)
             .expect("round trip");
         assert_eq!(reparsed, settings);
     }
 
     #[test]
     fn legacy_slide_up_migrates_to_slide_and_stays_unwritten_at_default() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\nstartAnimation=slide-up\n")
+        let parsed = load("revision=2\nstartAnimation=slide-up\n")
             .expect("legacy alias");
         assert_eq!(parsed.start_animation, AnimationStyle::Slide);
         assert_eq!(
@@ -2051,7 +1992,6 @@ mod tests {
 
     #[test]
     fn animation_style_values_are_validated_per_key() {
-        let store = ConfigStore::default();
         for line in [
             "startAnimation=none",
             "startAnimation=slide",
@@ -2069,8 +2009,7 @@ mod tests {
             "windowCloseAnimation=none",
             "windowCloseAnimation=fade",
         ] {
-            store
-                .parse_snapshot(&format!("revision=2\n{line}\n"))
+            load(&format!("revision=2\n{line}\n"))
                 .unwrap_or_else(|error| panic!("{line} must be accepted: {error:?}"));
         }
         assert_rejected(&[
@@ -2131,9 +2070,7 @@ mod tests {
         assert_eq!(settings.maximize_animation_style(), AnimationStyle::None);
         assert_eq!(settings.window_open_animation_style(), AnimationStyle::None);
 
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=2\nminimizeAnimation=fade\nmaximizeAnimationEnabled=0\n")
+        let parsed = load("revision=2\nminimizeAnimation=fade\nmaximizeAnimationEnabled=0\n")
             .expect("style and toggle");
         assert_eq!(parsed.minimize_animation_style(), AnimationStyle::Fade);
         assert_eq!(parsed.maximize_animation_style(), AnimationStyle::None);
@@ -2141,11 +2078,10 @@ mod tests {
 
     #[test]
     fn animation_style_keys_round_trip_when_set() {
-        let store = ConfigStore::default();
         let text = "revision=2\nstartAnimation=fade\nminimizeAnimation=none\n\
             maximizeAnimation=fade\nwindowOpenAnimation=fade\nwindowOpenAnimationEnabled=0\n\
             windowCloseAnimation=none\n";
-        let parsed = store.parse_snapshot(text).expect("valid animation styles");
+        let parsed = load(text).expect("valid animation styles");
         assert_eq!(parsed.window_close_animation, AnimationStyle::None);
         assert_eq!(parsed.start_animation, AnimationStyle::Fade);
         assert_eq!(parsed.minimize_animation, AnimationStyle::None);
@@ -2158,7 +2094,7 @@ mod tests {
         assert!(serialized.contains("windowOpenAnimationEnabled=false\n"));
         assert!(serialized.contains("windowCloseAnimation=none\n"));
         assert_eq!(
-            store.parse_snapshot(&serialized).expect("round trip"),
+            load(&serialized).expect("round trip"),
             parsed
         );
     }
@@ -2189,9 +2125,7 @@ mod tests {
 
     #[test]
     fn new_customization_keys_round_trip_when_set() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\nwallpaperFit=tile\ncursorSize=64\ntaskbarClockFormat=12h\n\
                  taskbarShowSeconds=true\ntaskbarShowDate=false\nsnapPreviewEnabled=0\n\
                  focusFollowsMouse=yes\n",
@@ -2210,7 +2144,7 @@ mod tests {
         assert!(text.contains("taskbarClockFormat=12h\n"));
         assert!(text.contains("taskbarShowSeconds=true\n"));
         assert!(text.contains("snapPreviewEnabled=false\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
     }
 
     #[test]
@@ -2240,9 +2174,8 @@ mod tests {
         for bad in ["", "/etc/localtime", "../etc/passwd", "Europe/../UTC", "a b", "x\ny"] {
             assert!(!super::is_valid_time_zone_name(bad), "{bad:?}");
         }
-        let store = ConfigStore::default();
-        assert!(store.parse_snapshot("revision=2\nautoTimeZone=../../etc\n").is_err());
-        assert!(store.parse_snapshot("revision=2\nautoTimeZone=Asia/Tokyo\n").is_ok());
+        assert!(load("revision=2\nautoTimeZone=../../etc\n").is_err());
+        assert!(load("revision=2\nautoTimeZone=Asia/Tokyo\n").is_ok());
     }
 
     #[test]
@@ -2267,10 +2200,8 @@ mod tests {
 
     #[test]
     fn weather_keys_are_typed_stable_rows_and_round_trip() {
-        let store = ConfigStore::default();
         let location = "51.5\t-0.12\tGB\tLondon";
-        let parsed = store
-            .parse_snapshot(&format!(
+        let parsed = load(&format!(
                 "revision=2\nweatherEnabled=true\nweatherUnits=fahrenheit\nweatherLocation={location}\n"
             ))
             .expect("valid weather settings");
@@ -2282,9 +2213,8 @@ mod tests {
         // Default-on weather is not written; an explicit off must survive a round trip.
         assert!(!text.contains("weatherEnabled"));
         assert!(text.contains("weatherUnits=fahrenheit\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
-        let off = store
-            .parse_snapshot("revision=2\nweatherEnabled=false\n")
+        assert_eq!(load(&text).expect("round trip"), parsed);
+        let off = load("revision=2\nweatherEnabled=false\n")
             .expect("explicit off");
         assert!(!off.weather_enabled);
         assert!(ConfigStore::serialize(&off).contains("weatherEnabled=false\n"));
@@ -2303,9 +2233,8 @@ mod tests {
 
     #[test]
     fn weather_units_reject_values_other_than_celsius_or_fahrenheit() {
-        let store = ConfigStore::default();
-        assert!(store.parse_snapshot("revision=2\nweatherUnits=kelvin\n").is_err());
-        assert!(store.parse_snapshot("revision=2\nweatherUnits=celsius\n").is_ok());
+        assert!(load("revision=2\nweatherUnits=kelvin\n").is_err());
+        assert!(load("revision=2\nweatherUnits=celsius\n").is_ok());
     }
 
     #[test]
@@ -2334,9 +2263,7 @@ mod tests {
 
     #[test]
     fn taskbar_widget_keys_round_trip_off_and_on_defaults() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\ntaskbarShowWeather=false\ntaskbarShowVolume=false\n\
                  taskbarShowNetwork=false\ntaskbarShowBattery=false\n\
                  taskbarShowClock=false\ntaskbarShowWorkspaces=false\n\
@@ -2354,10 +2281,9 @@ mod tests {
         assert!(text.contains("taskbarShowWeather=false\n"));
         assert!(text.contains("taskbarShowClock=false\n"));
         assert!(text.contains("taskbarBatteryOnlyWhenRelevant=true\n"));
-        assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        assert_eq!(load(&text).expect("round trip"), parsed);
 
-        let explicit_on = store
-            .parse_snapshot("revision=2\ntaskbarShowWeather=true\ntaskbarShowClock=true\n")
+        let explicit_on = load("revision=2\ntaskbarShowWeather=true\ntaskbarShowClock=true\n")
             .expect("explicit default-on values");
         assert!(explicit_on.taskbar_show_weather && explicit_on.taskbar_show_clock);
         let on_text = ConfigStore::serialize(&explicit_on);
@@ -2367,16 +2293,13 @@ mod tests {
 
     #[test]
     fn taskbar_widget_keys_reject_invalid_and_keep_unknown_keys() {
-        let store = ConfigStore::default();
         assert_eq!(
-            store
-                .parse_snapshot("revision=2\ntaskbarShowNetwork=maybe\n")
+            load("revision=2\ntaskbarShowNetwork=maybe\n")
                 .expect_err("invalid bool")
                 .code,
             ErrorCode::InvalidArgument
         );
-        let parsed = store
-            .parse_snapshot(
+        let parsed = load(
                 "revision=2\naccent=#EF4048\ntaskbarShowBattery=false\nfutureFeature=kept\n",
             )
             .expect("mixed file");
@@ -2391,9 +2314,7 @@ mod tests {
 
     #[test]
     fn legacy_file_without_taskbar_widget_keys_loads_defaults() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
+        let parsed = load("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
             .expect("legacy taskbar file");
         assert!(parsed.taskbar_show_weather);
         assert!(parsed.taskbar_show_volume);
@@ -2406,9 +2327,7 @@ mod tests {
 
     #[test]
     fn legacy_file_without_customization_keys_loads_defaults() {
-        let store = ConfigStore::default();
-        let parsed = store
-            .parse_snapshot("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
+        let parsed = load("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
             .expect("legacy file");
         assert_eq!(parsed.wallpaper_fit, WallpaperFit::Fill);
         assert_eq!(parsed.cursor_size, 24);
@@ -2423,10 +2342,8 @@ mod tests {
         settings.focus_follows_mouse = true;
         let text = ConfigStore::serialize(&settings);
         assert!(text.contains("focusFollowsMouse=true\n"));
-        let store = ConfigStore::default();
         assert!(
-            store
-                .parse_snapshot(&text)
+            load(&text)
                 .expect("round trip")
                 .focus_follows_mouse
         );
