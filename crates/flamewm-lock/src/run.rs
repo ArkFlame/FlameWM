@@ -794,17 +794,20 @@ mod tests {
         assert!(keep_lock_step("test step", || Ok(())));
     }
 
+    /// Body of the method in this file whose signature starts with `name`.
+    fn method_body(name: &str) -> &'static str {
+        let source = include_str!("run.rs");
+        let start = source.find(name).expect("function present");
+        let end = start + source[start..].find("\n    }\n").expect("function end");
+        &source[start..end]
+    }
+
     /// The loop-reachable functions must not propagate with `?`: a rendering or
     /// background error there would end `tick()` and drop the lock. The only tolerated
     /// propagation is the destroy after a successful authentication.
     #[test]
     fn lock_loop_paths_never_propagate_render_errors() {
-        let source = include_str!("run.rs");
-        let body = |name: &str| {
-            let start = source.find(name).expect("function present");
-            let end = start + source[start..].find("\n    }\n").expect("function end");
-            &source[start..end]
-        };
+        let body = method_body;
         for name in [
             "fn wake(",
             "fn enter(",
@@ -823,12 +826,7 @@ mod tests {
     /// Hiding on entry and restoring on wake must both exist, or the widgets stay hidden.
     #[test]
     fn saver_hides_lock_ui_on_entry_and_restores_on_wake() {
-        let source = include_str!("run.rs");
-        let body = |name: &str| {
-            let start = source.find(name).expect("function present");
-            let end = start + source[start..].find("\n    }\n").expect("function end");
-            &source[start..end]
-        };
+        let body = method_body;
         assert!(body("fn enter(").contains("ui_shown_wanted = false"));
         assert!(body("fn wake(").contains("ui_shown_wanted = true"));
         assert!(body("fn sync_ui_visibility(").contains("set_lock_ui_shown(view, shown)"));
