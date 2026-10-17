@@ -66,6 +66,20 @@ pub fn run_screensaver_preview(settings: &LockSettings, username: &str) -> Resul
     preview_loop(settings, username, true)
 }
 
+/// Config of the full-screen overlay surface shared by the lock and its previews.
+fn overlay_config(width: u32, height: u32, title: &str) -> SurfaceConfig {
+    SurfaceConfig {
+        width,
+        height,
+        title: title.to_string(),
+        role: SurfaceRole::Overlay,
+        input: SurfaceInputMode::Interactive,
+        initially_visible: false,
+        x: 0,
+        y: 0,
+    }
+}
+
 /// The lock projection for a preview, built only for the non-Ribbons preview. Ribbons
 /// shows no lock UI, so `project` is never called for it.
 fn preview_lock_ui<T>(ribbons: bool, project: impl FnOnce() -> T) -> Option<T> {
@@ -84,19 +98,7 @@ fn preview_loop(settings: &LockSettings, username: &str, ribbons: bool) -> Resul
         "FlameWM lock preview"
     };
     let surface = runtime
-        .create_surface(
-            template,
-            SurfaceConfig {
-                width,
-                height,
-                title: title.to_string(),
-                role: SurfaceRole::Overlay,
-                input: SurfaceInputMode::Interactive,
-                initially_visible: false,
-                x: 0,
-                y: 0,
-            },
-        )
+        .create_surface(template, overlay_config(width, height, title))
         .map_err(|error| format!("create preview surface: {error:?}"))?;
     let started = Instant::now();
     let mut frames = ribbons.then(|| RibbonFrames::new(width, height, &settings.saver, started));
@@ -195,19 +197,7 @@ fn lock_on(
     template: flamewm_ui_x11::UiTemplate,
 ) -> Result<(), String> {
     let surface = runtime
-        .create_surface(
-            template,
-            SurfaceConfig {
-                width,
-                height,
-                title: "FlameWM lock".to_string(),
-                role: SurfaceRole::Overlay,
-                input: SurfaceInputMode::Interactive,
-                initially_visible: false,
-                x: 0,
-                y: 0,
-            },
-        )
+        .create_surface(template, overlay_config(width, height, "FlameWM lock"))
         .map_err(|error| format!("create lock surface: {error:?}"))?;
 
     let mut session = Session::open()?;
@@ -376,30 +366,14 @@ fn keep_lock_step(what: &str, step: impl FnOnce() -> Result<(), String>) -> bool
     }
 }
 
-/// Applies the wallpaper restore. A failure is logged and leaves `stale` set so a later turn
-/// retries; the Ribbons frame stays up until a restore succeeds.
-fn settle_background(stale: &mut bool, apply: impl FnOnce() -> Result<(), String>) {
+/// Applies a deferred step. Success clears `pending`; a failure is logged and leaves it set
+/// so a later turn retries. It never ends the loop or touches the grabs.
+fn settle(pending: &mut bool, what: &str, apply: impl FnOnce() -> Result<(), String>) {
     match apply() {
-        Ok(()) => *stale = false,
+        Ok(()) => *pending = false,
         Err(error) => {
-            *stale = true;
-            eprintln!("flamewm-lock: lock background restore, retrying next turn: {error}");
-        }
-    }
-}
-
-/// Applies the wanted widget visibility. A failure is logged and leaves `dirty` set so the
-/// next turn retries; it never ends the loop or touches the grabs.
-fn settle_lock_ui(
-    dirty: &mut bool,
-    shown: bool,
-    apply: impl FnOnce(bool) -> Result<(), String>,
-) {
-    match apply(shown) {
-        Ok(()) => *dirty = false,
-        Err(error) => {
-            *dirty = true;
-            eprintln!("flamewm-lock: lock UI visibility, retrying next turn: {error}");
+            *pending = true;
+            eprintln!("flamewm-lock: {what}, retrying next turn: {error}");
         }
     }
 }
@@ -546,7 +520,7 @@ impl LockLoop {
         }
         let surface = self.surface;
         let shown = self.ui_shown_wanted;
-        settle_lock_ui(&mut self.ui_visibility_dirty, shown, |shown| {
+        settle(&mut self.ui_visibility_dirty, "lock UI visibility", || {
             runtime
                 .with_document(surface, |view| document::set_lock_ui_shown(view, shown))
                 .map_err(|error| format!("set lock UI shown: {error:?}"))
@@ -593,13 +567,11 @@ impl LockLoop {
     fn restore_background(&mut self, runtime: &mut SurfaceRuntime) {
         let base = self.base_background.clone();
         let surface = self.surface;
-        let mut stale = self.background_stale;
-        settle_background(&mut stale, || {
+        settle(&mut self.background_stale, "lock background restore", || {
             runtime
                 .with_document(surface, |view| document::set_background(view, base))
                 .map_err(|error| format!("restore lock background: {error:?}"))
         });
-        self.background_stale = stale;
     }
 
     /// Re-applies the wallpaper while a failed restore is pending. Not called during Ribbons.
@@ -867,12 +839,12 @@ mod tests {
     fn failed_wallpaper_restore_stays_pending_until_it_succeeds() {
         let mut stale = false;
         let mut attempts = 0;
-        settle_background(&mut stale, || {
+        settle(&mut stale, "test restore", || {
             attempts += 1;
             Err("document unavailable".to_string())
         });
         assert!(stale, "a refused restore must stay pending, not drop the Ribbons frame silently");
-        settle_background(&mut stale, || {
+        settle(&mut stale, "test restore", || {
             attempts += 1;
             Ok(())
         });
@@ -880,23 +852,23 @@ mod tests {
         assert_eq!(attempts, 2);
     }
 
-    /// A refused widget update must keep the loop alive: it is retried with the same
-    /// wanted state on the next turn, and a success clears the dirty flag.
+    /// A refused widget update must keep the loop alive: it is retried on the next turn,
+    /// and a success clears the dirty flag.
     #[test]
     fn failed_widget_visibility_is_retried_next_turn() {
         let mut dirty = true;
-        let mut calls = Vec::new();
-        settle_lock_ui(&mut dirty, false, |shown| {
-            calls.push(shown);
+        let mut attempts = 0;
+        settle(&mut dirty, "test visibility", || {
+            attempts += 1;
             Err("document unavailable".to_string())
         });
         assert!(dirty, "a failed update stays dirty for the next tick");
-        settle_lock_ui(&mut dirty, false, |shown| {
-            calls.push(shown);
+        settle(&mut dirty, "test visibility", || {
+            attempts += 1;
             Ok(())
         });
         assert!(!dirty, "a successful retry clears the flag");
-        assert_eq!(calls, vec![false, false], "the retry re-applies the same wanted state");
+        assert_eq!(attempts, 2, "the retry re-applies the same wanted state");
     }
 
     /// Counts the frame wakes that arrive within `window`.
