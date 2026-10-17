@@ -403,26 +403,6 @@ impl<R: IconResolve> IconService<R> {
     }
 }
 
-impl IconService<IconResolver> {
-    /// C05 core spawn: one-time index build from the environment base.
-    /// `base = IconResolver::from_environment` builds the single
-    /// generation-scoped index; every worker is `base.fork_worker()`
-    /// (shared immutable index + theme config, fresh 128-entry / 512 KiB
-    /// private caches, zero rescan). Exactly 20 workers, queue 256.
-    #[must_use]
-    pub fn spawn_icon_core(packaged_root: std::path::PathBuf, generation: u64) -> Self {
-        let base = IconResolver::from_environment(packaged_root, generation);
-        let index = Arc::clone(base.shared_index());
-        let base = Arc::new(base);
-        Self::with_index(
-            ICON_RESOLVE_CONCURRENCY,
-            ICON_QUEUE_CAPACITY,
-            move || base.fork_worker(),
-            index,
-        )
-    }
-}
-
 impl<R: IconResolve> IconService<R> {
     /// Emits a 5000ms-cooldown service summary from existing counters.
     fn emit_service_summary(&self, context: &str) {
