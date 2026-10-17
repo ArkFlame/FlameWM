@@ -944,19 +944,22 @@ impl ShellLoop {
                 }
                 target => IconLoader::dependent_surface(target),
             };
+            let apply = |document: &mut flamewm_ui_x11::UiDocumentView<'_>| {
+                async_projection::apply_icon_result(
+                    document,
+                    res.target,
+                    &res.name,
+                    res.width,
+                    res.height,
+                    res.generation,
+                    image.clone(),
+                )
+            };
             match surface {
                 DependentSurface::Panel => {
                     for handle in self.surfaces.panel_handles() {
                         let applied = runtime.with_document(handle, |document| {
-                            match async_projection::apply_icon_result(
-                                document,
-                                res.target,
-                                &res.name,
-                                res.width,
-                                res.height,
-                                res.generation,
-                                image.clone(),
-                            )? {
+                            match apply(document)? {
                                 true => Ok(true),
                                 false => {
                                     async_projection::apply_cached_binding(document, res.target)
@@ -969,17 +972,7 @@ impl ShellLoop {
                     }
                 }
                 DependentSurface::Start => {
-                    let applied = runtime.with_document(self.surfaces.start, |document| {
-                        async_projection::apply_icon_result(
-                            document,
-                            res.target,
-                            &res.name,
-                            res.width,
-                            res.height,
-                            res.generation,
-                            image.clone(),
-                        )
-                    });
+                    let applied = runtime.with_document(self.surfaces.start, apply);
                     if matches!(applied, Ok(true)) {
                         need_submenu = true;
                     }
