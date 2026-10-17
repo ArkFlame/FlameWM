@@ -100,6 +100,21 @@ mod tests {
         "hotkey-key-down",
     ];
 
+    const SETTINGS_PAGES: &[&str] = &[
+        "theme",
+        "start-menu",
+        "surfaces",
+        "animations",
+        "lock-screen",
+        "screensaver",
+        "desktop",
+        "taskbar",
+        "displays",
+        "fonts",
+        "hotkeys",
+        "about",
+    ];
+
     fn css_rule<'a>(css: &'a str, selector: &str) -> &'a str {
         css.split_once(&format!("{selector} {{"))
             .and_then(|(_, rule)| rule.split_once('}').map(|(rule, _)| rule))
@@ -127,16 +142,28 @@ mod tests {
             .unwrap_or_else(|| panic!("settings page {from} must precede {to}"))
     }
 
+    fn seed_text(document: &mut UiDocument, id: &str, text: &str) {
+        document
+            .text(id, text.to_owned())
+            .unwrap_or_else(|error| panic!("compiled text target {id}: {error}"));
+    }
+
+    fn assert_action_control(id: &str, action: &str) {
+        assert!(
+            HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+            "control {id} must retain its production action {action}"
+        );
+        assert!(
+            DISPATCH.contains(&format!("\"{action}\" =>")),
+            "action {action} must have a production dispatch branch"
+        );
+    }
+
     #[test]
     fn compiled_display_output_name_slots_are_mutable_text_targets() {
         let mut document = document().expect("settings artifact must decode");
         for slot in 0..4 {
-            document
-                .text(
-                    &format!("display-output-name-{slot}"),
-                    format!("output-{slot}"),
-                )
-                .unwrap_or_else(|error| panic!("compiled display name slot {slot}: {error}"));
+            seed_text(&mut document, &format!("display-output-name-{slot}"), &format!("output-{slot}"));
         }
     }
 
@@ -180,23 +207,7 @@ mod tests {
     #[test]
     fn appearance_tabs_are_six_pages_in_nav_order_with_unique_ids() {
         let nav = attr_values(HTML, "data-action=\"settings.page.");
-        assert_eq!(
-            nav,
-            [
-                "theme",
-                "start-menu",
-                "surfaces",
-                "animations",
-                "lock-screen",
-                "screensaver",
-                "desktop",
-                "taskbar",
-                "displays",
-                "fonts",
-                "hotkeys",
-                "about",
-            ]
-        );
+        assert_eq!(nav, SETTINGS_PAGES);
         for page in nav {
             let id = format!("id=\"page-{page}\"");
             assert_eq!(HTML.matches(&id).count(), 1, "one section for nav {page}");
@@ -241,20 +252,7 @@ mod tests {
 
     #[test]
     fn settings_source_preserves_native_canvas_and_page_contract() {
-        for page in [
-            "theme",
-            "start-menu",
-            "surfaces",
-            "animations",
-            "lock-screen",
-            "screensaver",
-            "desktop",
-            "taskbar",
-            "displays",
-            "fonts",
-            "hotkeys",
-            "about",
-        ] {
+        for page in SETTINGS_PAGES {
             assert!(HTML.contains(&format!("id=\"page-{page}\"")));
         }
         assert!(css_rule(CSS, "body").contains("width:100%"));
@@ -340,9 +338,7 @@ mod tests {
     fn every_projection_text_target_is_seeded_for_strict_document_updates() {
         let mut document = document().expect("settings artifact must decode");
         for id in PROJECTED_TEXT_IDS {
-            document
-                .text(id, "projection-seed".to_owned())
-                .unwrap_or_else(|error| panic!("compiled projection target {id}: {error}"));
+            seed_text(&mut document, id, "projection-seed");
         }
     }
 
@@ -352,38 +348,13 @@ mod tests {
 
         for (id, action, label) in [
             ("wallpaper-choose", "settings.wallpaper.choose", "Choose…"),
-            (
-                "wallpaper-clear",
-                "settings.wallpaper.clear",
-                "Clear",
-            ),
-            (
-                "wallpaper-default",
-                "settings.wallpaper.default",
-                "Default",
-            ),
-            (
-                "lock-background-default",
-                "settings.lock.background.default",
-                "Default",
-            ),
-            (
-                "lock-background-clear",
-                "settings.lock.background.clear",
-                "Clear",
-            ),
+            ("wallpaper-clear", "settings.wallpaper.clear", "Clear"),
+            ("wallpaper-default", "settings.wallpaper.default", "Default"),
+            ("lock-background-default", "settings.lock.background.default", "Default"),
+            ("lock-background-clear", "settings.lock.background.clear", "Clear"),
         ] {
-            assert!(
-                HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
-                "wallpaper control {id} must retain its production action"
-            );
-            assert!(
-                DISPATCH.contains(&format!("\"{action}\" =>")),
-                "wallpaper action {action} must have a production dispatch branch"
-            );
-            document
-                .text(id, label.to_owned())
-                .unwrap_or_else(|error| panic!("compiled wallpaper action target {id}: {error}"));
+            assert_action_control(id, action);
+            seed_text(&mut document, id, label);
         }
     }
 
@@ -395,17 +366,8 @@ mod tests {
             ("appearance-apps-dark", "settings.appearance.apps.dark", "Dark"),
             ("appearance-apps-light", "settings.appearance.apps.light", "Light"),
         ] {
-            assert!(
-                HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
-                "application appearance {id} must retain its production action"
-            );
-            assert!(
-                DISPATCH.contains(&format!("\"{action}\" =>")),
-                "application appearance action {action} must have a production dispatch branch"
-            );
-            document
-                .text(id, label.to_owned())
-                .unwrap_or_else(|error| panic!("compiled appearance target {id}: {error}"));
+            assert_action_control(id, action);
+            seed_text(&mut document, id, label);
             document
                 .background(id, flamewm_ui_x11::UiColor { r: 0x3d, g: 0x3d, b: 0x3d, a: 0xff })
                 .unwrap_or_else(|error| panic!("compiled appearance selected state {id}: {error}"));
@@ -533,9 +495,7 @@ mod tests {
                 PROJECTED_TEXT_IDS.contains(id),
                 "{id} must be listed as a projected text target"
             );
-            document
-                .text(id, "1-4 of 5".to_owned())
-                .unwrap_or_else(|error| panic!("compiled pager label {id}: {error}"));
+            seed_text(&mut document, id, "1-4 of 5");
         }
     }
 
