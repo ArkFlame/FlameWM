@@ -875,6 +875,27 @@ fn effective_output_scale(scale: f32) -> f32 {
 mod intrinsic_tests {
     use super::*;
 
+    fn element_node(
+        parent: Option<u32>,
+        first_child: Option<u32>,
+        id: &str,
+        style: flamewm_render_core::Style,
+    ) -> flamewm_render_core::CompiledNode {
+        flamewm_render_core::CompiledNode {
+            kind: flamewm_render_core::NodeKind::Element,
+            parent,
+            first_child,
+            next_sibling: None,
+            id: id.to_string(),
+            action: String::new(),
+            text: String::new(),
+            image: None,
+            style,
+            hover_style: None,
+            active_style: None,
+        }
+    }
+
     #[test]
     fn output_scale_validation_falls_back_to_one() {
         for scale in [0.0, -1.0, 0.25, 4.1, f32::NAN, f32::INFINITY] {
@@ -926,38 +947,14 @@ mod intrinsic_tests {
     /// a fixed-size Element child measures to its explicit style extent.
     #[test]
     fn measure_node_compact_path_matches_explicit_extent() {
-        use flamewm_render_core::{CompiledDocument, CompiledNode, NodeKind, Style};
+        use flamewm_render_core::{CompiledDocument, Style};
         let child_style = Style {
             width: flamewm_render_core::Length::Px(120.0),
             height: flamewm_render_core::Length::Px(48.0),
             ..Style::default()
         };
-        let root = CompiledNode {
-            kind: NodeKind::Element,
-            parent: None,
-            first_child: Some(1),
-            next_sibling: None,
-            id: "root".to_string(),
-            action: String::new(),
-            text: String::new(),
-            image: None,
-            style: Style::default(),
-            hover_style: None,
-            active_style: None,
-        };
-        let child = CompiledNode {
-            kind: NodeKind::Element,
-            parent: Some(0),
-            first_child: None,
-            next_sibling: None,
-            id: "card".to_string(),
-            action: String::new(),
-            text: String::new(),
-            image: None,
-            style: child_style,
-            hover_style: None,
-            active_style: None,
-        };
+        let root = element_node(None, Some(1), "root", Style::default());
+        let child = element_node(Some(0), None, "card", child_style);
         let document = flamewm_render_core::RuntimeDocument::new(CompiledDocument {
             source_fingerprint: 0,
             root: 0,
