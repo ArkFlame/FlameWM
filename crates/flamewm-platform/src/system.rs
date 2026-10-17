@@ -342,7 +342,7 @@ mod tests {
 /// snapshot-wide revision is not required for them. Battery-menu visibility toggles
 /// are idempotent and must not be rejected because power or CPU samples moved the revision.
 #[must_use]
-pub fn bypasses_revision_fence(action: &SystemAction) -> bool {
+fn bypasses_revision_fence(action: &SystemAction) -> bool {
     matches!(
         action,
         SystemAction::SetVolume(_)
