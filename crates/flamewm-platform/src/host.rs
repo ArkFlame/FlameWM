@@ -703,13 +703,15 @@ fn validate_requested_scales(transaction: &SettingsTransaction) -> FlameResult<(
 mod tests {
     use std::collections::BTreeMap;
 
-    use flamewm_api::display::{DisplaySnapshot, OutputSnapshot};
-    use flamewm_api::geometry::Rect;
+    use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
+    use flamewm_api::geometry::{Rect, Size};
     use flamewm_api::input::PointerPosition;
     use flamewm_api::ports::{
         ApplicationPort, DisplayPort, InputPort, SessionPort, ShortcutPort, WindowPort,
         WorkspacePort,
     };
+    use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
+    use flamewm_api::shortcuts::{ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE};
     use flamewm_api::window::WindowSnapshot;
     use flamewm_api::workspace::{WorkspacePlan, WorkspaceSnapshot};
 
@@ -863,18 +865,18 @@ mod tests {
         std::fs::write(&path, "").expect("write settings fixture");
         let mut display = fake_display(100);
         display.outputs[0].modes = vec![
-            flamewm_api::display::DisplayMode {
+            DisplayMode {
                 id: ModeId(1),
-                resolution: flamewm_api::geometry::Size {
+                resolution: Size {
                     width: 1920,
                     height: 1080,
                 },
                 refresh_millihz: 60_000,
                 preferred: true,
             },
-            flamewm_api::display::DisplayMode {
+            DisplayMode {
                 id: ModeId(5),
-                resolution: flamewm_api::geometry::Size {
+                resolution: Size {
                     width: 1280,
                     height: 720,
                 },
@@ -890,10 +892,7 @@ mod tests {
             path.clone(),
         );
         host.start().expect("host starts");
-        let generation = host
-            .display_snapshot()
-            .expect("display snapshot")
-            .generation;
+        let generation = display_generation(&mut host);
         let begun = host.begin_display_mode(&OutputId::new("default"), ModeId(5), generation, 0);
         let _ = std::fs::remove_file(&path);
         assert_eq!(begun.expect("mode change begins"), TransactionId(7));
@@ -954,8 +953,6 @@ mod tests {
 
     #[test]
     fn runtime_scale_setting_resyncs_panel_thickness() {
-        use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
-
         let path = fixture_path("runtime-panel-scale");
         std::fs::write(&path, "").expect("write settings fixture");
         let mut host = host_at(&path, 100);
@@ -981,8 +978,6 @@ mod tests {
 
     #[test]
     fn runtime_scale_setting_updates_display_snapshot_and_rejects_invalid_values() {
-        use flamewm_api::settings::{SettingValue, SettingsChange, SettingsTransaction};
-
         let path = fixture_path("runtime-scale");
         std::fs::write(&path, "").expect("write settings fixture");
         let mut host = host_at(&path, 100);
@@ -1019,10 +1014,7 @@ mod tests {
         host.start().expect("host starts");
         assert_eq!(host.panels.snapshot().panels[0].geometry.height, 44);
 
-        let generation = host
-            .display_snapshot()
-            .expect("display snapshot")
-            .generation;
+        let generation = display_generation(&mut host);
         let changed = host
             .set_shell_scale(&OutputId::new("default"), 125, generation)
             .expect("shell scale applies");
@@ -1042,10 +1034,7 @@ mod tests {
         let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         let revision_before = host.settings_snapshot().revision;
-        let generation = host
-            .display_snapshot()
-            .expect("display snapshot")
-            .generation;
+        let generation = display_generation(&mut host);
         let changed = host
             .set_shell_scale(&OutputId::new("default"), 125, generation)
             .expect("shell scale applies");
@@ -1079,10 +1068,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("remove settings dir");
         std::fs::write(&dir, "").expect("replace settings dir with a file");
 
-        let generation = host
-            .display_snapshot()
-            .expect("display snapshot")
-            .generation;
+        let generation = display_generation(&mut host);
         let error = host
             .set_shell_scale(&OutputId::new("default"), 125, generation)
             .expect_err("persistence failure is surfaced");
@@ -1105,6 +1091,12 @@ mod tests {
             },
             path.to_path_buf(),
         )
+    }
+
+    fn display_generation(host: &mut PlatformHost<FakeEngine>) -> u64 {
+        host.display_snapshot()
+            .expect("display snapshot")
+            .generation
     }
 
     fn cached_scale(host: &PlatformHost<FakeEngine>) -> Option<u16> {
@@ -1148,8 +1140,6 @@ mod tests {
 
     #[test]
     fn cleared_hotkey_persists_and_stays_unassigned_after_restart() {
-        use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
-
         let path = fixture_path("hotkey-clear");
         let mut host = started_hotkey_host(&path);
         let revision = host.shortcut_snapshot().revision;
@@ -1177,8 +1167,6 @@ mod tests {
 
     #[test]
     fn set_shortcut_persists_binding_across_restart() {
-        use flamewm_api::shortcuts::ACTION_WINDOW_CLOSE;
-
         let path = fixture_path("hotkey-set");
         let mut host = started_hotkey_host(&path);
         let revision = host.shortcut_snapshot().revision;
@@ -1203,8 +1191,6 @@ mod tests {
 
     #[test]
     fn reset_shortcut_removes_persisted_override_and_restores_default() {
-        use flamewm_api::shortcuts::ACTION_WINDOW_CLOSE;
-
         let path = fixture_path("hotkey-reset");
         std::fs::write(&path, "hotkey.WindowClose=Super+F8\n").expect("write override fixture");
         let mut host = started_hotkey_host(&path);
@@ -1232,8 +1218,6 @@ mod tests {
 
     #[test]
     fn stale_hotkey_revision_is_refused_without_persisting() {
-        use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
-
         let path = fixture_path("hotkey-stale");
         let mut host = started_hotkey_host(&path);
         let stale = host.shortcut_snapshot().revision + 1;
@@ -1247,8 +1231,6 @@ mod tests {
 
     #[test]
     fn failed_hotkey_persistence_rolls_back_the_shortcut_mutation() {
-        use flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU;
-
         // The settings parent becomes a regular file after start, so persistence cannot create it.
         let dir = fixture_path("hotkey-rollback-dir");
         std::fs::create_dir_all(&dir).expect("create settings dir");
