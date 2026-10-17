@@ -381,6 +381,10 @@ impl Canary {
             .map_err(|e| e.to_string())
     }
 
+    pub(crate) fn root_tree(&self) -> Option<x11rb::protocol::xproto::QueryTreeReply> {
+        self.conn.query_tree(self.root).ok()?.reply().ok()
+    }
+
     pub(crate) fn intern(&self, name: &str) -> Option<Atom> {
         self.conn
             .intern_atom(false, name.as_bytes())
@@ -1293,11 +1297,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     }
     // j12-context: shell context popup matrix via SR07 rows.
     if scenario == "all" || scenario == "context" {
-        let tree = canary
-            .conn
-            .query_tree(canary.root)
-            .ok()
-            .and_then(|c| c.reply().ok());
+        let tree = canary.root_tree();
         let popups = tree.map(|t| t.children.len()).unwrap_or(0);
         results.push(check(
             "shell-context-popup",
@@ -1381,11 +1381,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     }
     // j12-short-submenu: short submenu shape (small popup matrix geometry).
     if scenario == "all" || scenario == "short-submenu" {
-        let tree = canary
-            .conn
-            .query_tree(canary.root)
-            .ok()
-            .and_then(|c| c.reply().ok());
+        let tree = canary.root_tree();
         let mut short = 0;
         let mut total = 0;
         if let Some(t) = tree {
@@ -1408,13 +1404,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     if scenario == "all" || scenario == "audio-network" {
         let audio = canary.find("audio").len() + canary.find("volume").len();
         let network = canary.find("network").len() + canary.find("wifi").len();
-        let toplevel = canary
-            .conn
-            .query_tree(canary.root)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .map(|t| t.children.len())
-            .unwrap_or(0);
+        let toplevel = canary.root_tree().map(|t| t.children.len()).unwrap_or(0);
         results.push(check(
             "audio-network-popups",
             toplevel > 0,
@@ -1762,11 +1752,7 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
     }
     // status-popup: first mapped small popup rect (geometry + map-state).
     if scenario == "all" || scenario == "status-popup" {
-        let tree = canary
-            .conn
-            .query_tree(canary.root)
-            .ok()
-            .and_then(|c| c.reply().ok());
+        let tree = canary.root_tree();
         let mut first: Option<WinInfo> = None;
         if let Some(t) = tree {
             for child in t.children {
