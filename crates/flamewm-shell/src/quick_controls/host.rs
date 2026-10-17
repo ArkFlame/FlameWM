@@ -1141,10 +1141,6 @@ pub fn route_helper_event(
                 }
                 *reprojection = true;
             }
-        }
-    }
-    if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
-        if let Some(text) = event.action.text.as_deref() {
             if text == "\u{8}" || text == "\u{7f}" {
                 if snapshot.network_secret_focused {
                     snapshot.network_secret.pop();
