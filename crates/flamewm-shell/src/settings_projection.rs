@@ -383,6 +383,16 @@ fn rgb(value: u32, alpha: u8) -> UiColor {
 mod tests {
     use super::*;
     use flamewm_ui_x11::test_support::RecordingUiDoc;
+    use std::sync::Mutex;
+
+    /// Serializes tests that write the process-wide task accent and then read it back.
+    static TASK_ACCENT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_task_accent() -> std::sync::MutexGuard<'static, ()> {
+        TASK_ACCENT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn osd_projection_applies_surface_fill_and_accent_token() {
@@ -524,6 +534,7 @@ mod tests {
 
     #[test]
     fn popup_and_start_corner_radius_follow_decoration_setting() {
+        let _accent = lock_task_accent();
         let mut doc = RecordingUiDoc::default();
         project_menu_background(
             &mut doc,
@@ -550,6 +561,7 @@ mod tests {
 
     #[test]
     fn start_and_popups_share_surface_pair_and_ignore_legacy_startmenu_keys() {
+        let _accent = lock_task_accent();
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
             "surfaceColor".to_owned(),
@@ -582,6 +594,7 @@ mod tests {
 
     #[test]
     fn taskbar_projection_and_backdrop_follow_surface_keys() {
+        let _accent = lock_task_accent();
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
             "surfaceColor".to_owned(),
@@ -609,6 +622,7 @@ mod tests {
 
     #[test]
     fn popup_menu_background_projects_live_accent_to_popup_and_task_accent() {
+        let _accent = lock_task_accent();
         let mut snapshot = SettingsSnapshot::new(1);
         snapshot.values.insert(
             "accent".to_owned(),
