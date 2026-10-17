@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use flamewm_api::session::SessionCapabilities;
@@ -224,38 +225,23 @@ fn bindings() -> &'static std::sync::Mutex<HashMap<IconTarget, IconBinding>> {
     B.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-fn start_epoch() -> &'static std::sync::atomic::AtomicU64 {
-    static E: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
-    E.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
-}
-
-fn task_epoch() -> &'static std::sync::atomic::AtomicU64 {
-    static E: OnceLock<std::sync::atomic::AtomicU64> = OnceLock::new();
-    E.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
-}
+static START_EPOCH: AtomicU64 = AtomicU64::new(0);
+static TASK_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// Bump the start view epoch: category, search query, or model rebuild.
 pub fn bump_start_view_epoch() -> u64 {
-    start_epoch().fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+    START_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 /// Bump the task view epoch: task-slot reprojection.
 pub fn bump_task_view_epoch() -> u64 {
-    task_epoch().fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
-}
-
-fn current_start_epoch() -> u64 {
-    start_epoch().load(std::sync::atomic::Ordering::SeqCst)
-}
-
-fn current_task_epoch() -> u64 {
-    task_epoch().load(std::sync::atomic::Ordering::SeqCst)
+    TASK_EPOCH.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 fn epoch_for_target(target: IconTarget) -> u64 {
     match target {
-        IconTarget::StartSlot(_) => current_start_epoch(),
-        IconTarget::TaskSlot(_) => current_task_epoch(),
+        IconTarget::StartSlot(_) => START_EPOCH.load(Ordering::SeqCst),
+        IconTarget::TaskSlot(_) => TASK_EPOCH.load(Ordering::SeqCst),
     }
 }
 
@@ -351,8 +337,8 @@ pub fn test_record_binding(target: IconTarget, name: &str, w: u32, h: u32, gener
 
 #[cfg(test)]
 pub fn test_reset_icon_bindings() {
-    start_epoch().store(0, std::sync::atomic::Ordering::SeqCst);
-    task_epoch().store(0, std::sync::atomic::Ordering::SeqCst);
+    START_EPOCH.store(0, Ordering::SeqCst);
+    TASK_EPOCH.store(0, Ordering::SeqCst);
     if let Ok(mut bindings) = bindings().lock() {
         bindings.clear();
     }
@@ -874,16 +860,10 @@ fn project_panel_scoped_tail(
     if scope.tray {
         project_status_tray_async(document, view.snapshot, view.items)?;
     }
-    if scope.full_clock() {
+    if scope.task_slots && scope.pager && scope.tray && scope.geometry {
         crate::projection::project_clock(document)?;
     }
     Ok(())
-}
-
-impl PanelScope {
-    fn full_clock(&self) -> bool {
-        self.task_slots && self.pager && self.tray && self.geometry
-    }
 }
 
 /// LOW prewarm for rows just outside the visible window. Fire-and-forget:
@@ -997,7 +977,6 @@ macro_rules! noop_document_overflow {
 pub(crate) mod tests {
     use super::*;
     use flamewm_api::applications::DesktopApplication;
-    use std::collections::HashMap;
 
     #[derive(Default)]
     pub(crate) struct FakeDoc {
@@ -1063,17 +1042,26 @@ pub(crate) mod tests {
     }
 
     fn test_image(source: &str) -> RuntimeImage {
-        RuntimeImage {
-            source: source.to_owned(),
-            width: 1,
-            height: 1,
-            pixels: vec![0, 0, 0, 255],
-        }
+        sized_test_image(source, 1)
     }
 
     fn icon_test_lock() -> &'static std::sync::Mutex<()> {
         static M: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    fn project_changed(view: PanelView<'_>, changed: crate::runtime::ChangedDomains) -> FakeDoc {
+        let mut doc = FakeDoc::default();
+        project_panel_for_changed(&mut doc, view, None, &mut TaskIconCache::default(), changed)
+            .expect("projects");
+        doc
+    }
+
+    fn project_start_doc(model: &StartModel, category: StartCategory, query: &str) -> FakeDoc {
+        let mut doc = FakeDoc::default();
+        project_start_unified(&mut doc, model, category, query, &SessionCapabilities::default(), None)
+            .expect("projects");
+        doc
     }
 
     #[test]
@@ -1096,7 +1084,6 @@ pub(crate) mod tests {
 
     #[test]
     fn icon_binding_match_mutates_exact_node_only() {
-        use crate::icon_loader::IconTarget;
         let _guard = icon_test_lock().lock();
         test_reset_icon_bindings();
         let mut doc = FakeDoc::default();
@@ -1117,7 +1104,6 @@ pub(crate) mod tests {
 
     #[test]
     fn icon_binding_stale_on_epoch_bump_touches_nothing() {
-        use crate::icon_loader::IconTarget;
         let _guard = icon_test_lock().lock();
         test_reset_icon_bindings();
         let mut doc = FakeDoc::default();
@@ -1139,7 +1125,6 @@ pub(crate) mod tests {
 
     #[test]
     fn icon_binding_stale_on_key_or_generation_mismatch() {
-        use crate::icon_loader::IconTarget;
         let _guard = icon_test_lock().lock();
         test_reset_icon_bindings();
         let mut doc = FakeDoc::default();
@@ -1171,7 +1156,6 @@ pub(crate) mod tests {
 
     #[test]
     fn icon_ready_after_epoch_bump_repaints_bound_node() {
-        use crate::icon_loader::IconTarget;
         let _guard = icon_test_lock().lock();
         test_reset_icon_bindings();
         let mut doc = FakeDoc::default();
@@ -1199,7 +1183,6 @@ pub(crate) mod tests {
 
     #[test]
     fn wm_class_matches_desktop_entry_icon_before_fallback() {
-        use flamewm_api::applications::DesktopApplication;
         let app = DesktopApplication {
             id: flamewm_api::DesktopAppId::new("xterm-desktop"),
             name: "XTerm".to_owned(),
@@ -1220,7 +1203,6 @@ pub(crate) mod tests {
 
     #[test]
     fn task_slot_node_id_uses_source_ids() {
-        use crate::icon_loader::IconTarget;
         assert_eq!(
             icon_node_id_for_target(IconTarget::TaskSlot(2)),
             "task-slot-3-icon"
@@ -1309,8 +1291,7 @@ pub(crate) mod tests {
                 geometry: false,
             }
         );
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         for index in 0..8 {
             assert!(
                 doc.visible
@@ -1337,8 +1318,7 @@ pub(crate) mod tests {
             workspaces: true,
             ..ChangedDomains::default()
         };
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert!(doc.visible.contains_key("workspace-1"), "pager projected");
         assert!(
             !doc.visible.contains_key("task-slot-1"),
@@ -1359,8 +1339,7 @@ pub(crate) mod tests {
             system: true,
             ..ChangedDomains::default()
         };
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert!(doc.visible.contains_key("tray-volume"), "tray projected");
         assert!(
             !doc.visible.contains_key("task-slot-1"),
@@ -1381,8 +1360,7 @@ pub(crate) mod tests {
             panels: true,
             ..ChangedDomains::default()
         };
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert!(
             doc.visible.contains_key("task-slot-1"),
             "geometry owns slot count"
@@ -1417,8 +1395,7 @@ pub(crate) mod tests {
             system: true,
             ..ChangedDomains::default()
         };
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-050"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-caution"), Some(&false));
@@ -1427,29 +1404,25 @@ pub(crate) mod tests {
         // battery-only-when-relevant setting hides it.
         snapshot.system.power.percent = 87;
         snapshot.system.power.state = PowerState::Unknown;
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         let relevant_only = TaskbarItems {
             battery_only_when_relevant: true,
             ..TaskbarItems::default()
         };
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot).with_items(relevant_only), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot).with_items(relevant_only), changed);
         assert_eq!(doc.visible.get("tray-battery"), Some(&false));
 
         // Charging shows the charging glyph, at 80% too.
         snapshot.system.power.percent = 45;
         snapshot.system.power.state = PowerState::Charging;
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-050-charging"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-050"), Some(&false));
 
         snapshot.system.power.percent = 80;
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), changed).expect("projects");
+        let doc = project_changed(PanelView::first(&snapshot), changed);
         assert_eq!(doc.visible.get("tray-battery"), Some(&true));
         assert_eq!(doc.visible.get("tray-battery-080-charging"), Some(&true));
     }
@@ -1517,9 +1490,7 @@ pub(crate) mod tests {
         let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
         let snapshot = ShellSnapshot::default();
-        let mut doc = FakeDoc::default();
-        project_panel_for_changed(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default(), ChangedDomains::default())
-            .expect("noop ok");
+        let doc = project_changed(PanelView::first(&snapshot), ChangedDomains::default());
         assert!(doc.visible.is_empty(), "empty scope touches nothing");
     }
 
@@ -1651,10 +1622,7 @@ pub(crate) mod tests {
             icon_name: "missing-icon".to_owned(),
             categories: Vec::new(),
         }]);
-        let session = SessionCapabilities::default();
-        let mut doc = FakeDoc::default();
-        project_start_unified(&mut doc, &model, StartCategory::All, "", &session, None)
-            .expect("projects");
+        let doc = project_start_doc(&model, StartCategory::All, "");
         assert!(
             doc.images.contains(&"start-app-slot-1-icon".to_owned()),
             "miss applies Flame fallback now, never retains old icon"
@@ -1664,11 +1632,7 @@ pub(crate) mod tests {
     #[test]
     fn async_start_submenu_hides_empty_slots() {
         let _guard = icon_test_lock().lock();
-        let model = StartModel::new(Vec::new());
-        let session = SessionCapabilities::default();
-        let mut doc = FakeDoc::default();
-        project_start_unified(&mut doc, &model, StartCategory::All, "", &session, None)
-            .expect("projects");
+        let doc = project_start_doc(&StartModel::new(Vec::new()), StartCategory::All, "");
         assert_eq!(doc.visible.get("start-app-slot-1"), Some(&false));
     }
 
@@ -1693,17 +1657,7 @@ pub(crate) mod tests {
             start_test_app("org.example.calc", "Calculator", "Utility"),
             start_test_app("org.example.chess", "Chess", "Game"),
         ]);
-        let session = SessionCapabilities::default();
-        let mut doc = FakeDoc::default();
-        project_start_unified(
-            &mut doc,
-            &model,
-            StartCategory::Games,
-            "calc",
-            &session,
-            None,
-        )
-        .expect("projects");
+        let doc = project_start_doc(&model, StartCategory::Games, "calc");
         assert_eq!(
             doc.texts.get("start-app-slot-1-label").map(String::as_str),
             Some("Calculator"),
@@ -1721,17 +1675,7 @@ pub(crate) mod tests {
             start_test_app("org.example.calc", "Calculator", "Utility"),
             start_test_app("org.example.chess", "Chess", "Game"),
         ]);
-        let session = SessionCapabilities::default();
-        let mut doc = FakeDoc::default();
-        project_start_unified(
-            &mut doc,
-            &model,
-            StartCategory::Games,
-            "calc",
-            &session,
-            None,
-        )
-        .expect("projects");
+        let doc = project_start_doc(&model, StartCategory::Games, "calc");
         let projected = doc.texts.get("start-app-slot-1-label").cloned();
         assert_eq!(
             crate::projection::start_application_name_for_slot(
@@ -1752,10 +1696,7 @@ pub(crate) mod tests {
             start_test_app("org.example.calc", "Calculator", "Utility"),
             start_test_app("org.example.chess", "Chess", "Game"),
         ]);
-        let session = SessionCapabilities::default();
-        let mut doc = FakeDoc::default();
-        project_start_unified(&mut doc, &model, StartCategory::Games, "", &session, None)
-            .expect("projects");
+        let doc = project_start_doc(&model, StartCategory::Games, "");
         assert_eq!(
             doc.texts.get("start-app-slot-1-label").map(String::as_str),
             Some("Chess")
