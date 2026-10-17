@@ -83,12 +83,13 @@ impl DisplayService {
     }
 
     fn pending_transaction(&self) -> FlameResult<TransactionId> {
-        self.coordinator
-            .pending()
-            .map(|pending| pending.transaction)
-            .ok_or_else(|| {
-                FlameError::new(ErrorCode::InternalFailure, "missing display transaction")
-            })
+        self.pending_id().ok_or_else(|| {
+            FlameError::new(ErrorCode::InternalFailure, "missing display transaction")
+        })
+    }
+
+    fn pending_id(&self) -> Option<TransactionId> {
+        self.coordinator.pending().map(|pending| pending.transaction)
     }
 
     #[must_use]
@@ -113,11 +114,7 @@ impl DisplayService {
             FlameError::new(ErrorCode::InternalFailure, "missing display snapshot")
         })?;
         require_generation(observed, expected_generation)?;
-        if let Some(superseded) = self
-            .coordinator
-            .pending()
-            .map(|pending| pending.transaction)
-        {
+        if let Some(superseded) = self.pending_id() {
             // Restore the superseded transaction's baseline first so the new baseline is never
             // the intermediate mode. A refused revert aborts before any new apply.
             self.revert(port, superseded)?;
@@ -152,11 +149,7 @@ impl DisplayService {
         }
 
         let product_generation = cached.generation;
-        let scale_by_output = cached
-            .outputs
-            .iter()
-            .map(|candidate| (candidate.id.clone(), candidate.shell_scale_percent))
-            .collect::<std::collections::BTreeMap<_, _>>();
+        let scale_by_output = scale_map(cached);
 
         let transaction = port.apply_mode(output, mode)?;
         if let Err(error) =
@@ -257,20 +250,12 @@ impl DisplayService {
         if let Err(refresh_error) = refreshed {
             // Only a failed initial read leaves the expired transaction live here; the other
             // refresh failures already retired it. Never leave an expired transaction pending.
-            let Some(transaction) = self
-                .coordinator
-                .pending()
-                .map(|pending| pending.transaction)
-            else {
+            let Some(transaction) = self.pending_id() else {
                 return Err(refresh_error);
             };
             return Err(self.retire_after_read_failure(port, transaction, refresh_error));
         }
-        let Some(transaction) = self
-            .coordinator
-            .pending()
-            .map(|pending| pending.transaction)
-        else {
+        let Some(transaction) = self.pending_id() else {
             return Ok(true);
         };
         self.revert(port, transaction)?;
@@ -299,17 +284,7 @@ impl DisplayService {
             .cached
             .as_ref()
             .map_or(1, |snapshot| snapshot.generation.max(1));
-        let scales = self
-            .cached
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .outputs
-                    .iter()
-                    .map(|output| (output.id.clone(), output.shell_scale_percent))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let scales = self.cached.as_ref().map(scale_map).unwrap_or_default();
         (generation, scales)
     }
 
@@ -345,6 +320,14 @@ impl DisplayService {
         snapshot.generation = snapshot.generation.saturating_add(1);
         Ok(true)
     }
+}
+
+fn scale_map(snapshot: &DisplaySnapshot) -> std::collections::BTreeMap<OutputId, u16> {
+    snapshot
+        .outputs
+        .iter()
+        .map(|output| (output.id.clone(), output.shell_scale_percent))
+        .collect()
 }
 
 fn restore_shell_scales(

@@ -145,25 +145,21 @@ impl PanelService {
     /// Reconcile every live output with the persisted taskbar height owned by
     /// the settings service. Panel geometry and its revision remain owned here.
     pub fn reconcile_taskbar_height(&mut self, logical_size: u16) -> bool {
-        let before = self.manager.clone();
-        for output in self.manager.outputs() {
-            if let Some(panel) = self.manager.panel_mut(&output) {
-                panel.set_logical_size(logical_size);
-            }
-        }
-        let changed = self.manager != before;
-        if changed {
-            self.bump_revision();
-        }
-        changed
+        self.reconcile_panels(|panel| {
+            panel.set_logical_size(logical_size);
+        })
     }
 
     /// Reconcile every live output with the persisted taskbar style, margin and radius.
     pub fn reconcile_taskbar_frame(&mut self, frame: TaskbarFrame) -> bool {
+        self.reconcile_panels(|panel| panel.frame = frame)
+    }
+
+    fn reconcile_panels(&mut self, mut apply: impl FnMut(&mut OutputPanel)) -> bool {
         let before = self.manager.clone();
         for output in self.manager.outputs() {
             if let Some(panel) = self.manager.panel_mut(&output) {
-                panel.frame = frame;
+                apply(panel);
             }
         }
         let changed = self.manager != before;
