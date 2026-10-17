@@ -2222,14 +2222,11 @@ fn picker_grey(step: usize) -> String {
 /// Next value in `values`, wrapping at both ends. An unknown current value
 /// starts from the first entry.
 fn cycle_value(values: &[i64], current: i64, direction: i8) -> i64 {
-    if values.is_empty() {
+    let len = values.len();
+    if len == 0 {
         return current;
     }
-    let index = values
-        .iter()
-        .position(|value| *value == current)
-        .unwrap_or(0);
-    let len = values.len();
+    let index = values.iter().position(|value| *value == current).unwrap_or(0);
     let next = if direction < 0 {
         (index + len - 1) % len
     } else {
