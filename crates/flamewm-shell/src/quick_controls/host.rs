@@ -1804,24 +1804,12 @@ mod tests {
         let quick = QuickControlSnapshot {
             system,
             audio_tab: AudioTab::Devices,
-            audio_settings: AudioSettings::default(),
-            audio_drag_slot: None,
-            audio_scroll_offset: 0,
             network_query: NetworkQuery {
                 filter: "MATCH".to_owned(),
             },
             network_scroll_offset: 44,
-            network_secret_masked_len: 0,
-            network_secret: String::new(),
-            network_secret_request: None,
-            network_secret_focused: false,
-            network_filter_focused: false,
-            network_secret_error: false,
-            network_secret_submit_id: None,
-            settings: SettingsSnapshot::new(0),
             calendar: crate::calendar::CalendarState::for_today((2026, 10, 13)),
-            weather: WeatherFeed::default(),
-            weather_search: LocationSearch::default(),
+            ..blank_snapshot()
         };
 
         // Filtering leaves five rows; the connected provider index 4 is excluded
@@ -1867,6 +1855,17 @@ mod tests {
         assert!(refused.is_err());
     }
 
+    /// Measured popup placement for a valid anchor and size; panics on refusal.
+    fn measured(
+        anchor: flamewm_api::Rect,
+        size: flamewm_api::Size,
+        edge: PopoverEdge,
+        align: PopoverAlign,
+        area: flamewm_api::Rect,
+    ) -> flamewm_api::Rect {
+        measured_popup_rect(Some(anchor), Some(size), edge, align, area, 8).expect("measured")
+    }
+
     #[test]
     fn bottom_end_aligned_network_fixture_right_above() {
         // Bottom panel network fixture: output-end aligned above the anchor,
@@ -1874,15 +1873,7 @@ mod tests {
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1830, 1036, 70, 44);
         let size = flamewm_api::Size::new(310, 220);
-        let rect = measured_popup_rect(
-            Some(anchor),
-            Some(size),
-            PopoverEdge::Above,
-            PopoverAlign::OutputEnd,
-            area,
-            8,
-        )
-        .expect("measured");
+        let rect = measured(anchor, size, PopoverEdge::Above, PopoverAlign::OutputEnd, area);
         assert_eq!(rect.right(), area.right());
         assert!(rect.right() <= area.right());
         assert!(rect.bottom() <= anchor.y);
@@ -1894,15 +1885,7 @@ mod tests {
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1830, 0, 70, 44);
         let size = flamewm_api::Size::new(310, 220);
-        let rect = measured_popup_rect(
-            Some(anchor),
-            Some(size),
-            PopoverEdge::Below,
-            PopoverAlign::OutputEnd,
-            area,
-            8,
-        )
-        .expect("measured");
+        let rect = measured(anchor, size, PopoverEdge::Below, PopoverAlign::OutputEnd, area);
         assert!(rect.y >= anchor.bottom());
         assert_eq!(rect.right(), area.right());
     }
@@ -1914,25 +1897,9 @@ mod tests {
         let anchor_l = flamewm_api::Rect::new(0, 400, 44, 70);
         let anchor_r = flamewm_api::Rect::new(1876, 400, 44, 70);
         let size = flamewm_api::Size::new(200, 150);
-        let right_of = measured_popup_rect(
-            Some(anchor_l),
-            Some(size),
-            PopoverEdge::Right,
-            PopoverAlign::End,
-            area,
-            8,
-        )
-        .expect("measured");
+        let right_of = measured(anchor_l, size, PopoverEdge::Right, PopoverAlign::End, area);
         assert!(right_of.x >= anchor_l.right());
-        let left_of = measured_popup_rect(
-            Some(anchor_r),
-            Some(size),
-            PopoverEdge::Left,
-            PopoverAlign::End,
-            area,
-            8,
-        )
-        .expect("measured");
+        let left_of = measured(anchor_r, size, PopoverEdge::Left, PopoverAlign::End, area);
         assert!(left_of.right() <= anchor_r.x);
     }
 
@@ -1944,15 +1911,7 @@ mod tests {
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1900, 1036, 20, 44);
         let size = flamewm_api::Size::new(310, 200);
-        let rect = measured_popup_rect(
-            Some(anchor),
-            Some(size),
-            PopoverEdge::Above,
-            PopoverAlign::OutputEnd,
-            area,
-            8,
-        )
-        .expect("measured");
+        let rect = measured(anchor, size, PopoverEdge::Above, PopoverAlign::OutputEnd, area);
         assert!(rect.right() <= area.right());
         assert!(rect.bottom() <= anchor.y);
     }
@@ -2251,6 +2210,17 @@ mod audio_routing_tests {
         );
     }
 
+    /// Volume percent a pointer at `x` on the Devices slider requests, if any.
+    fn audio_slider_percent(raise: bool, x: f32) -> Option<u8> {
+        match audio_pointer_request(&quick(AudioTab::Devices, raise), 0, x) {
+            Some(ControlRequest::SystemAction {
+                action: SystemAction::SetVolume(volume),
+                ..
+            }) => Some(volume.percent),
+            _ => None,
+        }
+    }
+
     fn quick(tab: AudioTab, raise_maximum: bool) -> QuickControlSnapshot {
         let mut system = flamewm_api::system::SystemSnapshot::default();
         system.revision = 4;
@@ -2372,17 +2342,7 @@ mod audio_routing_tests {
     #[test]
     fn pointer_on_thumb_centre_reads_back_its_value_and_drag_clamps_at_both_ends() {
         use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
-        let percent = |raise: bool, x: f32| match audio_pointer_request(
-            &quick(AudioTab::Devices, raise),
-            0,
-            x,
-        ) {
-            Some(ControlRequest::SystemAction {
-                action: SystemAction::SetVolume(volume),
-                ..
-            }) => Some(volume.percent),
-            _ => None,
-        };
+        let percent = audio_slider_percent;
         // Thumb centre for 120% under cap 150 is X + (120 / 150) * W; pointer there reads 120 back.
         assert_eq!(
             percent(true, AUDIO_TRACK_X + AUDIO_TRACK_WIDTH * 120.0 / 150.0),
@@ -2408,17 +2368,7 @@ mod audio_routing_tests {
     fn pointer_drag_to_track_end_is_capped_at_100_or_150() {
         use crate::taskbar::status::audio::{AUDIO_TRACK_WIDTH, AUDIO_TRACK_X};
         let end = AUDIO_TRACK_X + AUDIO_TRACK_WIDTH;
-        let percent = |raise: bool, x: f32| match audio_pointer_request(
-            &quick(AudioTab::Devices, raise),
-            0,
-            x,
-        ) {
-            Some(ControlRequest::SystemAction {
-                action: SystemAction::SetVolume(volume),
-                ..
-            }) => Some(volume.percent),
-            _ => None,
-        };
+        let percent = audio_slider_percent;
         assert_eq!(percent(false, end), Some(100));
         assert_eq!(percent(true, end), Some(150));
         assert_eq!(percent(false, AUDIO_TRACK_X), Some(0));
@@ -2499,17 +2449,20 @@ mod network_filter_reprojection_tests {
     /// Every Wi-Fi filter keystroke (typed or backspace) must request reprojection, so
     /// `tick_host` projects and redraws the open popup. Source-scan over the keyboard
     /// section of `route_helper_event`, which needs a live runtime to call directly.
-    #[test]
-    fn each_network_filter_edit_requests_reprojection() {
-        let source = include_str!("host.rs");
-        let function = source
+    /// Source of `route_helper_event`'s keyboard section, up to the outside-release check.
+    pub(super) fn keyboard_section() -> &'static str {
+        include_str!("host.rs")
             .split_once("pub fn route_helper_event(")
             .expect("route_helper_event must exist")
-            .1;
-        let keyboard = function
+            .1
             .split_once("let open_surface = surfaces.open")
             .expect("keyboard section must precede the outside-release check")
-            .0;
+            .0
+    }
+
+    #[test]
+    fn each_network_filter_edit_requests_reprojection() {
+        let keyboard = keyboard_section();
         assert!(keyboard.contains("snapshot.network_query.filter.pop();"));
         assert!(keyboard.contains("snapshot.network_query.filter.push_str(text);"));
         assert!(
@@ -2628,16 +2581,11 @@ mod network_secret_prompt_tests {
     /// masked value and error line repaint without another input event.
     #[test]
     fn network_secret_edits_and_errors_request_reprojection() {
-        use super::network_filter_reprojection_tests::edit_block_requests_reprojection;
+        use super::network_filter_reprojection_tests::{
+            edit_block_requests_reprojection, keyboard_section,
+        };
+        let keyboard = keyboard_section();
         let source = include_str!("host.rs");
-        let function = source
-            .split_once("pub fn route_helper_event(")
-            .expect("route_helper_event must exist")
-            .1;
-        let keyboard = function
-            .split_once("let open_surface = surfaces.open")
-            .expect("keyboard section must precede the outside-release check")
-            .0;
         assert!(
             edit_block_requests_reprojection(keyboard, "snapshot.network_secret.pop();"),
             "secret backspace must request reprojection"
