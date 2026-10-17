@@ -90,13 +90,11 @@ fn wait_gone(canary: &crate::Canary, id: u32, timeout_ms: u64) -> bool {
     let start = std::time::Instant::now();
     let limit = std::time::Duration::from_millis(timeout_ms.max(200));
     while start.elapsed() < limit {
-        match canary.by_id(id) {
-            None => return true,
-            Some(w) => {
-                if w.map_state != u8::from(MapState::VIEWABLE) {
-                    return true;
-                }
-            }
+        if canary
+            .by_id(id)
+            .is_none_or(|w| w.map_state != u8::from(MapState::VIEWABLE))
+        {
+            return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
