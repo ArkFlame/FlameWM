@@ -65,12 +65,6 @@ impl ApplicationService {
         port.launch(id, options)
     }
 
-    pub fn launch_uri<P: ApplicationPort>(&self, port: &mut P, uri: &str) -> FlameResult<()> {
-        if uri.trim().is_empty() || uri.chars().any(char::is_control) {
-            return Err(FlameError::new(ErrorCode::InvalidArgument, "invalid URI"));
-        }
-        port.launch_uri(uri)
-    }
 }
 
 fn contains(text: &str, needle: &str) -> bool {
