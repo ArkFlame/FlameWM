@@ -86,13 +86,10 @@ pub fn project_network_full(
         );
         for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
             let row = window.get(slot);
-            document.visible(&format!("network-slot-{}", slot + 1), row.is_some())?;
+            let (mut name, mut status) = (String::new(), String::new());
             if let Some(row) = row {
-                document.text(
-                    &format!("network-slot-{}-name", slot + 1),
-                    row.label.clone(),
-                )?;
-                let mut status = format!("{}%", row.strength_percent);
+                name = row.label.clone();
+                status = format!("{}%", row.strength_percent);
                 if row.secured {
                     status.push_str(" · secured");
                 }
@@ -105,11 +102,10 @@ pub fn project_network_full(
                 if popover.pending_secret_path.as_deref() == Some(row.path.as_str()) {
                     status.push_str(" · password required");
                 }
-                document.text(&format!("network-slot-{}-status", slot + 1), status)?;
-            } else {
-                document.text(&format!("network-slot-{}-name", slot + 1), String::new())?;
-                document.text(&format!("network-slot-{}-status", slot + 1), String::new())?;
             }
+            document.visible(&format!("network-slot-{}", slot + 1), row.is_some())?;
+            document.text(&format!("network-slot-{}-name", slot + 1), name)?;
+            document.text(&format!("network-slot-{}-status", slot + 1), status)?;
         }
     } else {
         document.text("wifi-connected-name", view.label.clone())?;
@@ -226,22 +222,11 @@ mod network_template_tests {
     #[test]
     fn absent_connected_access_point_keeps_connected_container_visible() {
         let mut document = network_document();
-        let mut snapshot = crate::ShellSnapshot::default();
-        snapshot.system.network.availability = ServiceAvailability::Available;
-        snapshot.system.network.wifi_enabled = true;
-        snapshot.system.network.networking_enabled = true;
-        snapshot.system.network.label = "LinsaFTW".to_owned();
-        snapshot.system.network.strength_percent = 70;
-        snapshot.system.network.active_access_point_path =
-            "/org/freedesktop/NetworkManager/AccessPoint/9".to_owned();
-        snapshot.system.network.access_points =
-            vec![flamewm_api::system::NetworkAccessPointSnapshot {
-                path: "/org/freedesktop/NetworkManager/AccessPoint/2".to_owned(),
-                ssid: "StubNeighbor".to_owned(),
-                strength_percent: 42,
-                secured: false,
-                known: false,
-            }];
+        let snapshot = network_snapshot(
+            "/org/freedesktop/NetworkManager/AccessPoint/9",
+            "LinsaFTW",
+            vec![("/org/freedesktop/NetworkManager/AccessPoint/2", "StubNeighbor", 42)],
+        );
         let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert!(!recorder.texts["network-connected"].is_empty());
