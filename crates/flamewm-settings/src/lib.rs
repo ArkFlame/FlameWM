@@ -821,9 +821,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
             SettingsAction::Toggle(key) => {
                 let enabled = self
-                    .client
-                    .settings()
-                    .and_then(|snapshot| snapshot.values.get(key))
+                    .setting_value(key)
                     .and_then(|value| match value {
                         SettingValue::Boolean(value) => Some(!value),
                         _ => None,
@@ -1325,29 +1323,21 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .find(|output| &output.id == id)
     }
 
+    fn setting_value(&self, key: &str) -> Option<&SettingValue> {
+        self.client.settings().and_then(|snapshot| snapshot.values.get(key))
+    }
+
     fn percent_setting(&self, key: &str) -> Result<u8, String> {
-        match self
-            .client
-            .settings()
-            .and_then(|snapshot| snapshot.values.get(key))
-        {
+        match self.setting_value(key) {
             Some(SettingValue::Percent(value)) => Ok(*value),
-            _ => Err(format!(
-                "setting '{key}' has no authoritative percent value"
-            )),
+            _ => Err(format!("setting '{key}' has no authoritative percent value")),
         }
     }
 
     fn integer_setting(&self, key: &str) -> Result<i64, String> {
-        match self
-            .client
-            .settings()
-            .and_then(|snapshot| snapshot.values.get(key))
-        {
+        match self.setting_value(key) {
             Some(SettingValue::Integer(value)) => Ok(*value),
-            _ => Err(format!(
-                "setting '{key}' has no authoritative integer value"
-            )),
+            _ => Err(format!("setting '{key}' has no authoritative integer value")),
         }
     }
 
@@ -1357,11 +1347,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn text_setting(&self, key: &str) -> Result<String, String> {
-        match self
-            .client
-            .settings()
-            .and_then(|snapshot| snapshot.values.get(key))
-        {
+        match self.setting_value(key) {
             Some(SettingValue::Text(value)) => Ok(value.clone()),
             _ => Err(format!("setting '{key}' has no authoritative text value")),
         }
@@ -1369,10 +1355,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Boolean setting value; an absent or non-boolean key reads as OFF.
     fn bool_setting(&self, key: &str) -> bool {
-        matches!(
-            self.client.settings().and_then(|snapshot| snapshot.values.get(key)),
-            Some(SettingValue::Boolean(true))
-        )
+        matches!(self.setting_value(key), Some(SettingValue::Boolean(true)))
     }
 
     /// Writes every node; a failed node write is recorded and the rest still apply.
@@ -1388,11 +1371,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     fn sync_nodes(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
-        if let Some(SettingValue::Text(accent)) = self
-            .client
-            .settings()
-            .and_then(|snapshot| snapshot.values.get("accent"))
-        {
+        if let Some(SettingValue::Text(accent)) = self.setting_value("accent") {
             document.background("nav-selection", accent_color(accent)?)?;
             sync_accent_nodes(document, accent)?;
             for name in ["red", "blue", "purple", "teal"] {
@@ -1501,34 +1480,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
         ] {
-            let enabled = self
-                .client
-                .settings()
-                .and_then(|snapshot| snapshot.values.get(key))
-                .and_then(|value| match value {
-                    SettingValue::Boolean(value) => Some(*value),
-                    _ => None,
-                });
+            let enabled = self.setting_value(key).and_then(|value| match value {
+                SettingValue::Boolean(value) => Some(*value),
+                _ => None,
+            });
             document.visible(on_id, enabled == Some(true))?;
             document.visible(off_id, enabled == Some(false))?;
         }
         for (key, on_id, off_id, default) in SETTING_TWINS {
-            let enabled = match self
-                .client
-                .settings()
-                .and_then(|snapshot| snapshot.values.get(*key))
-            {
+            let enabled = match self.setting_value(key) {
                 Some(SettingValue::Boolean(value)) => *value,
                 _ => *default,
             };
             document.visible(on_id, enabled)?;
             document.visible(off_id, !enabled)?;
         }
-        if let Some(SettingValue::Text(family)) = self
-            .client
-            .settings()
-            .and_then(|snapshot| snapshot.values.get("fontFamily"))
-        {
+        if let Some(SettingValue::Text(family)) = self.setting_value("fontFamily") {
             document.font_family(family.clone())?;
         }
         self.sync_value_text(document)?;
