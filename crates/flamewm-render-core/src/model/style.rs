@@ -261,10 +261,13 @@ impl RuntimeDocument {
 }
 
 impl RuntimeDocument {
-    pub fn set_background_color(&mut self, id: &str, color: Color) -> Result<(), String> {
+    fn override_entry(&mut self, id: &str) -> Result<&mut RuntimeStyleOverride, String> {
         let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().background =
-            Some(ColorValue::Literal(color));
+        Ok(self.style_overrides.entry(index).or_default())
+    }
+
+    pub fn set_background_color(&mut self, id: &str, color: Color) -> Result<(), String> {
+        self.override_entry(id)?.background = Some(ColorValue::Literal(color));
         self.touch();
         Ok(())
     }
@@ -298,16 +301,13 @@ impl RuntimeDocument {
         if !radius.is_finite() || radius < 0.0 {
             return Err("runtime border radius must be finite and non-negative".to_string());
         }
-        let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().border_radius = Some(radius);
+        self.override_entry(id)?.border_radius = Some(radius);
         self.touch();
         Ok(())
     }
 
     pub fn set_border_color(&mut self, id: &str, color: Color) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().border_color =
-            Some(ColorValue::Literal(color));
+        self.override_entry(id)?.border_color = Some(ColorValue::Literal(color));
         self.touch();
         Ok(())
     }
@@ -331,8 +331,7 @@ impl RuntimeDocument {
     }
 
     pub fn set_foreground_color(&mut self, id: &str, color: ColorValue) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().color = Some(color);
+        self.override_entry(id)?.color = Some(color);
         self.touch();
         Ok(())
     }
@@ -350,23 +349,17 @@ impl RuntimeDocument {
         if !opacity.is_finite() {
             return Err("runtime opacity must be finite".to_string());
         }
-        let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().opacity = Some(opacity.clamp(0.0, 1.0));
+        self.override_entry(id)?.opacity = Some(opacity.clamp(0.0, 1.0));
         Ok(())
     }
 
     pub fn set_flex_direction(&mut self, id: &str, direction: FlexDirection) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        self.style_overrides
-            .entry(index)
-            .or_default()
-            .flex_direction = Some(direction);
+        self.override_entry(id)?.flex_direction = Some(direction);
         Ok(())
     }
 
     pub fn set_overflow(&mut self, id: &str, x: Overflow, y: Overflow) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        let entry = self.style_overrides.entry(index).or_default();
+        let entry = self.override_entry(id)?;
         entry.overflow_x = Some(x);
         entry.overflow_y = Some(y);
         Ok(())
@@ -393,8 +386,7 @@ impl RuntimeDocument {
     }
 
     pub fn set_font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        self.style_overrides.entry(index).or_default().font_weight = Some(weight.clamp(100, 900));
+        self.override_entry(id)?.font_weight = Some(weight.clamp(100, 900));
         Ok(())
     }
 
@@ -485,36 +477,16 @@ impl RuntimeDocument {
             }
         }
         if let Some(override_style) = self.style_overrides.get(&index) {
-            if let Some(background) = override_style.background {
-                style.background = background;
+            macro_rules! apply {
+                ($($field:ident),+) => {
+                    $(if let Some(value) = override_style.$field {
+                        style.$field = value;
+                    })+
+                };
             }
-            if let Some(color) = override_style.color {
-                style.color = color;
-            }
-            if let Some(border_color) = override_style.border_color {
-                style.border_color = border_color;
-            }
-            if let Some(border_radius) = override_style.border_radius {
-                style.border_radius = border_radius;
-            }
-            if let Some(opacity) = override_style.opacity {
-                style.opacity = opacity;
-            }
-            if let Some(direction) = override_style.flex_direction {
-                style.flex_direction = direction;
-            }
-            if let Some(font_size) = override_style.font_size {
-                style.font_size = font_size;
-            }
-            if let Some(font_weight) = override_style.font_weight {
-                style.font_weight = font_weight;
-            }
-            if let Some(overflow_x) = override_style.overflow_x {
-                style.overflow_x = overflow_x;
-            }
-            if let Some(overflow_y) = override_style.overflow_y {
-                style.overflow_y = overflow_y;
-            }
+            apply!(background, color, border_color, border_radius, opacity);
+            apply!(flex_direction, font_size, font_weight);
+            apply!(overflow_x, overflow_y);
         }
         style.font_size = (style.font_size + self.ui_font_size_offset).max(6.0);
         if self.ui_font_bold && style.font_weight < 600 {
