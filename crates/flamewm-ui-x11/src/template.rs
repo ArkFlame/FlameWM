@@ -179,195 +179,112 @@ impl UiDocument {
     }
 }
 
+/// Shared `UiDocumentAccess` method bodies. `self.document` is either an owned
+/// `RuntimeDocument` or a `&mut RuntimeDocument`; both auto-deref to the same calls.
+macro_rules! document_access_methods {
+    () => {
+        fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            self.document.set_text(id, text)
+        }
+
+        fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
+            replace_rgba8(&mut self.document, id, image)
+        }
+
+        fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
+            replace_rgba8(&mut self.document, id, image)
+        }
+
+        fn image_reset(&mut self, id: &str) -> Result<(), String> {
+            self.document.clear_image_for_node(id)
+        }
+
+        fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
+            self.document.set_visible(id, visible)
+        }
+
+        fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
+            set_toggle(&mut self.document, track_id, knob_id, checked)
+        }
+
+        fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
+            self.document.set_position_px(id, left, top)
+        }
+
+        fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String> {
+            self.document.set_size_px(id, width, height)
+        }
+
+        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.document.set_background_color(id, color.into())
+        }
+
+        fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.document.set_border_color(id, color.into())
+        }
+
+        fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
+            self.document.set_border_radius(id, radius_px)
+        }
+
+        fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
+            self.document.set_node_backdrop(id, blur_percent)
+        }
+
+        fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.document
+                .set_foreground_color(id, flamewm_render_core::ColorValue::Literal(color.into()))
+        }
+
+        fn background_clear(&mut self, id: &str) -> Result<(), String> {
+            self.document.clear_background_color(id)
+        }
+
+        fn border_clear(&mut self, id: &str) -> Result<(), String> {
+            self.document.clear_border_color(id)
+        }
+
+        fn foreground_clear(&mut self, id: &str) -> Result<(), String> {
+            self.document.clear_foreground_color(id)
+        }
+
+        fn overflow(
+            &mut self,
+            id: &str,
+            x: flamewm_render_core::Overflow,
+            y: flamewm_render_core::Overflow,
+        ) -> Result<(), String> {
+            self.document.set_overflow(id, x, y)
+        }
+
+        fn font_size(&mut self, id: &str, size_px: f32) -> Result<(), String> {
+            self.document.set_font_size_px(id, size_px)
+        }
+
+        fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
+            self.document.set_font_weight(id, weight)
+        }
+
+        fn font_family(&mut self, family: String) -> Result<(), String> {
+            self.document.set_ui_font_family(family)
+        }
+
+        fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
+            self.document.set_color_variable(name, color.into())
+        }
+
+        fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
+            self.document.set_z_index(id, layer.z_index())
+        }
+    };
+}
+
 impl UiDocumentAccess for UiDocument {
-    fn text(&mut self, id: &str, text: String) -> Result<(), String> {
-        self.text(id, text)
-    }
-
-    fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        self.image_rgb8(id, image)
-    }
-
-    fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        self.image_rgba8(id, image)
-    }
-
-    fn image_reset(&mut self, id: &str) -> Result<(), String> {
-        self.document.clear_image_for_node(id)
-    }
-
-    fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
-        self.visible(id, visible)
-    }
-
-    fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
-        self.toggle(track_id, knob_id, checked)
-    }
-
-    fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
-        self.position(id, left, top)
-    }
-
-    fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String> {
-        self.size(id, width, height)
-    }
-
-    fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-        self.background(id, color)
-    }
-
-    fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-        self.border(id, color)
-    }
-
-    fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
-        self.document.set_border_radius(id, radius_px)
-    }
-
-    fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
-        self.document.set_node_backdrop(id, blur_percent)
-    }
-
-    fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-        self.foreground(id, color)
-    }
-
-    fn background_clear(&mut self, id: &str) -> Result<(), String> {
-        self.background_clear(id)
-    }
-
-    fn border_clear(&mut self, id: &str) -> Result<(), String> {
-        self.border_clear(id)
-    }
-
-    fn foreground_clear(&mut self, id: &str) -> Result<(), String> {
-        self.foreground_clear(id)
-    }
-
-    fn overflow(
-        &mut self,
-        id: &str,
-        x: flamewm_render_core::Overflow,
-        y: flamewm_render_core::Overflow,
-    ) -> Result<(), String> {
-        self.overflow(id, x, y)
-    }
-
-    fn font_size(&mut self, id: &str, size_px: f32) -> Result<(), String> {
-        self.font_size(id, size_px)
-    }
-
-    fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
-        self.font_weight(id, weight)
-    }
-
-    fn font_family(&mut self, family: String) -> Result<(), String> {
-        self.font_family(family)
-    }
-
-    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
-        self.document.set_color_variable(name, color.into())
-    }
-
-    fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
-        self.layer(id, layer)
-    }
+    document_access_methods!();
 }
 
 impl<'a> UiDocumentAccess for UiDocumentView<'a> {
-    fn text(&mut self, id: &str, text: String) -> Result<(), String> {
-        self.document.set_text(id, text)
-    }
-
-    fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        replace_rgba8(self.document, id, image)
-    }
-
-    fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        replace_rgba8(self.document, id, image)
-    }
-
-    fn image_reset(&mut self, id: &str) -> Result<(), String> {
-        self.document.clear_image_for_node(id)
-    }
-
-    fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
-        self.document.set_visible(id, visible)
-    }
-
-    fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
-        set_toggle(self.document, track_id, knob_id, checked)
-    }
-
-    fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
-        self.document.set_position_px(id, left, top)
-    }
-
-    fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String> {
-        self.document.set_size_px(id, width, height)
-    }
-
-    fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-        self.document.set_background_color(id, color.into())
-    }
-
-    fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-        self.document.set_border_color(id, color.into())
-    }
-
-    fn corner_radius(&mut self, id: &str, radius_px: f32) -> Result<(), String> {
-        self.document.set_border_radius(id, radius_px)
-    }
-
-    fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
-        self.document.set_node_backdrop(id, blur_percent)
-    }
-
-    fn foreground(&mut self, id: &str, color: UiColor) -> Result<(), String> {
-        self.document
-            .set_foreground_color(id, flamewm_render_core::ColorValue::Literal(color.into()))
-    }
-
-    fn background_clear(&mut self, id: &str) -> Result<(), String> {
-        self.document.clear_background_color(id)
-    }
-
-    fn border_clear(&mut self, id: &str) -> Result<(), String> {
-        self.document.clear_border_color(id)
-    }
-
-    fn foreground_clear(&mut self, id: &str) -> Result<(), String> {
-        self.document.clear_foreground_color(id)
-    }
-
-    fn overflow(
-        &mut self,
-        id: &str,
-        x: flamewm_render_core::Overflow,
-        y: flamewm_render_core::Overflow,
-    ) -> Result<(), String> {
-        self.document.set_overflow(id, x, y)
-    }
-
-    fn font_size(&mut self, id: &str, size_px: f32) -> Result<(), String> {
-        self.document.set_font_size_px(id, size_px)
-    }
-
-    fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
-        self.document.set_font_weight(id, weight)
-    }
-
-    fn font_family(&mut self, family: String) -> Result<(), String> {
-        self.document.set_ui_font_family(family)
-    }
-
-    fn color_variable(&mut self, name: &str, color: UiColor) -> Result<(), String> {
-        self.document.set_color_variable(name, color.into())
-    }
-
-    fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
-        self.document.set_z_index(id, layer.z_index())
-    }
+    document_access_methods!();
 }
 
 impl From<UiColor> for flamewm_render_core::Color {
