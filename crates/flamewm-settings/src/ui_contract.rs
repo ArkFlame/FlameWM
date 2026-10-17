@@ -152,7 +152,7 @@ impl ControlTransport for ScriptedTransport {
     }
 }
 
-fn output(id: &str, connector: &str, primary: bool, modes: usize) -> OutputSnapshot {
+fn output(id: &str, primary: bool, modes: usize) -> OutputSnapshot {
     let modes_list: Vec<DisplayMode> = (0..modes)
         .map(|index| DisplayMode {
             id: ModeId(index as u64 + 1),
@@ -163,7 +163,7 @@ fn output(id: &str, connector: &str, primary: bool, modes: usize) -> OutputSnaps
         .collect();
     OutputSnapshot {
         id: OutputId::new(id),
-        connector: connector.to_owned(),
+        connector: id.to_owned(),
         edid_identity: format!("fixture-{id}"),
         connected: true,
         primary,
@@ -176,24 +176,21 @@ fn output(id: &str, connector: &str, primary: bool, modes: usize) -> OutputSnaps
 
 /// Several fixtures: one output, a full output page, and a paged mode list.
 fn display_fixtures() -> Vec<DisplaySnapshot> {
-    let single = DisplaySnapshot {
-        generation: 1,
-        outputs: vec![output("HDMI-1", "HDMI-1", true, 1)],
+    let snapshot = |generation, outputs| DisplaySnapshot {
+        generation,
+        outputs,
         pending: None,
     };
-    let full_page = DisplaySnapshot {
-        generation: 2,
-        outputs: (0..OUTPUT_PAGE_SLOTS)
-            .map(|slot| output(&format!("OUT-{slot}"), &format!("OUT-{slot}"), slot == 0, 2))
-            .collect(),
-        pending: None,
-    };
-    let many_modes = DisplaySnapshot {
-        generation: 3,
-        outputs: vec![output("DP-1", "DP-1", true, DISPLAY_MODE_SLOTS + 3)],
-        pending: None,
-    };
-    vec![single, full_page, many_modes]
+    vec![
+        snapshot(1, vec![output("HDMI-1", true, 1)]),
+        snapshot(
+            2,
+            (0..OUTPUT_PAGE_SLOTS)
+                .map(|slot| output(&format!("OUT-{slot}"), slot == 0, 2))
+                .collect(),
+        ),
+        snapshot(3, vec![output("DP-1", true, DISPLAY_MODE_SLOTS + 3)]),
+    ]
 }
 
 fn settings_fixture(accent: &str, appearance: &str) -> SettingsSnapshot {
