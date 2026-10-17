@@ -159,23 +159,6 @@ fn decode_varint(mut next: impl FnMut() -> io::Result<u8>) -> io::Result<u64> {
     Err(corrupt("varint too long"))
 }
 
-struct Cursor<'a> {
-    buf: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn byte(&mut self) -> io::Result<u8> {
-        let b = *self.buf.get(self.at).ok_or_else(|| corrupt("truncated block header"))?;
-        self.at += 1;
-        Ok(b)
-    }
-
-    fn varint(&mut self) -> io::Result<u64> {
-        decode_varint(|| self.byte())
-    }
-}
-
 /// Dictionary size from the LZMA2 property byte (xz spec), capped by `MAX_DICT`.
 fn dict_size(prop: u8) -> io::Result<usize> {
     if prop > 40 {
@@ -608,24 +591,29 @@ impl<R: Read> XzReader<R> {
         if crc32_update(0, body) != stored {
             return Err(corrupt("block header CRC mismatch"));
         }
-        let mut cur = Cursor { buf: body, at: 1 };
-        let flags = cur.byte()?;
+        let mut at = 1;
+        let mut next = || -> io::Result<u8> {
+            let b = *body.get(at).ok_or_else(|| corrupt("truncated block header"))?;
+            at += 1;
+            Ok(b)
+        };
+        let flags = next()?;
         if flags & 0x3C != 0 {
             return Err(corrupt("reserved block header flags"));
         }
         if flags & 0x03 != 0 {
             return Err(unsupported("multi-filter chains"));
         }
-        let declared_compressed = if flags & 0x40 != 0 { Some(cur.varint()?) } else { None };
-        let declared_uncompressed = if flags & 0x80 != 0 { Some(cur.varint()?) } else { None };
-        if cur.varint()? != LZMA2_ID {
+        let declared_compressed = if flags & 0x40 != 0 { Some(decode_varint(&mut next)?) } else { None };
+        let declared_uncompressed = if flags & 0x80 != 0 { Some(decode_varint(&mut next)?) } else { None };
+        if decode_varint(&mut next)? != LZMA2_ID {
             return Err(unsupported("non-LZMA2 filter"));
         }
-        if cur.varint()? != 1 {
+        if decode_varint(&mut next)? != 1 {
             return Err(corrupt("invalid LZMA2 filter properties"));
         }
-        let dict = dict_size(cur.byte()?)?;
-        if body[cur.at..].iter().any(|&b| b != 0) {
+        let dict = dict_size(next()?)?;
+        if body[at..].iter().any(|&b| b != 0) {
             return Err(corrupt("nonzero block header padding"));
         }
         self.block = Some(Block {
