@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use flamewm_api::display::{DisplaySnapshot, PendingModeChange};
 use flamewm_api::ports::DisplayPort;
 use flamewm_api::{ErrorCode, FlameError, FlameResult, ModeId, OutputId, TransactionId};
@@ -11,7 +13,7 @@ pub struct DisplayService {
     cached: Option<DisplaySnapshot>,
     engine_generation: u64,
     /// Last shell scale set per output ID, kept across unplug so a re-plugged output keeps it.
-    scale_memory: std::collections::BTreeMap<OutputId, u16>,
+    scale_memory: BTreeMap<OutputId, u16>,
 }
 
 impl DisplayService {
@@ -279,7 +281,7 @@ impl DisplayService {
         rollback.err().unwrap_or(read_error)
     }
 
-    fn product_generation_and_scales(&self) -> (u64, std::collections::BTreeMap<OutputId, u16>) {
+    fn product_generation_and_scales(&self) -> (u64, BTreeMap<OutputId, u16>) {
         let generation = self
             .cached
             .as_ref()
@@ -322,7 +324,7 @@ impl DisplayService {
     }
 }
 
-fn scale_map(snapshot: &DisplaySnapshot) -> std::collections::BTreeMap<OutputId, u16> {
+fn scale_map(snapshot: &DisplaySnapshot) -> BTreeMap<OutputId, u16> {
     snapshot
         .outputs
         .iter()
@@ -330,10 +332,7 @@ fn scale_map(snapshot: &DisplaySnapshot) -> std::collections::BTreeMap<OutputId,
         .collect()
 }
 
-fn restore_shell_scales(
-    snapshot: &mut DisplaySnapshot,
-    scales: &std::collections::BTreeMap<OutputId, u16>,
-) {
+fn restore_shell_scales(snapshot: &mut DisplaySnapshot, scales: &BTreeMap<OutputId, u16>) {
     for output in &mut snapshot.outputs {
         if let Some(scale) = scales.get(&output.id) {
             output.shell_scale_percent = *scale;
@@ -589,6 +588,13 @@ mod tests {
                 .expect("fixture output")
         }
 
+        fn connected_index(&self, output: &OutputId) -> FlameResult<usize> {
+            self.outputs
+                .iter()
+                .position(|o| o.connected && &o.id == output)
+                .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake output missing"))
+        }
+
         fn disconnect(&mut self, id: &str) {
             if let Some(output) = self.outputs.iter_mut().find(|o| o.id.as_str() == id) {
                 output.connected = false;
@@ -637,11 +643,7 @@ mod tests {
             if self.fail_apply {
                 return Err(FlameError::new(ErrorCode::Unavailable, "fake apply failed"));
             }
-            let index = self
-                .outputs
-                .iter()
-                .position(|o| o.connected && &o.id == output)
-                .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake output missing"))?;
+            let index = self.connected_index(output)?;
             if !self.outputs[index].modes.contains(&mode) {
                 return Err(FlameError::new(
                     ErrorCode::InvalidArgument,
@@ -687,11 +689,7 @@ mod tests {
                     "fake transaction missing",
                 ));
             }
-            let index = self
-                .outputs
-                .iter()
-                .position(|o| o.connected && o.id == output)
-                .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "fake output missing"))?;
+            let index = self.connected_index(&output)?;
             self.outputs[index].current = previous;
             self.generation += 1;
             Ok(())
