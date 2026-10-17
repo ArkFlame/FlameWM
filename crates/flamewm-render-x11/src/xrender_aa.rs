@@ -38,6 +38,29 @@ unsafe fn fill_box(
     unsafe { backend.fill_rounded_rect(rect, 0.0, color) }
 }
 
+/// Fills each run of device row `row` at origin `(x, y)`; `unsafe` as `fill_box`.
+unsafe fn paint_runs(
+    backend: &mut XRenderBackend,
+    (x, y): (i32, i32),
+    row: u32,
+    runs: &[Run],
+    color: Color,
+) -> Result<(), String> {
+    for &(start, len, coverage) in runs {
+        unsafe {
+            fill_box(
+                backend,
+                x + start as i32,
+                y + row as i32,
+                len,
+                1,
+                scaled(color, coverage),
+            )?
+        };
+    }
+    Ok(())
+}
+
 /// Per-sub-scanline left boundary offsets (device px, from the corner row's left)
 /// of a rounded corner, or `None` when `row` is not a rounded corner row.
 fn corner_edges(height: u32, radius: u32, row: u32) -> Option<[f64; EDGE_SAMPLES as usize]> {
@@ -184,10 +207,8 @@ pub(crate) unsafe fn fill_rounded_rect(
     radius: f32,
     color: Color,
 ) -> Result<(), String> {
-    let x = rect.x.round() as i32;
-    let y = rect.y.round() as i32;
-    let width = rect.width.round().max(0.0) as u32;
-    let height = rect.height.round().max(0.0) as u32;
+    let (x, y) = (rect.x.round() as i32, rect.y.round() as i32);
+    let (width, height) = (rect.width.round() as u32, rect.height.round() as u32);
     if width == 0 || height == 0 || color.a == 0 {
         return Ok(());
     }
@@ -208,33 +229,13 @@ pub(crate) unsafe fn fill_rounded_rect(
     }
     for row in 0..radius {
         let bottom_row = height - 1 - row;
-        for &(start, len, coverage) in &fill_row_runs(width, height, radius, row) {
-            // SAFETY: validated inputs above.
-            unsafe {
-                fill_box(
-                    backend,
-                    x + start as i32,
-                    y + row as i32,
-                    len,
-                    1,
-                    scaled(color, coverage),
-                )?
-            };
-        }
+        let runs = fill_row_runs(width, height, radius, row);
+        // SAFETY: validated inputs above.
+        unsafe { paint_runs(backend, (x, y), row, &runs, color)? };
         if bottom_row != row {
-            for &(start, len, coverage) in &fill_row_runs(width, height, radius, bottom_row) {
-                // SAFETY: validated inputs above.
-                unsafe {
-                    fill_box(
-                        backend,
-                        x + start as i32,
-                        y + bottom_row as i32,
-                        len,
-                        1,
-                        scaled(color, coverage),
-                    )?
-                };
-            }
+            let runs = fill_row_runs(width, height, radius, bottom_row);
+            // SAFETY: validated inputs above.
+            unsafe { paint_runs(backend, (x, y), bottom_row, &runs, color)? };
         }
     }
     Ok(())
@@ -252,10 +253,8 @@ pub(crate) unsafe fn stroke_rounded_rect(
     stroke_width: f32,
     color: Color,
 ) -> Result<(), String> {
-    let x = rect.x.round() as i32;
-    let y = rect.y.round() as i32;
-    let width = rect.width.round().max(0.0) as u32;
-    let height = rect.height.round().max(0.0) as u32;
+    let (x, y) = (rect.x.round() as i32, rect.y.round() as i32);
+    let (width, height) = (rect.width.round() as u32, rect.height.round() as u32);
     if width == 0 || height == 0 || color.a == 0 {
         return Ok(());
     }
@@ -264,19 +263,9 @@ pub(crate) unsafe fn stroke_rounded_rect(
     let radius = crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
 
     for row in 0..height {
-        for &(start, len, coverage) in &stroke_row_runs(width, height, radius, thickness, row) {
-            // SAFETY: validated inputs above.
-            unsafe {
-                fill_box(
-                    backend,
-                    x + start as i32,
-                    y + row as i32,
-                    len,
-                    1,
-                    scaled(color, coverage),
-                )?
-            };
-        }
+        let runs = stroke_row_runs(width, height, radius, thickness, row);
+        // SAFETY: validated inputs above.
+        unsafe { paint_runs(backend, (x, y), row, &runs, color)? };
     }
     Ok(())
 }
@@ -326,7 +315,8 @@ mod tests {
 
     #[test]
     fn corners_are_symmetric_across_quadrants() {
-        for runs in all_runs(22, 22, 9).iter().take(9) {
+        let rows = all_runs(22, 22, 9);
+        for runs in rows.iter().take(9) {
             // Left/right mirror: each run has a counterpart at the mirrored x.
             for &(start, len, coverage) in runs {
                 assert!(
@@ -335,7 +325,6 @@ mod tests {
                 );
             }
         }
-        let rows = all_runs(22, 22, 9);
         for row in 0..11 {
             assert_eq!(rows[row], rows[21 - row], "top/bottom mirror at row {row}");
         }
