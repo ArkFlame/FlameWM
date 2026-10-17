@@ -676,8 +676,8 @@ fn tick_host(
             Command::Open(request) => {
                 // Live menu settings: re-read the current settings on every open (no timers).
                 refresh_settings_for_open(state);
-                let snapshot = state.borrow().snapshot.clone();
                 let mut guard = state.borrow_mut();
+                let guard = &mut *guard;
                 // One helper popup at a time: close the current one first,
                 // timing the real close turn for the slow-open line.
                 let close_start = std::time::Instant::now();
@@ -686,7 +686,7 @@ fn tick_host(
                 if let Err(error) = open_request(
                     runtime,
                     &mut guard.surfaces,
-                    &snapshot,
+                    &guard.snapshot,
                     &request,
                     close_elapsed,
                 ) {
