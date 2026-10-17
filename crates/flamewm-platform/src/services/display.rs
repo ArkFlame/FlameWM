@@ -384,6 +384,23 @@ mod tests {
     use flamewm_api::display::{DisplayMode, OutputSnapshot};
     use flamewm_api::geometry::{Rect, Size};
 
+    fn mode(id: u64, width: i32, height: i32, preferred: bool) -> DisplayMode {
+        DisplayMode {
+            id: ModeId(id),
+            resolution: Size { width, height },
+            refresh_millihz: 60_000,
+            preferred,
+        }
+    }
+
+    fn unavailable(message: &str) -> FlameError {
+        FlameError::new(ErrorCode::Unavailable, message)
+    }
+
+    fn pending_of(service: &DisplayService) -> PendingModeChange {
+        service.cached().and_then(|s| s.pending.clone()).expect("pending")
+    }
+
     struct TwoModePort {
         mode: ModeId,
         generation: u64,
@@ -414,26 +431,7 @@ mod tests {
                     primary: true,
                     geometry: Rect::new(0, 0, 1920, 1080),
                     current_mode: self.mode,
-                    modes: vec![
-                        DisplayMode {
-                            id: ModeId(1),
-                            resolution: Size {
-                                width: 1920,
-                                height: 1080,
-                            },
-                            refresh_millihz: 60_000,
-                            preferred: true,
-                        },
-                        DisplayMode {
-                            id: ModeId(2),
-                            resolution: Size {
-                                width: 1280,
-                                height: 720,
-                            },
-                            refresh_millihz: 60_000,
-                            preferred: false,
-                        },
-                    ],
+                    modes: vec![mode(1, 1920, 1080, true), mode(2, 1280, 720, false)],
                     shell_scale_percent: 100,
                 }],
                 pending: None,
@@ -442,10 +440,7 @@ mod tests {
 
         fn apply_mode(&mut self, _output: &OutputId, mode: ModeId) -> FlameResult<TransactionId> {
             if self.fail_apply {
-                return Err(FlameError::new(
-                    ErrorCode::Unavailable,
-                    "fake apply failure",
-                ));
+                return Err(unavailable("fake apply failure"));
             }
             self.mode = mode;
             self.generation += 1;
@@ -458,10 +453,7 @@ mod tests {
 
         fn revert_mode(&mut self, _transaction: TransactionId) -> FlameResult<()> {
             if self.fail_revert {
-                return Err(FlameError::new(
-                    ErrorCode::Unavailable,
-                    "fake revert failure",
-                ));
+                return Err(unavailable("fake revert failure"));
             }
             self.mode = ModeId(1);
             self.generation += 1;
@@ -490,10 +482,7 @@ mod tests {
             .keep(&mut port, transaction, 100)
             .expect("keep mode");
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert_eq!(
-            service.cached().map(|s| s.outputs[0].current_mode),
-            Some(ModeId(2))
-        );
+        assert_eq!(service.cached().map(|s| s.outputs[0].current_mode), Some(ModeId(2)));
     }
 
     #[test]
@@ -505,10 +494,7 @@ mod tests {
         assert!(service.tick(&mut port, 15_100).expect("deadline tick"));
         assert!(!service.tick(&mut port, 15_101).expect("subsequent tick"));
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert_eq!(
-            service.cached().map(|s| s.outputs[0].current_mode),
-            Some(ModeId(1))
-        );
+        assert_eq!(service.cached().map(|s| s.outputs[0].current_mode), Some(ModeId(1)));
     }
 
     #[test]
@@ -618,10 +604,7 @@ mod tests {
     impl DisplayPort for TwoOutputPort {
         fn display_snapshot(&self) -> FlameResult<DisplaySnapshot> {
             if self.fail_snapshot {
-                return Err(FlameError::new(
-                    ErrorCode::Unavailable,
-                    "fake snapshot read failed",
-                ));
+                return Err(unavailable("fake snapshot read failed"));
             }
             Ok(DisplaySnapshot {
                 generation: self.generation,
@@ -641,15 +624,7 @@ mod tests {
                         modes: output
                             .modes
                             .iter()
-                            .map(|id| DisplayMode {
-                                id: *id,
-                                resolution: Size {
-                                    width: 1920,
-                                    height: 1080,
-                                },
-                                refresh_millihz: 60_000,
-                                preferred: false,
-                            })
+                            .map(|id| mode(id.0, 1920, 1080, false))
                             .collect(),
                         shell_scale_percent: 100,
                     })
@@ -699,10 +674,7 @@ mod tests {
         fn revert_mode(&mut self, transaction: TransactionId) -> FlameResult<()> {
             self.reverted.push(transaction);
             if self.fail_revert {
-                return Err(FlameError::new(
-                    ErrorCode::Unavailable,
-                    "fake revert refused",
-                ));
+                return Err(unavailable("fake revert refused"));
             }
             let (pending, output, previous) = self
                 .pending
@@ -734,13 +706,7 @@ mod tests {
         now_ms: u64,
     ) -> FlameResult<TransactionId> {
         let generation = service.refresh(port)?.generation;
-        service.begin_mode(
-            port,
-            &OutputId::new(output),
-            ModeId(mode),
-            generation,
-            now_ms,
-        )
+        service.begin_mode(port, &OutputId::new(output), ModeId(mode), generation, now_ms)
     }
 
     #[test]
@@ -767,10 +733,7 @@ mod tests {
                 port.applied.last(),
                 Some(&(OutputId::new("DP-B"), ModeId(mode)))
             );
-            let pending = service
-                .cached()
-                .and_then(|s| s.pending.clone())
-                .expect("pending");
+            let pending = pending_of(&service);
             assert_eq!(pending.transaction, transaction);
             assert_eq!(pending.output, OutputId::new("DP-B"));
             assert_eq!(pending.mode, ModeId(mode));
@@ -841,12 +804,7 @@ mod tests {
             "one rollback at late Keep"
         );
         assert_eq!(port.output("DP-B").current, ModeId(101));
-        assert_eq!(
-            service
-                .cached()
-                .and_then(|snapshot| snapshot.pending.as_ref()),
-            None
-        );
+        assert_eq!(service.cached().and_then(|snapshot| snapshot.pending.as_ref()), None);
         assert!(
             !service
                 .tick(&mut port, 15_002)
@@ -1015,10 +973,7 @@ mod tests {
             .begin_mode(&mut port, &output.id, mode, snapshot.generation, 0)
             .expect("begin on output index 4");
         assert_eq!(port.applied, vec![(OutputId::new("O4"), ModeId(412))]);
-        let pending = service
-            .cached()
-            .and_then(|s| s.pending.clone())
-            .expect("pending");
+        let pending = pending_of(&service);
         assert_eq!(
             (pending.transaction, pending.output, pending.mode),
             (transaction, OutputId::new("O4"), ModeId(412))
@@ -1139,10 +1094,7 @@ mod tests {
         let first = begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
         let second = begin_on(&mut port, &mut service, "DP-B", 103, 100).expect("B to C");
         assert_ne!(first, second);
-        let pending = service
-            .cached()
-            .and_then(|s| s.pending.clone())
-            .expect("pending");
+        let pending = pending_of(&service);
         assert_eq!(pending.transaction, second);
         assert_eq!(pending.mode, ModeId(103));
         assert_eq!(
@@ -1173,10 +1125,7 @@ mod tests {
         let mut service = DisplayService::default();
         begin_on(&mut port, &mut service, "DP-B", 102, 0).expect("A to B");
         begin_on(&mut port, &mut service, "DP-B", 103, 10_000).expect("B to C");
-        let pending = service
-            .cached()
-            .and_then(|s| s.pending.clone())
-            .expect("pending");
+        let pending = pending_of(&service);
         assert_eq!(pending.deadline_ms, 25_000);
         assert!(
             !service
@@ -1222,10 +1171,7 @@ mod tests {
         let latest = begin_on(&mut port, &mut service, "DP-A", 2, 0).expect("DP-A");
         assert_eq!(port.output("DP-B").current, ModeId(101));
         assert_eq!(port.output("DP-A").current, ModeId(2));
-        let pending = service
-            .cached()
-            .and_then(|s| s.pending.clone())
-            .expect("pending");
+        let pending = pending_of(&service);
         assert_eq!(pending.output, OutputId::new("DP-A"));
         service.revert(&mut port, latest).expect("cancel");
         assert_eq!(port.output("DP-A").current, ModeId(1));
