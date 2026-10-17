@@ -462,16 +462,14 @@ mod tests {
     #[test]
     fn duplicate_hotkey_is_rejected_inline_without_a_service_write() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
                 ("WorkspaceLeft", "Ctrl+Super+Left"),
                 ("ToggleStartMenu", "Super"),
-            ]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::CaptureLease(12)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
+            ]))),
+            Ok(ControlResponse::CaptureLease(12)),
+            Ok(ControlResponse::Unit),
+        ]);
         let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -506,23 +504,17 @@ mod tests {
     #[test]
     fn backspace_restores_the_default_hotkey_and_ends_capture() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
                 "ToggleStartMenu",
                 "Super",
-            )]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::CaptureLease(7)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+            )]))),
+            Ok(ControlResponse::CaptureLease(7)),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))),
+            Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
+        ]);
         let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -564,13 +556,11 @@ mod tests {
     #[test]
     fn hotkey_reset_button_restores_default_through_the_service() {
         let (requests, mut transport) = recording_transport();
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+        transport.responses.extend([
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))),
+            Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
+        ]);
         let mut application = SettingsApplication::new(transport);
         application
             .handle_action(
@@ -587,16 +577,14 @@ mod tests {
     #[test]
     fn hotkey_row_projects_its_binding_and_capture_prompt() {
         let mut transport = RecordingTransport::default();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
                 "WorkspaceUp",
                 "Ctrl+Super+Up",
-            )]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::CaptureLease(13)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
+            )]))),
+            Ok(ControlResponse::CaptureLease(13)),
+            Ok(ControlResponse::Unit),
+        ]);
         let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -717,23 +705,17 @@ mod tests {
     #[test]
     fn bare_super_release_commits_super_to_the_start_row() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::CaptureLease(20)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))),
+            Ok(ControlResponse::CaptureLease(20)),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
                 "ToggleStartMenu",
                 "Super",
-            )]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+            )]))),
+            Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
+        ]);
         let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -761,13 +743,11 @@ mod tests {
     #[test]
     fn super_chord_release_does_not_commit_and_keeps_capture_armed() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::CaptureLease(21)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))),
+            Ok(ControlResponse::CaptureLease(21)),
+            Ok(ControlResponse::Unit),
+        ]);
         let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -2101,15 +2081,11 @@ mod tests {
             "accent".to_owned(),
             SettingValue::Text("#1ABC9C".to_owned()),
         );
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(initial)));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(blue)));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(teal)));
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(initial)),
+            Ok(ControlResponse::Settings(blue)),
+            Ok(ControlResponse::Settings(teal)),
+        ]);
         let mut application = settings_application(transport);
 
         let mut press = release("settings.accent.blue");
@@ -2175,26 +2151,20 @@ mod tests {
     #[test]
     fn hotkey_controller_seam_preserves_escape_as_clear_binding() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
+        transport.responses.extend([
+            Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
                 "ToggleStartMenu",
                 "Super",
-            )]))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::CaptureLease(7)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+            )]))),
+            Ok(ControlResponse::CaptureLease(7)),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 2,
                 bindings: BTreeMap::new(),
-            })));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
+            })),
+            Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
+        ]);
         let mut client = SettingsClient::new(transport);
         client
             .refresh_shortcuts()
