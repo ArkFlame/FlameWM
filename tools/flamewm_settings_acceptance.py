@@ -538,28 +538,32 @@ def next_desktop_opacity(current: int) -> int:
     return 21 if current != 21 else 20
 
 
+def grade_contract(observations: dict[str, bool | None], required: tuple[str, ...], failure: str,
+                   unverified: str, passed: str) -> tuple[str, str]:
+    """Any measured False fails, any unmeasured subcontract is NOT_RUN, and only all-True passes."""
+    failed = [key for key in required if observations.get(key) is False]
+    if failed:
+        return STATUS_FAIL, failure + ", ".join(failed)
+    missing = [key for key in required if observations.get(key) is not True]
+    if missing:
+        return STATUS_NOT_RUN, unverified + ", ".join(missing)
+    return STATUS_PASS, passed
+
+
 def assess_ss12(observations: dict[str, bool | None]) -> tuple[str, str]:
     """Grade the complete SS12 contract; unmeasured subcontracts cannot pass."""
     required = ("lease_begin_end_same_owner", "binding_stored", "action_effect",
                 "grab_restored_start_behavior", "owner_loss_restored", "clear_reset_persisted")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured hotkey contract failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial capture evidence; unverified contract cases: " + ", ".join(missing)
-    return STATUS_PASS, "capture lease, stored binding, action, grab restoration, owner loss and persistence verified"
+    return grade_contract(observations, required, "measured hotkey contract failure: ",
+                          "partial capture evidence; unverified contract cases: ",
+                          "capture lease, stored binding, action, grab restoration, owner loss and persistence verified")
 
 
 def assess_ss03(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("blue_snapshot", "teal_snapshot", "selected_visuals", "reset_persisted_after_restart")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured accent contract failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial accent evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "palette choices, visible selection and persisted value verified"
+    return grade_contract(observations, required, "measured accent contract failure: ",
+                          "partial accent evidence; unverified: ",
+                          "palette choices, visible selection and persisted value verified")
 
 
 def ss05_wallpaper_matches_fixture(value: str | None, fixture: Path, run: Path) -> bool:
@@ -581,26 +585,18 @@ def ss05_wallpaper_matches_fixture(value: str | None, fixture: Path, run: Path) 
 def assess_ss05(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("success_applied_without_input", "cancel_preserved_without_error",
                 "error_preserved_and_visible")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured wallpaper chooser failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "unverified wallpaper chooser cases: " + ", ".join(missing)
-    return STATUS_PASS, "success, cancel and error effects verified without follow-up input"
+    return grade_contract(observations, required, "measured wallpaper chooser failure: ",
+                          "unverified wallpaper chooser cases: ",
+                          "success, cancel and error effects verified without follow-up input")
 
 
 def assess_ss15(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("single_output_boundary_observed", "disabled_output_prev_inert",
                 "disabled_output_next_inert", "disabled_mode_ends_inert",
                 "settings_survived_keyboard_escape")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured traversal/disabled-state failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial traversal evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "disabled pager endpoints were inert and keyboard Escape left Settings responsive"
+    return grade_contract(observations, required, "measured traversal/disabled-state failure: ",
+                          "partial traversal evidence; unverified: ",
+                          "disabled pager endpoints were inert and keyboard Escape left Settings responsive")
 
 
 def ss15_escape_state_ok(process_alive: bool, geometry: dict | None, input_exits: tuple[int, int, int],
@@ -614,13 +610,9 @@ def ss15_escape_state_ok(process_alive: bool, geometry: dict | None, input_exits
 def assess_ss19(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("repeated_pages_opened_and_closed", "idle_cpu_bounded", "fd_growth_bounded",
                 "memory_growth_bounded", "external_update_responsive", "owned_processes_clean")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured stability failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial stability evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "bounded idle use, repeated page lifecycle, external update and owned-process cleanup verified"
+    return grade_contract(observations, required, "measured stability failure: ",
+                          "partial stability evidence; unverified: ",
+                          "bounded idle use, repeated page lifecycle, external update and owned-process cleanup verified")
 
 
 def settings_relative_point(ctx: Ctx, geometry: dict, point: tuple[int, int]) -> str:
@@ -720,10 +712,13 @@ def inspect_accent_after_click(ctx: Ctx, run: Path, name: str, geometry: dict,
     }
 
 
+def gdbus_argv(method: str, *args: str) -> list[str]:
+    return ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
+            "--object-path", "/com/arkflame/FlameWM1", "--method", "com.arkflame.FlameWM1." + method, *args]
+
+
 def dbus_get_snapshot(ctx: Ctx, interface: str) -> tuple[str | None, str]:
-    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
-            "--object-path", "/com/arkflame/FlameWM1", "--method",
-            f"com.arkflame.FlameWM1.{interface}.GetSnapshot"]
+    argv = gdbus_argv(f"{interface}.GetSnapshot")
     try:
         result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
                                 timeout=10, check=False)
@@ -754,8 +749,8 @@ def parse_proc_metrics(pid: int) -> dict | None:
         return None
 
 
-def image_region_digest(path: Path, rect: tuple[int, int, int, int]) -> str | None:
-    """Hash a measured status-label crop so pager progress is not inferred from a click exit."""
+def image_region_crop(path: Path, rect: tuple[int, int, int, int]):
+    """RGB crop of rect, or None when Pillow is missing, the file is unreadable, or rect is out of bounds."""
     if Image is None:
         return None
     try:
@@ -763,25 +758,24 @@ def image_region_digest(path: Path, rect: tuple[int, int, int, int]) -> str | No
             x, y, width, height = rect
             if x < 0 or y < 0 or x + width > shot.width or y + height > shot.height:
                 return None
-            return hashlib.sha256(shot.convert("RGB").crop((x, y, x + width, y + height)).tobytes()).hexdigest()
+            return shot.convert("RGB").crop((x, y, x + width, y + height))
     except OSError:
         return None
+
+
+def image_region_digest(path: Path, rect: tuple[int, int, int, int]) -> str | None:
+    """Hash a measured status-label crop so pager progress is not inferred from a click exit."""
+    crop = image_region_crop(path, rect)
+    return None if crop is None else hashlib.sha256(crop.tobytes()).hexdigest()
 
 
 def image_region_color_count(path: Path, rect: tuple[int, int, int, int],
                              color: tuple[int, int, int]) -> int | None:
-    if Image is None:
+    crop = image_region_crop(path, rect)
+    if crop is None:
         return None
-    try:
-        with Image.open(path) as shot:
-            x, y, width, height = rect
-            if x < 0 or y < 0 or x + width > shot.width or y + height > shot.height:
-                return None
-            pixels = shot.convert("RGB").crop((x, y, x + width, y + height)).getdata()
-            return sum(1 for pixel in pixels if max(
-                abs(actual - expected) for actual, expected in zip(pixel, color)) <= 12)
-    except OSError:
-        return None
+    return sum(1 for pixel in crop.getdata() if max(
+        abs(actual - expected) for actual, expected in zip(pixel, color)) <= 12)
 
 
 def capture_lease_calls(log: str) -> list[tuple[str, str | None]]:
@@ -800,109 +794,81 @@ def assess_ss14(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("settings_accent_source_revision", "settings_signals_observed",
                 "settings_visible_without_input", "panels_external_change",
                 "shortcuts_external_change", "display_rollback_signal", "signal_loss_recovery")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured external-update failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial external-update evidence; unverified paths: " + ", ".join(missing)
-    return STATUS_PASS, "settings, panels, shortcuts, display rollback and signal-loss paths verified"
+    return grade_contract(observations, required, "measured external-update failure: ",
+                          "partial external-update evidence; unverified paths: ",
+                          "settings, panels, shortcuts, display rollback and signal-loss paths verified")
 
 
 def assess_ss04(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("supported_theme_snapshots", "unknown_theme_snapshot", "real_icon_fallback_consumer",
                 "theme_persistence_after_restart")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured icon-theme failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial icon-theme evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "theme cycling, fallback consumer and restart persistence verified"
+    return grade_contract(observations, required, "measured icon-theme failure: ",
+                          "partial icon-theme evidence; unverified: ",
+                          "theme cycling, fallback consumer and restart persistence verified")
 
 
 def assess_ss06(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("desktop_values_snapshot", "settings_persisted_after_wm_restart", "desktop_visual_consumer",
                 "snap_preview_consumer")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured Desktop settings failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial Desktop settings evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "Desktop settings, persistence and visual consumer verified"
+    return grade_contract(observations, required, "measured Desktop settings failure: ",
+                          "partial Desktop settings evidence; unverified: ",
+                          "Desktop settings, persistence and visual consumer verified")
 
 
 def assess_ss07(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("settings_snapshot_values", "panel_edge_and_size_snapshot", "taskbar_visual_consumer",
                 "settings_persistence_after_restart")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured Taskbar settings failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial Taskbar evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "Taskbar values, panel geometry, visual consumer and persistence verified"
+    return grade_contract(observations, required, "measured Taskbar settings failure: ",
+                          "partial Taskbar evidence; unverified: ",
+                          "Taskbar values, panel geometry, visual consumer and persistence verified")
 
 
 def assess_ss10(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("scale_changed_snapshot", "mode_list_unchanged", "scale_persisted_after_restart")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured display scale failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial display scale evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "Displays click set the output scale to 125 with the mode list unchanged and the value persisted after an owned WM restart"
+    return grade_contract(observations, required, "measured display scale failure: ",
+                          "partial display scale evidence; unverified: ",
+                          "Displays click set the output scale to 125 with the mode list unchanged and the value persisted after an owned WM restart")
 
 
 def assess_ss11(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("family_changed_snapshot", "size_changed_snapshot", "fonts_persisted_after_restart")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured font settings failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial font evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "Fonts family and size clicks changed the authoritative snapshot and both persisted after an owned WM restart"
+    return grade_contract(observations, required, "measured font settings failure: ",
+                          "partial font evidence; unverified: ",
+                          "Fonts family and size clicks changed the authoritative snapshot and both persisted after an owned WM restart")
 
 
 def assess_ss13(observations: dict[str, bool | None]) -> tuple[str, str]:
     required = ("about_render_760x500", "about_render_820x540", "about_render_960x640",
                 "version_matches_flamewm_version", "version_live_ocr_matches")
-    failed = [key for key in required if observations.get(key) is False]
-    if failed:
-        return STATUS_FAIL, "measured About page failure: " + ", ".join(failed)
-    missing = [key for key in required if observations.get(key) is not True]
-    if missing:
-        return STATUS_NOT_RUN, "partial About page evidence; unverified: " + ", ".join(missing)
-    return STATUS_PASS, "About rendered non-blank at 760x500, 820x540 and 960x640, the live about-version text was OCR-read as 'Version FLAMEWM_VERSION' at all three sizes (negative controls rejected) and the source test about_version_text_is_exact_flamewm_version passed"
+    return grade_contract(observations, required, "measured About page failure: ",
+                          "partial About page evidence; unverified: ",
+                          "About rendered non-blank at 760x500, 820x540 and 960x640, the live about-version text was OCR-read as 'Version FLAMEWM_VERSION' at all three sizes (negative controls rejected) and the source test about_version_text_is_exact_flamewm_version passed")
+
+
+def gvariant_field(output: str, key: str, value: str, convert) -> object | None:
+    """Read one `'key': <value>` field from gdbus's printed a{sv} snapshot without eval."""
+    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*" + value + r"\s*>", output)
+    return convert(match.group(1)) if match else None
 
 
 def gvariant_field_string(output: str, key: str) -> str | None:
-    """Read one string field from gdbus's printed a{sv} snapshot without eval."""
-    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*['\"]([^'\"]*)['\"]\s*>", output)
-    return match.group(1) if match else None
+    return gvariant_field(output, key, r"['\"]([^'\"]*)['\"]", str)
 
 
 def gvariant_field_u64(output: str, key: str) -> int | None:
-    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*(?:uint64\s+)?(\d+)\s*>", output)
-    return int(match.group(1)) if match else None
+    return gvariant_field(output, key, r"(?:uint64\s+)?(\d+)", int)
 
 
 def gvariant_field_uint(output: str, key: str) -> int | None:
-    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*(?:u?int\d+\s+)?(\d+)\s*>", output)
-    return int(match.group(1)) if match else None
+    return gvariant_field(output, key, r"(?:u?int\d+\s+)?(\d+)", int)
 
 
 def gvariant_field_int(output: str, key: str) -> int | None:
-    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*(?:u?int\d+\s+)?(-?\d+)\s*>", output)
-    return int(match.group(1)) if match else None
+    return gvariant_field(output, key, r"(?:u?int\d+\s+)?(-?\d+)", int)
 
 
 def gvariant_field_bool(output: str, key: str) -> bool | None:
-    match = re.search(r"['\"]" + re.escape(key) + r"['\"]\s*:\s*<\s*(true|false)\s*>", output)
-    return match.group(1) == "true" if match else None
+    return gvariant_field(output, key, r"(true|false)", lambda text: text == "true")
 
 
 def settings_signal_observations(log: str) -> dict[str, bool]:
@@ -1067,9 +1033,7 @@ def dbus_apply_accent(ctx: Ctx, revision: int, accent: str) -> tuple[str | None,
 
 def dbus_apply_settings(ctx: Ctx, revision: int, changes: dict[str, str]) -> tuple[str | None, str, int | None]:
     change = "{" + ", ".join("'" + key + "': <" + value + ">" for key, value in changes.items()) + "}"
-    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
-            "--object-path", "/com/arkflame/FlameWM1", "--method",
-            "com.arkflame.FlameWM1.Settings.Apply", f"uint64 {revision}", change]
+    argv = gdbus_argv("Settings.Apply", f"uint64 {revision}", change)
     try:
         result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True,
                                 timeout=10, check=False)
@@ -1927,8 +1891,7 @@ def run_ss19(ctx: Ctx, args: argparse.Namespace, external_update: bool | None) -
 
 
 def gdbus_call(ctx: Ctx, interface_method: str, args_list: list[str], details: dict) -> tuple[int, str]:
-    argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1", "--object-path", "/com/arkflame/FlameWM1",
-            "--method", "com.arkflame.FlameWM1." + interface_method, *args_list]
+    argv = gdbus_argv(interface_method, *args_list)
     result = subprocess.run(argv, env=ctx.app_env, capture_output=True, text=True, timeout=10, check=False)
     details["commands"].append(shell(argv))
     return result.returncode, (result.stdout if result.returncode == 0 else result.stderr).strip()
@@ -3213,10 +3176,8 @@ def run_ss07(ctx: Ctx, args: argparse.Namespace) -> dict:
             observations["panel_edge_and_size_snapshot"] = False
         else:
             next_edge = "top" if current_panel["edge"] != "top" else "bottom"
-            panel_set_argv = ["gdbus", "call", "--session", "--dest", "com.arkflame.FlameWM1",
-                             "--object-path", "/com/arkflame/FlameWM1", "--method",
-                             "com.arkflame.FlameWM1.Panels.SetEdge", "'" + output_key + "'",
-                             "'" + next_edge + "'", f"uint64 {panels_current['revision']}"]
+            panel_set_argv = gdbus_argv("Panels.SetEdge", "'" + output_key + "'", "'" + next_edge + "'",
+                                        f"uint64 {panels_current['revision']}")
             result = subprocess.run(panel_set_argv, env=ctx.app_env, capture_output=True, text=True,
                                     timeout=10, check=False)
             details["commands"].append(shell(panel_set_argv))
