@@ -20,15 +20,16 @@ use std::mem::MaybeUninit;
 use std::os::raw::c_ulong;
 
 use crate::backdrop::capture_drawable_rect;
+use crate::external_drawable::match_argb32_visual;
 use crate::lamp::{self, LampBand, PanelEdge};
 use crate::warp::{self, WarpRect, WarpSource};
 use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb_owned, upload_argb_pixmap};
 use crate::xlib::{
     CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
-    Pixmap, TRANSPARENT_CLEAR_PIXEL, TRUE_COLOR_CLASS, Window, XCreateColormap, XCreateWindow,
+    Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreateWindow,
     XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight, XDisplayWidth,
-    XCreatePixmap, XFlush, XFreeColormap, XFreePixmap, XMapWindow, XMatchVisualInfo, XRaiseWindow, XRootWindow,
-    XSetWindowAttributes, XSync, XVisualInfo, ALLOC_NONE, XInternAtom,
+    XCreatePixmap, XFlush, XFreeColormap, XFreePixmap, XMapWindow, XRaiseWindow, XRootWindow,
+    XSetWindowAttributes, XSync, ALLOC_NONE, XInternAtom,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
 
@@ -168,19 +169,8 @@ pub fn fade_frame(t: f64) -> (f64, f64) {
 /// True when the display has a 32-bit TrueColor visual. A null display has none.
 #[must_use]
 pub fn argb_visual_available(display: *mut Display) -> bool {
-    !display.is_null() && match_argb_visual(display).is_some()
-}
-
-/// The 32-bit TrueColor visual of the default screen, if the display has one.
-fn match_argb_visual(display: *mut Display) -> Option<XVisualInfo> {
-    let mut info = MaybeUninit::<XVisualInfo>::zeroed();
-    // SAFETY: the display is live per the caller contract; `info` is writable and is read
-    // only when the match succeeds.
-    let found = unsafe {
-        XMatchVisualInfo(display, XDefaultScreen(display), ARGB_DEPTH, TRUE_COLOR_CLASS, info.as_mut_ptr())
-    };
-    // SAFETY: a nonzero return means XMatchVisualInfo initialized `info`.
-    (found != 0).then(|| unsafe { info.assume_init() })
+    // SAFETY: a non-null display is live per the caller contract.
+    !display.is_null() && match_argb32_visual(display, unsafe { XDefaultScreen(display) }).is_some()
 }
 
 /// Root snapshot pixmap and its picture, both released by the owning overlay.
@@ -725,10 +715,10 @@ unsafe fn create_argb_window(
 ) -> Result<(Window, Colormap), String> {
     // SAFETY: live display; screen index is valid for the default screen.
     let screen = unsafe { XDefaultScreen(display) };
-    let info = match_argb_visual(display).ok_or("overlay: no 32-bit TrueColor visual")?;
+    let visual = match_argb32_visual(display, screen).ok_or("overlay: no 32-bit TrueColor visual")?;
     // SAFETY: live display; root and visual come from the same screen.
     let root = unsafe { XRootWindow(display, screen) };
-    let colormap = unsafe { XCreateColormap(display, root, info.visual, ALLOC_NONE) };
+    let colormap = unsafe { XCreateColormap(display, root, visual, ALLOC_NONE) };
     let mut attributes = MaybeUninit::<XSetWindowAttributes>::zeroed();
     // SAFETY: the zeroed struct is a valid XSetWindowAttributes; fields set below are the masked ones.
     let attributes_ptr = attributes.as_mut_ptr();
@@ -751,7 +741,7 @@ unsafe fn create_argb_window(
             0,
             ARGB_DEPTH,
             INPUT_OUTPUT_CLASS,
-            info.visual,
+            visual,
             mask,
             attributes_ptr,
         )
