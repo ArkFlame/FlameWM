@@ -27,6 +27,11 @@ pub(crate) fn title(w: &crate::WinInfo) -> (i16, i16) {
     )
 }
 
+/// Window `id` only while it is still a direct child of `parent`.
+fn child_of(canary: &crate::Canary, id: u32, parent: u32) -> Option<crate::WinInfo> {
+    canary.by_id(id).filter(|window| window.parent == parent)
+}
+
 fn left(w: &crate::WinInfo) -> (i16, i16) {
     (
         w.x.saturating_add(2),
@@ -185,18 +190,14 @@ fn x03_identity(
     canary: &crate::Canary,
     pinned: PinnedX03,
 ) -> Result<(crate::WinInfo, crate::WinInfo), X03ProbeError> {
-    let client = canary
-        .by_id(pinned.client)
-        .filter(|window| window.parent == pinned.frame)
+    let client = child_of(canary, pinned.client, pinned.frame)
         .ok_or_else(|| {
             X03ProbeError::IdentityChange(format!(
                 "client={} frame={} client_missing_or_reparented",
                 pinned.client, pinned.frame
             ))
         })?;
-    let frame = canary
-        .by_id(pinned.frame)
-        .filter(|window| window.parent == canary.root)
+    let frame = child_of(canary, pinned.frame, canary.root)
         .ok_or_else(|| {
             X03ProbeError::IdentityChange(format!(
                 "client={} frame={} frame_missing_or_reparented",
@@ -738,9 +739,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         true
     };
     settle_frame(canary, pinned.frame);
-    let Some(floating) = canary
-        .by_id(pinned.client)
-        .filter(|window| window.parent == pinned.frame)
+    let Some(floating) = child_of(canary, pinned.client, pinned.frame)
     else {
         return x03_failure(
             pinned,
@@ -748,9 +747,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             &logs,
         );
     };
-    let Some(_floating_surface) = canary
-        .by_id(pinned.frame)
-        .filter(|window| window.parent == canary.root)
+    let Some(_floating_surface) = child_of(canary, pinned.frame, canary.root)
     else {
         return x03_failure(
             pinned,
@@ -768,9 +765,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         }
     };
     settle_frame(canary, pinned.frame);
-    let Some(max_surface) = canary
-        .by_id(pinned.frame)
-        .filter(|window| window.parent == canary.root)
+    let Some(max_surface) = child_of(canary, pinned.frame, canary.root)
     else {
         return x03_failure(
             pinned,
@@ -782,9 +777,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     if let Err(error) = x03_observe(canary, pinned, "after-maximize", max_title, &mut logs) {
         return x03_failure(pinned, error, &logs);
     }
-    let selected_after = canary
-        .by_id(pinned.client)
-        .filter(|window| window.parent == pinned.frame)
+    let selected_after = child_of(canary, pinned.client, pinned.frame)
         .is_some_and(|window| prepare_native_measurement(canary, &window));
     let end = (
         max_title.0.saturating_add(64),
@@ -795,9 +788,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Err(error) => return x03_failure(pinned, error, &logs),
     };
     let restored = wait_until(500, || !maximized(canary, pinned.client));
-    let Some(after) = canary
-        .by_id(pinned.client)
-        .filter(|window| window.parent == pinned.frame)
+    let Some(after) = child_of(canary, pinned.client, pinned.frame)
     else {
         return x03_failure(
             pinned,
@@ -805,9 +796,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             &logs,
         );
     };
-    let Some(after_surface) = canary
-        .by_id(pinned.frame)
-        .filter(|window| window.parent == canary.root)
+    let Some(after_surface) = child_of(canary, pinned.frame, canary.root)
     else {
         return x03_failure(
             pinned,
@@ -934,13 +923,9 @@ fn begin_top_hold(canary: &crate::Canary, args: &[String]) -> Result<TopHoldSetu
     if !reset_floating {
         return Err(format!("id={} establish_floating=false", target.id));
     }
-    let client = canary
-        .by_id(target.id)
-        .filter(|window| window.parent == target.parent)
+    let client = child_of(canary, target.id, target.parent)
         .ok_or_else(|| format!("id={} target_gone_after_establish", target.id))?;
-    let frame = canary
-        .by_id(client.parent)
-        .filter(|window| window.parent == canary.root)
+    let frame = child_of(canary, client.parent, canary.root)
         .ok_or_else(|| format!("id={} frame_not_ready_after_establish", client.id))?;
     let selected_structure_notify = prepare_native_measurement(canary, &client);
     let initial_state = wm_state(canary, client.id);
@@ -959,13 +944,9 @@ fn begin_top_hold(canary: &crate::Canary, args: &[String]) -> Result<TopHoldSetu
         let _ = xtest_button_release(canary, start.0, start.1, 1);
         return Err(format!("id={} activation_motion_failed", client.id));
     }
-    let activated_floating = canary
-        .by_id(client.id)
-        .filter(|window| window.parent == frame.id)
+    let activated_floating = child_of(canary, client.id, frame.id)
         .zip(
-            canary
-                .by_id(frame.id)
-                .filter(|window| window.parent == canary.root),
+            child_of(canary, frame.id, canary.root),
         )
         .is_some_and(|(current_client, current_frame)| {
             !maximized(canary, client.id)
@@ -1003,16 +984,12 @@ fn observe_top_hold(canary: &crate::Canary, setup: &TopHoldSetup) -> TopHoldObse
         if xtest_motion(canary, point.0, point.1) {
             motion_count += 1;
         }
-        let Some(client) = canary
-            .by_id(setup.client.id)
-            .filter(|window| window.parent == setup.frame.id)
+        let Some(client) = child_of(canary, setup.client.id, setup.frame.id)
         else {
             identity_stable = false;
             continue;
         };
-        let Some(frame) = canary
-            .by_id(setup.frame.id)
-            .filter(|window| window.parent == canary.root)
+        let Some(frame) = child_of(canary, setup.frame.id, canary.root)
         else {
             identity_stable = false;
             continue;
@@ -1029,12 +1006,8 @@ fn observe_top_hold(canary: &crate::Canary, setup: &TopHoldSetup) -> TopHoldObse
     let capture_route = native_route.is_some_and(|window| {
         x03_interaction_capture_route(canary, window, canary.root_geometry())
     });
-    let final_client = canary
-        .by_id(setup.client.id)
-        .filter(|window| window.parent == setup.frame.id);
-    let final_frame = canary
-        .by_id(setup.frame.id)
-        .filter(|window| window.parent == canary.root);
+    let final_client = child_of(canary, setup.client.id, setup.frame.id);
+    let final_frame = child_of(canary, setup.frame.id, canary.root);
     let final_state = wm_state(canary, setup.client.id);
     let native_configures = native_configures(canary, &setup.client, 250);
     TopHoldObservation {
@@ -1161,9 +1134,7 @@ fn run_x05(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let committed_maximize =
         released_once && wait_until(500, || maximized_both(canary, setup.client.id));
     let after_client = canary.by_id(setup.client.id);
-    let after_frame = canary
-        .by_id(setup.frame.id)
-        .filter(|window| window.parent == canary.root);
+    let after_frame = child_of(canary, setup.frame.id, canary.root);
     let after_state = wm_state(canary, setup.client.id);
     let work_area_geometry = setup.work_area.is_some_and(|(x, y, width, height)| {
         after_frame.as_ref().is_some_and(|frame| {
@@ -1483,9 +1454,7 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         let client_id = target.id;
         let frame_id = target.parent;
         let reset_floating = establish_known_floating(canary, &target, work_area);
-        let Some(before) = canary
-            .by_id(client_id)
-            .filter(|window| window.parent == frame_id)
+        let Some(before) = child_of(canary, client_id, frame_id)
         else {
             all_pass = false;
             details.push(format!(
@@ -1574,12 +1543,8 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                     &wm_state(canary, client_id),
                 )
         });
-        let final_client = canary
-            .by_id(client_id)
-            .filter(|window| window.parent == frame_id);
-        let final_frame = canary
-            .by_id(frame_id)
-            .filter(|window| window.parent == canary.root);
+        let final_client = child_of(canary, client_id, frame_id);
+        let final_frame = child_of(canary, frame_id, canary.root);
         let geometry_ok = final_frame
             .as_ref()
             .is_some_and(|frame| frame_matches_geometry(frame, expected_geometry));
@@ -1685,9 +1650,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let client_id = target.id;
     let frame_id = target.parent;
     let reset_floating = establish_known_floating(canary, &target, work_area);
-    let Some(initial_client) = canary
-        .by_id(client_id)
-        .filter(|window| window.parent == frame_id)
+    let Some(initial_client) = child_of(canary, client_id, frame_id)
     else {
         return (
             false,
@@ -1717,9 +1680,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             frame_matches_probe_target(&frame, ProbeSnapTarget::LeftHalf, work_area)
         })
     });
-    let Some(snapped_client) = canary
-        .by_id(client_id)
-        .filter(|window| window.parent == frame_id)
+    let Some(snapped_client) = child_of(canary, client_id, frame_id)
     else {
         return (
             false,
@@ -1767,9 +1728,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             jittered = false;
             break;
         }
-        let stable = canary
-            .by_id(client_id)
-            .filter(|client| client.parent == frame_id)
+        let stable = child_of(canary, client_id, frame_id)
             .and_then(|client| input_surface(canary, &client))
             .is_some_and(|frame| {
                 frame.x == snapped_frame.x
@@ -1796,7 +1755,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let activated_motion = xtest_motion(canary, away.0, away.1);
     let activated = activated_motion
         && wait_until(750, || {
-            let Some(client) = canary.by_id(client_id).filter(|w| w.parent == frame_id) else {
+            let Some(client) = child_of(canary, client_id, frame_id) else {
                 return false;
             };
             let Some(frame) = input_surface(canary, &client) else {
@@ -1811,9 +1770,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                 && !frame_matches_any_probe_snap(&frame, work_area)
         });
     let activation_native = native_configures(canary, &snapped_client, 250);
-    let Some(activated_frame) = canary
-        .by_id(client_id)
-        .filter(|client| client.parent == frame_id)
+    let Some(activated_frame) = child_of(canary, client_id, frame_id)
         .and_then(|client| input_surface(canary, &client))
     else {
         let _ = xtest_button_release(canary, away.0, away.1, 1);
@@ -1829,9 +1786,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let later_motion = xtest_motion(canary, later.0, later.1);
     let later_position_only = later_motion
         && wait_until(500, || {
-            canary
-                .by_id(client_id)
-                .filter(|client| client.parent == frame_id)
+            child_of(canary, client_id, frame_id)
                 .and_then(|client| input_surface(canary, &client))
                 .is_some_and(|frame| {
                     frame.width == activated_frame.width
@@ -1842,9 +1797,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                 })
         });
     let later_native = native_configures(canary, &snapped_client, 250);
-    let before_release = canary
-        .by_id(client_id)
-        .filter(|client| client.parent == frame_id)
+    let before_release = child_of(canary, client_id, frame_id)
         .and_then(|client| input_surface(canary, &client))
         .is_some_and(|frame| {
             !maximized(canary, client_id)
@@ -1853,15 +1806,11 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         });
     let released_once = xtest_button_release(canary, later.0, later.1, 1);
     let final_ready = wait_until(500, || {
-        canary
-            .by_id(client_id)
-            .filter(|client| client.parent == frame_id)
+        child_of(canary, client_id, frame_id)
             .and_then(|client| input_surface(canary, &client))
             .is_some_and(|_frame| !maximized(canary, client_id))
     });
-    let final_client = canary
-        .by_id(client_id)
-        .filter(|client| client.parent == frame_id);
+    let final_client = child_of(canary, client_id, frame_id);
     let final_frame = final_client
         .as_ref()
         .and_then(|client| input_surface(canary, client));
