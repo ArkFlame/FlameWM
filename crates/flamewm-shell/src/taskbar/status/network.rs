@@ -174,12 +174,6 @@ pub fn active_page(_snapshot: &NetworkSnapshot) -> usize {
     0
 }
 
-/// `(slot, AP-path)` pairs for the active page in model order.
-#[must_use]
-pub fn paged_paths(snapshot: &NetworkSnapshot) -> Vec<(usize, String)> {
-    paged_paths_for_page(snapshot, active_page(snapshot))
-}
-
 #[must_use]
 pub fn paged_paths_for_page(snapshot: &NetworkSnapshot, page: usize) -> Vec<(usize, String)> {
     let available = available_access_points(snapshot).count();
