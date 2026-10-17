@@ -227,33 +227,21 @@ fn blur_stage(
     radius: f32,
 ) -> usize {
     let sigma = radius / 2.0;
-    if radius <= DOWNSCALE_RADIUS {
+    let (factor, grid, dw, dh, sigma) = if radius <= DOWNSCALE_RADIUS {
         fit_f32(&mut scratch.work, w * h * 4);
         for (i, dst) in scratch.work.chunks_exact_mut(4).enumerate() {
             premultiply_pixel(&sample(i % w, i / w), dst);
         }
-        blur_boxes(
-            &mut scratch.work,
-            &mut scratch.line,
-            &mut scratch.band,
-            w,
-            h,
-            sigma,
-        );
-        return 1;
-    }
-    let (dw, dh) = (w.div_ceil(DOWNSCALE_FACTOR), h.div_ceil(DOWNSCALE_FACTOR));
-    fit_f32(&mut scratch.down, dw * dh * 4);
-    box_downsample_premultiplied(&sample, w, h, &mut scratch.down, dw, dh, DOWNSCALE_FACTOR);
-    blur_boxes(
-        &mut scratch.down,
-        &mut scratch.line,
-        &mut scratch.band,
-        dw,
-        dh,
-        sigma / DOWNSCALE_FACTOR as f32,
-    );
-    DOWNSCALE_FACTOR
+        (1, &mut scratch.work, w, h, sigma)
+    } else {
+        let (dw, dh) = (w.div_ceil(DOWNSCALE_FACTOR), h.div_ceil(DOWNSCALE_FACTOR));
+        fit_f32(&mut scratch.down, dw * dh * 4);
+        box_downsample_premultiplied(&sample, w, h, &mut scratch.down, dw, dh, DOWNSCALE_FACTOR);
+        let down_sigma = sigma / DOWNSCALE_FACTOR as f32;
+        (DOWNSCALE_FACTOR, &mut scratch.down, dw, dh, down_sigma)
+    };
+    blur_boxes(grid, &mut scratch.line, &mut scratch.band, dw, dh, sigma);
+    factor
 }
 
 /// Writes window `win` of the grid staged by `blur_stage` (`w` x `h`, `factor`)
