@@ -4,7 +4,7 @@ pub mod icon_geometry;
 use super::intent::TaskbarIntent;
 use flamewm_api::panels::PanelsSnapshot;
 use flamewm_api::window::WindowSnapshot;
-use flamewm_api::{DesktopAppId, TaskEntryId, WindowRef};
+use flamewm_api::{TaskEntryId, WindowRef};
 use flamewm_control_core::ControlRequest;
 use flamewm_platform::task::{ReorderSession, TaskStrip};
 use flamewm_shell_core::{task_click_action, TaskClickAction};
@@ -14,14 +14,6 @@ pub enum TaskIntent {
     Activate(WindowRef),
     Minimize(WindowRef),
     Restore(WindowRef),
-    Pin {
-        app: DesktopAppId,
-        expected_revision: u64,
-    },
-    Unpin {
-        app: DesktopAppId,
-        expected_revision: u64,
-    },
     Reorder {
         entry_id: TaskEntryId,
         index: usize,
@@ -36,20 +28,6 @@ impl TaskIntent {
             Self::Activate(window) => ControlRequest::ActivateWindow(window),
             Self::Minimize(window) => ControlRequest::MinimizeWindow(window),
             Self::Restore(window) => ControlRequest::RestoreWindow(window),
-            Self::Pin {
-                app,
-                expected_revision,
-            } => ControlRequest::PinApp {
-                app,
-                expected_revision,
-            },
-            Self::Unpin {
-                app,
-                expected_revision,
-            } => ControlRequest::UnpinApp {
-                app,
-                expected_revision,
-            },
             Self::Reorder {
                 entry_id,
                 index,
@@ -160,6 +138,7 @@ pub fn begin_reorder(panels: &PanelsSnapshot, source: usize) -> Option<TaskReord
 mod tests {
     use super::*;
     use flamewm_api::panels::{TaskEntry, TaskEntryKind};
+    use flamewm_api::DesktopAppId;
 
     fn panels() -> PanelsSnapshot {
         PanelsSnapshot {
