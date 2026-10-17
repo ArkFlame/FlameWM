@@ -230,11 +230,19 @@ pub struct WarpOverlay {
 
 /// Smallest integer rect covering both `source` and `target` in root coordinates.
 fn union_bounds(source: WarpRect, target: WarpRect) -> (i32, i32, u32, u32) {
-    let x0 = source.x.min(target.x).floor();
-    let y0 = source.y.min(target.y).floor();
-    let x1 = (source.x + source.width).max(target.x + target.width).ceil();
-    let y1 = (source.y + source.height).max(target.y + target.height).ceil();
-    (x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32)
+    enclose(
+        source.x.min(target.x),
+        source.y.min(target.y),
+        (source.x + source.width).max(target.x + target.width),
+        (source.y + source.height).max(target.y + target.height),
+    )
+}
+
+/// Smallest integer rect `(x, y, width, height)` covering the float corners `(x0, y0)`-`(x1, y1)`.
+fn enclose(x0: f64, y0: f64, x1: f64, y1: f64) -> (i32, i32, u32, u32) {
+    let (x, y) = (x0.floor(), y0.floor());
+    let (ex, ey) = (x1.ceil(), y1.ceil());
+    (x as i32, y as i32, (ex - x) as u32, (ey - y) as u32)
 }
 
 impl WarpOverlay {
@@ -287,26 +295,7 @@ impl WarpOverlay {
         target: WarpRect,
     ) -> Result<Self, String> {
         let edge = lamp::edge_for(source, target, screen_rect(display));
-        Self::begin_with_edge(display, capture, source, target, edge)
-    }
-
-    /// Like [`WarpOverlay::begin`] with the panel edge given by the caller.
-    pub fn begin_with_edge(
-        display: *mut Display,
-        capture: CapturedImage,
-        source: WarpRect,
-        target: WarpRect,
-        edge: PanelEdge,
-    ) -> Result<Self, String> {
-        Self::begin_styled(
-            display,
-            capture,
-            source,
-            target,
-            edge,
-            TransitionStyle::MagicLamp,
-            TransitionDirection::In,
-        )
+        Self::begin_styled(display, capture, source, target, edge, TransitionStyle::MagicLamp, TransitionDirection::In)
     }
 
     /// Opens a transition of `style` between `source` and `target` (root rects). `direction`
@@ -543,11 +532,7 @@ impl WarpOverlay {
         let (w, h) = (f64::from(self.size.0), f64::from(self.size.1));
         let (cx, cy) = (w / 2.0, h / 2.0);
         // Destination of the scaled capture, centred in the window.
-        let x0 = (cx - cx * scale).floor();
-        let y0 = (cy - cy * scale).floor();
-        let x1 = (cx + cx * scale).ceil();
-        let y1 = (cy + cy * scale).ceil();
-        let rect = (x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32);
+        let rect = enclose(cx - cx * scale, cy - cy * scale, cx + cx * scale, cy + cy * scale);
         // Destination-to-source map: scale about the centre (inverse of the zoom).
         let inv = 1.0 / scale;
         let matrix = [[inv, 0.0, cx * (1.0 - inv)], [0.0, inv, cy * (1.0 - inv)], [0.0, 0.0, 1.0]];
@@ -586,9 +571,7 @@ impl WarpOverlay {
         let scale_x = f64::from(self.capture.width) / rect.width;
         let scale_y = f64::from(self.capture.height) / rect.height;
         let matrix = [[scale_x, 0.0, -rect.x * scale_x], [0.0, scale_y, -rect.y * scale_y], [0.0, 0.0, 1.0]];
-        let (x0, y0) = (rect.x.floor(), rect.y.floor());
-        let (x1, y1) = ((rect.x + rect.width).ceil(), (rect.y + rect.height).ceil());
-        let dst_rect = (x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32);
+        let dst_rect = enclose(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
         let (w, h) = self.size;
         let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
         let display = self.display;
