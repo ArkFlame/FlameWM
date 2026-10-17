@@ -154,16 +154,11 @@ fn move_frame(canary: &crate::Canary, client: u32, target: (i32, i32)) -> Option
         }
         sleep_ms(120);
         let next = frame_of(canary, client)?;
-        if (next.0, next.1) == (f.0, f.1) {
-            stuck += 1;
-            if stuck >= 2 {
-                f = next;
-                break;
-            }
-        } else {
-            stuck = 0;
-        }
+        stuck = if (next.0, next.1) == (f.0, f.1) { stuck + 1 } else { 0 };
         f = next;
+        if stuck >= 2 {
+            break;
+        }
     }
     Some(f)
 }
@@ -316,11 +311,7 @@ pub fn run_overflow(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             "NOT-RUN"
         } else {
             pass &= ok;
-            if ok {
-                "PASS"
-            } else {
-                "FAIL"
-            }
+            if ok { "PASS" } else { "FAIL" }
         };
         parts.push(format!(
             "{name}[{status} frame={} outside={outside} at_bound={at_bound} visible_w={vis_w}/{fw} visible_h={vis_h}/{fh} min_visible_w={} min_visible_h={}]",
@@ -373,11 +364,10 @@ pub fn run_overflow(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let _ = canary.conn.flush();
 
     // Machine-readable cases for the Python taskbar pixel probe.
-    let mut json = String::from("{\"screen\":[");
-    json.push_str(&format!(
-        "{sw},{sh}],\"panel\":[{},{},{},{}],\"cases\":[",
+    let mut json = format!(
+        "{{\"screen\":[{sw},{sh}],\"panel\":[{},{},{},{}],\"cases\":[",
         panel.x, panel.y, panel.width, panel.height
-    ));
+    );
     let items: Vec<String> = cases
         .iter()
         .map(|c| {
