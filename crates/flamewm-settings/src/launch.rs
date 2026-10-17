@@ -33,10 +33,7 @@ where
         let arg = raw.into();
         match arg.as_str() {
             "--page" => {
-                let value: String = args
-                    .next()
-                    .ok_or_else(|| "--page requires a value".to_owned())?
-                    .into();
+                let value = next_value(&mut args, "--page")?;
                 let (page, tab) =
                     parse_page(&value).ok_or_else(|| format!("unknown page '{value}'"))?;
                 if page_was_set {
@@ -47,10 +44,7 @@ where
                 options.appearance_tab = tab;
             }
             "--window-size" => {
-                let value: String = args
-                    .next()
-                    .ok_or_else(|| "--window-size requires a value".to_owned())?
-                    .into();
+                let value = next_value(&mut args, "--window-size")?;
                 if window_size_was_set {
                     return Err("--window-size may be specified only once".to_owned());
                 }
@@ -63,18 +57,23 @@ where
     Ok(options)
 }
 
+fn next_value<I, S>(args: &mut I, flag: &str) -> Result<String, String>
+where
+    I: Iterator<Item = S>,
+    S: Into<String>,
+{
+    args.next()
+        .map(Into::into)
+        .ok_or_else(|| format!("{flag} requires a value"))
+}
+
 fn parse_window_size(value: &str) -> Result<(u32, u32), String> {
-    let (width, height) = value
+    let size = value
         .split_once('x')
+        .and_then(|(width, height)| Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?)))
         .ok_or_else(|| "--window-size must be WIDTHxHEIGHT".to_owned())?;
-    let width = width
-        .parse::<u32>()
-        .map_err(|_| "--window-size must be WIDTHxHEIGHT".to_owned())?;
-    let height = height
-        .parse::<u32>()
-        .map_err(|_| "--window-size must be WIDTHxHEIGHT".to_owned())?;
-    match (width, height) {
-        (760, 500) | (820, 540) | (960, 640) => Ok((width, height)),
+    match size {
+        (760, 500) | (820, 540) | (960, 640) => Ok(size),
         _ => Err("--window-size supports 760x500, 820x540, or 960x640".to_owned()),
     }
 }

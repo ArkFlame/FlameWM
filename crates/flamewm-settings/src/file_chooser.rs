@@ -48,24 +48,15 @@ impl WallpaperChooserWake {
     /// Drains queued wake bytes. The reactor invokes this only after worker completion.
     pub fn drain(&mut self) {
         let mut bytes = [0u8; 64];
-        loop {
-            match self.reader.read(&mut bytes) {
-                Ok(0) => break,
-                Ok(_) => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
-            }
-        }
+        while matches!(self.reader.read(&mut bytes), Ok(read) if read > 0) {}
     }
 }
 
 impl Drop for WallpaperChooserWake {
     fn drop(&mut self) {
-        if let Some(slot) = COMPLETION_WAKE.get() {
-            if let Ok(mut slot) = slot.lock() {
-                if slot.as_ref().is_some_and(|registered| registered.id == self.id) {
-                    slot.take();
-                }
+        if let Some(mut slot) = COMPLETION_WAKE.get().and_then(|slot| slot.lock().ok()) {
+            if slot.as_ref().is_some_and(|registered| registered.id == self.id) {
+                slot.take();
             }
         }
     }
@@ -85,7 +76,7 @@ impl WallpaperChooserWorker {
                 let outcome = PortalFileChooser::connect()
                     .and_then(|chooser| chooser.choose_wallpaper(""))
                     .map_err(|error| error.to_string());
-                publish_completion(&sender, outcome);
+                publish_background_completion(&sender, outcome);
             })
             .map_err(|error| format!("failed to start wallpaper chooser worker: {error}"))?;
         Ok(Self {
@@ -128,13 +119,6 @@ pub(crate) fn notify_background_completion() {
     }
 }
 
-fn publish_completion(
-    sender: &mpsc::Sender<Result<Option<PathBuf>, String>>,
-    outcome: Result<Option<PathBuf>, String>,
-) {
-    publish_background_completion(sender, outcome);
-}
-
 pub(crate) fn publish_background_completion<T>(sender: &mpsc::Sender<T>, result: T) {
     let _ = sender.send(result);
     notify_background_completion();
@@ -154,9 +138,9 @@ mod tests {
         drop(stale_wake);
         let mut byte = [0u8; 1];
         assert!(wake.reader.read(&mut byte).is_err());
-        for outcome in [Err("portal unavailable".to_owned()), Ok(None)] {
+        for outcome in [Err("portal unavailable".to_owned()), Ok(None::<PathBuf>)] {
             let (sender, result) = mpsc::channel();
-            let producer = thread::spawn(move || publish_completion(&sender, outcome));
+            let producer = thread::spawn(move || publish_background_completion(&sender, outcome));
             // Joining is the deterministic completion barrier: the worker has sent its result
             // and written the wake byte before the nonblocking reactor FD is read.
             producer.join().unwrap();
