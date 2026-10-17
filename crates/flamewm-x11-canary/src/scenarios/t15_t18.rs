@@ -157,6 +157,10 @@ fn t17_optional_geometry(frame: Option<&crate::WinInfo>) -> String {
     frame.map_or_else(|| "unavailable".to_owned(), t17_geometry)
 }
 
+fn t17_configures(canary: &crate::Canary, frame: Option<&crate::WinInfo>) -> usize {
+    frame.map_or(0, |frame| matching_frame_configures(canary, frame, 250))
+}
+
 #[derive(Default)]
 struct T17WindowProbe {
     geometry: String,
@@ -967,12 +971,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         })
     });
     let move_seen = moved_frame.is_some();
-    let move_configures = moved_frame
-        .as_ref()
-        .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
-    let move_actual = moved_frame
-        .as_ref()
-        .map_or_else(|| "unavailable".to_owned(), t17_geometry);
+    let move_configures = t17_configures(canary, moved_frame.as_ref());
+    let move_actual = t17_optional_geometry(moved_frame.as_ref());
     let Some(_moved_frame) = moved_frame else {
         return (
             false,
@@ -1009,12 +1009,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         })
     });
     let resize_seen = resized_frame.is_some();
-    let resize_configures = resized_frame
-        .as_ref()
-        .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
-    let resize_actual = resized_frame
-        .as_ref()
-        .map_or_else(|| "unavailable".to_owned(), t17_geometry);
+    let resize_configures = t17_configures(canary, resized_frame.as_ref());
+    let resize_actual = t17_optional_geometry(resized_frame.as_ref());
     let Some(_resized_frame) = resized_frame else {
         return (
             false,
@@ -1055,9 +1051,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             })
         })
         .flatten();
-    let max_configures = max_frame
-        .as_ref()
-        .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
+    let max_configures = t17_configures(canary, max_frame.as_ref());
     let Some(max_frame) = max_frame else {
         return (
             false,
@@ -1123,9 +1117,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             })
         })
         .flatten();
-    let restore_configures = restored_frame
-        .as_ref()
-        .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
+    let restore_configures = t17_configures(canary, restored_frame.as_ref());
     let restore_state = wm_state(canary, client_id);
     let Some(restored_frame) = restored_frame else {
         let diagnostic = t17_restore_diagnostic(
@@ -1190,12 +1182,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         })
         .flatten();
     let snapped = snapped_frame.is_some();
-    let snap_configures = snapped_frame
-        .as_ref()
-        .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
-    let snap_actual = snapped_frame
-        .as_ref()
-        .map_or_else(|| "unavailable".to_owned(), t17_geometry);
+    let snap_configures = t17_configures(canary, snapped_frame.as_ref());
+    let snap_actual = t17_optional_geometry(snapped_frame.as_ref());
     let Some(_snapped_frame) = snapped_frame else {
         return (
             false,
@@ -1234,12 +1222,8 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         })
         .flatten();
     let titlebar_moved = titlebar_frame.is_some();
-    let titlebar_configures = titlebar_frame
-        .as_ref()
-        .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
-    let titlebar_actual = titlebar_frame
-        .as_ref()
-        .map_or_else(|| "unavailable".to_owned(), t17_geometry);
+    let titlebar_configures = t17_configures(canary, titlebar_frame.as_ref());
+    let titlebar_actual = t17_optional_geometry(titlebar_frame.as_ref());
     let final_identity = canary
         .by_id(client_id)
         .is_some_and(|current| current.parent == frame_id)
