@@ -312,62 +312,20 @@ fn resize_enforces_minimum_size() {
 #[test]
 fn cursor_kind_covers_eight_directions() {
     use flamewm_render_core::CursorKind;
-    let corner_nw = ResizeEdges {
-        left: true,
-        top: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(
-        corner_nw.cursor_kind(),
-        CursorKind::ResizeNorthWestSouthEast
-    );
-    let corner_se = ResizeEdges {
-        right: true,
-        bottom: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(
-        corner_se.cursor_kind(),
-        CursorKind::ResizeNorthWestSouthEast
-    );
-    let corner_ne = ResizeEdges {
-        right: true,
-        top: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(
-        corner_ne.cursor_kind(),
-        CursorKind::ResizeNorthEastSouthWest
-    );
-    let corner_sw = ResizeEdges {
-        left: true,
-        bottom: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(
-        corner_sw.cursor_kind(),
-        CursorKind::ResizeNorthEastSouthWest
-    );
-    let west = ResizeEdges {
-        left: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(west.cursor_kind(), CursorKind::ResizeHorizontal);
-    let east = ResizeEdges {
-        right: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(east.cursor_kind(), CursorKind::ResizeHorizontal);
-    let north = ResizeEdges {
-        top: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(north.cursor_kind(), CursorKind::ResizeVertical);
-    let south = ResizeEdges {
-        bottom: true,
-        ..ResizeEdges::default()
-    };
-    assert_eq!(south.cursor_kind(), CursorKind::ResizeVertical);
+    let edges = |left, top, right, bottom| ResizeEdges { left, top, right, bottom, ..ResizeEdges::default() };
+    let cases = [
+        (edges(true, true, false, false), CursorKind::ResizeNorthWestSouthEast),
+        (edges(false, false, true, true), CursorKind::ResizeNorthWestSouthEast),
+        (edges(false, true, true, false), CursorKind::ResizeNorthEastSouthWest),
+        (edges(true, false, false, true), CursorKind::ResizeNorthEastSouthWest),
+        (edges(true, false, false, false), CursorKind::ResizeHorizontal),
+        (edges(false, false, true, false), CursorKind::ResizeHorizontal),
+        (edges(false, true, false, false), CursorKind::ResizeVertical),
+        (edges(false, false, false, true), CursorKind::ResizeVertical),
+    ];
+    for (e, expected) in cases {
+        assert_eq!(e.cursor_kind(), expected);
+    }
     assert_eq!(ResizeEdges::default().cursor_kind(), CursorKind::Default);
 }
 
@@ -567,44 +525,20 @@ fn frame_control_hit_targets_unchanged() {
     let titlebar = chrome::TITLEBAR_HEIGHT;
     // Skin chrome: button_width=38, controls tile the right edge.
     // 400-wide frame: min [286,324), max [324,362), close [362,400).
-    assert_eq!(
-        frame_control_at(400, titlebar, 390),
-        Some(EngineControl::Close)
-    );
-    assert_eq!(
-        frame_control_at(400, titlebar, 360),
-        Some(EngineControl::MaximizeRestore)
-    );
-    assert_eq!(
-        frame_control_at(400, titlebar, 328),
-        Some(EngineControl::MaximizeRestore)
-    );
-    assert_eq!(frame_control_at(400, titlebar, 100), None);
-    assert_eq!(
-        frame_control_at(400, titlebar, 362),
-        Some(EngineControl::Close)
-    );
-    assert_eq!(
-        frame_control_at(400, titlebar, 324),
-        Some(EngineControl::MaximizeRestore)
-    );
-    assert_eq!(
-        frame_control_at(400, titlebar, 286),
-        Some(EngineControl::Minimize)
-    );
+    assert_eq!(frame_control_at(400, titlebar, 390), Some(EngineControl::Close));
+    assert_eq!(frame_control_at(400, titlebar, 362), Some(EngineControl::Close));
+    assert_eq!(frame_control_at(400, titlebar, 360), Some(EngineControl::MaximizeRestore));
+    assert_eq!(frame_control_at(400, titlebar, 328), Some(EngineControl::MaximizeRestore));
+    assert_eq!(frame_control_at(400, titlebar, 324), Some(EngineControl::MaximizeRestore));
+    assert_eq!(frame_control_at(400, titlebar, 286), Some(EngineControl::Minimize));
     assert_eq!(frame_control_at(400, titlebar, 285), None);
+    assert_eq!(frame_control_at(400, titlebar, 100), None);
 }
 
 #[test]
 fn frame_event_source_prefers_live_registered_child() {
     let mut registry = FrameRegistry::new();
-    registry.register(crate::frame::resources::FrameResources::new(
-        1,
-        2,
-        3,
-        [4, 5, 6],
-        [7, 8, 9, 10, 11, 12, 13, 14],
-    ));
+    registry.register(test_frame_resources());
     assert_eq!(resolve_frame_event_source(&registry, 99, 7), 7);
     assert_eq!(resolve_frame_event_source(&registry, 99, 0), 99);
     assert_eq!(resolve_frame_event_source(&registry, 99, 42), 99);
@@ -612,16 +546,14 @@ fn frame_event_source_prefers_live_registered_child() {
 
 #[test]
 fn pointer_grab_target_accepts_live_frame_or_input_child() {
-    let resources = crate::frame::resources::FrameResources::new(
-        1,
-        2,
-        3,
-        [4, 5, 6],
-        [7, 8, 9, 10, 11, 12, 13, 14],
-    );
+    let resources = test_frame_resources();
     assert!(pointer_grab_target(2, resources));
     assert!(pointer_grab_target(7, resources));
     assert!(!pointer_grab_target(99, resources));
+}
+
+fn test_frame_resources() -> crate::frame::resources::FrameResources {
+    crate::frame::resources::FrameResources::new(1, 2, 3, [4, 5, 6], [7, 8, 9, 10, 11, 12, 13, 14])
 }
 
 // CONTRACT-REGRESSION T10: release mapping is total and typed.
@@ -638,38 +570,14 @@ fn t10_release_action_mapping_is_total() {
     let cases = [
         (SnapTarget::None, ReleaseAction::None),
         (SnapTarget::Maximize, ReleaseAction::Maximize),
-        (
-            SnapTarget::LeftHalf,
-            ReleaseAction::Snap(EngineSnapTarget::Left),
-        ),
-        (
-            SnapTarget::RightHalf,
-            ReleaseAction::Snap(EngineSnapTarget::Right),
-        ),
-        (
-            SnapTarget::TopHalf,
-            ReleaseAction::Snap(EngineSnapTarget::Top),
-        ),
-        (
-            SnapTarget::BottomHalf,
-            ReleaseAction::Snap(EngineSnapTarget::Bottom),
-        ),
-        (
-            SnapTarget::TopLeftQuarter,
-            ReleaseAction::Snap(EngineSnapTarget::TopLeft),
-        ),
-        (
-            SnapTarget::TopRightQuarter,
-            ReleaseAction::Snap(EngineSnapTarget::TopRight),
-        ),
-        (
-            SnapTarget::BottomLeftQuarter,
-            ReleaseAction::Snap(EngineSnapTarget::BottomLeft),
-        ),
-        (
-            SnapTarget::BottomRightQuarter,
-            ReleaseAction::Snap(EngineSnapTarget::BottomRight),
-        ),
+        (SnapTarget::LeftHalf, ReleaseAction::Snap(EngineSnapTarget::Left)),
+        (SnapTarget::RightHalf, ReleaseAction::Snap(EngineSnapTarget::Right)),
+        (SnapTarget::TopHalf, ReleaseAction::Snap(EngineSnapTarget::Top)),
+        (SnapTarget::BottomHalf, ReleaseAction::Snap(EngineSnapTarget::Bottom)),
+        (SnapTarget::TopLeftQuarter, ReleaseAction::Snap(EngineSnapTarget::TopLeft)),
+        (SnapTarget::TopRightQuarter, ReleaseAction::Snap(EngineSnapTarget::TopRight)),
+        (SnapTarget::BottomLeftQuarter, ReleaseAction::Snap(EngineSnapTarget::BottomLeft)),
+        (SnapTarget::BottomRightQuarter, ReleaseAction::Snap(EngineSnapTarget::BottomRight)),
     ];
     let mismatches = cases
         .into_iter()
