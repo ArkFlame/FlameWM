@@ -699,6 +699,10 @@ mod tests {
         FrameEvent::Motion { pointer: RootPoint::new(x, y) }
     }
 
+    fn pressed(state: &ControllerState, source: u32, x: i32, y: i32) -> ControllerState {
+        reduce(state, press(source, x, y)).0
+    }
+
     fn release(x: i32, y: i32) -> FrameEvent {
         release_at(x, y, 0)
     }
@@ -832,8 +836,7 @@ mod tests {
 
     #[test]
     fn control_click_toggles_max() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(3, 300, 110));
+        let s1 = pressed(&floating_state(), 3, 300, 110);
         assert!(matches!(s1.session, InteractionSession::ControlPress(_)));
         let (s2, e2) = reduce(&s1, release(300, 110));
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
@@ -937,8 +940,7 @@ mod tests {
 
     #[test]
     fn cancel_aborts_move() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let s1 = pressed(&floating_state(), 1, 150, 120);
         let (s2, e2) = reduce(&s1, FrameEvent::Cancel);
         assert!(s2.session.is_idle());
         assert_eq!(s2.placement.current, START);
@@ -1023,8 +1025,7 @@ mod tests {
 
     #[test]
     fn effect_order_move_motion_has_no_layout_or_paint() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let s1 = pressed(&floating_state(), 1, 150, 120);
         let (_, e2) = reduce(&s1, motion(200, 170));
         assert_eq!(e2.len(), 3);
         assert!(matches!(
@@ -1051,8 +1052,7 @@ mod tests {
 
     #[test]
     fn effect_order_resize_release_has_frame_client_layout_chrome() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(2, 500, 400));
+        let s1 = pressed(&floating_state(), 2, 500, 400);
         let (s2, e_motion) = reduce(&s1, motion(550, 460));
         // Resize motion carries frame + local + root notify.
         assert_eq!(count_local(&e_motion), 1);
@@ -1095,8 +1095,7 @@ mod tests {
 
     #[test]
     fn effect_order_release_geometry_precedes_ungrab() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let s1 = pressed(&floating_state(), 1, 150, 120);
         let (s2, _) = reduce(&s1, motion(200, 170));
         let (s3, e3) = reduce(&s2, release(200, 170));
         assert_eq!(s3.placement.current, RootRect::new(150, 150, 400, 300));
@@ -1123,8 +1122,7 @@ mod tests {
 
     #[test]
     fn move_thousand_samples_zero_client_local() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let s1 = pressed(&floating_state(), 1, 150, 120);
         let mut total_local = 0;
         let mut total_configure_root = 0;
         let mut total_layout = 0;
@@ -1185,8 +1183,7 @@ mod tests {
 
     #[test]
     fn post_activation_move_repaints_chrome_after_frame_move() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let s1 = pressed(&floating_state(), 1, 150, 120);
         let (s2, _) = reduce(&s1, motion(200, 170));
         // Post-activation step whose frame position changes: titlebar must
         // repaint live, ordered after the frame move.
@@ -1211,8 +1208,7 @@ mod tests {
 
     #[test]
     fn resize_still_uses_full_configure_frame_root() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(2, 500, 400));
+        let s1 = pressed(&floating_state(), 2, 500, 400);
         let (_, e) = reduce(&s1, motion(550, 460));
         assert!(
             e.iter()
@@ -1226,8 +1222,7 @@ mod tests {
     fn move_frame_at_origin_client_local_and_root() {
         // Start (100,100) + delta (300,100) => frame (400,200); client local
         // stays (0,titlebar), synthetic root = (400,231) size (400,269).
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(1, 150, 120));
+        let s1 = pressed(&floating_state(), 1, 150, 120);
         let (s2, e2) = reduce(&s1, motion(450, 220));
         assert_eq!(s2.placement.current, RootRect::new(400, 200, 400, 300));
         assert!(matches!(
@@ -1243,8 +1238,7 @@ mod tests {
 
     #[test]
     fn resize_right_and_bottom_right_local_origin_constant() {
-        let s0 = floating_state();
-        let (s1, _) = reduce(&s0, press(2, 500, 400));
+        let s1 = pressed(&floating_state(), 2, 500, 400);
         let (_, e) = reduce(&s1, motion(550, 460));
         assert!(
             e.iter()
@@ -1554,8 +1548,7 @@ mod tests {
     // REPRESENTATIVE CASE: left-snapped bottom-right resize.
     #[test]
     fn t09_snapped_resize_exits_once_and_stays_floating() {
-        let s0 = snapped_state();
-        let (s1, _) = reduce(&s0, press(2, 960, 1080));
+        let s1 = pressed(&snapped_state(), 2, 960, 1080);
         let (s2, first_effects) = reduce(&s1, motion(965, 1085));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&first_effects));
@@ -1572,8 +1565,7 @@ mod tests {
     // REPRESENTATIVE CASE: three-pixel max drag jitter.
     #[test]
     fn t11_maximized_pending_motion_preserves_mode_rect_invariant() {
-        let s0 = maximized_state();
-        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let s1 = pressed(&maximized_state(), 1, 960, 20);
         let (s2, _effects) = reduce(&s1, motion(963, 20));
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
         assert!(!matches!(s2.placement.mode, PlacementMode::Snapped(_)));
@@ -1607,8 +1599,7 @@ mod tests {
     // REPRESENTATIVE CASE: exactly four-pixel max activation.
     #[test]
     fn t13_max_restore_activation_has_all_geometry_domains() {
-        let s0 = maximized_state();
-        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let s1 = pressed(&maximized_state(), 1, 960, 20);
         let (s2, effects) = reduce(&s1, motion(964, 24));
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&effects));
@@ -1627,8 +1618,7 @@ mod tests {
     // REPRESENTATIVE CASE: two-sample maximized drag.
     #[test]
     fn t14_restore_then_motion_has_one_full_then_position_only_plan() {
-        let s0 = maximized_state();
-        let (s1, _) = reduce(&s0, press(1, 960, 20));
+        let s1 = pressed(&maximized_state(), 1, 960, 20);
         let (s2, first_effects) = reduce(&s1, motion(965, 25));
         assert!(has_full_configure(&first_effects));
         let (_, second_effects) = reduce(&s2, motion(985, 45));
