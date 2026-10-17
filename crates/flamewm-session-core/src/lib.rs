@@ -256,17 +256,11 @@ fn flame_environment(
 /// [`appearance::plan_appearance`], not a style-override variable.
 #[must_use]
 pub fn appearance_environment(appearance: AppearanceMode) -> BTreeMap<String, String> {
-    let mut environment = BTreeMap::new();
-    let dark = appearance.prefers_dark();
-    environment.insert(
-        "FLAMEWM_APPEARANCE".to_owned(),
-        appearance.as_str().to_owned(),
-    );
-    environment.insert(
-        "FLAMEWM_DARK_MODE".to_owned(),
-        if dark { "1".to_owned() } else { "0".to_owned() },
-    );
-    environment
+    let dark = if appearance.prefers_dark() { "1" } else { "0" };
+    BTreeMap::from([
+        ("FLAMEWM_APPEARANCE".to_owned(), appearance.as_str().to_owned()),
+        ("FLAMEWM_DARK_MODE".to_owned(), dark.to_owned()),
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -426,18 +420,9 @@ mod tests {
         let paths = default_paths_from_home("/usr/bin", "/home/test");
         let plan = build_launch_plan(&paths, &[], &BTreeMap::new());
         let environment = &plan.processes[0].environment;
-        assert_eq!(
-            environment.get("XCURSOR_THEME").map(String::as_str),
-            Some(CURSOR_THEME_ID)
-        );
-        assert_eq!(
-            environment.get("XCURSOR_SIZE").map(String::as_str),
-            Some(CURSOR_SIZE)
-        );
-        assert_eq!(
-            environment.get("XCURSOR_PATH").map(String::as_str),
-            Some("/usr/share/icons")
-        );
+        assert_eq!(environment.get("XCURSOR_THEME").map(String::as_str), Some(CURSOR_THEME_ID));
+        assert_eq!(environment.get("XCURSOR_SIZE").map(String::as_str), Some(CURSOR_SIZE));
+        assert_eq!(environment.get("XCURSOR_PATH").map(String::as_str), Some("/usr/share/icons"));
         // No host inherit: an existing XCURSOR_PATH is ignored.
         let mut existing = BTreeMap::new();
         existing.insert("XCURSOR_PATH".to_owned(), "/tmp/host".to_owned());
@@ -453,25 +438,13 @@ mod tests {
         let mut existing = BTreeMap::new();
         existing.insert("FLAMEWM_CURSOR_THEME".to_owned(), "Custom".to_owned());
         existing.insert("FLAMEWM_CURSOR_SIZE".to_owned(), "32".to_owned());
-        existing.insert(
-            "FLAMEWM_CURSOR_PATH".to_owned(),
-            "/tmp/stage/icons".to_owned(),
-        );
+        existing.insert("FLAMEWM_CURSOR_PATH".to_owned(), "/tmp/stage/icons".to_owned());
         let plan = build_launch_plan(&paths, &[], &existing);
         let environment = &plan.processes[0].environment;
         // "Custom" is not installed under the stage root: falls back to the bundled theme.
-        assert_eq!(
-            environment.get("XCURSOR_THEME").map(String::as_str),
-            Some(CURSOR_THEME_ID)
-        );
-        assert_eq!(
-            environment.get("XCURSOR_SIZE").map(String::as_str),
-            Some("32")
-        );
-        assert_eq!(
-            environment.get("XCURSOR_PATH").map(String::as_str),
-            Some("/tmp/stage/icons")
-        );
+        assert_eq!(environment.get("XCURSOR_THEME").map(String::as_str), Some(CURSOR_THEME_ID));
+        assert_eq!(environment.get("XCURSOR_SIZE").map(String::as_str), Some("32"));
+        assert_eq!(environment.get("XCURSOR_PATH").map(String::as_str), Some("/tmp/stage/icons"));
     }
 
     #[test]
@@ -484,10 +457,7 @@ mod tests {
             Some("/usr/share/icons:/usr/share/pixmaps"),
         );
         let environment = &plan.processes[0].environment;
-        assert_eq!(
-            environment.get("XCURSOR_THEME_CORE").map(String::as_str),
-            Some("1")
-        );
+        assert_eq!(environment.get("XCURSOR_THEME_CORE").map(String::as_str), Some("1"));
         assert!(
             environment
                 .get("XCURSOR_PATH")
@@ -498,14 +468,8 @@ mod tests {
     #[test]
     fn appearance_overlay_marks_identity_without_toolkit_defaults() {
         let overlay = appearance_environment(AppearanceMode::Dark);
-        assert_eq!(
-            overlay.get("FLAMEWM_APPEARANCE").map(String::as_str),
-            Some("dark")
-        );
-        assert_eq!(
-            overlay.get("FLAMEWM_DARK_MODE").map(String::as_str),
-            Some("1")
-        );
+        assert_eq!(overlay.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("dark"));
+        assert_eq!(overlay.get("FLAMEWM_DARK_MODE").map(String::as_str), Some("1"));
         // No generic toolkit defaults even when themes are installed.
         assert!(!overlay.contains_key("GTK_THEME"));
         assert!(!overlay.contains_key("QT_STYLE_OVERRIDE"));
@@ -516,14 +480,8 @@ mod tests {
         let plan =
             build_launch_plan_with_appearance(&paths, &[], &existing, None, AppearanceMode::Dark);
         let environment = &plan.processes[0].environment;
-        assert_eq!(
-            environment.get("FLAMEWM_DESKTOP").map(String::as_str),
-            Some("FlameWM")
-        );
-        assert_eq!(
-            environment.get("FLAMEWM_APPEARANCE").map(String::as_str),
-            Some("dark")
-        );
+        assert_eq!(environment.get("FLAMEWM_DESKTOP").map(String::as_str), Some("FlameWM"));
+        assert_eq!(environment.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("dark"));
         assert!(!environment.contains_key("GTK_THEME"));
         assert!(!environment.contains_key("QT_STYLE_OVERRIDE"));
         // Decision (B6): the Qt channel is an owned kdeglobals reached through
@@ -535,19 +493,12 @@ mod tests {
             .expect("owned kdeglobals channel");
         assert!(xdg.starts_with(&format!("{}:", owned_appearance_root(&paths).display())));
         let expected_theme = kde_platform_theme_installed(&existing).then_some("kde");
-        assert_eq!(
-            environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str),
-            expected_theme
-        );
+        assert_eq!(environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str), expected_theme);
         // An inherited explicit platform theme is never overlaid.
         let explicit = BTreeMap::from([("QT_QPA_PLATFORMTHEME".to_owned(), "fusion".to_owned())]);
         let plan =
             build_launch_plan_with_appearance(&paths, &[], &explicit, None, AppearanceMode::Dark);
-        assert!(
-            !plan.processes[0]
-                .environment
-                .contains_key("QT_QPA_PLATFORMTHEME")
-        );
+        assert!(!plan.processes[0].environment.contains_key("QT_QPA_PLATFORMTHEME"));
     }
 
     fn install_cursor_theme(root: &std::path::Path, name: &str) {
@@ -574,24 +525,15 @@ mod tests {
         // Bundled McMojave wins over the FlameWM default when present.
         install_cursor_theme(&root, MCMOJAVE_CURSOR_THEME_ID);
         assert_eq!(resolve_cursor_theme("", &search), MCMOJAVE_CURSOR_THEME_ID);
-        assert_eq!(
-            resolve_cursor_theme("Missing", &search),
-            MCMOJAVE_CURSOR_THEME_ID
-        );
+        assert_eq!(resolve_cursor_theme("Missing", &search), MCMOJAVE_CURSOR_THEME_ID);
         // Explicit installed theme wins over both.
         install_cursor_theme(&root, "Custom");
         assert_eq!(resolve_cursor_theme("Custom", &search), "Custom");
         // A directory without a cursors/ subdir is a broken theme and never selected.
         std::fs::create_dir_all(root.join("Broken")).expect("broken theme");
-        assert_eq!(
-            resolve_cursor_theme("Broken", &search),
-            MCMOJAVE_CURSOR_THEME_ID
-        );
+        assert_eq!(resolve_cursor_theme("Broken", &search), MCMOJAVE_CURSOR_THEME_ID);
         // Path-like names never resolve outside the search roots.
-        assert_eq!(
-            resolve_cursor_theme("../Custom", &search),
-            MCMOJAVE_CURSOR_THEME_ID
-        );
+        assert_eq!(resolve_cursor_theme("../Custom", &search), MCMOJAVE_CURSOR_THEME_ID);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -602,10 +544,7 @@ mod tests {
         install_cursor_theme(&second, "Custom");
         let search = format!("{}:{}", first.display(), second.display());
         assert_eq!(resolve_cursor_theme("Custom", &search), "Custom");
-        assert_eq!(
-            resolve_cursor_theme("Custom", &first.display().to_string()),
-            CURSOR_THEME_ID
-        );
+        assert_eq!(resolve_cursor_theme("Custom", &first.display().to_string()), CURSOR_THEME_ID);
         let _ = std::fs::remove_dir_all(&first);
         let _ = std::fs::remove_dir_all(&second);
     }
@@ -641,10 +580,7 @@ mod tests {
             }
         }
         assert_eq!(delays, vec![500, 1_000, 2_000, 4_000, 8_000]);
-        assert_eq!(
-            supervisor.child_exited(ChildExit::ExitCode(1)),
-            SupervisorDecision::GiveUp
-        );
+        assert_eq!(supervisor.child_exited(ChildExit::ExitCode(1)), SupervisorDecision::GiveUp);
     }
 }
 
