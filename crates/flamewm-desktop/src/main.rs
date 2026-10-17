@@ -817,15 +817,10 @@ mod accent_token_tests {
     fn desktop_tokens_follow_live_accent_and_fall_back_to_neutral() {
         let mut snapshot = SettingsSnapshot::new(1);
         assert_eq!(accent_color(&snapshot).r, 0x7f);
-        snapshot
-            .values
-            .insert("accent".to_owned(), SettingValue::Text("#9b59b6".to_owned()));
+        snapshot.values.insert("accent".to_owned(), SettingValue::Text("#9b59b6".to_owned()));
         let tokens = accent_token_values(&snapshot);
         let value = |name: &str| tokens.iter().find(|(key, _)| *key == name).map(|(_, c)| *c);
-        assert_eq!(
-            value("--desktop-hover"),
-            Some(UiColor { r: 0x9b, g: 0x59, b: 0xb6, a: 0x26 })
-        );
+        assert_eq!(value("--desktop-hover"), Some(UiColor { r: 0x9b, g: 0x59, b: 0xb6, a: 0x26 }));
         assert_eq!(value("--snap-fill").map(|c| c.a), Some(0x33));
         assert_eq!(value("--accent"), Some(accent_color(&snapshot)));
         assert_eq!(tokens.len(), ACCENT_TOKEN_ALPHAS.len());
@@ -2507,10 +2502,7 @@ mod work_area_tests {
         let root = Rect::new(0, 0, 1350, 641);
         let panel = Rect::new(0, 641 - 55, 1350, 55);
 
-        assert_eq!(
-            subtract_panel_strip(root, panel),
-            Rect::new(0, 0, 1350, 586)
-        );
+        assert_eq!(subtract_panel_strip(root, panel), Rect::new(0, 0, 1350, 586));
     }
 
     #[test]
@@ -2519,10 +2511,7 @@ mod work_area_tests {
         let before = subtract_panel_strip(root, Rect::new(0, 641 - 44, 1350, 44));
         let after = subtract_panel_strip(root, Rect::new(0, 641 - 55, 1350, 55));
 
-        assert_eq!(
-            changed_work_area(before, after),
-            Some(Rect::new(0, 0, 1350, 586))
-        );
+        assert_eq!(changed_work_area(before, after), Some(Rect::new(0, 0, 1350, 586)));
     }
 
     #[test]
@@ -2604,9 +2593,7 @@ mod icon_theme_tests {
     fn snapshot_with_theme(theme: Option<&str>) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
         if let Some(theme) = theme {
-            snapshot
-                .values
-                .insert("iconTheme".to_owned(), SettingValue::Text(theme.to_owned()));
+            snapshot.values.insert("iconTheme".to_owned(), SettingValue::Text(theme.to_owned()));
         }
         snapshot
     }
