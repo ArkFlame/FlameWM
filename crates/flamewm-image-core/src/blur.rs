@@ -93,10 +93,7 @@ pub fn gaussian_blur_rgba_with(
     let (w, h) = (width as usize, height as usize);
     let factor = blur_stage(
         scratch,
-        |x, y| {
-            let i = (y * w + x) * 4;
-            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
-        },
+        |x, y| rgba_at(pixels, (y * w + x) * 4),
         w,
         h,
         radius_px,
@@ -156,13 +153,7 @@ pub fn frosted_backdrop_with(
     let sample = |px: usize, py: usize| -> [u8; 4] {
         let sx = (i64::from(crop.x) + px as i64 - pad as i64).clamp(0, max_x) as usize;
         let sy = (i64::from(crop.y) + py as i64 - pad as i64).clamp(0, max_y) as usize;
-        let si = (sy * src_w + sx) * 4;
-        [
-            src.pixels[si],
-            src.pixels[si + 1],
-            src.pixels[si + 2],
-            src.pixels[si + 3],
-        ]
+        rgba_at(&src.pixels, (sy * src_w + sx) * 4)
     };
     let mut out = vec![0u8; cw * ch * 4];
     if blur {
@@ -336,6 +327,11 @@ fn box_radii(sigma: f32) -> [usize; 3] {
         *radius = ((size - 1) / 2) as usize;
     }
     radii
+}
+
+/// Reads straight RGBA8 pixel at byte index `i`.
+fn rgba_at(px: &[u8], i: usize) -> [u8; 4] {
+    [px[i], px[i + 1], px[i + 2], px[i + 3]]
 }
 
 /// Reads one premultiplied float pixel at pixel index `x` of a row.
@@ -552,6 +548,15 @@ mod tests {
         rgba.repeat(width as usize * height as usize)
     }
 
+    fn rect(x: i32, y: i32, width: u32, height: u32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     fn pixel_at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
         let i = (y as usize * width as usize + x as usize) * 4;
         [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
@@ -756,12 +761,7 @@ mod tests {
     #[test]
     fn frosted_backdrop_with_matches_allocating_variant() {
         let src = RgbaImage::from_rgba8(40, 30, noisy(40, 30)).unwrap();
-        let crop = Rect {
-            x: -5,
-            y: 3,
-            width: 25,
-            height: 20,
-        };
+        let crop = rect(-5, 3, 25, 20);
         let mut scratch = BlurScratch::new();
         for radius in [0.0f32, 2.0, 9.0, 20.0] {
             let fresh = frosted_backdrop(&src, crop, radius, Some([10, 20, 30, 100]));
@@ -775,26 +775,10 @@ mod tests {
     #[test]
     fn frosted_backdrop_dirty_scratch_matches_fresh() {
         let src = RgbaImage::from_rgba8(40, 30, noisy(40, 30)).unwrap();
-        let crop = Rect {
-            x: 2,
-            y: 1,
-            width: 17,
-            height: 11,
-        };
+        let crop = rect(2, 1, 17, 11);
         let mut scratch = BlurScratch::new();
         // Leave a large, non-zero padded buffer behind so reuse must re-zero it.
-        let _ = frosted_backdrop_with(
-            &mut scratch,
-            &src,
-            Rect {
-                x: 0,
-                y: 0,
-                width: 40,
-                height: 30,
-            },
-            20.0,
-            None,
-        );
+        let _ = frosted_backdrop_with(&mut scratch, &src, rect(0, 0, 40, 30), 20.0, None);
         let fresh = frosted_backdrop(&src, crop, 6.0, None);
         let reused = frosted_backdrop_with(&mut scratch, &src, crop, 6.0, None);
         assert_eq!(fresh.pixels, reused.pixels);
@@ -803,17 +787,7 @@ mod tests {
     #[test]
     fn frosted_backdrop_crops_with_edge_clamping() {
         let src = RgbaImage::from_rgba8(8, 8, solid(8, 8, [255, 255, 255, 255])).unwrap();
-        let out = frosted_backdrop(
-            &src,
-            Rect {
-                x: -4,
-                y: -4,
-                width: 6,
-                height: 6,
-            },
-            6.0,
-            None,
-        );
+        let out = frosted_backdrop(&src, rect(-4, -4, 6, 6), 6.0, None);
         assert_eq!((out.width, out.height), (6, 6));
         assert!(
             out.pixels
@@ -831,34 +805,14 @@ mod tests {
             }
         }
         let src = RgbaImage::from_rgba8(4, 4, pixels).unwrap();
-        let out = frosted_backdrop(
-            &src,
-            Rect {
-                x: 1,
-                y: 2,
-                width: 2,
-                height: 1,
-            },
-            0.0,
-            None,
-        );
+        let out = frosted_backdrop(&src, rect(1, 2, 2, 1), 0.0, None);
         assert_eq!(out.pixels, vec![10, 20, 0, 255, 20, 20, 0, 255]);
     }
 
     #[test]
     fn frosted_backdrop_tint_composites_over() {
         let src = RgbaImage::from_rgba8(2, 2, solid(2, 2, [255, 255, 255, 255])).unwrap();
-        let out = frosted_backdrop(
-            &src,
-            Rect {
-                x: 0,
-                y: 0,
-                width: 2,
-                height: 2,
-            },
-            0.0,
-            Some([0, 0, 0, 128]),
-        );
+        let out = frosted_backdrop(&src, rect(0, 0, 2, 2), 0.0, Some([0, 0, 0, 128]));
         for p in out.pixels.chunks_exact(4) {
             assert!((i32::from(p[0]) - 127).abs() <= 1, "{p:?}");
             assert_eq!(p[3], 255);
@@ -1150,30 +1104,10 @@ mod tests {
     fn frosted_backdrop_matches_previous_implementation() {
         let src = RgbaImage::from_rgba8(41, 23, noisy(41, 23)).unwrap();
         let crops = [
-            Rect {
-                x: -5,
-                y: 3,
-                width: 25,
-                height: 13,
-            },
-            Rect {
-                x: 30,
-                y: -7,
-                width: 11,
-                height: 31,
-            },
-            Rect {
-                x: 0,
-                y: 0,
-                width: 41,
-                height: 23,
-            },
-            Rect {
-                x: 3,
-                y: 2,
-                width: 1,
-                height: 1,
-            },
+            rect(-5, 3, 25, 13),
+            rect(30, -7, 11, 31),
+            rect(0, 0, 41, 23),
+            rect(3, 2, 1, 1),
         ];
         let mut scratch = BlurScratch::new();
         for crop in crops {
