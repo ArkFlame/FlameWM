@@ -810,7 +810,7 @@ fn worker_loop<R: IconResolve>(
                 let fallback = result
                     .as_ref()
                     .ok()
-                    .and_then(|raster| raster.fallback_reason.clone());
+                    .and_then(|raster| raster.fallback_reason.as_ref());
                 flamewm_debug::emit(
                     flamewm_debug::ICON_RESOLVE_RESULT,
                     flamewm_debug::ICON_RESOLVE_RESULT_COOLDOWN,
@@ -899,7 +899,7 @@ fn emit_apply(result: &IconResult, wake_to_apply: std::time::Duration) {
         .result
         .as_ref()
         .ok()
-        .and_then(|raster| raster.fallback_reason.clone());
+        .and_then(|raster| raster.fallback_reason.as_ref());
     if fallback.is_some() {
         flamewm_debug::emit(
             flamewm_debug::ICON_FALLBACK,
