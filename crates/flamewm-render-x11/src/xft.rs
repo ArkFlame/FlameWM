@@ -358,12 +358,8 @@ impl XftBackend {
         if let Some(value) = self.colors.get(&color).copied() {
             return Ok(value);
         }
-        let render = XRenderColor {
-            red: u16::from(color.r) * 257,
-            green: u16::from(color.g) * 257,
-            blue: u16::from(color.b) * 257,
-            alpha: u16::from(color.a) * 257,
-        };
+        let (red, green, blue, alpha) = xrender_color_for(color);
+        let render = XRenderColor { red, green, blue, alpha };
         let mut allocated = XftColor {
             pixel: 0,
             color: render,
@@ -508,7 +504,6 @@ pub(crate) fn xft_draws_on_composited_target(composited: bool) -> bool {
 
 /// Straight-alpha `Color` -> 16-bit XRender color triple used by
 /// `XftColorAllocValue`. Pure so the alpha expansion is unit-testable.
-#[allow(dead_code)]
 pub(crate) fn xrender_color_for(color: Color) -> (u16, u16, u16, u16) {
     (
         u16::from(color.r) * 257,

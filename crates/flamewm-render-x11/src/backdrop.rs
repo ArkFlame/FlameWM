@@ -6,8 +6,6 @@
 //! desktop-selection material over it. Failure -> border-only preview.
 //! No capture runs unless the caller reports a geometry change.
 
-use std::ptr;
-
 use crate::xlib::*;
 
 /// Accent from the shared `flamewm-skin` selection contract (0xef4048).
@@ -40,8 +38,7 @@ fn mask_width(mask: u64) -> u32 {
     if mask == 0 {
         return 0;
     }
-    let shifted = mask >> mask_shift(mask);
-    64 - shifted.leading_zeros() - shifted.trailing_zeros().min(64)
+    64 - (mask >> mask_shift(mask)).leading_zeros()
 }
 
 /// Scale one extracted channel field to 8 bits using the live mask geometry.
@@ -184,8 +181,7 @@ pub fn capture_drawable_rect(
         )
     };
     let bytes_per_pixel = match bits_per_pixel {
-        32 => 4usize,
-        24 => 4usize,
+        24 | 32 => 4usize,
         16 => 2usize,
         _ => {
             unsafe { XDestroyImage(image) };
@@ -230,7 +226,6 @@ pub fn capture_drawable_rect(
         }
     }
     unsafe { XDestroyImage(image) };
-    let _ = ptr::null::<u8>();
     Ok(BackdropCapture {
         width: width_px,
         height: height_px,
@@ -397,7 +392,7 @@ mod tests {
 
     #[test]
     fn capture_rejects_empty_rect_without_x() {
-        assert!(capture_root_rect(ptr::null_mut(), 0, (0, 0, 0, 10)).is_err());
-        assert!(capture_root_rect(ptr::null_mut(), 0, (0, 0, 10, 10)).is_err());
+        assert!(capture_root_rect(std::ptr::null_mut(), 0, (0, 0, 0, 10)).is_err());
+        assert!(capture_root_rect(std::ptr::null_mut(), 0, (0, 0, 10, 10)).is_err());
     }
 }

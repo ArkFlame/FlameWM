@@ -263,45 +263,31 @@ impl DockStrut {
         let y = y as i64;
         let w = w as i64;
         let h = h as i64;
-        let zero = || Self {
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: 0,
-            left_start_y: 0,
-            left_end_y: 0,
-            right_start_y: 0,
-            right_end_y: 0,
-            top_start_x: 0,
-            top_end_x: 0,
-            bottom_start_x: 0,
-            bottom_end_x: 0,
-        };
         // Bottom edge wins over left/right corners; the `y > 0` guard keeps
         // full-height rects (y == 0) from misclassifying as bottom struts.
         if y + h == root_h && y > 0 {
-            let mut s = zero();
+            let mut s = Self::NONE;
             s.bottom = (root_h - y).max(0) as u32;
             s.bottom_start_x = x.max(0) as u32;
             s.bottom_end_x = (x + w - 1).max(0) as u32;
             return Some(s);
         }
         if y == 0 && y + h < root_h {
-            let mut s = zero();
+            let mut s = Self::NONE;
             s.top = h.max(0) as u32;
             s.top_start_x = x.max(0) as u32;
             s.top_end_x = (x + w - 1).max(0) as u32;
             return Some(s);
         }
         if x == 0 && x + w < root_w {
-            let mut s = zero();
+            let mut s = Self::NONE;
             s.left = w.max(0) as u32;
             s.left_start_y = y.max(0) as u32;
             s.left_end_y = (y + h - 1).max(0) as u32;
             return Some(s);
         }
         if x + w == root_w && x > 0 {
-            let mut s = zero();
+            let mut s = Self::NONE;
             s.right = (root_w - x).max(0) as u32;
             s.right_start_y = y.max(0) as u32;
             s.right_end_y = (y + h - 1).max(0) as u32;

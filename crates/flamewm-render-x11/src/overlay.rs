@@ -631,30 +631,25 @@ impl Drop for WarpOverlay {
             if let Some(source) = self.warp_source.take() {
                 warp::free_warp_source(self.display, &self.api, source);
             }
-            if self.clear != 0 {
-                self.api.free_picture(self.display, self.clear);
-            }
+            let free = |picture| {
+                if picture != 0 {
+                    self.api.free_picture(self.display, picture);
+                }
+            };
+            free(self.clear);
             // Fade and crossfade share the capture picture; zero ids were never created.
-            if self.fade_source != 0 {
-                self.api.free_picture(self.display, self.fade_source);
-            }
-            if self.fade_clear != 0 {
-                self.api.free_picture(self.display, self.fade_clear);
-            }
+            free(self.fade_source);
+            free(self.fade_clear);
             if self.fade_pixmap != 0 {
                 XFreePixmap(self.display, self.fade_pixmap);
             }
-            if self.picture != 0 {
-                self.api.free_picture(self.display, self.picture);
-            }
+            free(self.picture);
             if let Some(backdrop) = self.backdrop.take() {
-                self.api.free_picture(self.display, backdrop.picture);
+                free(backdrop.picture);
                 XFreePixmap(self.display, backdrop.pixmap);
             }
             if let Some(off) = self.offscreen.take() {
-                if off.picture != 0 {
-                    self.api.free_picture(self.display, off.picture);
-                }
+                free(off.picture);
                 XFreePixmap(self.display, off.pixmap);
             }
             if self.window != 0 {

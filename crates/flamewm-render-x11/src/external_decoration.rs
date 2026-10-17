@@ -166,6 +166,12 @@ impl ExternalDecorationRenderer {
         Ok(())
     }
 
+    fn overlay_display(&self) -> Result<*mut Display, String> {
+        (!self.display.is_null())
+            .then_some(self.display)
+            .ok_or_else(|| "overlay: renderer has no display".to_string())
+    }
+
     fn target_mut(&mut self) -> Result<&mut ExternalDrawableTarget, String> {
         self.live()?;
         self.target
@@ -376,10 +382,7 @@ impl ExternalDecorationRenderer {
         source: WarpRect,
         target: WarpRect,
     ) -> Result<WarpOverlay, String> {
-        if self.display.is_null() {
-            return Err("overlay: renderer has no display".to_string());
-        }
-        WarpOverlay::begin(self.display, capture, source, target)
+        WarpOverlay::begin(self.overlay_display()?, capture, source, target)
     }
 
     /// Like [`ExternalDecorationRenderer::open_warp_overlay`] with the panel edge given by the caller.
@@ -390,10 +393,7 @@ impl ExternalDecorationRenderer {
         target: WarpRect,
         edge: PanelEdge,
     ) -> Result<WarpOverlay, String> {
-        if self.display.is_null() {
-            return Err("overlay: renderer has no display".to_string());
-        }
-        WarpOverlay::begin_with_edge(self.display, capture, source, target, edge)
+        WarpOverlay::begin_with_edge(self.overlay_display()?, capture, source, target, edge)
     }
 
     /// Opens a transition of `style` (Magic Lamp or crossfade Fade) on this renderer's display.
@@ -408,10 +408,8 @@ impl ExternalDecorationRenderer {
         style: TransitionStyle,
         direction: TransitionDirection,
     ) -> Result<WarpOverlay, String> {
-        if self.display.is_null() {
-            return Err("overlay: renderer has no display".to_string());
-        }
-        WarpOverlay::begin_styled(self.display, capture, source, target, edge, style, direction)
+        let display = self.overlay_display()?;
+        WarpOverlay::begin_styled(display, capture, source, target, edge, style, direction)
     }
 
     /// True when this renderer's display has a 32-bit ARGB visual. Without one, Magic Lamp
@@ -436,10 +434,7 @@ impl ExternalDecorationRenderer {
         x: i32,
         y: i32,
     ) -> Result<WarpOverlay, String> {
-        if self.display.is_null() {
-            return Err("overlay: renderer has no display".to_string());
-        }
-        WarpOverlay::begin_fade(self.display, capture, x, y)
+        WarpOverlay::begin_fade(self.overlay_display()?, capture, x, y)
     }
 
     /// Native image-cache stats: (entries, bytes). (0, 0) when no target.
