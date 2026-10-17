@@ -324,7 +324,6 @@ impl Session {
         unsafe { XFlush(self.display) };
         ok
     }
-
 }
 
 impl Drop for Session {
