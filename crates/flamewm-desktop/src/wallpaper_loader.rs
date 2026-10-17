@@ -123,6 +123,7 @@ pub enum PollOutcome {
 pub struct WallpaperLoader {
     control: Arc<WorkerControl>,
     worker: Option<JoinHandle<()>>,
+    #[cfg_attr(test, allow(dead_code))] // read only by `main`, which is cfg-excluded under test
     wake_read: UnixStream,
     next_generation: u64,
     state: WallpaperState,
@@ -255,11 +256,13 @@ impl WallpaperLoader {
 
     /// Returns the read end used to wake the desktop reactor when a worker result is ready.
     #[must_use]
+    #[cfg_attr(test, allow(dead_code))] // called only by `main`, which is cfg-excluded under test
     pub fn wake_fd(&self) -> RawFd {
         self.wake_read.as_raw_fd()
     }
 
     /// Drains worker wake bytes without doing filesystem or decode work on the UI turn.
+    #[cfg_attr(test, allow(dead_code))] // called only by `main`, which is cfg-excluded under test
     pub fn wake_drain(&mut self) {
         let mut buffer = [0u8; 64];
         loop {
