@@ -1,6 +1,5 @@
 //! Lock screen document: compiled template, layout-driven geometry, theme,
 //! the per-output background, and the icon and avatar pixels.
-use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 
@@ -109,21 +108,15 @@ fn build_background(settings: &LockSettings, width: u32, height: u32) -> Runtime
 /// built-in lock background when none is configured. Any failure returns `None`,
 /// so the caller falls back to a colour.
 fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Option<RuntimeImage> {
-    let (source, format, bytes) = match (settings.background_mode, settings.background_image.as_deref()) {
-        (LockBackgroundMode::Custom, Some(path)) => (
-            path.display().to_string(),
-            ImageSourceFormat::from_extension(Path::new(path))?,
-            Cow::Owned(fs::read(path).ok()?),
-        ),
+    let (source, natural) = match (settings.background_mode, settings.background_image.as_deref()) {
+        (LockBackgroundMode::Custom, Some(path)) => (path.display().to_string(), decode_file(path)?),
         (LockBackgroundMode::Default, _) => (
             BUILTIN_BACKGROUND_SOURCE.to_string(),
-            ImageSourceFormat::Webp,
-            Cow::Borrowed(BUILTIN_BACKGROUND),
+            decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok()?,
         ),
         // Solid colour, or a custom mode without a saved path: the caller paints the colour.
         _ => return None,
     };
-    let natural = decode_bytes(&bytes, format).ok()?;
     Some(runtime_image(source, cover_rgba(&natural, width, height)?))
 }
 
@@ -639,6 +632,14 @@ mod tests {
         }
     }
 
+    /// A recorder after `apply_document` for a `width` x `height` output with the built-in background.
+    fn applied(width: u32, height: u32) -> Recorder {
+        let mut document = Recorder::default();
+        apply_document(&mut document, &LockSettings::default(), width, height, background(width, height))
+            .expect("apply document");
+        document
+    }
+
     fn project(settings: &LockSettings, password: &PasswordBuffer, status: Status) -> Recorder {
         let mut recorder = Recorder::default();
         let view = LockView::project(settings, Some(sample_time()), "alice", password, status);
@@ -694,9 +695,7 @@ mod tests {
 
     #[test]
     fn power_labels_come_from_the_power_buttons() {
-        let mut document = Recorder::default();
-        apply_document(&mut document, &LockSettings::default(), 1280, 720, background(1280, 720))
-            .expect("apply document");
+        let document = applied(1280, 720);
         assert_eq!(document.text["lock-power-label-0"], "Sleep");
         assert_eq!(document.text["lock-power-label-1"], "Restart");
         assert_eq!(document.text["lock-power-label-2"], "Shut Down");
@@ -706,15 +705,7 @@ mod tests {
     #[test]
     fn document_geometry_equals_the_layout_for_the_output() {
         for (width, height) in [(1280, 720), (701, 438), (1920, 1080)] {
-            let mut document = Recorder::default();
-            apply_document(
-                &mut document,
-                &LockSettings::default(),
-                width,
-                height,
-                background(width, height),
-            )
-            .expect("apply document");
+            let document = applied(width, height);
             let layout = LockLayout::for_output(width, height);
             let expect = |placed: Placed| (placed.rect.x as f32, placed.rect.y as f32);
             assert_eq!(document.position["lock-clock"], expect(layout.clock));
@@ -949,15 +940,13 @@ mod tests {
 
     #[test]
     fn other_list_opens_with_log_out_and_cancel() {
-        let mut document = Recorder::default();
+        let mut document = applied(1280, 720);
         let open = PowerView {
             enabled: [true, true, true, true],
             confirm: None,
             other_open: true,
             message: String::new(),
         };
-        apply_document(&mut document, &LockSettings::default(), 1280, 720, background(1280, 720))
-            .expect("apply document");
         apply_power(&mut document, 1280, 720, &open).expect("apply power");
         assert!(document.visible["lock-other"] && document.visible["lock-other-logout"]);
         assert!(document.visible["lock-other-cancel"]);
