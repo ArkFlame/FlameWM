@@ -336,15 +336,12 @@ impl RasterCache {
     }
 
     fn get(&mut self, key: &RasterKey) -> Option<Result<Rgba8Raster, RasterError>> {
-        if let Some(hit) = self.entries.get(key) {
-            let hit = hit.clone();
-            if let Some(position) = self.order.iter().position(|entry| entry == key) {
-                self.order.remove(position);
-                self.order.push_back(key.clone());
-            }
-            return Some(hit);
+        let hit = self.entries.get(key)?.clone();
+        if let Some(position) = self.order.iter().position(|entry| entry == key) {
+            self.order.remove(position);
+            self.order.push_back(key.clone());
         }
-        None
+        Some(hit)
     }
 
     fn insert(&mut self, key: RasterKey, result: Result<Rgba8Raster, RasterError>) {
@@ -353,16 +350,10 @@ impl RasterCache {
         }
         let cost = Self::raster_bytes(&result);
         while !self.entries.is_empty() && self.used_bytes + cost > self.budget_bytes {
-            if let Some(old) = self.order.pop_front() {
-                if let Some(removed) = self.entries.remove(&old) {
-                    self.used_bytes = self.used_bytes.saturating_sub(Self::raster_bytes(&removed));
-                }
-            } else {
-                break;
+            let Some(old) = self.order.pop_front() else { break };
+            if let Some(removed) = self.entries.remove(&old) {
+                self.used_bytes = self.used_bytes.saturating_sub(Self::raster_bytes(&removed));
             }
-        }
-        if cost > self.budget_bytes && !result_is_large_ok(&result) {
-            return;
         }
         self.order.push_back(key.clone());
         self.used_bytes += cost;
@@ -372,11 +363,6 @@ impl RasterCache {
     fn memory_estimate_bytes(&self) -> usize {
         self.used_bytes + self.entries.len() * 96
     }
-}
-
-fn result_is_large_ok(_: &Result<Rgba8Raster, RasterError>) -> bool {
-    // Single oversized rasters are still cached so warm path stays FS-free.
-    true
 }
 
 impl IconResolver {
@@ -538,11 +524,8 @@ impl IconResolver {
 
     fn enforce_request_bound(&mut self) {
         while self.cache.len() > self.max_entries {
-            if let Some(first) = self.cache.keys().next().cloned() {
-                self.cache.remove(&first);
-            } else {
-                break;
-            }
+            let Some(first) = self.cache.keys().next().cloned() else { break };
+            self.cache.remove(&first);
         }
     }
 
