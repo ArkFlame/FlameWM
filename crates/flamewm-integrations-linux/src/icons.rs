@@ -464,15 +464,6 @@ impl IconResolver {
         }
     }
 
-    /// Cache-pressure snapshot for service bounds checks.
-    #[must_use]
-    pub fn metrics_snapshot(&self) -> IconMetricsSnapshot {
-        IconMetricsSnapshot {
-            request_entries: self.cache.len(),
-            request_bytes: self.request_bytes(),
-        }
-    }
-
     /// Reads XDG paths once. Theme selection remains explicit when callers use `new`.
     /// Default search order after packaged assets is Breeze then hicolor.
     #[must_use]
@@ -522,10 +513,6 @@ impl IconResolver {
         self.theme_caches.note_generation_bump();
     }
 
-    pub fn notify_palette_changed(&mut self, palette_generation: u64) {
-        self.palette_generation = palette_generation;
-    }
-
     #[must_use]
     pub const fn theme_generation(&self) -> u64 {
         self.theme_generation
@@ -541,33 +528,12 @@ impl IconResolver {
         self.cache.len()
     }
 
-    /// Bounded-cache stats (hits, misses) for theme roots/index/inheritance/path probes.
-    #[must_use]
-    pub fn theme_cache_stats(&self) -> (u64, u64) {
-        self.theme_caches.stats()
-    }
-
     /// Estimated bytes held by theme lookup caches + bounded raster LRU.
     #[must_use]
     pub fn memory_estimate_bytes(&self) -> usize {
         self.theme_caches.memory_estimate_bytes()
             + self.raster.memory_estimate_bytes()
             + self.request_bytes()
-    }
-
-    /// Builder: cap for the request-level (purpose+name+size+generation) map.
-    #[must_use]
-    pub fn with_max_entries(mut self, max_entries: usize) -> Self {
-        self.max_entries = max_entries.max(1);
-        self.enforce_request_bound();
-        self
-    }
-
-    /// Builder: raster LRU budget in bytes (default 8 MiB).
-    #[must_use]
-    pub fn with_raster_budget_bytes(mut self, budget_bytes: usize) -> Self {
-        self.raster.budget_bytes = budget_bytes.max(1024);
-        self
     }
 
     fn enforce_request_bound(&mut self) {
@@ -1003,12 +969,6 @@ impl IconResolver {
 /// Returns straight-alpha RGBA8; see [`Rgba8Raster`].
 pub fn rasterize_path(path: &Path, size: IconSize) -> Result<Rgba8Raster, RasterError> {
     rasterize_path_with_origin(path, size, IconOrigin::ExplicitPath)
-}
-
-/// Legacy opaque projection with black-background compositing semantics.
-/// Returns packed RGB8 bytes (3 bytes/px); prefer [`rasterize_path`] RGBA8.
-pub fn rasterize_path_rgb8(path: &Path, size: IconSize) -> Result<Vec<u8>, RasterError> {
-    rasterize_path(path, size).map(|raster| raster.to_rgb8_black_background())
 }
 
 fn rasterize_path_with_origin(
