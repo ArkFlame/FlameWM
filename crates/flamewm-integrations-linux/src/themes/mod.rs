@@ -14,10 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::icon_theme::{IconThemeIndex, inheritance_chain, parse_ini_value, search_roots};
 
-#[cfg(target_arch = "aarch64")]
-const O_NOFOLLOW: i32 = 0o100_000;
-#[cfg(not(target_arch = "aarch64"))]
-const O_NOFOLLOW: i32 = 0o400_000;
+const O_NOFOLLOW: i32 = if cfg!(target_arch = "aarch64") { 0o100_000 } else { 0o400_000 };
 const O_NONBLOCK: i32 = 0o4_000;
 
 /// Read a regular file without following a final symlink. The cap applies to
@@ -73,38 +70,27 @@ impl ThemeCatalog {
             let mut dirs: Vec<PathBuf> = read.filter_map(Result::ok).map(|e| e.path()).collect();
             dirs.sort();
             for dir in dirs {
-                if !dir.is_dir() {
-                    continue;
-                }
                 let Some(id) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
                     continue;
                 };
-                if !dir.join("index.theme").is_file() {
+                let index = dir.join("index.theme");
+                if !dir.is_dir() || !index.is_file() {
                     continue;
                 }
-                let text = fs::read_to_string(dir.join("index.theme"));
+                let text = fs::read_to_string(&index);
                 let readable = text.is_ok();
                 let text = text.unwrap_or_default();
                 let parsed = IconThemeIndex::parse(&id, &text);
                 let name = parse_ini_value(&text, "Icon Theme", "Name").unwrap_or_else(|| id.clone());
+                let mut push = |kind: ThemeKind, name: String, valid: bool| {
+                    entries.push(ThemeEntry { id: id.clone(), name, kind, root: dir.clone(), valid });
+                };
                 if !parsed.directories.is_empty() && seen.insert((ThemeKind::Icon, id.clone())) {
                     let valid = readable && parsed.directories.iter().any(|d| dir.join(d).is_dir());
-                    entries.push(ThemeEntry {
-                        id: id.clone(),
-                        name: name.clone(),
-                        kind: ThemeKind::Icon,
-                        root: dir.clone(),
-                        valid,
-                    });
+                    push(ThemeKind::Icon, name.clone(), valid);
                 }
                 if dir.join("cursors").is_dir() && seen.insert((ThemeKind::Cursor, id.clone())) {
-                    entries.push(ThemeEntry {
-                        id: id.clone(),
-                        name,
-                        kind: ThemeKind::Cursor,
-                        root: dir.clone(),
-                        valid: readable,
-                    });
+                    push(ThemeKind::Cursor, name, readable);
                 }
             }
         }
