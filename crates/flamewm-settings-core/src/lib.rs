@@ -684,6 +684,10 @@ mod tests {
         }
     }
 
+    fn fake_client(responses: impl IntoIterator<Item = Result<ControlResponse, ControlError>>) -> SettingsClient<FakeTransport> {
+        SettingsClient::new(FakeTransport { responses: responses.into_iter().collect(), ..Default::default() })
+    }
+
     struct RecordingTransport {
         responses: VecDeque<Result<ControlResponse, ControlError>>,
         requests: Rc<RefCell<Vec<ControlRequest>>>,
@@ -737,11 +741,7 @@ mod tests {
 
     #[test]
     fn display_refresh_selects_primary_output() {
-        let mut transport = FakeTransport::default();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        let mut client = SettingsClient::new(transport);
+        let mut client = fake_client([Ok(ControlResponse::Displays(display_snapshot()))]);
         client.refresh_displays().expect("refresh");
         assert_eq!(
             client.ui().selected_output.as_ref().map(|id| id.0.as_str()),
@@ -755,16 +755,11 @@ mod tests {
         updated.generation = 4;
         updated.outputs[0].shell_scale_percent = 125;
 
-        let mut transport = FakeTransport::default();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(updated)));
-
-        let mut client = SettingsClient::new(transport);
+        let mut client = fake_client([
+            Ok(ControlResponse::Displays(display_snapshot())),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Displays(updated)),
+        ]);
         client.refresh_displays().expect("initial display snapshot");
         assert!(
             client.set_shell_scale(125).is_ok(),
@@ -1003,8 +998,7 @@ mod tests {
 
     #[test]
     fn unchanged_capture_ends_lease_without_shortcut_mutation() {
-        let mut transport = FakeTransport::default();
-        transport.responses.extend([
+        let mut client = fake_client([
             Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 8,
                 bindings: [("ToggleStartMenu".to_owned(), flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())))].into_iter().collect(),
@@ -1012,7 +1006,6 @@ mod tests {
             Ok(ControlResponse::CaptureLease(23)),
             Ok(ControlResponse::Unit),
         ]);
-        let mut client = SettingsClient::new(transport);
         client.refresh_shortcuts().expect("initial snapshot");
         client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
         assert!(client.capture_hotkey("Super"));
