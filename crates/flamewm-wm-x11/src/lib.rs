@@ -317,25 +317,20 @@ fn output_for_window_rect(outputs: &[OutputSnapshot], rect: Rect) -> Option<Outp
 impl WindowPort for X11Desktop {
     fn get(&self, reference: WindowRef) -> FlameResult<flamewm_api::window::WindowSnapshot> {
         let window = self.check_window(reference)?;
-        let tree = self
+        let parent = self
             .conn
             .query_tree(window)
             .map_err(io_error)?
             .reply()
+            .map_err(io_error)?
+            .parent;
+        let geometry_window = if parent != self.root { parent } else { window };
+        let geometry = self
+            .conn
+            .get_geometry(geometry_window)
+            .map_err(io_error)?
+            .reply()
             .map_err(io_error)?;
-        let geometry = if tree.parent != self.root {
-            self.conn
-                .get_geometry(tree.parent)
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?
-        } else {
-            self.conn
-                .get_geometry(window)
-                .map_err(io_error)?
-                .reply()
-                .map_err(io_error)?
-        };
         let states = self.property32(window, "_NET_WM_STATE")?;
         let desktop = self
             .property32(window, "_NET_WM_DESKTOP")?
@@ -859,11 +854,9 @@ impl DisplayPort for X11Desktop {
                     _ => (Rect::default(), ModeId(0)),
                 }
             };
-            if !geometry.is_valid() {
-                let root_size = self.root_size();
-                if root_size.is_valid() {
-                    geometry = Rect::from_parts(Point::new(0, 0), root_size);
-                }
+            let root_size = self.root_size();
+            if !geometry.is_valid() && root_size.is_valid() {
+                geometry = Rect::from_parts(Point::new(0, 0), root_size);
             }
             outputs.push(OutputSnapshot {
                 id: OutputId::new(String::from_utf8_lossy(&info.name).into_owned()),
