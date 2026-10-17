@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use super::model::{FrameControl, FrameRegion};
+use super::resources::FrameEventTarget;
 
 /// Title-button hit target from skin `control_button_geometries`.
 /// Hit rects derive from skin geometry; glyph pixels never affect them.
@@ -35,31 +36,16 @@ pub fn frame_control_at(frame_width: u32, titlebar_height: u16, x: i16) -> Optio
     None
 }
 
-/// Event target: client XID placeholder plus the resolved region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FrameEventTarget {
-    pub client: u32,
-    pub region: FrameRegion,
-}
-
-/// Identity for a known child region: source XID is truth, never geometry.
-#[must_use]
-pub fn region_for_known_child(region: FrameRegion) -> FrameRegion {
-    region
-}
-
 /// Resolve an event source XID via the registry map (value-side).
-/// Known child XID -> its registered region; anything else -> client.
+/// Known child XID -> its registered region (source XID is truth, no geometry);
+/// anything else -> client.
 #[must_use]
 pub fn target_for_xid(
     registry: &HashMap<u32, FrameRegion>,
     client: u32,
     source: u32,
 ) -> FrameEventTarget {
-    let region = registry
-        .get(&source)
-        .copied()
-        .map_or(FrameRegion::Client, region_for_known_child);
+    let region = registry.get(&source).copied().unwrap_or(FrameRegion::Client);
     FrameEventTarget { client, region }
 }
 
@@ -113,10 +99,6 @@ mod tests {
                 client,
                 region: FrameRegion::Resize(ResizeEdges::top()),
             }
-        );
-        assert_eq!(
-            region_for_known_child(FrameRegion::TitleDrag),
-            FrameRegion::TitleDrag
         );
         assert_eq!(
             target_for_xid(&registry, client, 203).region,

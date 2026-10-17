@@ -83,11 +83,7 @@ pub fn plan_scene(
         title_family: Typography::RWR_0_0_9.family,
         title_size_px: title_style.size_px,
         title_weight: title_style.weight,
-        title_color: (
-            ((text.0 >> 16) & 0xff) as u8,
-            ((text.0 >> 8) & 0xff) as u8,
-            (text.0 & 0xff) as u8,
-        ),
+        title_color: rgb_channels(text),
         bg: rgb_channels(bg),
         bg_alpha: tokens.titlebar_alpha,
         title_width,
@@ -313,16 +309,17 @@ pub fn render(
     } else {
         Ok(())
     };
-    let mut controls_result: Result<(), String> = Ok(());
-    for blit in crate::chrome::control_blits_for(
+    let controls_result = crate::chrome::control_blits_for(
         scene.frame_w,
         scene.maximized,
         scene.fullscreen,
         scene.hover,
         scene.pressed,
         &scene.tokens,
-    ) {
-        let step = renderer.blit_rgba(
+    )
+    .into_iter()
+    .try_for_each(|blit| {
+        renderer.blit_rgba(
             &blit.raster.pixels,
             blit.raster.width,
             blit.raster.height,
@@ -332,12 +329,8 @@ pub fn render(
                 width: blit.dest_w,
                 height: blit.dest_h,
             },
-        );
-        if let Err(message) = step {
-            controls_result = Err(message);
-            break;
-        }
-    }
+        )
+    });
     let shape_result = renderer.apply_shape(u32::from(scene.radius));
     renderer.flush();
     retarget_result?;

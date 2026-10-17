@@ -396,16 +396,10 @@ pub fn plan_client_configure(
         Some((w, h)) => snap_client_size(w.max(1), h.max(1), &req.hints),
         None => prev_size,
     };
-    // Gravity moves the requested origin only when the size changed.
-    let base_origin = if req_client_size.is_some() {
-        gravity_adjust_origin(prev_origin, prev_size, new_size, gravity)
-    } else {
-        req_client_origin
-    };
-    // A bare position request (no size) honors the requested origin.
+    // Gravity moves the requested origin only when the size changed; a bare
+    // position request (no size) honors the requested origin.
     let origin = if req_client_size.is_some() {
-        let _ = req_client_origin;
-        base_origin
+        gravity_adjust_origin(prev_origin, prev_size, new_size, gravity)
     } else {
         req_client_origin
     };
@@ -436,15 +430,14 @@ pub fn plan_initial_map(
     let origin = gravity_adjust_origin(req_client_origin, size, size, gravity);
     let frame = client_rect_to_frame(origin, size, req.frame_extents);
     let wa = req.work_area;
-    let x = frame.x.clamp(
-        wa.x,
-        wa.x.saturating_add(wa.w.saturating_sub(frame.w).max(0)),
-    );
-    let y = frame.y.clamp(
-        wa.y,
-        wa.y.saturating_add(wa.h.saturating_sub(frame.h).max(0)),
-    );
+    let x = clamp_span(frame.x, frame.w, wa.x, wa.w);
+    let y = clamp_span(frame.y, frame.h, wa.y, wa.h);
     GeometryPlan::of(req, RootRect::new(x, y, frame.w, frame.h))
+}
+
+/// Clamp a span of `len` at `start` so it fits inside `[lo, lo + extent)`.
+fn clamp_span(start: i32, len: i32, lo: i32, extent: i32) -> i32 {
+    start.clamp(lo, lo.saturating_add(extent.saturating_sub(len).max(0)))
 }
 
 /// Re-adopt after a WM restart: the client sits at its root position inside

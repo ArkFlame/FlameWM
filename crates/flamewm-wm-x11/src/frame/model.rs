@@ -42,94 +42,58 @@ impl Default for ResizeEdges {
 }
 
 impl ResizeEdges {
+    const fn of(left: bool, right: bool, top: bool, bottom: bool) -> Self {
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+        }
+    }
+
     #[must_use]
     pub const fn none() -> Self {
-        Self {
-            left: false,
-            right: false,
-            top: false,
-            bottom: false,
-        }
+        Self::of(false, false, false, false)
     }
 
     #[must_use]
     pub const fn left() -> Self {
-        Self {
-            left: true,
-            right: false,
-            top: false,
-            bottom: false,
-        }
+        Self::of(true, false, false, false)
     }
 
     #[must_use]
     pub const fn right() -> Self {
-        Self {
-            left: false,
-            right: true,
-            top: false,
-            bottom: false,
-        }
+        Self::of(false, true, false, false)
     }
 
     #[must_use]
     pub const fn top() -> Self {
-        Self {
-            left: false,
-            right: false,
-            top: true,
-            bottom: false,
-        }
+        Self::of(false, false, true, false)
     }
 
     #[must_use]
     pub const fn bottom() -> Self {
-        Self {
-            left: false,
-            right: false,
-            top: false,
-            bottom: true,
-        }
+        Self::of(false, false, false, true)
     }
 
     #[must_use]
     pub const fn top_left() -> Self {
-        Self {
-            left: true,
-            right: false,
-            top: true,
-            bottom: false,
-        }
+        Self::of(true, false, true, false)
     }
 
     #[must_use]
     pub const fn top_right() -> Self {
-        Self {
-            left: false,
-            right: true,
-            top: true,
-            bottom: false,
-        }
+        Self::of(false, true, true, false)
     }
 
     #[must_use]
     pub const fn bottom_left() -> Self {
-        Self {
-            left: true,
-            right: false,
-            top: false,
-            bottom: true,
-        }
+        Self::of(true, false, false, true)
     }
 
     #[must_use]
     pub const fn bottom_right() -> Self {
-        Self {
-            left: false,
-            right: true,
-            top: false,
-            bottom: true,
-        }
+        Self::of(false, true, false, true)
     }
 
     #[cfg(test)]

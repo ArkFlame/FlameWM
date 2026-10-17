@@ -130,21 +130,13 @@ impl FrameResources {
         if xid == self.title_drag {
             return Some(FrameRegion::TitleDrag);
         }
-        let mut i = 0;
-        while i < 3 {
-            if self.controls[i] == xid {
-                return Some(FrameRegion::Control(CONTROL_ORDER[i]));
-            }
-            i += 1;
+        if let Some(i) = self.controls.iter().position(|&c| c == xid) {
+            return Some(FrameRegion::Control(CONTROL_ORDER[i]));
         }
-        let mut j = 0;
-        while j < 8 {
-            if self.resize[j] == xid {
-                return Some(FrameRegion::Resize(RESIZE_ORDER[j]));
-            }
-            j += 1;
-        }
-        None
+        self.resize
+            .iter()
+            .position(|&r| r == xid)
+            .map(|j| FrameRegion::Resize(RESIZE_ORDER[j]))
     }
 }
 
