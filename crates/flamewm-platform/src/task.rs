@@ -176,10 +176,9 @@ impl TaskStrip {
             return false;
         };
         let app = self.entries[index].app.clone();
-        if self.is_pinned(&app) {
-            return true;
+        if !self.is_pinned(&app) {
+            self.entries[index].set_pinned_window(window);
         }
-        self.entries[index].set_pinned_window(window);
         true
     }
 
