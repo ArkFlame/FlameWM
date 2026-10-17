@@ -61,9 +61,6 @@ impl<'a, C: Connection> Wm<'a, C> {
                     configure::Observation::Current => {
                         configure_bump!(notify_expected, notify_expected_total);
                     }
-                    configure::Observation::Stale => {
-                        configure_bump!(notify_expected, notify_expected_total);
-                    }
                     configure::Observation::Mismatch => {
                         configure_bump!(notify_mismatch, notify_mismatch_total);
                         flamewm_debug::emit(
@@ -102,9 +99,6 @@ impl<'a, C: Connection> Wm<'a, C> {
                     ),
                 ) {
                     configure::Observation::Current => {
-                        configure_bump!(notify_expected, notify_expected_total);
-                    }
-                    configure::Observation::Stale => {
                         configure_bump!(notify_expected, notify_expected_total);
                     }
                     configure::Observation::Mismatch => {

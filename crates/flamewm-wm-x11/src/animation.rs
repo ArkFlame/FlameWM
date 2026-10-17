@@ -102,16 +102,19 @@ impl<T> CaptureCache<T> {
         let _ = self.take(key);
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.bytes

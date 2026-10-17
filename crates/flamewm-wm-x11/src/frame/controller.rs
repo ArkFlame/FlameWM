@@ -12,8 +12,10 @@ use flamewm_render_core::CursorKind;
 use super::coords::{ClientRootRect, RootPoint, RootRect};
 use super::geometry::{
     FrameExtents, GeometryReason, GeometryRequest, frame_to_client_local, frame_to_client_root,
-    plan_client_configure, plan_move, plan_resize,
+    plan_move, plan_resize,
 };
+#[cfg(test)]
+use super::geometry::plan_client_configure;
 use super::input::target_for_xid;
 use super::layout::TITLEBAR_H;
 use super::model::{
@@ -146,6 +148,7 @@ pub enum FrameEvent {
     /// `root_origin`/`size` are client-window geometry (client-root rect),
     /// never the frame outer rect and never a ConfigureNotify observation.
     /// The live owner must never construct this from notify events (M01).
+    #[cfg(test)]
     ClientConfigureRequest {
         root_origin: RootPoint,
         size: Option<(u32, u32)>,
@@ -537,6 +540,7 @@ pub fn reduce_owned(
                 (state, vec![FrameEffect::Noop])
             }
         }
+        #[cfg(test)]
         FrameEvent::ClientConfigureRequest { root_origin, size } => {
             let req = request(
                 &state,
@@ -729,10 +733,11 @@ mod tests {
             .with_registry(registry)
     }
 
-    fn maximized_state() -> ControllerState {
+    /// Floating fixture moved into `mode` at `current`, resumable back to `START`.
+    fn resumed_state(mode: PlacementMode, current: RootRect) -> ControllerState {
         let mut state = floating_state();
-        state.placement.mode = PlacementMode::Maximized;
-        state.placement.current = WA;
+        state.placement.mode = mode;
+        state.placement.current = current;
         state.placement.resume = Some(PlacementSnapshot {
             mode: PlacementMode::Floating,
             rect: START,
@@ -740,15 +745,15 @@ mod tests {
         state
     }
 
+    fn maximized_state() -> ControllerState {
+        resumed_state(PlacementMode::Maximized, WA)
+    }
+
     fn snapped_state() -> ControllerState {
-        let mut state = floating_state();
-        state.placement.mode = PlacementMode::Snapped(SnapTarget::Left);
-        state.placement.current = RootRect::new(0, 0, 960, 1080);
-        state.placement.resume = Some(PlacementSnapshot {
-            mode: PlacementMode::Floating,
-            rect: START,
-        });
-        state
+        resumed_state(
+            PlacementMode::Snapped(SnapTarget::Left),
+            RootRect::new(0, 0, 960, 1080),
+        )
     }
 
     fn has_full_configure(effects: &[FrameEffect]) -> bool {

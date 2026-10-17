@@ -241,6 +241,7 @@ fn control_glyph_cache()
 /// scheme. Rest uses the Flame default; hover/pressed tint the scheme text
 /// channel (dark glyph on light disk for min/max/restore, light glyph on
 /// red disk for close). Pure/cached assets only.
+#[cfg(test)]
 #[must_use]
 pub fn control_glyph_raster(
     role: ControlRole,
@@ -251,7 +252,7 @@ pub fn control_glyph_raster(
     control_glyph_raster_shared(role, edge, material, look).map(|raster| (*raster).clone())
 }
 
-/// Shared form of [`control_glyph_raster`]: a cache hit clones the `Arc`, not the pixels.
+/// Shared form of `control_glyph_raster`: a cache hit clones the `Arc`, not the pixels.
 #[must_use]
 pub fn control_glyph_raster_shared(
     role: ControlRole,

@@ -75,15 +75,16 @@ fn byte_len(w: u32, h: u32) -> Result<usize, SnapshotError> {
 }
 
 impl DragSnapshot {
-    /// Like [`DragSnapshot::crop`], but desktop coordinates outside the root replicate the
+    /// Like `DragSnapshot::crop`, but desktop coordinates outside the root replicate the
     /// nearest root edge pixel instead of transparent black.
+    #[cfg(test)]
     pub fn crop_clamped(&self, x: i32, y: i32, w: u32, h: u32) -> Vec<u8> {
         let mut out = Vec::with_capacity(w as usize * h as usize * 4);
         self.crop_clamped_into(x, y, w, h, &mut out);
         out
     }
 
-    /// Same output as [`DragSnapshot::crop_clamped`], written into `out`, which is cleared
+    /// Same output as `DragSnapshot::crop_clamped`, written into `out`, which is cleared
     /// first. Its allocation is reused: repeated crops of the same size do not reallocate.
     pub fn crop_clamped_into(&self, x: i32, y: i32, w: u32, h: u32, out: &mut Vec<u8>) {
         let len = w as usize * h as usize * 4;
@@ -227,7 +228,7 @@ mod tests {
         // Half-coverage premultiplied white over opaque black gives mid grey, not white.
         let half = [128, 128, 128, 128];
         let layers = [Layer { x: 0, y: 0, w: 1, h: 1, rgba: &half }];
-        let snap = DragSnapshot::build((0, 0), 1, 1, base.clone(), &layers).unwrap();
+        let snap = DragSnapshot::build((0, 0), 1, 1, base, &layers).unwrap();
         assert_eq!(snap.crop(0, 0, 1, 1), vec![128, 128, 128, 255]);
     }
 
@@ -250,7 +251,7 @@ mod tests {
     #[test]
     fn crop_outside_root_is_transparent() {
         let base = [px(RED), px(GREEN), px(BLACK), px(RED)].concat();
-        let snap = DragSnapshot::build((0, 0), 2, 2, base.clone(), &[]).unwrap();
+        let snap = DragSnapshot::build((0, 0), 2, 2, base, &[]).unwrap();
         assert_eq!(snap.crop(10, 10, 3, 3), vec![0u8; 3 * 3 * 4]);
         // Desktop (1,1) is the last root pixel; the rest of this 2x2 window is outside.
         let mut expected = px(RED);
@@ -261,7 +262,7 @@ mod tests {
     #[test]
     fn crop_clamped_replicates_root_edges() {
         let base = [px(RED), px(GREEN), px(BLACK), px(RED)].concat();
-        let snap = DragSnapshot::build((0, 0), 2, 2, base.clone(), &[]).unwrap();
+        let snap = DragSnapshot::build((0, 0), 2, 2, base, &[]).unwrap();
         assert_eq!(snap.crop_clamped(-2, -2, 2, 2), [px(RED), px(RED), px(RED), px(RED)].concat());
         assert_eq!(snap.crop_clamped(1, 1, 2, 1), [px(RED), px(RED)].concat());
     }

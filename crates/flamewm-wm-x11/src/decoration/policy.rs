@@ -8,6 +8,7 @@
 //!
 
 /// Who draws window borders/titlebar for a managed client.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DecorationPolicy {
     /// Flame creates and paints its frame; full EWMH action set applies.
@@ -23,8 +24,8 @@ pub enum DecorationPolicy {
     Undecorated,
 }
 
+#[cfg(test)]
 impl DecorationPolicy {
-    #[cfg(test)]
     #[must_use]
     pub const fn has_flame_frame(self) -> bool {
         matches!(self, Self::ServerDecorated)

@@ -521,7 +521,6 @@ fn run_session(
         flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
         let areas = host.output_work_areas();
         let wait = crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
-        drop(host);
         drop(host_guard);
         wm.set_output_work_areas(areas)?;
         // Wake the reactor at the pending display revert deadline; None when nothing is pending.

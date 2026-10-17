@@ -48,16 +48,7 @@ impl FrameChildLayout {
     #[cfg(test)]
     #[must_use]
     pub const fn resize_pairs() -> [ResizeEdges; 8] {
-        [
-            ResizeEdges::top_left(),
-            ResizeEdges::top_right(),
-            ResizeEdges::bottom_left(),
-            ResizeEdges::bottom_right(),
-            ResizeEdges::top(),
-            ResizeEdges::bottom(),
-            ResizeEdges::left(),
-            ResizeEdges::right(),
-        ]
+        crate::frame::resources::RESIZE_ORDER
     }
 
     /// Resize rects in the same corner-first order as [`Self::resize_pairs`].
@@ -96,31 +87,31 @@ pub fn layout_frame_children(
         (cw / 3).max(1)
     };
 
+    let strip_w = (w - 2 * t).max(0);
+    let mid_w = (strip_w - cw).max(0);
+    let side_h = (h - tb - t).max(0);
+
     let top_left = FrameRect::new(0, 0, t, t);
     let top_right = FrameRect::new(w - t, 0, t, t);
     let bottom_left = FrameRect::new(0, h - t, t, t);
     let bottom_right = FrameRect::new(w - t, h - t, t, t);
-    let top = FrameRect::new(t, 0, (w - 2 * t - cw).max(0), t);
-    let bottom = FrameRect::new(t, h - t, (w - 2 * t).max(0), t);
-    let left = FrameRect::new(0, tb, t, (h - tb - t).max(0));
-    let right = FrameRect::new(w - t, tb, t, (h - tb - t).max(0));
+    let top = FrameRect::new(t, 0, mid_w, t);
+    let bottom = FrameRect::new(t, h - t, strip_w, t);
+    let left = FrameRect::new(0, tb, t, side_h);
+    let right = FrameRect::new(w - t, tb, t, side_h);
 
     // Controls from the skin formula, then clipped below the top strip
     // when touching it (control top lives at y=0, strip owns y=0..t).
-    let mut controls = [FrameRect::new(0, 0, 0, 0); 3];
-    let mut i = 0;
-    while i < 3 {
-        let x = w - cw + bw * i as i32;
-        let raw = FrameRect::new(x, 0, bw, tb);
-        controls[i] = if raw.y < t {
+    let controls = std::array::from_fn(|i| {
+        let raw = FrameRect::new(w - cw + bw * i as i32, 0, bw, tb);
+        if raw.y < t {
             FrameRect::new(raw.x, t, raw.w, (raw.h - (t - raw.y)).max(0))
         } else {
             raw
-        };
-        i += 1;
-    }
+        }
+    });
 
-    let title_drag = FrameRect::new(t, t, (w - 2 * t - cw).max(0), (tb - t).max(0));
+    let title_drag = FrameRect::new(t, t, mid_w, (tb - t).max(0));
 
     FrameChildLayout {
         top_left,
@@ -150,6 +141,14 @@ mod tests {
 
     fn overlaps(a: FrameRect, b: FrameRect) -> bool {
         a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    }
+
+    /// All twelve children: 8 resize, title-drag, 3 controls.
+    fn all_children(l: FrameChildLayout) -> Vec<FrameRect> {
+        let mut all = l.resize_rects().to_vec();
+        all.push(l.title_drag);
+        all.extend(l.controls);
+        all
     }
 
     #[test]
@@ -206,10 +205,7 @@ mod tests {
 
     #[test]
     fn twelve_children_nonoverlapping() {
-        let l = layout();
-        let mut all = l.resize_rects().to_vec();
-        all.push(l.title_drag);
-        all.extend(l.controls);
+        let all = all_children(layout());
         assert_eq!(all.len(), 12);
         for i in 0..all.len() {
             assert!(all[i].w > 0 && all[i].h > 0, "{:?}", all[i]);
@@ -253,11 +249,7 @@ mod tests {
         // Layout is frame-local; crossing the (500,200) root origin and back
         // is the identity on every child rect.
         let origin = RootPoint::new(500, 200);
-        let l = layout();
-        let mut all = l.resize_rects().to_vec();
-        all.push(l.title_drag);
-        all.extend(l.controls);
-        for rect in all {
+        for rect in all_children(layout()) {
             let root: RootRect = rect.to_root(origin);
             assert_eq!(root.x, rect.x + 500);
             assert_eq!(root.y, rect.y + 200);

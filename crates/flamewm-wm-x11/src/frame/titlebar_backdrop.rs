@@ -83,6 +83,7 @@ impl BackdropCache {
         self.entries.clear();
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }

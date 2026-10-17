@@ -66,10 +66,12 @@ pub enum RequestDecision {
 }
 
 impl RequestDecision {
+    #[cfg(test)]
     #[must_use]
     pub const fn needs_synthetic_notify(self) -> bool {
         !matches!(self, Self::AcceptOnce)
     }
+    #[cfg(test)]
     #[must_use]
     pub const fn geometry_effects(self) -> usize {
         match self {
@@ -98,7 +100,6 @@ pub fn decide_request(session: &InteractionSession, mode: PlacementMode) -> Requ
 /// Observation-only: carries no geometry effects by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Observation {
-    Stale,
     Current,
     Mismatch,
 }

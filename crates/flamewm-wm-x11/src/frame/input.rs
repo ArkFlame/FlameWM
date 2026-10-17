@@ -91,24 +91,13 @@ mod tests {
     fn test_registry() -> (HashMap<u32, FrameRegion>, u32) {
         let client = 20_u32;
         let mut registry = HashMap::new();
-        let edges = [
-            ResizeEdges::top_left(),
-            ResizeEdges::top_right(),
-            ResizeEdges::bottom_left(),
-            ResizeEdges::bottom_right(),
-            ResizeEdges::top(),
-            ResizeEdges::bottom(),
-            ResizeEdges::left(),
-            ResizeEdges::right(),
-        ];
-        for (index, edges) in edges.iter().enumerate() {
+        for (index, edges) in crate::frame::resources::RESIZE_ORDER.iter().enumerate() {
             registry.insert(100 + index as u32, FrameRegion::Resize(*edges));
         }
         registry.insert(200, FrameRegion::TitleDrag);
         registry.insert(201, FrameRegion::Control(FrameControl::Minimize));
         registry.insert(202, FrameRegion::Control(FrameControl::MaximizeRestore));
         registry.insert(203, FrameRegion::Control(FrameControl::Close));
-        let _ = (W, H);
         (registry, client)
     }
 

@@ -1,39 +1,34 @@
-//! Decoration cache: WM-owned glyph/raster caches, no per-frame rediscovery.
+//! Decoration cache: WM-owned icon/raster caches, no per-frame rediscovery.
 //!
-//! Control SVGs decode once per role/material (see
-//! `crate::chrome::control_glyph_raster`), native icon rasters once per
-//! slot edge, catalog `Icon=` rasters once per icon name. Thread-unsafe by
-//! design: owned by the single-threaded WM event loop. All caches are
-//! bounded LRU with fixed capacities; bounds are kept in production.
+//! Native icon rasters once per slot edge, catalog `Icon=` rasters once per
+//! icon name. Thread-unsafe by design: owned by the single-threaded WM event
+//! loop. All caches are bounded LRU with fixed capacities; bounds are kept in
+//! production.
 
+#[cfg(test)]
 use std::collections::{HashMap, VecDeque};
 
-use crate::chrome::{ControlGlyphKey, ControlMaterial, ControlRole};
-
+#[cfg(test)]
 const TITLE_MEASURE_CACHE_CAPACITY: usize = 1_024;
+#[cfg(test)]
 const ICON_RASTER_CACHE_CAPACITY: usize = 128;
-const CONTROL_GLYPH_CACHE_CAPACITY: usize = 32;
 
-/// WM-owned frame caches: control glyphs, icon rasters, title measures,
-/// profiler hook. Title measures cache the canonical Xft estimate
+/// WM-owned frame caches: icon rasters, title measures, profiler hook.
+/// Title measures cache the canonical Xft estimate
 /// (`external_text_measure`, IBM Plex Sans) so layout never re-measures
 /// per frame; native pixmap bytes track `external_pixmap_byte_estimate`.
-/// Control glyphs cache one raster per role/material (resting glyph and
-/// hover/pressed semantic glyphs: white-disk dark-glyph for min/max/
-/// restore, red-disk light-glyph for close), decoded once each. Bounded
-/// LRU: icon rasters cap at 128 entries, title measures at 1024, control
-/// glyphs at 32.
+/// Bounded LRU: icon rasters cap at 128 entries, title measures at 1024.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct DecorationCache {
     icon_rasters: HashMap<String, flamewm_integrations_linux::icons::Rgba8Raster>,
     icon_raster_order: VecDeque<String>,
     title_measures: HashMap<(String, u32), i32>,
     title_measure_order: VecDeque<(String, u32)>,
-    control_glyphs: HashMap<(ControlRole, u32, ControlMaterial), flamewm_image_core::RgbaImage>,
-    control_glyph_order: VecDeque<(ControlRole, u32, ControlMaterial)>,
     image_cache_bytes: usize,
 }
 
+#[cfg(test)]
 impl DecorationCache {
     #[must_use]
     pub fn new() -> Self {
@@ -93,48 +88,6 @@ impl DecorationCache {
         self.title_measures.insert(key, width);
     }
 
-    /// Cached control glyph raster for one role/edge/material, decoded
-    /// once via `crate::chrome::control_glyph_raster`. Pure/cached asset
-    /// only: no application catalog lookup.
-    #[must_use]
-    pub fn control_glyph(
-        &mut self,
-        role: ControlRole,
-        edge: u32,
-        material: ControlMaterial,
-    ) -> Option<flamewm_image_core::RgbaImage> {
-        let key = (role, edge, material);
-        if let Some(cached) = self.control_glyphs.get(&key).cloned() {
-            touch(&mut self.control_glyph_order, &key);
-            return Some(cached);
-        }
-        let raster = crate::chrome::control_glyph_raster(
-            role,
-            edge,
-            material,
-            crate::chrome::ControlLook::default(),
-        )?;
-        if self.control_glyphs.contains_key(&key) {
-            self.control_glyphs.insert(key, raster.clone());
-            touch(&mut self.control_glyph_order, &key);
-            return Some(raster);
-        }
-        evict_oldest(
-            &mut self.control_glyphs,
-            &mut self.control_glyph_order,
-            CONTROL_GLYPH_CACHE_CAPACITY,
-        );
-        self.control_glyph_order.push_back(key);
-        self.control_glyphs.insert(key, raster.clone());
-        self.add_image_cache_bytes(raster.pixels.len());
-        Some(raster)
-    }
-
-    #[must_use]
-    pub fn control_glyph_count(&self) -> usize {
-        self.control_glyphs.len()
-    }
-
     /// Native pixmap bytes for the live-target image cache (w*h*4 per
     /// cached entry, canonical `external_pixmap_byte_estimate`).
     #[must_use]
@@ -160,15 +113,6 @@ impl DecorationCache {
         self.icon_rasters.len()
     }
 
-    #[must_use]
-    pub fn control_material_key(
-        role: ControlRole,
-        edge: u32,
-        hovered: bool,
-        pressed: bool,
-    ) -> ControlGlyphKey {
-        ControlGlyphKey::new(role, edge, ControlMaterial::for_pointer(hovered, pressed))
-    }
 }
 
 /// Convert a worker-produced straight RGBA8 catalog raster to ARGB32.
@@ -205,6 +149,7 @@ pub fn catalog_icon_image(
     })
 }
 
+#[cfg(test)]
 fn touch<K: Clone + PartialEq>(order: &mut VecDeque<K>, key: &K) {
     if let Some(position) = order.iter().position(|entry| entry == key) {
         order.remove(position);
@@ -212,6 +157,7 @@ fn touch<K: Clone + PartialEq>(order: &mut VecDeque<K>, key: &K) {
     order.push_back(key.clone());
 }
 
+#[cfg(test)]
 fn evict_oldest<K: Clone + Eq + std::hash::Hash, V>(
     entries: &mut HashMap<K, V>,
     order: &mut VecDeque<K>,

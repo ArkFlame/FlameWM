@@ -713,19 +713,10 @@ fn topology_dirty_is_consumed_exactly_once_per_change() {
     assert!(!dirty.take());
 }
 
-fn test_output(id: &str, geometry: (i32, i32, i32, i32), work: (i32, i32, i32, i32), primary: bool) -> OutputWorkArea {
-    OutputWorkArea::from_host((
-        flamewm_api::OutputId::new(id),
-        flamewm_api::Rect::new(geometry.0, geometry.1, geometry.2, geometry.3),
-        flamewm_api::Rect::new(work.0, work.1, work.2, work.3),
-        primary,
-    ))
-}
-
 #[test]
 fn removed_output_rehomes_floating_snapped_and_maximized_clients() {
     let global = Rect::new(0, 0, 1920, 1040);
-    let surviving = vec![test_output("A", (0, 0, 1920, 1080), (0, 0, 1920, 1040), true)];
+    let surviving = vec![output("A", Rect::new(0, 0, 1920, 1080), Rect::new(0, 0, 1920, 1040), true)];
     // A window on the removed right output is pulled onto the surviving output, keeping 1/4
     // (100 px) visible; it may overflow the primary work area (taskbar band included).
     let floating = rehome_outer(PlacementMode::Floating, Rect::new(2500, 900, 400, 300), &surviving, global);
@@ -751,9 +742,9 @@ fn removed_output_rehomes_floating_snapped_and_maximized_clients() {
 fn negative_origin_outputs_clamp_without_unsigned_wrap() {
     let global = Rect::new(0, 0, 1920, 1040);
     let outputs = vec![
-        test_output("L", (-1920, 0, 1920, 1080), (-1920, 0, 1920, 1040), false),
-        test_output("P", (0, 0, 1920, 1080), (0, 0, 1920, 1040), true),
-        test_output("T", (0, -1080, 1920, 1080), (0, -1080, 1920, 1040), false),
+        output("L", Rect::new(-1920, 0, 1920, 1080), Rect::new(-1920, 0, 1920, 1040), false),
+        output("P", Rect::new(0, 0, 1920, 1080), Rect::new(0, 0, 1920, 1040), true),
+        output("T", Rect::new(0, -1080, 1920, 1080), Rect::new(0, -1080, 1920, 1040), false),
     ];
     // Overlaps the left output with y above its work area: floating windows may overflow the
     // work area, and this one keeps a quarter visible on the outputs, so it is left alone.

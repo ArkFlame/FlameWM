@@ -318,6 +318,14 @@ fn any_conn_err(error: x11rb::errors::ConnectionError) -> AnyError {
     ))
 }
 
+fn bump(counter: &std::sync::atomic::AtomicU64) {
+    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn read(counter: &std::sync::atomic::AtomicU64) -> u64 {
+    counter.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Profiler point plus the running total read by the summary lines.
 struct TotalledCounter {
     point: flamewm_profiler::CounterPoint,
@@ -411,7 +419,6 @@ struct ConfigureCounterSet {
     notify_input_child: flamewm_profiler::CounterPoint,
     notify_expected: flamewm_profiler::CounterPoint,
     notify_mismatch: flamewm_profiler::CounterPoint,
-    feedback_reconfigure: flamewm_profiler::CounterPoint,
     synthetic: flamewm_profiler::CounterPoint,
     request_received_total: std::sync::atomic::AtomicU64,
     request_accepted_total: std::sync::atomic::AtomicU64,
@@ -445,9 +452,6 @@ fn configure_counters() -> &'static ConfigureCounterSet {
         notify_input_child: flamewm_profiler::CounterPoint::new("wm.configure.notify.input_child"),
         notify_expected: flamewm_profiler::CounterPoint::new("wm.configure.notify.expected"),
         notify_mismatch: flamewm_profiler::CounterPoint::new("wm.configure.notify.mismatch"),
-        feedback_reconfigure: flamewm_profiler::CounterPoint::new(
-            "wm.configure.feedback_reconfigure",
-        ),
         synthetic: flamewm_profiler::CounterPoint::new("wm.configure.synthetic"),
         request_received_total: std::sync::atomic::AtomicU64::new(0),
         request_accepted_total: std::sync::atomic::AtomicU64::new(0),
@@ -468,9 +472,7 @@ macro_rules! configure_bump {
     ($point:ident, $total:ident) => {{
         let counters = configure_counters();
         counters.$point.increment();
-        counters
-            .$total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        bump(&counters.$total);
     }};
 }
 
@@ -481,20 +483,18 @@ fn emit_configure_summary() {
         std::time::Duration::from_secs(1),
         || {
             let counters = configure_counters();
-            let load =
-                |v: &std::sync::atomic::AtomicU64| v.load(std::sync::atomic::Ordering::Relaxed);
             format!(
                 "requests={} accepted={} refused_interactive={} refused_mode={} notify_frame={} notify_client={} expected={} mismatch={} feedback={} synthetic={}",
-                load(&counters.request_received_total),
-                load(&counters.request_accepted_total),
-                load(&counters.request_refused_interactive_total),
-                load(&counters.request_refused_mode_total),
-                load(&counters.notify_frame_total),
-                load(&counters.notify_client_total),
-                load(&counters.notify_expected_total),
-                load(&counters.notify_mismatch_total),
-                load(&counters.feedback_total),
-                load(&counters.synthetic_total),
+                read(&counters.request_received_total),
+                read(&counters.request_accepted_total),
+                read(&counters.request_refused_interactive_total),
+                read(&counters.request_refused_mode_total),
+                read(&counters.notify_frame_total),
+                read(&counters.notify_client_total),
+                read(&counters.notify_expected_total),
+                read(&counters.notify_mismatch_total),
+                read(&counters.feedback_total),
+                read(&counters.synthetic_total),
             )
         },
     );
@@ -556,68 +556,38 @@ impl MoveCounterSet {
             .swap(target_bits, std::sync::atomic::Ordering::Relaxed)
             != target_bits
         {
-            self.snap_target_changes
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            bump(&self.snap_target_changes);
         }
     }
 
     fn record_preview(&self) {
         self.preview.increment();
-        self.preview_updates
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        bump(&self.preview_updates);
     }
 
     fn record_toggle_max(&self) {
-        self.toggle_max_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        bump(&self.toggle_max_total);
     }
 
     fn record_client_message_maximize(&self) {
-        self.client_message_maximize_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        bump(&self.client_message_maximize_total);
     }
 
     fn record_placement_transition(&self, before: PlacementMode, after: PlacementMode) {
         if before == after {
             return;
         }
-        self.state_mutations_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        bump(&self.state_mutations_total);
         if matches!(
             (before, after),
             (PlacementMode::Maximized, _) | (_, PlacementMode::Maximized)
         ) {
-            self.maximized_transitions
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            bump(&self.maximized_transitions);
         }
     }
 
     fn record_resize_snap_blocked(&self) {
-        self.resize_snap_blocked_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn snapshot(&self) -> (u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) {
-        (
-            self.received.load(),
-            self.coalesced.load(),
-            self.committed.load(),
-            self.snap_target_changes
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.preview_updates
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.last_target.load(std::sync::atomic::Ordering::Relaxed),
-            self.toggle_max_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.client_message_maximize_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.state_mutations_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.maximized_transitions
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.resize_snap_blocked_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-        )
+        bump(&self.resize_snap_blocked_total);
     }
 }
 
@@ -708,22 +678,20 @@ fn emit_move_summary() {
         flamewm_debug::WM_FRAME_MOVE_COMMITS,
         std::time::Duration::from_secs(1),
         || {
-            let counters = move_counters();
-            let (
-                received,
-                coalesced,
-                committed,
-                target_changes,
-                preview_updates,
-                snap_target_last,
-                toggle_max,
-                client_message_maximize,
-                state_mutations,
-                maximized_transitions,
-                resize_snap_blocked,
-            ) = counters.snapshot();
+            let c = move_counters();
             format!(
-                "received={received} coalesced={coalesced} commit={committed} snap_target_changes={target_changes} snap_target_last={snap_target_last} preview_updates={preview_updates} toggle_max={toggle_max} client_message_maximize={client_message_maximize} state_mutations={state_mutations} maximized_transitions={maximized_transitions} resize_snap_blocked={resize_snap_blocked}"
+                "received={} coalesced={} commit={} snap_target_changes={} snap_target_last={} preview_updates={} toggle_max={} client_message_maximize={} state_mutations={} maximized_transitions={} resize_snap_blocked={}",
+                c.received.load(),
+                c.coalesced.load(),
+                c.committed.load(),
+                read(&c.snap_target_changes),
+                read(&c.last_target),
+                read(&c.preview_updates),
+                read(&c.toggle_max_total),
+                read(&c.client_message_maximize_total),
+                read(&c.state_mutations_total),
+                read(&c.maximized_transitions),
+                read(&c.resize_snap_blocked_total),
             )
         },
     );
@@ -1394,7 +1362,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             if !current {
                 continue;
             }
-            match self.icon_service.borrow().submit(job.clone()) {
+            match self.icon_service.borrow().submit(job) {
                 Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
                 Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
                 Err(flamewm_integrations_linux::icon_service::IconSubmitError::HighQueueFull(job)) => {
@@ -1445,7 +1413,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         drop(service);
         self.icon_requests.entry(key).or_default().push((client_id, token));
-        match self.icon_service.borrow().submit(job.clone()) {
+        match self.icon_service.borrow().submit(job) {
             Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
             Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
             Err(IconSubmitError::HighQueueFull(job)) => {
