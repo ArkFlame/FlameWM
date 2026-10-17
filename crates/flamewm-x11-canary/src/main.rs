@@ -112,19 +112,14 @@ fn j13_hints_resizable(values: &[u32]) -> bool {
     let Some(&flags) = values.first() else {
         return true;
     };
-    let min = if flags & (1 << 4) != 0 && values.len() >= 7 {
-        let size = (values[5], values[6]);
-        if size != (0, 0) { Some(size) } else { None }
-    } else {
-        None
+    let pinned = |bit: u32, at: usize| -> Option<(u32, u32)> {
+        if flags & (1 << bit) == 0 {
+            return None;
+        }
+        let size = (*values.get(at)?, *values.get(at + 1)?);
+        (size != (0, 0)).then_some(size)
     };
-    let max = if flags & (1 << 5) != 0 && values.len() >= 9 {
-        let size = (values[7], values[8]);
-        if size != (0, 0) { Some(size) } else { None }
-    } else {
-        None
-    };
-    match (min, max) {
+    match (pinned(4, 5), pinned(5, 7)) {
         (Some(a), Some(b)) => a != b,
         _ => true,
     }
