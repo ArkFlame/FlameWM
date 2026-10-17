@@ -310,15 +310,9 @@ impl PowerUi {
     pub fn view(&self) -> PowerView {
         PowerView {
             enabled: POWER_ORDER.map(|button| button.enabled(self.capabilities)),
-            confirm: match self.state {
-                PowerState::Confirm(action) => Some(action),
-                _ => None,
-            },
+            confirm: match self.state { PowerState::Confirm(action) => Some(action), _ => None },
             other_open: self.state == PowerState::OtherOpen,
-            message: match &self.state {
-                PowerState::Error(message) => message.clone(),
-                _ => String::new(),
-            },
+            message: match &self.state { PowerState::Error(m) => m.clone(), _ => String::new() },
         }
     }
 }
