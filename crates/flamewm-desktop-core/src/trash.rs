@@ -356,6 +356,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atomic_file::unique_test_root;
 
     #[test]
     fn trash_info_path_percent_encodes_spaces_without_shell_semantics() {
@@ -388,13 +389,7 @@ mod tests {
     }
 
     fn unique_temp_root(label: &str) -> TempTree {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-trash-{label}-{}-{nanos}",
-            std::process::id()
-        ));
+        let root = unique_test_root(&format!("flamewm-trash-{label}"));
         fs::create_dir_all(&root).unwrap();
         TempTree(root)
     }

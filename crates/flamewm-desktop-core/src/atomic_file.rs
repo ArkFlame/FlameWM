@@ -42,19 +42,20 @@ pub(crate) fn io_error(operation: &str, error: std::io::Error) -> FlameError {
 }
 
 #[cfg(test)]
+pub(crate) fn unique_test_root(prefix: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn atomic_write_removes_temp_file_when_commit_fails() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-atomic-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = unique_test_root("flamewm-atomic");
         let target = root.join("layout.txt");
         // A directory at the target makes rename(file, dir) fail with EISDIR after the temp file exists.
         fs::create_dir_all(&target).unwrap();

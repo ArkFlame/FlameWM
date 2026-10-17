@@ -255,6 +255,7 @@ pub fn shortcut_destination(desktop: &Path, file_name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atomic_file::unique_test_root;
 
     #[test]
     fn entry_menu_maps_trash_to_empty_trash_only() {
@@ -277,13 +278,7 @@ mod tests {
 
     #[test]
     fn shortcut_destination_appends_link_suffix_collision_free() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-shortcut-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = unique_test_root("flamewm-shortcut");
         fs::create_dir_all(&root).unwrap();
         assert_eq!(
             shortcut_destination(&root, "app.desktop"),
@@ -303,14 +298,7 @@ mod tests {
 
     #[test]
     fn rename_renames_to_the_validated_trimmed_name() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-rename-trim-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = unique_test_root("flamewm-rename-trim");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("a.txt"), b"x").unwrap();
 
@@ -331,14 +319,7 @@ mod tests {
     fn new_folder_and_shortcut_skip_dangling_symlink_collisions() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-file-actions-collision-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = unique_test_root("flamewm-file-actions-collision");
         fs::create_dir_all(&root).unwrap();
         symlink(root.join("missing-folder-target"), root.join("New Folder")).unwrap();
         assert_eq!(
@@ -362,14 +343,7 @@ mod tests {
     fn rename_rejects_existing_dangling_symlink_without_clobbering() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-rename-collision-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = unique_test_root("flamewm-rename-collision");
         fs::create_dir_all(&root).unwrap();
         let source = root.join("source file");
         let target = root.join("target file");

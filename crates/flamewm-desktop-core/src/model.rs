@@ -215,14 +215,11 @@ fn classify(entry: &fs::DirEntry) -> FlameResult<DesktopItemKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atomic_file::unique_test_root;
 
     #[test]
     fn rescan_never_places_unstored_entry_on_a_stored_cell() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-model-free-cell-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let root = unique_test_root("flamewm-model-free-cell");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         // "alpha" sorts before "zed": the old single pass gave alpha the free cell
