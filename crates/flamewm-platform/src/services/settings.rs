@@ -258,7 +258,10 @@ fn transaction_changes_shortcuts(transaction: &SettingsTransaction) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+
+    fn temp_settings_path(stem: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{stem}-{}.conf", std::process::id()))
+    }
 
     struct UnsupportedShortcutPort;
 
@@ -304,10 +307,7 @@ mod tests {
     #[test]
     fn wallpaper_only_apply_does_not_require_shortcut_port_support() {
         for (case, wallpaper) in [("empty", ""), ("nonempty", "/tmp/flamewm-wallpaper.png")] {
-            let path = std::env::temp_dir().join(format!(
-                "flamewm-settings-wallpaper-only-{}-{case}.conf",
-                std::process::id()
-            ));
+            let path = temp_settings_path(&format!("flamewm-settings-wallpaper-only-{case}"));
             let _ = std::fs::remove_file(&path);
             let mut service = SettingsService::new(path.clone());
             let mut shortcut_port = UnsupportedShortcutPort;
@@ -340,10 +340,7 @@ mod tests {
 
     #[test]
     fn invalid_new_key_apply_is_rejected_before_revision_or_disk_change() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-settings-invalid-new-key-{}.conf",
-            std::process::id()
-        ));
+        let path = temp_settings_path("flamewm-settings-invalid-new-key");
         let _ = std::fs::remove_file(&path);
         let mut service = SettingsService::new(path.clone());
         let mut shortcut_port = UnsupportedShortcutPort;
@@ -368,10 +365,7 @@ mod tests {
 
     #[test]
     fn new_percent_and_text_keys_persist_and_reset_by_section() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-settings-new-keys-{}.conf",
-            std::process::id()
-        ));
+        let path = temp_settings_path("flamewm-settings-new-keys");
         let _ = std::fs::remove_file(&path);
         let mut service = SettingsService::new(path.clone());
         let mut shortcut_port = UnsupportedShortcutPort;
@@ -416,10 +410,7 @@ mod tests {
 
     #[test]
     fn mixed_wallpaper_and_shortcut_apply_preserves_shortcut_transaction() {
-        let path = std::env::temp_dir().join(format!(
-            "flamewm-settings-mixed-wallpaper-shortcut-{}.conf",
-            std::process::id()
-        ));
+        let path = temp_settings_path("flamewm-settings-mixed-wallpaper-shortcut");
         let _ = std::fs::remove_file(&path);
         let mut service = SettingsService::new(path.clone());
         let mut shortcut_port = UnsupportedShortcutPort;
