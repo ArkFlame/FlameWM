@@ -499,6 +499,10 @@ mod tests {
         path.file_name().unwrap().to_str().unwrap()
     }
 
+    fn import_desktop(dir: &TempDir, src: &Path) -> Result<ImportedMedia, MediaError> {
+        store_in(dir).import(src, MediaKind::DesktopWallpaper)
+    }
+
     #[test]
     fn sha256_matches_known_vectors() {
         assert_eq!(
@@ -648,9 +652,7 @@ mod tests {
         file.set_len(MAX_SOURCE_BYTES + 1).unwrap();
         drop(file);
 
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
 
         assert!(matches!(error, MediaError::TooLarge));
     }
@@ -666,9 +668,7 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("wide.png");
         write_file(&src, &png_bytes(4097, 1));
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -684,9 +684,7 @@ mod tests {
         push_chunk(&mut bytes, b"IHDR", &ihdr);
         push_chunk(&mut bytes, b"IEND", &[]);
         write_file(&src, &bytes);
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -833,9 +831,7 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("photo.bmp");
         write_file(&src, &[b'B', b'M', 0, 0, 0, 0, 0, 0, 0, 0]);
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
         assert!(matches!(error, MediaError::UnsupportedFormat));
     }
 
@@ -867,9 +863,7 @@ mod tests {
         let jpeg = include_bytes!("../../flamewm-image-core/tests/fixtures/baseline-16x16.jpg");
         let src = dir.0.join("cut.jpg");
         write_file(&src, &jpeg[..jpeg.len() / 2]);
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -879,9 +873,7 @@ mod tests {
         let jpeg = include_bytes!("../../flamewm-image-core/tests/fixtures/progressive-16x16.jpg");
         let src = dir.0.join("progressive.jpg");
         write_file(&src, jpeg);
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
         assert!(matches!(error, MediaError::Decode(_)));
     }
 
@@ -890,9 +882,7 @@ mod tests {
         let dir = TempDir::new();
         let src = dir.0.join("folder.png");
         fs::create_dir(&src).unwrap();
-        let error = store_in(&dir)
-            .import(&src, MediaKind::DesktopWallpaper)
-            .unwrap_err();
+        let error = import_desktop(&dir, &src).unwrap_err();
         assert!(matches!(error, MediaError::NotRegularFile));
     }
 
