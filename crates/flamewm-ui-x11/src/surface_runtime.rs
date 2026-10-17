@@ -712,32 +712,11 @@ impl SurfaceRuntime {
         max_device_w: f32,
         max_device_h: f32,
     ) -> Result<(f32, f32), UiBackendError> {
-        let (max_logical_w, max_logical_h) = device_constraint_to_logical(
-            max_device_w,
-            max_device_h,
-            self.controller
-                .document_mut(surface.0)
-                .map(|document| document.ui_scale())
-                .unwrap_or(1.0),
-        )
-        .map_err(UiBackendError::Document)?;
-        let document = self.document_mut(surface)?;
-        let scale = document.ui_scale();
-        let measured = flamewm_render_core::LayoutEngine::measure_root(
-            document,
-            max_logical_w,
-            max_logical_h,
-            flamewm_render_core::InteractionState::default(),
-        )
-        .map_err(|error| UiBackendError::Document(error.to_string()))?;
-        logical_intrinsic_to_device(
-            measured.width,
-            measured.height,
-            scale,
-            max_device_w,
-            max_device_h,
-        )
-        .map_err(UiBackendError::Document)
+        self.measure_device_size(surface, max_device_w, max_device_h, |doc, w, h| {
+            flamewm_render_core::LayoutEngine::measure_root(doc, w, h, Default::default())
+                .map(|size| (size.width, size.height))
+                .map_err(|error| error.to_string())
+        })
     }
 
     /// Intrinsic outer size of one node in device pixels under finite device
@@ -749,33 +728,36 @@ impl SurfaceRuntime {
         max_device_w: f32,
         max_device_h: f32,
     ) -> Result<(f32, f32), UiBackendError> {
-        let (max_logical_w, max_logical_h) = device_constraint_to_logical(
-            max_device_w,
-            max_device_h,
-            self.controller
-                .document_mut(surface.0)
-                .map(|document| document.ui_scale())
-                .unwrap_or(1.0),
-        )
-        .map_err(UiBackendError::Document)?;
+        self.measure_device_size(surface, max_device_w, max_device_h, |doc, w, h| {
+            flamewm_render_core::LayoutEngine::measure_node(doc, node, w, h, Default::default())
+                .map(|size| (size.width, size.height))
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    /// Shared device -> logical -> `measure` -> device pipeline behind the
+    /// root and node intrinsic measures.
+    fn measure_device_size(
+        &mut self,
+        surface: SurfaceHandle,
+        max_device_w: f32,
+        max_device_h: f32,
+        measure: impl FnOnce(&RuntimeDocument, f32, f32) -> Result<(f32, f32), String>,
+    ) -> Result<(f32, f32), UiBackendError> {
+        let scale = self
+            .controller
+            .document_mut(surface.0)
+            .map(|document| document.ui_scale())
+            .unwrap_or(1.0);
+        let (max_logical_w, max_logical_h) =
+            device_constraint_to_logical(max_device_w, max_device_h, scale)
+                .map_err(UiBackendError::Document)?;
         let document = self.document_mut(surface)?;
         let scale = document.ui_scale();
-        let measured = flamewm_render_core::LayoutEngine::measure_node(
-            document,
-            node,
-            max_logical_w,
-            max_logical_h,
-            flamewm_render_core::InteractionState::default(),
-        )
-        .map_err(|error| UiBackendError::Document(error.to_string()))?;
-        logical_intrinsic_to_device(
-            measured.width,
-            measured.height,
-            scale,
-            max_device_w,
-            max_device_h,
-        )
-        .map_err(UiBackendError::Document)
+        let (width, height) =
+            measure(document, max_logical_w, max_logical_h).map_err(UiBackendError::Document)?;
+        logical_intrinsic_to_device(width, height, scale, max_device_w, max_device_h)
+            .map_err(UiBackendError::Document)
     }
 
     /// Intrinsic outer size of one node by string id in device pixels under
