@@ -185,7 +185,7 @@ impl IconLoader {
                     let res = IconResult {
                         target: req.target,
                         generation: req.generation,
-                        name: req.name.clone(),
+                        name: req.name,
                         width: req.width,
                         height: req.height,
                         raster,
@@ -385,6 +385,14 @@ fn is_brand_fallback(raster: &Rgb8Raster) -> bool {
 mod tests {
     use super::*;
 
+    fn workspace_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
     #[test]
     fn icon_name_candidates_try_raw_then_lowercase_then_class_segment() {
         assert_eq!(
@@ -412,12 +420,7 @@ mod tests {
         let mut bytes = b"P6\n1 1\n255\n".to_vec();
         bytes.extend_from_slice(&[10, 200, 10]);
         std::fs::write(icons.join("xterm.ppm"), bytes).expect("xterm icon");
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("workspace root")
-            .to_path_buf();
-        let mut resolver = IconResolver::new(root, vec!["Breeze".to_owned()], vec![themes.clone()], 0);
+        let mut resolver = IconResolver::new(workspace_root(), vec!["Breeze".to_owned()], vec![themes.clone()], 0);
         let raster = resolve_icon_raster(&mut resolver, "mini.xterm", IconSize::new(16, 16))
             .expect("WM_CLASS segment must resolve");
         let _ = std::fs::remove_dir_all(&themes);
@@ -431,12 +434,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&themes).expect("empty theme dir");
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("workspace root")
-            .to_path_buf();
-        let mut resolver = IconResolver::new(root, Vec::new(), vec![themes], 0);
+        let mut resolver = IconResolver::new(workspace_root(), Vec::new(), vec![themes], 0);
         let size = IconSize::new(25, 25);
         for _ in 0..2 {
             let raster = resolve_icon_raster(&mut resolver, "mini.xterm", size)
