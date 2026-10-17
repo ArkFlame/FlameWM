@@ -2976,36 +2976,21 @@ mod value_text_tests {
 
     #[test]
     fn selecting_a_theme_writes_its_stable_id_and_closes_the_picker() {
-        use std::cell::RefCell;
-        use std::collections::VecDeque;
-        use std::rc::Rc;
-
         use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot};
-        use flamewm_control_core::{ControlError, ControlRequest, ControlResponse};
-        use flamewm_settings_core::ControlTransport;
+        use flamewm_control_core::{ControlRequest, ControlResponse};
         use theme_picker::{PickerKind, ThemeItem, ThemeRegistry};
-
-        struct Recorder {
-            requests: Rc<RefCell<Vec<ControlRequest>>>,
-            responses: VecDeque<ControlResponse>,
-        }
-        impl ControlTransport for Recorder {
-            fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
-                self.requests.borrow_mut().push(request);
-                Ok(self.responses.pop_front().unwrap_or(ControlResponse::Settings(SettingsSnapshot::new(1))))
-            }
-        }
+        use test_transport::ScriptedTransport;
 
         let item = |n: usize| ThemeItem {
             id: format!("theme-{n}"),
             name: format!("Theme {n}"),
             preview: None,
         };
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let transport = Recorder {
-            requests: requests.clone(),
-            responses: VecDeque::new(),
-        };
+        let mut transport = ScriptedTransport::default();
+        transport.responses = (0..8)
+            .map(|_| Ok(ControlResponse::Settings(SettingsSnapshot::new(1))))
+            .collect();
+        let requests = transport.requests.clone();
         let mut app = SettingsApplication::new(transport);
         app.themes = ThemeRegistry {
             icon: (0..8).map(item).collect(),
