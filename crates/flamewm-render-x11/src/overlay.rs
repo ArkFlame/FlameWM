@@ -849,9 +849,11 @@ mod tests {
     }
 
     #[test]
-    fn begin_fails_closed_without_display() {
+    fn begin_paths_fail_closed_without_display() {
         let capture = CapturedImage { width: 400, height: 300, argb: vec![0; 400 * 300 * 4] };
         assert!(WarpOverlay::begin(std::ptr::null_mut(), capture, SOURCE, SOURCE).is_err());
+        let capture = CapturedImage { width: 40, height: 30, argb: vec![0; 40 * 30 * 4] };
+        assert!(WarpOverlay::begin_fade(std::ptr::null_mut(), capture, 0, 0).is_err());
     }
 
     #[test]
@@ -889,17 +891,14 @@ mod tests {
     }
 
     #[test]
-    fn fade_fails_closed_without_display() {
-        let capture = CapturedImage { width: 40, height: 30, argb: vec![0; 40 * 30 * 4] };
-        assert!(WarpOverlay::begin_fade(std::ptr::null_mut(), capture, 0, 0).is_err());
-    }
-
-    #[test]
     fn crossfade_alpha_has_exact_endpoints_per_direction() {
         assert_eq!(fade_alpha(0.0, TransitionDirection::In), 0.0);
         assert_eq!(fade_alpha(1.0, TransitionDirection::In), 1.0);
         assert_eq!(fade_alpha(0.0, TransitionDirection::Out), 1.0);
         assert_eq!(fade_alpha(1.0, TransitionDirection::Out), 0.0);
+        assert_eq!(fade_alpha(-3.0, TransitionDirection::In), 0.0);
+        assert_eq!(fade_alpha(9.0, TransitionDirection::In), 1.0);
+        assert_eq!(fade_alpha(9.0, TransitionDirection::Out), 0.0);
     }
 
     #[test]
@@ -916,13 +915,6 @@ mod tests {
             assert!((a_in + a_out - 1.0).abs() < 1e-12, "Out is the mirror of In");
             (last_in, last_out) = (a_in, a_out);
         }
-    }
-
-    #[test]
-    fn crossfade_alpha_clamps_progress() {
-        assert_eq!(fade_alpha(-3.0, TransitionDirection::In), 0.0);
-        assert_eq!(fade_alpha(9.0, TransitionDirection::In), 1.0);
-        assert_eq!(fade_alpha(9.0, TransitionDirection::Out), 0.0);
     }
 
     #[test]
