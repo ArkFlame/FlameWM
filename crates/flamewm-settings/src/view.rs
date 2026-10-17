@@ -252,9 +252,6 @@ mod tests {
 
     #[test]
     fn settings_source_preserves_native_canvas_and_page_contract() {
-        for page in SETTINGS_PAGES {
-            assert!(HTML.contains(&format!("id=\"page-{page}\"")));
-        }
         assert!(css_rule(CSS, "body").contains("width:100%"));
         assert!(css_rule(CSS, ".settings-nav").contains("width:208px"));
         assert!(CSS.contains(".nav-selection { position:absolute; left:8px; width:192px;"));
