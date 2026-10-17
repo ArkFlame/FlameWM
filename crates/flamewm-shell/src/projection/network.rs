@@ -53,7 +53,7 @@ pub fn project_network_full(
     document.visible("network-connected-row", connected.is_some())?;
     document.visible("network-connected", connected.is_some())?;
     if let Some(popover) = popover {
-        document.text("wifi-connected-name", popover.connected_label.clone())?;
+        document.text("wifi-connected-name", popover.connected_label)?;
         // The label stays static; the query lives inside the input box so the
         // layout never shifts while typing.
         let filter_empty = query.filter.trim().is_empty();
