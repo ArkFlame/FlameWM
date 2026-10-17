@@ -436,16 +436,12 @@ pub fn project_drag_ghost_icon(
 /// cache miss; the worker result overwrites it. Not a placeholder shape: a
 /// real RGBA8 raster in the tile's selected semantic slot.
 fn flame_fallback_raster() -> Rgba8Raster {
-    let pixels = ICON_TILE_PX as usize * ICON_TILE_PX as usize;
-    let mut bytes = Vec::with_capacity(pixels * 4);
-    for _ in 0..pixels {
-        bytes.extend_from_slice(&[239, 64, 72, 255]);
-    }
+    let pixels = [239_u8, 64, 72, 255].repeat(ICON_TILE_PX as usize * ICON_TILE_PX as usize);
     Rgba8Raster {
         source: "flamewm-fallback".to_owned(),
         width: ICON_TILE_PX,
         height: ICON_TILE_PX,
-        pixels: bytes,
+        pixels,
         origin: IconOrigin::PackagedFallback,
         fallback_reason: None,
     }
