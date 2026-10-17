@@ -678,6 +678,16 @@ fn packaged_root() -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Writes a 7x5 PPM under `tag` and returns a fill-mode state sourced from it.
+    fn ppm_state(tag: &str) -> (State, PathBuf) {
+        let path = std::env::temp_dir().join(format!("flamewm-{tag}-{}.ppm", std::process::id()));
+        let mut bytes = b"P6\n7 5\n255\n".to_vec();
+        bytes.extend([90u8, 40, 10].repeat(7 * 5));
+        std::fs::write(&path, &bytes).unwrap();
+        let source = WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill };
+        (State { source: Some(source), ..State::default() }, path)
+    }
+
     #[test]
     fn blend_math_at_opacity_0_50_100_over_known_backdrop() {
         let backdrop = [200u8, 100, 0, 255];
@@ -961,14 +971,7 @@ mod tests {
 
     #[test]
     fn canvas_bytes_tracked_and_released_after_build_when_hit_needs_none() {
-        let path = std::env::temp_dir().join(format!("flamewm-bytes-{}.ppm", std::process::id()));
-        let mut bytes = b"P6\n7 5\n255\n".to_vec();
-        bytes.extend([90u8, 40, 10].repeat(7 * 5));
-        std::fs::write(&path, &bytes).unwrap();
-        let mut state = State {
-            source: Some(WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill }),
-            ..State::default()
-        };
+        let (mut state, path) = ppm_state("bytes");
         let root = (16, 8);
         let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
         fill(&mut state, (0, 0));
@@ -983,14 +986,7 @@ mod tests {
 
     #[test]
     fn canvas_retained_through_drag_and_rebuilt_on_miss() {
-        let path = std::env::temp_dir().join(format!("flamewm-drag-keep-{}.ppm", std::process::id()));
-        let mut bytes = b"P6\n7 5\n255\n".to_vec();
-        bytes.extend([90u8, 40, 10].repeat(7 * 5));
-        std::fs::write(&path, &bytes).unwrap();
-        let mut state = State {
-            source: Some(WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill }),
-            ..State::default()
-        };
+        let (mut state, path) = ppm_state("drag-keep");
         let root = (16, 8);
         state.drag = build_drag(&mut state, 9, root, None, (0, 0, 2, 2));
         assert!(state.drag.is_some());
@@ -1086,17 +1082,7 @@ mod tests {
 
     #[test]
     fn drag_with_capture_keeps_no_root_canvas() {
-        let path = std::env::temp_dir().join(format!("flamewm-drag-{}.ppm", std::process::id()));
-        let mut bytes = b"P6\n7 5\n255\n".to_vec();
-        bytes.extend([90u8, 40, 10].repeat(7 * 5));
-        std::fs::write(&path, &bytes).unwrap();
-        let mut state = State {
-            source: Some(WallpaperSource::Image {
-                path: path.to_string_lossy().into_owned(),
-                fit: WallpaperFit::Fill,
-            }),
-            ..State::default()
-        };
+        let (mut state, path) = ppm_state("drag");
         let captured = [1u8, 2, 3, 255].repeat(16 * 9);
         state.drag = build_drag(&mut state, 9, (16, 9), Some(captured), (-2, 3, 5, 4));
         assert!(state.drag.is_some());
