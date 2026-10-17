@@ -557,30 +557,38 @@ mod tests {
     use flamewm_control_wire::system_dict;
 
     fn signal_message(signal: &ControlSignal) -> Message {
-        let wire = encode_signal(signal);
-        wire_signal_message(&wire)
+        wire_signal_message(&encode_signal(signal))
     }
 
     fn wire_signal_message(wire: &WireSignal) -> Message {
         let mut message =
             Message::new_signal(OBJECT_PATH, &wire.interface, &wire.member).expect("signal");
-        message.append_items(
-            &wire
-                .args
-                .iter()
-                .map(to_item)
-                .collect::<Result<Vec<_>, _>>()
-                .expect("args"),
-        );
+        let items = wire
+            .args
+            .iter()
+            .map(to_item)
+            .collect::<Result<Vec<_>, _>>();
+        message.append_items(&items.expect("args"));
         message
+    }
+
+    fn settings_snapshot_wire(snapshot: &flamewm_api::settings::SettingsSnapshot) -> WireSignal {
+        WireSignal {
+            interface: flamewm_control_core::IFACE_SETTINGS.to_owned(),
+            member: "SettingsSnapshotChanged".to_owned(),
+            args: vec![WireValue::Dict(flamewm_control_wire::settings_dict(snapshot))],
+        }
+    }
+
+    fn assert_bus_round_trip(signal: ControlSignal) {
+        let wire = encode_signal(&signal);
+        assert_eq!(decode_signal(&wire), Ok(signal.clone()));
+        assert_eq!(decode_bus_signal(&signal_message(&signal)), Some(signal));
     }
 
     #[test]
     fn workspaces_changed_round_trips_through_bus_message() {
-        let signal = ControlSignal::WorkspacesChanged { revision: 7 };
-        let wire = encode_signal(&signal);
-        assert_eq!(decode_signal(&wire), Ok(signal.clone()));
-        assert_eq!(decode_bus_signal(&signal_message(&signal)), Some(signal));
+        assert_bus_round_trip(ControlSignal::WorkspacesChanged { revision: 7 });
     }
 
     #[test]
@@ -608,9 +616,7 @@ mod tests {
                 },
             },
         ] {
-            let wire = encode_signal(&signal);
-            assert_eq!(decode_signal(&wire), Ok(signal.clone()));
-            assert_eq!(decode_bus_signal(&signal_message(&signal)), Some(signal));
+            assert_bus_round_trip(signal);
         }
     }
 
@@ -630,13 +636,7 @@ mod tests {
             "surfaceOpacity".to_owned(),
             flamewm_api::settings::SettingValue::Percent(83),
         );
-        let expected = WireSignal {
-            interface: flamewm_control_core::IFACE_SETTINGS.to_owned(),
-            member: "SettingsSnapshotChanged".to_owned(),
-            args: vec![WireValue::Dict(flamewm_control_wire::settings_dict(
-                &snapshot,
-            ))],
-        };
+        let expected = settings_snapshot_wire(&snapshot);
         let decoded = decode_bus_signal(&wire_signal_message(&expected))
             .expect("SettingsSnapshotChanged must decode from D-Bus");
         assert_eq!(encode_signal(&decoded), expected);
@@ -674,13 +674,7 @@ mod tests {
         );
 
         let ordered = [
-            WireSignal {
-                interface: flamewm_control_core::IFACE_SETTINGS.to_owned(),
-                member: "SettingsSnapshotChanged".to_owned(),
-                args: vec![WireValue::Dict(flamewm_control_wire::settings_dict(
-                    &snapshot,
-                ))],
-            },
+            settings_snapshot_wire(&snapshot),
             encode_signal(&ControlSignal::SettingsChanged {
                 revision: snapshot.revision,
                 keys: vec!["fontBold".to_owned()],
@@ -716,13 +710,7 @@ mod tests {
             });
         let signals = match failure {
             Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => vec![
-                WireSignal {
-                    interface: flamewm_control_core::IFACE_SETTINGS.to_owned(),
-                    member: "SettingsSnapshotChanged".to_owned(),
-                    args: vec![WireValue::Dict(flamewm_control_wire::settings_dict(
-                        &snapshot,
-                    ))],
-                },
+                settings_snapshot_wire(&snapshot),
                 encode_signal(&ControlSignal::SettingsChanged {
                     revision: snapshot.revision,
                     keys: vec!["fontBold".to_owned()],
@@ -831,7 +819,6 @@ mod tests {
             member: "SystemSnapshotChanged".to_owned(),
             args: vec![WireValue::Dict(system_dict(&snapshot))],
         };
-
         let decoded = decode_bus_signal(&wire_signal_message(&wire))
             .expect("SystemSnapshotChanged must decode from D-Bus");
         assert_eq!(

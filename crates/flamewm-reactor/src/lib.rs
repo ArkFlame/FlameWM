@@ -398,38 +398,29 @@ fn trace_log(args: std::fmt::Arguments<'_>) {
 mod wake_tests {
     use super::*;
 
+    fn assert_timeout(timeout: Option<u64>, at: Option<u64>, expected: Option<u64>) {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        let got = bounded_timeout(timeout.map(ms), at.map(|t| now + ms(t)), now);
+        assert_eq!(got, expected.map(ms));
+    }
+
     #[test]
     fn no_deadline_keeps_the_caller_timeout() {
-        let now = Instant::now();
-        assert_eq!(bounded_timeout(None, None, now), None);
-        assert_eq!(
-            bounded_timeout(Some(Duration::from_secs(3)), None, now),
-            Some(Duration::from_secs(3))
-        );
+        assert_timeout(None, None, None);
+        assert_timeout(Some(3000), None, Some(3000));
     }
 
     #[test]
     fn deadline_bounds_an_unbounded_or_longer_timeout() {
-        let now = Instant::now();
-        let at = now + Duration::from_millis(1200);
-        assert_eq!(bounded_timeout(None, Some(at), now), Some(Duration::from_millis(1200)));
-        assert_eq!(
-            bounded_timeout(Some(Duration::from_secs(5)), Some(at), now),
-            Some(Duration::from_millis(1200))
-        );
-        assert_eq!(
-            bounded_timeout(Some(Duration::from_millis(100)), Some(at), now),
-            Some(Duration::from_millis(100))
-        );
+        assert_timeout(None, Some(1200), Some(1200));
+        assert_timeout(Some(5000), Some(1200), Some(1200));
+        assert_timeout(Some(100), Some(1200), Some(100));
     }
 
     #[test]
     fn past_deadline_yields_zero_wait() {
-        let now = Instant::now();
-        assert_eq!(
-            bounded_timeout(None, Some(now), now + Duration::from_millis(5)),
-            Some(Duration::ZERO)
-        );
+        assert_timeout(None, Some(0), Some(0));
     }
 
     #[test]
