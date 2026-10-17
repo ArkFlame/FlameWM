@@ -174,91 +174,7 @@ pub fn root_geometry() -> Result<(u32, u32), String> {
     flamewm_render_x11::root_geometry()
 }
 
-pub fn run_with_controller_events<F>(
-    document: UiDocument,
-    config: UiWindowConfig,
-    on_event: F,
-) -> Result<(), String>
-where
-    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
-{
-    run_with_controller_events_role(document, config, UiWindowRole::Normal, on_event)
-}
-
-pub fn run_with_controller_events_role<F>(
-    document: UiDocument,
-    config: UiWindowConfig,
-    role: UiWindowRole,
-    mut on_event: F,
-) -> Result<(), String>
-where
-    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
-{
-    flamewm_render_x11::run_with_controller_events(
-        document.document,
-        x11_config(config, role),
-        move |event, document| {
-            let flamewm_render_core::ControllerEvent::Action(action) = event;
-            let event = controller_event(action);
-            on_event(&event, &mut UiDocumentView { document })
-        },
-    )
-}
-
-pub fn run_with_controller_events_role_with_reactor<F, R>(
-    document: UiDocument,
-    config: UiWindowConfig,
-    role: UiWindowRole,
-    reactor: &mut Reactor,
-    on_event: F,
-    on_reactor: R,
-) -> Result<(), String>
-where
-    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
-    R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
-{
-    run_with_controller_events_role_with_reactor_geometry(
-        document,
-        config,
-        role,
-        reactor,
-        WindowGeometrySlot::default(),
-        on_event,
-        on_reactor,
-    )
-}
-
-/// Same as `run_with_controller_events_role_with_reactor`, plus a geometry
-/// request slot. A geometry written by `on_reactor` is applied to the window
-/// (move + size) on the next event-loop wake.
-pub fn run_with_controller_events_role_with_reactor_geometry<F, R>(
-    document: UiDocument,
-    config: UiWindowConfig,
-    role: UiWindowRole,
-    reactor: &mut Reactor,
-    geometry: WindowGeometrySlot,
-    on_event: F,
-    on_reactor: R,
-) -> Result<(), String>
-where
-    F: for<'a> FnMut(&UiControllerEvent, &mut UiDocumentView<'a>) -> Result<(), String>,
-    R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
-{
-    run_with_controller_events_role_with_presses_and_reactor_geometry(
-        document,
-        config,
-        role,
-        reactor,
-        geometry,
-        RawPressWatch::default(),
-        |_, _| Ok(()),
-        on_event,
-        on_reactor,
-    )
-}
-
-/// Same as `run_with_controller_events_role_with_reactor_geometry`, plus a root
-/// press observer: while `press_watch` is armed, each root press is delivered to
+/// Reactor-backed window loop with a root press observer: while `press_watch` is armed, each root press is delivered to
 /// `on_press` (logical px, observed only, never consumed).
 pub fn run_with_controller_events_role_with_presses_and_reactor_geometry<F, P, R>(
     document: UiDocument,
@@ -337,12 +253,14 @@ where
                 .map_err(|error| error.to_string())
         })
         .transpose()?;
-    run_with_controller_events_role_with_reactor_geometry(
+    run_with_controller_events_role_with_presses_and_reactor_geometry(
         document,
         config,
         role,
         &mut reactor,
         WindowGeometrySlot::default(),
+        RawPressWatch::default(),
+        |_, _| Ok(()),
         on_event,
         on_wake,
     )
