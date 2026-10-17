@@ -996,6 +996,17 @@ fn has_non_opaque_word(words: &[u32]) -> bool {
 mod tests {
     use super::*;
 
+    fn one_px_key(content_hash: u64) -> ExternalImageKey {
+        ExternalImageKey {
+            content_hash,
+            src_w: 1,
+            src_h: 1,
+            dst_w: 1,
+            dst_h: 1,
+            palette: [255, 255, 255, 255],
+        }
+    }
+
     #[test]
     fn non_opaque_detection_reads_alpha_byte() {
         assert!(!has_non_opaque_word(&[0xFF00_0000, 0xFFFF_FFFF]));
@@ -1056,26 +1067,9 @@ mod tests {
     fn cache_key_separates_content_size_palette() {
         let a = vec![1, 2, 3, 255];
         let b = vec![4, 5, 6, 255];
-        let base = ExternalImageKey {
-            content_hash: external_content_hash(&a),
-            src_w: 1,
-            src_h: 1,
-            dst_w: 1,
-            dst_h: 1,
-            palette: [255, 255, 255, 255],
-        };
+        let base = one_px_key(external_content_hash(&a));
         // Same content/size/palette -> same key (zero reupload).
-        assert_eq!(
-            base,
-            ExternalImageKey {
-                content_hash: external_content_hash(&a),
-                src_w: 1,
-                src_h: 1,
-                dst_w: 1,
-                dst_h: 1,
-                palette: [255, 255, 255, 255],
-            }
-        );
+        assert_eq!(base, one_px_key(external_content_hash(&a)));
         // Different content, size, or palette -> different key.
         assert_ne!(
             base.content_hash,
@@ -1110,14 +1104,7 @@ mod tests {
     #[test]
     fn cache_hit_reuses_key_miss_inserts() {
         let mut cache: HashMap<ExternalImageKey, ExternalCachedImage> = HashMap::new();
-        let key = ExternalImageKey {
-            content_hash: external_content_hash(&[1, 2, 3, 255]),
-            src_w: 1,
-            src_h: 1,
-            dst_w: 1,
-            dst_h: 1,
-            palette: [255, 255, 255, 255],
-        };
+        let key = one_px_key(external_content_hash(&[1, 2, 3, 255]));
         // Miss: first insert grows the cache and records native bytes.
         let bytes = external_pixmap_byte_estimate(1, 1);
         cache.insert(key, ExternalCachedImage { pixmap: 7, bytes });
@@ -1171,15 +1158,7 @@ mod tests {
     #[test]
     fn lru_touch_moves_hit_to_back() {
         let mut lru: VecDeque<ExternalImageKey> = VecDeque::new();
-        let key = |h: u64| ExternalImageKey {
-            content_hash: h,
-            src_w: 1,
-            src_h: 1,
-            dst_w: 1,
-            dst_h: 1,
-            palette: [255, 255, 255, 255],
-        };
-        let (a, b, c) = (key(1), key(2), key(3));
+        let (a, b, c) = (one_px_key(1), one_px_key(2), one_px_key(3));
         image_lru_touch(&mut lru, a);
         image_lru_touch(&mut lru, b);
         image_lru_touch(&mut lru, c);
