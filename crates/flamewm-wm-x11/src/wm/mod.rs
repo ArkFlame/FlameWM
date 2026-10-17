@@ -754,12 +754,7 @@ fn emit_pointer_trace(
         ))
     });
     let commit = commit.map(|commit| {
-        let effects = commit
-            .effects
-            .iter()
-            .map(|effect| format!("{effect:?}"))
-            .collect::<Vec<_>>()
-            .join(",");
+        let effects = join_effects(&commit.effects);
         format!(
             "grab={:?} ungrab={} abort_on_grab_fail={} effects=[{effects}]",
             commit.grab, commit.ungrab, commit.abort_on_grab_fail
@@ -863,12 +858,7 @@ fn emit_resize_probe(
                         .all(|effect| matches!(effect, FrameEffect::Noop)),
                 ),
                 rect,
-                commit
-                    .effects
-                    .iter()
-                    .map(|effect| format!("{effect:?}"))
-                    .collect::<Vec<_>>()
-                    .join(","),
+                join_effects(&commit.effects),
             )
         },
     );
@@ -885,29 +875,20 @@ fn emit_resize_probe(
     });
 }
 
+fn join_effects(effects: &[FrameEffect]) -> String {
+    effects.iter().map(|effect| format!("{effect:?}")).collect::<Vec<_>>().join(",")
+}
+
+fn emit_frame_dispatch(detail: impl FnOnce() -> String) {
+    flamewm_debug::emit(flamewm_debug::WM_FRAME_EVENT_DISPATCH, std::time::Duration::ZERO, detail);
+}
+
 fn pointer_ingress(event: &Event) -> Option<PointerIngress> {
+    let ingress = |kind, event, child, root_x, root_y| PointerIngress { kind, event, child, root_x, root_y };
     match event {
-        Event::ButtonPress(event) => Some(PointerIngress {
-            kind: "ButtonPress",
-            event: event.event,
-            child: event.child,
-            root_x: event.root_x,
-            root_y: event.root_y,
-        }),
-        Event::ButtonRelease(event) => Some(PointerIngress {
-            kind: "ButtonRelease",
-            event: event.event,
-            child: event.child,
-            root_x: event.root_x,
-            root_y: event.root_y,
-        }),
-        Event::MotionNotify(event) => Some(PointerIngress {
-            kind: "MotionNotify",
-            event: event.event,
-            child: event.child,
-            root_x: event.root_x,
-            root_y: event.root_y,
-        }),
+        Event::ButtonPress(e) => Some(ingress("ButtonPress", e.event, e.child, e.root_x, e.root_y)),
+        Event::ButtonRelease(e) => Some(ingress("ButtonRelease", e.event, e.child, e.root_x, e.root_y)),
+        Event::MotionNotify(e) => Some(ingress("MotionNotify", e.event, e.child, e.root_x, e.root_y)),
         _ => None,
     }
 }
@@ -1459,60 +1440,48 @@ impl<'a, C: Connection> Wm<'a, C> {
         match pointer.kind {
             "ButtonPress" => {
                 self.pointer_ingress_probe = PointerIngressProbe::default();
-                flamewm_debug::emit(
-                    flamewm_debug::WM_FRAME_EVENT_DISPATCH,
-                    std::time::Duration::ZERO,
-                    || {
-                        format!(
-                            "probe=pointer_ingress stage=pre_handle_event boundary=first raw={} event={} child={} root=({}, {}) session_client={session_client:?} pump_received={received}",
-                            pointer.kind,
-                            pointer.event,
-                            pointer.child,
-                            pointer.root_x,
-                            pointer.root_y
-                        )
-                    },
-                );
+                emit_frame_dispatch(|| {
+                    format!(
+                        "probe=pointer_ingress stage=pre_handle_event boundary=first raw={} event={} child={} root=({}, {}) session_client={session_client:?} pump_received={received}",
+                        pointer.kind,
+                        pointer.event,
+                        pointer.child,
+                        pointer.root_x,
+                        pointer.root_y
+                    )
+                });
             }
             "MotionNotify" => {
                 self.pointer_ingress_probe.last_motion = Some(pointer);
                 if !self.pointer_ingress_probe.motion_dispatched {
                     self.pointer_ingress_probe.motion_dispatched = true;
-                    flamewm_debug::emit(
-                        flamewm_debug::WM_FRAME_EVENT_DISPATCH,
-                        std::time::Duration::ZERO,
-                        || {
-                            format!(
-                                "probe=pointer_ingress stage=pre_handle_event boundary=first_motion raw={} motion_seen_upstream=true event={} child={} root=({}, {}) session_client={session_client:?} pump_received={} pump_coalesced={}",
-                                pointer.kind,
-                                pointer.event,
-                                pointer.child,
-                                pointer.root_x,
-                                pointer.root_y,
-                                received,
-                                received.saturating_sub(1),
-                            )
-                        },
-                    );
-                }
-            }
-            "ButtonRelease" => {
-                let last_motion = self.pointer_ingress_probe.last_motion;
-                flamewm_debug::emit(
-                    flamewm_debug::WM_FRAME_EVENT_DISPATCH,
-                    std::time::Duration::ZERO,
-                    || {
+                    emit_frame_dispatch(|| {
                         format!(
-                            "probe=pointer_ingress stage=pre_handle_event boundary=last raw={} motion_seen_upstream={} release_seen_upstream=true event={} child={} root=({}, {}) session_client={session_client:?} last_motion={last_motion:?} pump_received={received}",
+                            "probe=pointer_ingress stage=pre_handle_event boundary=first_motion raw={} motion_seen_upstream=true event={} child={} root=({}, {}) session_client={session_client:?} pump_received={} pump_coalesced={}",
                             pointer.kind,
-                            last_motion.is_some(),
                             pointer.event,
                             pointer.child,
                             pointer.root_x,
                             pointer.root_y,
+                            received,
+                            received.saturating_sub(1),
                         )
-                    },
-                );
+                    });
+                }
+            }
+            "ButtonRelease" => {
+                let last_motion = self.pointer_ingress_probe.last_motion;
+                emit_frame_dispatch(|| {
+                    format!(
+                        "probe=pointer_ingress stage=pre_handle_event boundary=last raw={} motion_seen_upstream={} release_seen_upstream=true event={} child={} root=({}, {}) session_client={session_client:?} last_motion={last_motion:?} pump_received={received}",
+                        pointer.kind,
+                        last_motion.is_some(),
+                        pointer.event,
+                        pointer.child,
+                        pointer.root_x,
+                        pointer.root_y,
+                    )
+                });
                 self.pointer_ingress_probe = PointerIngressProbe::default();
             }
             _ => {}
@@ -1525,16 +1494,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         self.pointer_ingress_probe.motion_handled = true;
         let session_client = self.session_client();
-        flamewm_debug::emit(
-            flamewm_debug::WM_FRAME_EVENT_DISPATCH,
-            std::time::Duration::ZERO,
-            || {
-                format!(
-                    "probe=pointer_ingress stage=handle_motion_entry boundary=first_motion raw=MotionNotify motion_seen_upstream=true event={} child={} root=({}, {}) session_client={session_client:?}",
-                    event.event, event.child, event.root_x, event.root_y
-                )
-            },
-        );
+        emit_frame_dispatch(|| {
+            format!(
+                "probe=pointer_ingress stage=handle_motion_entry boundary=first_motion raw=MotionNotify motion_seen_upstream=true event={} child={} root=({}, {}) session_client={session_client:?}",
+                event.event, event.child, event.root_x, event.root_y
+            )
+        });
     }
 
     fn screen(&self) -> &Screen {
