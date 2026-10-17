@@ -324,10 +324,7 @@ impl IconLoader {
     /// Ready keys leave the pending set so a later view change can re-queue.
     pub fn drain_ready(&mut self) -> Vec<IconResult> {
         let mut out = Vec::new();
-        let _ = self.wake_reader.set_nonblocking(true);
-        let mut wake_buf = [0u8; 64];
-        use std::io::Read;
-        let _ = (&self.wake_reader).read(&mut wake_buf);
+        self.wake_drain();
         self.flush_retries();
         while let Ok(res) = self.res_rx.try_recv() {
             self.pending
@@ -520,27 +517,10 @@ mod tests {
 
     #[test]
     fn stale_generations_are_dropped() {
-        let (req_tx, req_rx) = sync_channel::<WorkerMsg>(16);
+        let (req_tx, _req_rx) = sync_channel::<WorkerMsg>(16);
         let (res_tx, res_rx) = sync_channel::<IconResult>(16);
-        let (wake_reader, _wake_writer) = UnixStream::pair().expect("wake pair");
-        let mut loader = IconLoader {
-            req_tx,
-            res_rx,
-            wake_reader,
-            generation: 2,
-            pending: std::collections::HashSet::new(),
-            queue_full_drops: 0,
-            stale_drops: 0,
-            results_applied: 0,
-            high_enqueued: 0,
-            low_enqueued: 0,
-            coalesced: 0,
-            dropped_low: 0,
-            retry: Vec::new(),
-            theme: String::new(),
-            theme_outbox: None,
-        };
-        let _ = req_rx;
+        let mut loader = loader_with_channels(req_tx, res_rx);
+        loader.generation = 2;
         res_tx
             .try_send(IconResult {
                 target: IconTarget::TaskSlot(0),
@@ -569,28 +549,9 @@ mod tests {
 
     #[test]
     fn queue_full_drop_counts_without_blocking() {
-        let (tx, rx) = sync_channel::<WorkerMsg>(1);
-        let (res_tx, res_rx) = sync_channel::<IconResult>(16);
-        let (wake_reader, _w) = UnixStream::pair().expect("wake pair");
-        let _ = rx;
-        let _ = res_tx;
-        let mut loader = IconLoader {
-            req_tx: tx.clone(),
-            res_rx,
-            wake_reader,
-            generation: 1,
-            pending: std::collections::HashSet::new(),
-            queue_full_drops: 0,
-            stale_drops: 0,
-            results_applied: 0,
-            high_enqueued: 0,
-            low_enqueued: 0,
-            coalesced: 0,
-            dropped_low: 0,
-            retry: Vec::new(),
-            theme: String::new(),
-            theme_outbox: None,
-        };
+        let (tx, _rx) = sync_channel::<WorkerMsg>(1);
+        let (_res_tx, res_rx) = sync_channel::<IconResult>(16);
+        let mut loader = loader_with_channels(tx.clone(), res_rx);
         tx.try_send(WorkerMsg::Icon(IconRequest {
             target: IconTarget::StartSlot(0),
             generation: 1,
