@@ -510,11 +510,9 @@ pub fn reduce_owned(
                 }
                 match c.control {
                     FrameControl::MaximizeRestore => {
-                        let (mut out, mut effects) = toggle_max(state);
-                        let mut head = vec![FrameEffect::Ungrab];
-                        head.append(&mut effects);
+                        let (mut out, effects) = toggle_max(state);
                         out.session = InteractionSession::Idle;
-                        (out, head)
+                        (out, std::iter::once(FrameEffect::Ungrab).chain(effects).collect())
                     }
                     FrameControl::Minimize | FrameControl::Close => {
                         (state, vec![FrameEffect::Ungrab, FrameEffect::PaintChrome])
@@ -596,13 +594,7 @@ pub fn reduce_owned(
                 (state, vec![FrameEffect::Noop])
             } else {
                 state.session.cancel();
-                (
-                    state,
-                    vec![
-                        FrameEffect::Ungrab,
-                        FrameEffect::SnapPreview { target: None },
-                    ],
-                )
+                (state, vec![FrameEffect::Ungrab, FrameEffect::SnapPreview { target: None }])
             }
         }
     }
