@@ -37,13 +37,12 @@ pub fn run_surface_runtime_with_reactor<F, T>(
     runtime: &mut SurfaceRuntime,
     reactor: &mut Reactor,
     mut on_event: F,
-    on_tick: T,
+    mut on_tick: T,
 ) -> Result<(), UiBackendError>
 where
     F: FnMut(SurfaceEvent),
     T: FnMut() -> Result<(), String>,
 {
-    let mut on_tick = on_tick;
     runtime
         .controller
         .run_with_reactor(
