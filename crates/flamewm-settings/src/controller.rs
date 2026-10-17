@@ -22,6 +22,50 @@ mod tests {
         requests: Rc<RefCell<Vec<ControlRequest>>>,
     }
 
+    fn recording_transport() -> (Rc<RefCell<Vec<ControlRequest>>>, RecordingTransport) {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let transport = RecordingTransport {
+            requests: requests.clone(),
+            ..RecordingTransport::default()
+        };
+        (requests, transport)
+    }
+
+    /// `(key, value)` of every `ApplySettings` write, in request order.
+    fn applied_writes(requests: &RefCell<Vec<ControlRequest>>) -> Vec<(String, SettingValue)> {
+        requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .and_then(|change| change.value.clone().map(|value| (change.key.clone(), value))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn queue_displays_shortcuts_panels(transport: &mut RecordingTransport) {
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
+        transport
+            .responses
+            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                revision: 1,
+                bindings: BTreeMap::new(),
+            })));
+        transport.responses.push_back(Ok(ControlResponse::Panels(
+            flamewm_api::panels::PanelsSnapshot {
+                revision: 1,
+                panels: Vec::new(),
+                tasks: Vec::new(),
+                pinned_apps: Vec::new(),
+            },
+        )));
+    }
+
     impl ControlTransport for RecordingTransport {
         fn call(
             &mut self,
@@ -34,6 +78,22 @@ mod tests {
         }
     }
 
+    /// Values written to `key` by `ApplySettings` requests, in request order.
+    fn written_values(requests: &RefCell<Vec<ControlRequest>>, key: &str) -> Vec<SettingValue> {
+        requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                ControlRequest::ApplySettings(transaction) => transaction
+                    .changes
+                    .first()
+                    .filter(|change| change.key == key)
+                    .and_then(|change| change.value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[derive(Default)]
     struct ProbeDocument {
         texts: BTreeMap<String, String>,
@@ -43,19 +103,21 @@ mod tests {
 
     impl UiDocumentAccess for ProbeDocument {
         fn text(&mut self, id: &str, text: String) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(id)?;
             self.texts.insert(id.to_owned(), text);
             Ok(())
         }
 
         fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(id)?;
             self.visible.insert(id.to_owned(), visible);
             Ok(())
         }
@@ -66,49 +128,52 @@ mod tests {
             _knob_id: &str,
             _checked: bool,
         ) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_track_id)?;
+            crate::ui_contract::require_markup_id(_knob_id)
         }
 
         fn position(&mut self, _id: &str, _left: f32, _top: f32) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn background(&mut self, id: &str, _color: UiColor) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(id)?;
             self.highlighted.insert(id.to_owned(), true);
             Ok(())
         }
 
         fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn background_clear(&mut self, id: &str) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(id)?;
             self.highlighted.insert(id.to_owned(), false);
             Ok(())
         }
 
         fn border_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn overflow(
@@ -117,7 +182,7 @@ mod tests {
             _x: flamewm_ui_x11::Overflow,
             _y: flamewm_ui_x11::Overflow,
         ) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn layer(
@@ -125,7 +190,7 @@ mod tests {
             _id: &str,
             _layer: flamewm_ui_core::style::UiLayer,
         ) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
     }
 
@@ -187,11 +252,7 @@ mod tests {
 
     #[test]
     fn unknown_action_is_an_inline_error_and_never_syncs_or_calls() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, transport) = recording_transport();
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
         let result = application.handle_action(&release("settings.bogus.action"), &mut document);
@@ -252,11 +313,7 @@ mod tests {
 
     #[test]
     fn empty_snapshots_are_errors_not_panics() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, transport) = recording_transport();
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
         for action in [
@@ -315,23 +372,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(settings)));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
-                revision: 1,
-                bindings: BTreeMap::new(),
-            })));
-        transport.responses.push_back(Ok(ControlResponse::Panels(
-            flamewm_api::panels::PanelsSnapshot {
-                revision: 1,
-                panels: Vec::new(),
-                tasks: Vec::new(),
-                pinned_apps: Vec::new(),
-            },
-        )));
+        queue_displays_shortcuts_panels(&mut transport);
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
         application.refresh(&mut document).expect("refresh");
@@ -349,23 +390,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(2))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
-                revision: 1,
-                bindings: BTreeMap::new(),
-            })));
-        transport.responses.push_back(Ok(ControlResponse::Panels(
-            flamewm_api::panels::PanelsSnapshot {
-                revision: 1,
-                panels: Vec::new(),
-                tasks: Vec::new(),
-                pinned_apps: Vec::new(),
-            },
-        )));
+        queue_displays_shortcuts_panels(&mut transport);
         let mut application = SettingsApplication::new(transport);
         let mut document = ProbeDocument::default();
         assert!(
@@ -430,11 +455,7 @@ mod tests {
 
     #[test]
     fn duplicate_hotkey_is_rejected_inline_without_a_service_write() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[
@@ -482,11 +503,7 @@ mod tests {
 
     #[test]
     fn backspace_restores_the_default_hotkey_and_ends_capture() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
@@ -548,11 +565,7 @@ mod tests {
 
     #[test]
     fn hotkey_reset_button_restores_default_through_the_service() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport.responses.push_back(Ok(ControlResponse::Unit));
         transport
             .responses
@@ -604,11 +617,7 @@ mod tests {
 
     #[test]
     fn switching_page_ends_capture_lease_before_disarming_prompt() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport.responses.extend([
             Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))),
             Ok(ControlResponse::CaptureLease(31)),
@@ -721,11 +730,7 @@ mod tests {
 
     #[test]
     fn bare_super_release_commits_super_to_the_start_row() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
@@ -773,11 +778,7 @@ mod tests {
 
     #[test]
     fn super_chord_release_does_not_commit_and_keeps_capture_armed() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[]))));
@@ -835,11 +836,7 @@ mod tests {
 
     #[test]
     fn decoration_option_buttons_write_exact_values_and_highlight_the_snapshot() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
@@ -880,21 +877,7 @@ mod tests {
         assert!(document.highlighted["decoration-rounded"]);
         assert!(!document.highlighted["decoration-squared"]);
 
-        let writes: Vec<(String, SettingValue)> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => {
-                    transaction.changes.first().and_then(|change| {
-                        change
-                            .value
-                            .clone()
-                            .map(|value| (change.key.clone(), value))
-                    })
-                }
-                _ => None,
-            })
-            .collect();
+        let writes = applied_writes(&requests);
         assert_eq!(
             writes,
             vec![
@@ -923,11 +906,7 @@ mod tests {
 
     #[test]
     fn application_appearance_buttons_write_exact_values_and_highlight_the_snapshot() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(appearance_snapshot(
@@ -958,21 +937,7 @@ mod tests {
         assert!(document.highlighted["appearance-apps-light"]);
         assert!(!document.highlighted["appearance-apps-dark"]);
 
-        let writes: Vec<(String, SettingValue)> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => {
-                    transaction.changes.first().and_then(|change| {
-                        change
-                            .value
-                            .clone()
-                            .map(|value| (change.key.clone(), value))
-                    })
-                }
-                _ => None,
-            })
-            .collect();
+        let writes = applied_writes(&requests);
         assert_eq!(
             writes,
             vec![(
@@ -1005,11 +970,7 @@ mod tests {
 
     #[test]
     fn external_decoration_change_moves_the_highlight_without_a_write() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
@@ -1061,11 +1022,7 @@ mod tests {
 
     #[test]
     fn animation_style_segments_write_exact_values_and_highlight_the_snapshot() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         let mut revision = 1;
         transport
             .responses
@@ -1116,21 +1073,7 @@ mod tests {
             }
         }
 
-        let written: Vec<(String, SettingValue)> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => {
-                    transaction.changes.first().and_then(|change| {
-                        change
-                            .value
-                            .clone()
-                            .map(|value| (change.key.clone(), value))
-                    })
-                }
-                _ => None,
-            })
-            .collect();
+        let written = applied_writes(&requests);
         let expected: Vec<(String, SettingValue)> = writes
             .iter()
             .map(|(key, value)| ((*key).to_owned(), SettingValue::Text((*value).to_owned())))
@@ -1159,11 +1102,7 @@ mod tests {
 
     #[test]
     fn lock_timeout_segments_write_exact_minutes_and_highlight_the_snapshot() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(1))));
@@ -1200,18 +1139,7 @@ mod tests {
             }
         }
 
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "lockTimeoutMinutes")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "lockTimeoutMinutes");
         let expected: Vec<SettingValue> = minutes_options
             .iter()
             .map(|minutes| SettingValue::Integer(*minutes))
@@ -1274,7 +1202,9 @@ mod tests {
             ),
             ("taskbarShowClock", "taskbar-clock-on", "taskbar-clock-off", true),
             ("taskbarShowWorkspaces", "taskbar-workspaces-on", "taskbar-workspaces-off", true),
-            ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", false),
+            ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", true),
+            ("autoLocationEnabled", "weather-auto-location-on", "weather-auto-location-off", false),
+            ("autoTimeZoneEnabled", "time-auto-zone-on", "time-auto-zone-off", false),
         ] {
             for (value, expected_on) in [(None, default), (Some(default), default), (Some(!default), !default)] {
                 let mut transport = RecordingTransport::default();
@@ -1354,6 +1284,8 @@ mod tests {
             ("settings.toggle.taskbarShowDate", true),
             ("settings.toggle.taskbarShowWeather", true),
             ("settings.toggle.weatherEnabled", true),
+            ("settings.toggle.autoLocationEnabled", true),
+            ("settings.toggle.autoTimeZoneEnabled", true),
             ("settings.weather.units.celsius", true),
             ("settings.weather.units.fahrenheit", true),
             ("settings.weather.units.kelvin", false),
@@ -1404,11 +1336,7 @@ mod tests {
                 0,
             ),
         ] {
-            let requests = Rc::new(RefCell::new(Vec::new()));
-            let mut transport = RecordingTransport {
-                requests: requests.clone(),
-                ..RecordingTransport::default()
-            };
+            let (requests, mut transport) = recording_transport();
             let mut before = SettingsSnapshot::new(1);
             before
                 .values
@@ -1434,18 +1362,7 @@ mod tests {
                 .handle_action(&release(action), &mut document)
                 .expect("blur step");
 
-            let written: Vec<SettingValue> = requests
-                .borrow()
-                .iter()
-                .filter_map(|request| match request {
-                    ControlRequest::ApplySettings(transaction) => transaction
-                        .changes
-                        .first()
-                        .filter(|change| change.key == key)
-                        .and_then(|change| change.value.clone()),
-                    _ => None,
-                })
-                .collect();
+            let written = written_values(&requests, key);
             assert_eq!(written, vec![SettingValue::Percent(expected)], "{action}");
             assert_eq!(
                 document.texts[label_id],
@@ -1457,11 +1374,7 @@ mod tests {
 
     #[test]
     fn avatar_clear_writes_empty_default_and_never_touches_background() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1523,11 +1436,7 @@ mod tests {
                 80,
             ),
         ] {
-            let requests = Rc::new(RefCell::new(Vec::new()));
-            let mut transport = RecordingTransport {
-                requests: requests.clone(),
-                ..RecordingTransport::default()
-            };
+            let (requests, mut transport) = recording_transport();
             transport
                 .responses
                 .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1553,18 +1462,7 @@ mod tests {
                 .handle_action(&release(action), &mut document)
                 .expect("lock background step");
 
-            let written: Vec<SettingValue> = requests
-                .borrow()
-                .iter()
-                .filter_map(|request| match request {
-                    ControlRequest::ApplySettings(transaction) => transaction
-                        .changes
-                        .first()
-                        .filter(|change| change.key == key)
-                        .and_then(|change| change.value.clone()),
-                    _ => None,
-                })
-                .collect();
+            let written = written_values(&requests, key);
             assert_eq!(
                 written,
                 vec![SettingValue::Integer(expected)],
@@ -1575,11 +1473,7 @@ mod tests {
 
     #[test]
     fn floating_margin_stepper_clamps_at_its_maximum_and_writes_an_integer() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1608,18 +1502,7 @@ mod tests {
             )
             .expect("margin up at maximum");
 
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "taskbarFloatingMargin")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "taskbarFloatingMargin");
         assert_eq!(
             written,
             vec![SettingValue::Integer(32)],
@@ -1630,11 +1513,7 @@ mod tests {
 
     #[test]
     fn ribbon_width_stepper_moves_by_half_a_pixel_in_tenths() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1677,18 +1556,7 @@ mod tests {
             )
             .expect("ribbon width up");
 
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "screensaverRibbonWidthTenths")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "screensaverRibbonWidthTenths");
         assert_eq!(
             written,
             vec![SettingValue::Integer(105), SettingValue::Integer(110)],
@@ -1698,11 +1566,7 @@ mod tests {
 
     #[test]
     fn taskbar_style_segment_writes_floating_and_shows_only_its_floating_steppers() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1747,28 +1611,13 @@ mod tests {
             document.visible["taskbar-floating-radius-row"],
             "floating shows radius"
         );
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "taskbarStyle")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "taskbarStyle");
         assert_eq!(written, vec![SettingValue::Text("floating".to_owned())]);
     }
 
     #[test]
     fn cursor_size_segments_write_exact_pixels_and_highlight_the_snapshot() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1801,28 +1650,13 @@ mod tests {
         assert!(document.highlighted["cursor-size-64"]);
         assert!(!document.highlighted["cursor-size-32"]);
 
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "cursorSize")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "cursorSize");
         assert_eq!(written, vec![SettingValue::Integer(64)]);
     }
 
     #[test]
     fn background_mode_actions_write_distinct_modes_and_never_touch_saved_paths() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         for revision in 1..=5 {
             transport
                 .responses
@@ -1875,11 +1709,7 @@ mod tests {
 
     #[test]
     fn wallpaper_fit_selector_writes_the_next_wire_value_and_labels_it() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1906,28 +1736,13 @@ mod tests {
             .expect("wallpaper fit cycle");
 
         assert_eq!(document.texts["wallpaper-fit-value"], "Fit");
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "wallpaperFit")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "wallpaperFit");
         assert_eq!(written, vec![SettingValue::Text("fit".to_owned())]);
     }
 
     #[test]
     fn weather_units_segments_write_exact_values_and_highlight_the_snapshot() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -1959,18 +1774,7 @@ mod tests {
             .expect("weather units fahrenheit");
         assert!(document.highlighted["weather-units-fahrenheit"]);
         assert!(!document.highlighted["weather-units-celsius"]);
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "weatherUnits")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "weatherUnits");
         assert_eq!(written, vec![SettingValue::Text("fahrenheit".to_owned())]);
     }
 
@@ -1986,12 +1790,21 @@ mod tests {
     }
 
     #[test]
+    fn automatic_location_row_is_prefixed_and_manual_row_is_the_bare_city() {
+        use crate::{time_zone_label, weather_location_text};
+        assert_eq!(weather_location_text("51.5\t-0.12\tGB\tLondon", true), "Automatic: London, GB");
+        assert_eq!(weather_location_text("51.5\t-0.12\t\tSpringfield", true), "Automatic: Springfield");
+        assert_eq!(weather_location_text("51.5\t-0.12\tGB\tLondon", false), "London");
+        assert_eq!(
+            weather_location_text("", true),
+            "Not set - click the weather icon in the taskbar"
+        );
+        assert_eq!(time_zone_label(true, "Europe/Paris"), "Europe/Paris");
+    }
+
+    #[test]
     fn weather_location_clear_writes_empty_and_shows_the_unset_hint() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -2024,28 +1837,13 @@ mod tests {
             document.texts["weather-location-value"],
             "Not set - click the weather icon in the taskbar"
         );
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "weatherLocation")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "weatherLocation");
         assert_eq!(written, vec![SettingValue::Text(String::new())]);
     }
 
     #[test]
     fn focus_follows_mouse_toggle_flips_its_boolean_and_moves_the_highlight() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(lock_snapshot(
@@ -2078,28 +1876,13 @@ mod tests {
 
         assert!(document.visible["focus-mouse-on"]);
         assert!(!document.visible["focus-mouse-off"]);
-        let written: Vec<SettingValue> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == "focusFollowsMouse")
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
-            .collect();
+        let written = written_values(&requests, "focusFollowsMouse");
         assert_eq!(written, vec![SettingValue::Boolean(true)]);
     }
 
     #[test]
     fn opacity_clicks_use_one_apply_settings_transaction_at_each_step_boundary() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         for revision in 1..=3 {
             transport
                 .responses
@@ -2207,11 +1990,7 @@ mod tests {
 
     #[test]
     fn accent_reset_is_retired_and_writes_nothing() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, transport) = recording_transport();
         let mut application = SettingsApplication::new(transport);
         assert!(
             application
@@ -2521,11 +2300,7 @@ mod tests {
 
     #[test]
     fn hotkey_controller_seam_preserves_escape_as_clear_binding() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Shortcuts(shortcut_snapshot_with(&[(
@@ -2650,11 +2425,7 @@ mod tests {
 
     #[test]
     fn display_mode_slot_action_begins_the_mapped_mode() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Displays(two_mode_display_snapshot())));
@@ -2689,11 +2460,7 @@ mod tests {
 
     #[test]
     fn display_mode_slots_and_actions_follow_the_selected_output() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport
             .responses
             .push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
@@ -2735,11 +2502,7 @@ mod tests {
                 true,
             ),
         ] {
-            let requests = Rc::new(RefCell::new(Vec::new()));
-            let mut transport = RecordingTransport {
-                requests: requests.clone(),
-                ..RecordingTransport::default()
-            };
+            let (requests, mut transport) = recording_transport();
             let mut pending = two_mode_display_snapshot();
             pending.pending = Some(flamewm_api::display::PendingModeChange {
                 transaction: flamewm_api::TransactionId(21),
@@ -2837,11 +2600,7 @@ mod tests {
 
     #[test]
     fn display_mode_page_one_slot_three_begins_absolute_mode_eleven() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport.responses.push_back(Ok(
             ControlResponse::Displays(twelve_mode_display_snapshot()),
         ));
@@ -2902,11 +2661,7 @@ mod tests {
 
     #[test]
     fn out_of_range_page_slots_are_legible_errors_and_never_begin() {
-        let requests = Rc::new(RefCell::new(Vec::new()));
-        let mut transport = RecordingTransport {
-            requests: requests.clone(),
-            ..RecordingTransport::default()
-        };
+        let (requests, mut transport) = recording_transport();
         transport.responses.push_back(Ok(
             ControlResponse::Displays(twelve_mode_display_snapshot()),
         ));

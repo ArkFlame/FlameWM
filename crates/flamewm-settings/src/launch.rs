@@ -5,7 +5,7 @@ use flamewm_settings_core::SettingsPage;
 pub struct SettingsLaunchOptions {
     pub page: SettingsPage,
     /// Appearance sub-page opened by `--page`; ignored for other pages.
-    pub appearance_tab: AppearanceTab,
+    pub(crate) appearance_tab: AppearanceTab,
     /// Optional bounded geometry used by the native acceptance runner.
     pub window_size: Option<(u32, u32)>,
 }

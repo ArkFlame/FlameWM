@@ -9,7 +9,7 @@
 <body>
   <nav class="settings-nav">
     <div class="settings-brand"><img src="assets/branding/flamewm-wordmark.png"></div>
-    <div id="nav-selection" class="nav-selection"><div class="nav-selection-accent"></div></div>
+    <div id="nav-selection" class="nav-selection"><div id="nav-selection-accent" class="nav-selection-accent"></div></div>
     <button class="nav-row" data-action="settings.page.theme"><img src="assets/breeze/settings-appearance.svg"><div>Theme</div></button>
     <button class="nav-row" data-action="settings.page.start-menu"><img src="assets/breeze/application-menu.svg"><div>Start Menu</div></button>
     <button class="nav-row" data-action="settings.page.surfaces"><img src="assets/breeze/preferences-desktop-color.svg"><div>Surfaces</div></button>
@@ -150,6 +150,11 @@
         <div class="setting-block"><div class="setting-copy"><div class="setting-title">Show date</div><div class="setting-note">Show the date above the clock</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="taskbar-date-on" data-action="settings.toggle.taskbarShowDate"><i></i></button><button class="toggle toggle-off" id="taskbar-date-off" data-action="settings.toggle.taskbarShowDate"><i></i></button></div></div>
       </div>
       <div class="settings-card">
+        <div class="setting-group-title">Date and time</div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-title">Set time zone automatically from my IP location</div><div class="setting-note">Uses the same IP lookup as automatic location. Only the zone name is stored.</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="time-auto-zone-on" data-action="settings.toggle.autoTimeZoneEnabled"><i></i></button><button class="toggle toggle-off" id="time-auto-zone-off" data-action="settings.toggle.autoTimeZoneEnabled"><i></i></button></div></div>
+        <div class="setting-block"><div class="setting-copy"><div class="setting-note" id="time-zone-value">&#8203;</div></div></div>
+      </div>
+      <div class="settings-card">
         <div class="setting-group-title">Items</div>
         <div class="setting-block"><div class="setting-copy"><div class="setting-title">Show weather</div><div class="setting-note">Show the weather indicator</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="taskbar-weather-on" data-action="settings.toggle.taskbarShowWeather"><i></i></button><button class="toggle toggle-off" id="taskbar-weather-off" data-action="settings.toggle.taskbarShowWeather"><i></i></button></div></div>
         <div class="setting-block"><div class="setting-copy"><div class="setting-title">Show volume</div><div class="setting-note">Show the volume indicator</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="taskbar-volume-on" data-action="settings.toggle.taskbarShowVolume"><i></i></button><button class="toggle toggle-off" id="taskbar-volume-off" data-action="settings.toggle.taskbarShowVolume"><i></i></button></div></div>
@@ -162,6 +167,7 @@
       <div class="settings-card">
         <div class="setting-group-title">Weather</div>
         <div class="setting-block"><div class="setting-copy"><div class="setting-title">Enable weather</div><div class="setting-note">Fetch weather for the taskbar indicator</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="weather-enabled-on" data-action="settings.toggle.weatherEnabled"><i></i></button><button class="toggle toggle-off" id="weather-enabled-off" data-action="settings.toggle.weatherEnabled"><i></i></button></div></div>
+        <div class="setting-block lock-stacked"><div class="setting-copy"><div class="setting-title">Automatically detect my location</div><div class="setting-note">Approximate location from your IP address (ipwho.is, ipinfo.io). Only the city is stored.</div></div><div class="toggle-slots"><button class="toggle toggle-on" id="weather-auto-location-on" data-action="settings.toggle.autoLocationEnabled"><i></i></button><button class="toggle toggle-off" id="weather-auto-location-off" data-action="settings.toggle.autoLocationEnabled"><i></i></button></div></div>
         <div class="setting-block lock-stacked"><div class="setting-copy"><div class="setting-title">Units</div><div class="setting-note">Temperature scale</div></div><div class="segment-control"><button class="segment" id="weather-units-celsius" data-action="settings.weather.units.celsius">Celsius</button><button class="segment" id="weather-units-fahrenheit" data-action="settings.weather.units.fahrenheit">Fahrenheit</button></div></div>
         <div class="setting-block lock-stacked"><div class="setting-copy"><div class="setting-title">Location</div><div class="setting-note">Set by clicking the weather icon in the taskbar</div></div><div class="wallpaper-actions"><div class="value-pill value lock-path" id="weather-location-value">&#8203;</div><button class="settings-button" id="weather-location-clear" data-action="settings.weather.location.clear">Clear location</button></div></div>
       </div>

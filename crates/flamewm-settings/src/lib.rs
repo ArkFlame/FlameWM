@@ -15,6 +15,8 @@ pub mod view;
 mod controller;
 #[cfg(test)]
 mod projection;
+#[cfg(test)]
+mod ui_contract;
 
 use flamewm_api::panels::PanelEdge;
 use flamewm_api::settings::SettingValue;
@@ -60,6 +62,8 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "taskbar-clock-on",
     "taskbar-workspaces-on",
     "weather-enabled-on",
+    "weather-auto-location-on",
+    "time-auto-zone-on",
     "font-toggle-on",
 ];
 /// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
@@ -76,7 +80,9 @@ const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
     ),
     ("taskbarShowClock", "taskbar-clock-on", "taskbar-clock-off", true),
     ("taskbarShowWorkspaces", "taskbar-workspaces-on", "taskbar-workspaces-off", true),
-    ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", false),
+    ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", true),
+    ("autoLocationEnabled", "weather-auto-location-on", "weather-auto-location-off", false),
+    ("autoTimeZoneEnabled", "time-auto-zone-on", "time-auto-zone-off", false),
 ];
 /// Inline status line for failed requests. Optional in the compiled markup.
 const ERROR_NODE: &str = "settings-error";
@@ -1361,7 +1367,26 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
+    /// Boolean setting value; an absent or non-boolean key reads as OFF.
+    fn bool_setting(&self, key: &str) -> bool {
+        matches!(
+            self.client.settings().and_then(|snapshot| snapshot.values.get(key)),
+            Some(SettingValue::Boolean(true))
+        )
+    }
+
+    /// Writes every node; a failed node write is recorded and the rest still apply.
     fn sync(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let mut nodes = NodeFailures { inner: document, failures: Vec::new() };
+        let result = self.sync_nodes(&mut nodes);
+        match (result, nodes.into_result()) {
+            (Ok(()), recorded) => recorded,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(recorded)) => Err(format!("{error}; {recorded}")),
+        }
+    }
+
+    fn sync_nodes(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         document.position("nav-selection", 8.0, nav_top(self.nav_index()))?;
         if let Some(SettingValue::Text(accent)) = self
             .client
@@ -1508,6 +1533,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         self.sync_value_text(document)?;
         self.sync_weather(document)?;
+        self.sync_time_zone(document)?;
         self.sync_theme_pickers(document)?;
         if let Some(status) = &self.theme_status {
             optional_text(document, "theme-install-status", status.clone());
@@ -1574,20 +1600,14 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return Ok(());
         };
         let accent = self.accent()?;
-        for (value, id) in [
-            ("circle", "titlebar-button-style-circle"),
-            ("square", "titlebar-button-style-square"),
-        ] {
-            if current == value {
-                document.background(id, accent)?;
-            } else {
-                document.background_clear(id)?;
-            }
-        }
-        Ok(())
+        highlight_options(
+            document,
+            Some(&current),
+            &[("circle", "titlebar-button-style-circle"), ("square", "titlebar-button-style-square")],
+            accent,
+        )
     }
 
-    /// Highlights, in each animation style row, the segment whose value matches the stored style.
     /// Highlights the preset that matches each surface setting, and shows each
     /// setting's current colour on its wheel circle.
     fn sync_color_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -1649,6 +1669,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
+    /// Highlights, in each animation style row, the segment whose value matches the stored style.
     fn sync_animation_styles(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let accent = self.accent()?;
         for (key, values) in ANIMATION_STYLE_ROWS {
@@ -1694,28 +1715,40 @@ impl<T: ControlTransport> SettingsApplication<T> {
     fn sync_segment_rows(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let accent = self.accent()?;
         let style = self.text_setting("taskbarStyle").ok();
-        for (value, id) in [("classic", "taskbar-style-classic"), ("floating", "taskbar-style-floating")] {
-            highlight_segment(document, id, style.as_deref() == Some(value), accent)?;
-        }
+        highlight_options(
+            document,
+            style.as_deref(),
+            &[("classic", "taskbar-style-classic"), ("floating", "taskbar-style-floating")],
+            accent,
+        )?;
         let floating = style.as_deref() == Some("floating");
         document.visible("taskbar-floating-margin-row", floating)?;
         document.visible("taskbar-floating-radius-row", floating)?;
         let clock = self.text_setting("taskbarClockFormat").ok();
-        for (value, id) in [("24h", "taskbar-clock-24h"), ("12h", "taskbar-clock-12h")] {
-            highlight_segment(document, id, clock.as_deref() == Some(value), accent)?;
-        }
+        highlight_options(
+            document,
+            clock.as_deref(),
+            &[("24h", "taskbar-clock-24h"), ("12h", "taskbar-clock-12h")],
+            accent,
+        )?;
         let appearance = self.text_setting("appearance").ok();
-        for (value, id) in [("dark", "appearance-apps-dark"), ("light", "appearance-apps-light")] {
-            highlight_segment(document, id, appearance.as_deref() == Some(value), accent)?;
-        }
+        highlight_options(
+            document,
+            appearance.as_deref(),
+            &[("dark", "appearance-apps-dark"), ("light", "appearance-apps-light")],
+            accent,
+        )?;
         let size = self.integer_setting("cursorSize").ok();
         for value in CURSOR_SIZE_CHOICES {
             highlight_segment(document, &format!("cursor-size-{value}"), size == Some(value), accent)?;
         }
         let mode = self.text_setting("screensaverMode").ok();
-        for (value, id) in [("ribbons", "screensaver-mode-ribbons"), ("none", "screensaver-mode-none")] {
-            highlight_segment(document, id, mode.as_deref() == Some(value), accent)?;
-        }
+        highlight_options(
+            document,
+            mode.as_deref(),
+            &[("ribbons", "screensaver-mode-ribbons"), ("none", "screensaver-mode-none")],
+            accent,
+        )?;
         Ok(())
     }
 
@@ -1725,14 +1758,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
             return Ok(());
         };
         let accent = self.accent()?;
-        for (value, id) in [("rounded", "decoration-rounded"), ("squared", "decoration-squared")] {
-            if current == value {
-                document.background(id, accent)?;
-            } else {
-                document.background_clear(id)?;
-            }
-        }
-        Ok(())
+        highlight_options(
+            document,
+            Some(&current),
+            &[("rounded", "decoration-rounded"), ("squared", "decoration-squared")],
+            accent,
+        )
     }
 
     fn sync_error(&self, document: &mut impl UiDocumentAccess) {
@@ -1845,8 +1876,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
-    /// Writes the authoritative value text into every value pill and select
-    /// label. Missing snapshot values leave the authored placeholder untouched.
     /// Highlights the saved units and shows the saved weather city (or the unset hint).
     fn sync_weather(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let units = self.text_setting("weatherUnits").unwrap_or_else(|_| "celsius".to_owned());
@@ -1855,9 +1884,25 @@ impl<T: ControlTransport> SettingsApplication<T> {
             highlight_segment(document, id, units == value, accent)?;
         }
         let location = self.text_setting("weatherLocation").unwrap_or_default();
-        document.text("weather-location-value", weather_location_label(&location))
+        let automatic = self.bool_setting("autoLocationEnabled");
+        document.text("weather-location-value", weather_location_text(&location, automatic))
     }
 
+    fn sync_time_zone(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
+        let automatic_zone = self.bool_setting("autoTimeZoneEnabled");
+        let cached = self.text_setting("autoTimeZone").unwrap_or_default();
+        let zone = time_zone_label(automatic_zone, &cached);
+        let city = if self.bool_setting("autoLocationEnabled") {
+            let location = self.text_setting("weatherLocation").unwrap_or_default();
+            weather_location_label(&location)
+        } else {
+            "not detected".to_owned()
+        };
+        document.text("time-zone-value", format!("Current time zone: {zone} - detected city: {city}"))
+    }
+
+    /// Writes the authoritative value text into every value pill and select
+    /// label. Missing snapshot values leave the authored placeholder untouched.
     fn sync_value_text(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let values = self.client.settings().map(|snapshot| &snapshot.values);
         let percent = |key: &str| {
@@ -2112,6 +2157,19 @@ fn animation_style_node(key: &str, value: &str) -> String {
     format!("{row}-{value}")
 }
 
+/// Highlights each `(value, node id)` option that equals `current`; a missing value clears them all.
+fn highlight_options(
+    document: &mut impl UiDocumentAccess,
+    current: Option<&str>,
+    options: &[(&str, &str)],
+    accent: UiColor,
+) -> Result<(), String> {
+    for (value, id) in options {
+        highlight_segment(document, id, current == Some(*value), accent)?;
+    }
+    Ok(())
+}
+
 /// Paints one segment with the accent when selected, and clears its highlight otherwise.
 fn highlight_segment(
     document: &mut impl UiDocumentAccess,
@@ -2304,6 +2362,70 @@ fn solid_color(value: &str) -> Result<UiColor, String> {
     Ok(UiColor { a: 255, ..accent_color(value)? })
 }
 
+/// Generates `UiDocumentAccess` methods that forward one write to `inner` and record its failure.
+macro_rules! forward_writes {
+    ($($name:ident($($arg:ident: $ty:ty),*);)*) => {
+        $(
+            fn $name(&mut self, $($arg: $ty),*) -> Result<(), String> {
+                let result = self.inner.$name($($arg),*);
+                self.record(result)
+            }
+        )*
+    };
+}
+
+/// Forwards every write to `inner`, but a rejected write (for example a missing node id)
+/// is recorded instead of aborting the sync, so one bad node cannot blank the whole page.
+/// `into_result` reports all recorded failures together.
+struct NodeFailures<'a, D: UiDocumentAccess + ?Sized> {
+    inner: &'a mut D,
+    failures: Vec<String>,
+}
+
+impl<D: UiDocumentAccess + ?Sized> NodeFailures<'_, D> {
+    fn record(&mut self, result: Result<(), String>) -> Result<(), String> {
+        if let Err(error) = result {
+            self.failures.push(error);
+        }
+        Ok(())
+    }
+
+    fn into_result(self) -> Result<(), String> {
+        if self.failures.is_empty() {
+            Ok(())
+        } else {
+            Err(self.failures.join("; "))
+        }
+    }
+}
+
+impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
+    forward_writes! {
+        text(id: &str, text: String);
+        image_rgb8(id: &str, image: flamewm_ui_x11::RuntimeImage);
+        image_rgba8(id: &str, image: flamewm_ui_x11::RuntimeImage);
+        image_reset(id: &str);
+        visible(id: &str, visible: bool);
+        toggle(track_id: &str, knob_id: &str, checked: bool);
+        position(id: &str, left: f32, top: f32);
+        size(id: &str, width: f32, height: f32);
+        background(id: &str, color: UiColor);
+        border(id: &str, color: UiColor);
+        corner_radius(id: &str, radius_px: f32);
+        node_backdrop(id: &str, blur_percent: Option<u8>);
+        foreground(id: &str, color: UiColor);
+        background_clear(id: &str);
+        border_clear(id: &str);
+        foreground_clear(id: &str);
+        font_size(id: &str, size_px: f32);
+        font_weight(id: &str, weight: u16);
+        font_family(family: String);
+        color_variable(name: &str, color: UiColor);
+        overflow(id: &str, x: flamewm_ui_x11::Overflow, y: flamewm_ui_x11::Overflow);
+        layer(id: &str, layer: flamewm_ui_core::style::UiLayer);
+    }
+}
+
 /// Paints every accent-coloured node (selected-sidebar line and ON toggles) with the live accent.
 fn sync_accent_nodes(document: &mut impl UiDocumentAccess, accent: &str) -> Result<(), String> {
     let color = solid_color(accent)?;
@@ -2398,16 +2520,69 @@ fn parse_theme_action(rest: &str) -> Result<SettingsAction, String> {
     }
 }
 
-/// City name from the shell's stored `lat\tlon\tcountry\tname` location, or the unset hint.
-fn weather_location_label(encoded: &str) -> String {
+const WEATHER_UNSET_HINT: &str = "Not set - click the weather icon in the taskbar";
+
+/// `(country, city)` from the shell's stored `lat\tlon\tcountry\tname` location.
+fn decode_weather_location(encoded: &str) -> Option<(String, String)> {
     let mut parts = encoded.splitn(4, '\t');
     let coordinates_ok = [parts.next(), parts.next()]
         .into_iter()
         .all(|value| value.is_some_and(|value| value.parse::<f64>().is_ok()));
-    let _country = parts.next();
+    let country = parts.next().unwrap_or_default();
     match parts.next() {
-        Some(name) if coordinates_ok && !name.is_empty() => name.to_owned(),
-        _ => "Not set - click the weather icon in the taskbar".to_owned(),
+        Some(name) if coordinates_ok && !name.is_empty() => Some((country.to_owned(), name.to_owned())),
+        _ => None,
+    }
+}
+
+/// City name from the stored location, or the unset hint.
+fn weather_location_label(encoded: &str) -> String {
+    decode_weather_location(encoded).map_or_else(|| WEATHER_UNSET_HINT.to_owned(), |(_, city)| city)
+}
+
+/// Location row text; while automatic detection is ON the city is prefixed `Automatic:`.
+fn weather_location_text(encoded: &str, automatic: bool) -> String {
+    match decode_weather_location(encoded) {
+        Some((country, city)) if automatic && country.is_empty() => format!("Automatic: {city}"),
+        Some((country, city)) if automatic => format!("Automatic: {city}, {country}"),
+        Some((_, city)) => city,
+        None => WEATHER_UNSET_HINT.to_owned(),
+    }
+}
+
+/// Current IANA zone: the IP-lookup cache only while automatic time zone is on, else the system zone.
+fn time_zone_label(automatic: bool, cached: &str) -> String {
+    pick_time_zone(automatic, cached, &system_time_zone())
+}
+
+fn pick_time_zone(automatic: bool, cached: &str, system: &str) -> String {
+    if automatic && !cached.is_empty() {
+        cached.to_owned()
+    } else {
+        system.to_owned()
+    }
+}
+
+fn system_time_zone() -> String {
+    std::fs::read_link("/etc/localtime")
+        .ok()
+        .and_then(|path| path.to_str().and_then(|path| path.strip_prefix("/usr/share/zoneinfo/")).map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+#[cfg(test)]
+mod time_zone_label_tests {
+    use super::pick_time_zone;
+
+    #[test]
+    fn cached_auto_zone_is_ignored_when_automatic_switch_is_off() {
+        assert_eq!(pick_time_zone(false, "Asia/Tokyo", "Europe/Paris"), "Europe/Paris");
+    }
+
+    #[test]
+    fn cached_auto_zone_is_shown_when_automatic_switch_is_on() {
+        assert_eq!(pick_time_zone(true, "Asia/Tokyo", "Europe/Paris"), "Asia/Tokyo");
+        assert_eq!(pick_time_zone(true, "", "Europe/Paris"), "Europe/Paris");
     }
 }
 
@@ -2474,6 +2649,8 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             "taskbarShowClock" => Ok(SettingsAction::Toggle("taskbarShowClock")),
             "taskbarShowWorkspaces" => Ok(SettingsAction::Toggle("taskbarShowWorkspaces")),
             "weatherEnabled" => Ok(SettingsAction::Toggle("weatherEnabled")),
+            "autoLocationEnabled" => Ok(SettingsAction::Toggle("autoLocationEnabled")),
+            "autoTimeZoneEnabled" => Ok(SettingsAction::Toggle("autoTimeZoneEnabled")),
             "snapPreviewEnabled" => Ok(SettingsAction::Toggle("snapPreviewEnabled")),
             "focusFollowsMouse" => Ok(SettingsAction::Toggle("focusFollowsMouse")),
             _ => Err(format!("unknown toggle '{key}'")),
@@ -3342,68 +3519,75 @@ mod accent_node_tests {
     #[derive(Default)]
     struct ColorDocument {
         backgrounds: BTreeMap<String, UiColor>,
+        reject_positions: bool,
     }
 
     impl UiDocumentAccess for ColorDocument {
         fn text(&mut self, _id: &str, _text: String) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_track_id)?;
+            crate::ui_contract::require_markup_id(_knob_id)
         }
 
         fn position(&mut self, _id: &str, _left: f32, _top: f32) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)?;
+            if self.reject_positions {
+                return Err(format!("position rejected for {_id}"));
+            }
             Ok(())
         }
 
         fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(id)?;
             self.backgrounds.insert(id.to_owned(), color);
             Ok(())
         }
 
         fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn background_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn border_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn overflow(
@@ -3412,7 +3596,7 @@ mod accent_node_tests {
             _x: flamewm_ui_x11::Overflow,
             _y: flamewm_ui_x11::Overflow,
         ) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
 
         fn layer(
@@ -3420,7 +3604,7 @@ mod accent_node_tests {
             _id: &str,
             _layer: flamewm_ui_core::style::UiLayer,
         ) -> Result<(), String> {
-            Ok(())
+            crate::ui_contract::require_markup_id(_id)
         }
     }
 
@@ -3456,6 +3640,15 @@ mod accent_node_tests {
             }
             assert!(!document.backgrounds.contains_key("anim-global-off"));
         }
+    }
+
+    #[test]
+    fn sync_reports_recorded_write_failures_alongside_a_later_error() {
+        let application = application_with_accent("not-a-colour");
+        let mut document = ColorDocument { reject_positions: true, ..ColorDocument::default() };
+        let error = application.sync(&mut document).expect_err("sync must fail");
+        assert!(error.contains("position rejected for nav-selection"), "{error}");
+        assert!(error.contains("accent is not a #RRGGBB value"), "{error}");
     }
 
     #[test]

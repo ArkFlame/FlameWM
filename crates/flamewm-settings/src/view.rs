@@ -123,6 +123,16 @@ mod tests {
     }
 
     #[test]
+    fn auto_location_toggle_stacks_under_its_description_so_it_stays_visible() {
+        // A long description on a side-by-side row pushed the toggle off the right edge at 820px.
+        let html = include_str!("../../../ui/settings.html");
+        assert!(html.contains(
+            "<div class=\"setting-block lock-stacked\"><div class=\"setting-copy\"><div class=\"setting-title\">Automatically detect my location</div>"
+        ));
+        assert!(html.contains("Approximate location from your IP address (ipwho.is, ipinfo.io). Only the city is stored."));
+    }
+
+    #[test]
     fn lock_preview_button_is_in_the_lock_screen_card() {
         let html = include_str!("../../../ui/settings.html");
         assert!(html.contains(

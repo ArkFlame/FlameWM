@@ -14,11 +14,11 @@ flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-settings-core = { path = "../flamewm-settings-core" }
+flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-session-core = { path = "../flamewm-session-core" }
 
 [dev-dependencies]
-flamewm-ui-core = { path = "../flamewm-ui-core" }
 
 [build-dependencies]
 flamewm-render-compiler = { path = "../flamewm-render-compiler" }
