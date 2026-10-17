@@ -1105,25 +1105,42 @@ fn decode_webp(
 ) -> Result<Rgb8Raster, RasterError> {
     let natural = flamewm_image_core::webp::decode(bytes)
         .map_err(|message| invalid_raster_error(path, "WebP", &message))?;
-    let image = if natural.width == size.physical && natural.height == size.physical {
-        natural
-    } else {
-        flamewm_image_core::scale::scale_rgba(
-            &natural,
-            size.physical,
-            size.physical,
-            flamewm_image_core::scale::ScaleFilter::Area,
-        )
-        .ok_or_else(|| invalid_raster_error(path, "WebP", "requested dimensions overflow"))?
-    };
-    Ok(Rgba8Raster {
+    let image = scale_to_physical(path, "WebP", natural, size)?;
+    Ok(raster_from_image(path, image, origin))
+}
+
+fn raster_from_image(
+    path: &Path,
+    image: flamewm_image_core::RgbaImage,
+    origin: IconOrigin,
+) -> Rgb8Raster {
+    Rgba8Raster {
         source: path.to_string_lossy().into_owned(),
         width: image.width,
         height: image.height,
         pixels: image.pixels,
         origin,
         fallback_reason: None,
-    })
+    }
+}
+
+/// Scales `natural` to the physical icon size through image-core; a matching size passes through.
+fn scale_to_physical(
+    path: &Path,
+    format: &'static str,
+    natural: flamewm_image_core::RgbaImage,
+    size: IconSize,
+) -> Result<flamewm_image_core::RgbaImage, RasterError> {
+    if natural.width == size.physical && natural.height == size.physical {
+        return Ok(natural);
+    }
+    flamewm_image_core::scale::scale_rgba(
+        &natural,
+        size.physical,
+        size.physical,
+        flamewm_image_core::scale::ScaleFilter::Area,
+    )
+    .ok_or_else(|| invalid_raster_error(path, format, "requested dimensions overflow"))
 }
 
 /// True when at least one pixel carries nonzero alpha.
@@ -1140,14 +1157,7 @@ fn decode_svg(
     // SVG renders directly at the requested size; alpha preserved by image-core.
     let image = flamewm_image_core::svg::render(bytes, size.physical, size.physical)
         .map_err(|message| invalid_raster_error(path, "SVG", &message))?;
-    Ok(Rgba8Raster {
-        source: path.to_string_lossy().into_owned(),
-        width: image.width,
-        height: image.height,
-        pixels: image.pixels,
-        origin,
-        fallback_reason: None,
-    })
+    Ok(raster_from_image(path, image, origin))
 }
 
 fn decode_png(
@@ -1159,28 +1169,10 @@ fn decode_png(
     let natural = flamewm_image_core::png::decode(bytes)
         .map_err(|message| invalid_raster_error(path, "PNG", &message))?;
     if natural.width == 0 || natural.height == 0 {
-        return invalid_raster(path, "PNG", "dimensions must be non-zero".to_owned());
+        return Err(invalid_raster_error(path, "PNG", "dimensions must be non-zero"));
     }
-    // Deterministic bilinear upscale/downscale owned by image-core.
-    let image = if natural.width == size.physical && natural.height == size.physical {
-        natural
-    } else {
-        flamewm_image_core::scale::scale_rgba(
-            &natural,
-            size.physical,
-            size.physical,
-            flamewm_image_core::scale::ScaleFilter::Area,
-        )
-        .ok_or_else(|| invalid_raster_error(path, "PNG", "requested dimensions overflow"))?
-    };
-    Ok(Rgba8Raster {
-        source: path.to_string_lossy().into_owned(),
-        width: image.width,
-        height: image.height,
-        pixels: image.pixels,
-        origin,
-        fallback_reason: None,
-    })
+    let image = scale_to_physical(path, "PNG", natural, size)?;
+    Ok(raster_from_image(path, image, origin))
 }
 
 fn invalid_raster_error(path: &Path, format: &'static str, message: &str) -> RasterError {
@@ -1191,20 +1183,12 @@ fn invalid_raster_error(path: &Path, format: &'static str, message: &str) -> Ras
     }
 }
 
-fn invalid_raster<T>(path: &Path, format: &'static str, message: String) -> Result<T, RasterError> {
-    Err(RasterError::InvalidRaster {
-        path: path.to_path_buf(),
-        format,
-        message,
-    })
-}
-
 fn decode_ppm(
     path: &Path,
     bytes: &[u8],
     size: IconSize,
     origin: IconOrigin,
-) -> Result<Rgba8Raster, RasterError> {
+) -> Result<Rgb8Raster, RasterError> {
     // PPM is opaque (alpha=255); decode + deterministic nearest scale via image-core.
     let image = flamewm_image_core::decode_bytes_at(
         bytes,
@@ -1214,14 +1198,7 @@ fn decode_ppm(
         flamewm_image_core::scale::ScaleFilter::Nearest,
     )
     .map_err(|message| map_ppm_error(path, &message))?;
-    Ok(Rgba8Raster {
-        source: path.to_string_lossy().into_owned(),
-        width: image.width,
-        height: image.height,
-        pixels: image.pixels,
-        origin,
-        fallback_reason: None,
-    })
+    Ok(raster_from_image(path, image, origin))
 }
 
 fn map_ppm_error(path: &Path, message: &str) -> RasterError {
@@ -1244,31 +1221,14 @@ fn decode_xpm(
     bytes: &[u8],
     size: IconSize,
     origin: IconOrigin,
-) -> Result<Rgba8Raster, RasterError> {
+) -> Result<Rgb8Raster, RasterError> {
     let natural = flamewm_image_core::xpm::decode(bytes)
         .map_err(|message| invalid_raster_error(path, "XPM", &message))?;
     if natural.width == 0 || natural.height == 0 {
-        return invalid_raster(path, "XPM", "dimensions must be non-zero".to_owned());
+        return Err(invalid_raster_error(path, "XPM", "dimensions must be non-zero"));
     }
-    let image = if natural.width == size.physical && natural.height == size.physical {
-        natural
-    } else {
-        flamewm_image_core::scale::scale_rgba(
-            &natural,
-            size.physical,
-            size.physical,
-            flamewm_image_core::scale::ScaleFilter::Area,
-        )
-        .ok_or_else(|| invalid_raster_error(path, "XPM", "requested dimensions overflow"))?
-    };
-    Ok(Rgba8Raster {
-        source: path.to_string_lossy().into_owned(),
-        width: image.width,
-        height: image.height,
-        pixels: image.pixels,
-        origin,
-        fallback_reason: None,
-    })
+    let image = scale_to_physical(path, "XPM", natural, size)?;
+    Ok(raster_from_image(path, image, origin))
 }
 
 fn valid_icon_name(name: &str) -> bool {
