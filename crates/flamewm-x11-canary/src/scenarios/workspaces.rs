@@ -93,20 +93,18 @@ fn color_probe(bounds: ColorBounds) -> (i16, i16) {
     )
 }
 
-fn sticky_probe(canary: &crate::Canary, color: StickyPixel) -> Option<(i16, i16)> {
+fn sticky_scan(canary: &crate::Canary, color: StickyPixel) -> Option<Option<ColorBounds>> {
     let (width, height) = canary.root_geometry();
-    let data = canary
-        .sample(canary.root, 0, 0, width.max(1), height.max(1))
-        .ok()?;
-    Some(color_probe(color_bounds(&data, width, height, color)?))
+    let data = canary.sample(canary.root, 0, 0, width.max(1), height.max(1)).ok()?;
+    Some(color_bounds(&data, width, height, color))
+}
+
+fn sticky_probe(canary: &crate::Canary, color: StickyPixel) -> Option<(i16, i16)> {
+    Some(color_probe(sticky_scan(canary, color)??))
 }
 
 fn sticky_color_present(canary: &crate::Canary, color: StickyPixel) -> Option<bool> {
-    let (width, height) = canary.root_geometry();
-    let data = canary
-        .sample(canary.root, 0, 0, width.max(1), height.max(1))
-        .ok()?;
-    Some(color_bounds(&data, width, height, color).is_some())
+    sticky_scan(canary, color).map(|bounds| bounds.is_some())
 }
 
 fn sticky_pixel(canary: &crate::Canary, point: (i16, i16)) -> StickyPixel {
@@ -214,6 +212,10 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
             "scenario=T21-T22 no _NET_CURRENT_DESKTOP path=real-pointer".to_owned(),
         );
     };
+    let fail = |detail: String| {
+        let _ = restore_workspace(canary, original);
+        (false, detail)
+    };
     let desktops = canary
         .prop_u32(canary.root, "_NET_NUMBER_OF_DESKTOPS")
         .first()
@@ -233,30 +235,20 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         );
     }
     if original != 0 && (!real_workspace_click(canary, 0) || !wait_workspace(canary, 0, 500)) {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            format!("scenario=T21-T22 setup_workspace=0 failed original_workspace={original}"),
-        );
+        return fail(format!(
+            "scenario=T21-T22 setup_workspace=0 failed original_workspace={original}"
+        ));
     }
     let Some(yellow_probe) = sticky_probe(canary, StickyPixel::Yellow) else {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            "scenario=T21-T22 baseline_A_not_observable_on_workspace_0".to_owned(),
-        );
+        return fail("scenario=T21-T22 baseline_A_not_observable_on_workspace_0".to_owned());
     };
 
     let baseline_green = sticky_color_present(canary, StickyPixel::Green);
     if baseline_green != Some(false) || sticky_pixel(canary, yellow_probe) != StickyPixel::Yellow {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            format!(
-                "scenario=T21-T22 baseline_invalid workspace=0 A={:?} B_present={baseline_green:?} expected=A-visible/B-absent",
-                sticky_pixel(canary, yellow_probe),
-            ),
-        );
+        return fail(format!(
+            "scenario=T21-T22 baseline_invalid workspace=0 A={:?} B_present={baseline_green:?} expected=A-visible/B-absent",
+            sticky_pixel(canary, yellow_probe),
+        ));
     }
 
     // The seeded fixture places A on workspace 0 and B on workspace 1. Visit
@@ -267,52 +259,32 @@ pub fn run_t21_t22(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         let converged = clicked && wait_workspace(canary, 1, 500);
         if !clicked || !converged {
             let current = current_workspace(canary);
-            let _ = restore_workspace(canary, original);
-            return (
-                false,
-                format!(
-                    "scenario=T21-T22 setup_workspace=1 failed while_discovering_B clicked={clicked} converged={converged} current_workspace={current:?} target_workspace=1 path=real-pointer"
-                ),
-            );
+            return fail(format!(
+                "scenario=T21-T22 setup_workspace=1 failed while_discovering_B clicked={clicked} converged={converged} current_workspace={current:?} target_workspace=1 path=real-pointer"
+            ));
         }
     }
     let Some(green_probe) = sticky_probe(canary, StickyPixel::Green) else {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            "scenario=T21-T22 switched_B_not_observable_on_workspace_1".to_owned(),
-        );
+        return fail("scenario=T21-T22 switched_B_not_observable_on_workspace_1".to_owned());
     };
     let switched_yellow = sticky_color_present(canary, StickyPixel::Yellow);
     let switched = sticky_signature(canary, &[yellow_probe, green_probe]);
     if switched != expected_sticky_signature(1) || switched_yellow != Some(false) {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            format!(
-                "scenario=T21-T22 switched_invalid workspace=1 A_present={switched_yellow:?} B={:?} expected=A-absent/B-visible",
-                switched.green_probe
-            ),
-        );
+        return fail(format!(
+            "scenario=T21-T22 switched_invalid workspace=1 A_present={switched_yellow:?} B={:?} expected=A-absent/B-visible",
+            switched.green_probe
+        ));
     }
     if !real_workspace_click(canary, 0) || !wait_workspace(canary, 0, 500) {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            "scenario=T21-T22 setup_workspace=0 failed after_discovering_B".to_owned(),
-        );
+        return fail("scenario=T21-T22 setup_workspace=0 failed after_discovering_B".to_owned());
     }
     let probes = [yellow_probe, green_probe];
     let mut before = sticky_signature(canary, &probes);
     if before != expected_sticky_signature(0) {
-        let _ = restore_workspace(canary, original);
-        return (
-            false,
-            format!(
-                "scenario=T21-T22 baseline_invalid_after_probe_setup A={:?} B={:?} expected=A-visible/B-absent",
-                before.yellow_probe, before.green_probe
-            ),
-        );
+        return fail(format!(
+            "scenario=T21-T22 baseline_invalid_after_probe_setup A={:?} B={:?} expected=A-visible/B-absent",
+            before.yellow_probe, before.green_probe
+        ));
     }
     let mut timings_us = Vec::with_capacity(WORKSPACE_CONVERGENCE_SAMPLES);
     let mut wm_correct = 0usize;
@@ -418,6 +390,13 @@ fn has_state(canary: &crate::Canary, wid: u32, state: &str) -> bool {
     })
 }
 
+fn fills_root(canary: &crate::Canary, wid: u32, rw: u16, rh: u16) -> bool {
+    canary.by_id(wid).is_some_and(|w| {
+        u32::from(w.width) >= u32::from(rw.saturating_sub(8))
+            && u32::from(w.height) >= u32::from(rh.saturating_sub(8))
+    })
+}
+
 /// T11: maximize toggle, snap (left-half configure), fullscreen toggle;
 /// each leg verified by geometry/state observation.
 pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
@@ -446,10 +425,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         && (max_h == 0 || ewmh_request(canary, t.id, "_NET_WM_STATE", 1, max_h));
     std::thread::sleep(std::time::Duration::from_millis(250));
     let maxed = has_state(canary, t.id, "_NET_WM_STATE_MAXIMIZED_VERT")
-        || canary.by_id(t.id).is_some_and(|w| {
-            w.width >= u16::from(rw.saturating_sub(8))
-                && w.height >= u16::from(rh.saturating_sub(8))
-        });
+        || fills_root(canary, t.id, rw, rh);
     // Leg 2: snap left half via configure; verify width shrinks toward half.
     let snapped_cfg = canary
         .conn
@@ -473,11 +449,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let fs_atom = canary.intern("_NET_WM_STATE_FULLSCREEN").unwrap_or(0);
     let fs_sent = fs_atom != 0 && ewmh_request(canary, t.id, "_NET_WM_STATE", 1, fs_atom);
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let fs = has_state(canary, t.id, "_NET_WM_STATE_FULLSCREEN")
-        || canary.by_id(t.id).is_some_and(|w| {
-            u32::from(w.width) >= u32::from(rw.saturating_sub(8))
-                && u32::from(w.height) >= u32::from(rh.saturating_sub(8))
-        });
+    let fs = has_state(canary, t.id, "_NET_WM_STATE_FULLSCREEN") || fills_root(canary, t.id, rw, rh);
     // Restore: remove fullscreen + maximize.
     if fs_atom != 0 {
         let _ = ewmh_request(canary, t.id, "_NET_WM_STATE", 0, fs_atom);
@@ -491,10 +463,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     for _ in 0..40 {
         let still_big = has_state(canary, t.id, "_NET_WM_STATE_FULLSCREEN")
             || has_state(canary, t.id, "_NET_WM_STATE_MAXIMIZED_VERT")
-            || canary.by_id(t.id).is_some_and(|w| {
-                u32::from(w.width) >= u32::from(rw.saturating_sub(8))
-                    && u32::from(w.height) >= u32::from(rh.saturating_sub(8))
-            });
+            || fills_root(canary, t.id, rw, rh);
         if !still_big {
             break;
         }
@@ -514,9 +483,9 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 /// T12: workspace churn — cycle _NET_CURRENT_DESKTOP, verify targets follow
 /// visibility (viewable on current or sticky-listed), then restore.
 pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
-    let Some(cur_atom) = canary.intern("_NET_CURRENT_DESKTOP") else {
+    if canary.intern("_NET_CURRENT_DESKTOP").is_none() {
         return (false, "no EWMH workspaces path=ewmh-client-message".to_owned());
-    };
+    }
     let num: u32 = canary
         .prop_u32(canary.root, "_NET_NUMBER_OF_DESKTOPS")
         .first()
@@ -529,12 +498,7 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(num.min(4))
         .clamp(1, num.min(8));
-    let orig: u32 = canary
-        .prop_bytes(canary.root, cur_atom)
-        .chunks_exact(4)
-        .next()
-        .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-        .unwrap_or(0);
+    let orig = current_workspace(canary).unwrap_or(0);
     let sticky = canary.intern("_NET_WM_STATE_STICKY").unwrap_or(0);
     let state_atom = canary.intern("_NET_WM_STATE").unwrap_or(sticky);
     let mut legs = 0;
