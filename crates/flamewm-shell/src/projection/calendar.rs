@@ -17,6 +17,14 @@ pub(super) const ACTIVE_TAB_FILL: UiColor = UiColor {
     a: 255,
 };
 
+fn paint_today(doc: &mut impl UiDocumentAccess, id: &str, on: bool) -> Result<(), String> {
+    if on {
+        doc.background(id, TODAY_NEUTRAL)
+    } else {
+        doc.background_clear(id)
+    }
+}
+
 pub fn project_calendar(
     document: &mut impl UiDocumentAccess,
     state: &crate::calendar::CalendarState,
@@ -73,11 +81,7 @@ pub fn project_calendar(
                 let current = cell.month_kind == flamewm_shell_core::CalendarMonth::Current;
                 document.foreground(&marker, if current { CURRENT_FG } else { ADJACENT_FG })?;
                 let is_today = cell.today && cell.year == grid.year && cell.month == grid.month;
-                if is_today {
-                    document.background(&marker, TODAY_NEUTRAL)?;
-                } else {
-                    document.background_clear(&marker)?;
-                }
+                paint_today(document, &marker, is_today)?;
                 document.background_clear(&cell_id)?;
             }
         }
@@ -86,11 +90,7 @@ pub fn project_calendar(
                 let id = format!("calendar-pick-month-{month}");
                 document.text(&id, month_name(month).to_owned())?;
                 document.foreground(&id, CURRENT_FG)?;
-                if state.year == today.0 && month == today.1 {
-                    document.background(&id, TODAY_NEUTRAL)?;
-                } else {
-                    document.background_clear(&id)?;
-                }
+                paint_today(document, &id, state.year == today.0 && month == today.1)?;
             }
         }
         CalendarView::Years => {
@@ -100,11 +100,7 @@ pub fn project_calendar(
                 let id = format!("calendar-pick-year-{}", offset + 1);
                 document.text(&id, year.to_string())?;
                 document.foreground(&id, CURRENT_FG)?;
-                if year == today.0 {
-                    document.background(&id, TODAY_NEUTRAL)?;
-                } else {
-                    document.background_clear(&id)?;
-                }
+                paint_today(document, &id, year == today.0)?;
             }
         }
     }
@@ -130,6 +126,12 @@ mod calendar_tests {
         assert_eq!(taskbar_css_height(44), 44.0);
         assert_eq!(taskbar_css_height(72), 72.0);
         assert_eq!(taskbar_css_height(34), 34.0);
+    }
+
+    fn project(state: &crate::calendar::CalendarState, today: (i32, u8, u8)) -> RecordingUiDoc {
+        let mut document = RecordingUiDoc::default();
+        project_calendar(&mut document, state, today).expect("projection succeeds");
+        document
     }
 
     /// Every color the projection wrote, across backgrounds and foregrounds.
@@ -174,8 +176,7 @@ mod calendar_tests {
             .iter()
             .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
             .expect("known date is a current-month cell");
-        let mut document = RecordingUiDoc::default();
-        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let document = project(&state, today);
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
         assert_eq!(TODAY_NEUTRAL.r, TODAY_NEUTRAL.g);
@@ -217,8 +218,7 @@ mod calendar_tests {
         let mut state = crate::calendar::CalendarState::for_today(today);
         state.apply("calendar.view.months", today);
         state.month = 3;
-        let mut document = RecordingUiDoc::default();
-        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let document = project(&state, today);
         assert_only_today_filled(&document, (1..=12u8).map(|m| format!("calendar-pick-month-{m}")));
         assert_eq!(document.backgrounds.get("calendar-pick-month-10"), Some(&TODAY_NEUTRAL));
         assert!(document.cleared.contains(&"calendar-pick-month-3".to_owned()));
@@ -230,8 +230,7 @@ mod calendar_tests {
         let mut state = crate::calendar::CalendarState::for_today(today);
         state.apply("calendar.view.years", today);
         state.year = 2027;
-        let mut document = RecordingUiDoc::default();
-        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let document = project(&state, today);
         assert_only_today_filled(&document, (1..=12).map(|s| format!("calendar-pick-year-{s}")));
         let slot = today.0 - crate::calendar::year_page_start(today.0) + 1;
         assert_eq!(
@@ -251,8 +250,7 @@ mod calendar_tests {
             .iter()
             .position(|cell| cell.year == 2026 && cell.month == 10 && cell.day == 20)
             .expect("selected date is in grid");
-        let mut document = RecordingUiDoc::default();
-        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let document = project(&state, today);
         let cell = format!("calendar-day-{}", index + 1);
         assert_eq!(document.backgrounds.get(&cell), None, "selected cell has no fill");
         assert!(document.cleared.contains(&cell), "selected cell paint is cleared");
@@ -311,8 +309,7 @@ mod calendar_tests {
             .iter()
             .position(|cell| cell.today && cell.year == 2026 && cell.month == 9)
             .expect("known date is a current-month cell");
-        let mut document = RecordingUiDoc::default();
-        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let document = project(&state, today);
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         let tile = format!("calendar-day-{}", today_index + 1);
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
@@ -371,8 +368,7 @@ mod calendar_tests {
         let today = (2026, 10, 13);
         let mut state = crate::calendar::CalendarState::for_today(today);
         state.apply("calendar.view.months", today);
-        let mut document = RecordingUiDoc::default();
-        project_calendar(&mut document, &state, today).expect("projection succeeds");
+        let document = project(&state, today);
         assert_eq!(
             document
                 .texts
