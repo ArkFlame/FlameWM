@@ -683,6 +683,10 @@ mod tests {
     use super::*;
     use flamewm_skin::recipes::decoration::corner_radius;
 
+    fn put(snapshot: &mut SettingsSnapshot, key: &str, value: SettingValue) {
+        snapshot.values.insert(key.to_owned(), value);
+    }
+
     #[test]
     fn settings_color_rejects_sign_and_prefix_forms() {
         assert_eq!(parse_settings_color("#+12345"), None);
@@ -751,9 +755,7 @@ mod tests {
         let mut snapshot = SettingsSnapshot::new(1);
         let unset = chrome_tokens_from_settings(&snapshot);
         assert!(unset.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
-        snapshot
-            .values
-            .insert("titlebarButtonStyle".to_owned(), SettingValue::Text(String::new()));
+        put(&mut snapshot, "titlebarButtonStyle", SettingValue::Text(String::new()));
         assert!(
             chrome_tokens_from_settings(&snapshot)
                 .buttons
@@ -761,24 +763,12 @@ mod tests {
                 .all(|button| button.shape == ButtonShape::Circle)
         );
         let text = |value: &str| SettingValue::Text(value.to_owned());
-        snapshot
-            .values
-            .insert("decoration".to_owned(), text("squared"));
-        snapshot
-            .values
-            .insert("surfaceColor".to_owned(), text("#202326"));
-        snapshot
-            .values
-            .insert("surfaceOpacity".to_owned(), SettingValue::Percent(50));
-        snapshot
-            .values
-            .insert("titlebarButtonStyle".to_owned(), text("square"));
-        snapshot
-            .values
-            .insert("titlebarCloseHoverColor".to_owned(), text("#00ff00"));
-        snapshot
-            .values
-            .insert("titlebarMinimizeColor".to_owned(), text("#zz"));
+        put(&mut snapshot, "decoration", text("squared"));
+        put(&mut snapshot, "surfaceColor", text("#202326"));
+        put(&mut snapshot, "surfaceOpacity", SettingValue::Percent(50));
+        put(&mut snapshot, "titlebarButtonStyle", text("square"));
+        put(&mut snapshot, "titlebarCloseHoverColor", text("#00ff00"));
+        put(&mut snapshot, "titlebarMinimizeColor", text("#zz"));
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(tokens.style, DecorationStyle::Squared);
         assert_eq!(tokens.titlebar_bg, Rgb(0x202326));
@@ -786,9 +776,7 @@ mod tests {
         assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Square));
         assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x00ff00)));
         assert_eq!(tokens.buttons[0].glyph, None);
-        snapshot
-            .values
-            .insert("titlebarButtonStyle".to_owned(), text("bogus"));
+        put(&mut snapshot, "titlebarButtonStyle", text("bogus"));
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
     }
@@ -797,9 +785,7 @@ mod tests {
     fn surface_opacity_maps_to_titlebar_alpha() {
         let mut snapshot = SettingsSnapshot::new(1);
         let mut alpha = |percent: u8| {
-            snapshot
-                .values
-                .insert("surfaceOpacity".to_owned(), SettingValue::Percent(percent));
+            put(&mut snapshot, "surfaceOpacity", SettingValue::Percent(percent));
             chrome_tokens_from_settings(&snapshot).titlebar_alpha
         };
         assert_eq!(alpha(0), 0);
@@ -812,9 +798,7 @@ mod tests {
     #[test]
     fn titlebar_color_setting_is_ignored() {
         let mut snapshot = SettingsSnapshot::new(1);
-        snapshot
-            .values
-            .insert("titlebarColor".to_owned(), SettingValue::Text("#202326".to_owned()));
+        put(&mut snapshot, "titlebarColor", SettingValue::Text("#202326".to_owned()));
         let tokens = chrome_tokens_from_settings(&snapshot);
         assert_eq!(tokens.titlebar_bg, flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB);
         assert_eq!(tokens.titlebar_alpha, 127);
@@ -918,10 +902,7 @@ mod tests {
     fn decoration_setting_parses_rounded_squared_and_legacy_ios() {
         let style_of = |value: &str| {
             let mut snapshot = SettingsSnapshot::new(1);
-            snapshot.values.insert(
-                "decoration".to_owned(),
-                SettingValue::Text(value.to_owned()),
-            );
+            put(&mut snapshot, "decoration", SettingValue::Text(value.to_owned()));
             chrome_tokens_from_settings(&snapshot).style
         };
         assert_eq!(style_of("ios"), DecorationStyle::Rounded);

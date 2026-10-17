@@ -496,6 +496,13 @@ mod tests {
         }
     }
 
+    fn client_configure(hints: ClientSizeHints) -> GeometryRequest<'static> {
+        GeometryRequest {
+            reason: GeometryReason::ClientConfigure,
+            ..req(ResizeEdges::none(), (0, 0), hints)
+        }
+    }
+
     fn free() -> ClientSizeHints {
         ClientSizeHints::default()
     }
@@ -837,10 +844,7 @@ mod tests {
     #[test]
     fn client_configure_applies_hints_and_gravity() {
         // min 100x100, max 500x400; request 2000x2000 at (300,300).
-        let r = GeometryRequest {
-            reason: GeometryReason::ClientConfigure,
-            ..req(ResizeEdges::none(), (0, 0), min_max((100, 100), (500, 400)))
-        };
+        let r = client_configure(min_max((100, 100), (500, 400)));
         let p = plan_client_configure(&r, RootPoint::new(300, 300), Some((2000, 2000)));
         // NW gravity: origin pinned to previous client origin (100,131).
         assert_eq!(p.client_size, (500, 400));
@@ -849,10 +853,7 @@ mod tests {
 
     #[test]
     fn client_configure_position_only_moves_frame() {
-        let r = GeometryRequest {
-            reason: GeometryReason::ClientConfigure,
-            ..req(ResizeEdges::none(), (0, 0), free())
-        };
+        let r = client_configure(free());
         let p = plan_client_configure(&r, RootPoint::new(300, 300), None);
         assert_eq!(p.frame, RootRect::new(300, 269, 400, 300));
         assert_eq!(p.client_size, (400, 269));
@@ -971,10 +972,7 @@ mod tests {
     #[test]
     fn client_configure_clamps_requested_size_to_min_max_hints() {
         let client_size = |hints: ClientSizeHints, w: u32, h: u32| {
-            let r = GeometryRequest {
-                reason: GeometryReason::ClientConfigure,
-                ..req(ResizeEdges::none(), (0, 0), hints)
-            };
+            let r = client_configure(hints);
             let p = plan_client_configure(&r, RootPoint::new(100, 100), Some((w, h)));
             frame_to_client_root(p.frame, EXT).size_u32()
         };

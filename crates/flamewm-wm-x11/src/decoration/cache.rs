@@ -45,23 +45,8 @@ impl DecorationCache {
         Some(raster)
     }
 
-    pub fn insert_icon_raster(
-        &mut self,
-        key: String,
-        raster: flamewm_integrations_linux::icons::Rgba8Raster,
-    ) {
-        if self.icon_rasters.contains_key(&key) {
-            self.icon_rasters.insert(key.clone(), raster);
-            touch(&mut self.icon_raster_order, &key);
-            return;
-        }
-        evict_oldest(
-            &mut self.icon_rasters,
-            &mut self.icon_raster_order,
-            ICON_RASTER_CACHE_CAPACITY,
-        );
-        self.icon_raster_order.push_back(key.clone());
-        self.icon_rasters.insert(key, raster);
+    pub fn insert_icon_raster(&mut self, key: String, raster: flamewm_integrations_linux::icons::Rgba8Raster) {
+        lru_insert(&mut self.icon_rasters, &mut self.icon_raster_order, ICON_RASTER_CACHE_CAPACITY, key, raster);
     }
 
     #[must_use]
@@ -73,19 +58,7 @@ impl DecorationCache {
     }
 
     pub fn insert_title_measure(&mut self, title: String, size_bits: u32, width: i32) {
-        let key = (title, size_bits);
-        if self.title_measures.contains_key(&key) {
-            self.title_measures.insert(key.clone(), width);
-            touch(&mut self.title_measure_order, &key);
-            return;
-        }
-        evict_oldest(
-            &mut self.title_measures,
-            &mut self.title_measure_order,
-            TITLE_MEASURE_CACHE_CAPACITY,
-        );
-        self.title_measure_order.push_back(key.clone());
-        self.title_measures.insert(key, width);
+        lru_insert(&mut self.title_measures, &mut self.title_measure_order, TITLE_MEASURE_CACHE_CAPACITY, (title, size_bits), width);
     }
 
     /// Native pixmap bytes for the live-target image cache (w*h*4 per
@@ -112,7 +85,6 @@ impl DecorationCache {
     pub fn icon_raster_count(&self) -> usize {
         self.icon_rasters.len()
     }
-
 }
 
 /// Convert a worker-produced straight RGBA8 catalog raster to ARGB32.
@@ -158,17 +130,24 @@ fn touch<K: Clone + PartialEq>(order: &mut VecDeque<K>, key: &K) {
 }
 
 #[cfg(test)]
-fn evict_oldest<K: Clone + Eq + std::hash::Hash, V>(
+fn lru_insert<K: Clone + Eq + std::hash::Hash, V>(
     entries: &mut HashMap<K, V>,
     order: &mut VecDeque<K>,
     capacity: usize,
+    key: K,
+    value: V,
 ) {
-    if entries.len() < capacity {
-        return;
+    if entries.contains_key(&key) {
+        touch(order, &key);
+    } else {
+        if entries.len() >= capacity {
+            if let Some(oldest) = order.pop_front() {
+                entries.remove(&oldest);
+            }
+        }
+        order.push_back(key.clone());
     }
-    if let Some(key) = order.pop_front() {
-        entries.remove(&key);
-    }
+    entries.insert(key, value);
 }
 
 #[cfg(test)]

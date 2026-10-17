@@ -382,7 +382,6 @@ impl OpenGate {
     pub fn clear(&mut self, client: u32) {
         self.armed.remove(&client);
     }
-
 }
 
 /// How long a finished overlay stays above its remapped window, so the client's first repaint
@@ -620,14 +619,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    const ON: Settings = Settings {
-        enabled: true,
-        speed: 100,
-        minimize: Style::MagicLamp,
-        maximize: Style::MagicLamp,
-        open: Style::Scale,
-        close: Style::Fade,
-    };
+    const ON: Settings = Settings::DEFAULT;
 
     fn animator() -> Animator {
         Animator::new(true, ON)

@@ -717,6 +717,18 @@ mod tests {
 
     const SCREEN: RootRect = RootRect::new(0, 0, 1920, 1080);
 
+    fn press(source: u32, x: i32, y: i32) -> FrameEvent {
+        FrameEvent::Press { source, pointer: RootPoint::new(x, y) }
+    }
+
+    fn motion(x: i32, y: i32) -> FrameEvent {
+        FrameEvent::Motion { pointer: RootPoint::new(x, y) }
+    }
+
+    fn release(x: i32, y: i32) -> FrameEvent {
+        FrameEvent::Release { pointer: RootPoint::new(x, y), time_ms: 0 }
+    }
+
     fn floating_state() -> ControllerState {
         let placement = PlacementState {
             mode: PlacementMode::Floating,
@@ -814,28 +826,20 @@ mod tests {
         let s0 = floating_state();
         let (s1, e1) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         assert!(matches!(s1.session, InteractionSession::Move(_)));
         assert!(e1.iter().any(|e| matches!(e, FrameEffect::Grab { .. })));
         let (s2, e2) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(200, 170),
-            },
+            motion(200, 170),
         );
         assert_eq!(s2.placement.current, RootRect::new(150, 150, 400, 300));
         assert!(has_move_frame(&e2, 150, 150));
         assert!(!has_any_frame_root(&e2));
         let (s3, e3) = reduce(
             &s2,
-            FrameEvent::Release {
-                pointer: RootPoint::new(200, 170),
-                time_ms: 0,
-            },
+            release(200, 170),
         );
         assert!(s3.session.is_idle());
         assert!(e3.contains(&FrameEffect::Ungrab));
@@ -847,26 +851,18 @@ mod tests {
         let s0 = floating_state();
         let (s1, e1) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 2,
-                pointer: RootPoint::new(500, 400),
-            },
+            press(2, 500, 400),
         );
         assert!(matches!(s1.session, InteractionSession::Resize(_)));
         assert!(e1.iter().any(|e| matches!(e, FrameEffect::Grab { .. })));
         let (s2, _) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(550, 460),
-            },
+            motion(550, 460),
         );
         assert_eq!(s2.placement.current, RootRect::new(100, 100, 450, 360));
         let (s3, e3) = reduce(
             &s2,
-            FrameEvent::Release {
-                pointer: RootPoint::new(550, 460),
-                time_ms: 0,
-            },
+            release(550, 460),
         );
         assert!(s3.session.is_idle());
         assert!(e3.contains(&FrameEffect::Ungrab));
@@ -879,18 +875,12 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 3,
-                pointer: RootPoint::new(300, 110),
-            },
+            press(3, 300, 110),
         );
         assert!(matches!(s1.session, InteractionSession::ControlPress(_)));
         let (s2, e2) = reduce(
             &s1,
-            FrameEvent::Release {
-                pointer: RootPoint::new(300, 110),
-                time_ms: 0,
-            },
+            release(300, 110),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
         assert_eq!(s2.placement.current, WA);
@@ -906,10 +896,7 @@ mod tests {
     ) -> (ControllerState, Vec<FrameEffect>) {
         let (pressed, _) = reduce(
             state,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(x, y),
-            },
+            press(1, x, y),
         );
         reduce(
             &pressed,
@@ -985,16 +972,11 @@ mod tests {
         let (s1, _) = title_click(&s0, 150, 120, 1000);
         let (s2, _) = reduce(
             &s1,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s3, _) = reduce(
             &s2,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(200, 170),
-            },
+            motion(200, 170),
         );
         let (s4, _) = reduce(
             &s3,
@@ -1015,10 +997,7 @@ mod tests {
         let (s1, _) = title_click(&s0, 150, 120, 1000);
         let (s2, _) = reduce(
             &s1,
-            FrameEvent::Press {
-                source: 2,
-                pointer: RootPoint::new(500, 400),
-            },
+            press(2, 500, 400),
         );
         let (s3, _) = reduce(
             &s2,
@@ -1037,10 +1016,7 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s2, e2) = reduce(&s1, FrameEvent::Cancel);
         assert!(s2.session.is_idle());
@@ -1084,25 +1060,18 @@ mod tests {
         // Motion with zero delta while moving: plan equals start -> Noop.
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s2, e2) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(150, 120),
-            },
+            motion(150, 120),
         );
         assert_eq!(e2, vec![FrameEffect::Noop]);
         assert_eq!(s2.placement.current, START);
         // Bare configure with no movement on idle session -> Noop path.
         let (_, e3) = reduce(
             &s0,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(0, 0),
-            },
+            motion(0, 0),
         );
         assert_eq!(e3, vec![FrameEffect::Noop]);
     }
@@ -1145,16 +1114,11 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (_, e2) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(200, 170),
-            },
+            motion(200, 170),
         );
         assert_eq!(e2.len(), 3);
         assert!(matches!(
@@ -1184,16 +1148,11 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 2,
-                pointer: RootPoint::new(500, 400),
-            },
+            press(2, 500, 400),
         );
         let (s2, e_motion) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(550, 460),
-            },
+            motion(550, 460),
         );
         // Resize motion carries frame + local + root notify.
         assert_eq!(count_local(&e_motion), 1);
@@ -1204,10 +1163,7 @@ mod tests {
         );
         let (_, e3) = reduce(
             &s2,
-            FrameEvent::Release {
-                pointer: RootPoint::new(550, 460),
-                time_ms: 0,
-            },
+            release(550, 460),
         );
         assert!(e3.contains(&FrameEffect::LayoutInput));
         assert!(e3.contains(&FrameEffect::PaintChrome));
@@ -1245,23 +1201,15 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s2, _) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(200, 170),
-            },
+            motion(200, 170),
         );
         let (s3, e3) = reduce(
             &s2,
-            FrameEvent::Release {
-                pointer: RootPoint::new(200, 170),
-                time_ms: 0,
-            },
+            release(200, 170),
         );
         assert_eq!(s3.placement.current, RootRect::new(150, 150, 400, 300));
         assert_eq!(*e3.last().expect("nonempty"), FrameEffect::Ungrab);
@@ -1290,10 +1238,7 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let mut total_local = 0;
         let mut total_configure_root = 0;
@@ -1308,9 +1253,7 @@ mod tests {
             let dy = ((i * 7) % 100) - 50;
             let (_, e) = reduce(
                 &s1,
-                FrameEvent::Motion {
-                    pointer: RootPoint::new(150 + dx, 120 + dy),
-                },
+                motion(150 + dx, 120 + dy),
             );
             // Move motion emits either Noop (zero/non-plan delta) or exactly
             // [MoveFrameRoot, NotifyClientRoot, PaintChrome]; nothing else is representable.
@@ -1363,24 +1306,17 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s2, _) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(200, 170),
-            },
+            motion(200, 170),
         );
         // Post-activation step whose frame position changes: titlebar must
         // repaint live, ordered after the frame move.
         let (s3, e3) = reduce(
             &s2,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(230, 190),
-            },
+            motion(230, 190),
         );
         assert_eq!(s3.placement.current, RootRect::new(180, 170, 400, 300));
         let move_pos = e3
@@ -1398,9 +1334,7 @@ mod tests {
         // Repeated pointer position leaves the frame unchanged: no repaint.
         let (_, e4) = reduce(
             &s3,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(230, 190),
-            },
+            motion(230, 190),
         );
         assert!(!e4.contains(&FrameEffect::PaintChrome));
     }
@@ -1410,16 +1344,11 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 2,
-                pointer: RootPoint::new(500, 400),
-            },
+            press(2, 500, 400),
         );
         let (_, e) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(550, 460),
-            },
+            motion(550, 460),
         );
         assert!(
             e.iter()
@@ -1436,16 +1365,11 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s2, e2) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(450, 220),
-            },
+            motion(450, 220),
         );
         assert_eq!(s2.placement.current, RootRect::new(400, 200, 400, 300));
         assert!(matches!(
@@ -1464,16 +1388,11 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 2,
-                pointer: RootPoint::new(500, 400),
-            },
+            press(2, 500, 400),
         );
         let (_, e) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(550, 460),
-            },
+            motion(550, 460),
         );
         assert!(
             e.iter()
@@ -1578,16 +1497,11 @@ mod tests {
         let s0 = floating_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(150, 120),
-            },
+            press(1, 150, 120),
         );
         let (s2, _effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(153, 120),
-            },
+            motion(153, 120),
         );
         assert!(matches!(s1.session, InteractionSession::Move(_)));
         assert_eq!(s1.placement, s0.placement);
@@ -1611,16 +1525,11 @@ mod tests {
         let s0 = maximized_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         let (s2, effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(964, 20),
-            },
+            motion(964, 20),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert_eq!(
@@ -1644,10 +1553,7 @@ mod tests {
         let s0 = maximized_state();
         let (s1, effects) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         assert_eq!(s1.placement, s0.placement);
         assert!(effects.contains(&FrameEffect::Grab {
@@ -1684,10 +1590,7 @@ mod tests {
         let s0 = snapped_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(500, 20),
-            },
+            press(1, 500, 20),
         );
         assert_eq!(s1.placement, s0.placement);
         match s1.session {
@@ -1720,16 +1623,11 @@ mod tests {
         let s0 = maximized_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         let (s2, effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(965, 25),
-            },
+            motion(965, 25),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert_eq!(
@@ -1757,16 +1655,11 @@ mod tests {
         let s0 = snapped_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(500, 20),
-            },
+            press(1, 500, 20),
         );
         let (s2, effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(505, 25),
-            },
+            motion(505, 25),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert_eq!(
@@ -1793,22 +1686,15 @@ mod tests {
         let s0 = maximized_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         let (s2, _) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(965, 25),
-            },
+            motion(965, 25),
         );
         let (s3, effects) = reduce(
             &s2,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(985, 45),
-            },
+            motion(985, 45),
         );
         assert_eq!(s3.placement.mode, PlacementMode::Floating);
         assert_eq!(
@@ -1839,19 +1725,14 @@ mod tests {
             };
             let (s1, press_effects) = reduce(
                 &s0,
-                FrameEvent::Press {
-                    source: 2,
-                    pointer: RootPoint::new(1900, 1050),
-                },
+                press(2, 1900, 1050),
             );
             assert!(s1.session.is_idle(), "mode {mode:?}");
             assert_eq!(s1.placement, s0.placement, "mode {mode:?}");
             assert_eq!(press_effects, vec![FrameEffect::Noop], "mode {mode:?}");
             let (s2, motion_effects) = reduce(
                 &s1,
-                FrameEvent::Motion {
-                    pointer: RootPoint::new(1950, 1100),
-                },
+                motion(1950, 1100),
             );
             assert_eq!(s2.placement, s0.placement, "mode {mode:?}");
             assert_eq!(motion_effects, vec![FrameEffect::Noop], "mode {mode:?}");
@@ -1869,24 +1750,17 @@ mod tests {
         let s0 = snapped_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 2,
-                pointer: RootPoint::new(960, 1080),
-            },
+            press(2, 960, 1080),
         );
         let (s2, first_effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(965, 1085),
-            },
+            motion(965, 1085),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&first_effects));
         let (s3, second_effects) = reduce(
             &s2,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(985, 1105),
-            },
+            motion(985, 1105),
         );
         assert_eq!(s3.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&second_effects));
@@ -1903,16 +1777,11 @@ mod tests {
         let s0 = maximized_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         let (s2, _effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(963, 20),
-            },
+            motion(963, 20),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Maximized);
         assert!(!matches!(s2.placement.mode, PlacementMode::Snapped(_)));
@@ -1929,16 +1798,11 @@ mod tests {
         let s0 = snapped_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(500, 20),
-            },
+            press(1, 500, 20),
         );
         let (s2, _effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(503, 20),
-            },
+            motion(503, 20),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Snapped(SnapTarget::Left));
         assert_eq!(
@@ -1960,16 +1824,11 @@ mod tests {
         let s0 = maximized_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         let (s2, effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(964, 24),
-            },
+            motion(964, 24),
         );
         assert_eq!(s2.placement.mode, PlacementMode::Floating);
         assert!(has_full_configure(&effects));
@@ -1991,23 +1850,16 @@ mod tests {
         let s0 = maximized_state();
         let (s1, _) = reduce(
             &s0,
-            FrameEvent::Press {
-                source: 1,
-                pointer: RootPoint::new(960, 20),
-            },
+            press(1, 960, 20),
         );
         let (s2, first_effects) = reduce(
             &s1,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(965, 25),
-            },
+            motion(965, 25),
         );
         assert!(has_full_configure(&first_effects));
         let (_, second_effects) = reduce(
             &s2,
-            FrameEvent::Motion {
-                pointer: RootPoint::new(985, 45),
-            },
+            motion(985, 45),
         );
         assert_position_only(&second_effects);
     }

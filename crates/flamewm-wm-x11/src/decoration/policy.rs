@@ -52,16 +52,11 @@ pub struct DecorationRequest {
 #[cfg(test)]
 #[must_use]
 pub const fn decide(request: DecorationRequest) -> DecorationPolicy {
-    if request.override_redirect {
-        return DecorationPolicy::Undecorated;
+    if request.override_redirect || !request.is_normal_type || request.motif_no_decorations {
+        DecorationPolicy::Undecorated
+    } else {
+        DecorationPolicy::ServerDecorated
     }
-    if !request.is_normal_type {
-        return DecorationPolicy::Undecorated;
-    }
-    if request.motif_no_decorations {
-        return DecorationPolicy::Undecorated;
-    }
-    DecorationPolicy::ServerDecorated
 }
 
 /// ICCCM `WM_NORMAL_HINTS` flag bits (subset used here). Canonical
@@ -167,16 +162,10 @@ pub fn gtk_frame_extents(values: &[u32]) -> Option<[u32; 4]> {
 #[must_use]
 pub fn decoration_policy(hints: &DecorationHints) -> Decoration {
     use crate::classifier::WindowKind;
-    if hints.override_redirect {
-        return Decoration::None;
-    }
-    if matches!(
-        hints.kind,
-        WindowKind::Popup | WindowKind::Desktop | WindowKind::Dock
-    ) {
-        return Decoration::None;
-    }
-    if hints.motif_decorations == Some(0) {
+    if hints.override_redirect
+        || matches!(hints.kind, WindowKind::Popup | WindowKind::Desktop | WindowKind::Dock)
+        || hints.motif_decorations == Some(0)
+    {
         return Decoration::None;
     }
     if hints
@@ -194,12 +183,11 @@ mod csd_tests {
     use crate::classifier::WindowKind;
 
     fn hints(kind: WindowKind) -> DecorationHints {
-        DecorationHints {
-            override_redirect: false,
-            kind,
-            motif_decorations: None,
-            gtk_frame_extents: None,
-        }
+        DecorationHints { override_redirect: false, kind, motif_decorations: None, gtk_frame_extents: None }
+    }
+
+    fn motif_hints(values: &[u32]) -> DecorationHints {
+        DecorationHints { motif_decorations: Some(values[2]), ..hints(WindowKind::Normal) }
     }
 
     #[test]
@@ -207,9 +195,7 @@ mod csd_tests {
         // flags = DECORATIONS, functions = 0, decorations = 0
         let values = [MOTIF_HINTS_DECORATIONS, 0, 0, 0, 0];
         assert!(motif_no_decorations(&values));
-        let mut h = hints(WindowKind::Normal);
-        h.motif_decorations = Some(values[2]);
-        assert_eq!(decoration_policy(&h), Decoration::None);
+        assert_eq!(decoration_policy(&motif_hints(&values)), Decoration::None);
     }
 
     #[test]
@@ -217,9 +203,7 @@ mod csd_tests {
         // decorations = TITLE only: not a no-decoration request.
         let values = [MOTIF_HINTS_DECORATIONS, 0, MOTIF_DECOR_TITLE, 0, 0];
         assert!(!motif_no_decorations(&values));
-        let mut h = hints(WindowKind::Normal);
-        h.motif_decorations = Some(values[2]);
-        assert_eq!(decoration_policy(&h), Decoration::Server);
+        assert_eq!(decoration_policy(&motif_hints(&values)), Decoration::Server);
     }
 
     #[test]
@@ -227,9 +211,7 @@ mod csd_tests {
         // Negative control: decorations = ALL (1) must not hide the frame.
         let values = [MOTIF_HINTS_DECORATIONS, 0, 1, 0, 0];
         assert!(!motif_no_decorations(&values));
-        let mut h = hints(WindowKind::Normal);
-        h.motif_decorations = Some(values[2]);
-        assert_eq!(decoration_policy(&h), Decoration::Server);
+        assert_eq!(decoration_policy(&motif_hints(&values)), Decoration::Server);
     }
 
     #[test]
@@ -296,42 +278,26 @@ mod tests {
 
     #[test]
     fn override_redirect_is_undecorated() {
-        let policy = decide(DecorationRequest {
-            override_redirect: true,
-            is_normal_type: true,
-            motif_no_decorations: false,
-        });
+        let policy = decide(DecorationRequest { override_redirect: true, is_normal_type: true, motif_no_decorations: false });
         assert_eq!(policy, DecorationPolicy::Undecorated);
         assert!(!policy.has_flame_frame());
     }
 
     #[test]
     fn non_normal_type_is_undecorated() {
-        let policy = decide(DecorationRequest {
-            override_redirect: false,
-            is_normal_type: false,
-            motif_no_decorations: false,
-        });
+        let policy = decide(DecorationRequest { override_redirect: false, is_normal_type: false, motif_no_decorations: false });
         assert_eq!(policy, DecorationPolicy::Undecorated);
     }
 
     #[test]
     fn motif_zero_decorations_is_undecorated() {
-        let policy = decide(DecorationRequest {
-            override_redirect: false,
-            is_normal_type: true,
-            motif_no_decorations: true,
-        });
+        let policy = decide(DecorationRequest { override_redirect: false, is_normal_type: true, motif_no_decorations: true });
         assert_eq!(policy, DecorationPolicy::Undecorated);
     }
 
     #[test]
     fn normal_hint_free_is_server_decorated() {
-        let policy = decide(DecorationRequest {
-            override_redirect: false,
-            is_normal_type: true,
-            motif_no_decorations: false,
-        });
+        let policy = decide(DecorationRequest { override_redirect: false, is_normal_type: true, motif_no_decorations: false });
         assert_eq!(policy, DecorationPolicy::ServerDecorated);
         assert!(policy.has_flame_frame());
     }
