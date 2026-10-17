@@ -238,120 +238,50 @@ pub fn cmd_j07(canary: &crate::Canary, args: &[String]) {
         return;
     }
     let mut results: Vec<(String, bool, String)> = Vec::new();
-    let run = |name: &str, pass: bool, detail: String| (name.to_owned(), pass, detail);
-    if scenario == "all" || scenario == "popup" {
-        let (pass, detail) = popup_lifecycle::run_t03(canary, args);
-        results.push(run("t03-popup-lifecycle", pass, detail));
-    }
-    if scenario == "all" || scenario == "move" {
-        let (pass, detail) = window_interaction::run_t06(canary, args);
-        results.push(run("t06-real-move", pass, detail));
-    }
-    if scenario == "all" || scenario == "resize" {
-        let (pass, detail) = window_interaction::run_t07(canary, args);
-        results.push(run("t07-real-resize-8", pass, detail));
-    }
-    if scenario == "all" || scenario == "regressions" {
-        let (pass, detail) = interaction_regressions::run(canary, args);
-        results.push(run("j24-j25-interaction-regressions", pass, detail));
-    }
-    if scenario == "all" || scenario == "chrome" {
-        let (pass, detail) = window_chrome::run_t09_t10(canary, args);
-        results.push(run("t09-t10-chrome-client", pass, detail));
-    }
-    if scenario == "all" || scenario == "max-snap" {
-        let (pass, detail) = workspaces::run_t11(canary, args);
-        results.push(run("t11-max-snap-fullscreen", pass, detail));
-    }
-    if scenario == "all" || scenario == "workspaces" {
-        let (pass, detail) = workspaces::run_t12(canary, args);
-        results.push(run("t12-workspace-churn", pass, detail));
-    }
-    if scenario == "t21" || scenario == "t22" || scenario == "t21-t22" {
-        let (pass, detail) = workspaces::run_t21_t22(canary, args);
-        results.push(run("t21-t22-workspace-sticky-convergence", pass, detail));
-    }
-    if scenario == "all" || scenario == "retention" {
-        let (pass, detail) = debug_retention::run_t13(args);
-        results.push(run("t13-debug-retention", pass, detail));
-    }
-    if scenario == "t15" || scenario == "t15-t18" {
-        let (pass, detail) = t15_t18::run_t15(canary, args);
-        results.push(run("t15-native-snap-preview", pass, detail));
-    }
-    if scenario == "t16" || scenario == "t15-t18" {
-        let (pass, detail) = t15_t18::run_t16(canary, args);
-        results.push(run("t16-mixed-responsiveness", pass, detail));
-    }
-    if scenario == "t17" || scenario == "t15-t18" {
-        let (pass, detail) = t15_t18::run_t17(canary, args);
-        results.push(run("t17-protected-interactions", pass, detail));
-    }
-    if scenario == "t18" || scenario == "t15-t18" {
-        let (pass, detail) = t15_t18::run_t18(canary, args);
-        results.push(run("t18-desktop-selection-admission", pass, detail));
-    }
-    if scenario == "reactor" || scenario == "reactor-presentation" {
-        let (pass, detail) = reactor_presentation::run(canary, args);
-        results.push(run("t18-t20-reactor-presentation-admission", pass, detail));
-    }
-    if scenario == "snap-border" || scenario == "s1" {
-        let (pass, detail) = snap_border::run_s1(canary, args);
-        results.push(run("s1-physical-corner-quarters", pass, detail));
-    }
-    if scenario == "snap-border" || scenario == "s2" {
-        let (pass, detail) = snap_border::run_s2(canary, args);
-        results.push(run("s2-snapped-border-zero", pass, detail));
-    }
-    if scenario == "snap-border" || scenario == "s3" {
-        let (pass, detail) = snap_border::run_s3(canary, args);
-        results.push(run("s3-frame-extents-per-mode", pass, detail));
-    }
-    if scenario == "snap-border" || scenario == "s4" {
-        let (pass, detail) = snap_border::run_s4(canary, args);
-        results.push(run("s4-fixed-hints-client-stable", pass, detail));
-    }
-    // Explicit-only shell scenarios (B14): never part of `all`; need --shot-dir.
-    if scenario == "explicit-taskbar-menu" {
-        let (pass, detail) = explicit_shell::run_s1(canary, args);
-        results.push(run("shell-s1-taskbar-background-menu", pass, detail));
-    }
-    if scenario == "explicit-desktop-settings" {
-        let (pass, detail) = explicit_shell::run_s2(canary, args);
-        results.push(run("shell-s2-desktop-menu-settings", pass, detail));
-    }
-    if scenario == "explicit-audio-tabs" {
-        let (pass, detail) = explicit_shell::run_s3(canary, args);
-        results.push(run("shell-s3-audio-popup-tabs", pass, detail));
-    }
-    // B15 explicit-only: private audio stack (tools/flamewm_osd_audio_acceptance.py), never in `all`.
-    if scenario == "explicit-osd" {
-        let (pass, detail) = explicit_shell::run_osd(canary, args);
-        results.push(run("shell-osd-volume-card", pass, detail));
-    }
-    if scenario == "explicit-audio-apps" {
-        let (pass, detail) = explicit_shell::run_audio_apps(canary, args);
-        results.push(run("shell-audio-popup-applications", pass, detail));
-    }
-    // V7 A14 explicit-only layout probe (overflow limits, taskbar stacking, snap, maximize).
-    if scenario == "explicit-window-overflow" {
-        let (pass, detail) = explicit_layout::run_overflow(canary, args);
-        results.push(run("layout-window-overflow", pass, detail));
-    }
-    // G2 explicit-only ConfigureRequest clamp (3/4 overflow limit in four directions).
-    if scenario == "explicit-window-clamp" {
-        let (pass, detail) = explicit_layout::run_clamp(canary, args);
-        results.push(run("layout-window-clamp", pass, detail));
-    }
-    // A15 explicit-only tray toggle (start, audio, network): never part of `all`.
-    if scenario == "explicit-tray-toggle" {
-        let (pass, detail) = explicit_tray::run_toggle(canary, args);
-        results.push(run("tray-toggle-explicit", pass, detail));
-    }
-    // Explicit-only cross-client clipboard (CLIPBOARD+PRIMARY, TARGETS, INCR); never part of `all`.
-    if scenario == "clipboard" {
-        let (pass, detail) = clipboard::run(canary, args);
-        results.push(run("clipboard-cross-client", pass, detail));
+    type Scenario = fn(&crate::Canary, &[String]) -> (bool, String);
+    let s = scenario.as_str();
+    // (selectors, verdict name, scenario). `all` selects only the default group.
+    #[rustfmt::skip]
+    let table: &[(&[&str], &str, Scenario)] = &[
+        (&["all", "popup"], "t03-popup-lifecycle", popup_lifecycle::run_t03),
+        (&["all", "move"], "t06-real-move", window_interaction::run_t06),
+        (&["all", "resize"], "t07-real-resize-8", window_interaction::run_t07),
+        (&["all", "regressions"], "j24-j25-interaction-regressions", interaction_regressions::run),
+        (&["all", "chrome"], "t09-t10-chrome-client", window_chrome::run_t09_t10),
+        (&["all", "max-snap"], "t11-max-snap-fullscreen", workspaces::run_t11),
+        (&["all", "workspaces"], "t12-workspace-churn", workspaces::run_t12),
+        (&["t21", "t22", "t21-t22"], "t21-t22-workspace-sticky-convergence", workspaces::run_t21_t22),
+        (&["all", "retention"], "t13-debug-retention", |_, a| debug_retention::run_t13(a)),
+        (&["t15", "t15-t18"], "t15-native-snap-preview", t15_t18::run_t15),
+        (&["t16", "t15-t18"], "t16-mixed-responsiveness", t15_t18::run_t16),
+        (&["t17", "t15-t18"], "t17-protected-interactions", t15_t18::run_t17),
+        (&["t18", "t15-t18"], "t18-desktop-selection-admission", t15_t18::run_t18),
+        (&["reactor", "reactor-presentation"], "t18-t20-reactor-presentation-admission", reactor_presentation::run),
+        (&["snap-border", "s1"], "s1-physical-corner-quarters", snap_border::run_s1),
+        (&["snap-border", "s2"], "s2-snapped-border-zero", snap_border::run_s2),
+        (&["snap-border", "s3"], "s3-frame-extents-per-mode", snap_border::run_s3),
+        (&["snap-border", "s4"], "s4-fixed-hints-client-stable", snap_border::run_s4),
+        // Explicit-only shell scenarios (B14): never part of `all`; need --shot-dir.
+        (&["explicit-taskbar-menu"], "shell-s1-taskbar-background-menu", explicit_shell::run_s1),
+        (&["explicit-desktop-settings"], "shell-s2-desktop-menu-settings", explicit_shell::run_s2),
+        (&["explicit-audio-tabs"], "shell-s3-audio-popup-tabs", explicit_shell::run_s3),
+        // B15 explicit-only: private audio stack (tools/flamewm_osd_audio_acceptance.py), never in `all`.
+        (&["explicit-osd"], "shell-osd-volume-card", explicit_shell::run_osd),
+        (&["explicit-audio-apps"], "shell-audio-popup-applications", explicit_shell::run_audio_apps),
+        // V7 A14 explicit-only layout probe (overflow limits, taskbar stacking, snap, maximize).
+        (&["explicit-window-overflow"], "layout-window-overflow", explicit_layout::run_overflow),
+        // G2 explicit-only ConfigureRequest clamp (3/4 overflow limit in four directions).
+        (&["explicit-window-clamp"], "layout-window-clamp", explicit_layout::run_clamp),
+        // A15 explicit-only tray toggle (start, audio, network): never part of `all`.
+        (&["explicit-tray-toggle"], "tray-toggle-explicit", explicit_tray::run_toggle),
+        // Explicit-only cross-client clipboard (CLIPBOARD+PRIMARY, TARGETS, INCR); never part of `all`.
+        (&["clipboard"], "clipboard-cross-client", clipboard::run),
+    ];
+    for (selectors, name, f) in table {
+        if selectors.contains(&s) {
+            let (pass, detail) = f(canary, args);
+            results.push((name.to_string(), pass, detail));
+        }
     }
     if results.is_empty() {
         crate::fail(

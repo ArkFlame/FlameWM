@@ -90,24 +90,17 @@ pub fn run_toggle(canary: &Canary, _args: &[String]) -> (bool, String) {
         ("audio", (right - 120, cy), AUDIO_POPUP),
         ("network", (right - 90, cy), NETWORK_POPUP),
     ];
-    let mut parts = Vec::new();
     let mut pass = true;
+    let mut parts = Vec::new();
     for (name, point, popup) in targets {
         let (opens, closes, stays, detail) = toggle(canary, point, popup);
         let ok = opens == CYCLES && closes == CYCLES && stays == CYCLES;
         pass &= ok;
+        let sep = if detail.is_empty() { "" } else { " " };
         parts.push(format!(
-            "{name}={ok}(opens={opens}/{CYCLES} closes={closes}/{CYCLES} stays_closed={stays}/{CYCLES}{}{})",
-            if detail.is_empty() { "" } else { " " },
-            detail
+            "{name}={ok}(opens={opens}/{CYCLES} closes={closes}/{CYCLES} stays_closed={stays}/{CYCLES}{sep}{detail})"
         ));
     }
-    (
-        pass,
-        format!(
-            "{PATH} input={} {}",
-            InputPath::RealPointer.as_str(),
-            parts.join(" ")
-        ),
-    )
+    let input = InputPath::RealPointer.as_str();
+    (pass, format!("{PATH} input={input} {}", parts.join(" ")))
 }

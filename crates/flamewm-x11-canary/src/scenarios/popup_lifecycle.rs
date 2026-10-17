@@ -63,30 +63,27 @@ fn focus_snapshot(canary: &crate::Canary, popup_id: u32) -> String {
         .conn
         .get_input_focus()
         .ok()
-        .and_then(|c| c.reply().ok());
-    let attrs = canary
+        .and_then(|c| c.reply().ok())
+        .map_or("focus=unknown".to_owned(), |f| {
+            format!("focus={} revert_to={:?}", f.focus, f.revert_to)
+        });
+    let mask = canary
         .conn
         .get_window_attributes(popup_id)
         .ok()
-        .and_then(|c| c.reply().ok());
-    let pointer = canary
+        .and_then(|c| c.reply().ok())
+        .map_or("your_event_mask=unknown".to_owned(), |a| {
+            format!("your_event_mask={:#x}", u32::from(a.your_event_mask))
+        });
+    let child = canary
         .conn
         .query_pointer(canary.root)
         .ok()
-        .and_then(|c| c.reply().ok());
-    let focus_text = match focus {
-        Some(f) => format!("focus={} revert_to={:?}", f.focus, f.revert_to),
-        None => "focus=unknown".to_owned(),
-    };
-    let mask = match attrs {
-        Some(a) => format!("your_event_mask={:#x}", u32::from(a.your_event_mask)),
-        None => "your_event_mask=unknown".to_owned(),
-    };
-    let child = match pointer {
-        Some(p) => format!("pointer_child={}", p.child),
-        None => "pointer_child=unknown".to_owned(),
-    };
-    format!("popup={popup_id} {focus_text} {mask} {child}")
+        .and_then(|c| c.reply().ok())
+        .map_or("pointer_child=unknown".to_owned(), |p| {
+            format!("pointer_child={}", p.child)
+        });
+    format!("popup={popup_id} {focus} {mask} {child}")
 }
 
 fn wait_gone(canary: &crate::Canary, id: u32, timeout_ms: u64) -> bool {
@@ -114,17 +111,14 @@ pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(20)
         .clamp(1, 20);
-    let source = match canary.find(&source_name).into_iter().next() {
-        Some(w) => w,
-        None => {
-            return (
-                false,
-                format!(
-                    "no source {source_name:?} path={}",
-                    InputPath::SyntheticFallback.as_str()
-                ),
-            );
-        }
+    let Some(source) = canary.find(&source_name).into_iter().next() else {
+        return (
+            false,
+            format!(
+                "no source {source_name:?} path={}",
+                InputPath::SyntheticFallback.as_str()
+            ),
+        );
     };
     let pointer_away = crate::has(args, "--pointer-away");
     let (sx, sy) = start_button(&source);
@@ -151,8 +145,9 @@ pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let popup = wait_viewable_popup(canary, &baseline, 1500);
-        let Some(popup) = popup else { break };
+        let Some(popup) = wait_viewable_popup(canary, &baseline, 1500) else {
+            break;
+        };
         opened += 1;
         // Geometry matches spec: non-zero size, not pinned at 0,0 root origin
         // unless the source itself is there (spec popups anchor to source).
@@ -177,8 +172,7 @@ pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             if away_diag.is_empty() {
                 away_diag = format!(
                     "pointer_away=({},{}) moved={moved} pointer_child={child} ",
-                    POINTER_AWAY.0,
-                    POINTER_AWAY.1
+                    POINTER_AWAY.0, POINTER_AWAY.1
                 );
             }
         }
@@ -220,16 +214,14 @@ pub fn run_t03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         && closed == opened
         && closed_by_escape == opened
         && focus_restored == opened;
+    let escape = match (escape_attempted, escape_available) {
+        (false, _) => "not-attempted",
+        (true, true) => "xtest",
+        (true, false) => "unavailable",
+    };
     let detail = format!(
-        "source={} repeats={repeats} opened={opened} geom_ok={geom_ok} closed={closed} closed_by_escape={closed_by_escape} focus_restored={focus_restored} focus_diag=[{focus_diag}] {away_diag}escape={} fallback=outside-click path={}",
+        "source={} repeats={repeats} opened={opened} geom_ok={geom_ok} closed={closed} closed_by_escape={closed_by_escape} focus_restored={focus_restored} focus_diag=[{focus_diag}] {away_diag}escape={escape} fallback=outside-click path={}",
         source.id,
-        if !escape_attempted {
-            "not-attempted"
-        } else if escape_available {
-            "xtest"
-        } else {
-            "unavailable"
-        },
         path.as_str()
     );
     (pass, detail)
