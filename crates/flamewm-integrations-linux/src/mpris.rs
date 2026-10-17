@@ -614,27 +614,17 @@ fn artists(item: &MessageItem) -> FlameResult<String> {
 }
 
 fn apply_changes(info: &mut PlayerInfo, changes: PropertyChanges) {
-    if let Some(value) = changes.playback {
-        info.playback = value;
-    }
+    info.playback = changes.playback.unwrap_or(info.playback);
     if let Some(value) = changes.track_title {
         info.track_title = value;
     }
     if let Some(value) = changes.artist {
         info.artist = value;
     }
-    if let Some(value) = changes.can_play {
-        info.can_play = value;
-    }
-    if let Some(value) = changes.can_pause {
-        info.can_pause = value;
-    }
-    if let Some(value) = changes.can_next {
-        info.can_next = value;
-    }
-    if let Some(value) = changes.can_previous {
-        info.can_previous = value;
-    }
+    info.can_play = changes.can_play.unwrap_or(info.can_play);
+    info.can_pause = changes.can_pause.unwrap_or(info.can_pause);
+    info.can_next = changes.can_next.unwrap_or(info.can_next);
+    info.can_previous = changes.can_previous.unwrap_or(info.can_previous);
 }
 
 #[cfg(test)]
