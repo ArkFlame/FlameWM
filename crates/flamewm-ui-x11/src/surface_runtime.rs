@@ -253,14 +253,10 @@ impl SurfaceRuntime {
             .surface_role(surface.0)
             .map(flamewm_render_x11::surface_role_label)
             .unwrap_or("unknown");
-        let span = match trace {
-            Some(t) => GeometryTrace {
-                txn: t.txn,
-                surface: surface.0.get(),
-                role: role_label,
-            },
-            None => GeometryTrace::begin(role_label).for_surface(surface.0.get()),
-        };
+        let span = trace.map_or_else(
+            || GeometryTrace::begin(role_label).for_surface(surface.0.get()),
+            |t| GeometryTrace { txn: t.txn, surface: surface.0.get(), role: role_label },
+        );
         span.ui_request((x, y, width.max(1) as i32, height.max(1) as i32));
         self.controller
             .move_resize_traced(surface.0, x, y, width, height, Some(span))
@@ -400,13 +396,13 @@ impl SurfaceRuntime {
 
     pub fn grab_pointer(&mut self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
         // Pass-through surfaces never grab: refuse up front, same as render.
-        if let Ok(mode) = self.controller.surface_input_mode(surface.0) {
-            if mode == flamewm_render_x11::SurfaceInputMode::PassThrough {
-                return Err(UiBackendError::PointerGrabRefused(format!(
-                    "surface {} is pass-through",
-                    surface.0.get()
-                )));
-            }
+        if self.controller.surface_input_mode(surface.0)
+            == Ok(flamewm_render_x11::SurfaceInputMode::PassThrough)
+        {
+            return Err(UiBackendError::PointerGrabRefused(format!(
+                "surface {} is pass-through",
+                surface.0.get()
+            )));
         }
         self.controller
             .grab_pointer(surface.0)
