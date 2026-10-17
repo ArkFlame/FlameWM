@@ -13,18 +13,6 @@ pub struct ScaleManager {
 }
 
 impl ScaleManager {
-    pub fn set_scale(&mut self, output: OutputId, percent: u16) -> bool {
-        if !is_supported_scale(percent) {
-            return false;
-        }
-        self.scales.insert(output, percent) != Some(percent)
-    }
-
-    #[must_use]
-    pub fn scale_for(&self, output: &OutputId) -> u16 {
-        self.scales.get(output).copied().unwrap_or(100)
-    }
-
     pub fn cached_physical_size(&mut self, logical: i32, requested_scale: u16) -> i32 {
         let scale = nearest_supported_scale(requested_scale);
         *self
