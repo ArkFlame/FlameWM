@@ -87,9 +87,6 @@ pub fn desktop_label_lines(text: &str, width_px: f32, font_size: f32) -> [String
     }
 
     let words: Vec<&str> = trimmed.split_whitespace().collect();
-    if words.is_empty() {
-        return [String::new(), String::new()];
-    }
     // Single unbroken token: hard split across both lines.
     if words.len() == 1 {
         let word = words[0];
@@ -220,14 +217,7 @@ pub fn entry_menu_parts(row_count: usize) -> Vec<MenuPart> {
 /// Sticky-menu part shape: six color/bold/delete rows (J05).
 #[must_use]
 pub fn sticky_menu_parts() -> Vec<MenuPart> {
-    vec![
-        MenuPart::Row,
-        MenuPart::Row,
-        MenuPart::Row,
-        MenuPart::Row,
-        MenuPart::Row,
-        MenuPart::Row,
-    ]
+    vec![MenuPart::Row; 6]
 }
 
 /// Confirm-menu part shape: shared permanent-delete header + Delete/Cancel.
@@ -512,12 +502,6 @@ mod tests {
             [String::new(), String::new()]
         );
     }
-}
-
-
-#[cfg(test)]
-mod settings_row_contract_tests {
-    use super::*;
 
     #[test]
     fn desktop_settings_row_uses_shared_flamewm_settings_label() {
