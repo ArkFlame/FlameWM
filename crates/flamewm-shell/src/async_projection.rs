@@ -866,33 +866,6 @@ fn project_panel_scoped_tail(
     Ok(())
 }
 
-/// LOW prewarm for rows just outside the visible window. Fire-and-forget:
-/// runs after first show, never delays startup, never touches the document.
-pub fn prewarm_start_tail(
-    model: &StartModel,
-    category: StartCategory,
-    query: &str,
-    mut loader: Option<&mut IconLoader>,
-) {
-    let Some(loader) = loader.as_deref_mut() else {
-        return;
-    };
-    let applications = crate::projection::start_visible_results(model, category, query);
-    let (_, last) = flamewm_shell_core::status::visible_window(applications.len(), 36, 320, 0);
-    for application in applications.iter().skip(last).take(8) {
-        if cached_contains(&application.icon_name, 20, 20) {
-            continue;
-        }
-        loader.request_low(
-            IconTarget::StartSlot(START_APP_SLOT_COUNT as u8),
-            &application.icon_name,
-            20,
-            20,
-        );
-    }
-    prewarm_counter().increment();
-}
-
 /// Unified Start document projection (J04/J07): categories + search +
 /// app rows + power rows in ONE document on the single Start surface.
 /// Labels/visibility immediate; icons cached-or-Flame-fallback with queued
