@@ -248,8 +248,7 @@ impl DisplayService {
         }
         // Re-validate against the live topology before reverting: a disconnected output is
         // cleared (and its error surfaced) by refresh, and a topology jump is reverted there.
-        let refreshed = self.refresh(port).map(|_| ());
-        if let Err(refresh_error) = refreshed {
+        if let Err(refresh_error) = self.refresh(port) {
             // Only a failed initial read leaves the expired transaction live here; the other
             // refresh failures already retired it. Never leave an expired transaction pending.
             let Some(transaction) = self.pending_id() else {
