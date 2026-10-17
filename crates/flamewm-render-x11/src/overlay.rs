@@ -168,21 +168,19 @@ pub fn fade_frame(t: f64) -> (f64, f64) {
 /// True when the display has a 32-bit TrueColor visual. A null display has none.
 #[must_use]
 pub fn argb_visual_available(display: *mut Display) -> bool {
-    if display.is_null() {
-        return false;
-    }
+    !display.is_null() && match_argb_visual(display).is_some()
+}
+
+/// The 32-bit TrueColor visual of the default screen, if the display has one.
+fn match_argb_visual(display: *mut Display) -> Option<XVisualInfo> {
     let mut info = MaybeUninit::<XVisualInfo>::zeroed();
-    // SAFETY: the display is live per the caller contract; `info` is a writable struct and
-    // a zero return only means no matching visual.
-    unsafe {
-        XMatchVisualInfo(
-            display,
-            XDefaultScreen(display),
-            ARGB_DEPTH,
-            TRUE_COLOR_CLASS,
-            info.as_mut_ptr(),
-        ) != 0
-    }
+    // SAFETY: the display is live per the caller contract; `info` is writable and is read
+    // only when the match succeeds.
+    let found = unsafe {
+        XMatchVisualInfo(display, XDefaultScreen(display), ARGB_DEPTH, TRUE_COLOR_CLASS, info.as_mut_ptr())
+    };
+    // SAFETY: a nonzero return means XMatchVisualInfo initialized `info`.
+    (found != 0).then(|| unsafe { info.assume_init() })
 }
 
 /// Root snapshot pixmap and its picture, both released by the owning overlay.
@@ -485,17 +483,9 @@ impl WarpOverlay {
         let (w, h) = self.size;
         let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
         let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
-        if let Some(backdrop) = &self.backdrop {
-            // SAFETY: both pictures are live on `display` until Drop; the snapshot covers the
-            // whole window, so every pixel is opaque before the bands are drawn.
-            unsafe {
-                self.api.composite_src(self.display, backdrop.picture, dest, (0, 0, w, h));
-            }
-        } else {
-            // SAFETY: both pictures are live on `display` until Drop; the transparent solid
-            // clears the previous frame so rows that moved away do not linger.
-            unsafe { self.api.composite_src(self.display, self.clear, dest, (0, 0, w, h)) };
-        }
+        // SAFETY: `dest` and the fill picture are live until Drop; the snapshot covers the whole
+        // window, so every pixel is opaque before the bands are drawn.
+        unsafe { self.begin_frame(dest) };
         if self.warp_source.is_none() {
             // SAFETY: `display` is live until Drop; the capture never changes after `begin`, so
             // one upload serves every frame of this warp.
@@ -511,6 +501,18 @@ impl WarpOverlay {
             unsafe { self.api.composite_src(self.display, dest, self.picture, (0, 0, w, h)) };
         }
         Ok(())
+    }
+
+    /// Fills `dest` with the root snapshot when opaque, else the transparent clear.
+    ///
+    /// # Safety
+    ///
+    /// `dest` and the fill picture must be live on `self.display` until Drop.
+    unsafe fn begin_frame(&self, dest: c_ulong) {
+        let fill = self.backdrop.as_ref().map_or(self.clear, |backdrop| backdrop.picture);
+        let (w, h) = self.size;
+        // SAFETY: forwarded contract; `fill` and `dest` are live pictures on `self.display`.
+        unsafe { self.api.composite_src(self.display, fill, dest, (0, 0, w, h)) };
     }
 
     /// Composites the fade source OVER `dest` at `rect` through a solid mask of `alpha` (0..=1).
@@ -592,11 +594,7 @@ impl WarpOverlay {
         let display = self.display;
         // SAFETY: all pictures are live on `display` until Drop; the mask is freed below.
         unsafe {
-            if let Some(backdrop) = &self.backdrop {
-                self.api.composite_src(display, backdrop.picture, dest, (0, 0, w, h));
-            } else {
-                self.api.composite_src(display, self.clear, dest, (0, 0, w, h));
-            }
+            self.begin_frame(dest);
             if alpha > 0.0 {
                 self.api.set_transform(display, self.fade_source, matrix)?;
                 self.composite_alpha(display, dest, dst_rect, alpha)?;
@@ -644,14 +642,11 @@ impl Drop for WarpOverlay {
                 XFreePixmap(self.display, self.fade_pixmap);
             }
             free(self.picture);
-            if let Some(backdrop) = self.backdrop.take() {
-                free(backdrop.picture);
-                XFreePixmap(self.display, backdrop.pixmap);
-            }
-            if let Some(off) = self.offscreen.take() {
-                free(off.picture);
-                XFreePixmap(self.display, off.pixmap);
-            }
+            let release = |b: Backdrop| {
+                free(b.picture);
+                XFreePixmap(self.display, b.pixmap);
+            };
+            self.backdrop.take().into_iter().chain(self.offscreen.take()).for_each(release);
             if self.window != 0 {
                 XDestroyWindow(self.display, self.window);
             }
@@ -747,14 +742,7 @@ unsafe fn create_argb_window(
 ) -> Result<(Window, Colormap), String> {
     // SAFETY: live display; screen index is valid for the default screen.
     let screen = unsafe { XDefaultScreen(display) };
-    let mut info = MaybeUninit::<XVisualInfo>::zeroed();
-    // SAFETY: `info` is a writable XVisualInfo; a zero return means no such visual.
-    let found = unsafe { XMatchVisualInfo(display, screen, ARGB_DEPTH, TRUE_COLOR_CLASS, info.as_mut_ptr()) };
-    if found == 0 {
-        return Err("overlay: no 32-bit TrueColor visual".to_string());
-    }
-    // SAFETY: XMatchVisualInfo succeeded, so `info` is initialized.
-    let info = unsafe { info.assume_init() };
+    let info = match_argb_visual(display).ok_or("overlay: no 32-bit TrueColor visual")?;
     // SAFETY: live display; root and visual come from the same screen.
     let root = unsafe { XRootWindow(display, screen) };
     let colormap = unsafe { XCreateColormap(display, root, info.visual, ALLOC_NONE) };
