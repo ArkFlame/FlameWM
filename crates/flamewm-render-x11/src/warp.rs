@@ -85,7 +85,6 @@ pub unsafe fn upload_warp_source(
     }
     check_capture_size(capture.width, capture.height)?;
     // SAFETY: `display` is live per contract; the pixmap is freed on every failure path below.
-    // SAFETY: `display` is live per contract; the pixmap is freed on every failure path below.
     let pixmap = unsafe { upload_pixmap_depth(display, capture, 24) }?;
     // SAFETY: `display` and `pixmap` are live; the picture is owned by the returned source.
     match unsafe { api.create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24) } {
@@ -176,7 +175,6 @@ unsafe fn paint_bands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lamp::LampBand;
 
     fn band(src: (f64, f64, f64, f64), dst: (f64, f64, f64, f64)) -> LampBand {
         LampBand { src, dst }
