@@ -414,15 +414,14 @@ impl<T> Linger<T> {
 
     /// Drops every hold whose deadline is at or before `now` and returns those clients.
     pub fn expire(&mut self, now: Instant) -> Vec<u32> {
-        let expired: Vec<u32> = self
-            .held
-            .iter()
-            .filter(|(_, (_, deadline))| now >= *deadline)
-            .map(|(client, _)| *client)
-            .collect();
-        for client in &expired {
-            self.held.remove(client);
-        }
+        let mut expired = Vec::new();
+        self.held.retain(|client, (_, deadline)| {
+            let live = now < *deadline;
+            if !live {
+                expired.push(*client);
+            }
+            live
+        });
         expired
     }
 
@@ -551,7 +550,7 @@ impl Animator {
     pub fn tick(&mut self, now: Instant) -> Vec<Tick> {
         self.timeline.prune(now);
         let timeline = &self.timeline;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(self.flights.len());
         self.flights.retain(|flight| match timeline.progress(flight.id, now) {
             Some(progress) => {
                 out.push(Tick::Frame {
