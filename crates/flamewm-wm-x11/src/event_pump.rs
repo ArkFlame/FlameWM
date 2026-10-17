@@ -79,24 +79,6 @@ impl WmEventPump {
     }
 }
 
-/// Collapse `first` plus contiguous same-target motions from `drain`.
-///
-/// Contiguous means: every drained event that is `MotionNotify` with the same
-/// `event` and `child` window as the running latest is absorbed (latest wins).
-/// The first non-matching event (different window/child, `ButtonPress`,
-/// `ButtonRelease`, key, enter/leave, configure, property, client-message,
-/// expose, anything else) or drain exhaustion stops the collapse; the
-/// lookahead is stored in `pending_slot` exactly once.
-pub fn collapse_motions(
-    first: Event,
-    drain: &mut dyn FnMut() -> Option<Event>,
-    pending_slot: &mut Option<Event>,
-) -> PumpedEvent {
-    let mut drain_result = || -> Result<Option<Event>, std::convert::Infallible> { Ok(drain()) };
-    collapse_motions_result(first, &mut drain_result, pending_slot)
-        .expect("infallible drain cannot fail")
-}
-
 /// Error-aware collapse. Drain errors abort the collapse and propagate;
 /// an already-absorbed motion prefix is kept in the returned `PumpedEvent`
 /// and no lookahead is stashed on the error path (never crosses a release,
