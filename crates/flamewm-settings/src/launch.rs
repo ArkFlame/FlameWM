@@ -27,7 +27,6 @@ where
 {
     let mut options = SettingsLaunchOptions::default();
     let mut page_was_set = false;
-    let mut window_size_was_set = false;
     let mut args = args.into_iter();
     while let Some(raw) = args.next() {
         let arg = raw.into();
@@ -45,10 +44,9 @@ where
             }
             "--window-size" => {
                 let value = next_value(&mut args, "--window-size")?;
-                if window_size_was_set {
+                if options.window_size.is_some() {
                     return Err("--window-size may be specified only once".to_owned());
                 }
-                window_size_was_set = true;
                 options.window_size = Some(parse_window_size(&value)?);
             }
             value => return Err(format!("unknown argument '{value}'")),
