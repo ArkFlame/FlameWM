@@ -402,52 +402,76 @@ impl UiTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_render_core::{
+        ColorValue, ColorVariable, CompiledDocument, CompiledNode, ImageAsset, InteractionState,
+        Length, NodeKind, Style,
+    };
 
-    fn image_node_doc() -> UiDocument {
-        let asset = flamewm_render_core::ImageAsset {
-            source: "old".to_string(),
-            width: 1,
-            height: 1,
-            pixels: vec![0, 0, 0, 255],
-        };
-        let node = flamewm_render_core::CompiledNode {
-            kind: flamewm_render_core::NodeKind::Image,
+    fn node(id: &str, kind: NodeKind) -> CompiledNode {
+        CompiledNode {
+            kind,
             parent: None,
             first_child: None,
             next_sibling: None,
-            id: "icon".to_string(),
+            id: id.to_string(),
             action: String::new(),
             text: String::new(),
-            image: Some(0),
-            style: flamewm_render_core::Style::default(),
+            image: None,
+            style: Style::default(),
             hover_style: None,
             active_style: None,
-        };
+        }
+    }
+
+    fn make_doc(
+        assets: Vec<ImageAsset>,
+        variables: Vec<ColorVariable>,
+        nodes: Vec<CompiledNode>,
+    ) -> UiDocument {
         UiDocument {
-            document: RuntimeDocument::new(flamewm_render_core::CompiledDocument {
+            document: RuntimeDocument::new(CompiledDocument {
                 source_fingerprint: 0,
                 root: 0,
-                variables: Vec::new(),
-                assets: vec![asset],
-                nodes: vec![node],
+                variables,
+                assets,
+                nodes,
             })
             .expect("fixture validates"),
         }
     }
 
+    fn px(source: &str, pixels: [u8; 4]) -> RuntimeImage {
+        RuntimeImage {
+            source: source.to_string(),
+            width: 1,
+            height: 1,
+            pixels: pixels.to_vec(),
+        }
+    }
+
+    fn set_px(doc: &mut UiDocument, id: &str, source: &str, pixels: [u8; 4]) {
+        doc.image_rgba8(id, px(source, pixels)).expect("replace");
+    }
+
+    fn image_node_doc() -> UiDocument {
+        let asset = ImageAsset {
+            source: "old".to_string(),
+            width: 1,
+            height: 1,
+            pixels: vec![0, 0, 0, 255],
+        };
+        let node = CompiledNode {
+            image: Some(0),
+            ..node("icon", NodeKind::Image)
+        };
+        make_doc(vec![asset], Vec::new(), vec![node])
+    }
+
     #[test]
     fn rgba8_replace_keeps_alpha_and_rejects_rgb8_length() {
         let mut doc = image_node_doc();
-        doc.image_rgba8(
-            "icon",
-            RuntimeImage {
-                source: "t".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![200, 30, 10, 128],
-            },
-        )
-        .expect("rgba replace");
+        doc.image_rgba8("icon", px("t", [200, 30, 10, 128]))
+            .expect("rgba replace");
         // Node-local override wins; compiled asset stays immutable.
         let (_, _, _, _, pixels) = doc.document.image_for_node(0).expect("override present");
         assert_eq!(pixels, &[200, 30, 10, 128]);
@@ -474,106 +498,50 @@ mod tests {
     #[test]
     fn magenta_pixel_is_opaque_content_not_transparency() {
         let mut doc = image_node_doc();
-        doc.image_rgba8(
-            "icon",
-            RuntimeImage {
-                source: "m".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![255, 0, 255, 255],
-            },
-        )
-        .expect("magenta replace");
+        doc.image_rgba8("icon", px("m", [255, 0, 255, 255]))
+            .expect("magenta replace");
         let (_, _, _, _, pixels) = doc.document.image_for_node(0).expect("override present");
         assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
         assert!(doc.document.document.assets[0].is_fully_opaque());
     }
 
     fn shared_placeholder_doc() -> UiDocument {
-        let asset = flamewm_render_core::ImageAsset {
+        let asset = ImageAsset {
             source: "shared".to_string(),
             width: 1,
             height: 1,
             pixels: vec![9, 9, 9, 255],
         };
-        let mk = |id: &str| {
-            let mut style = flamewm_render_core::Style::default();
-            style.width = flamewm_render_core::Length::Px(10.0);
-            style.height = flamewm_render_core::Length::Px(10.0);
-            flamewm_render_core::CompiledNode {
-                kind: flamewm_render_core::NodeKind::Image,
-                parent: None,
-                first_child: None,
-                next_sibling: None,
-                id: id.to_string(),
-                action: String::new(),
-                text: String::new(),
-                image: Some(0),
-                style,
-                hover_style: None,
-                active_style: None,
-            }
+        let placeholder = |id: &str, parent: Option<u32>, next: Option<u32>| CompiledNode {
+            parent,
+            next_sibling: next,
+            image: Some(0),
+            style: Style {
+                width: Length::Px(10.0),
+                height: Length::Px(10.0),
+                ..Style::default()
+            },
+            ..node(id, NodeKind::Image)
         };
-        fn with_parent(
-            mut node: flamewm_render_core::CompiledNode,
-            parent: Option<u32>,
-            next: Option<u32>,
-        ) -> flamewm_render_core::CompiledNode {
-            node.parent = parent;
-            node.next_sibling = next;
-            node
-        }
-        UiDocument {
-            document: RuntimeDocument::new(flamewm_render_core::CompiledDocument {
-                source_fingerprint: 0,
-                root: 0,
-                variables: Vec::new(),
-                assets: vec![asset],
-                nodes: vec![
-                    flamewm_render_core::CompiledNode {
-                        kind: flamewm_render_core::NodeKind::Element,
-                        parent: None,
-                        first_child: Some(1),
-                        next_sibling: None,
-                        id: "root".to_string(),
-                        action: String::new(),
-                        text: String::new(),
-                        image: None,
-                        style: flamewm_render_core::Style::default(),
-                        hover_style: None,
-                        active_style: None,
-                    },
-                    with_parent(mk("a"), Some(0), Some(2)),
-                    with_parent(mk("b"), Some(0), None),
-                ],
-            })
-            .expect("fixture validates"),
-        }
+        make_doc(
+            vec![asset],
+            Vec::new(),
+            vec![
+                CompiledNode {
+                    first_child: Some(1),
+                    ..node("root", NodeKind::Element)
+                },
+                placeholder("a", Some(0), Some(2)),
+                placeholder("b", Some(0), None),
+            ],
+        )
     }
 
     #[test]
     fn shared_placeholder_nodes_keep_distinct_images() {
         let mut doc = shared_placeholder_doc();
-        doc.image_rgba8(
-            "a",
-            RuntimeImage {
-                source: "red".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![255, 0, 0, 255],
-            },
-        )
-        .expect("replace a");
-        doc.image_rgba8(
-            "b",
-            RuntimeImage {
-                source: "green".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![0, 255, 0, 255],
-            },
-        )
-        .expect("replace b");
+        set_px(&mut doc, "a", "red", [255, 0, 0, 255]);
+        set_px(&mut doc, "b", "green", [0, 255, 0, 255]);
         let a = doc.document.node_by_id("a").expect("a index");
         let b = doc.document.node_by_id("b").expect("b index");
         let (_, _, _, _, pa) = doc.document.image_for_node(a).expect("a image");
@@ -589,36 +557,9 @@ mod tests {
     #[test]
     fn update_one_shared_node_keeps_sibling_and_advances_revision() {
         let mut doc = shared_placeholder_doc();
-        doc.image_rgba8(
-            "a",
-            RuntimeImage {
-                source: "red".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![255, 0, 0, 255],
-            },
-        )
-        .expect("replace a");
-        doc.image_rgba8(
-            "b",
-            RuntimeImage {
-                source: "green".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![0, 255, 0, 255],
-            },
-        )
-        .expect("replace b");
-        doc.image_rgba8(
-            "a",
-            RuntimeImage {
-                source: "blue".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![0, 0, 255, 255],
-            },
-        )
-        .expect("update a");
+        set_px(&mut doc, "a", "red", [255, 0, 0, 255]);
+        set_px(&mut doc, "b", "green", [0, 255, 0, 255]);
+        set_px(&mut doc, "a", "blue", [0, 0, 255, 255]);
         let a = doc.document.node_by_id("a").expect("a index");
         let b = doc.document.node_by_id("b").expect("b index");
         let (_, _, _, _, pa) = doc.document.image_for_node(a).expect("a image");
@@ -632,46 +573,19 @@ mod tests {
     #[test]
     fn shared_placeholder_paint_commands_carry_per_node_revision() {
         let mut doc = shared_placeholder_doc();
-        doc.image_rgba8(
-            "a",
-            RuntimeImage {
-                source: "red".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![255, 0, 0, 255],
-            },
-        )
-        .expect("replace a");
-        doc.image_rgba8(
-            "b",
-            RuntimeImage {
-                source: "green".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![0, 255, 0, 255],
-            },
-        )
-        .expect("replace b");
-        doc.image_rgba8(
-            "a",
-            RuntimeImage {
-                source: "blue".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![0, 0, 255, 255],
-            },
-        )
-        .expect("update a");
+        set_px(&mut doc, "a", "red", [255, 0, 0, 255]);
+        set_px(&mut doc, "b", "green", [0, 255, 0, 255]);
+        set_px(&mut doc, "a", "blue", [0, 0, 255, 255]);
         let layout = flamewm_render_core::LayoutEngine::compute(
             &doc.document,
             50.0,
             50.0,
-            flamewm_render_core::InteractionState::default(),
+            InteractionState::default(),
         );
         let commands = flamewm_render_core::build_paint_commands(
             &doc.document,
             &layout,
-            flamewm_render_core::InteractionState::default(),
+            InteractionState::default(),
         );
         let mut revisions: Vec<(u32, u64)> = commands
             .iter()
@@ -719,40 +633,27 @@ mod tests {
         id: &str,
         parent: Option<u32>,
         color: flamewm_render_core::Color,
-    ) -> flamewm_render_core::CompiledNode {
-        flamewm_render_core::CompiledNode {
-            kind: flamewm_render_core::NodeKind::Element,
+    ) -> CompiledNode {
+        CompiledNode {
             parent,
-            first_child: None,
-            next_sibling: None,
-            id: id.to_string(),
             action: "a".to_string(),
-            text: String::new(),
-            image: None,
-            style: flamewm_render_core::Style {
-                background: flamewm_render_core::ColorValue::Literal(color),
-                ..flamewm_render_core::Style::default()
+            style: Style {
+                background: ColorValue::Literal(color),
+                ..Style::default()
             },
-            hover_style: None,
-            active_style: None,
+            ..node(id, NodeKind::Element)
         }
     }
 
     fn stacked_doc() -> (UiDocument, flamewm_render_core::LayoutResult) {
-        let nodes = vec![
-            el_color("base", None, flamewm_render_core::Color::rgb(10, 20, 30)),
-            el_color("top", None, flamewm_render_core::Color::rgb(200, 30, 40)),
-        ];
-        let mut doc = UiDocument {
-            document: RuntimeDocument::new(flamewm_render_core::CompiledDocument {
-                source_fingerprint: 0,
-                root: 0,
-                variables: Vec::new(),
-                assets: Vec::new(),
-                nodes,
-            })
-            .expect("fixture validates"),
-        };
+        let mut doc = make_doc(
+            Vec::new(),
+            Vec::new(),
+            vec![
+                el_color("base", None, flamewm_render_core::Color::rgb(10, 20, 30)),
+                el_color("top", None, flamewm_render_core::Color::rgb(200, 30, 40)),
+            ],
+        );
         doc.layer("base", UiLayer::Content).expect("base layer");
         doc.layer("top", UiLayer::Popover).expect("top layer");
         let base = doc.document.node_by_id("base").expect("base index");
@@ -804,7 +705,7 @@ mod tests {
         let commands = flamewm_render_core::build_paint_commands(
             &doc.document,
             &layout,
-            flamewm_render_core::InteractionState::default(),
+            InteractionState::default(),
         );
         let base_bg = flamewm_render_core::Color::rgb(10, 20, 30);
         let top_bg = flamewm_render_core::Color::rgb(200, 30, 40);
@@ -837,19 +738,14 @@ mod tests {
     #[test]
     fn color_variable_projection_reaches_runtime_document() {
         let default = flamewm_render_core::Color::rgb(0xef, 0x40, 0x48);
-        let mut doc = UiDocument {
-            document: RuntimeDocument::new(flamewm_render_core::CompiledDocument {
-                source_fingerprint: 0,
-                root: 0,
-                variables: vec![flamewm_render_core::ColorVariable {
-                    name: "--accent".to_string(),
-                    default,
-                }],
-                assets: Vec::new(),
-                nodes: vec![el_color("root", None, default)],
-            })
-            .expect("fixture validates"),
-        };
+        let mut doc = make_doc(
+            Vec::new(),
+            vec![ColorVariable {
+                name: "--accent".to_string(),
+                default,
+            }],
+            vec![el_color("root", None, default)],
+        );
         UiDocumentAccess::color_variable(
             &mut doc,
             "--accent",
