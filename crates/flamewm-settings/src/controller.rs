@@ -47,23 +47,21 @@ mod tests {
     }
 
     fn queue_displays_shortcuts_panels(transport: &mut RecordingTransport) {
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+        transport.responses.extend([
+            Ok(ControlResponse::Displays(display_snapshot())),
+            Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 1,
                 bindings: BTreeMap::new(),
-            })));
-        transport.responses.push_back(Ok(ControlResponse::Panels(
-            flamewm_api::panels::PanelsSnapshot {
-                revision: 1,
-                panels: Vec::new(),
-                tasks: Vec::new(),
-                pinned_apps: Vec::new(),
-            },
-        )));
+            })),
+            Ok(ControlResponse::Panels(
+                flamewm_api::panels::PanelsSnapshot {
+                    revision: 1,
+                    panels: Vec::new(),
+                    tasks: Vec::new(),
+                    pinned_apps: Vec::new(),
+                },
+            )),
+        ]);
     }
 
     impl ControlTransport for RecordingTransport {
