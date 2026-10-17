@@ -121,50 +121,44 @@ mod signal_tests {
         }
     }
 
+    fn scope_of(signal: &ControlSignal) -> Option<SettingsScope> {
+        reproject_scope(signal, projected())
+    }
+
+    fn settings(revision: u64) -> ControlSignal {
+        ControlSignal::SettingsSnapshotChanged {
+            snapshot: SettingsSnapshot::new(revision),
+        }
+    }
+
+    fn displays(generation: u64) -> ControlSignal {
+        ControlSignal::DisplaysSnapshotChanged {
+            snapshot: DisplaySnapshot {
+                generation,
+                outputs: Vec::new(),
+                pending: None,
+            },
+        }
+    }
+
     #[test]
     fn settings_signal_at_projected_revision_is_a_noop() {
-        let signal = ControlSignal::SettingsSnapshotChanged {
-            snapshot: SettingsSnapshot::new(7),
-        };
-        assert_eq!(reproject_scope(&signal, projected()), None);
+        assert_eq!(scope_of(&settings(7)), None);
     }
 
     #[test]
     fn settings_signal_with_newer_revision_reprojects_only_settings() {
-        let signal = ControlSignal::SettingsSnapshotChanged {
-            snapshot: SettingsSnapshot::new(8),
-        };
-        assert_eq!(
-            reproject_scope(&signal, projected()),
-            Some(SettingsScope::Settings)
-        );
+        assert_eq!(scope_of(&settings(8)), Some(SettingsScope::Settings));
     }
 
     #[test]
     fn displays_signal_at_projected_generation_is_a_noop() {
-        let signal = ControlSignal::DisplaysSnapshotChanged {
-            snapshot: DisplaySnapshot {
-                generation: 3,
-                outputs: Vec::new(),
-                pending: None,
-            },
-        };
-        assert_eq!(reproject_scope(&signal, projected()), None);
+        assert_eq!(scope_of(&displays(3)), None);
     }
 
     #[test]
     fn displays_signal_with_new_generation_reprojects_displays() {
-        let signal = ControlSignal::DisplaysSnapshotChanged {
-            snapshot: DisplaySnapshot {
-                generation: 4,
-                outputs: Vec::new(),
-                pending: None,
-            },
-        };
-        assert_eq!(
-            reproject_scope(&signal, projected()),
-            Some(SettingsScope::Displays)
-        );
+        assert_eq!(scope_of(&displays(4)), Some(SettingsScope::Displays));
     }
 
     #[test]
@@ -174,21 +168,15 @@ mod signal_tests {
             state: "pending".to_owned(),
             deadline_ms: 0,
         };
-        assert_eq!(
-            reproject_scope(&signal, projected()),
-            Some(SettingsScope::Displays)
-        );
+        assert_eq!(scope_of(&signal), Some(SettingsScope::Displays));
     }
 
     #[test]
     fn shortcut_and_panel_revisions_gate_their_own_scope() {
         let same = ControlSignal::ShortcutsChanged { revision: 4 };
         let newer = ControlSignal::ShortcutsChanged { revision: 5 };
-        assert_eq!(reproject_scope(&same, projected()), None);
-        assert_eq!(
-            reproject_scope(&newer, projected()),
-            Some(SettingsScope::Shortcuts)
-        );
+        assert_eq!(scope_of(&same), None);
+        assert_eq!(scope_of(&newer), Some(SettingsScope::Shortcuts));
 
         let panels = ControlSignal::PanelsSnapshotChanged {
             snapshot: PanelsSnapshot {
@@ -198,32 +186,20 @@ mod signal_tests {
                 pinned_apps: Vec::new(),
             },
         };
-        assert_eq!(
-            reproject_scope(&panels, projected()),
-            Some(SettingsScope::Panels)
-        );
+        assert_eq!(scope_of(&panels), Some(SettingsScope::Panels));
     }
 
     #[test]
     fn unprojected_sections_reproject_on_first_signal() {
-        let signal = ControlSignal::SettingsSnapshotChanged {
-            snapshot: SettingsSnapshot::new(1),
-        };
         assert_eq!(
-            reproject_scope(&signal, KnownRevisions::default()),
+            reproject_scope(&settings(1), KnownRevisions::default()),
             Some(SettingsScope::Settings)
         );
     }
 
     #[test]
     fn unrelated_signals_never_reproject() {
-        assert_eq!(
-            reproject_scope(&ControlSignal::StartMenuToggleRequested, projected()),
-            None
-        );
-        assert_eq!(
-            reproject_scope(&ControlSignal::WorkspacesChanged { revision: 2 }, projected()),
-            None
-        );
+        assert_eq!(scope_of(&ControlSignal::StartMenuToggleRequested), None);
+        assert_eq!(scope_of(&ControlSignal::WorkspacesChanged { revision: 2 }), None);
     }
 }
