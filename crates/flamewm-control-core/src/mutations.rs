@@ -122,6 +122,10 @@ struct QueueInner {
     closed: bool,
 }
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 fn busy(message: &str) -> ControlError {
     ControlError {
         name: super::error_name(ErrorCode::Busy),
@@ -170,9 +174,13 @@ impl ControlMutationQueue {
     }
 
     fn lock(&self) -> MutexGuard<'_, QueueInner> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        lock_unpoisoned(&self.inner)
+    }
+
+    fn drain_wake_byte(&self) {
+        use std::io::Read;
+        let mut discard = [0_u8; 64];
+        let _ = lock_unpoisoned(&self.wake_reader).read(&mut discard);
     }
 
     /// Submit a mutation; explicit `Busy` when the pending queue is full.
@@ -224,42 +232,26 @@ impl ControlMutationQueue {
             inner.results.push_back(result);
             self.result_cv.notify_all();
         }
-        let mut writer = self
-            .wake_writer
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        writer.write_all(&[1])
+        lock_unpoisoned(&self.wake_writer).write_all(&[1])
     }
 
     /// Nonblocking result drain for the reactor turn.
     pub fn try_recv_result(&self) -> Option<ControlMutationResult> {
-        use std::io::Read;
         let result = self.lock().results.pop_front();
         if result.is_some() {
-            let mut reader = self
-                .wake_reader
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            let mut discard = [0_u8; 64];
-            let _ = reader.read(&mut discard);
+            self.drain_wake_byte();
         }
         result
     }
 
     /// Blocking wait used by tests; bounded by `timeout`, never a sleep loop.
     pub fn wait_for_result(&self, timeout: std::time::Duration) -> Option<ControlMutationResult> {
-        use std::io::Read;
         let mut inner = self.lock();
         let deadline = std::time::Instant::now() + timeout;
         loop {
             if let Some(result) = inner.results.pop_front() {
                 drop(inner);
-                let mut reader = self
-                    .wake_reader
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                let mut discard = [0_u8; 64];
-                let _ = reader.read(&mut discard);
+                self.drain_wake_byte();
                 return Some(result);
             }
             let now = std::time::Instant::now();
@@ -279,10 +271,7 @@ impl ControlMutationQueue {
 
     /// Raw fd the WM reactor polls for result readiness.
     pub fn wake_fd(&self) -> RawFd {
-        self.wake_reader
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .as_raw_fd()
+        lock_unpoisoned(&self.wake_reader).as_raw_fd()
     }
 
     /// Sleep-free readiness probe: nonblocking read of one wake byte, then
@@ -291,13 +280,7 @@ impl ControlMutationQueue {
     pub fn wake_ready_probe(&self) -> std::io::Result<bool> {
         use std::io::Read;
         let mut byte = [0_u8; 1];
-        let read = {
-            let mut reader = self
-                .wake_reader
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            reader.read(&mut byte)
-        };
+        let read = lock_unpoisoned(&self.wake_reader).read(&mut byte);
         let fired = match read {
             Ok(1) => true,
             Ok(0) => {
@@ -311,11 +294,7 @@ impl ControlMutationQueue {
             Err(error) => return Err(error),
         };
         if fired {
-            let mut writer = self
-                .wake_writer
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            writer.write_all(&byte)?;
+            lock_unpoisoned(&self.wake_writer).write_all(&byte)?;
         }
         Ok(fired)
     }
@@ -342,11 +321,10 @@ mod tests {
     }
 
     fn execute_inline(queue: &ControlMutationQueue, mutation: ControlMutation) {
-        let outcome = Ok(ControlResponse::Unit);
         queue.push_result(ControlMutationResult {
             id: mutation.id,
             lane: mutation.lane,
-            outcome,
+            outcome: Ok(ControlResponse::Unit),
         })
         .expect("write mutation wake byte");
     }
