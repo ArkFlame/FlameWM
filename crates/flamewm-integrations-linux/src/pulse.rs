@@ -141,113 +141,6 @@ impl PulseAdapter {
         lock(&self.controller).generation()
     }
 
-    /// Queues a volume change for the sink named by the system snapshot.
-    pub fn set_volume_for_sink(
-        &self,
-        sink_name: &str,
-        percent: u8,
-        caller_generation: u64,
-        caller_server_generation: u64,
-    ) -> FlameResult<()> {
-        let endpoint_id = self.sink_endpoint_id(sink_name, caller_server_generation)?;
-        let intent = {
-            let controller = lock(&self.controller);
-            controller.set_volume(AudioVolumeAction {
-                target: AudioTarget::Endpoint {
-                    id: endpoint_id,
-                    kind: AudioEndpointKind::Sink,
-                },
-                percent,
-                generation: caller_generation,
-                server_generation: caller_server_generation,
-            })?
-        };
-        let PulseIntent::SetVolume(action) = intent else {
-            return Err(FlameError::new(
-                ErrorCode::InternalFailure,
-                "unexpected PulseAudio volume intent",
-            ));
-        };
-        if sink_name.is_empty() {
-            return Err(FlameError::unavailable(
-                "PulseAudio default sink is unavailable",
-            ));
-        }
-
-        let context_slot = Rc::downgrade(&self.context);
-        self.with_ready_context(|context| {
-            let introspector = context.introspect();
-            let mut seen = false;
-            let volume = pulse_volume(action.percent);
-            let _operation =
-                introspector.get_sink_info_by_name(sink_name, move |result| match result {
-                    ListResult::Item(info) if !seen => {
-                        seen = true;
-                        let channels = info.volume.len();
-                        if channels == 0 {
-                            return;
-                        }
-                        let mut target = ChannelVolumes::default();
-                        target.set(channels, volume);
-                        let Some(context_slot) = context_slot.upgrade() else {
-                            return;
-                        };
-                        let context_ref = context_slot.borrow();
-                        let Some(context) = context_ref.as_ref() else {
-                            return;
-                        };
-                        let mut introspector = context.introspect();
-                        let _ = introspector.set_sink_volume_by_index(endpoint_id, &target, None);
-                    }
-                    _ => {}
-                });
-            Ok(())
-        })
-    }
-
-    /// Queues a mute change for the sink named by the system snapshot.
-    pub fn set_mute_for_sink(
-        &self,
-        sink_name: &str,
-        muted: bool,
-        caller_generation: u64,
-        caller_server_generation: u64,
-    ) -> FlameResult<()> {
-        let endpoint_id = self.sink_endpoint_id(sink_name, caller_server_generation)?;
-        let intent = {
-            let controller = lock(&self.controller);
-            controller.set_mute(AudioMuteAction {
-                target: AudioTarget::Endpoint {
-                    id: endpoint_id,
-                    kind: AudioEndpointKind::Sink,
-                },
-                muted,
-                generation: caller_generation,
-                server_generation: caller_server_generation,
-            })?
-        };
-        let PulseIntent::SetMute(action) = intent else {
-            return Err(FlameError::new(
-                ErrorCode::InternalFailure,
-                "unexpected PulseAudio mute intent",
-            ));
-        };
-        if sink_name.is_empty() {
-            return Err(FlameError::unavailable(
-                "PulseAudio default sink is unavailable",
-            ));
-        }
-
-        self.with_ready_context(|context| {
-            let _operation = context.introspect().set_sink_mute_by_index(
-                endpoint_id,
-                action.muted,
-                Some(self.write_failure_callback(action.generation, "sink mute")),
-            );
-            Ok(())
-        })
-    }
-
     /// Queue one real PulseAudio object mutation. Snapshot publication waits for the matching
     /// provider subscription/reconcile path rather than synthesizing optimistic state.
     pub fn set_volume(&self, action: AudioVolumeAction) -> FlameResult<()> {
@@ -336,20 +229,6 @@ impl PulseAdapter {
             }
             Ok(())
         })
-    }
-
-    /// Resolves `sink_name` to its endpoint id in one snapshot, rejecting a stale server generation.
-    fn sink_endpoint_id(&self, sink_name: &str, caller_server_generation: u64) -> FlameResult<u32> {
-        let snapshot = self.snapshot();
-        if snapshot.server_generation != caller_server_generation {
-            return Err(FlameError::stale("stale PulseAudio server generation"));
-        }
-        snapshot
-            .endpoints()
-            .iter()
-            .find(|endpoint| endpoint.kind == AudioEndpointKind::Sink && endpoint.name == sink_name)
-            .map(|endpoint| endpoint.id)
-            .ok_or_else(|| FlameError::new(ErrorCode::NotFound, "PulseAudio sink no longer exists"))
     }
 
     /// Runs one queued write against a ready context while holding the mainloop lock.
