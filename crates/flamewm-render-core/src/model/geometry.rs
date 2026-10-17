@@ -70,12 +70,6 @@ impl RuntimeDocument {
         Ok(())
     }
 
-    pub fn clear_geometry_override(&mut self, id: &str) -> Result<(), String> {
-        let index = self.require_node(id)?;
-        self.geometry_overrides.remove(&index);
-        Ok(())
-    }
-
     pub fn geometry_override(&self, index: u32) -> Option<GeometryOverride> {
         self.geometry_overrides.get(&index).copied()
     }
