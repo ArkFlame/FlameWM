@@ -112,6 +112,10 @@ fn edge_str(edge: PanelEdge) -> &'static str {
     }
 }
 
+fn rect_str(r: Rect) -> String {
+    format!("{} {} {} {}", r.x, r.y, r.width, r.height)
+}
+
 /// Strict i32 parsing: no floats, no empty, no overflow, no shell expansion.
 fn parse_int(s: &str) -> Result<i32, ProtocolError> {
     if s.is_empty() {
@@ -151,21 +155,12 @@ pub fn encode_command(cmd: &Command) -> String {
             // A missing dock encodes as a zero-width rect, which decodes back to `None`.
             let dock = req.dock.unwrap_or(Rect::new(0, 0, 0, 0));
             format!(
-                "OPEN {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+                "OPEN {} {} {} {} {}",
                 req.kind.as_str(),
-                req.anchor.x,
-                req.anchor.y,
-                req.anchor.width,
-                req.anchor.height,
-                req.work_area.x,
-                req.work_area.y,
-                req.work_area.width,
-                req.work_area.height,
+                rect_str(req.anchor),
+                rect_str(req.work_area),
                 edge_str(req.panel_edge),
-                dock.x,
-                dock.y,
-                dock.width,
-                dock.height,
+                rect_str(dock),
             )
         }
     }
@@ -219,14 +214,18 @@ pub fn decode_line(line: &str) -> Result<Command, ProtocolError> {
 mod tests {
     use super::*;
 
-    fn sample() -> Command {
+    fn sample_of(kind: QuickControlKind) -> Command {
         Command::Open(OpenRequest {
-            kind: QuickControlKind::Audio,
+            kind,
             anchor: Rect::new(10, 20, 100, 30),
             work_area: Rect::new(0, 0, 1920, 1040),
             panel_edge: PanelEdge::Bottom,
             dock: None,
         })
+    }
+
+    fn sample() -> Command {
+        sample_of(QuickControlKind::Audio)
     }
 
     #[test]
@@ -272,13 +271,7 @@ mod tests {
     fn battery_kind_round_trips_through_its_wire_name() {
         assert_eq!(QuickControlKind::Battery.as_str(), "battery");
         assert_eq!(QuickControlKind::parse("battery"), Ok(QuickControlKind::Battery));
-        let line = encode_command(&Command::Open(OpenRequest {
-            kind: QuickControlKind::Battery,
-            anchor: Rect::new(10, 20, 100, 30),
-            work_area: Rect::new(0, 0, 1920, 1040),
-            panel_edge: PanelEdge::Bottom,
-            dock: None,
-        }));
+        let line = encode_command(&sample_of(QuickControlKind::Battery));
         assert!(line.starts_with("OPEN battery "), "{line}");
         assert!(decode_line(&line).is_ok());
     }
@@ -287,17 +280,10 @@ mod tests {
     fn weather_kind_round_trips_through_its_wire_name() {
         assert_eq!(QuickControlKind::Weather.as_str(), "weather");
         assert_eq!(QuickControlKind::parse("weather"), Ok(QuickControlKind::Weather));
-        for cmd in [Command::Open(OpenRequest {
-            kind: QuickControlKind::Weather,
-            anchor: Rect::new(10, 20, 100, 30),
-            work_area: Rect::new(0, 0, 1920, 1040),
-            panel_edge: PanelEdge::Bottom,
-            dock: None,
-        })] {
-            let line = encode_command(&cmd);
-            assert!(line.starts_with("OPEN weather "), "{line}");
-            assert_eq!(decode_line(&line), Ok(cmd));
-        }
+        let cmd = sample_of(QuickControlKind::Weather);
+        let line = encode_command(&cmd);
+        assert!(line.starts_with("OPEN weather "), "{line}");
+        assert_eq!(decode_line(&line), Ok(cmd));
         assert!(QuickControlKind::parse("Weather").is_err());
     }
 

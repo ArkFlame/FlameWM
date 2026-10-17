@@ -114,10 +114,7 @@ pub struct WeatherPopupView {
 /// temperature is `--` and no forecast rows are shown.
 #[must_use]
 pub fn popup_view(state: &WeatherState, settings: &WeatherSettings) -> WeatherPopupView {
-    let configured_name = settings
-        .location
-        .as_ref()
-        .map_or_else(String::new, |l| l.name.clone());
+    let configured_name = settings.location.as_ref().map_or_else(String::new, |l| l.name.clone());
     let (snapshot, status) = match state {
         WeatherState::Disabled => (None, "Weather is off"),
         WeatherState::Unconfigured => (None, "Choose a location"),
@@ -246,10 +243,7 @@ pub fn project_weather_popup(
         }
     }
     document.visible("weather-offline-veil", offline_dimmed(state))?;
-    document.background(
-        "weather-offline-veil",
-        UiColor { a: 160, ..veil },
-    )?;
+    document.background("weather-offline-veil", UiColor { a: 160, ..veil })?;
     document.text("weather-search-value", search.query.clone())?;
     document.visible("weather-search-placeholder", search.query.is_empty())?;
     for row in 1..=WEATHER_RESULT_ROWS {

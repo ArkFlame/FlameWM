@@ -29,19 +29,9 @@ pub fn project_network_full(
     query: &flamewm_shell_core::status::NetworkQuery,
     scroll_offset: u32,
 ) -> Result<(), String> {
-    // Rows come from the existing network popover model in model order with
-    // stable AP path identity. `popover_view` pages the full AP list (active
-    // page contains the connected AP); only the page window maps into the
-    // three compiled `network-slot-N` rows. No synthetic rows, no model
-    // truncation. Secured/known/connected flags and the masked secret prompt
-    // are encoded into the row status text; the secret value itself is never
-    // projected. Wifi toggle / scan / disconnect state is carried in the
-    // popover view for the control layer; the Wi-Fi switch projects the real
-    // snapshot wifi_enabled state, and no other dedicated nodes are fabricated here.
-    // Full-snapshot filter + Connected/Available grouping: rows come from
-    // the snapshot AP list in model order with stable path identity, never
-    // truncated. Secure connect travels via the SecretAgent snapshot; the
-    // secret value itself is never projected.
+    // Rows keep model order and AP path identity; `popover_view` pages the AP list
+    // and only the page window maps into the `network-slot-N` rows. The secret value
+    // is never projected.
     let view = crate::taskbar::status::network::project(&snapshot.system);
     let popover = crate::taskbar::status::network::popover_view(&snapshot.system);
     // Dedicated connected container: independent of paging, shown on every page.
@@ -145,6 +135,10 @@ mod network_template_tests {
     const NETWORK_ARTIFACT: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-network.rwr"));
 
+    fn network_document() -> flamewm_ui_x11::UiDocument {
+        flamewm_ui_x11::decode_document(NETWORK_ARTIFACT).expect("network artifact must decode")
+    }
+
     // CONTRACT-REGRESSION: every text target the network projection writes must be a
     // single-text-node element in the compiled network template.
     // TRIGGER: network.html id/child edits or project_network_full id changes.
@@ -152,8 +146,7 @@ mod network_template_tests {
     // MUTATION: drop the text child of #network-connected; the open must be refused.
     #[test]
     fn every_projected_network_id_is_a_text_target() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let mut ids = vec![
             "network-connected".to_owned(),
             "network-connected-status".to_owned(),
@@ -179,6 +172,17 @@ mod network_template_tests {
         texts: std::collections::HashMap<String, String>,
         visible: std::collections::HashMap<String, bool>,
         toggles: std::collections::HashMap<String, bool>,
+    }
+
+    impl<'a> NetworkRecorder<'a> {
+        fn new(document: &'a mut flamewm_ui_x11::UiDocument) -> Self {
+            Self {
+                document,
+                texts: Default::default(),
+                visible: Default::default(),
+                toggles: Default::default(),
+            }
+        }
     }
 
     impl UiDocumentAccess for NetworkRecorder<'_> {
@@ -221,8 +225,7 @@ mod network_template_tests {
     // connected container visible with the active network label.
     #[test]
     fn absent_connected_access_point_keeps_connected_container_visible() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let mut snapshot = crate::ShellSnapshot::default();
         snapshot.system.network.availability = ServiceAvailability::Available;
         snapshot.system.network.wifi_enabled = true;
@@ -239,12 +242,7 @@ mod network_template_tests {
                 secured: false,
                 known: false,
             }];
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert!(!recorder.texts["network-connected"].is_empty());
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
@@ -253,8 +251,7 @@ mod network_template_tests {
 
     #[test]
     fn projected_access_points_reach_slot_name_and_visible_flags() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let mut snapshot = crate::ShellSnapshot::default();
         snapshot.system.network.availability = ServiceAvailability::Available;
         snapshot.system.network.wifi_enabled = true;
@@ -278,12 +275,7 @@ mod network_template_tests {
                 known: false,
             },
         ];
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
         assert_eq!(recorder.visible.get("network-connected"), Some(&true));
@@ -327,19 +319,13 @@ mod network_template_tests {
     // the model strength only; no traffic rates are fabricated.
     #[test]
     fn connected_row_status_line_uses_model_strength_only() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot(
             "/ap/1",
             "LinsaFTW",
             vec![("/ap/1", "LinsaFTW", 72), ("/ap/2", "StubNeighbor", 42)],
         );
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(
             recorder.texts["network-connected-status"],
@@ -352,15 +338,9 @@ mod network_template_tests {
     // visible, named from the network label, and never duplicated in Available.
     #[test]
     fn absent_connected_ap_keeps_connected_row_and_adds_no_available_duplicate() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot("/ap/9", "LinsaFTW", vec![("/ap/2", "StubNeighbor", 42)]);
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "LinsaFTW");
         assert_eq!(recorder.visible.get("network-connected-row"), Some(&true));
@@ -372,19 +352,13 @@ mod network_template_tests {
     // is the connected container only; the same-SSID /ap/1 stays an Available slot.
     #[test]
     fn duplicate_ssids_keep_the_non_active_access_point_in_available_slots() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot(
             "/ap/2",
             "FlameNet",
             vec![("/ap/1", "FlameNet", 80), ("/ap/2", "FlameNet", 50)],
         );
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.texts["network-connected"], "FlameNet");
         assert_eq!(recorder.texts["network-slot-1-name"], "FlameNet");
@@ -397,8 +371,7 @@ mod network_template_tests {
     // Connected row is hidden and only matching Available rows remain.
     #[test]
     fn search_filters_connected_and_available_groups() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot(
             "/ap/1",
             "LinsaFTW",
@@ -411,12 +384,7 @@ mod network_template_tests {
         let query = flamewm_shell_core::status::NetworkQuery {
             filter: "stub".to_owned(),
         };
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network_full(&mut recorder, &snapshot, &query, 0)
             .expect("network projection must succeed");
         assert_eq!(recorder.visible.get("network-connected-row"), Some(&false));
@@ -432,15 +400,9 @@ mod network_template_tests {
     // placeholder visible for a non-empty query, fails these assertions.
     #[test]
     fn filter_query_is_projected_inside_the_input_box() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         let typed = flamewm_shell_core::status::NetworkQuery {
             filter: "stub".to_owned(),
         };
@@ -466,15 +428,9 @@ mod network_template_tests {
     // MUTATION: a hard-coded or inverted toggle state fails this assertion.
     #[test]
     fn wifi_toggle_projects_enabled_state_as_on() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.visible.get("network-wifi-toggle"), Some(&true));
         assert_eq!(recorder.toggles.get("network-wifi-track"), Some(&true));
@@ -484,16 +440,10 @@ mod network_template_tests {
     // always projects ON (or ignores the snapshot) is rejected.
     #[test]
     fn wifi_toggle_projects_disabled_state_as_off() {
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let mut snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
         snapshot.system.network.wifi_enabled = false;
-        let mut recorder = NetworkRecorder {
-            document: &mut document,
-            texts: std::collections::HashMap::new(),
-            visible: std::collections::HashMap::new(),
-            toggles: std::collections::HashMap::new(),
-        };
+        let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         assert_eq!(recorder.visible.get("network-wifi-toggle"), Some(&true));
         assert_eq!(recorder.toggles.get("network-wifi-track"), Some(&false));
@@ -506,16 +456,10 @@ mod network_template_tests {
     #[test]
     fn wifi_switch_geometry_is_inside_button_and_clear_of_connected_row() {
         const POPUP: (f32, f32) = (461.0, 453.0);
-        let mut document = flamewm_ui_x11::decode_document(NETWORK_ARTIFACT)
-            .expect("network artifact must decode");
+        let mut document = network_document();
         let snapshot = network_snapshot("/ap/1", "LinsaFTW", vec![("/ap/1", "LinsaFTW", 72)]);
         {
-            let mut recorder = NetworkRecorder {
-                document: &mut document,
-                texts: std::collections::HashMap::new(),
-                visible: std::collections::HashMap::new(),
-                toggles: std::collections::HashMap::new(),
-            };
+            let mut recorder = NetworkRecorder::new(&mut document);
             project_network(&mut recorder, &snapshot).expect("network projection must succeed");
         }
         let rect = |id: &str| {

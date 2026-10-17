@@ -131,6 +131,12 @@ mod audio_template_tests {
         recorded: Recorded,
     }
 
+    impl<'a> AudioRecorder<'a> {
+        fn new(document: &'a mut flamewm_ui_x11::UiDocument) -> Self {
+            Self { document, recorded: Recorded::default() }
+        }
+    }
+
     impl UiDocumentAccess for AudioRecorder<'_> {
         fn text(&mut self, id: &str, text: String) -> Result<(), String> {
             self.recorded.texts.insert(id.to_owned(), text.clone());
@@ -229,10 +235,7 @@ mod audio_template_tests {
         let settings = AudioSettings { raise_maximum };
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
-        let mut recorder = AudioRecorder {
-            document: &mut document,
-            recorded: Recorded::default(),
-        };
+        let mut recorder = AudioRecorder::new(&mut document);
         project_audio_full(&mut recorder, &snapshot, tab, settings, 0)
             .expect("every projected audio id must be a valid target");
         recorder.recorded
@@ -338,10 +341,7 @@ mod audio_template_tests {
         snapshot.system.audio.availability = ServiceAvailability::Available;
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
-        let mut recorder = AudioRecorder {
-            document: &mut document,
-            recorded: Recorded::default(),
-        };
+        let mut recorder = AudioRecorder::new(&mut document);
         project_audio_full(
             &mut recorder,
             &snapshot,
@@ -379,10 +379,7 @@ mod audio_template_tests {
         }];
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
-        let mut recorder = AudioRecorder {
-            document: &mut document,
-            recorded: Recorded::default(),
-        };
+        let mut recorder = AudioRecorder::new(&mut document);
         project_audio_full(
             &mut recorder,
             &snapshot,
@@ -408,10 +405,7 @@ mod audio_template_tests {
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
         {
-            let mut recorder = AudioRecorder {
-                document: &mut document,
-                recorded: Recorded::default(),
-            };
+            let mut recorder = AudioRecorder::new(&mut document);
             project_audio_full(
                 &mut recorder,
                 snapshot,

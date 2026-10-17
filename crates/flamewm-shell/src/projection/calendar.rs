@@ -70,11 +70,8 @@ pub fn project_calendar(
                 write!(marker, "calendar-day-{}-marker", index + 1)
                     .expect("write to String is infallible");
                 document.text(&marker, cell.day.to_string())?;
-                if cell.month_kind == flamewm_shell_core::CalendarMonth::Current {
-                    document.foreground(&marker, CURRENT_FG)?;
-                } else {
-                    document.foreground(&marker, ADJACENT_FG)?;
-                }
+                let current = cell.month_kind == flamewm_shell_core::CalendarMonth::Current;
+                document.foreground(&marker, if current { CURRENT_FG } else { ADJACENT_FG })?;
                 let is_today = cell.today && cell.year == grid.year && cell.month == grid.month;
                 if is_today {
                     document.background(&marker, TODAY_NEUTRAL)?;
@@ -196,10 +193,7 @@ mod calendar_tests {
             project_calendar(&mut document, &state, today).expect("projection succeeds");
             let colors = all_colors(&document);
             assert!(!colors.is_empty(), "{view} projects colors");
-            assert!(
-                !colors.contains(&FLAME_RED),
-                "{view} must not project Flame red"
-            );
+            assert!(!colors.contains(&FLAME_RED), "{view} must not project Flame red");
             assert!(
                 colors.iter().all(|c| !(c.r > 200 && c.g < 100)),
                 "{view} must not project any red-dominant color"
@@ -349,10 +343,7 @@ mod calendar_tests {
                 );
             }
         }
-        assert!(
-            !document.cleared.contains(&marker),
-            "today marker keeps its fill"
-        );
+        assert!(!document.cleared.contains(&marker), "today marker keeps its fill");
     }
 
     #[test]
@@ -364,10 +355,7 @@ mod calendar_tests {
         project_calendar(&mut document, &second, (2026, 9, 8)).expect("second projection succeeds");
         // Sep 1 2026 is a Tuesday: Sep 7 is cell 8 in the Monday-first grid.
         assert!(
-            document
-                .cleared
-                .iter()
-                .any(|id| id == "calendar-day-8-marker"),
+            document.cleared.iter().any(|id| id == "calendar-day-8-marker"),
             "previous marker is cleared on reprojection",
         );
         assert_eq!(

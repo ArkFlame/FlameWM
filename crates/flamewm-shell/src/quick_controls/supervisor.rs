@@ -76,6 +76,15 @@ fn set_stdin_nonblocking(child: &mut Child) -> Result<(), SupervisorError> {
     Ok(())
 }
 
+fn spawn_host(program: &str) -> Result<Child, SupervisorError> {
+    let mut child = std::process::Command::new(program)
+        .arg("--quick-control-host")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    set_stdin_nonblocking(&mut child)?;
+    Ok(child)
+}
+
 pub struct QuickControlSupervisor {
     child: Option<Child>,
     program: String,
@@ -111,12 +120,7 @@ impl QuickControlSupervisor {
             return Ok(());
         }
         self.shut_down = false;
-        let mut child = std::process::Command::new(&self.program)
-            .arg("--quick-control-host")
-            .stdin(std::process::Stdio::piped())
-            .spawn()?;
-        set_stdin_nonblocking(&mut child)?;
-        self.child = Some(child);
+        self.child = Some(spawn_host(&self.program)?);
         Ok(())
     }
 
@@ -126,12 +130,9 @@ impl QuickControlSupervisor {
         use std::io::Write;
         let child = self.child.as_mut().ok_or(SupervisorError::NotRunning)?;
         let stdin = child.stdin.as_mut().ok_or(SupervisorError::NotRunning)?;
-        let line = encode_command(cmd);
-        let buf = format!("{line}\n");
-        match stdin.write_all(buf.as_bytes()) {
-            Ok(()) => Ok(()),
-            Err(e) => Err(classify_write_error(e)),
-        }
+        stdin
+            .write_all(format!("{}\n", encode_command(cmd)).as_bytes())
+            .map_err(classify_write_error)
     }
 
     /// Pushes the weather feed to the popup host over the same stdin line channel as OPEN.
@@ -162,14 +163,8 @@ impl QuickControlSupervisor {
     /// restart while budget remains, and never treats a nonzero exit as
     /// fatal by itself. Returns the exit status when the child exited.
     pub fn poll(&mut self) -> Result<Option<std::process::ExitStatus>, SupervisorError> {
-        let exited = match self.child.as_mut() {
-            None => return Ok(None),
-            Some(child) => child.try_wait()?,
-        };
-        let status = match exited {
-            None => return Ok(None),
-            Some(s) => s,
-        };
+        let Some(child) = self.child.as_mut() else { return Ok(None) };
+        let Some(status) = child.try_wait()? else { return Ok(None) };
         // Reaped via try_wait above; drop handle so no zombie lingers.
         self.child = None;
         if self.shut_down {
@@ -179,12 +174,7 @@ impl QuickControlSupervisor {
             return Err(SupervisorError::RestartBudgetExhausted);
         }
         self.restarts += 1;
-        let mut child = std::process::Command::new(&self.program)
-            .arg("--quick-control-host")
-            .stdin(std::process::Stdio::piped())
-            .spawn()?;
-        set_stdin_nonblocking(&mut child)?;
-        self.child = Some(child);
+        self.child = Some(spawn_host(&self.program)?);
         Ok(Some(status))
     }
 
@@ -202,18 +192,11 @@ impl QuickControlSupervisor {
 
     fn send_to(&self, child: &mut Child, cmd: &Command) -> Result<(), SupervisorError> {
         use std::io::Write;
-        let line = encode_command(cmd);
-        match child.stdin.as_mut() {
-            Some(stdin) => {
-                let buf = format!("{line}\n");
-                match stdin.write_all(buf.as_bytes()) {
-                    Ok(()) => Ok(()),
-                    // Best-effort shutdown path: never block, never fail.
-                    Err(_) => Ok(()),
-                }
-            }
-            None => Ok(()),
+        // Best-effort shutdown path: never block, never fail.
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(format!("{}\n", encode_command(cmd)).as_bytes());
         }
+        Ok(())
     }
 
     #[must_use]

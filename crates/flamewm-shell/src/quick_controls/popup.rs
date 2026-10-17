@@ -41,6 +41,10 @@ pub fn edge_for_panel(panel_edge: PanelEdge) -> PopoverEdge {
     }
 }
 
+fn surface_error(error: impl core::fmt::Debug) -> PopupError {
+    PopupError::Surface(format!("{error:?}"))
+}
+
 /// Measure intrinsic size through the shared owner under the request
 /// work-area constraint. Degenerate work areas refuse as pending layout.
 pub fn measure_helper(
@@ -85,23 +89,17 @@ pub fn prepare_commit(
     }
     let width = u32::try_from(rect.width).map_err(|_| PopupError::InvalidSize(rect.width))?;
     let height = u32::try_from(rect.height).map_err(|_| PopupError::InvalidSize(rect.height))?;
-    runtime
-        .move_resize(popup, rect.x, rect.y, width, height)
-        .map_err(|error| PopupError::Surface(format!("{error:?}")))
+    runtime.move_resize(popup, rect.x, rect.y, width, height).map_err(surface_error)
 }
 
 /// Present (`show`) turn.
 pub fn present(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), PopupError> {
-    runtime
-        .show(popup)
-        .map_err(|error| PopupError::Surface(format!("{error:?}")))
+    runtime.show(popup).map_err(surface_error)
 }
 
 /// Pointer-grab turn.
 pub fn grab(runtime: &mut SurfaceRuntime, popup: SurfaceHandle) -> Result<(), PopupError> {
-    runtime
-        .grab_pointer(popup)
-        .map_err(|_| PopupError::GrabRefused)
+    runtime.grab_pointer(popup).map_err(|_| PopupError::GrabRefused)
 }
 
 /// Slide for a helper popup: the Start slide preference and speed on the panel edge the
@@ -117,9 +115,7 @@ pub fn arm_slide(
     popup: SurfaceHandle,
     slide: Option<SlideConfig>,
 ) -> Result<(), PopupError> {
-    runtime
-        .set_slide(popup, slide)
-        .map_err(|error| PopupError::Surface(format!("{error:?}")))
+    runtime.set_slide(popup, slide).map_err(surface_error)
 }
 
 /// Shared close transaction over the existing single-turn close owner. `slide` is the
@@ -185,12 +181,7 @@ mod tests {
         // 125% scale: device-pixel output 2400 wide; no rounding drift at the edge.
         let output = Rect::new(0, 0, 2400, 1500);
         let anchor = Rect::new(2000, 1456, 40, 44);
-        let req = request(
-            QuickControlKind::Calendar,
-            anchor,
-            output,
-            PanelEdge::Bottom,
-        );
+        let req = request(QuickControlKind::Calendar, anchor, output, PanelEdge::Bottom);
         let rect = fit_helper(&req, Size::new(388, 275)).expect("fit");
         assert_eq!(rect.right(), 2400);
     }
@@ -217,10 +208,7 @@ mod tests {
         let work = work_area_for_panel(output, panel, edge);
         let req = request(QuickControlKind::Calendar, anchor, work, edge);
         let rect = fit_helper(&req, Size::new(310, 1040)).expect("fit");
-        assert!(
-            !overlaps(rect, panel),
-            "{edge:?} popup {rect:?} overlaps panel {panel:?}"
-        );
+        assert!(!overlaps(rect, panel), "{edge:?} popup {rect:?} overlaps panel {panel:?}");
         assert!(
             rect.x >= work.x && rect.right() <= work.right(),
             "{edge:?} {rect:?} outside work {work:?}"

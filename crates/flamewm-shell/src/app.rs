@@ -214,11 +214,7 @@ impl ShellLoop {
     }
 
     pub(crate) fn apply_settings_snapshot(&mut self, snapshot: SettingsSnapshot) {
-        if self
-            .settings_cache
-            .as_ref()
-            .is_some_and(|current| snapshot.revision <= current.revision)
-        {
+        if self.settings_cache.as_ref().is_some_and(|current| snapshot.revision <= current.revision) {
             return;
         }
         self.settings_revision = snapshot.revision;
@@ -243,10 +239,7 @@ impl ShellLoop {
         }
         // A hidden taskbar item closes its open quick-control popup.
         let items = crate::settings_projection::taskbar_items(Some(&snapshot));
-        if self
-            .quick_kind_open
-            .is_some_and(|kind| !quick_kind_shown(kind, items))
-        {
+        if self.quick_kind_open.is_some_and(|kind| !quick_kind_shown(kind, items)) {
             self.close_quick_control_nonfatal();
         }
         let desired_zone = flamewm_shell::weather_auto::desired_time_zone(&snapshot);
@@ -359,9 +352,7 @@ impl ShellLoop {
         &mut self,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
-        self.surfaces
-            .close_transients(runtime)
-            .map_err(UiBackendError::Renderer)?;
+        self.surfaces.close_transients(runtime).map_err(UiBackendError::Renderer)?;
         self.clear_transient_state();
         self.active_start_launch = None;
         Ok(())
@@ -538,16 +529,12 @@ impl ShellLoop {
                 }
                 ShellControl::CloseContextMenu => {
                     let _close = shell_stage!("shell.context.open.close");
-                    self.surfaces
-                        .close_transients(runtime)
-                        .map_err(UiBackendError::Renderer)?;
+                    self.surfaces.close_transients(runtime).map_err(UiBackendError::Renderer)?;
                     self.context_menu = None;
                 }
                 ShellControl::SessionAction(action) => {
                     self.submit(ControlRequest::SessionAction(action));
-                    self.surfaces
-                        .close_transients(runtime)
-                        .map_err(UiBackendError::Renderer)?;
+                    self.surfaces.close_transients(runtime).map_err(UiBackendError::Renderer)?;
                     self.end_start_session();
                 }
                 ShellControl::Launch(_)
@@ -655,9 +642,7 @@ impl ShellLoop {
         {
             let path = flamewm_shell::taskbar::status::network::popover_view(&snapshot.system)
                 .and_then(|popover| popover.visible_rows.get(slot).map(|row| row.path.clone()))?;
-            return self
-                .shell
-                .network_system_action_for_path(&path, false, false);
+            return self.shell.network_system_action_for_path(&path, false, false);
         }
         if action == "network.secret.cancel" {
             return self.network_secret_request(false);
@@ -920,19 +905,8 @@ impl ShellLoop {
             .as_mut()
             .map(|loader| loader.drain_ready())
             .unwrap_or_default();
-        if self
-            .icon_loader
-            .as_ref()
-            .map(|l| l.queue_full_drops)
-            .unwrap_or(0)
-            > 0
-            || self
-                .icon_loader
-                .as_ref()
-                .map(|l| l.stale_drops)
-                .unwrap_or(0)
-                > 0
-        {
+        let loader = self.icon_loader.as_ref();
+        if loader.map_or(0, |l| l.queue_full_drops) > 0 || loader.map_or(0, |l| l.stale_drops) > 0 {
             if let Some(loader) = self.icon_loader.as_ref() {
                 async_projection::note_loader_stats(loader);
             }
@@ -1496,9 +1470,7 @@ impl ShellLoop {
         // nonfatal diagnostics, the shell loop always survives.
         flamewm_shell::quick_controls::host::poll_supervisor_nonfatal(&mut self.quick_control);
         self.tick_auto_location();
-        let settled = self
-            .zone_settle_at
-            .is_some_and(|at| std::time::Instant::now() >= at);
+        let settled = self.zone_settle_at.is_some_and(|at| std::time::Instant::now() >= at);
         if settled {
             self.zone_settle_at = None;
         }
@@ -1592,10 +1564,7 @@ impl ShellLoop {
         };
         let now = Instant::now();
         let settings = self.settings_cache.as_ref();
-        if let Err(error) = self
-            .osd
-            .update(runtime, level, output, scale, settings, now)
-        {
+        if let Err(error) = self.osd.update(runtime, level, output, scale, settings, now) {
             eprintln!("flamewm-shell: volume OSD failed (nonfatal): {error:?}");
         }
     }
@@ -1682,10 +1651,7 @@ impl ShellLoop {
                 &crate::packaged_root(),
             )
         };
-        if let Err(error) = self
-            .surfaces
-            .refresh_panel_backdrop(runtime, key, wallpaper)
-        {
+        if let Err(error) = self.surfaces.refresh_panel_backdrop(runtime, key, wallpaper) {
             eprintln!("flamewm-shell: taskbar backdrop capture failed (nonfatal): {error}");
         }
         if let Err(error) = self.surfaces.apply_panel_backdrop(runtime, opacity, blur) {
