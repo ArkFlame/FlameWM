@@ -1,9 +1,6 @@
 use flamewm_api::ports::WindowPort;
 use flamewm_api::window::WindowSnapshot;
-use flamewm_api::wm_features::{
-    FeatureAction, FullscreenMonitorSpan, InteractiveMoveResize, RestackMode, WindowFeature,
-    WindowFeatureSnapshot,
-};
+use flamewm_api::wm_features::{FullscreenMonitorSpan, InteractiveMoveResize, RestackMode};
 use flamewm_api::{ErrorCode, FlameError, FlameResult, OutputId, Rect, WindowRef};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -93,42 +90,6 @@ impl WindowService {
     pub fn close<P: WindowPort>(&self, port: &mut P, reference: WindowRef) -> FlameResult<()> {
         self.get(port, reference)?;
         port.close(reference)
-    }
-
-    pub fn set_outer_geometry<P: WindowPort>(
-        &self,
-        port: &mut P,
-        reference: WindowRef,
-        geometry: Rect,
-    ) -> FlameResult<()> {
-        if !geometry.is_valid() {
-            return Err(FlameError::new(
-                ErrorCode::InvalidArgument,
-                "invalid window geometry",
-            ));
-        }
-        self.get(port, reference)?;
-        port.set_outer_geometry(reference, geometry)
-    }
-
-    pub fn feature_snapshot<P: WindowPort>(
-        &self,
-        port: &P,
-        reference: WindowRef,
-    ) -> FlameResult<WindowFeatureSnapshot> {
-        self.get(port, reference)?;
-        port.feature_snapshot(reference)
-    }
-
-    pub fn apply_feature<P: WindowPort>(
-        &self,
-        port: &mut P,
-        reference: WindowRef,
-        feature: WindowFeature,
-        action: FeatureAction,
-    ) -> FlameResult<()> {
-        self.get(port, reference)?;
-        port.apply_window_feature(reference, feature, action)
     }
 
     pub fn showing_desktop<P: WindowPort>(&self, port: &P) -> FlameResult<bool> {
