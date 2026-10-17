@@ -69,14 +69,15 @@ fn header(member: &Member<'_>, size: u64) -> [u8; 512] {
     h
 }
 
+fn entry(member: &Member<'_>) -> Vec<u8> {
+    let mut out = header(member, member.body.len() as u64).to_vec();
+    out.extend_from_slice(member.body);
+    out.extend(std::iter::repeat_n(0u8, (512 - member.body.len() % 512) % 512));
+    out
+}
+
 fn tar(members: &[Member<'_>]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for member in members {
-        out.extend_from_slice(&header(member, member.body.len() as u64));
-        out.extend_from_slice(member.body);
-        let pad = (512 - member.body.len() % 512) % 512;
-        out.extend(std::iter::repeat_n(0u8, pad));
-    }
+    let mut out: Vec<u8> = members.iter().flat_map(entry).collect();
     out.extend(std::iter::repeat_n(0u8, 1024));
     out
 }
@@ -104,6 +105,12 @@ fn demo_members<'a>(xcursor: &'a [u8]) -> Vec<Member<'a>> {
         m("Demo/cursors/left_ptr", b'0', xcursor),
         link("Demo/cursors/default", b'2', "left_ptr"),
     ]
+}
+
+fn demo_with(base: &Path, name: &str, extra: Vec<Member<'_>>) -> PathBuf {
+    let mut members = demo_members(b"c");
+    members.extend(extra);
+    write_tgz(base, name, &members)
 }
 
 fn run(source: &Path, icons: &Path, options: &InstallOptions) -> Result<flamewm_integrations_linux::themes::import::InstalledTheme, ImportError> {
@@ -154,9 +161,7 @@ fn folder_source_installs_and_keeps_internal_links() {
 fn hardlink_inside_theme_is_accepted_and_copies_content() {
     let base = scratch("hardlink-ok");
     let icons = base.join("icons");
-    let mut members = demo_members(b"c");
-    members.push(link("Demo/16x16/apps/alias.png", b'1', "Demo/16x16/apps/app.png"));
-    let src = write_tgz(&base, "h.tar.gz", &members);
+    let src = demo_with(&base, "h.tar.gz", vec![link("Demo/16x16/apps/alias.png", b'1', "Demo/16x16/apps/app.png")]);
     run(&src, &icons, &InstallOptions::default()).expect("install");
     assert_eq!(fs::read(icons.join("Demo/16x16/apps/alias.png")).unwrap(), b"png-bytes");
     fs::remove_dir_all(&base).unwrap();
@@ -297,9 +302,7 @@ fn hostile_paths_are_rejected() {
         ("leading parent", m("../evil", b'0', b"x")),
     ];
     for (label, extra) in cases {
-        let mut members = demo_members(b"c");
-        members.push(extra);
-        let src = write_tgz(&base, "p.tar.gz", &members);
+        let src = demo_with(&base, "p.tar.gz", vec![extra]);
         let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
         assert!(matches!(err, ImportError::UnsafePath(_)), "{label}: {err:?}");
     }
@@ -312,16 +315,7 @@ fn hostile_paths_are_rejected() {
 }
 
 fn tar_raw_name(name: &[u8], body: &[u8]) -> Vec<u8> {
-    let member = Member {
-        name,
-        flag: b'0',
-        body,
-        link: b"",
-    };
-    let mut out = header(&member, body.len() as u64).to_vec();
-    out.extend_from_slice(body);
-    out.extend(std::iter::repeat_n(0u8, (512 - body.len() % 512) % 512));
-    out
+    entry(&Member { name, flag: b'0', body, link: b"" })
 }
 
 #[test]
@@ -351,10 +345,11 @@ fn escaping_and_absolute_links_are_rejected() {
 fn hardlink_to_outside_file_is_rejected() {
     let base = scratch("hardlink-escape");
     let icons = base.join("icons");
-    let mut members = demo_members(b"c");
-    members.push(m("Other/secret", b'0', b"secret"));
-    members.push(link("Demo/steal", b'1', "Other/secret"));
-    let src = write_tgz(&base, "hl.tar.gz", &members);
+    let src = demo_with(
+        &base,
+        "hl.tar.gz",
+        vec![m("Other/secret", b'0', b"secret"), link("Demo/steal", b'1', "Other/secret")],
+    );
     let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::EscapingLink(_)), "{err:?}");
     assert!(!icons.exists());
@@ -366,9 +361,7 @@ fn device_and_fifo_entries_are_rejected() {
     let base = scratch("devices");
     let icons = base.join("icons");
     for flag in [b'3', b'4', b'6'] {
-        let mut members = demo_members(b"c");
-        members.push(m("Demo/node", flag, b""));
-        let src = write_tgz(&base, "d.tar.gz", &members);
+        let src = demo_with(&base, "d.tar.gz", vec![m("Demo/node", flag, b"")]);
         let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
         assert!(matches!(err, ImportError::UnsupportedEntry(_)), "flag {flag}: {err:?}");
     }
@@ -391,9 +384,7 @@ fn entry_count_and_depth_caps_are_enforced() {
     assert!(matches!(err, ImportError::TooManyEntries), "{err:?}");
 
     let deep = format!("Demo/{}f", "d/".repeat(40));
-    let mut members = demo_members(b"c");
-    members.push(m(&deep, b'0', b"x"));
-    let src = write_tgz(&base, "deep.tar.gz", &members);
+    let src = demo_with(&base, "deep.tar.gz", vec![m(&deep, b'0', b"x")]);
     let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::TooDeep), "{err:?}");
     assert!(!icons.exists());
@@ -432,10 +423,11 @@ fn cancellation_leaves_zero_entries() {
 fn file_below_symlinked_directory_is_rejected() {
     let base = scratch("ancestor");
     let icons = base.join("icons");
-    let mut members = demo_members(b"c");
-    members.push(link("Demo/cursors/extra", b'2', "left_ptr"));
-    members.push(m("Demo/cursors/extra/x", b'0', b"x"));
-    let src = write_tgz(&base, "a.tar.gz", &members);
+    let src = demo_with(
+        &base,
+        "a.tar.gz",
+        vec![link("Demo/cursors/extra", b'2', "left_ptr"), m("Demo/cursors/extra/x", b'0', b"x")],
+    );
     let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::Corrupt(_)), "{err:?}");
     assert!(!icons.exists());
