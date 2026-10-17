@@ -884,13 +884,7 @@ mod tests {
                 preferred: false,
             },
         ];
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display,
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_with_display(&path, display);
         host.start().expect("host starts");
         let generation = display_generation(&mut host);
         let begun = host.begin_display_mode(&OutputId::new("default"), ModeId(5), generation, 0);
@@ -933,13 +927,7 @@ mod tests {
             width: 1350,
             height: 641,
         };
-        let mut host = PlatformHost::new(
-            FakeEngine {
-                display,
-                reverted: Vec::new(),
-            },
-            path.clone(),
-        );
+        let mut host = host_with_display(&path, display);
         let started = host.start();
         let _ = std::fs::remove_file(&path);
         started.expect("host starts");
@@ -1083,14 +1071,18 @@ mod tests {
         path
     }
 
-    fn host_at(path: &std::path::Path, scale: u16) -> PlatformHost<FakeEngine> {
+    fn host_with_display(path: &std::path::Path, display: DisplaySnapshot) -> PlatformHost<FakeEngine> {
         PlatformHost::new(
             FakeEngine {
-                display: fake_display(scale),
+                display,
                 reverted: Vec::new(),
             },
             path.to_path_buf(),
         )
+    }
+
+    fn host_at(path: &std::path::Path, scale: u16) -> PlatformHost<FakeEngine> {
+        host_with_display(path, fake_display(scale))
     }
 
     fn display_generation(host: &mut PlatformHost<FakeEngine>) -> u64 {
