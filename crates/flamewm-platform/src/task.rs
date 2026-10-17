@@ -41,7 +41,7 @@ impl TaskEntry {
     }
 
     #[must_use]
-    pub const fn represented_window(&self) -> Option<WindowRef> {
+    const fn represented_window(&self) -> Option<WindowRef> {
         match self.kind {
             TaskEntryKind::Pinned { window } => window,
             TaskEntryKind::Window { window } => Some(window),
@@ -49,7 +49,7 @@ impl TaskEntry {
     }
 
     #[must_use]
-    pub const fn is_pinned_slot(&self) -> bool {
+    const fn is_pinned_slot(&self) -> bool {
         matches!(self.kind, TaskEntryKind::Pinned { .. })
     }
 
@@ -142,7 +142,7 @@ impl TaskStrip {
         true
     }
 
-    pub fn remove_window(&mut self, window: WindowRef) -> bool {
+    fn remove_window(&mut self, window: WindowRef) -> bool {
         let Some(index) = self.window_index(window) else {
             return false;
         };
