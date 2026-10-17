@@ -54,6 +54,7 @@ pub fn layout_text(
 ) -> TextLayout {
     let size = font_size.max(0.0);
     let line_h = line_height(size);
+    let avail_ok = avail_width.is_finite() && avail_width > 0.0;
     let normalized: Cow<str> = if text.contains('\r') {
         Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
     } else {
@@ -65,87 +66,49 @@ pub fn layout_text(
         let collapsed = collapse_whitespace(paragraph);
         if collapsed.is_empty() {
             lines.push(TextLine::default());
-            continue;
-        }
-        if wrap == TextWrap::NoWrap && avail_width > 0.0 && avail_width.is_finite() {
-            lines.push(TextLine {
-                width: text_width(&collapsed, size),
-                text: collapsed,
-            });
-            continue;
-        }
-        if break_anywhere {
-            for chunk in char_chunks(&collapsed, size, avail_width) {
-                lines.push(TextLine {
-                    width: text_width(&chunk, size),
-                    text: chunk,
-                });
-            }
-            continue;
-        }
-        // Greedy word fill; overlong tokens char-split onto own lines.
-        let mut current = String::new();
-        let mut current_w = 0.0f32;
-        let space_w = char_width(size);
-        let flush = |current: &mut String, current_w: &mut f32, lines: &mut Vec<TextLine>| {
-            lines.push(TextLine {
-                width: *current_w,
-                text: std::mem::take(current),
-            });
-            *current_w = 0.0;
-        };
-        for word in collapsed.split(' ') {
-            let word_w = text_width(word, size);
-            if word_w > avail_width && avail_width.is_finite() && avail_width > 0.0 {
+        } else if wrap == TextWrap::NoWrap && avail_ok {
+            push_measured(&mut lines, collapsed, size);
+        } else if break_anywhere {
+            push_chunks(&mut lines, &collapsed, size, avail_width);
+        } else {
+            // Greedy word fill; overlong or degenerate-avail tokens char-split.
+            let mut current = String::new();
+            let mut current_w = 0.0f32;
+            let space_w = char_width(size);
+            let flush = |current: &mut String, current_w: &mut f32, lines: &mut Vec<TextLine>| {
                 if !current.is_empty() {
-                    flush(&mut current, &mut current_w, &mut lines);
-                }
-                for chunk in char_chunks(word, size, avail_width) {
                     lines.push(TextLine {
-                        width: text_width(&chunk, size),
-                        text: chunk,
+                        width: *current_w,
+                        text: std::mem::take(current),
                     });
                 }
-                continue;
-            }
-            // Narrow/degenerate avail: char-split the word.
-            if !(avail_width.is_finite() && avail_width > 0.0) {
-                // Narrow avail: one char-split stream per word.
-                if !current.is_empty() {
-                    flush(&mut current, &mut current_w, &mut lines);
-                }
-                for chunk in char_chunks(word, size, avail_width) {
-                    lines.push(TextLine {
-                        width: text_width(&chunk, size),
-                        text: chunk,
-                    });
-                }
-                continue;
-            }
-            let candidate = if current.is_empty() {
-                word_w
-            } else {
-                current_w + space_w + word_w
+                *current_w = 0.0;
             };
-            if candidate <= avail_width {
-                if !current.is_empty() {
-                    current.push(' ');
-                }
-                current.push_str(word);
-                current_w = candidate;
-            } else {
-                if !current.is_empty() {
+            for word in collapsed.split(' ') {
+                let word_w = text_width(word, size);
+                if !avail_ok || word_w > avail_width {
                     flush(&mut current, &mut current_w, &mut lines);
+                    push_chunks(&mut lines, word, size, avail_width);
+                    continue;
                 }
-                current.push_str(word);
-                current_w = word_w;
+                let candidate = if current.is_empty() {
+                    word_w
+                } else {
+                    current_w + space_w + word_w
+                };
+                if candidate <= avail_width {
+                    if !current.is_empty() {
+                        current.push(' ');
+                    }
+                    current.push_str(word);
+                    current_w = candidate;
+                } else {
+                    flush(&mut current, &mut current_w, &mut lines);
+                    current.push_str(word);
+                    current_w = word_w;
+                }
             }
-        }
-        if !current.is_empty() {
-            lines.push(TextLine {
-                width: current_w,
-                text: current,
-            });
+            flush(&mut current, &mut current_w, &mut lines);
         }
     }
 
@@ -159,6 +122,19 @@ pub fn layout_text(
         width,
         height,
         line_height: line_h,
+    }
+}
+
+fn push_measured(lines: &mut Vec<TextLine>, text: String, font_size: f32) {
+    lines.push(TextLine {
+        width: text_width(&text, font_size),
+        text,
+    });
+}
+
+fn push_chunks(lines: &mut Vec<TextLine>, text: &str, font_size: f32, avail_width: f32) {
+    for chunk in char_chunks(text, font_size, avail_width) {
+        push_measured(lines, chunk, font_size);
     }
 }
 
@@ -187,21 +163,8 @@ fn char_chunks(text: &str, font_size: f32, avail_width: f32) -> Vec<String> {
     } else {
         ((avail_width / char_w).floor() as usize).max(1)
     };
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut count = 0;
-    for ch in text.chars() {
-        current.push(ch);
-        count += 1;
-        if count == per_line {
-            chunks.push(std::mem::take(&mut current));
-            count = 0;
-        }
-    }
-    if count > 0 {
-        chunks.push(current);
-    }
-    chunks
+    let chars: Vec<char> = text.chars().collect();
+    chars.chunks(per_line).map(|c| c.iter().collect()).collect()
 }
 
 #[cfg(test)]
@@ -212,11 +175,14 @@ mod tests {
         layout.lines.iter().map(|line| line.width).collect()
     }
 
+    fn texts(layout: &TextLayout) -> Vec<&str> {
+        layout.lines.iter().map(|l| l.text.as_str()).collect()
+    }
+
     #[test]
     fn word_wrap_prefers_boundaries() {
         let layout = layout_text("aa bb cc", 10.0, 5.0 * 10.0 * 0.58, TextWrap::Wrap, false);
-        let texts: Vec<&str> = layout.lines.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(texts, vec!["aa bb", "cc"]);
+        assert_eq!(texts(&layout), vec!["aa bb", "cc"]);
         assert!((layout.line_height - 13.0).abs() < 0.01);
         assert!((layout.height - 26.0).abs() < 0.01);
         for w in widths(&layout) {
@@ -237,8 +203,7 @@ mod tests {
     #[test]
     fn newlines_preserved_and_whitespace_collapsed() {
         let layout = layout_text("a   b\n\nc\td", 10.0, 1000.0, TextWrap::Wrap, false);
-        let texts: Vec<&str> = layout.lines.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(texts, vec!["a b", "", "c d"]);
+        assert_eq!(texts(&layout), vec!["a b", "", "c d"]);
     }
 
     #[test]
@@ -260,8 +225,7 @@ mod tests {
     #[test]
     fn nowrap_keeps_single_line_per_paragraph() {
         let layout = layout_text("a b c\nd e", 10.0, 1.0, TextWrap::NoWrap, false);
-        let texts: Vec<&str> = layout.lines.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(texts, vec!["a b c", "d e"]);
+        assert_eq!(texts(&layout), vec!["a b c", "d e"]);
     }
 
     #[test]
