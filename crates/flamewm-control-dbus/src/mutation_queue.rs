@@ -311,12 +311,16 @@ mod tests {
         }
     }
 
-    fn retry_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    /// Serializes retry tests on the shared counters and starts each from zero.
+    fn retry_test_guard() -> std::sync::MutexGuard<'static, ()> {
         use std::sync::OnceLock;
         static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        let guard = LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+            .unwrap_or_else(|poison| poison.into_inner());
+        reset_stale_retry_stats_for_test();
+        guard
     }
 
     fn system_snapshot(
@@ -348,8 +352,7 @@ mod tests {
 
     #[test]
     fn stale_global_revision_retries_once_with_latest_revision() {
-        let _guard = retry_test_lock();
-        reset_stale_retry_stats_for_test();
+        let _guard = retry_test_guard();
         let calls = std::cell::RefCell::new(Vec::new());
         let mut call = |req: &ControlRequest| {
             calls.borrow_mut().push(req.clone());
@@ -377,8 +380,7 @@ mod tests {
 
     #[test]
     fn network_generation_change_does_not_retry_secret() {
-        let _guard = retry_test_lock();
-        reset_stale_retry_stats_for_test();
+        let _guard = retry_test_guard();
         let request = ControlRequest::SystemAction {
             action: flamewm_api::system::SystemAction::SubmitNetworkSecret {
                 request_id: 7,
@@ -404,8 +406,7 @@ mod tests {
 
     #[test]
     fn audio_generation_change_does_not_retry() {
-        let _guard = retry_test_lock();
-        reset_stale_retry_stats_for_test();
+        let _guard = retry_test_guard();
         let request = ControlRequest::SystemAction {
             action: flamewm_api::system::SystemAction::SetVolume(
                 flamewm_api::system::AudioVolumeAction {
@@ -430,8 +431,7 @@ mod tests {
 
     #[test]
     fn second_stale_returns_without_loop() {
-        let _guard = retry_test_lock();
-        reset_stale_retry_stats_for_test();
+        let _guard = retry_test_guard();
         let calls = std::cell::RefCell::new(0);
         let mut call = |req: &ControlRequest| {
             *calls.borrow_mut() += 1;
@@ -448,8 +448,7 @@ mod tests {
 
     #[test]
     fn non_system_mutation_never_retries() {
-        let _guard = retry_test_lock();
-        reset_stale_retry_stats_for_test();
+        let _guard = retry_test_guard();
         let calls = std::cell::RefCell::new(0);
         let mut call = |_: &ControlRequest| {
             *calls.borrow_mut() += 1;
