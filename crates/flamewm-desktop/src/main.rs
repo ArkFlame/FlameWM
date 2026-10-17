@@ -765,7 +765,6 @@ fn accent_color(snapshot: &SettingsSnapshot) -> UiColor {
     }
 }
 
-/// Projects the desktop accent tokens; `accentOpacity` scales them like the shell does.
 /// Accent-derived token values for the desktop; `accentOpacity` scales them like the shell does.
 fn accent_token_values(snapshot: &SettingsSnapshot) -> Vec<(&'static str, UiColor)> {
     let accent = accent_color(snapshot);
