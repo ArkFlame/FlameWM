@@ -65,11 +65,7 @@ impl ShortcutService {
         binding: &str,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.require_idle()?;
-        self.require_revision(expected_revision)?;
-        let mut candidate = self.registry.clone();
-        candidate.set(action, binding)?;
-        self.commit_candidate(port, candidate)
+        self.mutate(port, expected_revision, |registry| registry.set(action, binding))
     }
 
     pub fn clear_binding<P: ShortcutPort>(
@@ -78,11 +74,7 @@ impl ShortcutService {
         action: &str,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.require_idle()?;
-        self.require_revision(expected_revision)?;
-        let mut candidate = self.registry.clone();
-        candidate.clear(action)?;
-        self.commit_candidate(port, candidate)
+        self.mutate(port, expected_revision, |registry| registry.clear(action))
     }
 
     pub fn reset_binding<P: ShortcutPort>(
@@ -91,23 +83,29 @@ impl ShortcutService {
         action: &str,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.require_idle()?;
-        self.require_revision(expected_revision)?;
-        let mut candidate = self.registry.clone();
-        candidate.reset_one(action)?;
-        self.commit_candidate(port, candidate)
+        self.mutate(port, expected_revision, |registry| registry.reset_one(action))
     }
 
     pub fn apply<P: ShortcutPort>(
         &mut self,
         port: &mut P,
-        bindings: &std::collections::BTreeMap<String, KeyBinding>,
+        bindings: &BTreeMap<String, KeyBinding>,
         expected_revision: u64,
+    ) -> FlameResult<()> {
+        self.mutate(port, expected_revision, |registry| registry.replace_all(bindings))
+    }
+
+    /// Refuses during capture or on a stale revision, applies `edit` to a candidate copy, then commits it.
+    fn mutate<P: ShortcutPort>(
+        &mut self,
+        port: &mut P,
+        expected_revision: u64,
+        edit: impl FnOnce(&mut ShortcutRegistry) -> FlameResult<()>,
     ) -> FlameResult<()> {
         self.require_idle()?;
         self.require_revision(expected_revision)?;
         let mut candidate = self.registry.clone();
-        candidate.replace_all(bindings)?;
+        edit(&mut candidate)?;
         self.commit_candidate(port, candidate)
     }
 
@@ -315,7 +313,6 @@ mod capture_lease_tests {
     use flamewm_api::shortcuts::{ACTION_TOGGLE_START_MENU, ACTION_WINDOW_MAXIMIZE};
 
     use super::*;
-    use crate::shortcuts::ShortcutRegistry;
 
     /// Records the live grab set. `prepare` stages, `commit` makes the staged set live.
     #[derive(Default)]
