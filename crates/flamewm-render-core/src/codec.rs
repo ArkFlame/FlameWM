@@ -1,5 +1,51 @@
 use crate::model::*;
 
+// One table per wire enum: the tag bytes live here once, for both directions.
+trait Wire: Sized {
+    const NAME: &'static str;
+    fn to_wire(&self) -> u8;
+    fn from_wire(value: u8) -> Option<Self>;
+}
+
+macro_rules! wire_enum {
+    ($name:literal $ty:ident { $($variant:ident = $tag:literal),+ $(,)? }) => {
+        impl Wire for $ty {
+            const NAME: &'static str = $name;
+            fn to_wire(&self) -> u8 {
+                match self {
+                    $($ty::$variant => $tag,)+
+                }
+            }
+            fn from_wire(value: u8) -> Option<Self> {
+                match value {
+                    $($tag => Some($ty::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+wire_enum!("node kind" NodeKind { Element = 0, Text = 1, Image = 2 });
+wire_enum!("display" Display { None = 0, Block = 1, Flex = 2 });
+wire_enum!("flex direction" FlexDirection { Row = 0, Column = 1 });
+wire_enum!("justify content" JustifyContent { Start = 0, Center = 1, End = 2, SpaceBetween = 3 });
+wire_enum!("align items" AlignItems { Start = 0, Center = 1, End = 2, Stretch = 3 });
+wire_enum!("position" Position { Flow = 0, Absolute = 1 });
+wire_enum!("cursor kind" CursorKind {
+    Default = 0,
+    Pointer = 1,
+    Text = 2,
+    Move = 3,
+    ResizeHorizontal = 4,
+    ResizeVertical = 5,
+    ResizeNorthWestSouthEast = 6,
+    ResizeNorthEastSouthWest = 7,
+});
+wire_enum!("overflow" Overflow { Visible = 0, Hidden = 1, Auto = 2, Scroll = 3 });
+wire_enum!("image treatment" ImageTreatment { Original = 0, SymbolicForeground = 1 });
+wire_enum!("text wrap" TextWrap { NoWrap = 0, Wrap = 1 });
+
 pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
     document.validate()?;
     let mut writer = Writer { bytes: Vec::new() };
@@ -26,11 +72,7 @@ pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
     }
 
     for node in &document.nodes {
-        writer.u8(match node.kind {
-            NodeKind::Element => 0,
-            NodeKind::Text => 1,
-            NodeKind::Image => 2,
-        });
+        writer.tag(node.kind);
         writer.opt_u32(node.parent);
         writer.opt_u32(node.first_child);
         writer.opt_u32(node.next_sibling);
@@ -39,14 +81,8 @@ pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
         writer.string(&node.text)?;
         writer.opt_u16(node.image);
         writer.style(&node.style);
-        writer.u8(node.hover_style.is_some() as u8);
-        if let Some(style) = node.hover_style.as_ref() {
-            writer.style(style);
-        }
-        writer.u8(node.active_style.is_some() as u8);
-        if let Some(style) = node.active_style.as_ref() {
-            writer.style(style);
-        }
+        writer.opt_style(node.hover_style.as_ref());
+        writer.opt_style(node.active_style.as_ref());
     }
 
     Ok(writer.bytes)
@@ -133,12 +169,7 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
 
     let mut nodes = Vec::with_capacity(node_count);
     for _ in 0..node_count {
-        let kind = match reader.u8()? {
-            0 => NodeKind::Element,
-            1 => NodeKind::Text,
-            2 => NodeKind::Image,
-            value => return Err(format!("invalid node kind {value}")),
-        };
+        let kind = reader.tag()?;
         let parent = reader.opt_u32()?;
         let first_child = reader.opt_u32()?;
         let next_sibling = reader.opt_u32()?;
@@ -147,16 +178,8 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
         let text = reader.string()?;
         let image = reader.opt_u16()?;
         let style = reader.style_versioned(version)?;
-        let hover_style = if reader.u8()? != 0 {
-            Some(reader.style_versioned(version)?)
-        } else {
-            None
-        };
-        let active_style = if reader.u8()? != 0 {
-            Some(reader.style_versioned(version)?)
-        } else {
-            None
-        };
+        let hover_style = reader.opt_style(version)?;
+        let active_style = reader.opt_style(version)?;
         nodes.push(CompiledNode {
             kind,
             parent,
@@ -224,6 +247,15 @@ impl Writer {
         self.bytes.extend_from_slice(value.as_bytes());
         Ok(())
     }
+    fn tag<T: Wire>(&mut self, value: T) {
+        self.u8(value.to_wire());
+    }
+    fn opt_style(&mut self, style: Option<&Style>) {
+        self.u8(style.is_some() as u8);
+        if let Some(style) = style {
+            self.style(style);
+        }
+    }
     fn color(&mut self, value: Color) {
         self.bytes
             .extend_from_slice(&[value.r, value.g, value.b, value.a]);
@@ -265,41 +297,12 @@ impl Writer {
         self.f32(value.left);
     }
     fn style(&mut self, style: &Style) {
-        self.u8(match style.display {
-            Display::None => 0,
-            Display::Block => 1,
-            Display::Flex => 2,
-        });
-        self.u8(match style.flex_direction {
-            FlexDirection::Row => 0,
-            FlexDirection::Column => 1,
-        });
-        self.u8(match style.justify_content {
-            JustifyContent::Start => 0,
-            JustifyContent::Center => 1,
-            JustifyContent::End => 2,
-            JustifyContent::SpaceBetween => 3,
-        });
-        self.u8(match style.align_items {
-            AlignItems::Start => 0,
-            AlignItems::Center => 1,
-            AlignItems::End => 2,
-            AlignItems::Stretch => 3,
-        });
-        self.u8(match style.position {
-            Position::Flow => 0,
-            Position::Absolute => 1,
-        });
-        self.u8(match style.cursor {
-            CursorKind::Default => 0,
-            CursorKind::Pointer => 1,
-            CursorKind::Text => 2,
-            CursorKind::Move => 3,
-            CursorKind::ResizeHorizontal => 4,
-            CursorKind::ResizeVertical => 5,
-            CursorKind::ResizeNorthWestSouthEast => 6,
-            CursorKind::ResizeNorthEastSouthWest => 7,
-        });
+        self.tag(style.display);
+        self.tag(style.flex_direction);
+        self.tag(style.justify_content);
+        self.tag(style.align_items);
+        self.tag(style.position);
+        self.tag(style.cursor);
         for value in [
             style.width,
             style.height,
@@ -326,26 +329,10 @@ impl Writer {
         self.f32(style.font_size);
         self.u16(style.font_weight);
         self.f32(style.opacity);
-        self.u8(match style.overflow_x {
-            Overflow::Visible => 0,
-            Overflow::Hidden => 1,
-            Overflow::Auto => 2,
-            Overflow::Scroll => 3,
-        });
-        self.u8(match style.overflow_y {
-            Overflow::Visible => 0,
-            Overflow::Hidden => 1,
-            Overflow::Auto => 2,
-            Overflow::Scroll => 3,
-        });
-        self.u8(match style.image_treatment {
-            ImageTreatment::Original => 0,
-            ImageTreatment::SymbolicForeground => 1,
-        });
-        self.u8(match style.text_wrap {
-            TextWrap::NoWrap => 0,
-            TextWrap::Wrap => 1,
-        });
+        self.tag(style.overflow_x);
+        self.tag(style.overflow_y);
+        self.tag(style.image_treatment);
+        self.tag(style.text_wrap);
         self.u8(u8::from(style.break_anywhere));
     }
 }
@@ -403,6 +390,17 @@ impl<'a> Reader<'a> {
         String::from_utf8(bytes.to_vec())
             .map_err(|_| "compiled document contains invalid UTF-8".to_string())
     }
+    fn tag<T: Wire>(&mut self) -> Result<T, String> {
+        let value = self.u8()?;
+        T::from_wire(value).ok_or_else(|| format!("invalid {} {value}", T::NAME))
+    }
+    fn opt_style(&mut self, version: u16) -> Result<Option<Style>, String> {
+        if self.u8()? != 0 {
+            Ok(Some(self.style_versioned(version)?))
+        } else {
+            Ok(None)
+        }
+    }
     fn color(&mut self) -> Result<Color, String> {
         let b = self.take(4)?;
         Ok(Color {
@@ -441,47 +439,12 @@ impl<'a> Reader<'a> {
         })
     }
     fn style_versioned(&mut self, version: u16) -> Result<Style, String> {
-        let display = match self.u8()? {
-            0 => Display::None,
-            1 => Display::Block,
-            2 => Display::Flex,
-            v => return Err(format!("invalid display {v}")),
-        };
-        let flex_direction = match self.u8()? {
-            0 => FlexDirection::Row,
-            1 => FlexDirection::Column,
-            v => return Err(format!("invalid flex direction {v}")),
-        };
-        let justify_content = match self.u8()? {
-            0 => JustifyContent::Start,
-            1 => JustifyContent::Center,
-            2 => JustifyContent::End,
-            3 => JustifyContent::SpaceBetween,
-            v => return Err(format!("invalid justify content {v}")),
-        };
-        let align_items = match self.u8()? {
-            0 => AlignItems::Start,
-            1 => AlignItems::Center,
-            2 => AlignItems::End,
-            3 => AlignItems::Stretch,
-            v => return Err(format!("invalid align items {v}")),
-        };
-        let position = match self.u8()? {
-            0 => Position::Flow,
-            1 => Position::Absolute,
-            v => return Err(format!("invalid position {v}")),
-        };
-        let cursor = match self.u8()? {
-            0 => CursorKind::Default,
-            1 => CursorKind::Pointer,
-            2 => CursorKind::Text,
-            3 => CursorKind::Move,
-            4 => CursorKind::ResizeHorizontal,
-            5 => CursorKind::ResizeVertical,
-            6 => CursorKind::ResizeNorthWestSouthEast,
-            7 => CursorKind::ResizeNorthEastSouthWest,
-            v => return Err(format!("invalid cursor kind {v}")),
-        };
+        let display = self.tag()?;
+        let flex_direction = self.tag()?;
+        let justify_content = self.tag()?;
+        let align_items = self.tag()?;
+        let position = self.tag()?;
+        let cursor = self.tag()?;
         Ok(Style {
             display,
             flex_direction,
@@ -515,42 +478,22 @@ impl<'a> Reader<'a> {
             overflow_x: if version == FORMAT_VERSION_RGB8_LEGACY {
                 Overflow::Visible
             } else {
-                match self.u8()? {
-                    0 => Overflow::Visible,
-                    1 => Overflow::Hidden,
-                    2 => Overflow::Auto,
-                    3 => Overflow::Scroll,
-                    v => return Err(format!("invalid overflow {v}")),
-                }
+                self.tag()?
             },
             overflow_y: if version == FORMAT_VERSION_RGB8_LEGACY {
                 Overflow::Visible
             } else {
-                match self.u8()? {
-                    0 => Overflow::Visible,
-                    1 => Overflow::Hidden,
-                    2 => Overflow::Auto,
-                    3 => Overflow::Scroll,
-                    v => return Err(format!("invalid overflow {v}")),
-                }
+                self.tag()?
             },
             image_treatment: if version == FORMAT_VERSION
                 || version == FORMAT_VERSION_TREATMENT_LEGACY
             {
-                match self.u8()? {
-                    0 => ImageTreatment::Original,
-                    1 => ImageTreatment::SymbolicForeground,
-                    v => return Err(format!("invalid image treatment {v}")),
-                }
+                self.tag()?
             } else {
                 ImageTreatment::Original
             },
             text_wrap: if version == FORMAT_VERSION {
-                match self.u8()? {
-                    0 => TextWrap::NoWrap,
-                    1 => TextWrap::Wrap,
-                    v => return Err(format!("invalid text wrap {v}")),
-                }
+                self.tag()?
             } else {
                 TextWrap::NoWrap
             },
