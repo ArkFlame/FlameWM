@@ -127,12 +127,7 @@ impl BusPump {
     pub fn send_with_reply(&self, message: Message, timeout: Duration) -> FlameResult<Message> {
         self.channel
             .send_with_reply_and_block(message, timeout)
-            .map_err(|error| {
-                FlameError::new(
-                    ErrorCode::Unavailable,
-                    format!("D-Bus reply failed: {error}"),
-                )
-            })
+            .map_err(|error| FlameError::unavailable(format!("D-Bus reply failed: {error}")))
     }
 
     /// Claim one well-known name before exposing the server object.
@@ -149,22 +144,15 @@ impl BusPump {
             .channel
             .send_with_reply_and_block(call, Duration::from_secs(5))
             .map_err(|error| {
-                FlameError::new(
-                    ErrorCode::Unavailable,
-                    format!("D-Bus name request failed: {error}"),
-                )
+                FlameError::unavailable(format!("D-Bus name request failed: {error}"))
             })?;
         let result: u32 = reply.read1().map_err(|error| {
-            FlameError::new(
-                ErrorCode::Unavailable,
-                format!("D-Bus name request reply invalid: {error}"),
-            )
+            FlameError::unavailable(format!("D-Bus name request reply invalid: {error}"))
         })?;
         if result != 1 {
-            return Err(FlameError::new(
-                ErrorCode::Unavailable,
-                format!("D-Bus name {name} unavailable (result {result})"),
-            ));
+            return Err(FlameError::unavailable(format!(
+                "D-Bus name {name} unavailable (result {result})"
+            )));
         }
         Ok(())
     }
@@ -188,10 +176,7 @@ pub fn watch_contract(watch: Watch) -> BusWatch {
 }
 
 fn map_dbus_error(error: dbus::Error) -> FlameError {
-    FlameError::new(
-        ErrorCode::Unavailable,
-        format!("D-Bus connection failed: {error}"),
-    )
+    FlameError::unavailable(format!("D-Bus connection failed: {error}"))
 }
 
 #[cfg(test)]

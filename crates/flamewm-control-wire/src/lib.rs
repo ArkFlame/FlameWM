@@ -761,114 +761,66 @@ pub fn encode_reply(
 pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlResponse, ControlError> {
     match (call.interface.as_str(), call.member.as_str()) {
         (IFACE_ROOT, "Ping") => {
-            expect_reply_arity(reply, 1)?;
-            let pong = required_string(&reply.values[0], "reply")?;
+            let pong = required_string(single_reply(reply)?, "reply")?;
             if pong != "pong" {
                 return Err(invalid("Ping reply must be pong"));
             }
             Ok(ControlResponse::Pong)
         }
         (IFACE_ROOT, "GetVersion") => {
-            expect_reply_arity(reply, 1)?;
-            let version = Version::parse(required_string(&reply.values[0], "version")?)
+            let version = Version::parse(required_string(single_reply(reply)?, "version")?)
                 .ok_or_else(|| invalid("version is not canonical major.minor.patch"))?;
             Ok(ControlResponse::Version(version))
         }
-        (IFACE_ROOT, "GetCapabilities") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Capabilities(
-                required_string_array(&reply.values[0], "capabilities")?.to_vec(),
-            ))
-        }
-        (IFACE_ROOT, "GetShellBootstrap") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::ShellBootstrap(shell_bootstrap_snapshot(
-                required_dict(&reply.values[0], "snapshot")?,
-            )?))
-        }
-        (IFACE_WINDOWS, "GetWindows") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Windows(
-                required_array(&reply.values[0], "windows")?
-                    .iter()
-                    .map(window_snapshot)
-                    .collect::<Result<Vec<_>, _>>()?,
-            ))
-        }
-        (IFACE_APPLICATIONS, "GetApplications") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Applications(
-                required_array(&reply.values[0], "applications")?
-                    .iter()
-                    .map(application_snapshot)
-                    .collect::<Result<Vec<_>, _>>()?,
-            ))
-        }
-        (IFACE_SETTINGS, "GetSnapshot") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Settings(settings_snapshot(
-                required_dict(&reply.values[0], "snapshot")?,
-            )?))
-        }
-        (IFACE_SETTINGS, "Apply" | "ResetSection") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Settings(settings_snapshot(
-                required_dict(&reply.values[0], "snapshot")?,
-            )?))
-        }
-        (IFACE_WORKSPACES, "GetSnapshot") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Workspaces(workspace_snapshot(
-                required_dict(&reply.values[0], "snapshot")?,
-            )?))
-        }
-        (IFACE_DISPLAYS, "GetSnapshot") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Displays(display_snapshot(required_dict(
-                &reply.values[0],
-                "snapshot",
-            )?)?))
-        }
-        (IFACE_DISPLAYS, "BeginModeChange") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Transaction(TransactionId(required_u64(
-                &reply.values[0],
-                "transaction",
-            )?)))
-        }
-        (IFACE_SHORTCUTS, "BeginCapture") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::CaptureLease(required_u64(
-                &reply.values[0],
-                "lease",
-            )?))
-        }
-        (IFACE_SHORTCUTS, "GetSnapshot") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Shortcuts(shortcut_snapshot(
-                required_dict(&reply.values[0], "snapshot")?,
-            )?))
-        }
-        (IFACE_PANELS, "GetSnapshot") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::Panels(panels_snapshot(required_dict(
-                &reply.values[0],
-                "snapshot",
-            )?)?))
-        }
-        (IFACE_SESSION, "GetCapabilities") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::SessionCapabilities(session_capabilities(
-                required_string_array(&reply.values[0], "capabilities")?,
-            )))
-        }
-        (IFACE_SYSTEM, "GetSnapshot") => {
-            expect_reply_arity(reply, 1)?;
-            Ok(ControlResponse::System(system_snapshot(required_dict(
-                &reply.values[0],
-                "snapshot",
-            )?)?))
-        }
+        (IFACE_ROOT, "GetCapabilities") => Ok(ControlResponse::Capabilities(
+            required_string_array(single_reply(reply)?, "capabilities")?.to_vec(),
+        )),
+        (IFACE_ROOT, "GetShellBootstrap") => Ok(ControlResponse::ShellBootstrap(
+            shell_bootstrap_snapshot(required_dict(single_reply(reply)?, "snapshot")?)?,
+        )),
+        (IFACE_WINDOWS, "GetWindows") => Ok(ControlResponse::Windows(
+            required_array(single_reply(reply)?, "windows")?
+                .iter()
+                .map(window_snapshot)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        (IFACE_APPLICATIONS, "GetApplications") => Ok(ControlResponse::Applications(
+            required_array(single_reply(reply)?, "applications")?
+                .iter()
+                .map(application_snapshot)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        (IFACE_SETTINGS, "GetSnapshot") => Ok(ControlResponse::Settings(settings_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
+        (IFACE_SETTINGS, "Apply" | "ResetSection") => Ok(ControlResponse::Settings(
+            settings_snapshot(required_dict(single_reply(reply)?, "snapshot")?)?,
+        )),
+        (IFACE_WORKSPACES, "GetSnapshot") => Ok(ControlResponse::Workspaces(workspace_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
+        (IFACE_DISPLAYS, "GetSnapshot") => Ok(ControlResponse::Displays(display_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
+        (IFACE_DISPLAYS, "BeginModeChange") => Ok(ControlResponse::Transaction(TransactionId(
+            required_u64(single_reply(reply)?, "transaction")?,
+        ))),
+        (IFACE_SHORTCUTS, "BeginCapture") => Ok(ControlResponse::CaptureLease(required_u64(
+            single_reply(reply)?,
+            "lease",
+        )?)),
+        (IFACE_SHORTCUTS, "GetSnapshot") => Ok(ControlResponse::Shortcuts(shortcut_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
+        (IFACE_PANELS, "GetSnapshot") => Ok(ControlResponse::Panels(panels_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
+        (IFACE_SESSION, "GetCapabilities") => Ok(ControlResponse::SessionCapabilities(
+            session_capabilities(required_string_array(single_reply(reply)?, "capabilities")?),
+        )),
+        (IFACE_SYSTEM, "GetSnapshot") => Ok(ControlResponse::System(system_snapshot(
+            required_dict(single_reply(reply)?, "snapshot")?,
+        )?)),
         (
             IFACE_SYSTEM,
             "SetWifiEnabled"
@@ -1193,6 +1145,20 @@ fn session_capabilities(names: &[String]) -> SessionCapabilities {
     }
 }
 
+/// Build a wire dict from literal entries, so each key is inserted exactly once.
+fn dict_of<const N: usize>(entries: [(&str, WireValue); N]) -> WireDict {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+}
+
+/// Single-value reply: enforces arity 1 and returns the only value.
+fn single_reply(reply: &WireReply) -> Result<&WireValue, ControlError> {
+    expect_reply_arity(reply, 1)?;
+    Ok(&reply.values[0])
+}
+
 fn expect_reply_arity(reply: &WireReply, expected: usize) -> Result<(), ControlError> {
     if reply.values.len() == expected {
         Ok(())
@@ -1488,69 +1454,54 @@ pub fn settings_dict(snapshot: &SettingsSnapshot) -> WireDict {
 
 #[must_use]
 pub fn workspace_dict(snapshot: &WorkspaceSnapshot) -> WireDict {
-    let mut out = WireDict::new();
-    out.insert("revision".to_owned(), WireValue::U64(snapshot.revision));
-    out.insert(
-        "count".to_owned(),
-        WireValue::U32(u32_saturating(snapshot.count)),
-    );
-    out.insert(
-        "activeIndex".to_owned(),
-        WireValue::I32(i32_saturating(snapshot.active_index)),
-    );
-    out.insert(
-        "lastIndex".to_owned(),
-        WireValue::I32(snapshot.last_index.map_or(-1, i32_saturating)),
-    );
-    out.insert(
-        "names".to_owned(),
-        WireValue::StringArray(snapshot.names.clone()),
-    );
-    out
+    dict_of([
+        ("revision", WireValue::U64(snapshot.revision)),
+        ("count", WireValue::U32(u32_saturating(snapshot.count))),
+        (
+            "activeIndex",
+            WireValue::I32(i32_saturating(snapshot.active_index)),
+        ),
+        (
+            "lastIndex",
+            WireValue::I32(snapshot.last_index.map_or(-1, i32_saturating)),
+        ),
+        ("names", WireValue::StringArray(snapshot.names.clone())),
+    ])
 }
 
 #[must_use]
 pub fn shell_bootstrap_dict(snapshot: &ShellBootstrapSnapshot) -> WireDict {
-    let mut out = WireDict::new();
-    out.insert(
-        "windowsRevision".to_owned(),
-        WireValue::U64(snapshot.windows_revision),
-    );
-    out.insert(
-        "windows".to_owned(),
-        WireValue::Array(snapshot.windows.iter().map(window_wire_value).collect()),
-    );
-    out.insert(
-        "workspaces".to_owned(),
-        WireValue::Dict(workspace_dict(&snapshot.workspaces)),
-    );
-    out.insert(
-        "panels".to_owned(),
-        WireValue::Dict(panels_dict(&snapshot.panels)),
-    );
-    out.insert(
-        "applications".to_owned(),
-        WireValue::Array(
-            snapshot
-                .applications
-                .iter()
-                .map(application_wire_value)
-                .collect(),
+    dict_of([
+        ("windowsRevision", WireValue::U64(snapshot.windows_revision)),
+        (
+            "windows",
+            WireValue::Array(snapshot.windows.iter().map(window_wire_value).collect()),
         ),
-    );
-    out.insert(
-        "sessionCapabilities".to_owned(),
-        WireValue::StringArray(session_capability_names(snapshot.session)),
-    );
-    out.insert(
-        "displays".to_owned(),
-        WireValue::Dict(display_dict(&snapshot.displays)),
-    );
-    out.insert(
-        "system".to_owned(),
-        WireValue::Dict(system_dict(&snapshot.system)),
-    );
-    out
+        (
+            "workspaces",
+            WireValue::Dict(workspace_dict(&snapshot.workspaces)),
+        ),
+        ("panels", WireValue::Dict(panels_dict(&snapshot.panels))),
+        (
+            "applications",
+            WireValue::Array(
+                snapshot
+                    .applications
+                    .iter()
+                    .map(application_wire_value)
+                    .collect(),
+            ),
+        ),
+        (
+            "sessionCapabilities",
+            WireValue::StringArray(session_capability_names(snapshot.session)),
+        ),
+        (
+            "displays",
+            WireValue::Dict(display_dict(&snapshot.displays)),
+        ),
+        ("system", WireValue::Dict(system_dict(&snapshot.system))),
+    ])
 }
 
 #[must_use]
@@ -1794,98 +1745,57 @@ fn access_point_wire_value(point: &NetworkAccessPointSnapshot) -> WireValue {
     WireValue::Dict(item)
 }
 
-const fn availability_name(value: ServiceAvailability) -> &'static str {
-    match value {
-        ServiceAvailability::Unknown => "unknown",
-        ServiceAvailability::Available => "available",
-        ServiceAvailability::Unavailable => "unavailable",
-    }
+/// Generates a wire-name encoder (exhaustive) and a strict wire-name decoder.
+macro_rules! wire_enum_codec {
+    ($ty:ident, $name_fn:ident, $parse_fn:ident, $err:literal, { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        const fn $name_fn(value: $ty) -> &'static str {
+            match value {
+                $($ty::$variant => $wire,)+
+            }
+        }
+
+        fn $parse_fn(value: &str) -> Result<$ty, ControlError> {
+            match value {
+                $($wire => Ok($ty::$variant),)+
+                _ => Err(invalid($err)),
+            }
+        }
+    };
 }
 
-const fn network_kind_name(value: NetworkKind) -> &'static str {
-    match value {
-        NetworkKind::Unavailable => "unavailable",
-        NetworkKind::Disconnected => "disconnected",
-        NetworkKind::Connecting => "connecting",
-        NetworkKind::Wired => "wired",
-        NetworkKind::Wireless => "wireless",
-    }
-}
+wire_enum_codec!(ServiceAvailability, availability_name, parse_availability, "availability is invalid", {
+    Unknown => "unknown",
+    Available => "available",
+    Unavailable => "unavailable",
+});
 
-const fn power_state_name(value: PowerState) -> &'static str {
-    match value {
-        PowerState::Charging => "charging",
-        PowerState::Discharging => "discharging",
-        PowerState::Full => "full",
-        PowerState::Empty => "empty",
-        PowerState::Unknown => "unknown",
-    }
-}
+wire_enum_codec!(NetworkKind, network_kind_name, parse_network_kind, "network kind is invalid", {
+    Unavailable => "unavailable",
+    Disconnected => "disconnected",
+    Connecting => "connecting",
+    Wired => "wired",
+    Wireless => "wireless",
+});
 
-fn parse_power_state(value: &str) -> Result<PowerState, ControlError> {
-    match value {
-        "charging" => Ok(PowerState::Charging),
-        "discharging" => Ok(PowerState::Discharging),
-        "full" => Ok(PowerState::Full),
-        "empty" => Ok(PowerState::Empty),
-        "unknown" => Ok(PowerState::Unknown),
-        _ => Err(invalid("power state is invalid")),
-    }
-}
+wire_enum_codec!(PowerState, power_state_name, parse_power_state, "power state is invalid", {
+    Charging => "charging",
+    Discharging => "discharging",
+    Full => "full",
+    Empty => "empty",
+    Unknown => "unknown",
+});
 
-const fn playback_name(value: PlaybackState) -> &'static str {
-    match value {
-        PlaybackState::Playing => "playing",
-        PlaybackState::Paused => "paused",
-        PlaybackState::Stopped => "stopped",
-        PlaybackState::Unavailable => "unavailable",
-    }
-}
+wire_enum_codec!(PlaybackState, playback_name, parse_playback, "playback state is invalid", {
+    Playing => "playing",
+    Paused => "paused",
+    Stopped => "stopped",
+    Unavailable => "unavailable",
+});
 
-fn parse_availability(value: &str) -> Result<ServiceAvailability, ControlError> {
-    match value {
-        "unknown" => Ok(ServiceAvailability::Unknown),
-        "available" => Ok(ServiceAvailability::Available),
-        "unavailable" => Ok(ServiceAvailability::Unavailable),
-        _ => Err(invalid("availability is invalid")),
-    }
-}
-
-fn parse_network_kind(value: &str) -> Result<NetworkKind, ControlError> {
-    match value {
-        "unavailable" => Ok(NetworkKind::Unavailable),
-        "disconnected" => Ok(NetworkKind::Disconnected),
-        "connecting" => Ok(NetworkKind::Connecting),
-        "wired" => Ok(NetworkKind::Wired),
-        "wireless" => Ok(NetworkKind::Wireless),
-        _ => Err(invalid("network kind is invalid")),
-    }
-}
-
-fn parse_playback(value: &str) -> Result<PlaybackState, ControlError> {
-    match value {
-        "playing" => Ok(PlaybackState::Playing),
-        "paused" => Ok(PlaybackState::Paused),
-        "stopped" => Ok(PlaybackState::Stopped),
-        "unavailable" => Ok(PlaybackState::Unavailable),
-        _ => Err(invalid("playback state is invalid")),
-    }
-}
-
-const fn audio_endpoint_kind_name(value: AudioEndpointKind) -> &'static str {
-    match value {
-        AudioEndpointKind::Sink => "sink",
-        AudioEndpointKind::Source => "source",
-    }
-}
-
-fn parse_audio_endpoint_kind(value: &str) -> Result<AudioEndpointKind, ControlError> {
-    match value {
-        "sink" => Ok(AudioEndpointKind::Sink),
-        "source" => Ok(AudioEndpointKind::Source),
-        _ => Err(invalid("audio endpoint kind must be sink or source")),
-    }
-}
+wire_enum_codec!(AudioEndpointKind, audio_endpoint_kind_name, parse_audio_endpoint_kind, "audio endpoint kind must be sink or source", {
+    Sink => "sink",
+    Source => "source",
+});
 
 fn audio_target(kind: &str, endpoint_kind: &str, id: u32) -> Result<AudioTarget, ControlError> {
     match kind {
@@ -2017,24 +1927,21 @@ fn system_snapshot(dict: &WireDict) -> Result<SystemSnapshot, ControlError> {
 }
 
 fn audio_endpoint_wire_value(endpoint: &AudioEndpointSnapshot) -> WireValue {
-    let mut out = WireDict::new();
-    out.insert("id".to_owned(), WireValue::U32(endpoint.id));
-    out.insert(
-        "kind".to_owned(),
-        WireValue::String(audio_endpoint_kind_name(endpoint.kind).to_owned()),
-    );
-    out.insert("name".to_owned(), WireValue::String(endpoint.name.clone()));
-    out.insert(
-        "description".to_owned(),
-        WireValue::String(endpoint.description.clone()),
-    );
-    out.insert(
-        "volume".to_owned(),
-        WireValue::U32(u32::from(endpoint.volume_percent)),
-    );
-    out.insert("muted".to_owned(), WireValue::Bool(endpoint.muted));
-    out.insert("default".to_owned(), WireValue::Bool(endpoint.is_default));
-    WireValue::Dict(out)
+    WireValue::Dict(dict_of([
+        ("id", WireValue::U32(endpoint.id)),
+        (
+            "kind",
+            WireValue::String(audio_endpoint_kind_name(endpoint.kind).to_owned()),
+        ),
+        ("name", WireValue::String(endpoint.name.clone())),
+        (
+            "description",
+            WireValue::String(endpoint.description.clone()),
+        ),
+        ("volume", WireValue::U32(u32::from(endpoint.volume_percent))),
+        ("muted", WireValue::Bool(endpoint.muted)),
+        ("default", WireValue::Bool(endpoint.is_default)),
+    ]))
 }
 
 fn audio_stream_wire_value(stream: &AudioStreamSnapshot) -> WireValue {
@@ -2249,107 +2156,71 @@ fn output_wire_value(output: &OutputSnapshot) -> WireValue {
 }
 
 fn window_wire_value(window: &WindowSnapshot) -> WireValue {
-    let mut out = WireDict::new();
-    out.insert("windowId".to_owned(), WireValue::U64(window.reference.id));
-    out.insert(
-        "generation".to_owned(),
-        WireValue::U64(window.reference.generation),
-    );
-    out.insert("title".to_owned(), WireValue::String(window.title.clone()));
-    out.insert(
-        "appId".to_owned(),
-        WireValue::String(window.app_id.as_str().to_owned()),
-    );
-    out.insert("outerX".to_owned(), WireValue::I32(window.outer_geometry.x));
-    out.insert("outerY".to_owned(), WireValue::I32(window.outer_geometry.y));
-    out.insert(
-        "outerWidth".to_owned(),
-        WireValue::I32(window.outer_geometry.width),
-    );
-    out.insert(
-        "outerHeight".to_owned(),
-        WireValue::I32(window.outer_geometry.height),
-    );
-    out.insert(
-        "restoreX".to_owned(),
-        WireValue::I32(window.restore_geometry.x),
-    );
-    out.insert(
-        "restoreY".to_owned(),
-        WireValue::I32(window.restore_geometry.y),
-    );
-    out.insert(
-        "restoreWidth".to_owned(),
-        WireValue::I32(window.restore_geometry.width),
-    );
-    out.insert(
-        "restoreHeight".to_owned(),
-        WireValue::I32(window.restore_geometry.height),
-    );
-    out.insert(
-        "state".to_owned(),
-        WireValue::String(window_state_name(window.state).to_owned()),
-    );
-    out.insert("sticky".to_owned(), WireValue::Bool(window.sticky));
-    out.insert("focused".to_owned(), WireValue::Bool(window.focused));
-    out.insert(
-        "workspaceIndex".to_owned(),
-        WireValue::I32(window.workspace.index),
-    );
-    out.insert(
-        "workspaceRevision".to_owned(),
-        WireValue::U64(window.workspace.revision),
-    );
-    out.insert(
-        "output".to_owned(),
-        WireValue::String(window.output.as_str().to_owned()),
-    );
-    out.insert(
-        "stateGeneration".to_owned(),
-        WireValue::U64(window.state_generation),
-    );
-    WireValue::Dict(out)
+    WireValue::Dict(dict_of([
+        ("windowId", WireValue::U64(window.reference.id)),
+        ("generation", WireValue::U64(window.reference.generation)),
+        ("title", WireValue::String(window.title.clone())),
+        (
+            "appId",
+            WireValue::String(window.app_id.as_str().to_owned()),
+        ),
+        ("outerX", WireValue::I32(window.outer_geometry.x)),
+        ("outerY", WireValue::I32(window.outer_geometry.y)),
+        ("outerWidth", WireValue::I32(window.outer_geometry.width)),
+        ("outerHeight", WireValue::I32(window.outer_geometry.height)),
+        ("restoreX", WireValue::I32(window.restore_geometry.x)),
+        ("restoreY", WireValue::I32(window.restore_geometry.y)),
+        (
+            "restoreWidth",
+            WireValue::I32(window.restore_geometry.width),
+        ),
+        (
+            "restoreHeight",
+            WireValue::I32(window.restore_geometry.height),
+        ),
+        (
+            "state",
+            WireValue::String(window_state_name(window.state).to_owned()),
+        ),
+        ("sticky", WireValue::Bool(window.sticky)),
+        ("focused", WireValue::Bool(window.focused)),
+        ("workspaceIndex", WireValue::I32(window.workspace.index)),
+        (
+            "workspaceRevision",
+            WireValue::U64(window.workspace.revision),
+        ),
+        (
+            "output",
+            WireValue::String(window.output.as_str().to_owned()),
+        ),
+        ("stateGeneration", WireValue::U64(window.state_generation)),
+    ]))
 }
 
 fn application_wire_value(application: &DesktopApplication) -> WireValue {
-    let mut out = WireDict::new();
-    out.insert(
-        "id".to_owned(),
-        WireValue::String(application.id.as_str().to_owned()),
-    );
-    out.insert(
-        "name".to_owned(),
-        WireValue::String(application.name.clone()),
-    );
-    out.insert(
-        "genericName".to_owned(),
-        WireValue::String(application.generic_name.clone()),
-    );
-    out.insert(
-        "comment".to_owned(),
-        WireValue::String(application.comment.clone()),
-    );
-    out.insert(
-        "startupWmClass".to_owned(),
-        WireValue::String(application.startup_wm_class.clone()),
-    );
-    out.insert(
-        "argv".to_owned(),
-        WireValue::StringArray(application.argv.clone()),
-    );
-    out.insert(
-        "keywords".to_owned(),
-        WireValue::StringArray(application.keywords.clone()),
-    );
-    out.insert(
-        "iconName".to_owned(),
-        WireValue::String(application.icon_name.clone()),
-    );
-    out.insert(
-        "categories".to_owned(),
-        WireValue::StringArray(application.categories.clone()),
-    );
-    WireValue::Dict(out)
+    WireValue::Dict(dict_of([
+        ("id", WireValue::String(application.id.as_str().to_owned())),
+        ("name", WireValue::String(application.name.clone())),
+        (
+            "genericName",
+            WireValue::String(application.generic_name.clone()),
+        ),
+        ("comment", WireValue::String(application.comment.clone())),
+        (
+            "startupWmClass",
+            WireValue::String(application.startup_wm_class.clone()),
+        ),
+        ("argv", WireValue::StringArray(application.argv.clone())),
+        (
+            "keywords",
+            WireValue::StringArray(application.keywords.clone()),
+        ),
+        ("iconName", WireValue::String(application.icon_name.clone())),
+        (
+            "categories",
+            WireValue::StringArray(application.categories.clone()),
+        ),
+    ]))
 }
 
 const fn window_state_name(state: WindowState) -> &'static str {
@@ -2787,6 +2658,17 @@ mod tests {
         PlaybackState, ServiceAvailability,
     };
 
+    fn assert_request_round_trip(request: &ControlRequest) -> WireCall {
+        let call = encode_call(request).expect("encode");
+        assert_eq!(decode_call(&call).expect("decode"), *request);
+        call
+    }
+
+    fn assert_reply_round_trip(call: &WireCall, response: &ControlResponse) {
+        let reply = encode_reply(call, response).expect("encode reply");
+        assert_eq!(decode_reply(call, &reply).expect("decode reply"), *response);
+    }
+
     #[test]
     fn settings_apply_decodes_typed_variants_without_stringly_typed_core() {
         let mut changes = WireDict::new();
@@ -2909,12 +2791,7 @@ mod tests {
         source
             .values
             .insert("fontBold".to_owned(), SettingValue::Boolean(true));
-        let reply = encode_reply(&call, &ControlResponse::Settings(source.clone()))
-            .expect("matching response");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::Settings(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Settings(source.clone()));
     }
 
     // CONTRACT-REGRESSION: T11 SettingsSnapshotChanged must preserve the complete settings snapshot.
@@ -2953,12 +2830,7 @@ mod tests {
             .values
             .insert("fontBold".to_owned(), SettingValue::Boolean(true));
         let apply = WireCall::new(IFACE_SETTINGS, "Apply", Vec::new());
-        let reply = encode_reply(&apply, &ControlResponse::Settings(snapshot.clone()))
-            .expect("settings reply");
-        assert_eq!(
-            decode_reply(&apply, &reply).expect("settings reply decode"),
-            ControlResponse::Settings(snapshot.clone())
-        );
+        assert_reply_round_trip(&apply, &ControlResponse::Settings(snapshot.clone()));
 
         let ordered = [
             WireSignal {
@@ -3020,12 +2892,7 @@ mod tests {
             last_index: Some(0),
             names: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
         };
-        let reply =
-            encode_reply(&call, &ControlResponse::Workspaces(source.clone())).expect("encode");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::Workspaces(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Workspaces(source.clone()));
     }
 
     #[test]
@@ -3035,12 +2902,7 @@ mod tests {
         source
             .values
             .insert("surfaceOpacity".to_owned(), SettingValue::Percent(83));
-        let reply =
-            encode_reply(&call, &ControlResponse::Settings(source.clone())).expect("encode");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::Settings(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Settings(source.clone()));
     }
 
     fn window_fixture() -> WindowSnapshot {
@@ -3113,12 +2975,7 @@ mod tests {
             },
             system: SystemSnapshot::default(),
         };
-        let reply =
-            encode_reply(&call, &ControlResponse::ShellBootstrap(source.clone())).expect("encode");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::ShellBootstrap(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::ShellBootstrap(source.clone()));
     }
 
     #[test]
@@ -3145,18 +3002,13 @@ mod tests {
             decode_call(&WireCall::new(IFACE_SESSION, "LockPreview", Vec::new())).expect("decode"),
             request
         );
-        let reply = encode_reply(&call, &ControlResponse::Unit).expect("encode reply");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode reply"),
-            ControlResponse::Unit
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Unit);
     }
 
     #[test]
     fn shell_snapshot_requests_round_trip_through_wire_mapping() {
         for request in [ControlRequest::GetWindows, ControlRequest::GetApplications] {
-            let call = encode_call(&request).expect("encode");
-            assert_eq!(decode_call(&call).expect("decode"), request);
+            assert_request_round_trip(&request);
         }
     }
 
@@ -3171,11 +3023,7 @@ mod tests {
         };
         let call = encode_call(&request).expect("encode");
         assert_eq!(decode_call(&call).expect("decode"), request);
-        let reply = encode_reply(&call, &ControlResponse::Unit).expect("encode reply");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode reply"),
-            ControlResponse::Unit
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Unit);
     }
 
     #[test]
@@ -3188,11 +3036,7 @@ mod tests {
         ] {
             let call = encode_call(&request).expect("encode");
             assert_eq!(decode_call(&call).expect("decode"), request);
-            let reply = encode_reply(&call, &ControlResponse::Unit).expect("encode reply");
-            assert_eq!(
-                decode_reply(&call, &reply).expect("decode reply"),
-                ControlResponse::Unit
-            );
+            assert_reply_round_trip(&call, &ControlResponse::Unit);
         }
     }
 
@@ -3200,23 +3044,14 @@ mod tests {
     fn window_snapshot_reply_round_trips_through_wire_mapping() {
         let call = WireCall::new(IFACE_WINDOWS, "GetWindows", Vec::new());
         let source = vec![window_fixture()];
-        let reply = encode_reply(&call, &ControlResponse::Windows(source.clone())).expect("encode");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::Windows(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Windows(source.clone()));
     }
 
     #[test]
     fn application_snapshot_reply_round_trips_through_wire_mapping() {
         let call = WireCall::new(IFACE_APPLICATIONS, "GetApplications", Vec::new());
         let source = vec![application_fixture()];
-        let reply =
-            encode_reply(&call, &ControlResponse::Applications(source.clone())).expect("encode");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::Applications(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::Applications(source.clone()));
     }
 
     fn system_fixture() -> SystemSnapshot {
@@ -3345,8 +3180,7 @@ mod tests {
                 action,
                 expected_revision: 4,
             };
-            let call = encode_call(&request).expect("encode");
-            assert_eq!(decode_call(&call).expect("decode"), request);
+            assert_request_round_trip(&request);
         }
     }
 
@@ -3365,11 +3199,7 @@ mod tests {
     fn system_reply_round_trips_full_authoritative_snapshot() {
         let call = WireCall::new(IFACE_SYSTEM, "GetSnapshot", Vec::new());
         let source = system_fixture();
-        let reply = encode_reply(&call, &ControlResponse::System(source.clone())).expect("encode");
-        assert_eq!(
-            decode_reply(&call, &reply).expect("decode"),
-            ControlResponse::System(source)
-        );
+        assert_reply_round_trip(&call, &ControlResponse::System(source.clone()));
     }
 
     #[test]
@@ -3454,8 +3284,7 @@ mod tests {
                 action,
                 expected_revision: 9,
             };
-            let call = encode_call(&request).expect("encode");
-            assert_eq!(decode_call(&call).expect("decode"), request);
+            assert_request_round_trip(&request);
         }
     }
 

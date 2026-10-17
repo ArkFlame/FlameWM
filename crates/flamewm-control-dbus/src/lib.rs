@@ -153,14 +153,7 @@ fn handle_call<E: EnginePorts>(
     } else {
         let reply = encode_reply(&call, &response).map_err(to_flame_error)?;
         let mut output = message.method_return();
-        output.append_items(
-            &reply
-                .values
-                .iter()
-                .map(to_item)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| invalid(&error))?,
-        );
+        append_wire_values(&mut output, &reply.values)?;
         Some(output)
     };
     let mut signals = match (settings_keys, response) {
@@ -189,9 +182,9 @@ fn shortcut_change_signal(
         ControlRequest::SetShortcut { .. }
         | ControlRequest::ClearShortcut { .. }
         | ControlRequest::ResetShortcut { .. }
-        | ControlRequest::ApplyShortcuts { .. } => {
-            Some(ControlSignal::ShortcutsChanged { revision: revision() })
-        }
+        | ControlRequest::ApplyShortcuts { .. } => Some(ControlSignal::ShortcutsChanged {
+            revision: revision(),
+        }),
         _ => None,
     }
 }
@@ -281,14 +274,7 @@ fn send_signal(pump: &BusPump, signal: &ControlSignal) -> FlameResult<()> {
     let signal = encode_signal(signal);
     let mut message = Message::new_signal(OBJECT_PATH, &signal.interface, &signal.member)
         .map_err(|error| invalid(&error))?;
-    message.append_items(
-        &signal
-            .args
-            .iter()
-            .map(to_item)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| invalid(&error))?,
-    );
+    append_wire_values(&mut message, &signal.args)?;
     pump.send(message).map(|_| ())
 }
 
@@ -316,22 +302,14 @@ impl ControlClient {
         timeout: Duration,
     ) -> Result<flamewm_control_core::ControlResponse, ControlError> {
         let call = encode_call(request)?;
-        let message = Message::new_method_call(
+        let mut message = Message::new_method_call(
             flamewm_control_core::BUS_NAME,
             OBJECT_PATH,
             &call.interface,
             &call.member,
         )
         .map_err(|error| invalid(&error))?;
-        let mut message = message;
-        message.append_items(
-            &call
-                .args
-                .iter()
-                .map(to_item)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| invalid(&error))?,
-        );
+        append_wire_values(&mut message, &call.args)?;
         let reply = self
             .pump
             .send_with_reply(message, timeout)
@@ -424,6 +402,16 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     })
     .ok()
 }
+fn append_wire_values(message: &mut Message, values: &[WireValue]) -> FlameResult<()> {
+    let items = values
+        .iter()
+        .map(to_item)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| invalid(&error))?;
+    message.append_items(&items);
+    Ok(())
+}
+
 fn to_item(value: &WireValue) -> Result<MessageItem, String> {
     match value {
         WireValue::Bool(v) => Ok(MessageItem::Bool(*v)),
@@ -542,7 +530,7 @@ fn decode_remote_method_error(message: &str) -> Option<(ErrorCode, &str)> {
 }
 
 fn error_code_for_name(name: &str) -> Option<ErrorCode> {
-    let canonical_codes = [
+    const CODES: [ErrorCode; 12] = [
         ErrorCode::InvalidArgument,
         ErrorCode::NotFound,
         ErrorCode::StaleRevision,
@@ -551,28 +539,16 @@ fn error_code_for_name(name: &str) -> Option<ErrorCode> {
         ErrorCode::Unsupported,
         ErrorCode::Unavailable,
         ErrorCode::PermissionDenied,
+        ErrorCode::Timeout,
+        ErrorCode::IoFailure,
+        ErrorCode::EngineRejected,
         ErrorCode::InternalFailure,
-    ]
-    .into_iter()
-    .find(|code| name == flamewm_control_core::error_name(*code));
-    canonical_codes.or_else(|| {
-        [
-            ErrorCode::InvalidArgument,
-            ErrorCode::NotFound,
-            ErrorCode::StaleRevision,
-            ErrorCode::Conflict,
-            ErrorCode::Busy,
-            ErrorCode::Unsupported,
-            ErrorCode::Unavailable,
-            ErrorCode::PermissionDenied,
-            ErrorCode::Timeout,
-            ErrorCode::IoFailure,
-            ErrorCode::EngineRejected,
-            ErrorCode::InternalFailure,
-        ]
+    ];
+    // Canonical wire names win; the Debug spelling is only a fallback.
+    CODES
         .into_iter()
-        .find(|code| name == format!("{code:?}"))
-    })
+        .find(|code| name == flamewm_control_core::error_name(*code))
+        .or_else(|| CODES.into_iter().find(|code| name == format!("{code:?}")))
 }
 
 #[cfg(test)]
@@ -787,7 +763,10 @@ mod tests {
         ];
         for request in &mutations {
             let signal = shortcut_change_signal(request, || 9);
-            assert_eq!(signal, Some(ControlSignal::ShortcutsChanged { revision: 9 }));
+            assert_eq!(
+                signal,
+                Some(ControlSignal::ShortcutsChanged { revision: 9 })
+            );
             let wire = encode_signal(signal.as_ref().expect("signal"));
             assert_eq!(wire.interface, flamewm_control_core::IFACE_SHORTCUTS);
             assert_eq!(wire.member, "ShortcutsChanged");
@@ -989,7 +968,11 @@ mod capture_owner_tests {
         owner.record_begin(":1.42", 5);
         let error = owner.authorize_end(":1.7", 5).expect_err("non-owner end");
         assert_eq!(error.code, ErrorCode::PermissionDenied);
-        assert_eq!(owner.owner_lease(":1.42"), Some(5), "refusal keeps the lease");
+        assert_eq!(
+            owner.owner_lease(":1.42"),
+            Some(5),
+            "refusal keeps the lease"
+        );
     }
 
     #[test]
@@ -1012,6 +995,8 @@ mod capture_owner_tests {
     #[test]
     fn no_recorded_lease_passes_authorization_to_the_dispatcher() {
         let owner = CaptureOwner::default();
-        owner.authorize_end(":1.7", 1).expect("dispatcher reports NotFound");
+        owner
+            .authorize_end(":1.7", 1)
+            .expect("dispatcher reports NotFound");
     }
 }
