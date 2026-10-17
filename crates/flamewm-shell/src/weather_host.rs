@@ -218,15 +218,10 @@ impl LocationSearch {
         let Some(rx) = self.inflight.as_ref() else {
             return false;
         };
-        let polled = match rx.lock().map(|guard| guard.try_recv()) {
-            Ok(Ok(result)) => Some(result),
-            Ok(Err(mpsc::TryRecvError::Empty)) => None,
-            Ok(Err(mpsc::TryRecvError::Disconnected)) | Err(_) => {
-                Some(Err(WeatherError::Transport))
-            }
-        };
-        let Some(result) = polled else {
-            return false;
+        let result = match rx.lock().map(|guard| guard.try_recv()) {
+            Ok(Ok(result)) => result,
+            Ok(Err(mpsc::TryRecvError::Empty)) => return false,
+            Ok(Err(mpsc::TryRecvError::Disconnected)) | Err(_) => Err(WeatherError::Transport),
         };
         self.inflight = None;
         match result {
