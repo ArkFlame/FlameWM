@@ -23,6 +23,7 @@ use super::native::xresource::{
     X11ResourceAllocator, refresh_backbuffer_gauge, refresh_image_gauge,
 };
 use super::xft::XftBackend;
+use crate::external_drawable::match_argb32_visual;
 use super::xlib::*;
 use super::xrender::XRenderBackend;
 use super::xshape::XShapeBridge;
@@ -221,12 +222,8 @@ impl X11App {
         // Canonical scene creation: prefer a depth-32 TrueColor ARGB visual
         // validated by native/surface_format; fall back to the default visual
         // (opaque or shape-backed) only when no real alpha channel exists.
-        let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
-        let argb_visual =
-            unsafe { XMatchVisualInfo(display, screen, 32, TRUE_COLOR_CLASS, &mut vinfo) } != 0
-                && !vinfo.visual.is_null();
-        if argb_visual {
-            let alpha_mask = unsafe { visual_alpha_mask(display, vinfo.visual) };
+        if let Some(argb_visual) = match_argb32_visual(display, screen) {
+            let alpha_mask = unsafe { visual_alpha_mask(display, argb_visual) };
             match validate_argb32_visual(32, TRUE_COLOR_CLASS, alpha_mask) {
                 // No compositor is claimed in the default Xephyr path, so a
                 // depth-32 window cannot blend fractionally with the desktop.
@@ -410,7 +407,7 @@ impl X11App {
                 None
             }
         };
-        let mut xrender = match unsafe { XRenderBackend::new(display, backbuffer, visual) } {
+        let xrender = match unsafe { XRenderBackend::new(display, backbuffer, visual) } {
             Ok(backend) => {
                 eprintln!("FLAMEWM_RENDER_ALPHA_BACKEND xrender");
                 Some(backend)
@@ -500,11 +497,7 @@ impl X11App {
         unsafe {
             XFlush(display);
         }
-        let picture = if alpha_mode == SurfaceAlphaMode::CompositedArgb32 {
-            xrender.as_ref().map(|_| 1u64).unwrap_or(0)
-        } else {
-            0
-        };
+        let picture = u64::from(alpha_mode == SurfaceAlphaMode::CompositedArgb32 && xrender.is_some());
         let mut surface = NativeSurfaceTarget::create_plan(
             window,
             visual as u64,
@@ -517,7 +510,6 @@ impl X11App {
             .map_err(|e| presenter_error(&e))?;
         // XRender backend owns the live destination picture; the plan records
         // presence (1) only when composited + xrender is live.
-        let _ = &mut xrender;
 
         Ok(Self {
             display,
