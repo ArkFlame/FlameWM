@@ -61,6 +61,33 @@ def _labels(matrix) -> dict[str, str]:
     return dict(matrix)
 
 
+SS03_KEYS = ("blue_snapshot", "teal_snapshot", "selected_visuals", "reset_persisted_after_restart")
+SS12_KEYS = ("lease_begin_end_same_owner", "binding_stored", "action_effect",
+             "grab_restored_start_behavior", "owner_loss_restored", "clear_reset_persisted")
+SS14_KEYS = ("settings_accent_source_revision", "settings_signals_observed",
+             "settings_visible_without_input", "panels_external_change",
+             "shortcuts_external_change", "display_rollback_signal", "signal_loss_recovery")
+SS15_KEYS = ("single_output_boundary_observed", "disabled_output_prev_inert",
+             "disabled_output_next_inert", "disabled_mode_ends_inert", "settings_survived_keyboard_escape")
+SS19_KEYS = ("repeated_pages_opened_and_closed", "idle_cpu_bounded", "fd_growth_bounded",
+             "memory_growth_bounded", "external_update_responsive", "owned_processes_clean")
+
+
+def _obs(keys, value=True, **overrides) -> dict:
+    """Observation dict with every key set to value, then the named overrides applied."""
+    return {**dict.fromkeys(keys, value), **overrides}
+
+
+def _wallpaper_run(run: Path) -> tuple[Path, Path]:
+    """Write the wallpaper fixture and create the managed store; return (fixture, store)."""
+    fixture = run / "fixtures" / "wallpaper.png"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes(b"png-bytes")
+    store = run / "xdg-data" / "flamewm" / "wallpapers"
+    store.mkdir(parents=True)
+    return fixture, store
+
+
 class CanonicalMatrixTests(unittest.TestCase):
     def test_matrix_has_twenty_ordered_ids(self) -> None:
         ids = [sid for sid, _ in acc.CANONICAL_MATRIX]
@@ -222,36 +249,17 @@ class DesktopOpacityFixtureTests(unittest.TestCase):
 
 class HotkeyLeaseScenarioTests(unittest.TestCase):
     def test_complete_observations_required_for_ss12_pass(self) -> None:
-        observations = {
-            "lease_begin_end_same_owner": True,
-            "binding_stored": True,
-            "action_effect": True,
-            "grab_restored_start_behavior": True,
-            "owner_loss_restored": True,
-            "clear_reset_persisted": True,
-        }
-        self.assertEqual(acc.assess_ss12(observations)[0], "PASS")
+        self.assertEqual(acc.assess_ss12(_obs(SS12_KEYS))[0], "PASS")
 
     def test_missing_owner_loss_or_persistence_stays_not_run(self) -> None:
-        observations = {
-            "lease_begin_end_same_owner": True,
-            "binding_stored": True,
-            "action_effect": True,
-            "grab_restored_start_behavior": True,
-            "owner_loss_restored": None,
-            "clear_reset_persisted": None,
-        }
+        observations = _obs(SS12_KEYS, owner_loss_restored=None, clear_reset_persisted=None)
         status, reason = acc.assess_ss12(observations)
         self.assertEqual(status, "NOT_RUN")
         self.assertIn("owner_loss_restored", reason)
         self.assertIn("clear_reset_persisted", reason)
 
     def test_measured_missing_action_effect_fails(self) -> None:
-        observations = {key: True for key in (
-            "lease_begin_end_same_owner", "binding_stored", "action_effect",
-            "grab_restored_start_behavior", "owner_loss_restored", "clear_reset_persisted")}
-        observations["action_effect"] = False
-        self.assertEqual(acc.assess_ss12(observations)[0], "FAIL")
+        self.assertEqual(acc.assess_ss12(_obs(SS12_KEYS, action_effect=False))[0], "FAIL")
 
     def test_malformed_or_missing_snapshot_cannot_prove_binding(self) -> None:
         self.assertIsNone(acc.gvariant_field_string("garbage", "ToggleStartMenu"))
@@ -294,14 +302,10 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
         self.assertFalse(acc.ss15_escape_state_ok(True, geometry, (0, 0, 0), "Super", "Super", "Super"))
 
     def test_ss03_navigation_diagnostic_does_not_mask_missing_snapshot_effect(self) -> None:
-        observations = {key: True for key in (
-            "blue_snapshot", "teal_snapshot", "selected_visuals",
-            "reset_persisted_after_restart")}
-        observations["blue_snapshot"] = False
         # Even proven navigation click delivery cannot turn the missing state mutation into PASS.
         diagnostic = {"navigation_changed_and_returned": True}
         self.assertTrue(diagnostic["navigation_changed_and_returned"])
-        self.assertEqual(acc.assess_ss03(observations)[0], "FAIL")
+        self.assertEqual(acc.assess_ss03(_obs(SS03_KEYS, blue_snapshot=False))[0], "FAIL")
 
     def test_ss03_visual_report_moves_pointer_before_sampling_and_assembles_exit(self) -> None:
         calls = []
@@ -337,28 +341,17 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
         self.assertFalse(report["passed"])
 
     def test_ss03_requires_two_palette_values_visual_selection_and_restart(self) -> None:
-        complete = {key: True for key in (
-            "blue_snapshot", "teal_snapshot", "selected_visuals",
-            "reset_persisted_after_restart")}
-        self.assertEqual(acc.assess_ss03(complete)[0], "PASS")
-        for missing in complete:
-            partial = dict(complete)
-            partial[missing] = None
+        self.assertEqual(acc.assess_ss03(_obs(SS03_KEYS))[0], "PASS")
+        for missing in SS03_KEYS:
             with self.subTest(missing=missing):
-                self.assertEqual(acc.assess_ss03(partial)[0], "NOT_RUN")
+                self.assertEqual(acc.assess_ss03(_obs(SS03_KEYS, **{missing: None}))[0], "NOT_RUN")
 
     def test_ss03_measured_wrong_persisted_value_is_failure(self) -> None:
-        complete = {key: True for key in (
-            "blue_snapshot", "teal_snapshot", "selected_visuals",
-            "reset_persisted_after_restart")}
-        complete["reset_persisted_after_restart"] = False
+        complete = _obs(SS03_KEYS, reset_persisted_after_restart=False)
         self.assertEqual(acc.assess_ss03(complete)[0], "FAIL")
 
     def test_ss15_does_not_pass_with_snapshot_only_or_missing_escape(self) -> None:
-        observations = {key: True for key in (
-            "single_output_boundary_observed", "disabled_output_prev_inert",
-            "disabled_output_next_inert", "disabled_mode_ends_inert",
-            "settings_survived_keyboard_escape")}
+        observations = _obs(SS15_KEYS)
         self.assertEqual(acc.assess_ss15(observations)[0], "PASS")
         observations["settings_survived_keyboard_escape"] = None
         self.assertEqual(acc.assess_ss15(observations)[0], "NOT_RUN")
@@ -366,9 +359,7 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
         self.assertEqual(acc.assess_ss15(observations)[0], "FAIL")
 
     def test_ss19_requires_idle_repeat_resources_update_and_teardown(self) -> None:
-        observations = {key: True for key in (
-            "repeated_pages_opened_and_closed", "idle_cpu_bounded", "fd_growth_bounded",
-            "memory_growth_bounded", "external_update_responsive", "owned_processes_clean")}
+        observations = _obs(SS19_KEYS)
         self.assertEqual(acc.assess_ss19(observations)[0], "PASS")
         observations["external_update_responsive"] = None
         self.assertEqual(acc.assess_ss19(observations)[0], "NOT_RUN")
@@ -427,34 +418,18 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
 
 class ExternalSettingsScenarioTests(unittest.TestCase):
     def test_one_settings_mutation_does_not_pass_all_ss14_paths(self) -> None:
-        observations = {
-            "settings_accent_source_revision": True,
-            "settings_signals_observed": True,
-            "settings_visible_without_input": True,
-            "panels_external_change": None,
-            "shortcuts_external_change": None,
-            "display_rollback_signal": None,
-            "signal_loss_recovery": None,
-        }
+        observations = _obs(SS14_KEYS, panels_external_change=None, shortcuts_external_change=None,
+                            display_rollback_signal=None, signal_loss_recovery=None)
         status, reason = acc.assess_ss14(observations)
         self.assertEqual(status, "NOT_RUN")
         self.assertIn("panels_external_change", reason)
         self.assertIn("display_rollback_signal", reason)
 
     def test_measured_stale_source_revision_fails(self) -> None:
-        observations = {key: True for key in (
-            "settings_accent_source_revision", "settings_signals_observed",
-            "settings_visible_without_input", "panels_external_change",
-            "shortcuts_external_change", "display_rollback_signal", "signal_loss_recovery")}
-        observations["settings_accent_source_revision"] = False
-        self.assertEqual(acc.assess_ss14(observations)[0], "FAIL")
+        self.assertEqual(acc.assess_ss14(_obs(SS14_KEYS, settings_accent_source_revision=False))[0], "FAIL")
 
     def test_missing_source_or_visible_observation_stays_not_run(self) -> None:
-        observations = {key: None for key in (
-            "settings_accent_source_revision", "settings_signals_observed",
-            "settings_visible_without_input", "panels_external_change",
-            "shortcuts_external_change", "display_rollback_signal", "signal_loss_recovery")}
-        self.assertEqual(acc.assess_ss14(observations)[0], "NOT_RUN")
+        self.assertEqual(acc.assess_ss14(_obs(SS14_KEYS, value=None))[0], "NOT_RUN")
 
     def test_gvariant_snapshot_parser_rejects_stale_or_malformed_fields(self) -> None:
         snapshot = "({'accent': <'#2878D7'>, 'revision': <uint64 14>},)"
@@ -1262,7 +1237,7 @@ class Ss09SourceAndNativeTests(unittest.TestCase):
         self.assertEqual(acc.parse_cargo_test_lines(text), {"a::b": "ok", "c::d": "FAILED"})
 
     def test_assess_pass_labels_source_evidence_and_fails_on_native_false(self) -> None:
-        observations = {key: True for key in acc.SS09_SOURCE_TESTS}
+        observations = _obs(acc.SS09_SOURCE_TESTS)
         status, reason = acc.assess_ss09(observations)
         self.assertEqual(status, "PASS")
         self.assertIn("SOURCE-TEST", reason)
@@ -1459,11 +1434,7 @@ class SS05ManagedWallpaperTests(unittest.TestCase):
     def test_store_copy_with_identical_bytes_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
-            fixture = run / "fixtures" / "wallpaper.png"
-            fixture.parent.mkdir(parents=True)
-            fixture.write_bytes(b"png-bytes")
-            store = run / "xdg-data" / "flamewm" / "wallpapers"
-            store.mkdir(parents=True)
+            fixture, store = _wallpaper_run(run)
             copy = store / "desktop-0123.png"
             copy.write_bytes(b"png-bytes")
             self.assertTrue(acc.ss05_wallpaper_matches_fixture(str(copy), fixture, run))
@@ -1472,11 +1443,7 @@ class SS05ManagedWallpaperTests(unittest.TestCase):
     def test_store_copy_with_different_bytes_or_outside_store_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
-            fixture = run / "fixtures" / "wallpaper.png"
-            fixture.parent.mkdir(parents=True)
-            fixture.write_bytes(b"png-bytes")
-            store = run / "xdg-data" / "flamewm" / "wallpapers"
-            store.mkdir(parents=True)
+            fixture, store = _wallpaper_run(run)
             wrong = store / "desktop-wrong.png"
             wrong.write_bytes(b"other-bytes")
             outside = run / "elsewhere.png"
