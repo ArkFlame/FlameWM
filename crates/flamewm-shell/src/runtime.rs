@@ -530,13 +530,23 @@ impl ShellRuntime {
     pub fn open_task_context_at_slot(&mut self, slot: usize, pointer: Option<flamewm_api::Point>) {
         let states = self.task_visual_states();
         if let Some(state) = states.get(slot) {
-            self.controls
-                .push_back(ShellControl::OpenContextMenu(ContextMenuState {
-                    kind: ContextMenuKind::Task(state.id.clone()),
-                    revision: self.snapshot.panels.revision,
-                    anchor: pointer,
-                }));
+            let kind = ContextMenuKind::Task(state.id.clone());
+            self.push_context_menu(kind, self.snapshot.panels.revision, pointer);
         }
+    }
+
+    fn push_context_menu(
+        &mut self,
+        kind: ContextMenuKind,
+        revision: u64,
+        anchor: Option<flamewm_api::Point>,
+    ) {
+        self.controls
+            .push_back(ShellControl::OpenContextMenu(ContextMenuState {
+                kind,
+                revision,
+                anchor,
+            }));
     }
 
     pub fn open_workspace_context_for_slot(&mut self, slot: usize) {
@@ -553,26 +563,21 @@ impl ShellRuntime {
         let views = crate::taskbar::workspaces::project(self.snapshot.workspaces.as_ref());
         if let Some(workspace) = crate::taskbar::workspaces::visible_page(&views).get(slot) {
             if let Some(snapshot) = self.snapshot.workspaces.as_ref() {
-                self.controls
-                    .push_back(ShellControl::OpenContextMenu(ContextMenuState {
-                        kind: ContextMenuKind::Workspace {
-                            index: workspace.index,
-                        },
-                        revision: snapshot.revision,
-                        anchor: pointer,
-                    }));
+                let kind = ContextMenuKind::Workspace {
+                    index: workspace.index,
+                };
+                self.push_context_menu(kind, snapshot.revision, pointer);
             }
         }
     }
 
     /// Taskbar-background context menu, anchored at the root-coordinate click.
     pub fn open_taskbar_context_at(&mut self, pointer: Option<flamewm_api::Point>) {
-        self.controls
-            .push_back(ShellControl::OpenContextMenu(ContextMenuState {
-                kind: ContextMenuKind::Taskbar,
-                revision: self.snapshot.panels.revision,
-                anchor: pointer,
-            }));
+        self.push_context_menu(
+            ContextMenuKind::Taskbar,
+            self.snapshot.panels.revision,
+            pointer,
+        );
     }
 
     pub fn dispatch(&mut self, action: &str) {
@@ -1595,17 +1600,7 @@ impl ShellSurfaces {
         surface: SurfaceHandle,
         rect: flamewm_api::Rect,
     ) -> Result<(), String> {
-        self.map_raise_grab_traced(runtime, surface, rect, &GeometryTrace::begin("shell-popup"))
-    }
-
-    fn map_raise_grab_traced(
-        &mut self,
-        runtime: &mut SurfaceRuntime,
-        surface: SurfaceHandle,
-        rect: flamewm_api::Rect,
-        trace: &GeometryTrace,
-    ) -> Result<(), String> {
-        self.prepare_traced(runtime, surface, rect, trace)?;
+        self.prepare_traced(runtime, surface, rect, &GeometryTrace::begin("shell-popup"))?;
         runtime.show(surface).map_err(ui_error)?;
         runtime
             .grab_pointer(surface)
@@ -1620,17 +1615,7 @@ impl ShellSurfaces {
         surface: SurfaceHandle,
         rect: flamewm_api::Rect,
     ) -> Result<(), String> {
-        self.map_raise_traced(runtime, surface, rect, &GeometryTrace::begin("shell-popup"))
-    }
-
-    fn map_raise_traced(
-        &self,
-        runtime: &mut SurfaceRuntime,
-        surface: SurfaceHandle,
-        rect: flamewm_api::Rect,
-        trace: &GeometryTrace,
-    ) -> Result<(), String> {
-        self.prepare_traced(runtime, surface, rect, trace)?;
+        self.prepare_traced(runtime, surface, rect, &GeometryTrace::begin("shell-popup"))?;
         runtime.show(surface).map_err(ui_error)
     }
 }
@@ -1770,33 +1755,21 @@ pub enum DomainKind {
     Applications,
 }
 
+/// Declares a per-call-site `OnceLock` counter and yields `&'static CounterPoint`.
+macro_rules! static_counter {
+    ($label:literal) => {{
+        static C: std::sync::OnceLock<flamewm_profiler::CounterPoint> = std::sync::OnceLock::new();
+        C.get_or_init(|| flamewm_profiler::CounterPoint::new($label))
+    }};
+}
+
 pub fn domain_reconcile_counter(kind: DomainKind) -> &'static flamewm_profiler::CounterPoint {
-    use std::sync::OnceLock;
     match kind {
-        DomainKind::Windows => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.domain.windows.reconcile"))
-        }
-        DomainKind::Workspaces => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| {
-                flamewm_profiler::CounterPoint::new("shell.domain.workspaces.reconcile")
-            })
-        }
-        DomainKind::Panels => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.domain.panels.reconcile"))
-        }
-        DomainKind::System => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.domain.system.reconcile"))
-        }
-        DomainKind::Applications => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| {
-                flamewm_profiler::CounterPoint::new("shell.domain.applications.reconcile")
-            })
-        }
+        DomainKind::Windows => static_counter!("shell.domain.windows.reconcile"),
+        DomainKind::Workspaces => static_counter!("shell.domain.workspaces.reconcile"),
+        DomainKind::Panels => static_counter!("shell.domain.panels.reconcile"),
+        DomainKind::System => static_counter!("shell.domain.system.reconcile"),
+        DomainKind::Applications => static_counter!("shell.domain.applications.reconcile"),
     }
 }
 
@@ -1809,20 +1782,10 @@ pub enum ProjectionKind {
 }
 
 pub fn projection_counter(kind: ProjectionKind) -> &'static flamewm_profiler::CounterPoint {
-    use std::sync::OnceLock;
     match kind {
-        ProjectionKind::Partial => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.projection.panel.partial"))
-        }
-        ProjectionKind::Start => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.projection.panel.start"))
-        }
-        ProjectionKind::Popup => {
-            static C: OnceLock<flamewm_profiler::CounterPoint> = OnceLock::new();
-            C.get_or_init(|| flamewm_profiler::CounterPoint::new("shell.projection.panel.popup"))
-        }
+        ProjectionKind::Partial => static_counter!("shell.projection.panel.partial"),
+        ProjectionKind::Start => static_counter!("shell.projection.panel.start"),
+        ProjectionKind::Popup => static_counter!("shell.projection.panel.popup"),
     }
 }
 
