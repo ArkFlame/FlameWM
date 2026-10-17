@@ -34,7 +34,7 @@ const DESKTOP_MENU_HEIGHT: u32 = 165;
 const INK: i32 = 48;
 const TAB_ITERATIONS: usize = 30;
 
-fn wait_for<F: FnMut() -> bool>(timeout: Duration, mut condition: F) -> bool {
+pub(super) fn wait_for<F: FnMut() -> bool>(timeout: Duration, mut condition: F) -> bool {
     let end = Instant::now() + timeout;
     loop {
         if condition() {
@@ -47,7 +47,7 @@ fn wait_for<F: FnMut() -> bool>(timeout: Duration, mut condition: F) -> bool {
     }
 }
 
-fn viewable(canary: &Canary, name: &str) -> Option<WinInfo> {
+pub(super) fn viewable(canary: &Canary, name: &str) -> Option<WinInfo> {
     canary
         .find(name)
         .into_iter()

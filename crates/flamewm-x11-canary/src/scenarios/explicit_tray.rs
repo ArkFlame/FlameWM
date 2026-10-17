@@ -4,12 +4,11 @@
 //! must open it. Never part of `all`.
 
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use x11rb::protocol::xproto::MapState;
-
+use super::explicit_shell::{viewable, wait_for};
 use super::{real_click, real_escape, InputPath};
-use crate::{Canary, WinInfo};
+use crate::Canary;
 
 const PATH: &str = "path=real-pointer";
 const START_MENU: &str = "FlameWM start";
@@ -18,25 +17,6 @@ const NETWORK_POPUP: &str = "FlameWM network";
 const PANEL: &str = "FlameWM panel";
 const CYCLES: usize = 10;
 
-fn wait_for<F: FnMut() -> bool>(timeout: Duration, mut condition: F) -> bool {
-    let end = Instant::now() + timeout;
-    loop {
-        if condition() {
-            return true;
-        }
-        if Instant::now() >= end {
-            return false;
-        }
-        sleep(Duration::from_millis(50));
-    }
-}
-
-fn viewable(canary: &Canary, name: &str) -> Option<WinInfo> {
-    canary
-        .find(name)
-        .into_iter()
-        .find(|w| w.name == name && w.map_state == u8::from(MapState::VIEWABLE))
-}
 
 /// Toggle one opener CYCLES times. Returns (opens_ok, closes_ok, stays_closed_ok, detail).
 fn toggle(canary: &Canary, point: (i16, i16), popup: &str) -> (usize, usize, usize, String) {
