@@ -387,41 +387,25 @@ impl ProductSettings {
     /// Effective Start menu style. A disabled toggle or the `none` style both mean no animation.
     #[must_use]
     pub fn start_animation_style(&self) -> AnimationStyle {
-        if self.start_animation_enabled {
-            self.start_animation
-        } else {
-            AnimationStyle::None
-        }
+        gated_animation(self.start_animation_enabled, self.start_animation)
     }
 
     /// Effective minimize style. A disabled toggle or the `none` style both mean no animation.
     #[must_use]
     pub fn minimize_animation_style(&self) -> AnimationStyle {
-        if self.minimize_animation_enabled {
-            self.minimize_animation
-        } else {
-            AnimationStyle::None
-        }
+        gated_animation(self.minimize_animation_enabled, self.minimize_animation)
     }
 
     /// Effective maximize style. A disabled toggle or the `none` style both mean no animation.
     #[must_use]
     pub fn maximize_animation_style(&self) -> AnimationStyle {
-        if self.maximize_animation_enabled {
-            self.maximize_animation
-        } else {
-            AnimationStyle::None
-        }
+        gated_animation(self.maximize_animation_enabled, self.maximize_animation)
     }
 
     /// Effective window-open style. A disabled toggle or the `none` style both mean no animation.
     #[must_use]
     pub fn window_open_animation_style(&self) -> AnimationStyle {
-        if self.window_open_animation_enabled {
-            self.window_open_animation
-        } else {
-            AnimationStyle::None
-        }
+        gated_animation(self.window_open_animation_enabled, self.window_open_animation)
     }
 
     /// Taskbar backdrop from the shared surface policy. See [`Backdrop`] for the blur-to-radius mapping.
@@ -936,6 +920,10 @@ macro_rules! integer_slot {
 
 integer_slot!(i8, u16);
 
+fn gated_animation(enabled: bool, style: AnimationStyle) -> AnimationStyle {
+    if enabled { style } else { AnimationStyle::None }
+}
+
 fn backdrop(opacity_percent: u8, blur_percent: u8) -> Backdrop {
     let radius_px = if opacity_percent >= 100 {
         0.0
@@ -993,10 +981,7 @@ impl Slot for AppearanceMode {
     }
 
     fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
-        }
+        from_text_value(value, key)
     }
 }
 
