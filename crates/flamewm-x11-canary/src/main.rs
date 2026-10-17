@@ -329,12 +329,7 @@ impl Canary {
         press: bool,
         detail: u8,
     ) -> Result<(), String> {
-        let geom = self
-            .conn
-            .get_geometry(window)
-            .map_err(|e| e.to_string())?
-            .reply()
-            .map_err(|e| e.to_string())?;
+        let (gx, gy) = self.window_origin(window)?;
         let ev = ButtonPressEvent {
             response_type: if press {
                 BUTTON_PRESS_EVENT
@@ -347,20 +342,34 @@ impl Canary {
             root: self.root,
             event: window,
             child: x11rb::NONE,
-            root_x: geom.x.saturating_add(x),
-            root_y: geom.y.saturating_add(y),
+            root_x: gx.saturating_add(x),
+            root_y: gy.saturating_add(y),
             event_x: x,
             event_y: y,
             state: KeyButMask::default(),
             same_screen: true,
         };
+        self.send_checked(window, EventMask::BUTTON_PRESS, ev)
+    }
+
+    fn send_checked<T: Into<[u8; 32]>>(&self, dest: Window, mask: EventMask, ev: T) -> Result<(), String> {
         self.conn
-            .send_event(false, window, EventMask::BUTTON_PRESS, ev)
+            .send_event(false, dest, mask, ev)
             .map_err(|e| e.to_string())?
             .check()
             .map_err(|e| e.to_string())?;
         self.conn.flush().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn window_origin(&self, window: Window) -> Result<(i16, i16), String> {
+        let geom = self
+            .conn
+            .get_geometry(window)
+            .map_err(|e| e.to_string())?
+            .reply()
+            .map_err(|e| e.to_string())?;
+        Ok((geom.x, geom.y))
     }
 
     pub(crate) fn stacking_order(&self) -> Result<Vec<Window>, String> {
@@ -431,13 +440,7 @@ impl Canary {
             type_: msg_type,
             data: ClientMessageData::from([1u32, CURRENT_TIME, 0, 0, 0]),
         };
-        self.conn
-            .send_event(false, self.root, EventMask::SUBSTRUCTURE_REDIRECT, ev)
-            .map_err(|e| e.to_string())?
-            .check()
-            .map_err(|e| e.to_string())?;
-        self.conn.flush().map_err(|e| e.to_string())?;
-        Ok(())
+        self.send_checked(self.root, EventMask::SUBSTRUCTURE_REDIRECT, ev)
     }
 
     pub(crate) fn root_geometry(&self) -> (u16, u16) {
@@ -446,12 +449,7 @@ impl Canary {
     }
 
     pub(crate) fn send_motion(&self, window: Window, x: i16, y: i16) -> Result<(), String> {
-        let geom = self
-            .conn
-            .get_geometry(window)
-            .map_err(|e| e.to_string())?
-            .reply()
-            .map_err(|e| e.to_string())?;
+        let (gx, gy) = self.window_origin(window)?;
         let ev = MotionNotifyEvent {
             response_type: MOTION_NOTIFY_EVENT,
             detail: Motion::NORMAL,
@@ -460,20 +458,14 @@ impl Canary {
             root: self.root,
             event: window,
             child: x11rb::NONE,
-            root_x: geom.x.saturating_add(x),
-            root_y: geom.y.saturating_add(y),
+            root_x: gx.saturating_add(x),
+            root_y: gy.saturating_add(y),
             event_x: x,
             event_y: y,
             state: KeyButMask::default(),
             same_screen: true,
         };
-        self.conn
-            .send_event(false, window, EventMask::POINTER_MOTION, ev)
-            .map_err(|e| e.to_string())?
-            .check()
-            .map_err(|e| e.to_string())?;
-        self.conn.flush().map_err(|e| e.to_string())?;
-        Ok(())
+        self.send_checked(window, EventMask::POINTER_MOTION, ev)
     }
 }
 
@@ -492,6 +484,13 @@ pub(crate) fn arg(args: &[String], flag: &str) -> Option<String> {
 
 pub(crate) fn has(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
+}
+
+pub(crate) fn arg_num<T: std::str::FromStr>(args: &[String], flag: &str, default: T) -> T {
+    arg(args, flag).map_or(default, |v| {
+        v.parse()
+            .unwrap_or_else(|_| fail(&format!("{flag} must be a number")))
+    })
 }
 
 fn usage() -> ! {
@@ -613,12 +612,8 @@ fn cmd_map_state(canary: &Canary, args: &[String]) {
 
 fn cmd_click(canary: &Canary, args: &[String]) {
     let target = resolve_target(canary, args);
-    let x: i16 = arg(args, "--x")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--x must be a number")))
-        .unwrap_or((target.width / 2) as i16);
-    let y: i16 = arg(args, "--y")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--y must be a number")))
-        .unwrap_or((target.height / 2) as i16);
+    let x: i16 = arg_num(args, "--x", (target.width / 2) as i16);
+    let y: i16 = arg_num(args, "--y", (target.height / 2) as i16);
     canary
         .send_button(target.id, x, y, true)
         .unwrap_or_else(|e| fail(&e));
@@ -630,12 +625,8 @@ fn cmd_click(canary: &Canary, args: &[String]) {
 
 fn cmd_motion(canary: &Canary, args: &[String]) {
     let target = resolve_target(canary, args);
-    let x: i16 = arg(args, "--x")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--x must be a number")))
-        .unwrap_or((target.width / 2) as i16);
-    let y: i16 = arg(args, "--y")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--y must be a number")))
-        .unwrap_or((target.height / 2) as i16);
+    let x: i16 = arg_num(args, "--x", (target.width / 2) as i16);
+    let y: i16 = arg_num(args, "--y", (target.height / 2) as i16);
     canary
         .send_motion(target.id, x, y)
         .unwrap_or_else(|e| fail(&e));
@@ -662,18 +653,10 @@ fn print_sample(window: u32, x: i16, y: i16, w: u16, h: u16, data: &[u8], json: 
 
 fn cmd_sample(canary: &Canary, args: &[String]) {
     let target = resolve_target(canary, args);
-    let w: u16 = arg(args, "--w")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--w must be a number")))
-        .unwrap_or(target.width.min(64));
-    let h: u16 = arg(args, "--h")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--h must be a number")))
-        .unwrap_or(target.height.min(64));
-    let x: i16 = arg(args, "--x")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--x must be a number")))
-        .unwrap_or(0);
-    let y: i16 = arg(args, "--y")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--y must be a number")))
-        .unwrap_or(0);
+    let w: u16 = arg_num(args, "--w", target.width.min(64));
+    let h: u16 = arg_num(args, "--h", target.height.min(64));
+    let x: i16 = arg_num(args, "--x", 0);
+    let y: i16 = arg_num(args, "--y", 0);
     let data = canary
         .sample(target.id, x, y, w.max(1), h.max(1))
         .unwrap_or_else(|e| fail(&e));
@@ -684,12 +667,8 @@ fn cmd_sample_root(canary: &Canary, args: &[String]) {
     let setup = &canary.conn.setup().roots[canary.screen];
     let sw = setup.width_in_pixels;
     let sh = setup.height_in_pixels;
-    let w: u16 = arg(args, "--w")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--w must be a number")))
-        .unwrap_or(sw.min(256));
-    let h: u16 = arg(args, "--h")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--h must be a number")))
-        .unwrap_or(sh.min(256));
+    let w: u16 = arg_num(args, "--w", sw.min(256));
+    let h: u16 = arg_num(args, "--h", sh.min(256));
     let data = canary
         .sample(canary.root, 0, 0, w.max(1), h.max(1))
         .unwrap_or_else(|e| fail(&e));
@@ -699,12 +678,7 @@ fn cmd_sample_root(canary: &Canary, args: &[String]) {
 /// SR05 first-present: wait until a named surface is mapped/viewable.
 fn cmd_sr05(canary: &Canary, args: &[String]) {
     let name = arg(args, "--name").unwrap_or_else(|| "flame".to_owned());
-    let timeout: u64 = arg(args, "--timeout-secs")
-        .map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| fail("--timeout-secs must be a number"))
-        })
-        .unwrap_or(10);
+    let timeout: u64 = arg_num(args, "--timeout-secs", 10);
     let start = Instant::now();
     let limit = Duration::from_secs(timeout.max(1));
     loop {
@@ -1009,12 +983,8 @@ fn cmd_root_geometry(canary: &Canary, args: &[String]) {
 
 fn cmd_root_shot(canary: &Canary, args: &[String]) {
     let (sw, sh) = canary.root_geometry();
-    let w: u16 = arg(args, "--w")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--w must be a number")))
-        .unwrap_or(sw.min(256));
-    let h: u16 = arg(args, "--h")
-        .map(|v| v.parse().unwrap_or_else(|_| fail("--h must be a number")))
-        .unwrap_or(sh.min(256));
+    let w: u16 = arg_num(args, "--w", sw.min(256));
+    let h: u16 = arg_num(args, "--h", sh.min(256));
     let data = canary
         .sample(canary.root, 0, 0, w.max(1), h.max(1))
         .unwrap_or_else(|e| fail(&e));
@@ -1065,12 +1035,7 @@ fn cmd_click_at(canary: &Canary, args: &[String]) {
 /// profile-startup: time until a named surface is viewable (Start-equivalent gate).
 fn cmd_profile_startup(canary: &Canary, args: &[String]) {
     let name = arg(args, "--name").unwrap_or_else(|| "flame".to_owned());
-    let timeout: u64 = arg(args, "--timeout-secs")
-        .map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| fail("--timeout-secs must be a number"))
-        })
-        .unwrap_or(10);
+    let timeout: u64 = arg_num(args, "--timeout-secs", 10);
     let start = Instant::now();
     let limit = Duration::from_secs(timeout.max(1));
     loop {
@@ -1186,12 +1151,7 @@ fn cmd_profile_pss(args: &[String]) {
 
 /// profile-idle: sleep bounded window to separate idle baseline from workload.
 fn cmd_profile_idle(args: &[String]) {
-    let secs: u64 = arg(args, "--secs")
-        .map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| fail("--secs must be a number"))
-        })
-        .unwrap_or(5);
+    let secs: u64 = arg_num(args, "--secs", 5);
     let secs = secs.max(1).min(60);
     let start = Instant::now();
     std::thread::sleep(Duration::from_secs(secs));
@@ -1546,12 +1506,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
 fn cmd_j06(canary: &Canary, args: &[String]) {
     let scenario = arg(args, "--scenario").unwrap_or_else(|| "all".to_owned());
     let json = has(args, "--json");
-    let timeout: u64 = arg(args, "--timeout-secs")
-        .map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| fail("--timeout-secs must be a number"))
-        })
-        .unwrap_or(3);
+    let timeout: u64 = arg_num(args, "--timeout-secs", 3);
     let mut results: Vec<(String, bool, String)> = Vec::new();
     let check = |name: &str, pass: bool, detail: String| (name.to_owned(), pass, detail);
     if scenario == "all" || scenario == "postreg-calendar-300" {
@@ -1798,12 +1753,7 @@ fn cmd_j06(canary: &Canary, args: &[String]) {
 fn cmd_j13(canary: &Canary, args: &[String]) {
     let scenario = arg(args, "--scenario").unwrap_or_else(|| "all".to_owned());
     let json = has(args, "--json");
-    let timeout: u64 = arg(args, "--timeout-secs")
-        .map(|v| {
-            v.parse()
-                .unwrap_or_else(|_| fail("--timeout-secs must be a number"))
-        })
-        .unwrap_or(10);
+    let timeout: u64 = arg_num(args, "--timeout-secs", 10);
     let mut results: Vec<(String, bool, String)> = Vec::new();
     let check = |name: &str, pass: bool, detail: String| (name.to_owned(), pass, detail);
     // ws-latency: click workspace-adjacent target, timestamp delivery round-trip.
