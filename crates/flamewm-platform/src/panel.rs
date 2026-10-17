@@ -22,12 +22,12 @@ pub const fn supported_scale(scale_percent: u16) -> bool {
 
 #[must_use]
 pub fn logical_to_physical(logical: u16, scale_percent: u16) -> i32 {
-    let scale = if supported_scale(scale_percent) {
-        scale_percent
-    } else {
-        100
-    };
+    let scale = effective_scale(scale_percent);
     ((u32::from(logical) * u32::from(scale) + 50) / 100) as i32
+}
+
+fn effective_scale(scale_percent: u16) -> u16 {
+    supported_scale(scale_percent).then_some(scale_percent).unwrap_or(100)
 }
 
 /// Taskbar layout from `taskbarStyle`, `taskbarFloatingMargin` and `taskbarFloatingRadius`.
@@ -67,11 +67,7 @@ impl OutputPanel {
             output,
             output_rect,
             edge,
-            scale_percent: if supported_scale(scale_percent) {
-                scale_percent
-            } else {
-                100
-            },
+            scale_percent: effective_scale(scale_percent),
             logical_size: DEFAULT_PANEL_LOGICAL_SIZE,
             frame: TaskbarFrame::default(),
         }
@@ -152,24 +148,14 @@ impl OutputPanel {
     #[must_use]
     pub fn strut(&self) -> Strut {
         let reserved = self.reserved();
+        let mut strut = Strut::default();
         match self.edge {
-            PanelEdge::Bottom => Strut {
-                bottom: reserved,
-                ..Strut::default()
-            },
-            PanelEdge::Top => Strut {
-                top: reserved,
-                ..Strut::default()
-            },
-            PanelEdge::Left => Strut {
-                left: reserved,
-                ..Strut::default()
-            },
-            PanelEdge::Right => Strut {
-                right: reserved,
-                ..Strut::default()
-            },
+            PanelEdge::Bottom => strut.bottom = reserved,
+            PanelEdge::Top => strut.top = reserved,
+            PanelEdge::Left => strut.left = reserved,
+            PanelEdge::Right => strut.right = reserved,
         }
+        strut
     }
 
     #[must_use]
@@ -356,6 +342,10 @@ mod tests {
         OutputId::new(value)
     }
 
+    fn fhd_bottom(output: &str, scale: u16) -> OutputPanel {
+        OutputPanel::new(id(output), Rect::new(0, 0, 1920, 1080), PanelEdge::Bottom, scale)
+    }
+
     #[test]
     fn panel_geometry_supports_all_four_edges_and_negative_origins() {
         let output = Rect::new(-1920, 0, 1920, 1080);
@@ -382,12 +372,7 @@ mod tests {
     #[test]
     fn unsupported_panel_scale_falls_back_to_one_hundred_percent() {
         assert!(!supported_scale(110));
-        let panel = OutputPanel::new(
-            id("eDP-1"),
-            Rect::new(0, 0, 1920, 1080),
-            PanelEdge::Bottom,
-            110,
-        );
+        let panel = fhd_bottom("eDP-1", 110);
         assert_eq!(panel.scale_percent, 100);
         assert_eq!(panel.thickness(), 44);
     }
@@ -395,12 +380,7 @@ mod tests {
     #[test]
     fn active_output_resolution_is_focus_then_primary_then_first() {
         let mut manager = PanelManager::default();
-        manager.upsert_output(OutputPanel::new(
-            id("eDP-1"),
-            Rect::new(0, 0, 1920, 1080),
-            PanelEdge::Bottom,
-            100,
-        ));
+        manager.upsert_output(fhd_bottom("eDP-1", 100));
         manager.upsert_output(OutputPanel::new(
             id("HDMI-1"),
             Rect::new(1920, 0, 2560, 1440),
@@ -427,12 +407,7 @@ mod tests {
 
     #[test]
     fn classic_frame_ignores_margin_and_radius() {
-        let mut panel = OutputPanel::new(
-            id("eDP-1"),
-            Rect::new(0, 0, 1920, 1080),
-            PanelEdge::Bottom,
-            100,
-        );
+        let mut panel = fhd_bottom("eDP-1", 100);
         panel.frame = TaskbarFrame {
             floating: false,
             margin: 8,
@@ -533,12 +508,7 @@ mod tests {
         let t150 = logical_to_physical(DEFAULT_PANEL_LOGICAL_SIZE, 150);
         assert_ne!(t100, t150);
         let mut manager = PanelManager::default();
-        manager.upsert_output(OutputPanel::new(
-            id("L"),
-            Rect::new(0, 0, 1920, 1080),
-            PanelEdge::Bottom,
-            100,
-        ));
+        manager.upsert_output(fhd_bottom("L", 100));
         manager.upsert_output(OutputPanel::new(
             id("R"),
             Rect::new(1920, 180, 1280, 720),
