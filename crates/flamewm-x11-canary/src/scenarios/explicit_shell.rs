@@ -54,6 +54,32 @@ fn viewable(canary: &Canary, name: &str) -> Option<WinInfo> {
         .find(|w| w.name == name && w.map_state == u8::from(MapState::VIEWABLE))
 }
 
+fn wait_viewable(canary: &Canary, name: &str, timeout: Duration) -> bool {
+    wait_for(timeout, || viewable(canary, name).is_some())
+}
+
+fn wait_hidden(canary: &Canary, name: &str, timeout: Duration) -> bool {
+    wait_for(timeout, || viewable(canary, name).is_none())
+}
+
+/// Closes an open popup with Escape; true when it is closed afterwards.
+fn close_if_open(canary: &Canary, name: &str) -> bool {
+    if viewable(canary, name).is_none() {
+        return true;
+    }
+    let _ = real_escape(canary);
+    wait_hidden(canary, name, Duration::from_secs(2))
+}
+
+fn rect_of(w: &WinInfo) -> (i32, i32, u32, u32) {
+    (
+        i32::from(w.x),
+        i32::from(w.y),
+        u32::from(w.width),
+        u32::from(w.height),
+    )
+}
+
 /// Root-relative RGB sample of a rectangle (ZPixmap, 4 bytes per pixel).
 fn grab(canary: &Canary, rect: (i32, i32, u32, u32)) -> Option<Vec<u8>> {
     let (x, y, w, h) = rect;
@@ -158,8 +184,10 @@ fn shot_dir(args: &[String]) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn panel_of(canary: &Canary) -> Result<WinInfo, String> {
-    viewable(canary, PANEL).ok_or_else(|| "FlameWM panel not viewable".to_owned())
+fn shot_dir_and_panel(canary: &Canary, args: &[String]) -> Result<(PathBuf, WinInfo), String> {
+    let dir = shot_dir(args)?;
+    let panel = viewable(canary, PANEL).ok_or_else(|| "FlameWM panel not viewable".to_owned())?;
+    Ok((dir, panel))
 }
 
 /// Empty taskbar point (panel centre) and the start button (left icon).
@@ -173,12 +201,8 @@ fn taskbar_points(panel: &WinInfo) -> ((i16, i16), (i16, i16)) {
 /// S1: taskbar background Button3 opens one "FlameWM Settings" row; Escape and
 /// outside click dismiss; left click on start still opens the start menu.
 pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
-    let dir = match shot_dir(args) {
-        Ok(d) => d,
-        Err(e) => return (false, e),
-    };
-    let panel = match panel_of(canary) {
-        Ok(p) => p,
+    let (dir, panel) = match shot_dir_and_panel(canary, args) {
+        Ok(v) => v,
         Err(e) => return (false, e),
     };
     let (empty, start) = taskbar_points(&panel);
@@ -189,17 +213,10 @@ pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
     checks.push(("menu-closed-before", closed_before, String::new()));
 
     let opened = real_click(canary, empty.0, empty.1, 3)
-        && wait_for(Duration::from_secs(3), || {
-            viewable(canary, TASK_MENU).is_some()
-        });
+        && wait_viewable(canary, TASK_MENU, Duration::from_secs(3));
     checks.push(("button3-opens-task-menu", opened, String::new()));
     if let Some(menu) = viewable(canary, TASK_MENU) {
-        let rect = (
-            i32::from(menu.x),
-            i32::from(menu.y),
-            u32::from(menu.width),
-            u32::from(menu.height),
-        );
+        let rect = rect_of(&menu);
         let bands = ink_bands(canary, rect, 8, Ink::DeltaFromBackground).unwrap_or_default();
         let row_count = bands.len();
         let shot = screenshot(&dir, "s1-taskbar-menu-open.png");
@@ -212,27 +229,18 @@ pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
         checks.push(("one-settings-row", false, "menu not viewable".to_owned()));
     }
 
-    let escaped = real_escape(canary)
-        && wait_for(Duration::from_secs(2), || {
-            viewable(canary, TASK_MENU).is_none()
-        });
+    let escaped = real_escape(canary) && wait_hidden(canary, TASK_MENU, Duration::from_secs(2));
     checks.push(("escape-dismisses", escaped, String::new()));
 
     let reopened = real_click(canary, empty.0, empty.1, 3)
-        && wait_for(Duration::from_secs(3), || {
-            viewable(canary, TASK_MENU).is_some()
-        });
+        && wait_viewable(canary, TASK_MENU, Duration::from_secs(3));
     let outside_closed = reopened
         && real_click(canary, outside.0, outside.1, 1)
-        && wait_for(Duration::from_secs(2), || {
-            viewable(canary, TASK_MENU).is_none()
-        });
+        && wait_hidden(canary, TASK_MENU, Duration::from_secs(2));
     checks.push(("outside-click-dismisses", outside_closed, String::new()));
 
     let start_opened = real_click(canary, start.0, start.1, 1)
-        && wait_for(Duration::from_secs(3), || {
-            viewable(canary, START_MENU).is_some()
-        });
+        && wait_viewable(canary, START_MENU, Duration::from_secs(3));
     let start_shot = screenshot(&dir, "s1-start-menu-open.png");
     checks.push((
         "left-click-start-opens-start",
@@ -240,29 +248,9 @@ pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
         format!("shot={start_shot:?}"),
     ));
     let _ = real_click(canary, outside.0, outside.1, 1);
-    let _ = wait_for(Duration::from_secs(2), || {
-        viewable(canary, START_MENU).is_none()
-    });
+    let _ = wait_hidden(canary, START_MENU, Duration::from_secs(2));
 
-    let pass = checks.iter().all(|(_, ok, _)| *ok);
-    let detail = checks
-        .iter()
-        .map(|(n, ok, d)| {
-            format!(
-                "{n}={ok}{}",
-                if d.is_empty() {
-                    String::new()
-                } else {
-                    format!("({d})")
-                }
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    (
-        pass,
-        format!("{PATH} input={} {detail}", InputPath::RealPointer.as_str()),
-    )
+    summarize(&checks)
 }
 
 /// Count live `flamewm-settings` processes (comm truncated to 15 bytes, zombies excluded).
@@ -401,34 +389,23 @@ fn differing_permille(a: &[u8], b: &[u8], w: u32) -> u32 {
 /// the popup stays open while the pointer sweeps over the taskbar (taskbar
 /// receives EnterNotify).
 pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
-    let dir = match shot_dir(args) {
-        Ok(d) => d,
-        Err(e) => return (false, e),
-    };
-    let panel = match panel_of(canary) {
-        Ok(p) => p,
+    let (dir, panel) = match shot_dir_and_panel(canary, args) {
+        Ok(v) => v,
         Err(e) => return (false, e),
     };
     let cy = panel.y + panel.height as i16 / 2;
     let audio_button = (panel.x + panel.width as i16 - 120, cy);
     // Precondition: the popup starts closed (the tray button toggles it).
-    if viewable(canary, AUDIO_POPUP).is_some() {
-        let _ = real_escape(canary);
-        if !wait_for(Duration::from_secs(2), || {
-            viewable(canary, AUDIO_POPUP).is_none()
-        }) {
-            return (
-                false,
-                "audio popup already open and Escape did not close it".to_owned(),
-            );
-        }
+    if !close_if_open(canary, AUDIO_POPUP) {
+        return (
+            false,
+            "audio popup already open and Escape did not close it".to_owned(),
+        );
     }
     if !real_click(canary, audio_button.0, audio_button.1, 1) {
         return (false, "audio button injection failed".to_owned());
     }
-    if !wait_for(Duration::from_secs(3), || {
-        viewable(canary, AUDIO_POPUP).is_some()
-    }) {
+    if !wait_viewable(canary, AUDIO_POPUP, Duration::from_secs(3)) {
         return (false, "audio popup not viewable".to_owned());
     }
     let Some(popup) = viewable(canary, AUDIO_POPUP) else {
@@ -558,22 +535,9 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
         format!("enter_notify={enters}"),
     ));
 
-    let closed = real_escape(canary)
-        && wait_for(Duration::from_secs(2), || {
-            viewable(canary, AUDIO_POPUP).is_none()
-        });
+    let closed = real_escape(canary) && wait_hidden(canary, AUDIO_POPUP, Duration::from_secs(2));
     checks.push(("escape-closes-popup", closed, String::new()));
-
-    let pass = checks.iter().all(|(_, ok, _)| *ok);
-    let detail = checks
-        .iter()
-        .map(|(n, ok, d)| format!("{n}={ok}({d})"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    (
-        pass,
-        format!("{PATH} input={} {detail}", InputPath::RealPointer.as_str()),
-    )
+    summarize(&checks)
 }
 
 /// B15 OSD contract mirrored from `crates/flamewm-shell/src/osd.rs` (source wins) at 1x:
@@ -595,7 +559,13 @@ fn summarize(checks: &[(&str, bool, String)]) -> (bool, String) {
     let pass = checks.iter().all(|(_, ok, _)| *ok);
     let detail = checks
         .iter()
-        .map(|(n, ok, d)| format!("{n}={ok}({d})"))
+        .map(|(n, ok, d)| {
+            if d.is_empty() {
+                format!("{n}={ok}")
+            } else {
+                format!("{n}={ok}({d})")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ");
     (
@@ -657,9 +627,7 @@ fn osd_cards(canary: &Canary) -> Vec<WinInfo> {
 }
 
 fn osd_visible(canary: &Canary) -> Option<WinInfo> {
-    osd_cards(canary)
-        .into_iter()
-        .find(|w| w.map_state == u8::from(MapState::VIEWABLE))
+    viewable(canary, OSD_TITLE)
 }
 
 fn wait_osd_shown(canary: &Canary, timeout: Duration) -> Option<WinInfo> {
@@ -773,12 +741,8 @@ fn fill_fraction(empty: &[u8], cap: &[u8], w: u32, row: u32) -> f64 {
 /// track fill of level/150; muted shows an empty track; the card hides within 1.5 s;
 /// two changes within 300 ms show one card; focus is unchanged; clicks pass through.
 pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
-    let dir = match shot_dir(args) {
-        Ok(d) => d,
-        Err(e) => return (false, e),
-    };
-    let _panel = match panel_of(canary) {
-        Ok(p) => p,
+    let (dir, _) = match shot_dir_and_panel(canary, args) {
+        Ok(v) => v,
         Err(e) => return (false, e),
     };
     let Some((root_w, root_h)) = canary
@@ -845,13 +809,7 @@ pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
         let size_ok = (card.width as u32, card.height as u32) == OSD_BODY;
         let centre_x_ok = (i32::from(card.x) - expected_x).abs() <= 1;
         let centre_y_ok = (i32::from(card.y) - expected_y).abs() <= 1;
-        let rect = (
-            i32::from(card.x),
-            i32::from(card.y),
-            card.width as u32,
-            card.height as u32,
-        );
-        let cap = grab(canary, rect);
+        let cap = grab(canary, rect_of(&card));
         let _ = screenshot(&dir, &format!("b15-osd-{label}.png"));
         checks.push((
             "osd-body-215x37",
@@ -1063,27 +1021,16 @@ fn ocr_words(png: &Path) -> Result<Vec<(String, i32, i32)>, String> {
 /// B15 explicit-audio-apps: the audio popup Applications tab lists QMMP and Firefox as two
 /// rows and shows no raw `alsa_output` text (checked by OCR of the popup crop).
 pub fn run_audio_apps(canary: &Canary, args: &[String]) -> (bool, String) {
-    let dir = match shot_dir(args) {
-        Ok(d) => d,
-        Err(e) => return (false, e),
-    };
-    let panel = match panel_of(canary) {
-        Ok(p) => p,
+    let (dir, panel) = match shot_dir_and_panel(canary, args) {
+        Ok(v) => v,
         Err(e) => return (false, e),
     };
     let cy = panel.y + panel.height as i16 / 2;
     let audio_button = (panel.x + panel.width as i16 - 120, cy);
     let mut checks: Vec<(&str, bool, String)> = Vec::new();
-    if viewable(canary, AUDIO_POPUP).is_some() {
-        let _ = real_escape(canary);
-        let _ = wait_for(Duration::from_secs(2), || {
-            viewable(canary, AUDIO_POPUP).is_none()
-        });
-    }
+    close_if_open(canary, AUDIO_POPUP);
     let opened = real_click(canary, audio_button.0, audio_button.1, 1)
-        && wait_for(Duration::from_secs(3), || {
-            viewable(canary, AUDIO_POPUP).is_some()
-        });
+        && wait_viewable(canary, AUDIO_POPUP, Duration::from_secs(3));
     checks.push(("popup-opens", opened, String::new()));
     let Some(popup) = viewable(canary, AUDIO_POPUP) else {
         checks.push(("popup-viewable", false, String::new()));
@@ -1123,12 +1070,7 @@ pub fn run_audio_apps(canary: &Canary, args: &[String]) -> (bool, String) {
         format!("attempts={attempts}"),
     ));
 
-    let rect = (
-        i32::from(popup.x),
-        i32::from(popup.y),
-        u32::from(popup.width),
-        u32::from(popup.height),
-    );
+    let rect = rect_of(&popup);
     let crop = match screenshot(&dir, "b15-audio-apps-root.png") {
         Ok(root) => {
             let out = dir.join("b15-audio-apps-popup.png");
@@ -1192,10 +1134,7 @@ pub fn run_audio_apps(canary: &Canary, args: &[String]) -> (bool, String) {
             "convert or root shot failed".to_owned(),
         )),
     }
-    let closed = real_escape(canary)
-        && wait_for(Duration::from_secs(2), || {
-            viewable(canary, AUDIO_POPUP).is_none()
-        });
+    let closed = real_escape(canary) && wait_hidden(canary, AUDIO_POPUP, Duration::from_secs(2));
     checks.push(("escape-closes-popup", closed, String::new()));
     summarize(&checks)
 }
