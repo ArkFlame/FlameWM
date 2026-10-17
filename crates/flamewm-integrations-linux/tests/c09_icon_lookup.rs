@@ -52,8 +52,8 @@ fn key(name: &str) -> flamewm_integrations_linux::icons::IconKey {
 fn twenty_concurrent_requests_complete_with_twenty_workers() {
     assert_eq!(ICON_RESOLVE_CONCURRENCY, 20);
     // Hermetic: empty theme/data dirs so no live system icon scan
-    // (spawn_icon_core -> from_environment walks real Breeze/hicolor
-    // trees; 20 workers x thousands of cold stats hung this test).
+    // (a from_environment resolver walks real Breeze/hicolor trees;
+    // 20 workers x thousands of cold stats hung this test).
     let dir = test_dir("workers");
     let mut service = IconService::new(20, 256, move || {
         IconResolver::new(dir.clone(), Vec::new(), Vec::new(), 0)
