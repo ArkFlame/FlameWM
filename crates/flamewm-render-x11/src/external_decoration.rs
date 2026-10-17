@@ -385,17 +385,6 @@ impl ExternalDecorationRenderer {
         WarpOverlay::begin(self.overlay_display()?, capture, source, target)
     }
 
-    /// Like [`ExternalDecorationRenderer::open_warp_overlay`] with the panel edge given by the caller.
-    pub fn open_warp_overlay_with_edge(
-        &self,
-        capture: CapturedImage,
-        source: WarpRect,
-        target: WarpRect,
-        edge: PanelEdge,
-    ) -> Result<WarpOverlay, String> {
-        WarpOverlay::begin_with_edge(self.overlay_display()?, capture, source, target, edge)
-    }
-
     /// Opens a transition of `style` (Magic Lamp or crossfade Fade) on this renderer's display.
     /// `direction` is `In` for an appearing window and `Out` for a disappearing one. Works with or
     /// without a compositing manager. Errors when unavailable.
