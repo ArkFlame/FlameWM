@@ -13,8 +13,9 @@ use crate::wallpaper_fit;
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum WallpaperPresentation {
+    #[default]
     DefaultBlackWatermark,
     Image(Rgba8Raster),
     /// Flat `wallpaperMode=solid` fill; no decode and no worker round trip.
@@ -50,12 +51,6 @@ fn parse_rgb(value: &str) -> Option<[u8; 3]> {
     Some([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
 }
 
-impl Default for WallpaperPresentation {
-    fn default() -> Self {
-        Self::DefaultBlackWatermark
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WallpaperDiagnostic {
     pub generation: u64,
@@ -63,21 +58,11 @@ pub struct WallpaperDiagnostic {
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WallpaperState {
     pub generation: u64,
     pub presentation: WallpaperPresentation,
     pub diagnostic: Option<WallpaperDiagnostic>,
-}
-
-impl Default for WallpaperState {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            presentation: WallpaperPresentation::DefaultBlackWatermark,
-            diagnostic: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -195,8 +180,7 @@ impl WallpaperLoader {
             path: path.into(),
             fit,
         };
-        let mut state = self
-            .control.lock();
+        let mut state = self.control.lock();
         if state.shutdown {
             return Err(LoaderClosed);
         }
@@ -212,8 +196,7 @@ impl WallpaperLoader {
     pub fn request_solid(&mut self, rgb: [u8; 3]) -> Result<u64, LoaderClosed> {
         self.next_generation = self.next_generation.saturating_add(1);
         let generation = self.next_generation;
-        let mut state = self
-            .control.lock();
+        let mut state = self.control.lock();
         if state.shutdown {
             return Err(LoaderClosed);
         }
@@ -233,8 +216,7 @@ impl WallpaperLoader {
     /// Admits one worker completion on the caller's turn. Decode and filesystem reads never run
     /// here; failures leave the previous valid presentation in place and expose a diagnostic.
     pub fn poll(&mut self) -> PollOutcome {
-        let mut worker_state = self
-            .control.lock();
+        let mut worker_state = self.control.lock();
         if let Some(stale_generation) = worker_state.stale_generation.take() {
             return PollOutcome::Stale {
                 generation: stale_generation,
@@ -304,8 +286,7 @@ impl WallpaperLoader {
             return;
         };
         {
-            let mut state = self
-                .control.lock();
+            let mut state = self.control.lock();
             state.shutdown = true;
             state.pending = None;
             state.completion = None;
@@ -345,7 +326,7 @@ fn wallpaper_worker(
             continue;
         };
         let result = load_wallpaper(&request.path, request.fit, target, &packaged_root);
-        if request.path.as_os_str().is_empty() || request.path.to_string_lossy().trim().is_empty() {
+        if is_default_wallpaper(&request.path) {
             request.path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
         }
         let mut state = control.lock();
@@ -372,16 +353,16 @@ fn load_wallpaper(
     target: (u32, u32),
     packaged_root: &Path,
 ) -> LoadResult {
-    if path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty() {
-        return match decode_default(packaged_root, fit, target) {
-            Ok(image) => LoadResult::Image(image),
-            Err(error) => LoadResult::Failure(error),
-        };
-    }
-    match decode_custom(path, fit, target) {
-        Ok(image) => LoadResult::Image(image),
-        Err(message) => LoadResult::Failure(message),
-    }
+    let decoded = if is_default_wallpaper(path) {
+        decode_default(packaged_root, fit, target)
+    } else {
+        decode_custom(path, fit, target)
+    };
+    decoded.map_or_else(LoadResult::Failure, LoadResult::Image)
+}
+
+fn is_default_wallpaper(path: &Path) -> bool {
+    path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty()
 }
 
 fn decode_default(
