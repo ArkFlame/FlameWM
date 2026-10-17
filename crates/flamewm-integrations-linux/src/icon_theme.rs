@@ -1150,6 +1150,12 @@ impl IconLookupIndex {
 mod tests {
     use super::*;
 
+    fn fixture_root(tag: &str, line: u32) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("flamewm-{tag}-{}-{line}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        root
+    }
+
     #[test]
     fn unique_paths_drops_empty_and_repeats_keeping_first_order() {
         let input = vec![
@@ -1213,12 +1219,7 @@ mod tests {
 
     #[test]
     fn shallow_watch_detects_nested_icon_directory_change() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-watch-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&root);
+        let root = fixture_root("watch", line!());
         let nested = root.join("Theme/16x16/apps");
         fs::create_dir_all(&nested).expect("nested theme dirs");
         let before = current_watch_mtime(std::slice::from_ref(&root), &[]);
@@ -1237,12 +1238,7 @@ mod tests {
 
     #[test]
     fn watch_dirs_covers_depth_three_under_last_theme_past_cap() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-watch-cap-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&root);
+        let root = fixture_root("watch-cap", line!());
         // First theme alone holds more than WATCH_DIR_CAP directories.
         for i in 0..2100 {
             fs::create_dir_all(root.join("A").join(format!("s{i}"))).expect("wide theme dirs");
@@ -1279,12 +1275,7 @@ mod tests {
 
     #[test]
     fn needs_rebuild_bumps_generation_when_watch_mtime_is_stale() {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-rebuild-gen-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&root);
+        let root = fixture_root("rebuild-gen", line!());
         fs::create_dir_all(&root).expect("watch root");
         let mut index = IconLookupIndex::new(
             vec![root.clone()],
@@ -1316,12 +1307,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unindexed_theme_symlink_loop_terminates() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-loop-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("loop", line!());
         // No index.theme: forces the build-time walk for this theme.
         let apps = data.join("icons/loopy/16x16/apps");
         fs::create_dir_all(&apps).expect("loop fixture dirs");
@@ -1339,12 +1325,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unindexed_theme_valid_symlinked_subdir_is_indexed() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-symlink-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("symlink", line!());
         // Target lives outside the theme; only the in-theme symlink reaches it.
         let real = data.join("shared/real");
         fs::create_dir_all(&real).expect("symlink fixture dirs");
@@ -1361,12 +1342,7 @@ mod tests {
 
     #[test]
     fn selected_theme_inherits_before_breeze_then_hicolor() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-chain-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("chain", line!());
         let mcmojave = "[Icon Theme]\nName=McMojave\nDirectories=16x16/apps\nInherits=Numix-Circle-Light,hicolor,breeze\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
         theme_fixture(&data, "McMojave-circle", mcmojave, None);
         theme_fixture(&data, "Numix-Circle-Light", FIXED_16, Some("chain-app.png"));
@@ -1384,12 +1360,7 @@ mod tests {
 
     #[test]
     fn theme_dir_lookup_is_case_insensitive_for_breeze() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-case-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("case", line!());
         // Host ships lowercase `breeze`; the chain names `Breeze`.
         theme_fixture(&data, "breeze", FIXED_16, Some("case-app.png"));
         let names = vec!["Breeze".to_owned()];
@@ -1402,12 +1373,7 @@ mod tests {
 
     #[test]
     fn missing_selected_theme_falls_back_to_breeze_not_blank() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-missing-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("missing", line!());
         theme_fixture(&data, "Breeze", FIXED_16, Some("fallback-app.png"));
         let names = vec!["McMojave-circle".to_owned(), "Breeze".to_owned()];
         let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
@@ -1421,12 +1387,7 @@ mod tests {
 
     #[test]
     fn build_parses_each_chained_index_theme_once() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-parse-once-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("parse-once", line!());
         theme_fixture(&data, "Breeze", FIXED_16, Some("once-app.png"));
         let mine = data.join("icons").join("Mine");
         fs::create_dir_all(&mine).expect("selected theme dir");
@@ -1455,12 +1416,7 @@ mod tests {
 
     #[test]
     fn compact_index_selects_same_paths_as_before() {
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-compact-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("compact", line!());
         let base = data.join("icons/FlameFixture");
         fs::create_dir_all(base.join("16x16/apps")).expect("16 dir");
         fs::create_dir_all(base.join("32x32/apps")).expect("32 dir");
@@ -1485,18 +1441,9 @@ mod tests {
 
     #[test]
     fn duplicate_search_roots_index_each_file_once() {
-        let first = std::env::temp_dir().join(format!(
-            "flamewm-dup-a-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let second = std::env::temp_dir().join(format!(
-            "flamewm-dup-b-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let first = fixture_root("dup-a", line!());
+        let second = fixture_root("dup-b", line!());
         for data in [&first, &second] {
-            let _ = fs::remove_dir_all(data);
             let base = data.join("icons/FlameDup");
             fs::create_dir_all(base.join("16x16/apps")).expect("dup theme dirs");
             fs::write(
@@ -1524,12 +1471,7 @@ mod tests {
     #[test]
     fn distinct_non_utf8_names_are_both_indexed() {
         use std::os::unix::ffi::OsStringExt;
-        let data = std::env::temp_dir().join(format!(
-            "flamewm-rawname-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = fs::remove_dir_all(&data);
+        let data = fixture_root("rawname", line!());
         theme_fixture(&data, "RawNames", FIXED_16, None);
         let apps = data.join("icons/RawNames/16x16/apps");
         for raw in [b"a\xff.png".to_vec(), b"a\xfe.png".to_vec()] {
