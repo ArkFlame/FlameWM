@@ -224,7 +224,6 @@ pub(crate) fn sync_sticky(
                     a: 255,
                 },
             )?;
-            let number = slot + 1;
             let text_id = format!("sticky-{number}-text");
             let editing = state
                 .sticky
@@ -248,14 +247,12 @@ pub(crate) fn sync_sticky(
                     a: 255,
                 },
             )?;
-            let number = slot + 1;
             document.visible(&format!("sticky-{number}-drag"), show_any)?;
             for corner in ["nw", "ne", "sw", "se"] {
                 document.visible(&format!("sticky-{number}-resize-{corner}"), show_any)?;
             }
         } else {
             document.visible(&id, false)?;
-            let number = slot + 1;
             document.text(&format!("sticky-{number}-text"), String::new())?;
             let _ = document.visible(&format!("sticky-{number}-drag"), false);
             for corner in ["nw", "ne", "sw", "se"] {
@@ -305,14 +302,8 @@ pub(crate) fn create_note(state: &mut DesktopState, anchor: Point) {
 pub(crate) fn apply_menu_action(action: &str, state: &mut DesktopState) -> Result<(), String> {
     match action {
         "sticky.menu.delete" => {
-            let note_id = selected_menu_id(state).or_else(|| {
-                    state
-                        .sticky
-                        .store
-                        .notes()
-                        .first()
-                        .map(|note| note.id.clone())
-                });
+            let note_id = selected_menu_id(state)
+                .or_else(|| state.sticky.store.notes().first().map(|note| note.id.clone()));
             if let Some(note_id) = note_id {
                 state.sticky.store.remove(&note_id);
                 if state
@@ -323,9 +314,7 @@ pub(crate) fn apply_menu_action(action: &str, state: &mut DesktopState) -> Resul
                 {
                     state.sticky.edit = None;
                 }
-                sticky_persist_counter().increment();
-                sticky_persistence::persist(&state.sticky.path, &state.sticky.store)
-                    .map_err(|error| format!("{error:?}"))?;
+                persist(state)?;
             }
         }
         "sticky.menu.yellow" | "sticky.menu.green" | "sticky.menu.pink" | "sticky.menu.blue" => {
@@ -525,9 +514,6 @@ fn handle_slot(
                     start_y: action.y,
                     original: note.rect,
                     moved: false,
-                });
-                state.sticky.gesture.as_mut().map(|gesture| {
-                    gesture.mode = StickyGestureMode::Resize;
                 });
             }
             UiActionPhase::Motion | UiActionPhase::Release => {
