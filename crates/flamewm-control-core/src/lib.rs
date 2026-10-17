@@ -248,6 +248,12 @@ pub const fn error_name(code: ErrorCode) -> &'static str {
     }
 }
 
+fn unit(result: Result<(), FlameError>) -> Result<ControlResponse, ControlError> {
+    result
+        .map(|()| ControlResponse::Unit)
+        .map_err(ControlError::from)
+}
+
 pub struct Dispatcher;
 
 impl Dispatcher {
@@ -294,25 +300,12 @@ impl Dispatcher {
                 ControlResponse::Applications(host.search_applications(""))
             }
             ControlRequest::LaunchApplication { app, options } => {
-                host.launch_application(&app, &options)?;
-                ControlResponse::Unit
+                unit(host.launch_application(&app, &options))?
             }
-            ControlRequest::ActivateWindow(window) => {
-                host.activate_window(window)?;
-                ControlResponse::Unit
-            }
-            ControlRequest::MinimizeWindow(window) => {
-                host.minimize_window(window)?;
-                ControlResponse::Unit
-            }
-            ControlRequest::RestoreWindow(window) => {
-                host.restore_window(window)?;
-                ControlResponse::Unit
-            }
-            ControlRequest::CloseWindow(window) => {
-                host.close_window(window)?;
-                ControlResponse::Unit
-            }
+            ControlRequest::ActivateWindow(window) => unit(host.activate_window(window))?,
+            ControlRequest::MinimizeWindow(window) => unit(host.minimize_window(window))?,
+            ControlRequest::RestoreWindow(window) => unit(host.restore_window(window))?,
+            ControlRequest::CloseWindow(window) => unit(host.close_window(window))?,
             ControlRequest::GetSettings => ControlResponse::Settings(host.settings_snapshot()),
             ControlRequest::ApplySettings(transaction) => {
                 ControlResponse::Settings(host.apply_settings(&transaction)?)
@@ -323,24 +316,15 @@ impl Dispatcher {
             ControlRequest::ActivateWorkspace {
                 index,
                 expected_revision,
-            } => {
-                host.activate_workspace(index, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.activate_workspace(index, expected_revision))?,
             ControlRequest::InsertWorkspaceAfter {
                 index,
                 expected_revision,
-            } => {
-                host.insert_workspace_after(index, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.insert_workspace_after(index, expected_revision))?,
             ControlRequest::RemoveWorkspace {
                 index,
                 expected_revision,
-            } => {
-                host.remove_workspace(index, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.remove_workspace(index, expected_revision))?,
             ControlRequest::GetDisplays => ControlResponse::Displays(host.display_snapshot()?),
             ControlRequest::BeginDisplayMode {
                 output,
@@ -356,13 +340,9 @@ impl Dispatcher {
             ControlRequest::KeepDisplayMode {
                 transaction,
                 now_ms,
-            } => {
-                host.keep_display_mode(transaction, now_ms)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.keep_display_mode(transaction, now_ms))?,
             ControlRequest::RevertDisplayMode { transaction } => {
-                host.revert_display_mode(transaction)?;
-                ControlResponse::Unit
+                unit(host.revert_display_mode(transaction))?
             }
             ControlRequest::SetShellScale {
                 output,
@@ -378,31 +358,19 @@ impl Dispatcher {
                 action,
                 binding,
                 expected_revision,
-            } => {
-                host.set_shortcut(&action, &binding, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.set_shortcut(&action, &binding, expected_revision))?,
             ControlRequest::ClearShortcut {
                 action,
                 expected_revision,
-            } => {
-                host.clear_shortcut(&action, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.clear_shortcut(&action, expected_revision))?,
             ControlRequest::ResetShortcut {
                 action,
                 expected_revision,
-            } => {
-                host.reset_shortcut(&action, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.reset_shortcut(&action, expected_revision))?,
             ControlRequest::ApplyShortcuts {
                 bindings,
                 expected_revision,
-            } => {
-                host.apply_shortcuts(&bindings, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.apply_shortcuts(&bindings, expected_revision))?,
             ControlRequest::BeginHotkeyCapture {
                 action,
                 expected_revision,
@@ -410,27 +378,18 @@ impl Dispatcher {
                 &action,
                 expected_revision,
             )?),
-            ControlRequest::EndHotkeyCapture { lease } => {
-                host.end_hotkey_capture(lease)?;
-                ControlResponse::Unit
-            }
+            ControlRequest::EndHotkeyCapture { lease } => unit(host.end_hotkey_capture(lease))?,
             ControlRequest::GetPanels => ControlResponse::Panels(host.panels_snapshot()),
             ControlRequest::SetPanelEdge {
                 output,
                 edge,
                 expected_revision,
-            } => {
-                host.set_panel_edge(&output, edge, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.set_panel_edge(&output, edge, expected_revision))?,
             ControlRequest::SetPanelSize {
                 output,
                 logical_size,
                 expected_revision,
-            } => {
-                host.set_panel_size(&output, logical_size, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.set_panel_size(&output, logical_size, expected_revision))?,
             ControlRequest::PinApp {
                 app,
                 expected_revision,
@@ -451,18 +410,12 @@ impl Dispatcher {
             ControlRequest::GetSessionCapabilities => {
                 ControlResponse::SessionCapabilities(host.session_capabilities())
             }
-            ControlRequest::SessionAction(action) => {
-                host.session_action(action)?;
-                ControlResponse::Unit
-            }
+            ControlRequest::SessionAction(action) => unit(host.session_action(action))?,
             ControlRequest::GetSystem => ControlResponse::System(host.system_snapshot().clone()),
             ControlRequest::SystemAction {
                 action,
                 expected_revision,
-            } => {
-                host.system_action(action, expected_revision)?;
-                ControlResponse::Unit
-            }
+            } => unit(host.system_action(action, expected_revision))?,
         };
         Ok(response)
     }
