@@ -700,8 +700,7 @@ pub fn project_task_slots_async(
         write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
         line_id.clear();
         write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
-        let state = states.get(index);
-        if let Some(state) = state {
+        if let Some(state) = states.get(index) {
             let label = snapshot
                 .applications
                 .iter()
@@ -732,7 +731,7 @@ pub fn project_task_slots_async(
             document.visible(&line_id, false)?;
             document.background_clear(&slot_id)?;
         }
-        document.visible(&slot_id, state.is_some())?;
+        document.visible(&slot_id, states.get(index).is_some())?;
     }
     Ok(())
 }
@@ -843,14 +842,6 @@ fn project_panel_scoped(
     if scope.task_slots {
         project_task_slots_async(document, view, loader, icon_cache)?;
     }
-    project_panel_scoped_tail(document, view, scope)
-}
-
-fn project_panel_scoped_tail(
-    document: &mut impl UiDocumentAccess,
-    view: PanelView<'_>,
-    scope: &PanelScope,
-) -> Result<(), String> {
     if scope.geometry {
         project_panel_geometry(document, view)?;
     }
