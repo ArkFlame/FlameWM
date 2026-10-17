@@ -104,18 +104,11 @@ impl<E: EnginePorts> PlatformHost<E> {
     /// Re-applies persisted panel edges after panels exist for the connected outputs. An entry for a
     /// disconnected output is skipped with a stderr diagnostic so it cannot block startup.
     fn seed_persisted_panel_edges(&mut self) {
-        let entries: Vec<(String, PanelEdge)> = self
-            .settings
-            .current()
-            .panel_edges
-            .iter()
-            .map(|(output, edge)| (output.clone(), *edge))
-            .collect();
-        for (output, edge) in entries {
+        for (output, edge) in &self.settings.current().panel_edges {
             let revision = self.panels.revision();
             if let Err(error) = self
                 .panels
-                .set_edge(&OutputId::new(output.clone()), edge, revision)
+                .set_edge(&OutputId::new(output.clone()), *edge, revision)
             {
                 eprintln!("flamewm: persisted panel edge for {output} not applied: {error}");
             }
@@ -128,21 +121,14 @@ impl<E: EnginePorts> PlatformHost<E> {
     /// setter as invalid (InvalidArgument) are skipped so a bad persisted value cannot block startup.
     /// The generation is re-read per entry because each applied scale bumps it.
     fn seed_persisted_shell_scales(&mut self) -> FlameResult<()> {
-        let entries: Vec<(String, u16)> = self
-            .settings
-            .current()
-            .per_output_scale
-            .iter()
-            .map(|(output, scale)| (output.clone(), *scale))
-            .collect();
-        for (output, scale) in entries {
+        for (output, scale) in &self.settings.current().per_output_scale {
             let generation = self
                 .displays
                 .cached()
                 .map_or(0, |snapshot| snapshot.generation);
             match self
                 .displays
-                .set_shell_scale(&OutputId::new(output.clone()), scale, generation)
+                .set_shell_scale(&OutputId::new(output.clone()), *scale, generation)
             {
                 Ok(_) => {}
                 Err(error) if error.code == ErrorCode::NotFound => {
@@ -179,16 +165,16 @@ impl<E: EnginePorts> PlatformHost<E> {
         before: &std::collections::BTreeMap<String, u16>,
         after: &std::collections::BTreeMap<String, u16>,
     ) {
-        let mut targets: Vec<(String, u16)> = after
+        let mut targets: Vec<(&String, u16)> = after
             .iter()
             .filter(|(output, scale)| before.get(*output) != Some(*scale))
-            .map(|(output, scale)| (output.clone(), *scale))
+            .map(|(output, scale)| (output, *scale))
             .collect();
         targets.extend(
             before
                 .keys()
                 .filter(|output| !after.contains_key(*output))
-                .map(|output| (output.clone(), 100)),
+                .map(|output| (output, 100)),
         );
         for (output, scale) in targets {
             let Some(generation) = self.displays.cached().map(|snapshot| snapshot.generation) else {

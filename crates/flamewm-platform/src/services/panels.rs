@@ -58,11 +58,11 @@ impl PanelService {
             .collect::<Vec<_>>();
         let desired_ids = connected
             .iter()
-            .map(|output| output.id.clone())
+            .map(|output| &output.id)
             .collect::<BTreeSet<_>>();
 
         for output in self.manager.outputs() {
-            if !desired_ids.contains(&output) {
+            if !desired_ids.contains(&&output) {
                 self.manager.remove_output(&output);
                 self.start.output_removed(&output);
             }
@@ -90,7 +90,7 @@ impl PanelService {
             .find(|output| output.primary)
             .or_else(|| connected.first())
             .map(|output| output.id.clone());
-        self.manager.set_primary_output(primary.clone());
+        self.manager.set_primary_output(primary);
 
         let changed = self.manager != before_manager;
         if changed {

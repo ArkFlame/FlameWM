@@ -25,6 +25,28 @@ const KNOWN_HOTKEYS: [&str; 8] = [
     ACTION_WINDOW_MAXIMIZE,
 ];
 
+/// Generates `as_str` (wire text) and `parse` (wire text to variant) from one variant table.
+macro_rules! wire_enum {
+    ($ty:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        impl $ty {
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $wire,)+
+                }
+            }
+
+            #[must_use]
+            pub fn parse(value: &str) -> Option<Self> {
+                match value {
+                    $($wire => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
 /// Clock notation on the lock screen (`lockClockFormat`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockClockFormat {
@@ -32,24 +54,7 @@ pub enum LockClockFormat {
     Twelve,
 }
 
-impl LockClockFormat {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TwentyFour => "24h",
-            Self::Twelve => "12h",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "24h" => Some(Self::TwentyFour),
-            "12h" => Some(Self::Twelve),
-            _ => None,
-        }
-    }
-}
+wire_enum!(LockClockFormat { TwentyFour => "24h", Twelve => "12h" });
 
 /// Lock-screen idle action after the Ribbons screensaver (`screensaverMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,24 +64,7 @@ pub enum ScreensaverMode {
     None,
 }
 
-impl ScreensaverMode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ribbons => "ribbons",
-            Self::None => "none",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "ribbons" => Some(Self::Ribbons),
-            "none" => Some(Self::None),
-            _ => None,
-        }
-    }
-}
+wire_enum!(ScreensaverMode { Ribbons => "ribbons", None => "none" });
 
 /// Taskbar layout (`taskbarStyle`). `Floating` insets the bar and rounds its corners.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,24 +73,7 @@ pub enum TaskbarStyle {
     Floating,
 }
 
-impl TaskbarStyle {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Classic => "classic",
-            Self::Floating => "floating",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "classic" => Some(Self::Classic),
-            "floating" => Some(Self::Floating),
-            _ => None,
-        }
-    }
-}
+wire_enum!(TaskbarStyle { Classic => "classic", Floating => "floating" });
 
 /// Clock notation on the taskbar (`taskbarClockFormat`). Same `24h`/`12h` wire values as the lock
 /// screen, so both keys share one type.
@@ -118,26 +89,7 @@ pub enum BackgroundMode {
     Custom,
 }
 
-impl BackgroundMode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Solid => "solid",
-            Self::Custom => "custom",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "default" => Some(Self::Default),
-            "solid" => Some(Self::Solid),
-            "custom" => Some(Self::Custom),
-            _ => None,
-        }
-    }
-}
+wire_enum!(BackgroundMode { Default => "default", Solid => "solid", Custom => "custom" });
 
 /// Desktop wallpaper placement (`wallpaperFit`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,30 +101,13 @@ pub enum WallpaperFit {
     Tile,
 }
 
-impl WallpaperFit {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Fill => "fill",
-            Self::Fit => "fit",
-            Self::Stretch => "stretch",
-            Self::Center => "center",
-            Self::Tile => "tile",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "fill" => Some(Self::Fill),
-            "fit" => Some(Self::Fit),
-            "stretch" => Some(Self::Stretch),
-            "center" => Some(Self::Center),
-            "tile" => Some(Self::Tile),
-            _ => None,
-        }
-    }
-}
+wire_enum!(WallpaperFit {
+    Fill => "fill",
+    Fit => "fit",
+    Stretch => "stretch",
+    Center => "center",
+    Tile => "tile",
+});
 
 /// Translucent surface policy for the taskbar or Start menu.
 ///
@@ -282,6 +217,12 @@ pub struct ProductSettings {
     pub weather_location: String,
     /// `celsius` or `fahrenheit`.
     pub weather_units: String,
+    /// Sets `weatherLocation` from the IP-geolocated position (privacy-first: off by default).
+    pub auto_location_enabled: bool,
+    /// Applies the IP-geolocated IANA time zone to the shell and lock clocks.
+    pub auto_time_zone_enabled: bool,
+    /// Last IANA time zone from automatic lookup (offline-start cache); empty means none.
+    pub auto_time_zone: String,
     pub surface_color: String,
     pub surface_opacity: u8,
     pub surface_blur_percent: u8,
@@ -377,9 +318,12 @@ impl Default for ProductSettings {
             taskbar_show_clock: true,
             taskbar_show_workspaces: true,
             taskbar_battery_only_when_relevant: false,
-            weather_enabled: false,
+            weather_enabled: true,
             weather_location: String::new(),
             weather_units: "celsius".to_owned(),
+            auto_location_enabled: false,
+            auto_time_zone_enabled: false,
+            auto_time_zone: String::new(),
             surface_color: "#191b1d".to_owned(),
             surface_opacity: 50,
             surface_blur_percent: 80,
@@ -610,6 +554,9 @@ impl ProductSettings {
         validate_lock_image_path(&self.avatar_image, "avatarImage")?;
         if !matches!(self.weather_units.as_str(), "celsius" | "fahrenheit") {
             return invalid("weatherUnits must be celsius or fahrenheit");
+        }
+        if !self.auto_time_zone.is_empty() && !is_valid_time_zone_name(&self.auto_time_zone) {
+            return invalid("autoTimeZone must be an IANA time zone name");
         }
         if self.lock_background_blur_percent > 100 {
             return invalid("lockBackgroundBlurPercent must be 0..100");
@@ -908,6 +855,14 @@ trait Slot: Sized + Clone {
     fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self>;
 }
 
+/// Text-valued slots read `SettingValue::Text` through their own `from_text`.
+fn from_text_value<T: Slot>(value: &SettingValue, key: &str) -> FlameResult<T> {
+    match value {
+        SettingValue::Text(text) => T::from_text(text, key),
+        _ => invalid("setting requires text"),
+    }
+}
+
 impl Slot for String {
     fn to_value(&self) -> SettingValue {
         SettingValue::Text(self.clone())
@@ -917,11 +872,8 @@ impl Slot for String {
         Ok(text.to_owned())
     }
 
-    fn from_value(value: &SettingValue, _key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Ok(text.clone()),
-            _ => invalid("setting requires text"),
-        }
+    fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
+        from_text_value(value, key)
     }
 }
 
@@ -1007,10 +959,7 @@ impl Slot for AnimationStyle {
     }
 
     fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-        match value {
-            SettingValue::Text(text) => Self::from_text(text, key),
-            _ => invalid("setting requires text"),
-        }
+        from_text_value(value, key)
     }
 }
 
@@ -1026,10 +975,7 @@ macro_rules! text_enum_slot {
             }
 
             fn from_value(value: &SettingValue, key: &str) -> FlameResult<Self> {
-                match value {
-                    SettingValue::Text(text) => Self::from_text(text, key),
-                    _ => invalid("setting requires text"),
-                }
+                from_text_value(value, key)
             }
         }
     )*};
@@ -1052,6 +998,19 @@ impl Slot for AppearanceMode {
             _ => invalid("setting requires text"),
         }
     }
+}
+
+/// Accepts an IANA zone name such as `Europe/Berlin` or `UTC`: ASCII letters, digits, `_`, `+`,
+/// `-`, `/`, no leading `/` or `.`, no `..`, at most 64 bytes. Existence is checked separately.
+#[must_use]
+pub fn is_valid_time_zone_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('/')
+        && !name.contains("..")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-' | b'/'))
 }
 
 /// One typed key. The table below is the single source for file parse, serialize, API snapshot,
@@ -1126,6 +1085,9 @@ stable_settings! {
     (false, weather, "weatherEnabled", weather_enabled),
     (false, weather, "weatherLocation", weather_location),
     (false, weather, "weatherUnits", weather_units),
+    (false, weather, "autoLocationEnabled", auto_location_enabled),
+    (false, time, "autoTimeZoneEnabled", auto_time_zone_enabled),
+    (false, time, "autoTimeZone", auto_time_zone),
     (false, desktop, "wallpaperFit", wallpaper_fit),
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
@@ -2351,13 +2313,34 @@ mod tests {
     }
 
     #[test]
-    fn weather_keys_default_off_and_write_nothing() {
+    fn time_zone_names_accept_iana_shapes_and_reject_paths() {
+        for ok in ["UTC", "Europe/Berlin", "America/Argentina/Buenos_Aires", "Etc/GMT+3"] {
+            assert!(super::is_valid_time_zone_name(ok), "{ok}");
+        }
+        for bad in ["", "/etc/localtime", "../etc/passwd", "Europe/../UTC", "a b", "x\ny"] {
+            assert!(!super::is_valid_time_zone_name(bad), "{bad:?}");
+        }
+        let store = ConfigStore::default();
+        assert!(store.parse_snapshot("revision=2\nautoTimeZone=../../etc\n").is_err());
+        assert!(store.parse_snapshot("revision=2\nautoTimeZone=Asia/Tokyo\n").is_ok());
+    }
+
+    #[test]
+    fn weather_keys_default_on_without_location_and_write_nothing() {
         let defaults = ProductSettings::default();
-        assert!(!defaults.weather_enabled);
+        assert!(defaults.weather_enabled);
         assert!(defaults.weather_location.is_empty());
         assert_eq!(defaults.weather_units, "celsius");
+        assert!(!defaults.auto_location_enabled);
+        assert!(!defaults.auto_time_zone_enabled);
         let text = ConfigStore::serialize(&defaults);
-        for key in ["weatherEnabled", "weatherLocation", "weatherUnits"] {
+        for key in [
+            "weatherEnabled",
+            "weatherLocation",
+            "weatherUnits",
+            "autoLocationEnabled",
+            "autoTimeZoneEnabled",
+        ] {
             assert!(!text.contains(key), "{key} must not be written at default");
         }
     }
@@ -2376,15 +2359,21 @@ mod tests {
         assert_eq!(parsed.weather_location, location);
         assert!(parsed.unknown_keys.is_empty(), "weather keys must not fall into unknown_keys");
         let text = ConfigStore::serialize(&parsed);
-        assert!(text.contains("weatherEnabled=true\n"));
+        // Default-on weather is not written; an explicit off must survive a round trip.
+        assert!(!text.contains("weatherEnabled"));
         assert!(text.contains("weatherUnits=fahrenheit\n"));
         assert_eq!(store.parse_snapshot(&text).expect("round trip"), parsed);
+        let off = store
+            .parse_snapshot("revision=2\nweatherEnabled=false\n")
+            .expect("explicit off");
+        assert!(!off.weather_enabled);
+        assert!(ConfigStore::serialize(&off).contains("weatherEnabled=false\n"));
 
         let stable = |key: &str| super::stable_setting(key).expect("typed weather row");
         let defaults = ProductSettings::default();
         assert_eq!(
             (stable("weatherEnabled").get)(&defaults),
-            flamewm_api::settings::SettingValue::Boolean(false)
+            flamewm_api::settings::SettingValue::Boolean(true)
         );
         let mut settings = parsed.clone();
         (stable("weatherLocation").set)(&mut settings, &defaults, None, "weatherLocation")

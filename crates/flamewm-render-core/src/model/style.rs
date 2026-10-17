@@ -262,9 +262,7 @@ impl RuntimeDocument {
 
 impl RuntimeDocument {
     pub fn set_background_color(&mut self, id: &str, color: Color) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().background =
             Some(ColorValue::Literal(color));
         self.touch();
@@ -277,9 +275,7 @@ impl RuntimeDocument {
         if blur_percent.is_some_and(|blur| blur > 100) {
             return Err("node backdrop blur must be 0..=100".to_string());
         }
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         match blur_percent.filter(|blur| *blur > 0) {
             Some(blur) => {
                 self.node_backdrops.insert(index, blur);
@@ -302,18 +298,14 @@ impl RuntimeDocument {
         if !radius.is_finite() || radius < 0.0 {
             return Err("runtime border radius must be finite and non-negative".to_string());
         }
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().border_radius = Some(radius);
         self.touch();
         Ok(())
     }
 
     pub fn set_border_color(&mut self, id: &str, color: Color) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().border_color =
             Some(ColorValue::Literal(color));
         self.touch();
@@ -321,9 +313,7 @@ impl RuntimeDocument {
     }
 
     pub fn clear_background_color(&mut self, id: &str) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         if let Some(override_style) = self.style_overrides.get_mut(&index) {
             override_style.background = None;
         }
@@ -332,9 +322,7 @@ impl RuntimeDocument {
     }
 
     pub fn clear_border_color(&mut self, id: &str) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         if let Some(override_style) = self.style_overrides.get_mut(&index) {
             override_style.border_color = None;
         }
@@ -343,18 +331,14 @@ impl RuntimeDocument {
     }
 
     pub fn set_foreground_color(&mut self, id: &str, color: ColorValue) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().color = Some(color);
         self.touch();
         Ok(())
     }
 
     pub fn clear_foreground_color(&mut self, id: &str) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         if let Some(override_style) = self.style_overrides.get_mut(&index) {
             override_style.color = None;
         }
@@ -366,17 +350,13 @@ impl RuntimeDocument {
         if !opacity.is_finite() {
             return Err("runtime opacity must be finite".to_string());
         }
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().opacity = Some(opacity.clamp(0.0, 1.0));
         Ok(())
     }
 
     pub fn set_flex_direction(&mut self, id: &str, direction: FlexDirection) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides
             .entry(index)
             .or_default()
@@ -385,9 +365,7 @@ impl RuntimeDocument {
     }
 
     pub fn set_overflow(&mut self, id: &str, x: Overflow, y: Overflow) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         let entry = self.style_overrides.entry(index).or_default();
         entry.overflow_x = Some(x);
         entry.overflow_y = Some(y);
@@ -398,9 +376,7 @@ impl RuntimeDocument {
         if !size.is_finite() || size <= 0.0 {
             return Err("runtime font size must be finite and positive".to_string());
         }
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().font_size = Some(size);
         // Text children are measured with their own compile-time style, so the element override alone
         // never reaches the glyphs: mirror it onto the element's direct text children.
@@ -417,9 +393,7 @@ impl RuntimeDocument {
     }
 
     pub fn set_font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().font_weight = Some(weight.clamp(100, 900));
         Ok(())
     }
@@ -473,9 +447,7 @@ impl RuntimeDocument {
     }
 
     pub fn set_z_index(&mut self, id: &str, z: i32) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.z_index_overrides.insert(index, z);
         Ok(())
     }

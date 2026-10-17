@@ -229,10 +229,12 @@ impl RuntimeDocument {
         self.id_index.get(id).copied()
     }
 
+    pub(crate) fn require_node(&self, id: &str) -> Result<u32, String> {
+        self.node_by_id(id).ok_or_else(|| format!("no node with id '{id}'"))
+    }
+
     pub fn set_text(&mut self, id: &str, text: impl Into<String>) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         let target = if self.document.nodes[index as usize].kind == NodeKind::Text {
             index
         } else {
@@ -259,9 +261,7 @@ impl RuntimeDocument {
     }
 
     pub fn set_visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         if self.hidden_nodes.contains(&index) == !visible {
             return Ok(());
         }
@@ -282,9 +282,7 @@ impl RuntimeDocument {
         height: u32,
         rgba8: Vec<u8>,
     ) -> Result<(), String> {
-        let index = self
-            .node_by_id(node_id)
-            .ok_or_else(|| format!("no node with id '{node_id}'"))?;
+        let index = self.require_node(node_id)?;
         let node = self
             .document
             .nodes
@@ -336,9 +334,7 @@ impl RuntimeDocument {
 
     /// Drops a node-local image override so the node falls back to its compiled asset.
     pub fn clear_image_for_node(&mut self, node_id: &str) -> Result<(), String> {
-        let index = self
-            .node_by_id(node_id)
-            .ok_or_else(|| format!("no node with id '{node_id}'"))?;
+        let index = self.require_node(node_id)?;
         if self.node_image_overrides.remove(&index).is_some() {
             self.touch();
         }

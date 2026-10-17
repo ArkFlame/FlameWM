@@ -52,9 +52,7 @@ impl RuntimeDocument {
         if !left.is_finite() || !top.is_finite() {
             return Err("runtime position must be finite".to_string());
         }
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         let entry = self.geometry_overrides.entry(index).or_default();
         entry.left = Some(left);
         entry.top = Some(top);
@@ -65,9 +63,7 @@ impl RuntimeDocument {
         if !width.is_finite() || !height.is_finite() || width < 0.0 || height < 0.0 {
             return Err("runtime size must be finite and non-negative".to_string());
         }
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         let entry = self.geometry_overrides.entry(index).or_default();
         entry.width = Some(width);
         entry.height = Some(height);
@@ -75,9 +71,7 @@ impl RuntimeDocument {
     }
 
     pub fn clear_geometry_override(&mut self, id: &str) -> Result<(), String> {
-        let index = self
-            .node_by_id(id)
-            .ok_or_else(|| format!("no node with id '{id}'"))?;
+        let index = self.require_node(id)?;
         self.geometry_overrides.remove(&index);
         Ok(())
     }
