@@ -133,15 +133,6 @@ pub fn slot_id(snapshot: &AudioSnapshot, slot: usize) -> Option<String> {
         .map(|(_, row)| row.stable_id().to_owned())
 }
 
-/// Stable slot index for a row identity on the active page.
-#[must_use]
-pub fn slot_for_row(snapshot: &AudioSnapshot, id: &str) -> Option<usize> {
-    paged_rows(snapshot)
-        .into_iter()
-        .find(|(_, row)| row.stable_id() == id)
-        .map(|(slot, _)| slot)
-}
-
 #[must_use]
 pub fn popover(snapshot: &SystemSnapshot) -> Option<AudioPopoverModel> {
     if !audio_available(snapshot) {
