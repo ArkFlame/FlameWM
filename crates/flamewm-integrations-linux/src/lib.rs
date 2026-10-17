@@ -93,18 +93,8 @@ impl LinuxIntegrationRuntime {
     }
 
     #[must_use]
-    pub fn network_manager_mut(&mut self) -> Option<&mut NetworkManagerProvider> {
-        self.network_manager.provider_mut()
-    }
-
-    #[must_use]
     pub fn mpris(&self) -> &MprisProvider {
         &self.mpris
-    }
-
-    #[must_use]
-    pub fn mpris_mut(&mut self) -> &mut MprisProvider {
-        &mut self.mpris
     }
 
     #[must_use]
