@@ -37,10 +37,6 @@ impl Screensaver {
         self.phase
     }
 
-    pub fn config(&self) -> &SaverConfig {
-        &self.config
-    }
-
     /// Advances the idle clock by `elapsed`. Returns the new phase when it changed.
     pub fn tick(&mut self, elapsed: Duration) -> Option<Phase> {
         match self.phase {
