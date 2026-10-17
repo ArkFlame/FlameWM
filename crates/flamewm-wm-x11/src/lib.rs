@@ -248,6 +248,10 @@ impl X11Desktop {
     fn text(&self, window: Window, name: &str) -> FlameResult<String> {
         Ok(shared::text_from_bytes(&self.property_bytes(window, name)?))
     }
+    fn root_size(&self) -> Size {
+        let root = &self.conn.setup().roots[self.screen];
+        Size::new(i32::from(root.width_in_pixels), i32::from(root.height_in_pixels))
+    }
 }
 
 fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
@@ -343,16 +347,14 @@ impl WindowPort for X11Desktop {
             .copied()
             .unwrap_or(0);
         let workspace = self.workspace_snapshot()?;
-        let output = output_for_window_rect(
-            &self.display_snapshot()?.outputs,
-            Rect::new(
-                i32::from(geometry.x),
-                i32::from(geometry.y),
-                i32::from(geometry.width),
-                i32::from(geometry.height),
-            ),
-        )
-        .unwrap_or_else(|| OutputId::new("default"));
+        let outer = Rect::new(
+            i32::from(geometry.x),
+            i32::from(geometry.y),
+            i32::from(geometry.width),
+            i32::from(geometry.height),
+        );
+        let output = output_for_window_rect(&self.display_snapshot()?.outputs, outer)
+            .unwrap_or_else(|| OutputId::new("default"));
         let title = self
             .text(window, "_NET_WM_NAME")
             .or_else(|_| self.text(window, "WM_NAME"))?;
@@ -371,18 +373,8 @@ impl WindowPort for X11Desktop {
             reference: WindowRef::new(u64::from(window), self.ensure_generation(window)),
             title,
             app_id: window_application_id(&self.catalog, &wm_instance, &wm_class),
-            outer_geometry: Rect::new(
-                i32::from(geometry.x),
-                i32::from(geometry.y),
-                i32::from(geometry.width),
-                i32::from(geometry.height),
-            ),
-            restore_geometry: Rect::new(
-                i32::from(geometry.x),
-                i32::from(geometry.y),
-                i32::from(geometry.width),
-                i32::from(geometry.height),
-            ),
+            outer_geometry: outer,
+            restore_geometry: outer,
             state,
             sticky: has("_NET_WM_STATE_STICKY"),
             focused: self
@@ -422,35 +414,22 @@ impl WindowPort for X11Desktop {
     fn maximize(&mut self, w: WindowRef) -> FlameResult<()> {
         let window = self.check_window(w)?;
         self.bump_generation(window);
-        self.send_state(
-            window,
-            self.atom("_NET_WM_STATE_MAXIMIZED_VERT"),
-            FeatureAction::Add,
-        )?;
-        self.send_state(
-            window,
-            self.atom("_NET_WM_STATE_MAXIMIZED_HORZ"),
-            FeatureAction::Add,
-        )
+        for name in ["_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ"] {
+            self.send_state(window, self.atom(name), FeatureAction::Add)?;
+        }
+        Ok(())
     }
     fn restore(&mut self, w: WindowRef) -> FlameResult<()> {
         let window = self.check_window(w)?;
         self.bump_generation(window);
-        self.send_state(
-            window,
-            self.atom("_NET_WM_STATE_HIDDEN"),
-            FeatureAction::Remove,
-        )?;
-        self.send_state(
-            window,
-            self.atom("_NET_WM_STATE_MAXIMIZED_VERT"),
-            FeatureAction::Remove,
-        )?;
-        self.send_state(
-            window,
-            self.atom("_NET_WM_STATE_MAXIMIZED_HORZ"),
-            FeatureAction::Remove,
-        )
+        for name in [
+            "_NET_WM_STATE_HIDDEN",
+            "_NET_WM_STATE_MAXIMIZED_VERT",
+            "_NET_WM_STATE_MAXIMIZED_HORZ",
+        ] {
+            self.send_state(window, self.atom(name), FeatureAction::Remove)?;
+        }
+        Ok(())
     }
     fn close(&mut self, w: WindowRef) -> FlameResult<()> {
         let window = self.check_window(w)?;
@@ -776,33 +755,26 @@ impl MainLoopPort for X11Desktop {
         Err(unsupported("desktop host owns deferred callbacks"))
     }
 }
+const BACKGROUND_UNSUPPORTED: &str = "X11 desktop adapter does not own wallpaper rendering";
+const TRAY_UNSUPPORTED: &str = "X11 desktop adapter does not implement system tray ownership";
+
 impl BackgroundPort for X11Desktop {
     fn project_background(&mut self, _state: &BackgroundState) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not own wallpaper rendering",
-        ))
+        Err(unsupported(BACKGROUND_UNSUPPORTED))
     }
     fn reload_background(&mut self) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not own wallpaper rendering",
-        ))
+        Err(unsupported(BACKGROUND_UNSUPPORTED))
     }
 }
 impl TrayPort for X11Desktop {
     fn set_tray_owner(&mut self, _output: &OutputId) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not implement system tray ownership",
-        ))
+        Err(unsupported(TRAY_UNSUPPORTED))
     }
     fn clear_tray_owner(&mut self) -> FlameResult<()> {
-        Err(unsupported(
-            "X11 desktop adapter does not implement system tray ownership",
-        ))
+        Err(unsupported(TRAY_UNSUPPORTED))
     }
     fn tray_owner(&self) -> FlameResult<Option<OutputId>> {
-        Err(unsupported(
-            "X11 desktop adapter does not implement system tray ownership",
-        ))
+        Err(unsupported(TRAY_UNSUPPORTED))
     }
 }
 impl WorkAreaPort for X11Desktop {
@@ -881,11 +853,7 @@ impl DisplayPort for X11Desktop {
                     ModeId(u64::from(c.mode)),
                 )
             } else {
-                let root = &self.conn.setup().roots[self.screen];
-                let root_size = Size::new(
-                    i32::from(root.width_in_pixels),
-                    i32::from(root.height_in_pixels),
-                );
+                let root_size = self.root_size();
                 // Xephyr exposes its active output with CRTC zero. Prefer the
                 // advertised mode when it matches the valid root geometry.
                 match modes.iter().find(|mode| mode.resolution == root_size) {
@@ -896,11 +864,7 @@ impl DisplayPort for X11Desktop {
                 }
             };
             if !geometry.is_valid() {
-                let root = &self.conn.setup().roots[self.screen];
-                let root_size = Size::new(
-                    i32::from(root.width_in_pixels),
-                    i32::from(root.height_in_pixels),
-                );
+                let root_size = self.root_size();
                 if root_size.is_valid() {
                     geometry = Rect::from_parts(Point::new(0, 0), root_size);
                 }
@@ -918,11 +882,7 @@ impl DisplayPort for X11Desktop {
             });
         }
         if outputs.is_empty() {
-            let root = &self.conn.setup().roots[self.screen];
-            let root_size = Size::new(
-                i32::from(root.width_in_pixels),
-                i32::from(root.height_in_pixels),
-            );
+            let root_size = self.root_size();
             if root_size.is_valid() {
                 outputs.push(OutputSnapshot {
                     id: OutputId::new("default"),
