@@ -54,12 +54,8 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
         .map(|b| {
             let r = (b.radius_ref * s).max(1.0);
             let (px, py) = (b.cx * wf, b.cy * hf);
-            let cols = (0..wu)
-                .map(|x| ((x as f64 + 0.5 - px) / r).powi(2))
-                .collect();
-            let rows = (0..hu)
-                .map(|y| ((y as f64 + 0.5 - py) / r).powi(2))
-                .collect();
+            let cols = (0..wu).map(|x| ((x as f64 + 0.5 - px) / r).powi(2)).collect();
+            let rows = (0..hu).map(|y| ((y as f64 + 0.5 - py) / r).powi(2)).collect();
             (cols, rows, b.opacity)
         })
         .collect();
