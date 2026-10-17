@@ -39,10 +39,8 @@ impl ApplicationService {
 
     #[must_use]
     pub fn search(&self, query: &str) -> Vec<DesktopApplication> {
+        // An empty needle matches every field via `str::contains("")`, so no early return is needed.
         let needle = query.trim().to_lowercase();
-        if needle.is_empty() {
-            return self.applications.clone();
-        }
         self.applications
             .iter()
             .filter(|app| {
