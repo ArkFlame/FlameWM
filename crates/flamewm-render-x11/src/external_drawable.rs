@@ -107,36 +107,6 @@ impl ExternalDrawableSession {
         })
     }
 
-    /// # Safety
-    /// Same live-display contract as [`new`](Self::new); `colormap` must be
-    /// valid on this display and is freed on drop.
-    pub unsafe fn with_colormap(
-        display: *mut Display,
-        visual: *mut Visual,
-        colormap: Colormap,
-    ) -> Result<Self, String> {
-        if display.is_null() || visual.is_null() || colormap == 0 {
-            return Err(
-                "ExternalDrawableSession requires live display/visual/colormap".to_string(),
-            );
-        }
-        let screen = unsafe { XDefaultScreen(display) };
-        let root = unsafe { XRootWindow(display, screen) };
-        let gc = unsafe { XCreateGC(display, root, 0, ptr::null_mut()) };
-        if gc.is_null() {
-            return Err("XCreateGC failed for external session".to_string());
-        }
-        unsafe { XSetGraphicsExposures(display, gc, 0) };
-        Ok(Self {
-            display,
-            screen,
-            visual,
-            colormap,
-            owned_colormap: true,
-            gc,
-        })
-    }
-
     pub fn display(&self) -> *mut Display {
         self.display
     }
@@ -271,18 +241,6 @@ impl ExternalDrawableTarget {
 
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
-    }
-
-    pub fn has_xft(&self) -> bool {
-        self.xft.is_some()
-    }
-
-    pub fn has_xrender(&self) -> bool {
-        self.xrender.is_some()
-    }
-
-    pub fn has_xshape(&self) -> bool {
-        self.xshape.is_some()
     }
 
     /// Swap to a new drawable, retargeting Xft/XRender so no stale drawable
@@ -491,38 +449,6 @@ impl ExternalDrawableTarget {
         )
     }
 
-    /// Semantic-icon draw: source alpha tints `fg` (SymbolicForeground math),
-    /// then blits through the same cached ARGB32/XRender path as `blit_rgba`.
-    /// The cache key carries `fg` as palette, so palette swaps reupload once.
-    pub fn draw_semantic_icon(
-        &mut self,
-        rgba8: &[u8],
-        src_w: u32,
-        src_h: u32,
-        dest: Rect,
-        fg: Color,
-    ) -> Result<(), String> {
-        let w = dest.width.round().max(1.0) as u32;
-        let h = dest.height.round().max(1.0) as u32;
-        expected_rgba_len(src_w, src_h, rgba8)?;
-        let key = ExternalImageKey {
-            content_hash: external_content_hash(rgba8),
-            src_w,
-            src_h,
-            dst_w: w,
-            dst_h: h,
-            palette: [fg.r, fg.g, fg.b, fg.a],
-        };
-        self.blit_cached_argb32(
-            key,
-            || external_symbolic_argb(rgba8, src_w, src_h, w, h, fg),
-            w,
-            h,
-            dest,
-            true,
-        )
-    }
-
     /// Shared cached-ARGB32 composite. `require_xrender` keeps the semantic
     /// path's explicit error; the straight path keeps its opaque fallback.
     /// On cache hit the pixmap upload is skipped (zero reupload) and the
@@ -637,14 +563,6 @@ impl ExternalDrawableTarget {
         unsafe { bridge.apply_rounded_mask(self.drawable, &spans) }
     }
 
-    /// Empty XShape input region: pointer events fall through the drawable.
-    pub fn apply_passthrough_input(&self) -> Result<(), String> {
-        let Some(bridge) = self.xshape.as_ref() else {
-            return Err("external passthrough input requires XShape (unavailable)".to_string());
-        };
-        unsafe { bridge.apply_input_mask(self.drawable, &[]) }
-    }
-
     pub fn flush(&self) {
         if self.session.is_null() {
             return;
@@ -663,16 +581,6 @@ impl<'a> NativeDrawableRenderer<'a> {
     #[allow(dead_code)]
     pub(crate) fn new(app: &'a mut super::app::X11App) -> Self {
         Self { app }
-    }
-
-    /// Measure text width in device pixels using the core font fallback.
-    /// Returns an estimate when Xft measurement is unavailable.
-    pub fn text_measure(&mut self, text: &str, size: f32) -> (f32, f32) {
-        if unsafe { self.app.font_for_size_pub(size) }.is_some() {
-            // Core-font measurement needs the raw XFontStruct pointer, which
-            // stays inside X11App; use the layout-compatible estimate here.
-        }
-        external_text_measure(text, size)
     }
 
     /// Draw text at device-pixel (x, baseline y) via Xft when available.
@@ -775,31 +683,6 @@ impl<'a> NativeDrawableRenderer<'a> {
                 .free_pixmap(self.app.display, pixmap, bytes)
         };
         blit
-    }
-
-    /// Fill a device-pixel rect with a skin color. Same semantics as the
-    /// canonical scene painter: XRender handles alpha; OpaqueFallback is the
-    /// only path that flattens.
-    pub fn fill_skin(&mut self, rect: Rect, color: Color) -> Result<(), String> {
-        if let Some(xrender) = self.app.xrender.as_mut() {
-            if color.a < 255 {
-                return unsafe { xrender.fill_rounded_rect(rect, 0.0, color) };
-            }
-        }
-        let pixel = unsafe { self.app.pixel_pub(color)? };
-        unsafe { XSetForeground(self.app.display, self.app.gc, pixel) };
-        unsafe {
-            XFillRectangle(
-                self.app.display,
-                self.app.backbuffer,
-                self.app.gc,
-                rect.x.round() as i32,
-                rect.y.round() as i32,
-                rect.width.round().max(1.0) as u32,
-                rect.height.round().max(1.0) as u32,
-            )
-        };
-        Ok(())
     }
 
     /// Apply the rounded-corner shape mask for chrome-ready surfaces.
