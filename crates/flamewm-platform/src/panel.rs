@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 
 use flamewm_api::{OutputId, PanelEdge, Rect};
 
+use crate::scale::is_supported_scale;
+
 pub const DEFAULT_PANEL_LOGICAL_SIZE: u16 = 44;
 pub const MIN_PANEL_LOGICAL_SIZE: u16 = 34;
 pub const MAX_PANEL_LOGICAL_SIZE: u16 = 72;
-pub const SUPPORTED_SCALES: [u16; 5] = [100, 125, 150, 175, 200];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Strut {
@@ -16,18 +17,13 @@ pub struct Strut {
 }
 
 #[must_use]
-pub const fn supported_scale(scale_percent: u16) -> bool {
-    matches!(scale_percent, 100 | 125 | 150 | 175 | 200)
-}
-
-#[must_use]
 pub fn logical_to_physical(logical: u16, scale_percent: u16) -> i32 {
     let scale = effective_scale(scale_percent);
     ((u32::from(logical) * u32::from(scale) + 50) / 100) as i32
 }
 
 fn effective_scale(scale_percent: u16) -> u16 {
-    supported_scale(scale_percent).then_some(scale_percent).unwrap_or(100)
+    is_supported_scale(scale_percent).then_some(scale_percent).unwrap_or(100)
 }
 
 /// Taskbar layout from `taskbarStyle`, `taskbarFloatingMargin` and `taskbarFloatingRadius`.
@@ -289,13 +285,6 @@ impl PanelManager {
         self.primary_output.as_ref()
     }
 
-    #[must_use]
-    pub fn work_areas(&self) -> Vec<(OutputId, Rect)> {
-        self.panels
-            .iter()
-            .map(|(output, panel)| (output.clone(), panel.work_area()))
-            .collect()
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -371,7 +360,7 @@ mod tests {
 
     #[test]
     fn unsupported_panel_scale_falls_back_to_one_hundred_percent() {
-        assert!(!supported_scale(110));
+        assert!(!is_supported_scale(110));
         let panel = fhd_bottom("eDP-1", 110);
         assert_eq!(panel.scale_percent, 100);
         assert_eq!(panel.thickness(), 44);
