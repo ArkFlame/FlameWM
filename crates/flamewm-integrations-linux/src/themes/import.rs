@@ -323,8 +323,7 @@ fn sanitize_path(bytes: &[u8]) -> Result<Option<String>, ImportError> {
     for part in text.split('/') {
         match part {
             "" | "." => {}
-            ".." => return Err(ImportError::UnsafePath(text.to_owned())),
-            p if p.contains('\0') => return Err(ImportError::UnsafePath(text.to_owned())),
+            p if p == ".." || p.contains('\0') => return Err(ImportError::UnsafePath(text.to_owned())),
             p => parts.push(p),
         }
     }
