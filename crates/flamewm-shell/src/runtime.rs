@@ -674,10 +674,17 @@ pub fn panel_context_for_snapshot(
     snapshot: &ShellSnapshot,
     expected_edge: flamewm_api::PanelEdge,
 ) -> Option<PanelPlacementContext> {
-    let panel = snapshot.panels.panels.first().cloned()?;
+    let panel = snapshot.panels.panels.first()?;
     if panel.edge != expected_edge {
         return None;
     }
+    panel_context_for_panel(snapshot, panel)
+}
+
+fn panel_context_for_panel(
+    snapshot: &ShellSnapshot,
+    panel: &flamewm_api::panels::PanelSnapshot,
+) -> Option<PanelPlacementContext> {
     let output = snapshot
         .displays
         .outputs
@@ -686,7 +693,7 @@ pub fn panel_context_for_snapshot(
         .cloned()?;
     Some(PanelPlacementContext::new(
         output,
-        panel,
+        panel.clone(),
         snapshot.displays.generation,
         snapshot.panels.revision,
     ))
@@ -705,20 +712,7 @@ pub fn panel_contexts_for_snapshot(
         .panels
         .iter()
         .filter(|panel| panel.edge == expected_edge)
-        .filter_map(|panel| {
-            let output = snapshot
-                .displays
-                .outputs
-                .iter()
-                .find(|output| output.id == panel.output && output.connected)
-                .cloned()?;
-            Some(PanelPlacementContext::new(
-                output,
-                panel.clone(),
-                snapshot.displays.generation,
-                snapshot.panels.revision,
-            ))
-        })
+        .filter_map(|panel| panel_context_for_panel(snapshot, panel))
         .collect()
 }
 
