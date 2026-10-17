@@ -185,9 +185,7 @@ mod tests {
         assert_eq!(texts(&layout), vec!["aa bb", "cc"]);
         assert!((layout.line_height - 13.0).abs() < 0.01);
         assert!((layout.height - 26.0).abs() < 0.01);
-        for w in widths(&layout) {
-            assert!(w <= 5.0 * 10.0 * 0.58 + 0.01);
-        }
+        assert!(widths(&layout).iter().all(|&w| w <= 5.0 * 10.0 * 0.58 + 0.01));
     }
 
     #[test]
@@ -195,9 +193,7 @@ mod tests {
         let layout = layout_text("abcdefgh", 10.0, 3.0 * 10.0 * 0.58, TextWrap::Wrap, false);
         assert!(layout.lines.len() > 1);
         assert_eq!(layout.lines.iter().map(|l| l.text.len()).sum::<usize>(), 8);
-        for w in widths(&layout) {
-            assert!(w <= 3.0 * 10.0 * 0.58 + 0.01);
-        }
+        assert!(widths(&layout).iter().all(|&w| w <= 3.0 * 10.0 * 0.58 + 0.01));
     }
 
     #[test]
@@ -210,9 +206,7 @@ mod tests {
     fn narrow_width_degrades_to_char_lines() {
         let layout = layout_text("ab cd", 10.0, 0.0, TextWrap::Wrap, false);
         assert!(layout.lines.len() >= 4);
-        for w in widths(&layout) {
-            assert!(w <= 10.0 * 0.58 + 0.01);
-        }
+        assert!(widths(&layout).iter().all(|&w| w <= 10.0 * 0.58 + 0.01));
     }
 
     #[test]
@@ -250,7 +244,7 @@ mod tests {
     #[test]
     fn break_anywhere_fills_chars() {
         let layout = layout_text("aa bb", 10.0, 3.0 * 10.0 * 0.58, TextWrap::Wrap, true);
-        let joined: String = layout.lines.iter().map(|l| l.text.clone()).collect();
+        let joined: String = layout.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(joined, "aa bb");
         assert!(layout.lines.len() > 1);
     }
