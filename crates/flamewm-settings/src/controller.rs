@@ -78,49 +78,37 @@ mod tests {
         }
     }
 
+    /// Controller over `transport`, with the queued snapshot loaded by `refresh`.
+    fn loaded_application<R, E: std::fmt::Debug>(
+        transport: RecordingTransport,
+        refresh: impl FnOnce(&mut SettingsClient<RecordingTransport>) -> Result<R, E>,
+    ) -> SettingsApplication<RecordingTransport> {
+        let mut application = SettingsApplication::new(transport);
+        refresh(application.client_mut()).expect("queued snapshot");
+        application
+    }
+
     /// Controller over `transport`, with the queued settings snapshot already loaded.
     fn settings_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("settings snapshot");
-        application
+        loaded_application(transport, |client| client.refresh_settings())
     }
 
     /// Controller over `transport`, with the queued display snapshot already loaded.
     fn displays_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
-        application
+        loaded_application(transport, |client| client.refresh_displays())
     }
 
     /// Controller over `transport`, with the queued shortcut snapshot already loaded.
     fn shortcuts_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
-        application
+        loaded_application(transport, |client| client.refresh_shortcuts())
     }
 
     /// Values written to `key` by `ApplySettings` requests, in request order.
     fn written_values(requests: &RefCell<Vec<ControlRequest>>, key: &str) -> Vec<SettingValue> {
-        requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .filter(|change| change.key == key)
-                    .and_then(|change| change.value.clone()),
-                _ => None,
-            })
+        applied_writes(requests)
+            .into_iter()
+            .filter(|(written, _)| written == key)
+            .map(|(_, value)| value)
             .collect()
     }
 
