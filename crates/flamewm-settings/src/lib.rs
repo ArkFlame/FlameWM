@@ -2836,18 +2836,12 @@ pub fn font_size_label(offset: i64) -> String {
 
 /// Profile picture label: the managed file name, or `Default` for the built-in ring icon.
 fn avatar_label(path: &str) -> String {
-    if path.is_empty() {
-        return "Default".to_owned();
-    }
-    file_name_label(path)
+    if path.is_empty() { "Default".to_owned() } else { file_name_label(path) }
 }
 
 /// Start icon label: the managed file name, or `Built-in icon` for the default logo.
 fn start_icon_label(path: &str) -> String {
-    if path.is_empty() {
-        return "Built-in icon".to_owned();
-    }
-    file_name_label(path)
+    if path.is_empty() { "Built-in icon".to_owned() } else { file_name_label(path) }
 }
 
 fn file_name_label(path: &str) -> String {
