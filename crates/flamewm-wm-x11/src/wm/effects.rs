@@ -16,17 +16,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         });
         if effect_boundary == Some("first") {
-            let session = self.session_of(client);
-            if let Some(probe) = self.resize_probe.as_ref() {
-                emit_resize_probe(
-                    "effect",
-                    "first",
-                    probe,
-                    Some(probe.last_pointer),
-                    session,
-                    Some(commit),
-                );
-            }
+            self.emit_effect_boundary(client, "first", commit);
             if let Some(probe) = self.resize_probe.as_mut() {
                 probe.effect_seen = true;
             }
@@ -171,17 +161,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.abort_session_to_idle(client);
         }
         if effect_boundary == Some("last") {
-            let session = self.session_of(client);
-            if let Some(probe) = self.resize_probe.as_ref() {
-                emit_resize_probe(
-                    "effect",
-                    "last",
-                    probe,
-                    Some(probe.last_pointer),
-                    session,
-                    Some(commit),
-                );
-            }
+            self.emit_effect_boundary(client, "last", commit);
         }
         if commit.ungrab {
             self.resize_probe = None;
@@ -189,13 +169,20 @@ impl<'a, C: Connection> Wm<'a, C> {
         result
     }
 
+    fn emit_effect_boundary(&self, client: Window, boundary: &str, commit: &interaction::PointerCommit) {
+        let session = self.session_of(client);
+        if let Some(probe) = self.resize_probe.as_ref() {
+            emit_resize_probe("effect", boundary, probe, Some(probe.last_pointer), session, Some(commit));
+        }
+    }
+
+    fn client_and_session_mut(&mut self, client: Window) -> Option<(&mut ManagedClient, &mut ControllerState)> {
+        Some((self.clients.get_mut(&client)?, self.sessions.get_mut(&client)?))
+    }
+
     pub(super) fn commit_frame_position(&mut self, client: Window, x: i32, y: i32) {
-        let (state, session) = match (
-            self.clients.get_mut(&client),
-            self.sessions.get_mut(&client),
-        ) {
-            (Some(state), Some(session)) => (state, session),
-            _ => return,
+        let Some((state, session)) = self.client_and_session_mut(client) else {
+            return;
         };
         let current = state.placement.current;
         let next = RootRect::new(x, y, current.w.max(1), current.h.max(1));
@@ -210,12 +197,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn commit_frame_rect(&mut self, client: Window, x: i32, y: i32, w: i32, h: i32) {
-        let (state, session) = match (
-            self.clients.get_mut(&client),
-            self.sessions.get_mut(&client),
-        ) {
-            (Some(state), Some(session)) => (state, session),
-            _ => return,
+        let Some((state, session)) = self.client_and_session_mut(client) else {
+            return;
         };
         let frame = RootRect::new(x, y, w.max(1), h.max(1)).to_legacy();
         let mode = state.placement.mode;
@@ -284,8 +267,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             "effect=GrabCapture stack=above".to_owned(),
             &result,
         );
-        let _ = result;
-        let reply = match self.conn.grab_pointer(
+        let grab = self.conn.grab_pointer(
             false,
             grab_target,
             EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
@@ -294,17 +276,15 @@ impl<'a, C: Connection> Wm<'a, C> {
             0u32,
             0u32,
             CURRENT_TIME,
-        ) {
-            Ok(cookie) => match cookie.reply() {
-                Ok(reply) => reply,
-                Err(error) => {
-                    self.release_pointer();
-                    return Err(error.into());
-                }
-            },
+        );
+        let reply = match grab
+            .map_err(ReplyOrIdError::from)
+            .and_then(|cookie| cookie.reply().map_err(ReplyOrIdError::from))
+        {
+            Ok(reply) => reply,
             Err(error) => {
                 self.release_pointer();
-                return Err(ReplyOrIdError::ConnectionError(error));
+                return Err(error);
             }
         };
         if reply.status == GrabStatus::SUCCESS {
