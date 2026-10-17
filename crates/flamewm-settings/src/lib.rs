@@ -1506,8 +1506,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             optional_text(document, "theme-install-status", status.clone());
         }
         self.sync_appearance(document)?;
-        self.sync_decoration(document)?;
-        self.sync_titlebar_button_style(document)?;
+        self.sync_option_setting(document, "decoration", &[("rounded", "decoration-rounded"), ("squared", "decoration-squared")])?;
+        self.sync_option_setting(document, "titlebarButtonStyle", &[("circle", "titlebar-button-style-circle"), ("square", "titlebar-button-style-square")])?;
         self.sync_animation_styles(document)?;
         self.sync_lock_screen(document)?;
         self.sync_segment_rows(document)?;
@@ -1558,21 +1558,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
         Ok(())
     }
 
-    /// Highlights the preview button whose shape matches the authoritative `titlebarButtonStyle`.
-    fn sync_titlebar_button_style(
+    /// Highlights the option matching the authoritative `key` setting; an unset key leaves the row alone.
+    fn sync_option_setting(
         &self,
         document: &mut impl UiDocumentAccess,
+        key: &str,
+        options: &[(&str, &str)],
     ) -> Result<(), String> {
-        let Ok(current) = self.text_setting("titlebarButtonStyle") else {
+        let Ok(current) = self.text_setting(key) else {
             return Ok(());
         };
         let accent = self.accent()?;
-        highlight_options(
-            document,
-            Some(&current),
-            &[("circle", "titlebar-button-style-circle"), ("square", "titlebar-button-style-square")],
-            accent,
-        )
+        highlight_options(document, Some(&current), options, accent)
     }
 
     /// Highlights the preset that matches each surface setting, and shows each
@@ -1666,9 +1663,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         let accent = self.accent()?;
         let clock = self.text_setting("lockClockFormat").ok();
-        for (value, id) in [("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")] {
-            highlight_segment(document, id, clock.as_deref() == Some(value), accent)?;
-        }
+        highlight_options(document, clock.as_deref(), &[("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")], accent)?;
         let timeout = self.integer_setting("lockTimeoutMinutes").ok();
         for minutes in LOCK_TIMEOUT_CHOICES {
             let id = format!("lock-timeout-{minutes}");
@@ -1717,20 +1712,6 @@ impl<T: ControlTransport> SettingsApplication<T> {
             accent,
         )?;
         Ok(())
-    }
-
-    /// Highlights the option button whose value matches the authoritative `decoration`.
-    fn sync_decoration(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let Ok(current) = self.text_setting("decoration") else {
-            return Ok(());
-        };
-        let accent = self.accent()?;
-        highlight_options(
-            document,
-            Some(&current),
-            &[("rounded", "decoration-rounded"), ("squared", "decoration-squared")],
-            accent,
-        )
     }
 
     fn sync_error(&self, document: &mut impl UiDocumentAccess) {
@@ -1847,9 +1828,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
     fn sync_weather(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         let units = self.text_setting("weatherUnits").unwrap_or_else(|_| "celsius".to_owned());
         let accent = self.accent()?;
-        for (value, id) in [("celsius", "weather-units-celsius"), ("fahrenheit", "weather-units-fahrenheit")] {
-            highlight_segment(document, id, units == value, accent)?;
-        }
+        highlight_options(document, Some(&units), &[("celsius", "weather-units-celsius"), ("fahrenheit", "weather-units-fahrenheit")], accent)?;
         let location = self.text_setting("weatherLocation").unwrap_or_default();
         let automatic = self.bool_setting("autoLocationEnabled");
         document.text("weather-location-value", weather_location_text(&location, automatic))
@@ -2916,6 +2895,12 @@ mod cursor_reload_tests {
 mod value_text_tests {
     use super::*;
 
+    macro_rules! assert_action {
+        ($action:expr, $($pat:tt)+) => {
+            assert!(matches!(parse_action($action), $($pat)+))
+        };
+    }
+
     #[test]
     fn avatar_chooser_targets_avatar_media_and_setting() {
         assert_eq!(ChooserTarget::Avatar.media_kind(), MediaKind::Avatar);
@@ -2943,27 +2928,12 @@ mod value_text_tests {
     #[test]
     fn theme_picker_actions_parse_to_typed_targets() {
         use theme_picker::PickerKind;
-        assert!(matches!(
-            parse_action("settings.theme.icon.open"),
-            Ok(SettingsAction::ThemePickerOpen(PickerKind::Icon))
-        ));
-        assert!(matches!(
-            parse_action("settings.theme.cursor.next"),
-            Ok(SettingsAction::ThemePickerPage(PickerKind::Cursor, PageStep::Next))
-        ));
-        assert!(matches!(
-            parse_action("settings.theme.icon.select.5"),
-            Ok(SettingsAction::ThemePickerSelect(PickerKind::Icon, 5))
-        ));
+        assert_action!("settings.theme.icon.open", Ok(SettingsAction::ThemePickerOpen(PickerKind::Icon)));
+        assert_action!("settings.theme.cursor.next", Ok(SettingsAction::ThemePickerPage(PickerKind::Cursor, PageStep::Next)));
+        assert_action!("settings.theme.icon.select.5", Ok(SettingsAction::ThemePickerSelect(PickerKind::Icon, 5)));
         assert!(matches!(parse_action("settings.theme.close"), Ok(SettingsAction::ThemePickerClose)));
-        assert!(matches!(
-            parse_action("settings.theme.install"),
-            Ok(SettingsAction::ThemeInstallChoose { folder: false })
-        ));
-        assert!(matches!(
-            parse_action("settings.theme.install-folder"),
-            Ok(SettingsAction::ThemeInstallChoose { folder: true })
-        ));
+        assert_action!("settings.theme.install", Ok(SettingsAction::ThemeInstallChoose { folder: false }));
+        assert_action!("settings.theme.install-folder", Ok(SettingsAction::ThemeInstallChoose { folder: true }));
     }
 
     #[test]
@@ -3059,32 +3029,20 @@ mod value_text_tests {
 
     #[test]
     fn color_swatches_and_coarse_steps_parse_to_fixed_typed_targets() {
-        assert!(matches!(
-            parse_action("settings.color.surface.preset.0"),
-            Ok(SettingsAction::ColorSwatch { key: "surfaceColor", value: "#191B1D" })
-        ));
+        assert_action!("settings.color.surface.preset.0", Ok(SettingsAction::ColorSwatch { key: "surfaceColor", value: "#191B1D" }));
         assert!(
             parse_action("settings.color.surface.preset.6").is_err(),
             "only six surface presets exist"
         );
         assert!(parse_action("settings.color.taskbar.preset.0").is_err());
-        assert!(matches!(
-            parse_action("settings.color.lockbackground.preset.5"),
-            Ok(SettingsAction::ColorSwatch { key: "lockBackgroundColor", value: "#9B59B6" })
-        ));
+        assert_action!("settings.color.lockbackground.preset.5", Ok(SettingsAction::ColorSwatch { key: "lockBackgroundColor", value: "#9B59B6" }));
         assert!(
             parse_action("settings.picker.open.titlebar").is_err(),
             "titlebar has no colour target"
         );
         assert!(parse_action("settings.color.titlebar.preset.0").is_err());
-        assert!(matches!(
-            parse_action("settings.picker.pick.0.0"),
-            Ok(SettingsAction::ColorPickerPick(value)) if value == "#F7C9C9"
-        ));
-        assert!(matches!(
-            parse_action("settings.picker.pick.grey.5"),
-            Ok(SettingsAction::ColorPickerPick(value)) if value == "#FFFFFF"
-        ));
+        assert_action!("settings.picker.pick.0.0", Ok(SettingsAction::ColorPickerPick(value)) if value == "#F7C9C9");
+        assert_action!("settings.picker.pick.grey.5", Ok(SettingsAction::ColorPickerPick(value)) if value == "#FFFFFF");
         for action in [
             "settings.color.taskbar.preset.9",
             "settings.color.taskbar.preset.x",
@@ -3104,36 +3062,15 @@ mod value_text_tests {
     #[test]
     fn appearance_actions_parse_to_their_exact_typed_targets() {
         assert!(parse_action("settings.start-menu-opacity.up").is_err());
-        assert!(matches!(
-            parse_action("settings.accent-opacity.down"),
-            Ok(SettingsAction::PercentStep("accentOpacity", -1))
-        ));
-        assert!(matches!(
-            parse_action("settings.toggle.maximizeAnimationEnabled"),
-            Ok(SettingsAction::Toggle("maximizeAnimationEnabled"))
-        ));
-        assert!(matches!(
-            parse_action("settings.titlebar.button-style.square"),
-            Ok(SettingsAction::TextSelect { key: "titlebarButtonStyle", value: "square" })
-        ));
+        assert_action!("settings.accent-opacity.down", Ok(SettingsAction::PercentStep("accentOpacity", -1)));
+        assert_action!("settings.toggle.maximizeAnimationEnabled", Ok(SettingsAction::Toggle("maximizeAnimationEnabled")));
+        assert_action!("settings.titlebar.button-style.square", Ok(SettingsAction::TextSelect { key: "titlebarButtonStyle", value: "square" }));
         assert!(parse_action("settings.titlebar.minimize.style").is_err());
         assert!(parse_action("settings.titlebar.button-style.cycle").is_err());
-        assert!(matches!(
-            parse_action("settings.decoration.rounded"),
-            Ok(SettingsAction::TextSelect { key: "decoration", value: "rounded" })
-        ));
-        assert!(matches!(
-            parse_action("settings.decoration.squared"),
-            Ok(SettingsAction::TextSelect { key: "decoration", value: "squared" })
-        ));
-        assert!(matches!(
-            parse_action("settings.appearance.apps.dark"),
-            Ok(SettingsAction::TextSelect { key: "appearance", value: "dark" })
-        ));
-        assert!(matches!(
-            parse_action("settings.appearance.apps.light"),
-            Ok(SettingsAction::TextSelect { key: "appearance", value: "light" })
-        ));
+        assert_action!("settings.decoration.rounded", Ok(SettingsAction::TextSelect { key: "decoration", value: "rounded" }));
+        assert_action!("settings.decoration.squared", Ok(SettingsAction::TextSelect { key: "decoration", value: "squared" }));
+        assert_action!("settings.appearance.apps.dark", Ok(SettingsAction::TextSelect { key: "appearance", value: "dark" }));
+        assert_action!("settings.appearance.apps.light", Ok(SettingsAction::TextSelect { key: "appearance", value: "light" }));
         assert!(parse_action("settings.appearance.apps.system").is_err());
         assert_eq!(
             flamewm_api::settings::AppearanceMode::default().as_str(),
@@ -3146,35 +3083,17 @@ mod value_text_tests {
 
     #[test]
     fn screensaver_preview_action_is_distinct_from_lock_preview() {
-        assert!(matches!(
-            parse_action("settings.screensaver.preview"),
-            Ok(SettingsAction::ScreensaverPreview)
-        ));
-        assert!(matches!(
-            parse_action("settings.lock.preview"),
-            Ok(SettingsAction::LockPreview)
-        ));
+        assert_action!("settings.screensaver.preview", Ok(SettingsAction::ScreensaverPreview));
+        assert_action!("settings.lock.preview", Ok(SettingsAction::LockPreview));
     }
 
     #[test]
     fn accent_reset_and_start_icon_actions_parse_to_their_typed_targets() {
         assert!(parse_action("settings.accent.reset").is_err());
-        assert!(matches!(
-            parse_action("settings.start-icon.clear"),
-            Ok(SettingsAction::StartIconClear)
-        ));
-        assert!(matches!(
-            parse_action("settings.start-icon.choose"),
-            Ok(SettingsAction::StartIconChoose)
-        ));
-        assert!(matches!(
-            parse_action("settings.page.surfaces"),
-            Ok(SettingsAction::AppearanceTab(AppearanceTab::Surfaces))
-        ));
-        assert!(matches!(
-            parse_action("settings.page.desktop"),
-            Ok(SettingsAction::Page(SettingsPage::Desktop))
-        ));
+        assert_action!("settings.start-icon.clear", Ok(SettingsAction::StartIconClear));
+        assert_action!("settings.start-icon.choose", Ok(SettingsAction::StartIconChoose));
+        assert_action!("settings.page.surfaces", Ok(SettingsAction::AppearanceTab(AppearanceTab::Surfaces)));
+        assert_action!("settings.page.desktop", Ok(SettingsAction::Page(SettingsPage::Desktop)));
     }
 
     #[test]
@@ -3199,70 +3118,28 @@ mod value_text_tests {
 
     #[test]
     fn lock_background_steppers_parse_to_their_exact_typed_targets() {
-        assert!(matches!(
-            parse_action("settings.lock-bg-blur.up"),
-            Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: 5, minimum: 0, maximum: 100 })
-        ));
-        assert!(matches!(
-            parse_action("settings.lock-bg-blur.down"),
-            Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: -5, minimum: 0, maximum: 100 })
-        ));
-        assert!(matches!(
-            parse_action("settings.lock-bg-dim.up"),
-            Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: 5, minimum: 0, maximum: 80 })
-        ));
-        assert!(matches!(
-            parse_action("settings.lock-bg-dim.down"),
-            Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: -5, minimum: 0, maximum: 80 })
-        ));
+        assert_action!("settings.lock-bg-blur.up", Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: 5, minimum: 0, maximum: 100 }));
+        assert_action!("settings.lock-bg-blur.down", Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: -5, minimum: 0, maximum: 100 }));
+        assert_action!("settings.lock-bg-dim.up", Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: 5, minimum: 0, maximum: 80 }));
+        assert_action!("settings.lock-bg-dim.down", Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: -5, minimum: 0, maximum: 80 }));
         assert!(parse_action("settings.lock-bg-dim.sideways").is_err());
     }
 
     #[test]
     fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
-        assert!(matches!(
-            parse_action("settings.surface-blur.up"),
-            Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1))
-        ));
-        assert!(matches!(
-            parse_action("settings.surface-opacity.down"),
-            Ok(SettingsAction::PercentStep("surfaceOpacity", -1))
-        ));
+        assert_action!("settings.surface-blur.up", Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1)));
+        assert_action!("settings.surface-opacity.down", Ok(SettingsAction::PercentStep("surfaceOpacity", -1)));
         assert!(parse_action("settings.taskbar-blur.up").is_err());
         assert!(parse_action("settings.taskbar-opacity.up").is_err());
         assert!(parse_action("settings.start-menu-blur.down").is_err());
-        assert!(matches!(
-            parse_action("settings.taskbar-floating-margin.up"),
-            Ok(SettingsAction::IntegerStep { key: "taskbarFloatingMargin", delta: 1, minimum: 0, maximum: 32 })
-        ));
-        assert!(matches!(
-            parse_action("settings.screensaver-ribbon-width.down"),
-            Ok(SettingsAction::IntegerStep { key: "screensaverRibbonWidthTenths", delta: -5, minimum: 20, maximum: 280 })
-        ));
-        assert!(matches!(
-            parse_action("settings.screensaver-display-off.up"),
-            Ok(SettingsAction::IntegerStep { key: "screensaverDisplayOffMinutes", delta: 5, minimum: 0, maximum: 240 })
-        ));
-        assert!(matches!(
-            parse_action("settings.cursor.size.48"),
-            Ok(SettingsAction::IntegerSelect { key: "cursorSize", value: 48 })
-        ));
-        assert!(matches!(
-            parse_action("settings.taskbar.style.floating"),
-            Ok(SettingsAction::TextSelect { key: "taskbarStyle", value: "floating" })
-        ));
-        assert!(matches!(
-            parse_action("settings.taskbar.clock.12h"),
-            Ok(SettingsAction::TextSelect { key: "taskbarClockFormat", value: "12h" })
-        ));
-        assert!(matches!(
-            parse_action("settings.screensaver.mode.none"),
-            Ok(SettingsAction::TextSelect { key: "screensaverMode", value: "none" })
-        ));
-        assert!(matches!(
-            parse_action("settings.wallpaper.fit"),
-            Ok(SettingsAction::TextCycle { key: "wallpaperFit", .. })
-        ));
+        assert_action!("settings.taskbar-floating-margin.up", Ok(SettingsAction::IntegerStep { key: "taskbarFloatingMargin", delta: 1, minimum: 0, maximum: 32 }));
+        assert_action!("settings.screensaver-ribbon-width.down", Ok(SettingsAction::IntegerStep { key: "screensaverRibbonWidthTenths", delta: -5, minimum: 20, maximum: 280 }));
+        assert_action!("settings.screensaver-display-off.up", Ok(SettingsAction::IntegerStep { key: "screensaverDisplayOffMinutes", delta: 5, minimum: 0, maximum: 240 }));
+        assert_action!("settings.cursor.size.48", Ok(SettingsAction::IntegerSelect { key: "cursorSize", value: 48 }));
+        assert_action!("settings.taskbar.style.floating", Ok(SettingsAction::TextSelect { key: "taskbarStyle", value: "floating" }));
+        assert_action!("settings.taskbar.clock.12h", Ok(SettingsAction::TextSelect { key: "taskbarClockFormat", value: "12h" }));
+        assert_action!("settings.screensaver.mode.none", Ok(SettingsAction::TextSelect { key: "screensaverMode", value: "none" }));
+        assert_action!("settings.wallpaper.fit", Ok(SettingsAction::TextCycle { key: "wallpaperFit", .. }));
         assert!(parse_action("settings.toggle.screensaverSpanMonitors").is_err());
     }
 
@@ -3490,21 +3367,13 @@ mod accent_node_tests {
     }
 
     impl UiDocumentAccess for ColorDocument {
-        fn text(&mut self, _id: &str, _text: String) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn text(&mut self, _id: &str, _text: String) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
         fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
             crate::ui_contract::require_markup_id(_track_id)?;
@@ -3519,9 +3388,7 @@ mod accent_node_tests {
             Ok(())
         }
 
-        fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
         fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
             crate::ui_contract::require_markup_id(id)?;
@@ -3529,33 +3396,19 @@ mod accent_node_tests {
             Ok(())
         }
 
-        fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn background_clear(&mut self, _id: &str) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn background_clear(&mut self, _id: &str) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn border_clear(&mut self, _id: &str) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn border_clear(&mut self, _id: &str) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn foreground_clear(&mut self, _id: &str) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
-        fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> {
-            crate::ui_contract::require_markup_id(_id)
-        }
+        fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
 
         fn overflow(
             &mut self,
