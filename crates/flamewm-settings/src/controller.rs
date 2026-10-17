@@ -1238,12 +1238,10 @@ mod tests {
             after
                 .values
                 .insert(key.to_owned(), SettingValue::Percent(expected));
-            transport
-                .responses
-                .push_back(Ok(ControlResponse::Settings(before)));
-            transport
-                .responses
-                .push_back(Ok(ControlResponse::Settings(after)));
+            transport.responses.extend([
+                Ok(ControlResponse::Settings(before)),
+                Ok(ControlResponse::Settings(after)),
+            ]);
             let mut application = settings_application(transport);
             let mut document = ProbeDocument::default();
 
@@ -1264,20 +1262,18 @@ mod tests {
     #[test]
     fn avatar_clear_writes_empty_default_and_never_touches_background() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "avatarImage",
                 SettingValue::Text("/home/u/avatar-0123456789abcdef.png".to_owned()),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "avatarImage",
                 SettingValue::Text(String::new()),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
@@ -1749,12 +1745,10 @@ mod tests {
         updated
             .values
             .insert("fontBold".to_owned(), SettingValue::Boolean(true));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(initial)));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(updated)));
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(initial)),
+            Ok(ControlResponse::Settings(updated)),
+        ]);
         let mut application = settings_application(transport);
         application
             .handle_action(
@@ -2212,14 +2206,10 @@ mod tests {
     #[test]
     fn display_mode_slots_and_actions_follow_the_selected_output() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Transaction(
-                flamewm_api::TransactionId(12),
-            )));
+        transport.responses.extend([
+            Ok(ControlResponse::Displays(two_output_display_snapshot())),
+            Ok(ControlResponse::Transaction(flamewm_api::TransactionId(12))),
+        ]);
         let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -2344,14 +2334,10 @@ mod tests {
     #[test]
     fn display_mode_page_one_slot_three_begins_absolute_mode_eleven() {
         let (requests, mut transport) = recording_transport();
-        transport.responses.push_back(Ok(
-            ControlResponse::Displays(twelve_mode_display_snapshot()),
-        ));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Transaction(
-                flamewm_api::TransactionId(31),
-            )));
+        transport.responses.extend([
+            Ok(ControlResponse::Displays(twelve_mode_display_snapshot())),
+            Ok(ControlResponse::Transaction(flamewm_api::TransactionId(31))),
+        ]);
         let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
