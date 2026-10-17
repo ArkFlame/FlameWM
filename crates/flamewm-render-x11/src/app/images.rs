@@ -23,6 +23,44 @@ fn log_degraded_mask_once(asset_id: u16) {
     });
 }
 
+/// Creates a ZPIXMAP XImage with zeroed, malloc'd data (XDestroyImage frees it).
+/// Returns the image and its data size. Caller must XDestroyImage on success.
+pub(crate) unsafe fn create_zeroed_ximage(
+    display: *mut Display,
+    visual: *mut Visual,
+    depth: u32,
+    what: &str,
+    width: u32,
+    height: u32,
+) -> Result<(*mut XImage, usize), String> {
+    let ximage = unsafe {
+        XCreateImage(display, visual, depth, ZPIXMAP, 0, ptr::null_mut(), width, height, 32, 0)
+    };
+    if ximage.is_null() {
+        return Err(format!("XCreateImage failed for {what}"));
+    }
+    let head = unsafe { &mut *(ximage as *mut XImageHead) };
+    if head.bytes_per_line <= 0 {
+        unsafe { XDestroyImage(ximage) };
+        return Err("XCreateImage produced invalid bytes_per_line".to_string());
+    }
+    let total = match (head.bytes_per_line as usize).checked_mul(height as usize) {
+        Some(total) => total,
+        None => {
+            unsafe { XDestroyImage(ximage) };
+            return Err("XImage buffer size overflow".to_string());
+        }
+    };
+    let data = unsafe { malloc(total) };
+    if data.is_null() {
+        unsafe { XDestroyImage(ximage) };
+        return Err(format!("malloc failed for {total}-byte XImage"));
+    }
+    unsafe { ptr::write_bytes(data as *mut u8, 0, total) };
+    head.data = data as *mut _;
+    Ok((ximage, total))
+}
+
 pub(crate) fn image_cache_key(
     node: u32,
     asset_id: u16,
@@ -248,40 +286,12 @@ impl X11App {
         if visual.is_null() {
             return Err("ARGB32 visual is NULL".to_string());
         }
-        let ximage = unsafe {
-            XCreateImage(
-                self.display,
-                visual,
-                32,
-                ZPIXMAP,
-                0,
-                ptr::null_mut(),
-                width,
-                height,
-                32,
-                0,
-            )
+        let (ximage, total) = unsafe {
+            create_zeroed_ximage(self.display, visual, 32, "ARGB32 upload", width, height)?
         };
-        if ximage.is_null() {
-            return Err("XCreateImage failed for ARGB32 upload".to_string());
-        }
-        let head = unsafe { &mut *(ximage as *mut XImageHead) };
-        if head.bytes_per_line <= 0 {
-            unsafe { XDestroyImage(ximage) };
-            return Err("XCreateImage produced invalid bytes_per_line".to_string());
-        }
-        let total = (head.bytes_per_line as usize)
-            .checked_mul(height as usize)
-            .ok_or_else(|| "XImage buffer size overflow".to_string())?;
-        let data = unsafe { malloc(total) };
-        if data.is_null() {
-            unsafe { XDestroyImage(ximage) };
-            return Err(format!("malloc failed for {total}-byte XImage"));
-        }
-        unsafe { ptr::write_bytes(data as *mut u8, 0, total) };
-        head.data = data as *mut _;
+        let head = unsafe { &*(ximage as *const XImageHead) };
         let bpl_words = head.bytes_per_line as usize / 4;
-        let raw = unsafe { std::slice::from_raw_parts_mut(data as *mut u32, total / 4) };
+        let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
         for y in 0..height as usize {
             let dst_off = y * bpl_words;
             let src_off = y * width as usize;
@@ -328,38 +338,10 @@ impl X11App {
         if visual.is_null() {
             return Err("XDefaultVisual returned NULL".to_string());
         }
-        let ximage = unsafe {
-            XCreateImage(
-                self.display,
-                visual,
-                self.depth as u32,
-                ZPIXMAP,
-                0,
-                ptr::null_mut(),
-                width,
-                height,
-                32,
-                0,
-            )
+        let (ximage, _) = unsafe {
+            create_zeroed_ximage(self.display, visual, self.depth as u32, "image fallback", width, height)?
         };
-        if ximage.is_null() {
-            return Err("XCreateImage failed for image fallback".to_string());
-        }
-        let head = unsafe { &mut *(ximage as *mut XImageHead) };
-        if head.bytes_per_line <= 0 {
-            unsafe { XDestroyImage(ximage) };
-            return Err("XCreateImage produced invalid bytes_per_line".to_string());
-        }
-        let total = (head.bytes_per_line as usize)
-            .checked_mul(height as usize)
-            .ok_or_else(|| "XImage buffer size overflow".to_string())?;
-        let data = unsafe { malloc(total) };
-        if data.is_null() {
-            unsafe { XDestroyImage(ximage) };
-            return Err(format!("malloc failed for {total}-byte XImage"));
-        }
-        unsafe { ptr::write_bytes(data as *mut u8, 0, total) };
-        head.data = data as *mut _;
+        let head = unsafe { &*(ximage as *const XImageHead) };
         for y in 0..height {
             let sy = ((y as u64 * src_height as u64) / height as u64) as u32;
             for x in 0..width {

@@ -37,6 +37,7 @@ mod cursor_theme;
 mod events;
 mod geometry;
 mod images;
+pub(crate) use images::create_zeroed_ximage;
 mod input;
 mod layout_helpers;
 mod primitives;

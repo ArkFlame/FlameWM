@@ -100,7 +100,8 @@ where
                 document,
             )
         });
-        let deferred_native = unsafe { app.take_deferred_native_libraries() };
+        // SAFETY: covered by the enclosing `unsafe` block above; this call is not re-wrapped.
+        let deferred_native = app.take_deferred_native_libraries();
         drop(app);
         XCloseDisplay(display);
         drop(deferred_native);
@@ -526,10 +527,7 @@ impl SurfaceController {
         let now = Instant::now();
         let key = id.get();
         let (slide, shown) = {
-            let instance = self
-                .surfaces
-                .get_mut(&id)
-                .ok_or_else(|| format!("unknown surface {}", id.0))?;
+            let instance = self.instance_mut(id)?;
             (instance.slide, instance.shown)
         };
         // A slide-out keeps the grab so an outside press during the close is still captured;
@@ -668,10 +666,7 @@ impl SurfaceController {
     }
 
     pub fn grab_pointer(&mut self, id: SurfaceId) -> Result<(), String> {
-        let instance = self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        let instance = self.instance_ref(id)?;
         if !instance.input.allows_grab() {
             return Err(format!(
                 "surface {} is pass-through; pointer grab refused",
@@ -744,10 +739,7 @@ impl SurfaceController {
 
     /// Peek the merged damage latch for one surface (no consume).
     pub fn peek_surface_damage(&self, id: SurfaceId) -> Result<SurfaceDamage, String> {
-        let instance = self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        let instance = self.instance_ref(id)?;
         Ok(instance
             .app
             .pending_damage
@@ -842,10 +834,7 @@ impl SurfaceController {
     }
 
     fn retained(&self, id: SurfaceId) -> Result<(&X11App, &RuntimeDocument), String> {
-        let instance = self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        let instance = self.instance_ref(id)?;
         Ok((&instance.app, &instance.document))
     }
 
@@ -923,18 +912,12 @@ impl SurfaceController {
     }
 
     pub fn surface_role(&self, id: SurfaceId) -> Result<SurfaceRole, String> {
-        Ok(self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?
+        Ok(self.instance_ref(id)?
             .role)
     }
 
     pub fn surface_input_mode(&self, id: SurfaceId) -> Result<SurfaceInputMode, String> {
-        Ok(self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?
+        Ok(self.instance_ref(id)?
             .input)
     }
 
@@ -945,10 +928,7 @@ impl SurfaceController {
     }
 
     pub fn is_pointer_grabbed(&self, id: SurfaceId) -> Result<bool, String> {
-        Ok(self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?
+        Ok(self.instance_ref(id)?
             .app
             .pointer_grabbed)
     }
@@ -1045,10 +1025,7 @@ impl SurfaceController {
     where
         F: FnOnce(*mut Display, Window) -> i32,
     {
-        let instance = self
-            .surfaces
-            .get(&id)
-            .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        let instance = self.instance_ref(id)?;
         if operation(self.display, instance.app.window) == 0 {
             mark_x_error_seen();
             return Err(format!("X11 operation failed for surface {}", id.0));
@@ -1086,10 +1063,7 @@ impl SurfaceController {
         // window resize -> repaint); pure moves keep the retained size with
         // one XMoveResizeWindow.
         let size_changed = {
-            let instance = self
-                .surfaces
-                .get(&id)
-                .ok_or_else(|| format!("unknown surface {}", id.0))?;
+            let instance = self.instance_ref(id)?;
             width.max(1) != instance.app.width || height.max(1) != instance.app.height
         };
         let role_label = self

@@ -10,6 +10,7 @@
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 
 use crate::backdrop::{BackdropCapture, capture_drawable_rect};
+#[cfg(test)]
 use crate::ffi::dynamic_library::DynamicLibrary;
 use crate::xlib::{
     Display, Pixmap, Window, XCreateGC, XCreateImage, XCreatePixmap, XDefaultScreen,
@@ -29,17 +30,19 @@ pub struct CapturedImage {
     pub argb: Vec<u8>,
 }
 
+#[cfg(test)]
 type QueryExtensionFn = unsafe extern "C" fn(*mut Display, *mut c_int, *mut c_int) -> c_int;
+#[cfg(test)]
 type QueryVersionFn = unsafe extern "C" fn(*mut Display, *mut c_int, *mut c_int) -> c_int;
-type NameWindowPixmapFn = unsafe extern "C" fn(*mut Display, Window) -> Pixmap;
 
+#[cfg(test)]
 pub struct XCompositeApi {
     _library: DynamicLibrary,
     query_extension: QueryExtensionFn,
     query_version: QueryVersionFn,
-    name_window_pixmap: NameWindowPixmapFn,
 }
 
+#[cfg(test)]
 impl XCompositeApi {
     pub fn load() -> Result<Self, String> {
         let library = DynamicLibrary::open(&["libXcomposite.so.1", "libXcomposite.so"])?;
@@ -47,13 +50,10 @@ impl XCompositeApi {
         let query_extension = unsafe { library.symbol(b"XCompositeQueryExtension\0") }?;
         // SAFETY: as above.
         let query_version = unsafe { library.symbol(b"XCompositeQueryVersion\0") }?;
-        // SAFETY: as above.
-        let name_window_pixmap = unsafe { library.symbol(b"XCompositeNameWindowPixmap\0") }?;
         Ok(Self {
             _library: library,
             query_extension,
             query_version,
-            name_window_pixmap,
         })
     }
 
@@ -79,27 +79,6 @@ impl XCompositeApi {
         Ok((major, minor))
     }
 
-    /// Pixmap naming the backing store of a window that is already redirected.
-    /// Does not redirect; the caller frees the pixmap.
-    ///
-    /// # Safety
-    ///
-    /// `display` must be live and `window` a window on it that is redirected.
-    pub unsafe fn name_window_pixmap(
-        &self,
-        display: *mut Display,
-        window: Window,
-    ) -> Result<Pixmap, String> {
-        if display.is_null() || window == 0 {
-            return Err("XCompositeNameWindowPixmap: no display/window".to_string());
-        }
-        // SAFETY: caller contract; failure is reported by a zero pixmap.
-        let pixmap = unsafe { (self.name_window_pixmap)(display, window) };
-        if pixmap == 0 {
-            return Err("XCompositeNameWindowPixmap returned 0".to_string());
-        }
-        Ok(pixmap)
-    }
 }
 
 /// Rejects empty and oversize captures before any allocation.

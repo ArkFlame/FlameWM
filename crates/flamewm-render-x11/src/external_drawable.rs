@@ -15,6 +15,7 @@ use super::xft::{XftBackend, xft_measure_estimate};
 use super::xlib::*;
 use super::xrender::XRenderBackend;
 use super::xshape::{XShapeBridge, rounded_mask_spans};
+use crate::app::create_zeroed_ximage;
 
 /// Persistent RGBA native cache key: content identity plus raster size and
 /// palette. `content_hash` is FNV-1a over the source RGBA8 bytes; `palette`
@@ -932,40 +933,12 @@ fn upload_argb32(
     height: u32,
 ) -> Result<(), String> {
     use std::os::raw::c_void;
-    let ximage = unsafe {
-        XCreateImage(
-            display,
-            visual,
-            32,
-            ZPIXMAP,
-            0,
-            ptr::null_mut(),
-            width,
-            height,
-            32,
-            0,
-        )
+    let (ximage, total) = unsafe {
+        create_zeroed_ximage(display, visual, 32, "external ARGB32 upload", width, height)?
     };
-    if ximage.is_null() {
-        return Err("XCreateImage failed for external ARGB32 upload".to_string());
-    }
-    let head = unsafe { &mut *(ximage as *mut XImageHead) };
-    if head.bytes_per_line <= 0 {
-        unsafe { XDestroyImage(ximage) };
-        return Err("XCreateImage produced invalid bytes_per_line".to_string());
-    }
-    let total = (head.bytes_per_line as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| "XImage buffer size overflow".to_string())?;
-    let data = unsafe { malloc(total) };
-    if data.is_null() {
-        unsafe { XDestroyImage(ximage) };
-        return Err(format!("malloc failed for {total}-byte XImage"));
-    }
-    unsafe { ptr::write_bytes(data as *mut u8, 0, total) };
-    head.data = data as *mut _;
+    let head = unsafe { &*(ximage as *const XImageHead) };
     let bpl_words = head.bytes_per_line as usize / 4;
-    let raw = unsafe { std::slice::from_raw_parts_mut(data as *mut u32, total / 4) };
+    let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
     for y in 0..height as usize {
         let dst_off = y * bpl_words;
         let src_off = y * width as usize;

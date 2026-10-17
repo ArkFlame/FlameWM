@@ -310,10 +310,6 @@ impl NativeCursorSession {
         unsafe { self.backend.define(window, kind) }
     }
 
-    pub unsafe fn free_all(&mut self) {
-        unsafe { self.backend.free_all() };
-    }
-
     /// # Safety
     /// The session's display must be live.
     pub unsafe fn reload_theme(&mut self, theme: &str) -> Result<(), String> {

@@ -374,31 +374,20 @@ impl X11App {
         let Some(bridge) = self.xshape.as_ref() else {
             return;
         };
-        if let Some((border, radius)) = self.ring_mask {
-            let spans = crate::xshape::ring_mask_spans(self.width, self.height, border, radius);
-            if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
-                eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
-            }
-            return;
-        }
-        if self.dock_corner_radius > 0 {
-            let spans = crate::xshape::rounded_mask_spans(
-                self.width,
-                self.height,
-                self.dock_corner_radius,
-            );
-            if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
-                eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
-            }
-            return;
-        }
         // A retained backdrop is composited under translucent fills, so the snapshot must stay
         // visible across the whole rounded shape; coverage would drop the translucent area and
         // show the live desktop (unblurred) instead. Corners outside the radius stay transparent.
-        let spans = self.mask_spans(commands, scale, backdrop_radius);
-        if spans.is_empty() {
-            return;
-        }
+        let spans = if let Some((border, radius)) = self.ring_mask {
+            crate::xshape::ring_mask_spans(self.width, self.height, border, radius)
+        } else if self.dock_corner_radius > 0 {
+            crate::xshape::rounded_mask_spans(self.width, self.height, self.dock_corner_radius)
+        } else {
+            let spans = self.mask_spans(commands, scale, backdrop_radius);
+            if spans.is_empty() {
+                return;
+            }
+            spans
+        };
         if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
@@ -459,12 +448,10 @@ impl X11App {
                 let radius = *radius * scale;
                 // Canonical scene target: XRender handles all alpha; the GC
                 // path only runs in explicit OpaqueFallback (flattened pixel).
-                if self.xrender.is_some() {
-                    if let Some(xrender) = self.xrender.as_mut() {
-                        // SAFETY: same initialized backbuffer/display contract as `paint`.
-                        unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color)? };
-                        return Ok(());
-                    }
+                if let Some(xrender) = self.xrender.as_mut() {
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color)? };
+                    return Ok(());
                 }
                 if self.alpha_mode != SurfaceAlphaMode::OpaqueFallback && color.a < 255 {
                     return Err(
@@ -489,12 +476,10 @@ impl X11App {
                 let rect = scale_rect(*rect, scale);
                 let width = *width * scale;
                 let radius = *radius * scale;
-                if self.xrender.is_some() {
-                    if let Some(xrender) = self.xrender.as_mut() {
-                        // SAFETY: same initialized backbuffer/display contract as `paint`.
-                        unsafe { crate::xrender_aa::stroke_rounded_rect(xrender, rect, radius, width, *color)? };
-                        return Ok(());
-                    }
+                if let Some(xrender) = self.xrender.as_mut() {
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe { crate::xrender_aa::stroke_rounded_rect(xrender, rect, radius, width, *color)? };
+                    return Ok(());
                 }
                 if self.alpha_mode != SurfaceAlphaMode::OpaqueFallback && color.a < 255 {
                     return Err(
@@ -554,12 +539,10 @@ impl X11App {
                 let dy = rect.y.round() as i32;
                 // Canonical scene target: XRender/Xft paint onto the scene
                 // backbuffer; composited path uses PictOpOver with true alpha.
-                if self.xrender.is_some() {
-                    if let Some(xrender) = self.xrender.as_mut() {
-                        // SAFETY: same initialized backbuffer/display contract as `paint`.
-                        unsafe { xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)? };
-                        return Ok(());
-                    }
+                if let Some(xrender) = self.xrender.as_mut() {
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe { xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)? };
+                    return Ok(());
                 }
                 if cached.mask != 0 {
                     // SAFETY: display and GC are valid X11 resources owned by this app.
@@ -656,12 +639,16 @@ impl X11App {
                         // SAFETY: display and GC are valid X11 resources owned by this app.
                         unsafe { XSetFont(self.display, self.gc, font) };
                     }
-                    let ascii: String = text
-                        .chars()
-                        .map(|ch| if ch.is_ascii() { ch } else { '?' })
-                        .collect();
-                    let string =
-                        CString::new(ascii).map_err(|_| "text contains NUL".to_string())?;
+                    let string = if text.is_ascii() {
+                        CString::new(text.as_bytes())
+                    } else {
+                        CString::new(
+                            text.chars()
+                                .map(|ch| if ch.is_ascii() { ch } else { '?' })
+                                .collect::<String>(),
+                        )
+                    }
+                    .map_err(|_| "text contains NUL".to_string())?;
                     let len = string.as_bytes().len().min(i32::MAX as usize) as i32;
                     // SAFETY: display, backbuffer, and GC are valid; string remains alive for the call.
                     unsafe {
