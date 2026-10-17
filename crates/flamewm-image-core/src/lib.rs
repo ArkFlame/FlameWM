@@ -157,15 +157,12 @@ pub fn check_size_limits(width: u32, height: u32) -> Result<(), String> {
             "image dimensions {width}x{height} exceed maximum {MAX_DIMENSION}x{MAX_DIMENSION}"
         ));
     }
-    let bytes = (width as usize)
+    (width as usize)
         .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4));
-    match bytes {
-        Some(len) if len <= MAX_PIXEL_BYTES => Ok(()),
-        _ => Err(format!(
-            "image pixel payload exceeds maximum {MAX_PIXEL_BYTES} bytes"
-        )),
-    }
+        .and_then(|pixels| pixels.checked_mul(4))
+        .filter(|&len| len <= MAX_PIXEL_BYTES)
+        .map(|_| ())
+        .ok_or_else(|| format!("image pixel payload exceeds maximum {MAX_PIXEL_BYTES} bytes"))
 }
 
 /// Decodes at natural size. SVG without intrinsic dimensions is rejected.
