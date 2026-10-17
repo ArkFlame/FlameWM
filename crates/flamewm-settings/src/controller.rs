@@ -1363,20 +1363,18 @@ mod tests {
             ),
         ] {
             let (requests, mut transport) = recording_transport();
-            transport
-                .responses
-                .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            transport.responses.extend([
+                Ok(ControlResponse::Settings(lock_snapshot(
                     1,
                     key,
                     SettingValue::Integer(start),
-                ))));
-            transport
-                .responses
-                .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+                ))),
+                Ok(ControlResponse::Settings(lock_snapshot(
                     2,
                     key,
                     SettingValue::Integer(expected),
-                ))));
+                ))),
+            ]);
             let mut application = settings_application(transport);
             let mut document = ProbeDocument::default();
 
@@ -1396,20 +1394,18 @@ mod tests {
     #[test]
     fn floating_margin_stepper_clamps_at_its_maximum_and_writes_an_integer() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "taskbarFloatingMargin",
                 SettingValue::Integer(32),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "taskbarFloatingMargin",
                 SettingValue::Integer(32),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
@@ -1432,27 +1428,23 @@ mod tests {
     #[test]
     fn ribbon_width_stepper_moves_by_half_a_pixel_in_tenths() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "screensaverRibbonWidthTenths",
                 SettingValue::Integer(110),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "screensaverRibbonWidthTenths",
                 SettingValue::Integer(105),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 3,
                 "screensaverRibbonWidthTenths",
                 SettingValue::Integer(110),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
@@ -1481,20 +1473,18 @@ mod tests {
     #[test]
     fn taskbar_style_segment_writes_floating_and_shows_only_its_floating_steppers() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "taskbarStyle",
                 SettingValue::Text("classic".to_owned()),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "taskbarStyle",
                 SettingValue::Text("floating".to_owned()),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -1528,20 +1518,18 @@ mod tests {
     #[test]
     fn cursor_size_segments_write_exact_pixels_and_highlight_the_snapshot() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "cursorSize",
                 SettingValue::Integer(32),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "cursorSize",
                 SettingValue::Integer(64),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -1612,20 +1600,18 @@ mod tests {
     #[test]
     fn wallpaper_fit_selector_writes_the_next_wire_value_and_labels_it() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "wallpaperFit",
                 SettingValue::Text("fill".to_owned()),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "wallpaperFit",
                 SettingValue::Text("fit".to_owned()),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
@@ -1641,20 +1627,18 @@ mod tests {
     #[test]
     fn weather_units_segments_write_exact_values_and_highlight_the_snapshot() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "weatherUnits",
                 SettingValue::Text("celsius".to_owned()),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "weatherUnits",
                 SettingValue::Text("fahrenheit".to_owned()),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -1699,20 +1683,18 @@ mod tests {
     #[test]
     fn weather_location_clear_writes_empty_and_shows_the_unset_hint() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "weatherLocation",
                 SettingValue::Text("51.5\t-0.12\tGB\tLondon".to_owned()),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "weatherLocation",
                 SettingValue::Text(String::new()),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
@@ -1734,20 +1716,18 @@ mod tests {
     #[test]
     fn focus_follows_mouse_toggle_flips_its_boolean_and_moves_the_highlight() {
         let (requests, mut transport) = recording_transport();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+        transport.responses.extend([
+            Ok(ControlResponse::Settings(lock_snapshot(
                 1,
                 "focusFollowsMouse",
                 SettingValue::Boolean(false),
-            ))));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(lock_snapshot(
+            ))),
+            Ok(ControlResponse::Settings(lock_snapshot(
                 2,
                 "focusFollowsMouse",
                 SettingValue::Boolean(true),
-            ))));
+            ))),
+        ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
