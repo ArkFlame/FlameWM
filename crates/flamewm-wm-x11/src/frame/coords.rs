@@ -112,10 +112,7 @@ impl ClientRootRect {
 
     #[must_use]
     pub const fn origin(self) -> RootPoint {
-        RootPoint {
-            x: self.x,
-            y: self.y,
-        }
+        RootPoint::new(self.x, self.y)
     }
 
     #[must_use]
@@ -150,22 +147,15 @@ impl RootRect {
     #[cfg(test)]
     #[must_use]
     pub const fn origin(self) -> RootPoint {
-        RootPoint {
-            x: self.x,
-            y: self.y,
-        }
+        RootPoint::new(self.x, self.y)
     }
 
     /// Explicit domain crossing: root -> frame given the frame origin in root coords.
     #[cfg(test)]
     #[must_use]
     pub fn to_frame(self, frame_origin: RootPoint) -> FrameRect {
-        FrameRect {
-            x: self.x.saturating_sub(frame_origin.x),
-            y: self.y.saturating_sub(frame_origin.y),
-            w: self.w,
-            h: self.h,
-        }
+        let p = self.origin().to_frame(frame_origin);
+        FrameRect::new(p.x, p.y, self.w, self.h)
     }
 }
 
@@ -179,12 +169,8 @@ impl FrameRect {
     #[cfg(test)]
     #[must_use]
     pub fn to_root(self, frame_origin: RootPoint) -> RootRect {
-        RootRect {
-            x: self.x.saturating_add(frame_origin.x),
-            y: self.y.saturating_add(frame_origin.y),
-            w: self.w,
-            h: self.h,
-        }
+        let p = FramePoint::new(self.x, self.y).to_root(frame_origin);
+        RootRect::new(p.x, p.y, self.w, self.h)
     }
 }
 
