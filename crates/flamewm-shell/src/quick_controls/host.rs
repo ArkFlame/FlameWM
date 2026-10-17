@@ -1760,13 +1760,7 @@ mod tests {
             !debug.contains("s3cr3t"),
             "snapshot debug must not carry a secret"
         );
-        let line = super::super::protocol::encode_command(&Command::Open(OpenRequest {
-            kind: QuickControlKind::Network,
-            anchor: flamewm_api::Rect::new(0, 0, 1, 1),
-            work_area: flamewm_api::Rect::new(0, 0, 10, 10),
-            panel_edge: flamewm_api::PanelEdge::Bottom,
-            dock: None,
-        }));
+        let line = super::super::protocol::encode_command(&open_cmd(QuickControlKind::Network));
         assert!(!line.contains("s3cr3t"));
     }
 
@@ -2396,6 +2390,15 @@ mod battery_popup_tests {
         }
     }
 
+    fn project_battery(doc: &mut RecordingUiDoc, cpu_percent: Option<u8>) {
+        crate::projection::project_battery_menu(doc, &power(cpu_percent), 268.0)
+            .expect("battery menu projects");
+    }
+
+    fn text_of<'a>(doc: &'a RecordingUiDoc, id: &str) -> Option<&'a str> {
+        doc.texts.get(id).map(String::as_str)
+    }
+
     #[test]
     fn battery_kind_wire_name_and_popup_root_are_battery() {
         assert_eq!(QuickControlKind::Battery.as_str(), "battery");
@@ -2408,29 +2411,14 @@ mod battery_popup_tests {
     #[test]
     fn battery_menu_projects_cpu_text_and_refreshes_when_cpu_changes() {
         let mut doc = RecordingUiDoc::default();
-        crate::projection::project_battery_menu(&mut doc, &power(Some(37)), 268.0)
-            .expect("battery menu projects");
-        assert_eq!(
-            doc.texts.get("battery-cpu").map(String::as_str),
-            Some("CPU usage: 37%")
-        );
-        assert_eq!(
-            doc.texts.get("battery-percent").map(String::as_str),
-            Some("80%")
-        );
+        project_battery(&mut doc, Some(37));
+        assert_eq!(text_of(&doc, "battery-cpu"), Some("CPU usage: 37%"));
+        assert_eq!(text_of(&doc, "battery-percent"), Some("80%"));
         // A later snapshot with a new CPU sample must change the projected text.
-        crate::projection::project_battery_menu(&mut doc, &power(Some(64)), 268.0)
-            .expect("battery menu reprojects");
-        assert_eq!(
-            doc.texts.get("battery-cpu").map(String::as_str),
-            Some("CPU usage: 64%")
-        );
-        crate::projection::project_battery_menu(&mut doc, &power(None), 268.0)
-            .expect("battery menu projects without a sample");
-        assert_eq!(
-            doc.texts.get("battery-cpu").map(String::as_str),
-            Some("CPU usage: --%")
-        );
+        project_battery(&mut doc, Some(64));
+        assert_eq!(text_of(&doc, "battery-cpu"), Some("CPU usage: 64%"));
+        project_battery(&mut doc, None);
+        assert_eq!(text_of(&doc, "battery-cpu"), Some("CPU usage: --%"));
     }
 
     #[test]
