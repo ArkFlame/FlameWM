@@ -306,10 +306,7 @@ impl SurfaceController {
         // Visible create: paint retained offscreen first (redraw refreshes
         // shape once), then map (popup map+raise) + present/flush.
         unsafe {
-            instance.app.redraw(&instance.document).map_err(|error| {
-                mark_x_error_seen();
-                error
-            })?;
+            instance.app.redraw(&instance.document).map_err(mark_x_error)?;
         }
         unsafe {
             if surface_role_needs_popup_raise(role) {
@@ -318,10 +315,7 @@ impl SurfaceController {
             } else {
                 XMapWindow(self.display, window);
             }
-            instance.app.present_scene().map_err(|error| {
-                mark_x_error_seen();
-                error
-            })?;
+            instance.app.present_scene().map_err(mark_x_error)?;
             XFlush(self.display);
         }
         self.windows.insert(window, id);
@@ -333,13 +327,7 @@ impl SurfaceController {
         if let Some(mut instance) = self.surfaces.remove(&id) {
             self.slides.cancel(id.get());
             self.windows.remove(&instance.app.window);
-            if instance.app.pointer_grabbed {
-                unsafe {
-                    release_popup_presses(self.display, self.root_window(), &mut self.press_selection, id);
-                    popup_restore_focus(self.display, &mut instance.app);
-                }
-                instance.app.pointer_grabbed = false;
-            }
+            drop_popup_grab(self.display, self.root_window(), &mut self.press_selection, id, &mut instance.app);
             if x_io_broken() || x_error_seen() || !display_fd_alive(self.display) {
                 // No backend may call into a broken display. Preserve the
                 // complete app until process teardown rather than unloading a
@@ -365,19 +353,10 @@ impl SurfaceController {
             .surfaces
             .get_mut(&id)
             .ok_or_else(|| format!("unknown surface {}", id.0))?;
-        if instance.app.pointer_grabbed {
-            unsafe {
-                release_popup_presses(display, root, &mut self.press_selection, id);
-                popup_restore_focus(display, &mut instance.app);
-            }
-            instance.app.pointer_grabbed = false;
-        }
+        drop_popup_grab(display, root, &mut self.press_selection, id, &mut instance.app);
         unsafe {
             XUnmapWindow(display, instance.app.window);
-            instance.app.present_scene().map_err(|error| {
-                mark_x_error_seen();
-                error
-            })?;
+            instance.app.present_scene().map_err(mark_x_error)?;
             XFlush(display);
         }
         // The popup is unmapped here without a slide-out: drop slide bookkeeping so the next show
@@ -461,10 +440,7 @@ impl SurfaceController {
             instance
                 .app
                 .redraw_if_dirty(&mut instance.document)
-                .map_err(|error| {
-                    mark_x_error_seen();
-                    error
-                })?;
+                .map_err(mark_x_error)?;
         }
         cycle.advance("paint")?;
         // SAFETY: display/window live; shape follows retained repaint. A slide clips to the
@@ -490,10 +466,7 @@ impl SurfaceController {
         cycle.advance("map_raise")?;
         let instance = self.instance_mut(id)?;
         unsafe {
-            instance.app.present_scene().map_err(|error| {
-                mark_x_error_seen();
-                error
-            })?;
+            instance.app.present_scene().map_err(mark_x_error)?;
             XFlush(display);
         }
         cycle.advance("present")?;
@@ -512,13 +485,7 @@ impl SurfaceController {
             .surfaces
             .get_mut(&id)
             .ok_or_else(|| format!("unknown surface {}", id.0))?;
-        if instance.app.pointer_grabbed {
-            unsafe {
-                release_popup_presses(display, root, &mut self.press_selection, id);
-                popup_restore_focus(display, &mut instance.app);
-            }
-            instance.app.pointer_grabbed = false;
-        }
+        drop_popup_grab(display, root, &mut self.press_selection, id, &mut instance.app);
         Ok(())
     }
 
@@ -593,10 +560,7 @@ impl SurfaceController {
             let painted = instance
                 .app
                 .redraw_if_dirty(&mut instance.document)
-                .map_err(|error| {
-                    mark_x_error_seen();
-                    error
-                })?;
+                .map_err(mark_x_error)?;
             if painted {
                 instance.app.refresh_shape_mask(&instance.document);
             }
@@ -809,10 +773,7 @@ impl SurfaceController {
                     instance
                         .app
                         .event_loop_once(&mut instance.document, &mut callback)
-                        .map_err(|error| {
-                            mark_x_error_seen();
-                            error
-                        })?;
+                        .map_err(mark_x_error)?;
                 }
                 // Drain the document-owned damage latch into the app latch so
                 // `redraw_dirty` can coalesce; event_loop already merged its
@@ -833,6 +794,11 @@ impl SurfaceController {
         Ok(&mut self.instance_mut(id)?.document)
     }
 
+    /// Native root-space origin of a surface; (0, 0) when the surface is unknown.
+    fn origin_of(&self, id: SurfaceId) -> (i32, i32) {
+        self.surfaces.get(&id).map(|instance| instance.origin).unwrap_or((0, 0))
+    }
+
     fn retained(&self, id: SurfaceId) -> Result<(&X11App, &RuntimeDocument), String> {
         let instance = self.instance_ref(id)?;
         Ok((&instance.app, &instance.document))
@@ -843,11 +809,7 @@ impl SurfaceController {
     /// recompute, no headless fallback.
     pub fn surface_device_rect(&self, id: SurfaceId) -> Result<Rect, String> {
         let (app, _) = self.retained(id)?;
-        let origin = self
-            .surfaces
-            .get(&id)
-            .map(|instance| instance.origin)
-            .unwrap_or((0, 0));
+        let origin = self.origin_of(id);
         Ok(Rect {
             x: origin.0 as f32,
             y: origin.1 as f32,
@@ -861,11 +823,7 @@ impl SurfaceController {
     /// layout exists (mapped-surface queries never use 1350x641 here).
     pub fn node_device_rect(&self, id: SurfaceId, index: u32) -> Result<Rect, String> {
         let (app, document) = self.retained(id)?;
-        let origin = self
-            .surfaces
-            .get(&id)
-            .map(|instance| instance.origin)
-            .unwrap_or((0, 0));
+        let origin = self.origin_of(id);
         let local = app
             .node_global_rect(document, index)
             .ok_or_else(|| format!("surface {} has no retained layout", id.0))?;
@@ -879,24 +837,11 @@ impl SurfaceController {
 
     /// Node rect by string id from retained layout (root-space device rect).
     pub fn node_device_rect_by_id(&self, id: SurfaceId, node: &str) -> Result<Rect, String> {
-        let (app, document) = self.retained(id)?;
+        let (_, document) = self.retained(id)?;
         let index = document
             .node_by_id(node)
             .ok_or_else(|| format!("no node with id '{node}'"))?;
-        let origin = self
-            .surfaces
-            .get(&id)
-            .map(|instance| instance.origin)
-            .unwrap_or((0, 0));
-        let local = app
-            .node_global_rect(document, index)
-            .ok_or_else(|| format!("surface {} has no retained layout", id.0))?;
-        Ok(Rect {
-            x: local.x + origin.0 as f32,
-            y: local.y + origin.1 as f32,
-            width: local.width,
-            height: local.height,
-        })
+        self.node_device_rect(id, index)
     }
 
     /// Retained intrinsic content size of the document root in device
@@ -933,6 +878,13 @@ impl SurfaceController {
             .pointer_grabbed)
     }
 
+    /// Registers the X connection as a read wakeup source; X readiness only wakes dispatch.
+    fn register_x_wakeup(&self, reactor: &mut Reactor) -> Result<calloop::RegistrationToken, String> {
+        reactor
+            .register_fd(ReactorPebble(self.connection_fd()), calloop::Interest::READ, |_, _| {})
+            .map_err(|error| error.to_string())
+    }
+
     pub fn run_with_reactor<F, R>(
         &mut self,
         reactor: &mut Reactor,
@@ -943,15 +895,7 @@ impl SurfaceController {
         F: FnMut(&SurfaceControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
         R: FnMut(&mut Self) -> Result<(), String>,
     {
-        let token = reactor
-            .register_fd(
-                ReactorPebble(self.connection_fd()),
-                calloop::Interest::READ,
-                move |_, _| {
-                    // X readiness only wakes dispatch; pump happens below.
-                },
-            )
-            .map_err(|error| error.to_string())?;
+        let token = self.register_x_wakeup(reactor)?;
         loop {
             reactor
                 .dispatch(self.motion_frame_timeout())
@@ -980,15 +924,7 @@ impl SurfaceController {
         &mut self,
         reactor: &mut Reactor,
     ) -> Result<(Vec<SurfaceControllerEvent>, usize), String> {
-        let token = reactor
-            .register_fd(
-                ReactorPebble(self.connection_fd()),
-                calloop::Interest::READ,
-                move |_, _| {
-                    // X readiness only wakes dispatch; pump happens below.
-                },
-            )
-            .map_err(|error| error.to_string())?;
+        let token = self.register_x_wakeup(reactor)?;
         let mut events = Vec::new();
         let result: Result<usize, String> = (|| {
             reactor
@@ -1086,10 +1022,7 @@ impl SurfaceController {
                 instance
                     .app
                     .commit_geometry(&instance.document, width, height)
-                    .map_err(|error| {
-                        mark_x_error_seen();
-                        error
-                    })?
+                    .map_err(mark_x_error)?
             };
             unsafe {
                 XMoveResizeWindow(
@@ -1105,22 +1038,8 @@ impl SurfaceController {
             instance.slide_drawn = None;
             span_trace.retained((x, y, instance.app.width as i32, instance.app.height as i32));
             if instance.role == SurfaceRole::Dock {
-                let root_w = unsafe { XDisplayWidth(display, instance.app.screen).max(1) as u32 };
-                let root_h = unsafe { XDisplayHeight(display, instance.app.screen).max(1) as u32 };
-                let (ox, oy) = instance.origin;
                 let (w, h) = (instance.app.width, instance.app.height);
-                crate::app::apply_dock_strut(
-                    instance.app.display,
-                    instance.app.window,
-                    root_w,
-                    root_h,
-                    instance.dock_edge,
-                    ox,
-                    oy,
-                    w,
-                    h,
-                );
-                apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
+                sync_dock_geometry(display, instance, x, y, w, h);
             }
             unsafe { XFlush(display) };
             return Ok(());
@@ -1132,20 +1051,7 @@ impl SurfaceController {
         instance.origin = (x, y);
         instance.slide_drawn = None;
         if instance.role == SurfaceRole::Dock {
-            let root_w = unsafe { XDisplayWidth(display, instance.app.screen).max(1) as u32 };
-            let root_h = unsafe { XDisplayHeight(display, instance.app.screen).max(1) as u32 };
-            crate::app::apply_dock_strut(
-                instance.app.display,
-                instance.app.window,
-                root_w,
-                root_h,
-                instance.dock_edge,
-                x,
-                y,
-                w,
-                h,
-            );
-            apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
+            sync_dock_geometry(display, instance, x, y, w, h);
         }
         span_trace.retained((x, y, w as i32, h as i32));
         unsafe { XFlush(display) };
@@ -1237,11 +1143,7 @@ impl SurfaceController {
             } else {
                 // Slide-out landed: release the grab held since hide() started the close.
                 if landing_releases_grab(active.opening, instance.app.pointer_grabbed) {
-                    unsafe {
-                        release_popup_presses(display, root, &mut self.press_selection, *id);
-                        popup_restore_focus(display, &mut instance.app);
-                    }
-                    instance.app.pointer_grabbed = false;
+                    drop_popup_grab(display, root, &mut self.press_selection, *id, &mut instance.app);
                 }
                 unsafe { XUnmapWindow(display, window) };
                 instance.shown = false;
@@ -1301,6 +1203,37 @@ impl Drop for SurfaceController {
         }
         drop(deferred_native);
     }
+}
+
+/// Records a failed native call in the X error latch, then passes the error through.
+fn mark_x_error(error: String) -> String {
+    mark_x_error_seen();
+    error
+}
+
+/// Releases a popup's held pointer grab and restores focus. No-op when not grabbed.
+fn drop_popup_grab(
+    display: *mut Display,
+    root: Window,
+    selection: &mut RawPressSelection,
+    id: SurfaceId,
+    app: &mut crate::app::X11App,
+) {
+    if app.pointer_grabbed {
+        unsafe {
+            release_popup_presses(display, root, selection, id);
+            popup_restore_focus(display, app);
+        }
+        app.pointer_grabbed = false;
+    }
+}
+
+/// Keeps a dock's strut, rounded mask, and root-space origin in step with its window rect.
+fn sync_dock_geometry(display: *mut Display, instance: &mut SurfaceInstance, x: i32, y: i32, w: u32, h: u32) {
+    let root_w = unsafe { XDisplayWidth(display, instance.app.screen).max(1) as u32 };
+    let root_h = unsafe { XDisplayHeight(display, instance.app.screen).max(1) as u32 };
+    crate::app::apply_dock_strut(instance.app.display, instance.app.window, root_w, root_h, instance.dock_edge, x, y, w, h);
+    apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
 }
 
 /// True while the X connection fd still exists. After an X IO error the
