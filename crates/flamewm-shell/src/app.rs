@@ -1120,7 +1120,6 @@ impl ShellLoop {
         let start_model = self.start_model.clone();
         let category = self.start_category;
         let query = self.start_query.clone();
-        let session = snapshot.session.clone();
         self.ensure_loader();
         // Windows or panels or workspaces own the visible panel document.
         if panel_projection_needed(changed, resynced) {
@@ -1199,7 +1198,7 @@ impl ShellLoop {
                     &start_model,
                     category,
                     &query,
-                    &session,
+                    &snapshot.session,
                     loader,
                 )
             });
