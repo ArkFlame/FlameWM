@@ -111,11 +111,7 @@ fn handle_call<E: EnginePorts>(
         .member()
         .ok_or_else(|| invalid("missing member"))?
         .to_string();
-    let args = message
-        .get_items()
-        .into_iter()
-        .map(from_item)
-        .collect::<Result<Vec<_>, _>>()?;
+    let args = wire_args(message.get_items())?;
     let call = WireCall::new(interface, member, args).with_now_ms(now_ms);
     let request = decode_call(&call).map_err(to_flame_error)?;
     let sender = message
@@ -234,11 +230,10 @@ impl CaptureOwner {
     /// the dispatcher, which reports `NotFound` or `Conflict` without changing grabs.
     pub fn authorize_end(&self, sender: &str, lease: u64) -> Result<(), ControlError> {
         match &self.active {
-            Some((owner, held)) if *held == lease && owner != sender => Err(ControlError {
-                name: flamewm_control_core::error_name(ErrorCode::PermissionDenied),
-                code: ErrorCode::PermissionDenied,
-                message: "hotkey capture belongs to another client".to_owned(),
-            }),
+            Some((owner, held)) if *held == lease && owner != sender => Err(control_error(
+                ErrorCode::PermissionDenied,
+                "hotkey capture belongs to another client",
+            )),
             _ => Ok(()),
         }
     }
@@ -314,11 +309,7 @@ impl ControlClient {
             .pump
             .send_with_reply(message, timeout)
             .map_err(control_error_from_transport)?;
-        let values = reply
-            .get_items()
-            .into_iter()
-            .map(from_item)
-            .collect::<Result<Vec<_>, _>>()?;
+        let values = wire_args(reply.get_items())?;
         decode_reply(&call, &WireReply { values })
     }
 }
@@ -330,7 +321,7 @@ pub struct ControlSignalClient {
 impl ControlSignalClient {
     pub fn connect(kind: BusKind) -> FlameResult<Self> {
         let pump = BusPump::connect(kind)?;
-        install_match_rule(&pump)?;
+        add_match_rule(&pump, &signal_match_rule())?;
         Ok(Self { pump })
     }
 
@@ -359,10 +350,6 @@ fn signal_match_rule() -> String {
     format!("type='signal',path='{}'", OBJECT_PATH)
 }
 
-fn install_match_rule(pump: &BusPump) -> FlameResult<()> {
-    add_match_rule(pump, &signal_match_rule())
-}
-
 fn add_match_rule(pump: &BusPump, rule: &str) -> FlameResult<()> {
     let call = Message::new_method_call(
         "org.freedesktop.DBus",
@@ -389,12 +376,7 @@ pub fn decode_bus_signal(message: &Message) -> Option<ControlSignal> {
     }
     let interface = message.interface()?.to_string();
     let member = message.member()?.to_string();
-    let args = message
-        .get_items()
-        .into_iter()
-        .map(from_item)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
+    let args = wire_args(message.get_items()).ok()?;
     decode_signal(&WireSignal {
         interface,
         member,
@@ -492,6 +474,10 @@ fn from_item(item: MessageItem) -> Result<WireValue, FlameError> {
     }
 }
 
+fn wire_args(items: Vec<MessageItem>) -> FlameResult<Vec<WireValue>> {
+    items.into_iter().map(from_item).collect()
+}
+
 fn invalid(message: &str) -> FlameError {
     FlameError::new(ErrorCode::InvalidArgument, message)
 }
@@ -502,21 +488,22 @@ fn error_name(error: &FlameError) -> &'static str {
     flamewm_control_core::error_name(error.code)
 }
 
+fn control_error(code: ErrorCode, message: impl Into<String>) -> ControlError {
+    let name = flamewm_control_core::error_name(code);
+    ControlError {
+        name,
+        code,
+        message: message.into(),
+    }
+}
+
 fn control_error_from_transport(error: FlameError) -> ControlError {
     if error.code == ErrorCode::Unavailable {
         if let Some((code, message)) = decode_remote_method_error(&error.message) {
-            return ControlError {
-                name: flamewm_control_core::error_name(code),
-                code,
-                message: message.to_owned(),
-            };
+            return control_error(code, message);
         }
     }
-    ControlError {
-        name: flamewm_control_core::error_name(error.code),
-        code: error.code,
-        message: error.to_string(),
-    }
+    control_error(error.code, error.to_string())
 }
 
 fn decode_remote_method_error(message: &str) -> Option<(ErrorCode, &str)> {
@@ -646,8 +633,7 @@ mod tests {
     // OBSERVABLE: the decoded signal equals the emitted unit variant; no payload is required.
     #[test]
     fn start_menu_toggle_requested_round_trips_through_dbus() {
-        let signal = ControlSignal::StartMenuToggleRequested;
-        assert_eq!(decode_bus_signal(&signal_message(&signal)), Some(signal));
+        assert_bus_round_trip(ControlSignal::StartMenuToggleRequested);
     }
 
     // CONTRACT-REGRESSION: T12 ApplySettings success order is reply, snapshot signal, legacy signal.
@@ -702,12 +688,9 @@ mod tests {
     // MUTATION: publish either success signal after an error; this test must fail.
     #[test]
     fn t12_apply_settings_failure_emits_no_success_bus_signal() {
-        let failure: Result<flamewm_control_core::ControlResponse, ControlError> =
-            Err(ControlError {
-                name: flamewm_control_core::error_name(ErrorCode::StaleRevision),
-                code: ErrorCode::StaleRevision,
-                message: "settings revision is stale".to_owned(),
-            });
+        let failure: Result<flamewm_control_core::ControlResponse, ControlError> = Err(
+            control_error(ErrorCode::StaleRevision, "settings revision is stale"),
+        );
         let signals = match failure {
             Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => vec![
                 settings_snapshot_wire(&snapshot),
@@ -807,13 +790,9 @@ mod tests {
         snapshot.network.strength_percent = 82;
         snapshot.media.title = "Neon Skyline".to_owned();
         snapshot.audio.volume_percent = 72;
-        let expected = ControlSignal::SystemSnapshotChanged {
+        assert_bus_round_trip(ControlSignal::SystemSnapshotChanged {
             snapshot: snapshot.clone(),
-        };
-        assert_eq!(
-            decode_bus_signal(&signal_message(&expected)),
-            Some(expected)
-        );
+        });
         let wire = WireSignal {
             interface: flamewm_control_core::IFACE_SYSTEM.to_owned(),
             member: "SystemSnapshotChanged".to_owned(),
@@ -826,8 +805,7 @@ mod tests {
             format!("SystemSnapshotChanged {{ snapshot: {:?} }}", snapshot)
         );
 
-        let legacy = ControlSignal::SystemChanged { revision: 37 };
-        assert_eq!(decode_bus_signal(&signal_message(&legacy)), Some(legacy));
+        assert_bus_round_trip(ControlSignal::SystemChanged { revision: 37 });
     }
 
     // CONTRACT-REGRESSION: a remote StaleRevision method error must retain its
@@ -859,7 +837,7 @@ mod tests {
             ErrorCode::Unavailable,
             format!("D-Bus reply failed: {stale}"),
         );
-        let mapped = client_transport_error_fixture(transport_error);
+        let mapped = control_error_from_transport(transport_error);
         assert_eq!(mapped.code, ErrorCode::StaleRevision);
         assert_eq!(
             mapped.name,
@@ -878,7 +856,7 @@ mod tests {
             ErrorCode::Unavailable,
             format!("D-Bus reply failed: {unknown}"),
         );
-        let mapped = client_transport_error_fixture(transport_error);
+        let mapped = control_error_from_transport(transport_error);
         assert_eq!(mapped.code, ErrorCode::Unavailable);
         assert_eq!(
             mapped.name,
@@ -894,7 +872,7 @@ mod tests {
     fn transport_failure_remains_unavailable() {
         let transport_error =
             FlameError::new(ErrorCode::Unavailable, "D-Bus connection read/write failed");
-        let mapped = client_transport_error_fixture(transport_error.clone());
+        let mapped = control_error_from_transport(transport_error.clone());
         assert_eq!(mapped.code, ErrorCode::Unavailable);
         assert_eq!(
             mapped.name,
@@ -923,9 +901,6 @@ mod tests {
         reply.as_result().expect_err("method error reply")
     }
 
-    fn client_transport_error_fixture(error: FlameError) -> ControlError {
-        control_error_from_transport(error)
-    }
 }
 
 #[cfg(test)]
