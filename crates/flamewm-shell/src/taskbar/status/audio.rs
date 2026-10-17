@@ -105,22 +105,20 @@ pub fn paged_rows(snapshot: &AudioSnapshot) -> Vec<(usize, RowSource)> {
 
 #[must_use]
 pub fn paged_rows_for_page(snapshot: &AudioSnapshot, page: usize) -> Vec<(usize, RowSource)> {
-    let rows: Vec<RowSource> = snapshot
+    let total = snapshot.endpoints().len() + snapshot.streams().len();
+    if total == 0 {
+        return Vec::new();
+    }
+    let pages = ceil_div(total, AUDIO_SLOT_COUNT);
+    let clamped = page.min(pages.saturating_sub(1));
+    snapshot
         .endpoints()
         .iter()
         .map(RowSource::from_endpoint)
         .chain(snapshot.streams().iter().map(RowSource::from_stream))
-        .collect();
-    if rows.is_empty() {
-        return Vec::new();
-    }
-    let pages = ceil_div(rows.len(), AUDIO_SLOT_COUNT);
-    let clamped = page.min(pages.saturating_sub(1));
-    rows.into_iter()
         .skip(clamped * AUDIO_SLOT_COUNT)
         .take(AUDIO_SLOT_COUNT)
         .enumerate()
-        .map(|(slot, row)| (slot, row))
         .collect()
 }
 
