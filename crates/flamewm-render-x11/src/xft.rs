@@ -391,13 +391,10 @@ impl XftBackend {
     /// handles; the returned libraries must remain alive through XCloseDisplay.
     pub(crate) unsafe fn into_deferred_libraries(mut self) -> Vec<DynamicLibrary> {
         unsafe { self.release_resources() };
-        let mut libraries = Vec::with_capacity(2);
-        if let Some(library) = self._xft_library.take() {
-            libraries.push(library);
-        }
-        if let Some(library) = self._fontconfig_library.take() {
-            libraries.push(library);
-        }
+        let libraries = [self._xft_library.take(), self._fontconfig_library.take()]
+            .into_iter()
+            .flatten()
+            .collect();
         drop(self);
         libraries
     }
