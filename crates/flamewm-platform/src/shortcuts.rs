@@ -117,20 +117,9 @@ impl ShortcutRegistry {
 
     pub fn set(&mut self, action: &str, raw: &str) -> FlameResult<()> {
         self.require_action(action)?;
-        let normalized = normalize(raw);
-        if normalized.is_empty() {
+        let Some(normalized) = checked_binding(action, raw)? else {
             return self.clear(action);
-        }
-        if normalized.eq_ignore_ascii_case("Escape") {
-            return self.clear(action);
-        }
-        validate_binding(&normalized)?;
-        if is_modifier_only(&normalized) && action != ACTION_TOGGLE_START_MENU {
-            return Err(FlameError::new(
-                ErrorCode::InvalidArgument,
-                "modifier-only binding is permitted only for ToggleStartMenu",
-            ));
-        }
+        };
         if let Some(conflict) = self.conflict_for(action, &normalized) {
             return Err(FlameError::new(
                 ErrorCode::Conflict,
@@ -149,29 +138,12 @@ impl ShortcutRegistry {
 
         let mut candidate = BTreeMap::new();
         for action in ACTIONS {
-            let binding = desired
-                .get(action)
-                .cloned()
-                .unwrap_or_else(KeyBinding::unassigned);
-            let normalized = match binding.0 {
-                Some(value) => {
-                    let normalized = normalize(&value);
-                    if normalized.is_empty() || normalized.eq_ignore_ascii_case("Escape") {
-                        KeyBinding::unassigned()
-                    } else {
-                        validate_binding(&normalized)?;
-                        if is_modifier_only(&normalized) && action != ACTION_TOGGLE_START_MENU {
-                            return Err(FlameError::new(
-                                ErrorCode::InvalidArgument,
-                                "modifier-only binding is permitted only for ToggleStartMenu",
-                            ));
-                        }
-                        KeyBinding::assigned(normalized)
-                    }
-                }
+            let binding = match desired.get(action).and_then(|binding| binding.0.as_deref()) {
+                Some(raw) => checked_binding(action, raw)?
+                    .map_or_else(KeyBinding::unassigned, KeyBinding::assigned),
                 None => KeyBinding::unassigned(),
             };
-            candidate.insert(action.to_owned(), normalized);
+            candidate.insert(action.to_owned(), binding);
         }
 
         let mut seen = BTreeMap::<String, String>::new();
@@ -179,8 +151,7 @@ impl ShortcutRegistry {
             let Some(value) = binding.0.as_ref() else {
                 continue;
             };
-            let normalized = normalize(value).to_ascii_lowercase();
-            if let Some(conflict) = seen.insert(normalized, action.clone()) {
+            if let Some(conflict) = seen.insert(value.to_ascii_lowercase(), action.clone()) {
                 return Err(FlameError::new(
                     ErrorCode::Conflict,
                     format!("shortcut conflicts with {conflict}"),
@@ -226,6 +197,22 @@ pub fn normalize(raw: &str) -> String {
         .join("+")
 }
 
+/// Normalizes and validates a raw binding; `None` means the action is cleared.
+fn checked_binding(action: &str, raw: &str) -> FlameResult<Option<String>> {
+    let normalized = normalize(raw);
+    if normalized.is_empty() || normalized.eq_ignore_ascii_case("Escape") {
+        return Ok(None);
+    }
+    validate_binding(&normalized)?;
+    if is_modifier_only(&normalized) && action != ACTION_TOGGLE_START_MENU {
+        return Err(FlameError::new(
+            ErrorCode::InvalidArgument,
+            "modifier-only binding is permitted only for ToggleStartMenu",
+        ));
+    }
+    Ok(Some(normalized))
+}
+
 pub fn validate_binding(normalized: &str) -> FlameResult<()> {
     if normalized.len() > 64 || normalized.chars().any(char::is_control) {
         return Err(FlameError::new(
@@ -244,17 +231,12 @@ pub fn validate_binding(normalized: &str) -> FlameResult<()> {
 
 #[must_use]
 pub fn is_modifier_only(normalized: &str) -> bool {
-    let mut saw = false;
-    for token in normalized.split('+') {
-        saw = true;
-        if !matches!(
+    normalized.split('+').all(|token| {
+        matches!(
             token.to_ascii_lowercase().as_str(),
             "ctrl" | "shift" | "alt" | "super" | "meta" | "hyper" | "super_l" | "super_r"
-        ) {
-            return false;
-        }
-    }
-    saw
+        )
+    })
 }
 
 #[cfg(test)]
