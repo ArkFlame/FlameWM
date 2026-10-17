@@ -9,9 +9,7 @@ const RENDER_SOURCE: &str = include_str!("../../../flamewm-render-x11/src/app/re
 
 fn reactor_loop_source() -> Option<&'static str> {
     let start = EVENTS_SOURCE.find("pub(crate) unsafe fn event_loop_with_reactor")?;
-    let end = EVENTS_SOURCE[start..]
-        .find("pub(crate) fn hit_test")
-        .map(|offset| start + offset)?;
+    let end = start + EVENTS_SOURCE[start..].find("pub(crate) fn hit_test")?;
     Some(&EVENTS_SOURCE[start..end])
 }
 
@@ -34,8 +32,7 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let callback = "on_reactor(document)?";
     let retained_gate = "redraw_if_dirty(document)?";
     let queue_gate = "XEventsQueued";
-    let t18 =
-        ordered(source, callback, retained_gate) && ordered(source, retained_gate, queue_gate);
+    let t18 = ordered(source, callback, retained_gate) && ordered(source, retained_gate, queue_gate);
     let t19 = source.matches(retained_gate).count() == 1
         && !source.contains("self.redraw(")
         && RENDER_SOURCE.contains("if self.pending_damage.is_empty() && !stale")
