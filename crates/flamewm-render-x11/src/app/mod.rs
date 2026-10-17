@@ -398,10 +398,7 @@ impl X11App {
             }
         }
         if let Some(font) = fonts.values().next().copied() {
-            let fid = unsafe { (*font).fid };
-            unsafe {
-                XSetFont(display, gc, fid);
-            }
+            unsafe { XSetFont(display, gc, (*font).fid) };
         }
         let xft = match unsafe { XftBackend::new(display, screen, backbuffer, visual, colormap) } {
             Ok(backend) => {
@@ -736,15 +733,11 @@ pub(crate) fn apply_dock_strut(
         None => crate::config::DockStrut::from_root_and_rect(root_w, root_h, x, y, w, h),
     };
     match reserved {
-        Some(reserved) => {
-            let values12 = reserved.partial12();
-            let values4 = reserved.strut4();
-            unsafe {
-                let (p12, p4) = (values12.as_ptr() as *const u8, values4.as_ptr() as *const u8);
-                replace_property(display, window, partial, XA_CARDINAL, 32, p12, 12);
-                replace_property(display, window, strut, XA_CARDINAL, 32, p4, 4);
-            }
-        }
+        Some(reserved) => unsafe {
+            let (p12, p4) = (reserved.partial12(), reserved.strut4());
+            replace_property(display, window, partial, XA_CARDINAL, 32, p12.as_ptr() as *const u8, 12);
+            replace_property(display, window, strut, XA_CARDINAL, 32, p4.as_ptr() as *const u8, 4);
+        },
         None => unsafe {
             XDeleteProperty(display, window, partial);
             XDeleteProperty(display, window, strut);
@@ -765,10 +758,8 @@ pub(crate) fn apply_pager_cells(display: *mut Display, window: Window, cells: &[
         return;
     }
     let flat: Vec<u64> = cells.iter().flat_map(|cell| cell.iter().copied()).collect();
-    unsafe {
-        let data = flat.as_ptr() as *const u8;
-        replace_property(display, window, property, XA_CARDINAL, 32, data, flat.len() as c_int);
-    }
+    let data = flat.as_ptr() as *const u8;
+    unsafe { replace_property(display, window, property, XA_CARDINAL, 32, data, flat.len() as c_int) };
 }
 
 /// Writes (`Some`) or deletes (`None`) `_NET_WM_ICON_GEOMETRY` on a client
@@ -786,12 +777,9 @@ pub(crate) fn apply_window_icon_geometry(
     }
     match rect {
         Some(values) => unsafe {
-            let data = values.as_ptr() as *const u8;
-            replace_property(display, window, property, XA_CARDINAL, 32, data, values.len() as c_int);
+            replace_property(display, window, property, XA_CARDINAL, 32, values.as_ptr() as *const u8, values.len() as c_int)
         },
-        None => {
-            unsafe { XDeleteProperty(display, window, property) };
-        }
+        None => unsafe { XDeleteProperty(display, window, property); },
     }
 }
 
@@ -812,19 +800,13 @@ fn set_window_identity(
             bytes.push(0);
             bytes.extend_from_slice(identity.class.as_bytes());
             bytes.push(0);
-            unsafe {
-                let len = bytes.len() as c_int;
-                replace_property(display, window, wm_class, XA_STRING, 8, bytes.as_ptr(), len);
-            }
+            unsafe { replace_property(display, window, wm_class, XA_STRING, 8, bytes.as_ptr(), bytes.len() as c_int) };
         }
     }
     let net_wm_name = intern_atom(display, "_NET_WM_NAME");
     let utf8_string = intern_atom(display, "UTF8_STRING");
     if net_wm_name != 0 && utf8_string != 0 {
-        unsafe {
-            let len = title.len() as c_int;
-            replace_property(display, window, net_wm_name, utf8_string, 8, title.as_ptr(), len);
-        }
+        unsafe { replace_property(display, window, net_wm_name, utf8_string, 8, title.as_ptr(), title.len() as c_int) };
     }
 }
 
@@ -840,10 +822,7 @@ fn set_window_role(display: *mut Display, window: Window, role: X11WindowRole) {
     let property = intern_atom(display, "_NET_WM_WINDOW_TYPE");
     let role_atom = intern_atom(display, role_name);
     if property != 0 && role_atom != 0 {
-        unsafe {
-            let data = &role_atom as *const Atom as *const u8;
-            replace_property(display, window, property, XA_ATOM, 32, data, 1);
-        }
+        unsafe { replace_property(display, window, property, XA_ATOM, 32, &role_atom as *const Atom as *const u8, 1) };
     }
 }
 
