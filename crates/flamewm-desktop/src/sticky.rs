@@ -283,9 +283,9 @@ pub(crate) fn cancel_edit_and_gesture(state: &mut DesktopState) {
 pub(crate) fn create_note(state: &mut DesktopState, anchor: Point) {
     if state.sticky.store.enabled() {
         let workspace = state.workspace.active_index();
-        let sequence = state.sticky.store.count_for_workspace(workspace) + 1;
-        let id = format!("sticky-{workspace}-{sequence}");
-        if state.sticky.store.count_for_workspace(workspace) < STICKY_SLOTS {
+        let count = state.sticky.store.count_for_workspace(workspace);
+        if count < STICKY_SLOTS {
+            let id = format!("sticky-{workspace}-{}", count + 1);
             state.sticky.store.create(StickyNote::new(
                 id,
                 OutputId::new("default"),
@@ -352,33 +352,22 @@ pub(crate) fn handle_text_input(
         state.sticky.edit = None;
         return sync_sticky(document, state);
     }
-    if let Some(text) = action.text.clone() {
-        if text == "\u{8}" || text == "\u{7f}" {
-            if let Some(current) = state.sticky.edit.as_mut() {
-                current.buffer.pop();
-            }
-        } else {
-            for ch in text.chars() {
-                if ch == '\n' || !ch.is_control() {
-                    if let Some(current) = state.sticky.edit.as_mut() {
-                        current.buffer.push(ch);
-                    }
-                }
-            }
-        }
-        if let Some(buffer) = state
-            .sticky
-            .edit
-            .as_ref()
-            .map(|current| current.buffer.clone())
-        {
-            state.sticky.store.set_text(&note_id, buffer);
-            sticky_edit_counter().increment();
-            schedule_persist(state);
-        }
-        return sync_sticky(document, state);
+    let Some(text) = action.text.as_deref() else {
+        return Ok(());
+    };
+    let Some(edit) = state.sticky.edit.as_mut() else {
+        return Ok(());
+    };
+    if text == "\u{8}" || text == "\u{7f}" {
+        edit.buffer.pop();
+    } else {
+        edit.buffer
+            .extend(text.chars().filter(|ch| *ch == '\n' || !ch.is_control()));
     }
-    Ok(())
+    state.sticky.store.set_text(&note_id, edit.buffer.clone());
+    sticky_edit_counter().increment();
+    schedule_persist(state);
+    sync_sticky(document, state)
 }
 
 /// Routes every `sticky.*` UI action from the desktop event loop.
@@ -418,7 +407,7 @@ fn open_context_menu(
     state.menu = Some(MenuState {
         kind: MenuKind::Sticky,
         anchor,
-        selected_id: Some(note.id.clone()),
+        selected_id: Some(note.id),
     });
     state.pending_delete = None;
     hide_confirm(document, &mut state.menu_rects)?;
@@ -433,7 +422,7 @@ fn handle_slot(
     let Some(note) = slot_note(state, action) else {
         return Ok(());
     };
-    let note_id = note.id.clone();
+    let note_id = note.id;
     // Primary press on the note body (.move), drag overlay (.drag) or text
     // (.text) activates the edit buffer and records a pending move. The move
     // only starts once the pointer passes STICKY_DRAG_THRESHOLD_PX; a release
@@ -448,7 +437,7 @@ fn handle_slot(
                 state.menu = None;
                 state.sticky.edit = Some(StickyEdit {
                     note_id: note_id.clone(),
-                    buffer: note.text.clone(),
+                    buffer: note.text,
                 });
                 state.sticky.gesture = Some(StickyGesture {
                     note_id,
@@ -517,23 +506,26 @@ fn handle_slot(
                 });
             }
             UiActionPhase::Motion | UiActionPhase::Release => {
-                if let Some(gesture) = state.sticky.gesture.clone() {
-                    if gesture.note_id == note_id {
-                        let rect = resize_rect(
-                            gesture.original,
-                            corner,
-                            (action.x - gesture.start_x) as i32,
-                            (action.y - gesture.start_y) as i32,
-                            state.grid.work_area,
-                        );
-                        state.sticky.store.set_rect(&note_id, rect);
-                        sticky_resize_counter().increment();
-                        if action.phase == UiActionPhase::Release {
-                            state.sticky.gesture = None;
-                            flush_now(state);
-                        }
-                        sync_sticky(document, state)?;
+                if let Some(gesture) = state
+                    .sticky
+                    .gesture
+                    .as_ref()
+                    .filter(|gesture| gesture.note_id == note_id)
+                {
+                    let rect = resize_rect(
+                        gesture.original,
+                        corner,
+                        (action.x - gesture.start_x) as i32,
+                        (action.y - gesture.start_y) as i32,
+                        state.grid.work_area,
+                    );
+                    state.sticky.store.set_rect(&note_id, rect);
+                    sticky_resize_counter().increment();
+                    if action.phase == UiActionPhase::Release {
+                        state.sticky.gesture = None;
+                        flush_now(state);
                     }
+                    sync_sticky(document, state)?;
                 }
             }
             UiActionPhase::Hover => {}
