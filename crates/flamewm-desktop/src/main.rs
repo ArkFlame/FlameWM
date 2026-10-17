@@ -1100,26 +1100,11 @@ fn refresh_launchers(state: &mut DesktopState) {
         if item.kind != DesktopItemKind::DesktopLauncher {
             continue;
         }
-        match DesktopEntry::from_file(&item.path) {
-            Ok(Some(entry)) => {
-                state.launchers.insert(
-                    item.path.clone(),
-                    LauncherMeta {
-                        icon: entry.icon().to_owned(),
-                        valid: true,
-                    },
-                );
-            }
-            Ok(None) | Err(_) => {
-                state.launchers.insert(
-                    item.path.clone(),
-                    LauncherMeta {
-                        icon: String::new(),
-                        valid: false,
-                    },
-                );
-            }
-        }
+        let meta = match DesktopEntry::from_file(&item.path) {
+            Ok(Some(entry)) => LauncherMeta { icon: entry.icon().to_owned(), valid: true },
+            Ok(None) | Err(_) => LauncherMeta { icon: String::new(), valid: false },
+        };
+        state.launchers.insert(item.path.clone(), meta);
     }
 }
 
@@ -2409,14 +2394,9 @@ fn resolve_packaged_root(
 
 fn installed_data_root(executable: &Path) -> Option<PathBuf> {
     let bin_dir = executable.parent()?;
-    if bin_dir.file_name()? != "bin" {
-        return None;
-    }
     let usr_dir = bin_dir.parent()?;
-    if usr_dir.file_name()? != "usr" {
-        return None;
-    }
-    Some(usr_dir.join("share/flamewm"))
+    (bin_dir.file_name()? == "bin" && usr_dir.file_name()? == "usr")
+        .then(|| usr_dir.join("share/flamewm"))
 }
 
 #[cfg(test)]
