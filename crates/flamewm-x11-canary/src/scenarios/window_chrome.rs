@@ -16,42 +16,34 @@ fn checkerboard(
     let cells = cells.max(2).min(8);
     let cw = (w / cells).max(1);
     let ch = (h / cells).max(1);
-    let mut delivered = 0;
-    let mut non_black = 0;
-    let mut sr: u64 = 0;
-    let mut sg: u64 = 0;
-    let mut sb: u64 = 0;
-    let mut n: u64 = 0;
-    let mut idx = 0;
+    let (mut delivered, mut non_black, mut n) = (0, 0, 0u64);
+    let mut sum = [0u64; 3];
     for cy in 0..cells {
         for cx in 0..cells {
-            idx += 1;
             if (cx + cy) % 2 != 0 {
                 continue; // checkerboard: alternate cells only.
             }
             let x = ox.saturating_add((cx * cw) as i16);
             let y = oy.saturating_add((ch * cy) as i16);
-            if let Ok(d) = canary.sample(wid, x, y, cw.min(32), ch.min(32)) {
-                delivered += 1;
-                let (az, _, r, g, b) = crate::Canary::pixel_stats(&d);
-                if !az {
-                    non_black += 1;
-                }
-                sr += u64::from(r);
-                sg += u64::from(g);
-                sb += u64::from(b);
-                n += 1;
+            let Ok(d) = canary.sample(wid, x, y, cw.min(32), ch.min(32)) else {
+                continue;
+            };
+            delivered += 1;
+            let (az, _, r, g, b) = crate::Canary::pixel_stats(&d);
+            non_black += u32::from(!az);
+            for (s, v) in sum.iter_mut().zip([r, g, b]) {
+                *s += u64::from(v);
             }
+            n += 1;
         }
     }
-    let _ = idx;
     let nn = n.max(1);
     (
         delivered,
         non_black,
-        (sr / nn) as u8,
-        (sg / nn) as u8,
-        (sb / nn) as u8,
+        (sum[0] / nn) as u8,
+        (sum[1] / nn) as u8,
+        (sum[2] / nn) as u8,
     )
 }
 
