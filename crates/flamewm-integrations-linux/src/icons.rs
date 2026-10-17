@@ -392,18 +392,11 @@ impl IconResolver {
             &data_dirs,
             theme_generation,
         ));
-        Self {
-            packaged_root: packaged_root.into(),
-            theme_names: unique_strings(theme_names),
-            data_dirs: unique_paths(data_dirs),
-            theme_generation,
-            palette_generation: 0,
-            cache: HashMap::new(),
-            max_entries: 1024,
-            theme_caches: ThemeLookupCaches::default(),
-            raster: RasterCache::default(),
-            shared_index: index,
-        }
+        let mut resolver =
+            Self::from_shared_index(packaged_root, theme_names, data_dirs, theme_generation, index);
+        resolver.max_entries = 1024;
+        resolver.raster = RasterCache::default();
+        resolver
     }
 
     /// Worker fork seam: shares the immutable lookup index + theme config
@@ -474,14 +467,9 @@ impl IconResolver {
     /// Cache-pressure snapshot for service bounds checks.
     #[must_use]
     pub fn metrics_snapshot(&self) -> IconMetricsSnapshot {
-        let bytes: usize = self
-            .cache
-            .iter()
-            .map(|(k, r)| key_memory(k) + result_memory(r) + 96)
-            .sum();
         IconMetricsSnapshot {
             request_entries: self.cache.len(),
-            request_bytes: bytes,
+            request_bytes: self.request_bytes(),
         }
     }
 
@@ -562,12 +550,9 @@ impl IconResolver {
     /// Estimated bytes held by theme lookup caches + bounded raster LRU.
     #[must_use]
     pub fn memory_estimate_bytes(&self) -> usize {
-        let mut bytes = self.theme_caches.memory_estimate_bytes();
-        bytes += self.raster.memory_estimate_bytes();
-        for (key, result) in &self.cache {
-            bytes += key_memory(key) + result_memory(result) + 96;
-        }
-        bytes
+        self.theme_caches.memory_estimate_bytes()
+            + self.raster.memory_estimate_bytes()
+            + self.request_bytes()
     }
 
     /// Builder: cap for the request-level (purpose+name+size+generation) map.
@@ -593,6 +578,13 @@ impl IconResolver {
                 break;
             }
         }
+    }
+
+    fn request_bytes(&self) -> usize {
+        self.cache
+            .iter()
+            .map(|(k, r)| key_memory(k) + result_memory(r) + 96)
+            .sum()
     }
 }
 
@@ -644,16 +636,15 @@ impl IconResolver {
                 IconRequest::Path(path.clone()),
                 size,
             );
-            let cached = self.cache.get(&key).cloned();
-            if let Some(hit) = cached {
+            if let Some(hit) = self.cache.get(&key).cloned() {
                 return hit;
             }
-            if self.path_exists(&path) {
-                return self.cached_or_resolve(key, size, |resolver| {
-                    resolver.resolve_path_candidate(&path, IconOrigin::ExplicitPath, size)
-                });
+            if !self.path_exists(&path) {
+                return self.application_miss(None);
             }
-            return self.application_miss(None);
+            return self.cached_or_resolve(key, size, |resolver| {
+                resolver.resolve_path_candidate(&path, IconOrigin::ExplicitPath, size)
+            });
         }
         let request = IconRequest::Name(name);
         let key = self.key(IconLookupPurpose::Application, request.clone(), size);
@@ -756,12 +747,8 @@ impl IconResolver {
             self.raster.insert(
                 raster_key,
                 Ok(Rgba8Raster {
-                    source: raster.source.clone(),
-                    width: raster.width,
-                    height: raster.height,
-                    pixels: raster.pixels.clone(),
-                    origin: raster.origin,
                     fallback_reason: None,
+                    ..raster.clone()
                 }),
             );
         }
@@ -843,7 +830,7 @@ impl IconResolver {
         request: &IconRequest,
         size: IconSize,
     ) -> Result<Rgba8Raster, IconError> {
-        let candidates = self.application_theme_candidates(request, size);
+        let candidates = self.theme_candidates(request, size);
         self.resolve_application_candidates(&candidates, size)
     }
 
@@ -863,11 +850,10 @@ impl IconResolver {
                     return Ok(raster);
                 }
             }
-            let mut candidates = Vec::new();
-            candidates.extend(self.application_theme_candidates(request, size));
-            return self.resolve_candidates_with_error(&candidates, size, candidate_error);
+            let candidates = self.theme_candidates(request, size);
+            return self.resolve_candidates(&candidates, size, candidate_error);
         }
-        self.resolve_candidates(&[], size)
+        self.resolve_candidates(&[], size, None)
     }
 
     fn resolve_application_candidates(
@@ -921,8 +907,8 @@ impl IconResolver {
         &mut self,
         candidates: &[Candidate],
         size: IconSize,
+        mut candidate_error: Option<RasterError>,
     ) -> Result<Rgba8Raster, IconError> {
-        let mut candidate_error: Option<RasterError> = None;
         for candidate in candidates {
             // Packaged hits probe the FS directly so a packaged icon never
             // pays thousands of stat calls for theme candidates enumerated
@@ -933,28 +919,6 @@ impl IconResolver {
                 }
                 continue;
             }
-            if !self.path_exists(&candidate.path) {
-                continue;
-            }
-            match self.cached_rasterize(&candidate.path, size, candidate.origin) {
-                Ok(raster) => return Ok(raster),
-                Err(error) => {
-                    if candidate_error.is_none() {
-                        candidate_error = Some(error);
-                    }
-                }
-            }
-        }
-        self.generic_fallback(size, candidate_error)
-    }
-
-    fn resolve_candidates_with_error(
-        &mut self,
-        candidates: &[Candidate],
-        size: IconSize,
-        mut candidate_error: Option<RasterError>,
-    ) -> Result<Rgba8Raster, IconError> {
-        for candidate in candidates {
             if !self.path_exists(&candidate.path) {
                 continue;
             }
@@ -993,18 +957,6 @@ impl IconResolver {
     /// precedence (global exact-size first, then per-theme best, then
     /// pixmaps). Explicit extensions are normalized by the index (no second
     /// ext appended), so `foo.png` and `foo` resolve to the same record.
-    fn application_theme_candidates(
-        &self,
-        request: &IconRequest,
-        size: IconSize,
-    ) -> Vec<Candidate> {
-        let name = match request {
-            IconRequest::Name(name) => name.as_str(),
-            IconRequest::Path(_) => return Vec::new(),
-        };
-        self.theme_candidates(name, size)
-    }
-
     fn packaged_candidates(&self, name: &str) -> Vec<Candidate> {
         let mut candidates = Vec::new();
         if matches!(name, "flamewm" | "flamewm-icon") {
@@ -1028,7 +980,11 @@ impl IconResolver {
     /// Semantic theme tail: reuses the same frozen shared-index order as
     /// normal application lookup (explicit-ext aware, pixmaps included).
     /// Packaged overrides are probed separately in `resolve_semantic_name`.
-    fn theme_candidates(&self, name: &str, size: IconSize) -> Vec<Candidate> {
+    fn theme_candidates(&self, request: &IconRequest, size: IconSize) -> Vec<Candidate> {
+        let name = match request {
+            IconRequest::Name(name) => name.as_str(),
+            IconRequest::Path(_) => return Vec::new(),
+        };
         if !valid_icon_name(name) {
             return Vec::new();
         }
