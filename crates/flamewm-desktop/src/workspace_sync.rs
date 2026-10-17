@@ -49,27 +49,8 @@ impl WorkspaceAuthority {
 
 #[cfg(test)]
 mod tests {
+    use super::settings_sync::{signal_callback_source, source_between};
     use super::*;
-
-    fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-        let start = source
-            .find(start)
-            .unwrap_or_else(|| panic!("source is missing marker: {start}"));
-        let body = &source[start..];
-        let end = body
-            .find(end)
-            .unwrap_or_else(|| panic!("source is missing marker after {start}: {end}"));
-        &body[..end]
-    }
-
-    fn signal_callback_source() -> &'static str {
-        let source = include_str!("main.rs");
-        source_between(
-            source,
-            "let _ = client.on_ready(|signal| {",
-            "FdAction::Continue",
-        )
-    }
 
     #[test]
     fn t01_snapshot_signal_drives_active_transition_without_control_fetch() {
@@ -168,30 +149,26 @@ mod tests {
         );
     }
 
+    fn snapshot(
+        revision: u64,
+        count: usize,
+        active_index: usize,
+        last_index: Option<usize>,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            revision,
+            count,
+            active_index,
+            last_index,
+            names: (1..=count).map(|index| index.to_string()).collect(),
+        }
+    }
+
     #[test]
     fn workspace_authority_reports_only_active_projection_changes() {
-        let initial = WorkspaceSnapshot {
-            revision: 1,
-            count: 2,
-            active_index: 0,
-            last_index: None,
-            names: vec!["1".to_owned(), "2".to_owned()],
-        };
-        let mut authority = WorkspaceAuthority::new(initial);
-        assert!(!authority.apply_snapshot(WorkspaceSnapshot {
-            revision: 2,
-            count: 3,
-            active_index: 0,
-            last_index: None,
-            names: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
-        }));
-        assert!(authority.apply_snapshot(WorkspaceSnapshot {
-            revision: 3,
-            count: 3,
-            active_index: 1,
-            last_index: Some(0),
-            names: vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
-        }));
+        let mut authority = WorkspaceAuthority::new(snapshot(1, 2, 0, None));
+        assert!(!authority.apply_snapshot(snapshot(2, 3, 0, None)));
+        assert!(authority.apply_snapshot(snapshot(3, 3, 1, Some(0))));
         assert_eq!(authority.active_index(), 1);
     }
 }

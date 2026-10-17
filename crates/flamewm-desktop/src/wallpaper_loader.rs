@@ -549,6 +549,27 @@ mod tests {
         panic!("wallpaper generation {generation} did not complete");
     }
 
+    fn wait_applied(loader: &mut WallpaperLoader, generation: u64) {
+        assert!(matches!(
+            wait_for(loader, generation),
+            PollOutcome::Applied { .. }
+        ));
+    }
+
+    fn wait_failed(loader: &mut WallpaperLoader, generation: u64) {
+        assert!(matches!(
+            wait_for(loader, generation),
+            PollOutcome::Failed { .. }
+        ));
+    }
+
+    fn assert_image_presented(loader: &WallpaperLoader) {
+        assert!(matches!(
+            loader.state().presentation,
+            WallpaperPresentation::Image(_)
+        ));
+    }
+
     #[test]
     fn t13_wallpaper_loader_is_off_turn_and_latest_generation_wins() {
         // CONTRACT: wallpaper decode/load work is off-turn and completion is fenced by the
@@ -623,18 +644,12 @@ mod tests {
         let valid_generation = loader
             .request(&valid, WallpaperFit::Fill)
             .expect("request valid wallpaper");
-        assert!(matches!(
-            wait_for(&mut loader, valid_generation),
-            PollOutcome::Applied { .. }
-        ));
+        wait_applied(&mut loader, valid_generation);
         let previous = loader.state().presentation.clone();
         let failed_generation = loader
             .request(&missing, WallpaperFit::Fill)
             .expect("request failed wallpaper");
-        assert!(matches!(
-            wait_for(&mut loader, failed_generation),
-            PollOutcome::Failed { .. }
-        ));
+        wait_failed(&mut loader, failed_generation);
         assert_eq!(loader.state().presentation, previous);
         assert!(loader.state().diagnostic.is_some());
         loader.shutdown();
@@ -649,27 +664,15 @@ mod tests {
         let empty_generation = loader
             .request("", WallpaperFit::Fill)
             .expect("request default wallpaper");
-        assert!(matches!(
-            wait_for(&mut loader, empty_generation),
-            PollOutcome::Applied { .. }
-        ));
-        assert!(matches!(
-            loader.state().presentation,
-            WallpaperPresentation::Image(_)
-        ));
+        wait_applied(&mut loader, empty_generation);
+        assert_image_presented(&loader);
         let unsupported = temp_path("jpg");
         fs::write(&unsupported, b"not a supported wallpaper").expect("write unsupported file");
         let failed_generation = loader
             .request(&unsupported, WallpaperFit::Fill)
             .expect("request unsupported wallpaper");
-        assert!(matches!(
-            wait_for(&mut loader, failed_generation),
-            PollOutcome::Failed { .. }
-        ));
-        assert!(matches!(
-            loader.state().presentation,
-            WallpaperPresentation::Image(_)
-        ));
+        wait_failed(&mut loader, failed_generation);
+        assert_image_presented(&loader);
         loader.shutdown();
         let _ = fs::remove_file(unsupported);
         let _ = fs::remove_dir_all(root);
@@ -683,10 +686,7 @@ mod tests {
         let default_generation = loader
             .request("", WallpaperFit::Fill)
             .expect("request packaged default");
-        assert!(matches!(
-            wait_for(&mut loader, default_generation),
-            PollOutcome::Applied { .. }
-        ));
+        wait_applied(&mut loader, default_generation);
         let packaged = loader.state().presentation.clone();
         assert!(matches!(
             &packaged,
@@ -700,10 +700,7 @@ mod tests {
         let custom_generation = loader
             .request(&custom, WallpaperFit::Fill)
             .expect("request custom WebP");
-        assert!(matches!(
-            wait_for(&mut loader, custom_generation),
-            PollOutcome::Applied { .. }
-        ));
+        wait_applied(&mut loader, custom_generation);
         assert!(matches!(
             &loader.state().presentation,
             WallpaperPresentation::Image(image)
@@ -713,10 +710,7 @@ mod tests {
         let reset_generation = loader
             .request("", WallpaperFit::Fill)
             .expect("reset to packaged default");
-        assert!(matches!(
-            wait_for(&mut loader, reset_generation),
-            PollOutcome::Applied { .. }
-        ));
+        wait_applied(&mut loader, reset_generation);
         assert_eq!(loader.state().presentation, packaged);
         loader.shutdown();
         let _ = fs::remove_file(custom);
@@ -741,10 +735,7 @@ mod tests {
         let center = loader
             .request(&path, WallpaperFit::Center)
             .expect("request centered");
-        assert!(matches!(
-            wait_for(&mut loader, center),
-            PollOutcome::Applied { .. }
-        ));
+        wait_applied(&mut loader, center);
         let WallpaperPresentation::Image(centered) = loader.state().presentation.clone() else {
             panic!("centered image expected");
         };
@@ -758,10 +749,7 @@ mod tests {
         let stretch = loader
             .request(&path, WallpaperFit::Stretch)
             .expect("request stretched");
-        assert!(matches!(
-            wait_for(&mut loader, stretch),
-            PollOutcome::Applied { .. }
-        ));
+        wait_applied(&mut loader, stretch);
         let WallpaperPresentation::Image(stretched) = &loader.state().presentation else {
             panic!("stretched image expected");
         };
@@ -778,10 +766,7 @@ mod tests {
         let generation = loader
             .request("", WallpaperFit::Fill)
             .expect("request packaged default");
-        assert!(matches!(
-            wait_for(&mut loader, generation),
-            PollOutcome::Failed { .. }
-        ));
+        wait_failed(&mut loader, generation);
         let diagnostic = loader.state().diagnostic.as_ref().expect("load diagnostic");
         assert_eq!(diagnostic.path, root.join(DEFAULT_WALLPAPER_PATH));
         assert!(diagnostic.message.contains("packaged default wallpaper"));

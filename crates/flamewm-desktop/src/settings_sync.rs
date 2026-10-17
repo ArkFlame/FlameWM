@@ -1,4 +1,4 @@
-fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+pub(super) fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start = source
         .find(start)
         .unwrap_or_else(|| panic!("source is missing marker: {start}"));
@@ -9,7 +9,7 @@ fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &body[..end]
 }
 
-fn signal_callback_source() -> &'static str {
+pub(super) fn signal_callback_source() -> &'static str {
     let source = include_str!("main.rs");
     source_between(
         source,
