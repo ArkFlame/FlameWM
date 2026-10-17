@@ -406,24 +406,30 @@ class _XClientMessage(ctypes.Structure):
                 ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
 
 
-def request_fullscreen(s: Session, window_id: str, enable: bool) -> bool:
-    """EWMH _NET_WM_STATE client message (add/remove _NET_WM_STATE_FULLSCREEN) sent to the root window."""
+def _open_display(s: Session):
     x11_path = ctypes.util.find_library("X11")
     if not x11_path:
-        return False
+        return None
     x11 = ctypes.cdll.LoadLibrary(x11_path)
     x11.XOpenDisplay.restype = ctypes.c_void_p
     x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
     x11.XDefaultRootWindow.restype = ctypes.c_ulong
     x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
-    x11.XInternAtom.restype = ctypes.c_ulong
-    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
-    x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
     x11.XFlush.argtypes = [ctypes.c_void_p]
     x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
     dpy = x11.XOpenDisplay(s.ctx.display.encode("ascii"))
-    if not dpy:
+    return (x11, dpy) if dpy else None
+
+
+def request_fullscreen(s: Session, window_id: str, enable: bool) -> bool:
+    """EWMH _NET_WM_STATE client message (add/remove _NET_WM_STATE_FULLSCREEN) sent to the root window."""
+    opened = _open_display(s)
+    if opened is None:
         return False
+    x11, dpy = opened
+    x11.XInternAtom.restype = ctypes.c_ulong
+    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
     try:
         root = x11.XDefaultRootWindow(dpy)
         event = _XClientMessage()
@@ -1419,14 +1425,10 @@ def xfixes_cursor_observable(s: Session) -> bool:
     A probe window is given the stock `watch` then `left_ptr` cursor and the pointer is parked on it.
     When both read back identically (Xephyr reports a fixed image), cursor-theme pixels cannot be
     measured here and AP08 must say so instead of failing the product."""
-    x11_path = ctypes.util.find_library("X11")
-    if not x11_path:
+    opened = _open_display(s)
+    if opened is None:
         return False
-    x11 = ctypes.cdll.LoadLibrary(x11_path)
-    x11.XOpenDisplay.restype = ctypes.c_void_p
-    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
-    x11.XDefaultRootWindow.restype = ctypes.c_ulong
-    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11, dpy = opened
     x11.XCreateSimpleWindow.restype = ctypes.c_ulong
     x11.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_int] * 2 + [ctypes.c_uint] * 3 + [ctypes.c_ulong] * 2
     x11.XCreateFontCursor.restype = ctypes.c_ulong
@@ -1434,11 +1436,6 @@ def xfixes_cursor_observable(s: Session) -> bool:
     x11.XDefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
     x11.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
     x11.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-    x11.XFlush.argtypes = [ctypes.c_void_p]
-    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
-    dpy = x11.XOpenDisplay(s.ctx.display.encode("ascii"))
-    if not dpy:
-        return False
     try:
         root = x11.XDefaultRootWindow(dpy)
         window = x11.XCreateSimpleWindow(dpy, root, 40, 40, 200, 200, 0, 0, 0xFFFFFF)
