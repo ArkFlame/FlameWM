@@ -154,6 +154,22 @@ pub enum UiWindowRole {
     Dock,
 }
 
+fn x11_config(config: UiWindowConfig, role: UiWindowRole) -> flamewm_render_x11::X11Config {
+    flamewm_render_x11::X11Config {
+        width: config.width,
+        height: config.height,
+        x: config.x,
+        y: config.y,
+        title: config.title,
+        identity: config.identity,
+        role: match role {
+            UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
+            UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
+            UiWindowRole::Dock => flamewm_render_x11::X11WindowRole::Dock,
+        },
+    }
+}
+
 pub fn root_geometry() -> Result<(u32, u32), String> {
     flamewm_render_x11::root_geometry()
 }
@@ -180,19 +196,7 @@ where
 {
     flamewm_render_x11::run_with_controller_events(
         document.document,
-        flamewm_render_x11::X11Config {
-            width: config.width,
-            height: config.height,
-            x: config.x,
-            y: config.y,
-            title: config.title,
-            identity: config.identity,
-            role: match role {
-                UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
-                UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
-                UiWindowRole::Dock => flamewm_render_x11::X11WindowRole::Dock,
-            },
-        },
+        x11_config(config, role),
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
             let event = controller_event(action);
@@ -274,19 +278,7 @@ where
 {
     flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
         document.document,
-        flamewm_render_x11::X11Config {
-            width: config.width,
-            height: config.height,
-            x: config.x,
-            y: config.y,
-            title: config.title,
-            identity: config.identity,
-            role: match role {
-                UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
-                UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
-                UiWindowRole::Dock => flamewm_render_x11::X11WindowRole::Dock,
-            },
-        },
+        x11_config(config, role),
         reactor,
         geometry,
         press_watch,
