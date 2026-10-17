@@ -83,13 +83,13 @@ impl TaskReorderSession {
 
     #[must_use]
     pub fn cancel(self, panels: &PanelsSnapshot) -> bool {
-        self.revision == panels.revision && self.session.original_order() == current_ids(panels)
+        self.revision == panels.revision && same_order(self.session.original_order(), panels)
     }
 
     #[must_use]
     pub fn commit(self, panels: &PanelsSnapshot, index: usize) -> Option<TaskIntent> {
         if self.revision != panels.revision
-            || self.session.original_order() != current_ids(panels)
+            || !same_order(self.session.original_order(), panels)
             || index >= panels.tasks.len()
         {
             return None;
@@ -102,8 +102,8 @@ impl TaskReorderSession {
     }
 }
 
-fn current_ids(panels: &PanelsSnapshot) -> Vec<TaskEntryId> {
-    panels.tasks.iter().map(|entry| entry.id.clone()).collect()
+fn same_order(original: &[TaskEntryId], panels: &PanelsSnapshot) -> bool {
+    original.iter().eq(panels.tasks.iter().map(|entry| &entry.id))
 }
 
 #[must_use]
