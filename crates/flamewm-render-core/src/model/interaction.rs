@@ -101,15 +101,6 @@ impl RuntimeDocument {
         self.scroll_offsets.get(&index).copied().unwrap_or_default()
     }
 
-    /// Node-local rect for damage marks (viewport box, unscaled doc coords).
-    pub fn node_rect_for_damage(
-        &self,
-        index: u32,
-        layout: &crate::layout::LayoutResult,
-    ) -> Option<Rect> {
-        layout.boxes.get(index as usize).map(|b| b.rect)
-    }
-
     pub fn apply_scroll_delta(
         &mut self,
         index: u32,
