@@ -564,20 +564,12 @@ impl ProductSettings {
             return invalid("screensaverDisplayOffMinutes must be 0..240");
         }
         for output in self.panel_edges.keys() {
-            if output.is_empty()
-                || output
-                    .chars()
-                    .any(|c| c.is_whitespace() || c.is_control() || c == '=')
-            {
+            if !is_valid_output_id(output) {
                 return invalid("panel.edge output id is invalid");
             }
         }
         for (output, scale) in &self.per_output_scale {
-            if output.is_empty()
-                || output
-                    .chars()
-                    .any(|c| c.is_whitespace() || c.is_control() || c == '=')
-            {
+            if !is_valid_output_id(output) {
                 return invalid("perOutputScale output id is invalid");
             }
             if !matches!(*scale, 100 | 125 | 150 | 175 | 200) {
@@ -1174,6 +1166,10 @@ fn parse_bool(value: &str, name: &str) -> FlameResult<bool> {
     }
 }
 
+fn is_valid_output_id(output: &str) -> bool {
+    !output.is_empty() && !output.chars().any(|c| c.is_whitespace() || c.is_control() || c == '=')
+}
+
 fn validate_color(value: &str, allow_empty: bool, name: &str) -> FlameResult<()> {
     if allow_empty && value.is_empty() {
         return Ok(());
@@ -1257,6 +1253,22 @@ fn io_error(error: io::Error) -> FlameError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each line, set on an otherwise default file, must be rejected as `InvalidArgument`.
+    fn assert_rejected<S: AsRef<str>>(lines: &[S]) {
+        let store = ConfigStore::default();
+        for line in lines {
+            let line = line.as_ref();
+            assert_eq!(
+                store
+                    .parse_snapshot(&format!("revision=2\n{line}\n"))
+                    .expect_err(line)
+                    .code,
+                ErrorCode::InvalidArgument,
+                "{line} must be rejected"
+            );
+        }
+    }
 
     #[test]
     fn defaults_match_current_flamewm_product_contract() {
@@ -1382,23 +1394,13 @@ mod tests {
 
     #[test]
     fn invalid_avatar_image_paths_are_rejected() {
-        let store = ConfigStore::default();
         let long_path = format!("/{}", "a".repeat(4096));
-        for line in [
+        assert_rejected(&[
             "avatarImage=face.png".to_owned(),
             "avatarImage=images/face.png".to_owned(),
             "avatarImage=/tmp/a\tb.png".to_owned(),
             format!("avatarImage={long_path}"),
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err("invalid avatar value")
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -1519,24 +1521,14 @@ mod tests {
 
     #[test]
     fn invalid_lock_background_blur_and_dim_values_are_rejected() {
-        let store = ConfigStore::default();
-        for line in [
+        assert_rejected(&[
             "lockBackgroundBlurPercent=101",
             "lockBackgroundBlurPercent=-1",
             "lockBackgroundBlurPercent=40.5",
             "lockBackgroundDimPercent=81",
             "lockBackgroundDimPercent=-1",
             "lockBackgroundDimPercent=25%",
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err("invalid lock background value")
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -1578,9 +1570,8 @@ mod tests {
 
     #[test]
     fn invalid_lock_screen_values_are_rejected() {
-        let store = ConfigStore::default();
         let long_path = format!("/{}", "a".repeat(4096));
-        for line in [
+        assert_rejected(&[
             "lockBackgroundColor=red".to_owned(),
             "lockBackgroundColor=#12345".to_owned(),
             "lockClockFormat=13h".to_owned(),
@@ -1593,16 +1584,7 @@ mod tests {
             "lockBackgroundImage=/tmp/a\tb.png".to_owned(),
             format!("lockBackgroundImage={long_path}"),
             "lockShowDate=maybe".to_owned(),
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err("invalid lock value")
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -1659,8 +1641,7 @@ mod tests {
 
     #[test]
     fn invalid_taskbar_style_and_blur_values_are_rejected() {
-        let store = ConfigStore::default();
-        for line in [
+        assert_rejected(&[
             "taskbarStyle=Floating",
             "taskbarStyle=bar",
             "taskbarFloatingMargin=33",
@@ -1669,14 +1650,7 @@ mod tests {
             "taskbarBlurPercent=101",
             "taskbarBlurPercent=80.5",
             "startMenuBlurPercent=101",
-        ] {
-            assert!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .is_err(),
-                "{line} should be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -1741,8 +1715,7 @@ mod tests {
 
     #[test]
     fn invalid_screensaver_values_are_rejected() {
-        let store = ConfigStore::default();
-        for line in [
+        assert_rejected(&[
             "screensaverMode=Ribbons",
             "screensaverMode=blank",
             "screensaverAfterLockMinutes=61",
@@ -1754,16 +1727,7 @@ mod tests {
             "screensaverRibbonWidthTenths=11.0",
             "screensaverDisplayOffMinutes=241",
             "screensaverSpanMonitors=maybe",
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err("invalid screensaver value")
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -2022,8 +1986,7 @@ mod tests {
 
     #[test]
     fn invalid_new_appearance_values_are_rejected() {
-        let store = ConfigStore::default();
-        for line in [
+        assert_rejected(&[
             "startMenuColor=red",
             "titlebarCloseColor=#GGGGGG",
             "startMenuOpacity=101",
@@ -2037,16 +2000,7 @@ mod tests {
             "animationSpeed=201",
             "startAnimation=bounce",
             "animationsEnabled=maybe",
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err(line)
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -2119,7 +2073,7 @@ mod tests {
                 .parse_snapshot(&format!("revision=2\n{line}\n"))
                 .unwrap_or_else(|error| panic!("{line} must be accepted: {error:?}"));
         }
-        for line in [
+        assert_rejected(&[
             "startAnimation=bounce",
             "startAnimation=scale",
             "startAnimation=slide-up-x",
@@ -2135,16 +2089,7 @@ mod tests {
             "windowCloseAnimation=magic-lamp",
             "windowCloseAnimation=Fade",
             "windowCloseAnimation=slide",
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err(line)
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
@@ -2270,8 +2215,7 @@ mod tests {
 
     #[test]
     fn invalid_new_customization_values_are_rejected() {
-        let store = ConfigStore::default();
-        for line in [
+        assert_rejected(&[
             "wallpaperFit=Fill",
             "wallpaperFit=zoom",
             "cursorSize=16",
@@ -2285,16 +2229,7 @@ mod tests {
             "taskbarShowDate=2",
             "snapPreviewEnabled=on",
             "focusFollowsMouse=sometimes",
-        ] {
-            assert_eq!(
-                store
-                    .parse_snapshot(&format!("revision=2\n{line}\n"))
-                    .expect_err("invalid customization value")
-                    .code,
-                ErrorCode::InvalidArgument,
-                "{line} must be rejected"
-            );
-        }
+        ]);
     }
 
     #[test]
