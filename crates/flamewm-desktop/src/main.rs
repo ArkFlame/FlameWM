@@ -54,162 +54,61 @@ macro_rules! cached {
     }};
 }
 
+macro_rules! point_fn {
+    ($name:ident, $ty:ident, $key:expr) => {
+        fn $name() -> &'static $ty {
+            cached!($ty, $key)
+        }
+    };
+}
+
 mod projection;
 mod sticky;
 mod wallpaper_fit;
 mod wallpaper_loader;
 mod workspace_sync;
 
-
-fn scan_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.scan")
-}
-
-fn sync_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.sync_document")
-}
-
-fn rescan_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.rescan")
-}
-
-fn icon_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.icon.resolve")
-}
-
-fn inotify_wakeup_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.inotify.wakeup")
-}
-
-fn inotify_rescan_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.inotify.rescan")
-}
-
-fn selection_begin_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.selection.begin")
-}
-
-fn selection_visible_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.selection.visible")
-}
-
-fn selection_end_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.selection.end")
-}
-
-fn context_secondary_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.context.secondary")
-}
-
-fn context_open_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.context.open")
-}
-
-fn context_open_total_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.context.open.total")
-}
-
-fn context_open_project_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.context.open.project")
-}
-
-fn context_open_measure_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.context.open.measure")
-}
-
-fn context_open_place_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.context.open.place")
-}
-
-fn context_open_present_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.context.open.present")
-}
-
-fn context_open_close_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.context.open.close")
-}
-
-fn context_action_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.context.action")
-}
-
-fn render_sync_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.render.sync")
-}
-
-fn drag_ghost_show_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.drag.ghost.show")
-}
-
-fn drag_ghost_motion_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.drag.ghost.motion")
-}
-
-fn rename_open_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.rename.open")
-}
-
-fn rename_success_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.rename.success")
-}
-
-fn rename_failure_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.rename.failure")
-}
-
-fn action_failure_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.action.failure")
-}
-
-fn spawn_failure_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.spawn.failure")
-}
-
+point_fn!(scan_point, ProfilePoint, "desktop.scan");
+point_fn!(sync_point, ProfilePoint, "desktop.sync_document");
+point_fn!(rescan_point, ProfilePoint, "desktop.rescan");
+point_fn!(icon_point, ProfilePoint, "desktop.icon.resolve");
+point_fn!(inotify_wakeup_counter, CounterPoint, "desktop.inotify.wakeup");
+point_fn!(inotify_rescan_counter, CounterPoint, "desktop.inotify.rescan");
+point_fn!(selection_begin_counter, CounterPoint, "desktop.selection.begin");
+point_fn!(selection_visible_counter, CounterPoint, "desktop.selection.visible");
+point_fn!(selection_end_counter, CounterPoint, "desktop.selection.end");
+point_fn!(context_secondary_counter, CounterPoint, "desktop.context.secondary");
+point_fn!(context_open_counter, CounterPoint, "desktop.context.open");
+point_fn!(context_open_total_point, ProfilePoint, "desktop.context.open.total");
+point_fn!(context_open_project_point, ProfilePoint, "desktop.context.open.project");
+point_fn!(context_open_measure_point, ProfilePoint, "desktop.context.open.measure");
+point_fn!(context_open_place_point, ProfilePoint, "desktop.context.open.place");
+point_fn!(context_open_present_point, ProfilePoint, "desktop.context.open.present");
+point_fn!(context_open_close_point, ProfilePoint, "desktop.context.open.close");
+point_fn!(context_action_counter, CounterPoint, "desktop.context.action");
+point_fn!(render_sync_counter, CounterPoint, "desktop.render.sync");
+point_fn!(drag_ghost_show_counter, CounterPoint, "desktop.drag.ghost.show");
+point_fn!(drag_ghost_motion_counter, CounterPoint, "desktop.drag.ghost.motion");
+point_fn!(rename_open_counter, CounterPoint, "desktop.rename.open");
+point_fn!(rename_success_counter, CounterPoint, "desktop.rename.success");
+point_fn!(rename_failure_counter, CounterPoint, "desktop.rename.failure");
+point_fn!(action_failure_counter, CounterPoint, "desktop.action.failure");
+point_fn!(spawn_failure_counter, CounterPoint, "desktop.spawn.failure");
 fn report_action_failure(context: &str, error: String) {
     action_failure_counter().increment();
     eprintln!("desktop: {context} failed: {error}; keeping event loop alive");
 }
 
-fn workspace_change_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.workspace.change")
-}
-
-fn workspace_signal_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.workspace.signal")
-}
-
-fn workspace_apply_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.workspace.apply")
-}
-
-fn workspace_project_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.workspace.project")
-}
-
-fn workspace_present_point() -> &'static ProfilePoint {
-    cached!(ProfilePoint, "desktop.workspace.present")
-}
-
-fn workspace_snapshot_received_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.workspace.snapshot_received")
-}
-
-fn workspace_legacy_ignored_counter() -> &'static CounterPoint {
-    cached!(CounterPoint, "desktop.workspace.legacy_ignored")
-}
-
-fn model_gauge() -> &'static MemoryGauge {
-    cached!(MemoryGauge, "desktop.model")
-}
-
-fn launcher_gauge() -> &'static MemoryGauge {
-    cached!(MemoryGauge, "desktop.launcher")
-}
-
-fn icon_gauge() -> &'static MemoryGauge {
-    cached!(MemoryGauge, "desktop.icon")
-}
-
+point_fn!(workspace_change_counter, CounterPoint, "desktop.workspace.change");
+point_fn!(workspace_signal_point, ProfilePoint, "desktop.workspace.signal");
+point_fn!(workspace_apply_point, ProfilePoint, "desktop.workspace.apply");
+point_fn!(workspace_project_point, ProfilePoint, "desktop.workspace.project");
+point_fn!(workspace_present_point, ProfilePoint, "desktop.workspace.present");
+point_fn!(workspace_snapshot_received_counter, CounterPoint, "desktop.workspace.snapshot_received");
+point_fn!(workspace_legacy_ignored_counter, CounterPoint, "desktop.workspace.legacy_ignored");
+point_fn!(model_gauge, MemoryGauge, "desktop.model");
+point_fn!(launcher_gauge, MemoryGauge, "desktop.launcher");
+point_fn!(icon_gauge, MemoryGauge, "desktop.icon");
 fn rescan_desktop(state: &mut DesktopState) -> Result<(), String> {
     state
         .model
