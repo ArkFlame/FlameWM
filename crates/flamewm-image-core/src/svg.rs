@@ -2,10 +2,6 @@
 
 use crate::{RgbaImage, SvgColorScheme, check_size_limits, unpremultiply_swapped_to_rgba};
 
-fn options_default() -> resvg::usvg::Options<'static> {
-    resvg::usvg::Options::default()
-}
-
 /// Returns true when the SVG references a themeable color scheme.
 #[must_use]
 pub fn uses_current_color_scheme(bytes: &[u8]) -> bool {
@@ -22,19 +18,21 @@ pub fn uses_current_color_scheme(bytes: &[u8]) -> bool {
         || contains(bytes, b"current-color-scheme")
 }
 
-/// Returns natural (intrinsic) SVG dimensions rounded up to whole pixels.
-pub fn natural_size(bytes: &[u8]) -> Result<(u32, u32), String> {
-    let tree = resvg::usvg::Tree::from_data_nested(bytes, &options_default())
-        .map_err(|error| error.to_string())?;
+fn finite_size(tree: &resvg::usvg::Tree) -> Result<(f32, f32), String> {
     let size = tree.size();
-    if !size.width().is_finite()
-        || !size.height().is_finite()
-        || size.width() <= 0.0
-        || size.height() <= 0.0
-    {
+    let (width, height) = (size.width(), size.height());
+    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
         return Err("SVG dimensions must be finite and non-zero".to_string());
     }
-    Ok((size.width().ceil() as u32, size.height().ceil() as u32))
+    Ok((width, height))
+}
+
+/// Returns natural (intrinsic) SVG dimensions rounded up to whole pixels.
+pub fn natural_size(bytes: &[u8]) -> Result<(u32, u32), String> {
+    let tree = resvg::usvg::Tree::from_data_nested(bytes, &resvg::usvg::Options::default())
+        .map_err(|error| error.to_string())?;
+    let (width, height) = finite_size(&tree)?;
+    Ok((width.ceil() as u32, height.ceil() as u32))
 }
 
 /// Renders SVG to an exact target size, preserving alpha.
@@ -78,7 +76,7 @@ fn sheet_css(scheme: &SvgColorScheme) -> String {
     ];
     let mut css = String::new();
     for class in classes {
-        let color = if class.ends_with("-Text") || class.ends_with("Text") {
+        let color = if class.ends_with("Text") {
             if class == "ColorScheme-NegativeText" {
                 &negative
             } else {
@@ -101,7 +99,7 @@ fn render_inner(
     scheme: Option<&SvgColorScheme>,
 ) -> Result<RgbaImage, String> {
     check_size_limits(width, height)?;
-    let mut options = options_default();
+    let mut options = resvg::usvg::Options::default();
     if let Some(scheme) = scheme {
         options.style_sheet = Some(sheet_css(scheme));
     }
@@ -112,19 +110,12 @@ fn render_inner(
     } else {
         resvg::usvg::Tree::from_data_nested(bytes, &options).map_err(|error| error.to_string())?
     };
-    let svg_size = tree.size();
-    if !svg_size.width().is_finite()
-        || !svg_size.height().is_finite()
-        || svg_size.width() <= 0.0
-        || svg_size.height() <= 0.0
-    {
-        return Err("SVG dimensions must be finite and non-zero".to_string());
-    }
+    let (svg_width, svg_height) = finite_size(&tree)?;
     let mut pixmap =
         resvg::tiny_skia::Pixmap::new(width, height).ok_or("requested dimensions overflow")?;
     let transform = resvg::tiny_skia::Transform::from_scale(
-        width as f32 / svg_size.width(),
-        height as f32 / svg_size.height(),
+        width as f32 / svg_width,
+        height as f32 / svg_height,
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     if pixmap.width() != width || pixmap.height() != height {
@@ -147,6 +138,10 @@ mod tests {
     fn fixture(path: &str) -> Vec<u8> {
         let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
         std::fs::read(full).expect("SVG fixture")
+    }
+
+    fn alpha_coverage(image: &RgbaImage) -> u32 {
+        image.pixels.chunks_exact(4).filter(|pixel| pixel[3] > 8).count() as u32
     }
 
     fn mean_rgb(image: &RgbaImage) -> (f32, f32, f32, u32) {
@@ -211,16 +206,8 @@ mod tests {
         let scheme = SvgColorScheme::flame_default();
         let plain = render(&bytes, 48, 48).unwrap();
         let themed = render_with_color_scheme(&bytes, 48, 48, &scheme).unwrap();
-        let themed_alpha: u32 = themed
-            .pixels
-            .chunks_exact(4)
-            .map(|pixel| u32::from(pixel[3] > 8))
-            .sum();
-        let plain_alpha: u32 = plain
-            .pixels
-            .chunks_exact(4)
-            .map(|pixel| u32::from(pixel[3] > 8))
-            .sum();
+        let themed_alpha = alpha_coverage(&themed);
+        let plain_alpha = alpha_coverage(&plain);
         assert!(themed_alpha > 0);
         // Alpha coverage (shape area) must be preserved by recoloring.
         assert!(
