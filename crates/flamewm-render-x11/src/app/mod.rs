@@ -225,36 +225,32 @@ impl X11App {
         let argb_visual =
             unsafe { XMatchVisualInfo(display, screen, 32, TRUE_COLOR_CLASS, &mut vinfo) } != 0
                 && !vinfo.visual.is_null();
-        let (visual, depth, alpha_mode) = if argb_visual {
+        if argb_visual {
             let alpha_mask = unsafe { visual_alpha_mask(display, vinfo.visual) };
             match validate_argb32_visual(32, TRUE_COLOR_CLASS, alpha_mask) {
+                // No compositor is claimed in the default Xephyr path, so a
+                // depth-32 window cannot blend fractionally with the desktop.
+                // Keep the ARGB32 scene for in-scene alpha, but present via
+                // the shape-backed mode unless a compositing manager owns its
+                // selection. Never claim fractional desktop translucency here.
                 Ok(_) => {
-                    // No compositor is claimed in the default Xephyr path, so a
-                    // depth-32 window cannot blend fractionally with the desktop.
-                    // Keep the ARGB32 scene for in-scene alpha, but present via
-                    // the shape-backed mode unless a compositing manager owns its
-                    // selection. Never claim fractional desktop translucency here.
-                    eprintln!("FLAMEWM_RENDER_SURFACE_FORMAT shape-backed (no compositor claim)");
-                    let dv = unsafe { XDefaultVisual(display, screen) };
-                    let dd = unsafe { XDefaultDepth(display, screen) };
-                    (dv, dd, fallback_mode(shape_available(display)))
+                    eprintln!("FLAMEWM_RENDER_SURFACE_FORMAT shape-backed (no compositor claim)")
                 }
-                Err(error) => {
-                    eprintln!("FLAMEWM_RENDER_SURFACE_FORMAT degraded reason={error}");
-                    let dv = unsafe { XDefaultVisual(display, screen) };
-                    let dd = unsafe { XDefaultDepth(display, screen) };
-                    (dv, dd, fallback_mode(shape_available(display)))
-                }
+                Err(error) => eprintln!("FLAMEWM_RENDER_SURFACE_FORMAT degraded reason={error}"),
             }
-        } else {
-            let dv = unsafe { XDefaultVisual(display, screen) };
-            let dd = unsafe { XDefaultDepth(display, screen) };
-            (dv, dd, fallback_mode(shape_available(display)))
+        }
+        let (visual, depth, alpha_mode) = unsafe {
+            (
+                XDefaultVisual(display, screen),
+                XDefaultDepth(display, screen),
+                fallback_mode(shape_available(display)),
+            )
         };
         if visual.is_null() {
             return Err("no usable visual for native surface".to_string());
         }
-        let colormap = if depth == 32 && alpha_mode == SurfaceAlphaMode::CompositedArgb32 {
+        let owns_argb_colormap = depth == 32 && alpha_mode == SurfaceAlphaMode::CompositedArgb32;
+        let colormap = if owns_argb_colormap {
             let cmap = unsafe { XCreateColormap(display, root, visual, ALLOC_NONE) };
             if cmap == 0 {
                 return Err("XCreateColormap failed for ARGB32 surface".to_string());
@@ -306,7 +302,7 @@ impl X11App {
             )
         };
         if window == 0 {
-            if depth == 32 && alpha_mode == SurfaceAlphaMode::CompositedArgb32 {
+            if owns_argb_colormap {
                 unsafe { XFreeColormap(display, colormap) };
             }
             return Err("XCreateWindow failed for native surface".to_string());
@@ -330,13 +326,12 @@ impl X11App {
         set_window_identity(display, window, config.title.as_str(), config.identity.as_ref());
         set_window_role(display, window, config.role);
         if config.role == X11WindowRole::Dock {
-            let root_w = unsafe { XDisplayWidth(display, screen).max(1) as u32 };
-            let root_h = unsafe { XDisplayHeight(display, screen).max(1) as u32 };
+            let (root_w, root_h) = display_extent(display, screen);
             apply_dock_strut(display, window, root_w, root_h, None, x, y, width, height);
         }
         let gc = unsafe { XCreateGC(display, window, 0, ptr::null_mut()) };
         if gc.is_null() {
-            if depth == 32 && alpha_mode == SurfaceAlphaMode::CompositedArgb32 {
+            if owns_argb_colormap {
                 unsafe { XFreeColormap(display, colormap) };
             }
             unsafe {
@@ -351,12 +346,7 @@ impl X11App {
             XSetGraphicsExposures(display, gc, 0);
         }
         let backbuffer = {
-            let root_geom = unsafe {
-                (
-                    XDisplayWidth(display, screen).max(1) as u32,
-                    XDisplayHeight(display, screen).max(1) as u32,
-                )
-            };
+            let (root_w, root_h) = display_extent(display, screen);
             let mut owned = X11ResourceAllocator::new();
             let created = unsafe {
                 owned.create_pixmap(
@@ -365,8 +355,8 @@ impl X11App {
                     config.width.max(1),
                     config.height.max(1),
                     depth as u32,
-                    root_geom.0,
-                    root_geom.1,
+                    root_w,
+                    root_h,
                 )
             };
             match created {
@@ -377,7 +367,7 @@ impl X11App {
                 Err(error) => {
                     unsafe {
                         XFreeGC(display, gc);
-                        if depth == 32 && alpha_mode == SurfaceAlphaMode::CompositedArgb32 {
+                        if owns_argb_colormap {
                             XFreeColormap(display, colormap);
                         }
                         XDestroyWindow(display, window);
@@ -442,8 +432,7 @@ impl X11App {
                 None
             }
         };
-        let delete_name = CString::new("WM_DELETE_WINDOW").expect("static atom contains no NUL");
-        let wm_delete = unsafe { XInternAtom(display, delete_name.as_ptr(), 0) };
+        let wm_delete = intern_atom(display, "WM_DELETE_WINDOW");
         if wm_delete != 0 {
             let mut protocol = wm_delete;
             unsafe {
@@ -586,12 +575,7 @@ impl X11App {
     }
 
     pub(crate) fn root_extent(&self) -> (u32, u32) {
-        unsafe {
-            (
-                XDisplayWidth(self.display, self.screen).max(1) as u32,
-                XDisplayHeight(self.display, self.screen).max(1) as u32,
-            )
-        }
+        display_extent(self.display, self.screen)
     }
 
     /// Transfer all dynamically loaded backend handles to the display owner.
@@ -623,6 +607,50 @@ impl X11App {
 
 fn shape_available(display: *mut Display) -> bool {
     unsafe { XShapeBridge::new(display).is_ok() }
+}
+
+/// Root window size of `screen`, clamped to at least 1x1.
+fn display_extent(display: *mut Display, screen: i32) -> (u32, u32) {
+    unsafe {
+        (
+            XDisplayWidth(display, screen).max(1) as u32,
+            XDisplayHeight(display, screen).max(1) as u32,
+        )
+    }
+}
+
+/// Interns a static atom name; `0` when the server refuses it.
+fn intern_atom(display: *mut Display, name: &str) -> Atom {
+    let name = CString::new(name).expect("static atom contains no NUL");
+    unsafe { XInternAtom(display, name.as_ptr(), 0) }
+}
+
+/// Replaces `property` on `window` with `nelements` items of `format` bits (PROP_MODE_REPLACE).
+///
+/// # Safety
+///
+/// `data` must point to `nelements * format / 8` readable bytes, and `display` must be live.
+unsafe fn replace_property(
+    display: *mut Display,
+    window: Window,
+    property: Atom,
+    type_: Atom,
+    format: c_int,
+    data: *const u8,
+    nelements: c_int,
+) {
+    unsafe {
+        XChangeProperty(
+            display,
+            window,
+            property,
+            type_,
+            format,
+            PROP_MODE_REPLACE,
+            data,
+            nelements,
+        );
+    }
 }
 
 #[repr(C)]
@@ -698,11 +726,8 @@ pub(crate) fn apply_dock_strut(
     w: u32,
     h: u32,
 ) {
-    use std::ffi::CString;
-    let partial_name = CString::new("_NET_WM_STRUT_PARTIAL").expect("static atom contains no NUL");
-    let strut_name = CString::new("_NET_WM_STRUT").expect("static atom contains no NUL");
-    let partial = unsafe { XInternAtom(display, partial_name.as_ptr(), 0) };
-    let strut = unsafe { XInternAtom(display, strut_name.as_ptr(), 0) };
+    let partial = intern_atom(display, "_NET_WM_STRUT_PARTIAL");
+    let strut = intern_atom(display, "_NET_WM_STRUT");
     if partial == 0 || strut == 0 {
         return;
     }
@@ -713,30 +738,11 @@ pub(crate) fn apply_dock_strut(
     match reserved {
         Some(reserved) => {
             let values12 = reserved.partial12();
-            unsafe {
-                XChangeProperty(
-                    display,
-                    window,
-                    partial,
-                    XA_CARDINAL,
-                    32,
-                    PROP_MODE_REPLACE,
-                    &values12 as *const [u64; 12] as *const u8,
-                    12,
-                );
-            }
             let values4 = reserved.strut4();
             unsafe {
-                XChangeProperty(
-                    display,
-                    window,
-                    strut,
-                    XA_CARDINAL,
-                    32,
-                    PROP_MODE_REPLACE,
-                    &values4 as *const [u64; 4] as *const u8,
-                    4,
-                );
+                let (p12, p4) = (values12.as_ptr() as *const u8, values4.as_ptr() as *const u8);
+                replace_property(display, window, partial, XA_CARDINAL, 32, p12, 12);
+                replace_property(display, window, strut, XA_CARDINAL, 32, p4, 4);
             }
         }
         None => unsafe {
@@ -750,8 +756,7 @@ pub(crate) fn apply_dock_strut(
 /// `FLAMEWM_PAGER_CELLS` CARDINAL list: four values (x, y, width, height)
 /// per cell, window-relative, in cell order. Empty input deletes it.
 pub(crate) fn apply_pager_cells(display: *mut Display, window: Window, cells: &[[u64; 4]]) {
-    let property_name = CString::new("FLAMEWM_PAGER_CELLS").expect("static atom contains no NUL");
-    let property = unsafe { XInternAtom(display, property_name.as_ptr(), 0) };
+    let property = intern_atom(display, "FLAMEWM_PAGER_CELLS");
     if property == 0 {
         return;
     }
@@ -761,16 +766,8 @@ pub(crate) fn apply_pager_cells(display: *mut Display, window: Window, cells: &[
     }
     let flat: Vec<u64> = cells.iter().flat_map(|cell| cell.iter().copied()).collect();
     unsafe {
-        XChangeProperty(
-            display,
-            window,
-            property,
-            XA_CARDINAL,
-            32,
-            PROP_MODE_REPLACE,
-            flat.as_ptr() as *const u8,
-            flat.len() as c_int,
-        );
+        let data = flat.as_ptr() as *const u8;
+        replace_property(display, window, property, XA_CARDINAL, 32, data, flat.len() as c_int);
     }
 }
 
@@ -789,16 +786,8 @@ pub(crate) fn apply_window_icon_geometry(
     }
     match rect {
         Some(values) => unsafe {
-            XChangeProperty(
-                display,
-                window,
-                property,
-                XA_CARDINAL,
-                32,
-                PROP_MODE_REPLACE,
-                values.as_ptr() as *const u8,
-                values.len() as c_int,
-            );
+            let data = values.as_ptr() as *const u8;
+            replace_property(display, window, property, XA_CARDINAL, 32, data, values.len() as c_int);
         },
         None => {
             unsafe { XDeleteProperty(display, window, property) };
@@ -815,12 +804,8 @@ fn set_window_identity(
     identity: Option<&super::config::X11WindowIdentity>,
 ) {
     const XA_STRING: Atom = 31;
-    let intern = |name: &str| -> Atom {
-        let name = CString::new(name).expect("static atom contains no NUL");
-        unsafe { XInternAtom(display, name.as_ptr(), 0) }
-    };
     if let Some(identity) = identity {
-        let wm_class = intern("WM_CLASS");
+        let wm_class = intern_atom(display, "WM_CLASS");
         if wm_class != 0 {
             let mut bytes = Vec::with_capacity(identity.instance.len() + identity.class.len() + 2);
             bytes.extend_from_slice(identity.instance.as_bytes());
@@ -828,62 +813,36 @@ fn set_window_identity(
             bytes.extend_from_slice(identity.class.as_bytes());
             bytes.push(0);
             unsafe {
-                XChangeProperty(
-                    display,
-                    window,
-                    wm_class,
-                    XA_STRING,
-                    8,
-                    PROP_MODE_REPLACE,
-                    bytes.as_ptr(),
-                    bytes.len() as c_int,
-                );
+                let len = bytes.len() as c_int;
+                replace_property(display, window, wm_class, XA_STRING, 8, bytes.as_ptr(), len);
             }
         }
     }
-    let net_wm_name = intern("_NET_WM_NAME");
-    let utf8_string = intern("UTF8_STRING");
+    let net_wm_name = intern_atom(display, "_NET_WM_NAME");
+    let utf8_string = intern_atom(display, "UTF8_STRING");
     if net_wm_name != 0 && utf8_string != 0 {
         unsafe {
-            XChangeProperty(
-                display,
-                window,
-                net_wm_name,
-                utf8_string,
-                8,
-                PROP_MODE_REPLACE,
-                title.as_ptr(),
-                title.len() as c_int,
-            );
+            let len = title.len() as c_int;
+            replace_property(display, window, net_wm_name, utf8_string, 8, title.as_ptr(), len);
         }
     }
 }
 
 fn set_window_role(display: *mut Display, window: Window, role: X11WindowRole) {
-    let property_name = CString::new("_NET_WM_WINDOW_TYPE").expect("static atom contains no NUL");
-    let role_name = CString::new(crate::config::overlay_window_type_name(match role {
+    let role_name = crate::config::overlay_window_type_name(match role {
         X11WindowRole::Normal => crate::config::SurfaceRole::Normal,
         X11WindowRole::Desktop => crate::config::SurfaceRole::Desktop,
         X11WindowRole::Dock => crate::config::SurfaceRole::Dock,
         X11WindowRole::PopupMenu => crate::config::SurfaceRole::PopupMenu,
         X11WindowRole::DropdownMenu => crate::config::SurfaceRole::DropdownMenu,
         X11WindowRole::Overlay => crate::config::SurfaceRole::Overlay,
-    }))
-    .expect("static atom contains no NUL");
-    let property = unsafe { XInternAtom(display, property_name.as_ptr(), 0) };
-    let role_atom = unsafe { XInternAtom(display, role_name.as_ptr(), 0) };
+    });
+    let property = intern_atom(display, "_NET_WM_WINDOW_TYPE");
+    let role_atom = intern_atom(display, role_name);
     if property != 0 && role_atom != 0 {
         unsafe {
-            XChangeProperty(
-                display,
-                window,
-                property,
-                XA_ATOM,
-                32,
-                PROP_MODE_REPLACE,
-                &role_atom as *const Atom as *const u8,
-                1,
-            );
+            let data = &role_atom as *const Atom as *const u8;
+            replace_property(display, window, property, XA_ATOM, 32, data, 1);
         }
     }
 }

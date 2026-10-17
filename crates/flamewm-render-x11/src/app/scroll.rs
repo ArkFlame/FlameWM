@@ -7,7 +7,11 @@
 use super::*;
 use flamewm_render_core::{InteractionState as Interaction, Overflow};
 
-fn is_scroll_container(document: &RuntimeDocument, index: u32, interaction: Interaction) -> bool {
+pub(crate) fn is_scroll_container(
+    document: &RuntimeDocument,
+    index: u32,
+    interaction: Interaction,
+) -> bool {
     matches!(
         document.runtime_style(index, interaction).overflow_y,
         Overflow::Auto | Overflow::Scroll

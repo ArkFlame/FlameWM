@@ -2,8 +2,9 @@
 //! feature logic), wheel Button4/5 -> scroll delta, slider thumb/track
 //! geometry for range drag.
 
+use super::scroll::is_scroll_container;
 use super::*;
-use flamewm_render_core::{Overflow, ScrollDelta};
+use flamewm_render_core::ScrollDelta;
 
 /// Local raw-X-button mapping. Mirrors `PointerButton::from_raw_x` without
 /// importing feature logic; wheel buttons never act as press/release.
@@ -38,10 +39,7 @@ fn wheel_scroll_target(
             .get(index as usize)
             .is_some_and(|b| b.rect.contains(x, y))
             && document.is_effectively_visible(index)
-            && matches!(
-                document.runtime_style(index, interaction).overflow_y,
-                Overflow::Auto | Overflow::Scroll
-            )
+            && is_scroll_container(document, index, interaction)
     })
 }
 
@@ -98,7 +96,7 @@ pub(crate) fn slider_value_from_pointer(
 mod tests {
     use super::*;
     use flamewm_render_core::{
-        CompiledDocument, CompiledNode, Length, NodeKind, ScrollState, Style,
+        CompiledDocument, CompiledNode, Length, NodeKind, Overflow, ScrollState, Style,
     };
 
     #[test]
@@ -156,38 +154,19 @@ mod tests {
         let (_, up) = wheel_scroll_delta(pointer_button_from_raw(4)).expect("Button4 wheel");
 
         // Pointer over the non-scrollable 180x500 child: target is the scrollable root.
-        let target = apply_wheel_scroll(
-            &layout,
-            &mut doc,
-            InteractionState::default(),
-            10.0,
-            10.0,
-            (0.0, down),
-        );
-        assert_eq!(target, Some(0));
+        let wheel = |doc: &mut RuntimeDocument, dy: f32| {
+            apply_wheel_scroll(&layout, doc, InteractionState::default(), 10.0, 10.0, (0.0, dy))
+        };
+        assert_eq!(wheel(&mut doc, down), Some(0));
         assert_eq!(doc.scroll_offset(0).offset_y, 24.0);
 
         for _ in 0..40 {
-            apply_wheel_scroll(
-                &layout,
-                &mut doc,
-                InteractionState::default(),
-                10.0,
-                10.0,
-                (0.0, down),
-            );
+            wheel(&mut doc, down);
         }
         assert_eq!(doc.scroll_offset(0).offset_y, max_y);
 
         for _ in 0..40 {
-            apply_wheel_scroll(
-                &layout,
-                &mut doc,
-                InteractionState::default(),
-                10.0,
-                10.0,
-                (0.0, up),
-            );
+            wheel(&mut doc, up);
         }
         assert_eq!(doc.scroll_offset(0).offset_y, 0.0);
     }
