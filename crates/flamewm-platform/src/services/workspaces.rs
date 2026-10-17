@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use flamewm_api::ports::WorkspacePort;
 use flamewm_api::workspace::{MAX_WORKSPACES, WORKSPACE_COUNT_KEY, WorkspacePlan, WorkspaceSnapshot};
-use flamewm_api::{ErrorCode, FlameError, FlameResult, WindowRef};
+use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
-use crate::workspace::{TwoRowTopology, WorkspacePlanner};
+use crate::workspace::WorkspacePlanner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationDirection {
@@ -145,55 +145,6 @@ impl WorkspaceService {
         Ok(())
     }
 
-    pub fn navigate<P: WorkspacePort>(
-        &self,
-        port: &mut P,
-        direction: NavigationDirection,
-        expected_revision: u64,
-    ) -> FlameResult<()> {
-        let snapshot = self.snapshot(port)?;
-        require_revision(&snapshot, expected_revision)?;
-        let target = match direction {
-            NavigationDirection::Left => {
-                TwoRowTopology::move_left(snapshot.active_index, snapshot.count)
-            }
-            NavigationDirection::Right => {
-                TwoRowTopology::move_right(snapshot.active_index, snapshot.count)
-            }
-            NavigationDirection::Up => {
-                TwoRowTopology::move_up(snapshot.active_index, snapshot.count)
-            }
-            NavigationDirection::Down => {
-                TwoRowTopology::move_down(snapshot.active_index, snapshot.count)
-            }
-        };
-        if target == snapshot.active_index {
-            return Ok(());
-        }
-        port.activate_workspace(target, expected_revision)
-    }
-
-    pub fn move_window<P: WorkspacePort>(
-        &self,
-        port: &mut P,
-        window: WindowRef,
-        target: usize,
-    ) -> FlameResult<()> {
-        if !window.is_valid() {
-            return Err(FlameError::new(
-                ErrorCode::InvalidArgument,
-                "invalid WindowRef",
-            ));
-        }
-        let snapshot = self.snapshot(port)?;
-        if target >= snapshot.count {
-            return Err(FlameError::new(
-                ErrorCode::InvalidArgument,
-                "workspace index is invalid",
-            ));
-        }
-        port.move_window_to_workspace(window, target)
-    }
 }
 
 fn require_revision(snapshot: &WorkspaceSnapshot, expected: u64) -> FlameResult<()> {
@@ -211,6 +162,7 @@ fn require_revision(snapshot: &WorkspaceSnapshot, expected: u64) -> FlameResult<
 mod tests {
     use std::path::PathBuf;
 
+    use flamewm_api::WindowRef;
     use flamewm_api::workspace::{WorkspacePlan, WorkspaceSnapshot};
 
     use super::*;
