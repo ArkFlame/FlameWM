@@ -86,13 +86,17 @@ SCENARIOS = {
 }
 
 
-def blocked(reason: str, check: str) -> int:
-    emit({"tool": "flamewm_mpris_acceptance", "check": check, "status": "BLOCKED", "reason": reason})
-    return EXIT_BLOCKED
-
-
 def emit(obj: dict) -> None:
     print(json.dumps(obj, indent=2, sort_keys=True))
+
+
+def report(check: str, status: str, **fields) -> None:
+    emit({"tool": "flamewm_mpris_acceptance", "check": check, "status": status, **fields})
+
+
+def blocked(reason: str, check: str) -> int:
+    report(check, "BLOCKED", reason=reason)
+    return EXIT_BLOCKED
 
 
 def parse_caps(text: str) -> list:
@@ -150,12 +154,12 @@ def check_bus_safety(address: str) -> str | None:
 
 def import_dbus():
     import dbus  # noqa: F401
-    import dbus.mainloop.glib  # noqa: F401
     import dbus.exceptions  # noqa: F401
     import dbus.service  # noqa: F401
-    from gi.repository import GLib  # noqa: F401
+    from dbus.mainloop.glib import DBusGMainLoop
+    from gi.repository import GLib
 
-    return dbus, GLib
+    return dbus, GLib, DBusGMainLoop
 
 
 def box(key: str, value):
@@ -290,8 +294,7 @@ def export_players(dbus, logpath: str, setup: dict):
 
 def serve(args) -> int:
     """Child mode: export fake players, wait for GO on stdin, run scenario steps."""
-    dbus, GLib = import_dbus()
-    from dbus.mainloop.glib import DBusGMainLoop
+    dbus, GLib, DBusGMainLoop = import_dbus()
 
     DBusGMainLoop(set_as_default=True)
     scenario = SCENARIOS[args.scenario]
@@ -340,8 +343,7 @@ def serve(args) -> int:
 
 def hold_mode(seconds: float, setup: dict) -> int:
     """Register the fake players and keep serving (logging calls) until terminated, or for SECONDS if > 0."""
-    dbus, GLib = import_dbus()
-    from dbus.mainloop.glib import DBusGMainLoop
+    dbus, GLib, DBusGMainLoop = import_dbus()
 
     DBusGMainLoop(set_as_default=True)
     tmp = tempfile.mkdtemp(prefix="flamewm-mpris-hold-")
@@ -366,8 +368,7 @@ def hold_mode(seconds: float, setup: dict) -> int:
 
 
 def run_session(scenario: str, step_ms: int, hold_ms: int, extra=None, setup=None) -> dict:
-    dbus, GLib = import_dbus()
-    from dbus.mainloop.glib import DBusGMainLoop
+    dbus, GLib, DBusGMainLoop = import_dbus()
 
     if setup is None:
         setup = build_setup(scenario, None)
@@ -480,14 +481,12 @@ def run_scenario(name: str, step_ms: int, hold_ms: int, opts=None) -> int:
         return blocked(result["error"] + ": " + result["stderr"], name)
     checks = scenario_checks(name, result)
     ok = all(c["ok"] for c in checks)
-    emit({"tool": "flamewm_mpris_acceptance", "check": name, "status": "PASS" if ok else "FAIL",
-          "checks": checks, "observed": result["observed"]})
+    report(name, "PASS" if ok else "FAIL", checks=checks, observed=result["observed"])
     return EXIT_PASS if ok else EXIT_FAIL
 
 
 def self_test(step_ms: int, hold_ms: int) -> int:
-    dbus, _ = import_dbus()
-    failures = []
+    dbus, _, _ = import_dbus()
 
     def selftest_extra(bus, logpath):
         out = {}
@@ -527,8 +526,7 @@ def self_test(step_ms: int, hold_ms: int) -> int:
     ]
     checks += scenario_checks("title-change", result)
     failures = [c["name"] for c in checks if not c["ok"]]
-    emit({"tool": "flamewm_mpris_acceptance", "check": "self-test",
-          "status": "PASS" if not failures else "FAIL", "failures": failures, "checks": checks})
+    report("self-test", "PASS" if not failures else "FAIL", failures=failures, checks=checks)
     return EXIT_PASS if not failures else EXIT_FAIL
 
 
