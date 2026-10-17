@@ -183,16 +183,12 @@ impl X11Desktop {
             .filter(|&window| {
                 let is_dock = self
                     .property32(window, "_NET_WM_WINDOW_TYPE")
-                    .map(|types| types.contains(&self.atom("_NET_WM_WINDOW_TYPE_DOCK")))
-                    .unwrap_or(false);
+                    .is_ok_and(|types| types.contains(&self.atom("_NET_WM_WINDOW_TYPE_DOCK")));
                 // Identity is advisory, not a liveness gate: a freshly
                 // mapped client may not have set WM_CLASS/_NET_WM_NAME yet,
                 // and a dead window must not linger. Liveness is proven by
                 // the window still existing on the server.
-                if is_dock {
-                    return false;
-                }
-                self.conn.get_geometry(window).is_ok()
+                !is_dock && self.conn.get_geometry(window).is_ok()
             })
             .collect())
     }
