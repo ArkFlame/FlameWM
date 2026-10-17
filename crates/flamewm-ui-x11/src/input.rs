@@ -48,12 +48,12 @@ pub(crate) fn action_to_ui_event(event: &ActionEvent) -> Option<UiEvent> {
     }
     if let Some(text) = event.text.clone() {
         return Some(UiEvent::TextChanged {
-            widget: WidgetId::new(event.action.clone()),
+            widget: WidgetId::new(&event.action),
             text,
         });
     }
     Some(UiEvent::Activate {
-        widget: WidgetId::new(event.action.clone()),
-        action: ActionId::new(event.action.clone()),
+        widget: WidgetId::new(&event.action),
+        action: ActionId::new(&event.action),
     })
 }
