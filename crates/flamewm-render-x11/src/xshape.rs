@@ -90,22 +90,9 @@ impl XShapeBridge {
         spans: &[(u32, u32, u32)],
         clip: ClipRect,
     ) -> Result<(), String> {
-        let clipped = clip_spans(spans, clip);
-        let rects = spans_to_rects(&clipped);
-        // SAFETY: display is live per `new`; rects is a valid slice for the call.
-        unsafe {
-            (self.shape_rectangles)(
-                self.display,
-                window,
-                SHAPE_BOUNDING,
-                0,
-                0,
-                rects.as_ptr(),
-                rects.len().min(c_int::MAX as usize) as c_int,
-                SHAPE_SET,
-                SHAPE_YX_SORTED,
-            )
-        };
+        let rects = spans_to_rects(&clip_spans(spans, clip));
+        // SAFETY: `window` is live per the caller contract.
+        unsafe { self.set_rects(window, SHAPE_BOUNDING, &rects) };
         Ok(())
     }
 
@@ -122,20 +109,8 @@ impl XShapeBridge {
         spans: &[(u32, u32, u32)],
     ) -> Result<(), String> {
         if spans.is_empty() {
-            let empty: [XRectangle; 0] = [];
-            unsafe {
-                (self.shape_rectangles)(
-                    self.display,
-                    window,
-                    SHAPE_INPUT,
-                    0,
-                    0,
-                    empty.as_ptr(),
-                    0,
-                    SHAPE_SET,
-                    SHAPE_YX_SORTED,
-                )
-            };
+            // SAFETY: `window` is live per the caller contract.
+            unsafe { self.set_rects(window, SHAPE_INPUT, &[]) };
             return Ok(());
         }
         unsafe { self.apply_mask_kind(window, SHAPE_INPUT, spans) }
@@ -151,6 +126,15 @@ impl XShapeBridge {
         if rects.is_empty() {
             return Err("rounded shape mask has no visible rows".to_string());
         }
+        // SAFETY: `window` is live per the caller contract.
+        unsafe { self.set_rects(window, kind, &rects) };
+        Ok(())
+    }
+
+    /// # Safety
+    ///
+    /// `window` must be a live X window on this bridge's display.
+    unsafe fn set_rects(&self, window: Window, kind: c_int, rects: &[XRectangle]) {
         // SAFETY: display is live per `new`; rects is a valid slice for the call.
         unsafe {
             (self.shape_rectangles)(
@@ -165,7 +149,6 @@ impl XShapeBridge {
                 SHAPE_YX_SORTED,
             )
         };
-        Ok(())
     }
 }
 
