@@ -18,17 +18,15 @@ pub fn normalize_identity(raw: &str) -> String {
 
 #[must_use]
 pub fn resolve_identity(input: &AppIdentityInput) -> String {
-    for candidate in [
+    [
         &input.desktop_id,
         &input.startup_wm_class,
         &input.wm_class,
         &input.wm_instance,
-    ] {
-        if !candidate.is_empty() {
-            return normalize_identity(candidate);
-        }
-    }
-    "unknown".to_owned()
+    ]
+    .into_iter()
+    .find(|candidate| !candidate.is_empty())
+    .map_or_else(|| "unknown".to_owned(), |candidate| normalize_identity(candidate))
 }
 
 #[must_use]
