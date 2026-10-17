@@ -53,19 +53,7 @@ pub fn compose(
         return None;
     }
     match layer(natural, width, height, fit)? {
-        Layer::Tiled => {
-            let mut canvas = solid(width, height, BACKGROUND)?;
-            let (nw, nh) = (u64::from(natural.width), u64::from(natural.height));
-            for y in 0..height {
-                for x in 0..width {
-                    let source = (((u64::from(y) % nh) * nw + u64::from(x) % nw) * 4) as usize;
-                    let target = (y as usize * width as usize + x as usize) * 4;
-                    canvas.pixels[target..target + 4]
-                        .copy_from_slice(&natural.pixels[source..source + 4]);
-                }
-            }
-            Some(canvas)
-        }
+        Layer::Tiled => compose_region(natural, width, height, fit, (0, 0, width, height)),
         Layer::Scaled {
             width: sw,
             height: sh,
