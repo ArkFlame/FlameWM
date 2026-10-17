@@ -374,6 +374,10 @@ mod tests {
         kde_platform_theme: true,
     };
 
+    fn qt_plan(paths: &SessionPaths, mode: AppearanceMode) -> AppearancePlan {
+        plan_appearance(paths, &BTreeMap::new(), mode, QT_PLUGIN_PRESENT)
+    }
+
     fn env_with_home(home: &Path) -> BTreeMap<String, String> {
         BTreeMap::from([
             ("HOME".to_owned(), home.display().to_string()),
@@ -385,12 +389,7 @@ mod tests {
     fn dark_plan_owns_breeze_dark_and_prefixes_owned_config_dirs() {
         let home = isolated_home("dark");
         let paths = paths_for(&home);
-        let plan = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Dark,
-            QT_PLUGIN_PRESENT,
-        );
+        let plan = qt_plan(&paths, AppearanceMode::Dark);
         assert_eq!(
             plan.owned_files
                 .get(Path::new("kdeglobals"))
@@ -538,12 +537,7 @@ mod tests {
             config_home: home.join(".config"),
             data_root: home.join("empty-share"),
         };
-        let plan = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Dark,
-            QT_PLUGIN_PRESENT,
-        );
+        let plan = qt_plan(&paths, AppearanceMode::Dark);
         assert!(plan.owned_files.is_empty());
         assert!(!plan.environment.contains_key("XDG_CONFIG_DIRS"));
         assert!(matches!(plan.toolkits[&Toolkit::Qt], ToolkitStatus::Unsupported(_)));
@@ -574,12 +568,7 @@ mod tests {
     fn materialize_writes_only_under_owned_root_and_never_host_kdeglobals() {
         let home = isolated_home("materialize");
         let paths = paths_for(&home);
-        let plan = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Dark,
-            QT_PLUGIN_PRESENT,
-        );
+        let plan = qt_plan(&paths, AppearanceMode::Dark);
         materialize_owned_files(&plan).expect("materialize");
         let written = std::fs::read_to_string(owned_appearance_root(&paths).join("kdeglobals"))
             .expect("owned file");
@@ -625,19 +614,9 @@ mod tests {
     fn materialize_replaces_owned_file_atomically_without_temp_leftovers() {
         let home = isolated_home("atomic");
         let paths = paths_for(&home);
-        let light = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Light,
-            QT_PLUGIN_PRESENT,
-        );
+        let light = qt_plan(&paths, AppearanceMode::Light);
         materialize_owned_files(&light).expect("light");
-        let dark = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Dark,
-            QT_PLUGIN_PRESENT,
-        );
+        let dark = qt_plan(&paths, AppearanceMode::Dark);
         materialize_owned_files(&dark).expect("dark");
         let root = owned_appearance_root(&paths);
         assert_eq!(std::fs::read_to_string(root.join("kdeglobals")).expect("owned"), DARK_SCHEME);
@@ -668,18 +647,8 @@ mod tests {
     fn gtk_settings_ini_prefers_dark_only_for_dark_mode() {
         let home = isolated_home("gtk-ini");
         let paths = paths_for(&home);
-        let dark = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Dark,
-            QT_PLUGIN_PRESENT,
-        );
-        let light = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Light,
-            QT_PLUGIN_PRESENT,
-        );
+        let dark = qt_plan(&paths, AppearanceMode::Dark);
+        let light = qt_plan(&paths, AppearanceMode::Light);
         for key in ["gtk-3.0/settings.ini", "gtk-4.0/settings.ini"] {
             assert_eq!(
                 dark.owned_files.get(Path::new(key)).map(String::as_str),
@@ -700,12 +669,7 @@ mod tests {
     fn gtk_settings_are_written_under_owned_root_only() {
         let home = isolated_home("gtk-materialize");
         let paths = paths_for(&home);
-        let plan = plan_appearance(
-            &paths,
-            &BTreeMap::new(),
-            AppearanceMode::Dark,
-            QT_PLUGIN_PRESENT,
-        );
+        let plan = qt_plan(&paths, AppearanceMode::Dark);
         materialize_owned_files(&plan).expect("materialize");
         let root = owned_appearance_root(&paths);
         assert_eq!(
