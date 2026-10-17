@@ -108,7 +108,7 @@ pub fn project_network_full(
             document.text(&format!("network-slot-{}-status", slot + 1), status)?;
         }
     } else {
-        document.text("wifi-connected-name", view.label.clone())?;
+        document.text("wifi-connected-name", view.label)?;
         for slot in 0..crate::taskbar::status::network::NETWORK_SLOT_COUNT {
             document.visible(&format!("network-slot-{}", slot + 1), false)?;
             document.text(&format!("network-slot-{}-name", slot + 1), String::new())?;
