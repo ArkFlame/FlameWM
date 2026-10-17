@@ -82,11 +82,6 @@ pub fn take_network_secret_outcomes() -> Vec<NetworkSecretOutcome> {
     NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
 
-#[must_use]
-pub fn network_secret_result(id: u64, identity: (u64, u64), succeeded: bool) -> NetworkSecretOutcome {
-    NetworkSecretOutcome { id, identity, result: if succeeded { Ok(()) } else { Err(()) } }
-}
-
 /// Enqueue a Start-menu launch and remember the app name against the queue
 /// id so the matching result can be correlated. A refused enqueue is recorded
 /// as an immediate failed outcome. Never blocks.
@@ -384,15 +379,5 @@ mod tests {
             }],
             2,
         ).is_none());
-    }
-
-    #[test]
-    fn network_secret_results_preserve_queue_and_identity_for_stale_fencing() {
-        let success = network_secret_result(41, (7, 3), true);
-        let failure = network_secret_result(42, (8, 3), false);
-        assert_eq!(success, NetworkSecretOutcome { id: 41, identity: (7, 3), result: Ok(()) });
-        assert_eq!(failure, NetworkSecretOutcome { id: 42, identity: (8, 3), result: Err(()) });
-        assert_ne!(success.id, failure.id);
-        assert_ne!(success.identity, failure.identity);
     }
 }
