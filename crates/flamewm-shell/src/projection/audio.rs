@@ -232,11 +232,14 @@ mod audio_template_tests {
                 ..Default::default()
             },
         ];
-        let settings = AudioSettings { raise_maximum };
+        project(&snapshot, tab, AudioSettings { raise_maximum })
+    }
+
+    fn project(snapshot: &crate::ShellSnapshot, tab: AudioTab, settings: AudioSettings) -> Recorded {
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
         let mut recorder = AudioRecorder::new(&mut document);
-        project_audio_full(&mut recorder, &snapshot, tab, settings, 0)
+        project_audio_full(&mut recorder, snapshot, tab, settings, 0)
             .expect("every projected audio id must be a valid target");
         recorder.recorded
     }
@@ -339,22 +342,9 @@ mod audio_template_tests {
     fn applications_tab_without_streams_shows_empty_state() {
         let mut snapshot = crate::ShellSnapshot::default();
         snapshot.system.audio.availability = ServiceAvailability::Available;
-        let mut document =
-            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
-        let mut recorder = AudioRecorder::new(&mut document);
-        project_audio_full(
-            &mut recorder,
-            &snapshot,
-            AudioTab::Applications,
-            AudioSettings::default(),
-            0,
-        )
-        .expect("empty applications projection must succeed");
-        assert_eq!(recorder.recorded.visible.get("audio-empty"), Some(&true));
-        assert_eq!(
-            text(&recorder.recorded, "audio-empty"),
-            "No active applications"
-        );
+        let recorded = project(&snapshot, AudioTab::Applications, AudioSettings::default());
+        assert_eq!(recorded.visible.get("audio-empty"), Some(&true));
+        assert_eq!(text(&recorded, "audio-empty"), "No active applications");
     }
 
     const POPUP_VIEWPORT: (f32, f32) = (459.0, 460.0);
@@ -377,18 +367,7 @@ mod audio_template_tests {
             muted: false,
             is_default: true,
         }];
-        let mut document =
-            flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
-        let mut recorder = AudioRecorder::new(&mut document);
-        project_audio_full(
-            &mut recorder,
-            &snapshot,
-            AudioTab::Devices,
-            AudioSettings::default(),
-            0,
-        )
-        .expect("audio projection");
-        let recorded = recorder.recorded;
+        let recorded = project(&snapshot, AudioTab::Devices, AudioSettings::default());
         assert!(
             recorded.texts.values().all(|value| !value.contains("alsa_output")),
             "raw sink id leaked: {:?}",
