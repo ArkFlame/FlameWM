@@ -151,32 +151,21 @@ fn run_session(
     let mut mpris_registration = register(LinuxIntegrationSource::Mpris)?;
     let mut power_registration = register(LinuxIntegrationSource::Power)?;
     let (audio_sender, audio_receiver) = mpsc::sync_channel::<AudioSnapshot>(32);
-    let (audio_reader, mut audio_writer) = match UnixStream::pair() {
-        Ok(pair) => pair,
-        Err(error) => {
-            integrations.borrow_mut().stop();
-            return Err(error.into());
-        }
-    };
-    if let Err(error) = audio_reader.set_nonblocking(true) {
-        integrations.borrow_mut().stop();
-        return Err(error.into());
-    }
-    if let Err(error) = audio_writer.set_nonblocking(true) {
-        integrations.borrow_mut().stop();
-        return Err(error.into());
-    }
-    let pulse = match PulseAdapter::connect(move |snapshot| {
-        if audio_sender.try_send(snapshot).is_ok() {
-            let _ = audio_writer.write(&[1]);
-        }
-    }) {
-        Ok(pulse) => Rc::new(pulse),
-        Err(error) => {
-            integrations.borrow_mut().stop();
-            return Err(error.into());
-        }
-    };
+    let (audio_reader, mut audio_writer) = UnixStream::pair()
+        .and_then(|(reader, writer)| {
+            reader.set_nonblocking(true)?;
+            writer.set_nonblocking(true)?;
+            Ok((reader, writer))
+        })
+        .inspect_err(|_| integrations.borrow_mut().stop())?;
+    let pulse = Rc::new(
+        PulseAdapter::connect(move |snapshot| {
+            if audio_sender.try_send(snapshot).is_ok() {
+                let _ = audio_writer.write(&[1]);
+            }
+        })
+        .inspect_err(|_| integrations.borrow_mut().stop())?,
+    );
     let audio_updates = Rc::new(RefCell::new(Vec::<AudioSnapshot>::new()));
     let audio_updates_for_callback = Rc::clone(&audio_updates);
     let _audio_registration = match reactor.borrow_mut().register_fd_with_source_action(
