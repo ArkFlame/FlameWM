@@ -96,19 +96,6 @@ pub fn selection_material(opacity_percent: u8) -> ((u8, u8, u8, u8), (u8, u8, u8
     )
 }
 
-/// Capture root content under `rect` via XGetImage (ZPixmap, all planes).
-/// Converts with the live `XImage` masks/byte order; rejects depths other
-/// than 24/32 and empty geometry. `Err` means caller falls back to the
-/// border-only preview with no opaque fill.
-pub fn capture_root_rect(
-    display: *mut Display,
-    root: u64,
-    rect: (i32, i32, u32, u32),
-) -> Result<BackdropCapture, String> {
-    let _guard = flamewm_profiler::start("render.overlay.capture");
-    capture_drawable_rect(display, root, rect)
-}
-
 /// Channel masks to decode with. XGetImage on a pixmap reports zero masks, so a zero triple
 /// falls back to the 24/32-bpp TrueColor layout (red, green, blue in the low three bytes).
 /// Window images keep the masks their visual reports.
@@ -392,7 +379,7 @@ mod tests {
 
     #[test]
     fn capture_rejects_empty_rect_without_x() {
-        assert!(capture_root_rect(std::ptr::null_mut(), 0, (0, 0, 0, 10)).is_err());
-        assert!(capture_root_rect(std::ptr::null_mut(), 0, (0, 0, 10, 10)).is_err());
+        assert!(capture_drawable_rect(std::ptr::null_mut(), 0, (0, 0, 0, 10)).is_err());
+        assert!(capture_drawable_rect(std::ptr::null_mut(), 0, (0, 0, 10, 10)).is_err());
     }
 }
