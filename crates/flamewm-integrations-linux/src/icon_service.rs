@@ -115,7 +115,7 @@ impl Queue {
             }
         }
         let priority = job.priority;
-        let key = job.key.clone();
+        let key = job.key;
         self.pending.insert(key.clone());
         let queued = Queued {
             key,
@@ -274,7 +274,7 @@ impl<R: IconResolve> IconService<R> {
             completed,
             coalesced,
             dropped_low,
-            theme_rebuilder: ThemeRebuilder::new(),
+            theme_rebuilder: ThemeRebuilder::with_wake(wake_tx),
         }
     }
 
@@ -285,6 +285,13 @@ impl<R: IconResolve> IconService<R> {
     /// on the calling thread.
     pub fn request_theme_rebuild(&self) -> bool {
         self.theme_rebuilder.request(self.shared_index())
+    }
+
+    /// Queues an off-thread build of the index for `theme_names` (a resolved theme chain).
+    /// Returns `false` while a job is in flight or a finished index is unpolled.
+    pub fn request_theme_change(&self, theme_names: Vec<String>) -> bool {
+        self.theme_rebuilder
+            .request_theme(self.shared_index(), theme_names)
     }
 
     /// Non-blocking: returns the finished replacement index, if the rebuild
@@ -597,8 +604,18 @@ struct RebuildState {
 /// result, so no UI or caller thread blocks on it. At most one check is in
 /// flight; a finished result is held until polled. The thread exits and is
 /// joined when the rebuilder is dropped.
+/// Work for the rebuild thread: a throttled watch check of `current`, or a full build of
+/// `current`'s search roots under an explicit theme chain.
+enum ThemeJob {
+    Watch(Arc<IconLookupIndex>),
+    Theme {
+        current: Arc<IconLookupIndex>,
+        theme_names: Vec<String>,
+    },
+}
+
 pub struct ThemeRebuilder {
-    tx: Option<mpsc::Sender<Arc<IconLookupIndex>>>,
+    tx: Option<mpsc::Sender<ThemeJob>>,
     state: Arc<RebuildState>,
     handle: Option<JoinHandle<()>>,
 }
@@ -607,7 +624,14 @@ impl ThemeRebuilder {
     /// Spawns the rebuild thread (idle until a request arrives).
     #[must_use]
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel::<Arc<IconLookupIndex>>();
+        Self::with_wake(None)
+    }
+
+    /// Like [`ThemeRebuilder::new`], but a published result also writes one byte to
+    /// `wake`, the owner's reactor wake pipe, so an idle event loop picks it up.
+    #[must_use]
+    pub fn with_wake(wake: Option<Arc<Mutex<UnixStream>>>) -> Self {
+        let (tx, rx) = mpsc::channel::<ThemeJob>();
         let state = Arc::new(RebuildState {
             in_flight: AtomicBool::new(false),
             ready: Mutex::new(None),
@@ -615,7 +639,7 @@ impl ThemeRebuilder {
         let thread_state = Arc::clone(&state);
         let handle = thread::Builder::new()
             .name("icon-theme-rebuild".to_owned())
-            .spawn(move || rebuild_loop(&rx, &thread_state))
+            .spawn(move || rebuild_loop(&rx, &thread_state, wake.as_ref()))
             .expect("spawn icon theme rebuild thread");
         Self {
             tx: Some(tx),
@@ -628,6 +652,19 @@ impl ThemeRebuilder {
     /// check was queued, `false` when one is already in flight or an
     /// unpolled result is waiting.
     pub fn request(&self, current: Arc<IconLookupIndex>) -> bool {
+        self.submit(ThemeJob::Watch(current))
+    }
+
+    /// Queues a full build of `current`'s roots under `theme_names`. Same gating as
+    /// [`ThemeRebuilder::request`].
+    pub fn request_theme(&self, current: Arc<IconLookupIndex>, theme_names: Vec<String>) -> bool {
+        self.submit(ThemeJob::Theme {
+            current,
+            theme_names,
+        })
+    }
+
+    fn submit(&self, job: ThemeJob) -> bool {
         let Some(tx) = &self.tx else {
             return false;
         };
@@ -640,7 +677,7 @@ impl ThemeRebuilder {
             .lock()
             .map(|slot| slot.is_some())
             .unwrap_or(true);
-        if has_ready || tx.send(current).is_err() {
+        if has_ready || tx.send(job).is_err() {
             self.state.in_flight.store(false, Ordering::Release);
             return false;
         }
@@ -677,12 +714,32 @@ impl Drop for ThemeRebuilder {
     }
 }
 
-fn rebuild_loop(rx: &Receiver<Arc<IconLookupIndex>>, state: &RebuildState) {
-    while let Ok(current) = rx.recv() {
-        // Throttled (5s) stat; a full build only when watched mtimes changed.
-        if let Some(next) = current.needs_rebuild() {
+fn rebuild_loop(
+    rx: &Receiver<ThemeJob>,
+    state: &RebuildState,
+    wake: Option<&Arc<Mutex<UnixStream>>>,
+) {
+    while let Ok(job) = rx.recv() {
+        let next = match job {
+            // Throttled (5s) stat; a full build only when watched mtimes changed.
+            ThemeJob::Watch(current) => current.needs_rebuild(),
+            ThemeJob::Theme {
+                current,
+                theme_names,
+            } => Some(IconLookupIndex::build(
+                &theme_names,
+                &current.data_dirs,
+                current.generation.saturating_add(1),
+            )),
+        };
+        if let Some(next) = next {
             if let Ok(mut slot) = state.ready.lock() {
                 *slot = Some(Arc::new(next));
+            }
+            if let Some(wake) = wake {
+                if let Ok(mut stream) = wake.lock() {
+                    let _ = stream.write_all(&[1]);
+                }
             }
         }
         // Cleared after publishing so `is_idle` implies the result is visible.
@@ -1173,6 +1230,73 @@ mod tests {
         assert_eq!(service.install_theme_index(rebuilt), 4);
         assert_eq!(service.theme_generation(), 4);
         assert!(service.poll_theme_rebuild().is_none(), "result taken once");
+    }
+
+    #[test]
+    fn requested_theme_chain_builds_off_thread_with_next_generation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        service.install_theme_index(Arc::new(IconLookupIndex::build(&[], &[], 5)));
+
+        let chain = vec!["flame-no-such-theme".to_owned(), "hicolor".to_owned()];
+        assert!(service.request_theme_change(chain.clone()), "theme build must queue");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let built = loop {
+            if let Some(index) = service.poll_theme_rebuild() {
+                break index;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "requested theme index must arrive within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        wait_until_idle(&service);
+        assert_eq!(built.theme_names, chain, "built index uses the requested chain");
+        assert_eq!(built.generation, 6, "built generation is installed + 1");
+        assert_eq!(service.install_theme_index(built), 6);
+    }
+
+    #[test]
+    fn published_theme_rebuild_wakes_reactor_fd() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-service-wake-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("watch root");
+        let mut stale = IconLookupIndex::new(
+            vec![root.clone()],
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+            3,
+        );
+        stale.watch_mtime = Some(std::time::UNIX_EPOCH);
+        service.install_theme_index(Arc::new(stale));
+        let mut reader = service
+            .wake_reader
+            .as_ref()
+            .expect("wake pipe")
+            .try_clone()
+            .expect("clone wake reader");
+
+        assert!(service.request_theme_rebuild(), "check must queue");
+        wait_until_idle(&service);
+        let mut byte = [0_u8; 1];
+        let woke = reader.read(&mut byte).expect("wake pipe readable after publish");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(woke, 1, "a published theme rebuild must write the reactor wake fd");
+        assert!(service.poll_theme_rebuild().is_some(), "result is held for polling");
     }
 
     #[test]

@@ -495,6 +495,10 @@ mod tests {
         MediaStore::new(dir.0.join("store"))
     }
 
+    fn name_of(path: &Path) -> &str {
+        path.file_name().unwrap().to_str().unwrap()
+    }
+
     #[test]
     fn sha256_matches_known_vectors() {
         assert_eq!(
@@ -525,8 +529,10 @@ mod tests {
         assert_eq!((imported.width, imported.height), (4, 3));
         assert_eq!(imported.sha256_hex, sha256_hex(&bytes));
         assert!(imported.path.starts_with(&store.root));
-        let name = imported.path.file_name().unwrap().to_str().unwrap();
-        assert_eq!(name, format!("desktop-{}.png", &imported.sha256_hex[..16]));
+        assert_eq!(
+            name_of(&imported.path),
+            format!("desktop-{}.png", &imported.sha256_hex[..16])
+        );
         assert_eq!(fs::read(&imported.path).unwrap(), bytes);
         assert!(store.is_managed(&imported.path));
     }
@@ -539,15 +545,7 @@ mod tests {
         let imported = store_in(&dir)
             .import(&src, MediaKind::LockWallpaper)
             .unwrap();
-        assert!(
-            imported
-                .path
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("lock-")
-        );
+        assert!(name_of(&imported.path).starts_with("lock-"));
     }
 
     #[test]
@@ -558,7 +556,7 @@ mod tests {
         let store = store_in(&dir);
         let avatar = store.import(&src, MediaKind::Avatar).unwrap();
         let lock = store.import(&src, MediaKind::LockWallpaper).unwrap();
-        let name = avatar.path.file_name().unwrap().to_str().unwrap();
+        let name = name_of(&avatar.path);
         assert!(name.starts_with("avatar-"), "{name}");
         assert!(name.ends_with(".png"), "{name}");
         assert_ne!(
@@ -746,14 +744,7 @@ mod tests {
 
         write_file(&src, &png_bytes(2, 2));
         let png = store.import(&src, MediaKind::StartIcon).unwrap();
-        assert!(
-            png.path
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("start-")
-        );
+        assert!(name_of(&png.path).starts_with("start-"));
         assert!(png.path.to_str().unwrap().ends_with(".png"));
 
         let webp = webp_1x1_bytes();

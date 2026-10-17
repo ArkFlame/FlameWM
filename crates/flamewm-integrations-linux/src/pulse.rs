@@ -198,51 +198,34 @@ impl PulseAdapter {
         }
 
         let context_slot = Rc::downgrade(&self.context);
-        let mut mainloop = self.mainloop.borrow_mut();
-        mainloop.lock();
-        let result = {
-            let context_ref = self.context.borrow();
-            match context_ref.as_ref() {
-                None => Err(FlameError::unavailable("PulseAudio context is unavailable")),
-                Some(context) if context.get_state() != ContextState::Ready => {
-                    Err(FlameError::unavailable("PulseAudio context is not ready"))
-                }
-                Some(context) => {
-                    let introspector = context.introspect();
-                    let mut seen = false;
-                    let volume = pulse_volume(action.percent);
-                    let _operation =
-                        introspector.get_sink_info_by_name(sink_name, move |result| match result {
-                            ListResult::Item(info) if !seen => {
-                                seen = true;
-                                let channels = info.volume.len();
-                                if channels == 0 {
-                                    return;
-                                }
-                                let mut target = ChannelVolumes::default();
-                                target.set(channels, volume);
-                                let Some(context_slot) = context_slot.upgrade() else {
-                                    return;
-                                };
-                                let context_ref = context_slot.borrow();
-                                let Some(context) = context_ref.as_ref() else {
-                                    return;
-                                };
-                                let mut introspector = context.introspect();
-                                let _ = introspector.set_sink_volume_by_index(
-                                    endpoint_id,
-                                    &target,
-                                    None,
-                                );
-                            }
-                            _ => {}
-                        });
-                    Ok(())
-                }
-            }
-        };
-        mainloop.unlock();
-        result
+        self.with_ready_context(|context| {
+            let introspector = context.introspect();
+            let mut seen = false;
+            let volume = pulse_volume(action.percent);
+            let _operation =
+                introspector.get_sink_info_by_name(sink_name, move |result| match result {
+                    ListResult::Item(info) if !seen => {
+                        seen = true;
+                        let channels = info.volume.len();
+                        if channels == 0 {
+                            return;
+                        }
+                        let mut target = ChannelVolumes::default();
+                        target.set(channels, volume);
+                        let Some(context_slot) = context_slot.upgrade() else {
+                            return;
+                        };
+                        let context_ref = context_slot.borrow();
+                        let Some(context) = context_ref.as_ref() else {
+                            return;
+                        };
+                        let mut introspector = context.introspect();
+                        let _ = introspector.set_sink_volume_by_index(endpoint_id, &target, None);
+                    }
+                    _ => {}
+                });
+            Ok(())
+        })
     }
 
     /// Queues a user-requested sink mute change. Actual state remains subscription-driven.
@@ -300,28 +283,15 @@ impl PulseAdapter {
             ));
         }
 
-        let mut mainloop = self.mainloop.borrow_mut();
-        mainloop.lock();
-        let result = {
-            let context_ref = self.context.borrow();
-            match context_ref.as_ref() {
-                None => Err(FlameError::unavailable("PulseAudio context is unavailable")),
-                Some(context) if context.get_state() != ContextState::Ready => {
-                    Err(FlameError::unavailable("PulseAudio context is not ready"))
-                }
-                Some(context) => {
-                    let mut introspector = context.introspect();
-                    let _operation = introspector.set_sink_mute_by_index(
-                        endpoint_id,
-                        action.muted,
-                        Some(self.write_failure_callback(action.generation, "sink mute")),
-                    );
-                    Ok(())
-                }
-            }
-        };
-        mainloop.unlock();
-        result
+        self.with_ready_context(|context| {
+            let mut introspector = context.introspect();
+            let _operation = introspector.set_sink_mute_by_index(
+                endpoint_id,
+                action.muted,
+                Some(self.write_failure_callback(action.generation, "sink mute")),
+            );
+            Ok(())
+        })
     }
 
     /// Queue one real PulseAudio object mutation. Snapshot publication waits for the matching
@@ -336,49 +306,39 @@ impl PulseAdapter {
         };
         let mut target = ChannelVolumes::default();
         target.set(2, pulse_volume(action.percent));
-        let mut mainloop = self.mainloop.borrow_mut();
-        mainloop.lock();
-        let result = match self.context.borrow().as_ref() {
-            None => Err(FlameError::unavailable("PulseAudio context is unavailable")),
-            Some(context) if context.get_state() != ContextState::Ready => {
-                Err(FlameError::unavailable("PulseAudio context is not ready"))
-            }
-            Some(context) => {
-                let mut introspector = context.introspect();
-                match action.target {
-                    AudioTarget::Endpoint {
+        self.with_ready_context(|context| {
+            let mut introspector = context.introspect();
+            match action.target {
+                AudioTarget::Endpoint {
+                    id,
+                    kind: AudioEndpointKind::Sink,
+                } => {
+                    let _operation = introspector.set_sink_volume_by_index(
                         id,
-                        kind: AudioEndpointKind::Sink,
-                    } => {
-                        let _operation = introspector.set_sink_volume_by_index(
-                            id,
-                            &target,
-                            Some(self.write_failure_callback(action.generation, "sink volume")),
-                        );
-                    }
-                    AudioTarget::Endpoint {
-                        id,
-                        kind: AudioEndpointKind::Source,
-                    } => {
-                        let _operation = introspector.set_source_volume_by_index(
-                            id,
-                            &target,
-                            Some(self.write_failure_callback(action.generation, "source volume")),
-                        );
-                    }
-                    AudioTarget::Stream { id } => {
-                        let _operation = introspector.set_sink_input_volume(
-                            id,
-                            &target,
-                            Some(self.write_failure_callback(action.generation, "stream volume")),
-                        );
-                    }
+                        &target,
+                        Some(self.write_failure_callback(action.generation, "sink volume")),
+                    );
                 }
-                Ok(())
+                AudioTarget::Endpoint {
+                    id,
+                    kind: AudioEndpointKind::Source,
+                } => {
+                    let _operation = introspector.set_source_volume_by_index(
+                        id,
+                        &target,
+                        Some(self.write_failure_callback(action.generation, "source volume")),
+                    );
+                }
+                AudioTarget::Stream { id } => {
+                    let _operation = introspector.set_sink_input_volume(
+                        id,
+                        &target,
+                        Some(self.write_failure_callback(action.generation, "stream volume")),
+                    );
+                }
             }
-        };
-        mainloop.unlock();
-        result
+            Ok(())
+        })
     }
 
     pub fn set_mute(&self, action: AudioMuteAction) -> FlameResult<()> {
@@ -389,6 +349,46 @@ impl PulseAdapter {
                 "unexpected PulseAudio mute intent",
             ));
         };
+        self.with_ready_context(|context| {
+            let mut introspector = context.introspect();
+            match action.target {
+                AudioTarget::Endpoint {
+                    id,
+                    kind: AudioEndpointKind::Sink,
+                } => {
+                    let _operation = introspector.set_sink_mute_by_index(
+                        id,
+                        action.muted,
+                        Some(self.write_failure_callback(action.generation, "sink mute")),
+                    );
+                }
+                AudioTarget::Endpoint {
+                    id,
+                    kind: AudioEndpointKind::Source,
+                } => {
+                    let _operation = introspector.set_source_mute_by_index(
+                        id,
+                        action.muted,
+                        Some(self.write_failure_callback(action.generation, "source mute")),
+                    );
+                }
+                AudioTarget::Stream { id } => {
+                    let _operation = introspector.set_sink_input_mute(
+                        id,
+                        action.muted,
+                        Some(self.write_failure_callback(action.generation, "stream mute")),
+                    );
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Runs one queued write against a ready context while holding the mainloop lock.
+    fn with_ready_context(
+        &self,
+        write: impl FnOnce(&Context) -> FlameResult<()>,
+    ) -> FlameResult<()> {
         let mut mainloop = self.mainloop.borrow_mut();
         mainloop.lock();
         let result = match self.context.borrow().as_ref() {
@@ -396,39 +396,7 @@ impl PulseAdapter {
             Some(context) if context.get_state() != ContextState::Ready => {
                 Err(FlameError::unavailable("PulseAudio context is not ready"))
             }
-            Some(context) => {
-                let mut introspector = context.introspect();
-                match action.target {
-                    AudioTarget::Endpoint {
-                        id,
-                        kind: AudioEndpointKind::Sink,
-                    } => {
-                        let _operation = introspector.set_sink_mute_by_index(
-                            id,
-                            action.muted,
-                            Some(self.write_failure_callback(action.generation, "sink mute")),
-                        );
-                    }
-                    AudioTarget::Endpoint {
-                        id,
-                        kind: AudioEndpointKind::Source,
-                    } => {
-                        let _operation = introspector.set_source_mute_by_index(
-                            id,
-                            action.muted,
-                            Some(self.write_failure_callback(action.generation, "source mute")),
-                        );
-                    }
-                    AudioTarget::Stream { id } => {
-                        let _operation = introspector.set_sink_input_mute(
-                            id,
-                            action.muted,
-                            Some(self.write_failure_callback(action.generation, "stream mute")),
-                        );
-                    }
-                }
-                Ok(())
-            }
+            Some(context) => write(context),
         };
         mainloop.unlock();
         result

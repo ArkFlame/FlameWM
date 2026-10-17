@@ -230,8 +230,7 @@ impl PowerProvider {
     pub fn stop(&mut self) {
         self.started = false;
         self.pending_get_all = None;
-        self.cpu.reset();
-        self.snapshot.cpu_percent = None;
+        self.clear_cpu();
     }
 
     #[must_use]
@@ -290,9 +289,13 @@ impl PowerProvider {
     pub fn set_battery_menu_open(&mut self, open: bool) {
         self.menu_open = open;
         if !open {
-            self.cpu.reset();
-            self.snapshot.cpu_percent = None;
+            self.clear_cpu();
         }
+    }
+
+    fn clear_cpu(&mut self) {
+        self.cpu.reset();
+        self.snapshot.cpu_percent = None;
     }
 
     /// One CPU sample tick, called only by the reactor-owned timer while the menu is open.
@@ -483,31 +486,12 @@ mod tests {
 
     #[test]
     fn property_map_keys_are_unwrapped_from_variants() {
-        let mut provider = PowerProvider {
-            pump: None,
-            dormant: UnixStream::pair().expect("pair").0,
-            _peer: UnixStream::pair().expect("pair").0,
-            pending_get_all: None,
-            snapshot: PowerSnapshot::default(),
-            cpu: CpuSampler::default(),
-            menu_open: false,
-            started: false,
-        };
-        let dict = MessageItem::new_dict(vec![
-            (
-                MessageItem::Str("Percentage".to_owned()),
-                MessageItem::Variant(Box::new(MessageItem::Double(86.7))),
-            ),
-            (
-                MessageItem::Str("State".to_owned()),
-                MessageItem::Variant(Box::new(MessageItem::UInt32(4))),
-            ),
-            (
-                MessageItem::Str("IsPresent".to_owned()),
-                MessageItem::Variant(Box::new(MessageItem::Bool(true))),
-            ),
-        ])
-        .expect("dict");
+        let mut provider = test_provider();
+        let dict = props(vec![
+            ("Percentage", MessageItem::Double(86.7)),
+            ("State", MessageItem::UInt32(4)),
+            ("IsPresent", MessageItem::Bool(true)),
+        ]);
         provider.apply_properties(Some(&dict));
         let snapshot = provider.snapshot();
         assert_eq!(snapshot.available, ServiceAvailability::Available);
@@ -534,7 +518,7 @@ mod tests {
         assert_eq!(provider.snapshot().cpu_percent, None);
     }
 
-    fn rate_provider() -> PowerProvider {
+    fn test_provider() -> PowerProvider {
         PowerProvider {
             pump: None,
             dormant: UnixStream::pair().expect("pair").0,
@@ -563,7 +547,7 @@ mod tests {
     }
 
     fn rate_after(state: u32, rate: Option<f64>) -> Option<u32> {
-        let mut provider = rate_provider();
+        let mut provider = test_provider();
         let mut entries = vec![("State", MessageItem::UInt32(state))];
         if let Some(rate) = rate {
             entries.push(("EnergyRate", MessageItem::Double(rate)));
@@ -619,7 +603,7 @@ mod tests {
 
     #[test]
     fn energy_rate_ignored_without_battery() {
-        let mut provider = rate_provider();
+        let mut provider = test_provider();
         provider.apply_properties(Some(&props(vec![
             ("IsPresent", MessageItem::Bool(false)),
             ("State", MessageItem::UInt32(0)),
@@ -630,7 +614,7 @@ mod tests {
 
     #[test]
     fn energy_rate_follows_properties_changed_updates() {
-        let mut provider = rate_provider();
+        let mut provider = test_provider();
         provider.apply_properties(Some(&props(vec![
             ("State", MessageItem::UInt32(DISCHARGING)),
             ("EnergyRate", MessageItem::Double(12.34)),

@@ -621,7 +621,7 @@ impl IconResolver {
         size: IconSize,
     ) -> Result<Rgba8Raster, IconError> {
         let request = request.into();
-        match request.clone() {
+        match request {
             IconRequest::Path(path) => self.prepare_path(path, size),
             IconRequest::Name(name) => self.prepare_application(name, size),
         }
@@ -1281,7 +1281,7 @@ pub const DEFAULT_ICON_THEME: &str = "PlagueSur";
 /// Theme search chain: `FLAMEWM_ICON_THEME`, the Flame `iconTheme`
 /// preference, the desktop's configured theme (kdeglobals, then GTK), then
 /// Breeze. hicolor is appended by the inheritance chain.
-fn theme_chain(preferred: Option<&str>) -> Vec<String> {
+pub fn theme_chain(preferred: Option<&str>) -> Vec<String> {
     let mut theme_names: Vec<String> = Vec::new();
     if let Some(value) = env::var_os("FLAMEWM_ICON_THEME")
         .map(|value| value.to_string_lossy().into_owned())

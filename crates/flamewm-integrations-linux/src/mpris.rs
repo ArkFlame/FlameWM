@@ -8,7 +8,7 @@ use flamewm_api::system::{MediaSnapshot, PlaybackState, SystemAction};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
 use flamewm_integrations_core::mpris::{MediaIntent, MprisController, PlayerInfo};
-use crate::network_manager::{item_bool, item_string, one_string, unwrap_variant};
+use crate::network_manager::{item_bool, item_string, one_string, unsupported, unwrap_variant};
 
 pub const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
 pub const MPRIS_ROOT: &str = "/org/mpris/MediaPlayer2";
@@ -635,10 +635,6 @@ fn apply_changes(info: &mut PlayerInfo, changes: PropertyChanges) {
     if let Some(value) = changes.can_previous {
         info.can_previous = value;
     }
-}
-
-fn unsupported(message: &str) -> FlameError {
-    FlameError::new(ErrorCode::Unsupported, message)
 }
 
 #[cfg(test)]

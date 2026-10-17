@@ -548,6 +548,6 @@ fn header_label_for(connected: Option<&AccessPoint>, active_path_set: bool) -> S
     )
 }
 
-fn unsupported(message: &str) -> FlameError {
+pub(crate) fn unsupported(message: &str) -> FlameError {
     FlameError::new(ErrorCode::Unsupported, message)
 }
