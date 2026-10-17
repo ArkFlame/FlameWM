@@ -2,7 +2,6 @@
 //! projection, text edit, move/resize gestures and sticky menu actions.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use flamewm_api::{OutputId, Point, Rect};
@@ -27,23 +26,19 @@ const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 const PERSIST_RETRY_CAP: Duration = Duration::from_secs(30);
 
 fn sticky_edit_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.sticky.edit"))
+    cached!(CounterPoint, "desktop.sticky.edit")
 }
 
 fn sticky_move_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.sticky.move"))
+    cached!(CounterPoint, "desktop.sticky.move")
 }
 
 fn sticky_resize_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.sticky.resize"))
+    cached!(CounterPoint, "desktop.sticky.resize")
 }
 
 fn sticky_persist_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.sticky.persist"))
+    cached!(CounterPoint, "desktop.sticky.persist")
 }
 
 /// All sticky-note state owned by the desktop process.

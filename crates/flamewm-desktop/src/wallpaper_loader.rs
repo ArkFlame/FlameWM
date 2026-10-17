@@ -2,7 +2,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use flamewm_api::background::WallpaperFit;
@@ -113,6 +113,14 @@ struct WorkerControl {
     wake: Condvar,
 }
 
+impl WorkerControl {
+    fn lock(&self) -> MutexGuard<'_, WorkerState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LoaderClosed;
 
@@ -188,10 +196,7 @@ impl WallpaperLoader {
             fit,
         };
         let mut state = self
-            .control
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .control.lock();
         if state.shutdown {
             return Err(LoaderClosed);
         }
@@ -208,10 +213,7 @@ impl WallpaperLoader {
         self.next_generation = self.next_generation.saturating_add(1);
         let generation = self.next_generation;
         let mut state = self
-            .control
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .control.lock();
         if state.shutdown {
             return Err(LoaderClosed);
         }
@@ -232,10 +234,7 @@ impl WallpaperLoader {
     /// here; failures leave the previous valid presentation in place and expose a diagnostic.
     pub fn poll(&mut self) -> PollOutcome {
         let mut worker_state = self
-            .control
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .control.lock();
         if let Some(stale_generation) = worker_state.stale_generation.take() {
             return PollOutcome::Stale {
                 generation: stale_generation,
@@ -306,10 +305,7 @@ impl WallpaperLoader {
         };
         {
             let mut state = self
-                .control
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .control.lock();
             state.shutdown = true;
             state.pending = None;
             state.completion = None;
@@ -333,10 +329,7 @@ fn wallpaper_worker(
 ) {
     loop {
         let request = {
-            let mut state = control
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = control.lock();
             while state.pending.is_none() && !state.shutdown {
                 state = control
                     .wake
@@ -355,10 +348,7 @@ fn wallpaper_worker(
         if request.path.as_os_str().is_empty() || request.path.to_string_lossy().trim().is_empty() {
             request.path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
         }
-        let mut state = control
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = control.lock();
         if state.shutdown {
             return;
         }

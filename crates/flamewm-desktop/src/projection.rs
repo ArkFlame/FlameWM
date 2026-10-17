@@ -186,6 +186,7 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
     document.layer("desktop-menu", UiLayer::Popover)?;
     document.layer("desktop-entry-menu", UiLayer::Popover)?;
     document.layer("sticky-menu", UiLayer::Popover)?;
+    document.layer("desktop-rename", UiLayer::Popover)?;
     document.layer("desktop-confirm", UiLayer::Modal)?;
     Ok(())
 }
@@ -251,6 +252,22 @@ impl ParallelIconService {
             THEME_GENERATION.load(Ordering::Acquire),
             0,
         )
+    }
+
+    /// UI-thread, non-blocking. Requests the `theme` chain off-thread and installs the finished
+    /// index. Returns `true` only once the installed index uses that chain, so the caller keeps
+    /// retrying each tick until then.
+    pub fn apply_icon_theme(&mut self, theme: &str) -> bool {
+        let wanted = flamewm_integrations_linux::icons::theme_chain(Some(theme));
+        if self.service.shared_index().theme_names == wanted {
+            return true;
+        }
+        self.service.request_theme_change(wanted.clone());
+        if let Some(next) = self.service.poll_theme_rebuild() {
+            let generation = self.service.install_theme_index(next);
+            THEME_GENERATION.store(generation, Ordering::Release);
+        }
+        self.service.shared_index().theme_names == wanted
     }
 
     /// UI-thread, non-blocking theme watch. Queues a check on the rebuild
@@ -552,14 +569,52 @@ fn replace_image(
 mod tests {
     use super::*;
 
-    macro_rules! noop_overflow {
+    // No-op `UiDocumentAccess` methods shared by every probe below; each probe
+    // lists only the methods it records or overrides.
+    macro_rules! noop_document_common {
         () => {
+            fn text(&mut self, _: &str, _: String) -> Result<(), String> {
+                Ok(())
+            }
+            fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
+                Ok(())
+            }
+            fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+                Ok(())
+            }
+            fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+                Ok(())
+            }
+            fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+                Ok(())
+            }
+            fn background_clear(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn border_clear(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+                Ok(())
+            }
+            fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
             fn overflow(
                 &mut self,
                 _: &str,
                 _: flamewm_ui_x11::Overflow,
                 _: flamewm_ui_x11::Overflow,
             ) -> Result<(), String> {
+                Ok(())
+            }
+            fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
+                Ok(())
+            }
+            fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
                 Ok(())
             }
         };
@@ -768,50 +823,14 @@ mod tests {
     }
 
     impl UiDocumentAccess for LayerProbe {
-        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
+        noop_document_common!();
         fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
             Ok(())
         }
         fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
             Ok(())
         }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
         fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        noop_overflow!();
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
             Ok(())
         }
         fn layer(&mut self, id: &str, layer: UiLayer) -> Result<(), String> {
@@ -828,25 +847,11 @@ mod tests {
     }
 
     impl UiDocumentAccess for MenuShapeProbe {
-        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
+        noop_document_common!();
         fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
             Ok(())
         }
         fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
             Ok(())
         }
         fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
@@ -859,28 +864,6 @@ mod tests {
         }
         fn node_backdrop(&mut self, id: &str, blur_percent: Option<u8>) -> Result<(), String> {
             self.backdrops.push((id.to_owned(), blur_percent));
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        noop_overflow!();
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
             Ok(())
         }
         fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
@@ -988,6 +971,7 @@ mod tests {
         let entry_menu = layer_of(&probe, "desktop-entry-menu");
         let sticky_menu = layer_of(&probe, "sticky-menu");
         let modal = layer_of(&probe, "desktop-confirm");
+        let rename = layer_of(&probe, "desktop-rename");
         assert_eq!(root, UiLayer::SurfaceBackground.z_index());
         assert_eq!(wallpaper, UiLayer::Background.z_index());
         assert_eq!(watermark, UiLayer::Content.z_index());
@@ -1003,6 +987,9 @@ mod tests {
         assert_eq!(sticky_menu, menu);
         // Menu hit-test wins: popover layer above content/selection.
         assert!(menu > item && menu > selection);
+        // The inline rename editor paints above the items it edits, like the menus.
+        assert!(rename > item && rename > selection);
+        assert_eq!(rename, menu);
     }
 
     struct VisibilityProbe {
@@ -1054,12 +1041,7 @@ mod tests {
     }
 
     impl UiDocumentAccess for VisibilityProbe {
-        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
+        noop_document_common!();
         fn image_rgba8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
             Ok(())
         }
@@ -1071,38 +1053,7 @@ mod tests {
             }
             Ok(())
         }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
         fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        noop_overflow!();
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
             Ok(())
         }
         fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
@@ -1117,12 +1068,7 @@ mod tests {
     }
 
     impl UiDocumentAccess for WallpaperImageProbe {
-        fn text(&mut self, _: &str, _: String) -> Result<(), String> {
-            Ok(())
-        }
-        fn image_rgb8(&mut self, _: &str, _: RuntimeImage) -> Result<(), String> {
-            Ok(())
-        }
+        noop_document_common!();
         fn image_rgba8(&mut self, _: &str, image: RuntimeImage) -> Result<(), String> {
             if std::mem::take(&mut self.fail_next) {
                 return Err("rejected".to_owned());
@@ -1133,38 +1079,7 @@ mod tests {
         fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
             Ok(())
         }
-        fn toggle(&mut self, _: &str, _: &str, _: bool) -> Result<(), String> {
-            Ok(())
-        }
-        fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
-            Ok(())
-        }
         fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn background_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn border_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground(&mut self, _: &str, _: UiColor) -> Result<(), String> {
-            Ok(())
-        }
-        fn foreground_clear(&mut self, _: &str) -> Result<(), String> {
-            Ok(())
-        }
-        noop_overflow!();
-        fn font_size(&mut self, _: &str, _: f32) -> Result<(), String> {
-            Ok(())
-        }
-        fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
             Ok(())
         }
         fn layer(&mut self, _: &str, _: UiLayer) -> Result<(), String> {
@@ -1342,6 +1257,49 @@ mod tests {
             icon_purpose(DesktopItemKind::TrashPseudo, false),
             IconLookupPurpose::Semantic
         );
+    }
+
+    #[test]
+    fn apply_icon_theme_installs_requested_chain_and_bumps_generation() {
+        let mut icons = ParallelIconService::spawn(
+            std::env::temp_dir().join("flamewm-projection-apply-theme-no-such-root"),
+        );
+        let before = THEME_GENERATION.load(Ordering::Acquire);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !icons.apply_icon_theme("flame-apply-no-such-theme") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "requested icon theme must install within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(THEME_GENERATION.load(Ordering::Acquire) > before);
+        assert_eq!(
+            icons.service.shared_index().theme_names,
+            flamewm_integrations_linux::icons::theme_chain(Some("flame-apply-no-such-theme"))
+        );
+    }
+
+    #[test]
+    fn apply_icon_theme_stays_satisfied_after_watch_refresh() {
+        // A watch refresh rebuilds from the installed chain, so the pending icon theme request
+        // must still read as satisfied; otherwise icon_theme_pending would stay true and retry
+        // request_theme_change on every tick.
+        let mut icons = ParallelIconService::spawn(
+            std::env::temp_dir().join("flamewm-projection-watch-after-apply-no-such-root"),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !icons.apply_icon_theme("flame-watch-after-apply-no-such-theme") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "requested icon theme must install within deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        for _ in 0..3 {
+            icons.refresh_theme();
+            assert!(icons.apply_icon_theme("flame-watch-after-apply-no-such-theme"));
+        }
     }
 
     #[test]

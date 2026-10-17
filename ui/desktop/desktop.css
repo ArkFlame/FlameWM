@@ -12,8 +12,10 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .sticky { position:absolute; left:220px; top:180px; width:190px; height:190px; padding:12px; display:flex; flex-direction:column; gap:12px; background:#ffe56b; color:#171717; border:1px solid #d0b941; border-radius:5px; cursor:default; }
 .desktop-drag-ghost { position:absolute; width:82px; height:82px; display:flex; flex-direction:column; align-items:center; padding:0px; border:1px solid var(--desktop-hover-border); border-radius:4px; color:white; background:var(--desktop-hover); opacity:0.76; box-sizing:border-box; cursor:default; }
 .desktop-drag-count { position:absolute; right:2px; top:2px; min-width:18px; height:18px; display:flex; align-items:center; justify-content:center; background:var(--accent); color:white; border-radius:9px; font-size:11px; }
-.desktop-rename { position:absolute; display:flex; flex-direction:column; background:#202326; border:1px solid #474b4f; border-radius:4px; padding:8px; }
-.desktop-rename-value { min-width:180px; min-height:20px; color:#f1f2f3; font-size:13px; }
+.desktop-rename { position:absolute; display:flex; flex-direction:row; align-items:center; gap:8px; box-sizing:border-box; background:#202326; border:1px solid #474b4f; border-radius:4px; padding:6px 8px; }
+.desktop-rename-value { flex-grow:1; min-width:0; min-height:20px; color:#f1f2f3; font-size:13px; white-space:nowrap; overflow:hidden; }
+.desktop-rename-actions { display:flex; gap:6px; }
+.desktop-rename-button { background:#2b2f33; color:#f1f2f3; border:1px solid #474b4f; border-radius:3px; padding:3px 10px; font-size:12px; }
 .sticky-title { display:none; }
 .sticky-drag { position:absolute; left:0px; top:0px; width:100%; height:14px; cursor:move; }
 .sticky-text { position:absolute; left:12px; right:12px; top:26px; bottom:12px; cursor:text; white-space:normal; overflow-wrap:anywhere; overflow:auto; overflow-x:hidden; }

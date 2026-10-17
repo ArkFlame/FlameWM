@@ -71,23 +71,31 @@ impl DesktopModel {
             .map_err(|error| io_error("read desktop entry", error))?;
         entries.sort_by_key(|entry| entry.file_name());
 
-        let mut occupied = BTreeSet::new();
+        // Stored cells are reserved before any unstored entry is placed, so a
+        // new entry never takes the cell of a stored entry that sorts after it.
+        let mut occupied: BTreeSet<Cell> = entries
+            .iter()
+            .filter_map(|entry| self.positions.get(&entry.path()))
+            .map(|position| grid.clamp_cell(position.cell))
+            .collect();
         let mut rebuilt = BTreeMap::new();
         for entry in entries {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
             let id = path.to_string_lossy().into_owned();
             let kind = classify(&entry)?;
-            let position = self
-                .positions
-                .get(&path)
-                .cloned()
-                .unwrap_or_else(|| StoredPosition {
-                    output: default_output.clone(),
-                    cell: first_free(&occupied, grid),
-                });
+            let position = match self.positions.get(&path).cloned() {
+                Some(position) => position,
+                None => {
+                    let cell = first_free(&occupied, grid);
+                    occupied.insert(cell);
+                    StoredPosition {
+                        output: default_output.clone(),
+                        cell,
+                    }
+                }
+            };
             let cell = grid.clamp_cell(position.cell);
-            occupied.insert(cell);
             self.positions.insert(
                 path.clone(),
                 StoredPosition {
@@ -207,6 +215,46 @@ fn classify(entry: &fs::DirEntry) -> FlameResult<DesktopItemKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rescan_never_places_unstored_entry_on_a_stored_cell() {
+        let root = std::env::temp_dir().join(format!(
+            "flamewm-model-free-cell-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // "alpha" sorts before "zed": the old single pass gave alpha the free cell
+        // (0,0) before zed's stored cell was reserved, so both shared it.
+        fs::write(root.join("alpha"), b"").unwrap();
+        fs::write(root.join("zed"), b"").unwrap();
+        let grid = GridConfig::compute(flamewm_api::Rect::new(0, 0, 1280, 800), 100);
+        let output = OutputId::new("default");
+        let zed = Cell::new(0, 0);
+        let mut model = DesktopModel::default();
+        model.set_position(
+            root.join("zed"),
+            StoredPosition {
+                output: output.clone(),
+                cell: zed,
+            },
+        );
+        model.rescan(&root, &output, grid).unwrap();
+        let alpha_cell = model
+            .items()
+            .find(|item| item.display_name == "alpha")
+            .map(|item| item.cell)
+            .unwrap();
+        let zed_cell = model
+            .items()
+            .find(|item| item.display_name == "zed")
+            .map(|item| item.cell)
+            .unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(zed_cell, zed);
+        assert_ne!(alpha_cell, zed);
+    }
 
     #[test]
     fn desktop_dir_expands_only_home_forms_without_shell_evaluation() {

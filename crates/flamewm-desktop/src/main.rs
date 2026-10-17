@@ -47,142 +47,122 @@ use flamewm_ui_x11::{
     run_with_controller_events_role_with_presses_and_reactor_geometry,
 };
 
+macro_rules! cached {
+    ($ty:ident, $name:expr) => {{
+        static CELL: ::std::sync::OnceLock<$ty> = ::std::sync::OnceLock::new();
+        CELL.get_or_init(|| $ty::new($name))
+    }};
+}
+
 mod projection;
 mod sticky;
 mod wallpaper_fit;
 mod wallpaper_loader;
 mod workspace_sync;
 
-use std::sync::OnceLock;
 
 fn scan_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.scan"))
+    cached!(ProfilePoint, "desktop.scan")
 }
 
 fn sync_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.sync_document"))
+    cached!(ProfilePoint, "desktop.sync_document")
 }
 
 fn rescan_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.rescan"))
+    cached!(ProfilePoint, "desktop.rescan")
 }
 
 fn icon_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.icon.resolve"))
+    cached!(ProfilePoint, "desktop.icon.resolve")
 }
 
 fn inotify_wakeup_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.inotify.wakeup"))
+    cached!(CounterPoint, "desktop.inotify.wakeup")
 }
 
 fn inotify_rescan_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.inotify.rescan"))
+    cached!(CounterPoint, "desktop.inotify.rescan")
 }
 
 fn selection_begin_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.selection.begin"))
+    cached!(CounterPoint, "desktop.selection.begin")
 }
 
 fn selection_visible_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.selection.visible"))
+    cached!(CounterPoint, "desktop.selection.visible")
 }
 
 fn selection_end_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.selection.end"))
+    cached!(CounterPoint, "desktop.selection.end")
 }
 
 fn context_secondary_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.context.secondary"))
+    cached!(CounterPoint, "desktop.context.secondary")
 }
 
 fn context_open_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.context.open"))
+    cached!(CounterPoint, "desktop.context.open")
 }
 
 fn context_open_total_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.context.open.total"))
+    cached!(ProfilePoint, "desktop.context.open.total")
 }
 
 fn context_open_project_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.context.open.project"))
+    cached!(ProfilePoint, "desktop.context.open.project")
 }
 
 fn context_open_measure_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.context.open.measure"))
+    cached!(ProfilePoint, "desktop.context.open.measure")
 }
 
 fn context_open_place_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.context.open.place"))
+    cached!(ProfilePoint, "desktop.context.open.place")
 }
 
 fn context_open_present_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.context.open.present"))
+    cached!(ProfilePoint, "desktop.context.open.present")
 }
 
 fn context_open_close_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.context.open.close"))
+    cached!(ProfilePoint, "desktop.context.open.close")
 }
 
 fn context_action_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.context.action"))
+    cached!(CounterPoint, "desktop.context.action")
 }
 
 fn render_sync_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.render.sync"))
+    cached!(CounterPoint, "desktop.render.sync")
 }
 
 fn drag_ghost_show_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.drag.ghost.show"))
+    cached!(CounterPoint, "desktop.drag.ghost.show")
 }
 
 fn drag_ghost_motion_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.drag.ghost.motion"))
+    cached!(CounterPoint, "desktop.drag.ghost.motion")
 }
 
 fn rename_open_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.rename.open"))
+    cached!(CounterPoint, "desktop.rename.open")
 }
 
 fn rename_success_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.rename.success"))
+    cached!(CounterPoint, "desktop.rename.success")
 }
 
 fn rename_failure_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.rename.failure"))
+    cached!(CounterPoint, "desktop.rename.failure")
 }
 
 fn action_failure_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.action.failure"))
+    cached!(CounterPoint, "desktop.action.failure")
 }
 
 fn spawn_failure_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.spawn.failure"))
+    cached!(CounterPoint, "desktop.spawn.failure")
 }
 
 fn report_action_failure(context: &str, error: String) {
@@ -191,53 +171,43 @@ fn report_action_failure(context: &str, error: String) {
 }
 
 fn workspace_change_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.workspace.change"))
+    cached!(CounterPoint, "desktop.workspace.change")
 }
 
 fn workspace_signal_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.workspace.signal"))
+    cached!(ProfilePoint, "desktop.workspace.signal")
 }
 
 fn workspace_apply_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.workspace.apply"))
+    cached!(ProfilePoint, "desktop.workspace.apply")
 }
 
 fn workspace_project_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.workspace.project"))
+    cached!(ProfilePoint, "desktop.workspace.project")
 }
 
 fn workspace_present_point() -> &'static ProfilePoint {
-    static POINT: OnceLock<ProfilePoint> = OnceLock::new();
-    POINT.get_or_init(|| ProfilePoint::new("desktop.workspace.present"))
+    cached!(ProfilePoint, "desktop.workspace.present")
 }
 
 fn workspace_snapshot_received_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.workspace.snapshot_received"))
+    cached!(CounterPoint, "desktop.workspace.snapshot_received")
 }
 
 fn workspace_legacy_ignored_counter() -> &'static CounterPoint {
-    static COUNTER: OnceLock<CounterPoint> = OnceLock::new();
-    COUNTER.get_or_init(|| CounterPoint::new("desktop.workspace.legacy_ignored"))
+    cached!(CounterPoint, "desktop.workspace.legacy_ignored")
 }
 
 fn model_gauge() -> &'static MemoryGauge {
-    static GAUGE: OnceLock<MemoryGauge> = OnceLock::new();
-    GAUGE.get_or_init(|| MemoryGauge::new("desktop.model"))
+    cached!(MemoryGauge, "desktop.model")
 }
 
 fn launcher_gauge() -> &'static MemoryGauge {
-    static GAUGE: OnceLock<MemoryGauge> = OnceLock::new();
-    GAUGE.get_or_init(|| MemoryGauge::new("desktop.launcher"))
+    cached!(MemoryGauge, "desktop.launcher")
 }
 
 fn icon_gauge() -> &'static MemoryGauge {
-    static GAUGE: OnceLock<MemoryGauge> = OnceLock::new();
-    GAUGE.get_or_init(|| MemoryGauge::new("desktop.icon"))
+    cached!(MemoryGauge, "desktop.icon")
 }
 
 fn update_gauges(state: &DesktopState) {
@@ -969,7 +939,7 @@ fn refresh_icon_theme(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    if !state.icon_theme_pending || !state.icons.refresh_theme() {
+    if !state.icon_theme_pending || !state.icons.apply_icon_theme(&state.icon_theme) {
         return Ok(());
     }
     state.icon_theme_pending = false;
@@ -1265,9 +1235,7 @@ fn sync_document(
 ) -> Result<(), String> {
     let _span = sync_point().start();
     render_sync_counter().increment();
-    if state.icons.refresh_theme() {
-        state.icon_theme_pending = false;
-    }
+    state.icons.refresh_theme();
     apply_ready_icons(document, state)?;
     let items: Vec<_> = state.model.items().take(SLOT_COUNT).collect();
     for index in 0..SLOT_COUNT {
@@ -1420,6 +1388,8 @@ fn is_menu_action(action: &str) -> bool {
             | "menu.settings"
             | "entry.empty-trash"
             | "entry.rename"
+            | "rename.confirm"
+            | "rename.cancel"
             | "entry.shortcut"
             | "entry.delete"
             | "confirm.delete"
@@ -1831,24 +1801,16 @@ fn handle_menu_action(
             open_rename(document, state)?;
         }
         "entry.delete" => {
-            let selected = state
+            let path = state
                 .menu
                 .as_ref()
-                .and_then(|menu| menu.selected_id.clone());
-            let Some(id) = selected else {
-                state.menu = None;
-                return sync_menu(document, state);
-            };
-            let path = state
-                .model
-                .items()
-                .find(|item| item.id == id)
+                .and_then(|menu| menu.selected_id.as_ref())
+                .and_then(|id| state.model.items().find(|item| &item.id == id))
                 .map(|item| item.path.clone());
+            state.menu = None;
             let Some(path) = path else {
-                state.menu = None;
                 return sync_menu(document, state);
             };
-            state.menu = None;
             hide_menus(document, &mut state.menu_rects)?;
             state.pending_delete = Some(path);
             show_confirm(document, state)?;
@@ -1868,6 +1830,15 @@ fn handle_menu_action(
         "confirm.cancel" => {
             state.pending_delete = None;
             hide_confirm(document, &mut state.menu_rects)?;
+        }
+        "rename.confirm" => {
+            if state.rename.is_some() {
+                return confirm_rename(document, state);
+            }
+        }
+        "rename.cancel" => {
+            state.rename = None;
+            sync_rename_editor(document, state)?;
         }
         "entry.empty-trash" => {
             empty_home_trash()?;
@@ -1937,8 +1908,9 @@ fn sync_rename_editor(
         .find(|item| item.id == rename.item_id)
         .map(|item| state.grid.cell_to_pixel(item.cell))
         .unwrap_or(state.grid.work_area.origin());
-    let width = 220;
-    let height = 48;
+    // Value plus OK/Cancel on one row.
+    let width = 300;
+    let height = 44;
     let placed = clamp_menu_anchor(
         state.grid.work_area,
         Rect::new(anchor.x, anchor.y + 84, width, height),
@@ -2840,3 +2812,14 @@ mod outside_press_tests {
     }
 }
 
+#[cfg(test)]
+mod rename_button_tests {
+    use super::is_menu_action;
+
+    #[test]
+    fn rename_editor_buttons_are_dispatched_as_menu_actions() {
+        assert!(is_menu_action("rename.confirm"));
+        assert!(is_menu_action("rename.cancel"));
+        assert!(is_menu_action("entry.rename"));
+    }
+}
