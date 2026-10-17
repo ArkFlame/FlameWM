@@ -574,24 +574,13 @@ mod tests {
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        for _ in 0..3 {
-            bytes.extend_from_slice(&0u32.to_le_bytes());
-        }
+        bytes.extend_from_slice(&[0u8; 12]);
         bytes.extend_from_slice(&u16::MAX.to_le_bytes());
         // Default style encoding: display=Block(1), then 5 single-byte enums.
         bytes.extend_from_slice(&[1, 0, 0, 3, 0, 0]);
-        for _ in 0..10 {
-            bytes.extend_from_slice(&[0]);
-            bytes.extend_from_slice(&0f32.to_le_bytes());
-        }
-        for _ in 0..2 {
-            bytes.extend_from_slice(
-                &[0f32; 4]
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect::<Vec<_>>(),
-            );
-        }
+        // 10 auto lengths (kind byte + f32 each), then margin and padding edges.
+        bytes.extend_from_slice(&[0u8; 50]);
+        bytes.extend_from_slice(&[0u8; 32]);
         bytes.extend_from_slice(&0f32.to_le_bytes());
         bytes.extend_from_slice(&0f32.to_le_bytes());
         bytes.push(0);
@@ -616,25 +605,7 @@ mod tests {
 
     #[test]
     fn unknown_version_is_rejected_explicitly() {
-        let document = CompiledDocument {
-            source_fingerprint: 1,
-            root: 0,
-            variables: Vec::new(),
-            assets: Vec::new(),
-            nodes: vec![CompiledNode {
-                kind: NodeKind::Element,
-                parent: None,
-                first_child: None,
-                next_sibling: None,
-                id: String::new(),
-                action: String::new(),
-                text: String::new(),
-                image: None,
-                style: Style::default(),
-                hover_style: None,
-                active_style: None,
-            }],
-        };
+        let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode(&document).unwrap();
         bytes[4..6].copy_from_slice(&9u16.to_le_bytes());
         let error = decode(&bytes).expect_err("version 9 must fail");
@@ -692,28 +663,9 @@ mod tests {
 
     #[test]
     fn v4_roundtrip_preserves_wrap_fields() {
-        let mut style = Style::default();
-        style.text_wrap = TextWrap::Wrap;
-        style.break_anywhere = true;
-        let document = CompiledDocument {
-            source_fingerprint: 1,
-            root: 0,
-            variables: Vec::new(),
-            assets: Vec::new(),
-            nodes: vec![CompiledNode {
-                kind: NodeKind::Element,
-                parent: None,
-                first_child: None,
-                next_sibling: None,
-                id: String::new(),
-                action: String::new(),
-                text: String::new(),
-                image: None,
-                style,
-                hover_style: None,
-                active_style: None,
-            }],
-        };
+        let mut document = roundtrip_node(ImageTreatment::Original);
+        document.nodes[0].style.text_wrap = TextWrap::Wrap;
+        document.nodes[0].style.break_anywhere = true;
         let decoded = decode(&encode(&document).unwrap()).unwrap();
         assert_eq!(decoded, document);
     }
