@@ -76,20 +76,7 @@ pub fn self_test() -> Result<(), String> {
 /// when one decodes, else the reference navy gradient (default colour) or a flat
 /// fill of the configured `lockBackgroundColor`.
 pub fn background_image(settings: &LockSettings, width: u32, height: u32) -> RuntimeImage {
-    let mut image = build_background(settings, width, height);
-    // Blur and dim once here; a failed blur keeps the sharp picture rather than no background.
-    let _ = background::post_process(
-        &mut image.pixels,
-        width,
-        height,
-        settings.blur_percent,
-        settings.dim_percent,
-    );
-    image
-}
-
-fn build_background(settings: &LockSettings, width: u32, height: u32) -> RuntimeImage {
-    decoded_background(settings, width, height).unwrap_or_else(|| {
+    let mut image = decoded_background(settings, width, height).unwrap_or_else(|| {
         let pixels = if settings.background_color == DEFAULT_BACKGROUND {
             background::reference_navy(width, height)
         } else {
@@ -101,7 +88,16 @@ fn build_background(settings: &LockSettings, width: u32, height: u32) -> Runtime
             height,
             pixels,
         }
-    })
+    });
+    // Blur and dim once here; a failed blur keeps the sharp picture rather than no background.
+    let _ = background::post_process(
+        &mut image.pixels,
+        width,
+        height,
+        settings.blur_percent,
+        settings.dim_percent,
+    );
+    image
 }
 
 /// Reads and cover-scales the configured background image to the screen, or the
@@ -153,7 +149,8 @@ pub fn apply_document<V: UiDocumentAccess>(
 ) -> Result<(), String> {
     let layout = LockLayout::for_output(width, height);
     let s = layout.fit.s;
-    view.background("lock-root", ui_color(settings.background_color))?;
+    let [r, g, b] = settings.background_color;
+    view.background("lock-root", UiColor { r, g, b, a: 255 })?;
     view.font_family(settings.font_family.clone())?;
 
     view.image_rgba8(BACKGROUND_ID, background)?;
@@ -510,10 +507,6 @@ fn runtime_image(source: String, image: RgbaImage) -> RuntimeImage {
 
 fn scaled(reference_px: f64, s: f64) -> u32 {
     (reference_px * s).round().max(f64::from(layout::MIN_FONT_PX)) as u32
-}
-
-fn ui_color([r, g, b]: [u8; 3]) -> UiColor {
-    UiColor { r, g, b, a: 255 }
 }
 
 #[cfg(test)]
