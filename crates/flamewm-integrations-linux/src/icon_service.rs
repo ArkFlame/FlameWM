@@ -1187,17 +1187,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn submitted_theme_rebuild_completes_off_thread_with_next_generation() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+    /// Fresh watch root plus a generation-3 index whose epoch mtime forces a rebuild check.
+    fn stale_watch_index(tag: &str) -> (std::path::PathBuf, IconLookupIndex) {
         let root = std::env::temp_dir().join(format!(
-            "flamewm-service-rebuild-{}-{}",
-            std::process::id(),
-            line!()
+            "flamewm-service-{tag}-{}",
+            std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("watch root");
@@ -1210,20 +1204,33 @@ mod tests {
         );
         // Epoch mtime never matches the real root, so the check must rebuild.
         stale.watch_mtime = Some(std::time::UNIX_EPOCH);
+        (root, stale)
+    }
+
+    /// Polls the rebuild slot until a finished index arrives or the deadline passes.
+    fn poll_theme_index<R: IconResolve>(service: &IconService<R>, what: &str) -> Arc<IconLookupIndex> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(index) = service.poll_theme_rebuild() {
+                return index;
+            }
+            assert!(std::time::Instant::now() < deadline, "{what} must arrive within deadline");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn submitted_theme_rebuild_completes_off_thread_with_next_generation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(1, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        let (root, stale) = stale_watch_index("rebuild");
         service.install_theme_index(Arc::new(stale));
 
         assert!(service.request_theme_rebuild(), "check must queue");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let rebuilt = loop {
-            if let Some(index) = service.poll_theme_rebuild() {
-                break index;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "rebuilt index must arrive within deadline"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        };
+        let rebuilt = poll_theme_index(&service, "rebuilt index");
         wait_until_idle(&service);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(rebuilt.generation, 4, "rebuilt generation is installed + 1");
@@ -1243,17 +1250,7 @@ mod tests {
 
         let chain = vec!["flame-no-such-theme".to_owned(), "hicolor".to_owned()];
         assert!(service.request_theme_change(chain.clone()), "theme build must queue");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let built = loop {
-            if let Some(index) = service.poll_theme_rebuild() {
-                break index;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "requested theme index must arrive within deadline"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        };
+        let built = poll_theme_index(&service, "requested theme index");
         wait_until_idle(&service);
         assert_eq!(built.theme_names, chain, "built index uses the requested chain");
         assert_eq!(built.generation, 6, "built generation is installed + 1");
@@ -1267,21 +1264,7 @@ mod tests {
             let calls = Arc::clone(&calls);
             move || FakeResolver(Arc::clone(&calls))
         });
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-service-wake-{}-{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("watch root");
-        let mut stale = IconLookupIndex::new(
-            vec![root.clone()],
-            Vec::new(),
-            HashMap::new(),
-            HashMap::new(),
-            3,
-        );
-        stale.watch_mtime = Some(std::time::UNIX_EPOCH);
+        let (root, stale) = stale_watch_index("wake");
         service.install_theme_index(Arc::new(stale));
         let mut reader = service
             .wake_reader
