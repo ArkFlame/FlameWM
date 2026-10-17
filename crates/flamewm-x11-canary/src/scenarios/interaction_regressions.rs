@@ -5,6 +5,7 @@
 //! effect/counter stream or query an X pointer grab.  Those assertions remain
 //! explicit blockers rather than being replaced with synthetic evidence.
 
+use super::window_interaction::input_surface;
 use super::{InputPath, xtest_button_press, xtest_button_release, xtest_drag_path, xtest_motion};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{
@@ -119,9 +120,6 @@ pub(crate) fn native_configures(
     }
 }
 
-fn input_surface(canary: &crate::Canary, target: &crate::WinInfo) -> Option<crate::WinInfo> {
-    super::window_interaction::input_surface(canary, target)
-}
 
 pub(crate) fn wait_until<F>(timeout_ms: u64, mut ready: F) -> bool
 where
