@@ -16,7 +16,7 @@ use flamewm_ui_x11::{PointerButton, UiActionEvent, UiActionPhase, UiColor, UiDoc
 use crate::projection;
 use crate::{
     DesktopState, MenuKind, MenuState, context_secondary_counter, hide_confirm, hide_menus,
-    pointer_button, pointer_point, sync_menu,
+    pointer_button, pointer_point, selected_menu_id, sync_menu,
 };
 
 const STICKY_SLOTS: usize = projection::STICKY_SLOT_COUNT;
@@ -305,11 +305,7 @@ pub(crate) fn create_note(state: &mut DesktopState, anchor: Point) {
 pub(crate) fn apply_menu_action(action: &str, state: &mut DesktopState) -> Result<(), String> {
     match action {
         "sticky.menu.delete" => {
-            let note_id = state
-                .menu
-                .as_ref()
-                .and_then(|menu| menu.selected_id.clone())
-                .or_else(|| {
+            let note_id = selected_menu_id(state).or_else(|| {
                     state
                         .sticky
                         .store
@@ -339,21 +335,13 @@ pub(crate) fn apply_menu_action(action: &str, state: &mut DesktopState) -> Resul
                 "sticky.menu.pink" => 2,
                 _ => 3,
             };
-            let note_id = state
-                .menu
-                .as_ref()
-                .and_then(|menu| menu.selected_id.clone());
-            if let Some(note_id) = note_id {
+            if let Some(note_id) = selected_menu_id(state) {
                 state.sticky.store.set_color(&note_id, preset);
                 schedule_persist(state);
             }
         }
         "sticky.menu.bold" => {
-            let note_id = state
-                .menu
-                .as_ref()
-                .and_then(|menu| menu.selected_id.clone());
-            if let Some(note_id) = note_id {
+            if let Some(note_id) = selected_menu_id(state) {
                 state.sticky.store.toggle_bold(&note_id);
                 schedule_persist(state);
             }
@@ -423,28 +411,29 @@ pub(crate) fn handle_action(
     handle_slot(action, document, state)
 }
 
+fn slot_note(state: &DesktopState, action: &UiActionEvent) -> Option<StickyNote> {
+    let position = slot_number(&action.action)?.checked_sub(1)?;
+    visible_sticky_notes(state).into_iter().nth(position)
+}
+
 fn open_context_menu(
     action: &UiActionEvent,
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let visible = visible_sticky_notes(state);
-    let slot_index = slot_number(&action.action).and_then(|number| number.checked_sub(1));
-    if let Some(position) = slot_index {
-        if let Some(note) = visible.get(position) {
-            context_secondary_counter().increment();
-            let anchor = pointer_point(action, state.grid.work_area);
-            state.menu = Some(MenuState {
-                kind: MenuKind::Sticky,
-                anchor,
-                selected_id: Some(note.id.clone()),
-            });
-            state.pending_delete = None;
-            hide_confirm(document, &mut state.menu_rects)?;
-            return sync_menu(document, state);
-        }
-    }
-    Ok(())
+    let Some(note) = slot_note(state, action) else {
+        return Ok(());
+    };
+    context_secondary_counter().increment();
+    let anchor = pointer_point(action, state.grid.work_area);
+    state.menu = Some(MenuState {
+        kind: MenuKind::Sticky,
+        anchor,
+        selected_id: Some(note.id.clone()),
+    });
+    state.pending_delete = None;
+    hide_confirm(document, &mut state.menu_rects)?;
+    sync_menu(document, state)
 }
 
 fn handle_slot(
@@ -452,12 +441,7 @@ fn handle_slot(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let visible = visible_sticky_notes(state);
-    let slot_index = slot_number(&action.action).and_then(|number| number.checked_sub(1));
-    let Some(position) = slot_index else {
-        return Ok(());
-    };
-    let Some(note) = visible.get(position).cloned() else {
+    let Some(note) = slot_note(state, action) else {
         return Ok(());
     };
     let note_id = note.id.clone();
@@ -607,6 +591,13 @@ mod tests {
         StickyState::new(StickyNoteStore::default(), PathBuf::from("unused"), true)
     }
 
+    fn armed() -> (StickyState, Instant) {
+        let mut state = state();
+        let now = Instant::now();
+        state.arm_persist(now);
+        (state, now)
+    }
+
     #[test]
     fn idle_state_publishes_no_wake_deadline() {
         let state = state();
@@ -626,18 +617,14 @@ mod tests {
 
     #[test]
     fn repeated_mutations_coalesce_onto_the_first_deadline() {
-        let mut state = state();
-        let now = Instant::now();
-        state.arm_persist(now);
+        let (mut state, now) = armed();
         state.arm_persist(now + Duration::from_millis(200));
         assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
     }
 
     #[test]
     fn save_runs_only_once_due_and_clears_the_deadline() {
-        let mut state = state();
-        let now = Instant::now();
-        state.arm_persist(now);
+        let (mut state, now) = armed();
         assert!(!state.take_due(now + Duration::from_millis(499)));
         assert_eq!(state.wake.get(), Some(now + PERSIST_DEBOUNCE));
         assert!(state.take_due(now + PERSIST_DEBOUNCE));
@@ -648,9 +635,7 @@ mod tests {
 
     #[test]
     fn failed_save_keeps_a_retry_deadline() {
-        let mut state = state();
-        let now = Instant::now();
-        state.arm_persist(now);
+        let (mut state, now) = armed();
         assert!(state.take_due(now + PERSIST_DEBOUNCE));
         let failed_at = now + PERSIST_DEBOUNCE;
         state.persist_failed(failed_at);
@@ -681,9 +666,7 @@ mod tests {
 
     #[test]
     fn successful_save_clears_the_deadline() {
-        let mut state = state();
-        let now = Instant::now();
-        state.arm_persist(now);
+        let (mut state, now) = armed();
         assert!(state.take_due(now + PERSIST_DEBOUNCE));
         assert_eq!(state.wake.get(), None);
         assert!(!state.persist_pending);
@@ -692,9 +675,7 @@ mod tests {
 
     #[test]
     fn mutation_after_a_save_arms_a_new_deadline() {
-        let mut state = state();
-        let now = Instant::now();
-        state.arm_persist(now);
+        let (mut state, now) = armed();
         assert!(state.take_due(now + PERSIST_DEBOUNCE));
         let later = now + Duration::from_secs(5);
         state.arm_persist(later);

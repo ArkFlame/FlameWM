@@ -210,6 +210,18 @@ fn icon_gauge() -> &'static MemoryGauge {
     cached!(MemoryGauge, "desktop.icon")
 }
 
+fn rescan_desktop(state: &mut DesktopState) -> Result<(), String> {
+    state
+        .model
+        .rescan(&state.directory, &OutputId::new("default"), state.grid)
+        .map(|_| ())
+        .map_err(|error| format!("{error:?}"))
+}
+
+fn selected_menu_id(state: &DesktopState) -> Option<String> {
+    state.menu.as_ref().and_then(|menu| menu.selected_id.clone())
+}
+
 fn update_gauges(state: &DesktopState) {
     model_gauge().set((state.model.items().count() as u64).saturating_mul(256));
     launcher_gauge().set((state.launchers.len() as u64).saturating_mul(320));
@@ -1164,10 +1176,7 @@ fn refresh_if_changed(
     }
     inotify_rescan_counter().increment();
     let _span = rescan_point().start();
-    state
-        .model
-        .rescan(&state.directory, &OutputId::new("default"), state.grid)
-        .map_err(|error| format!("{error:?}"))?;
+    rescan_desktop(state)?;
     refresh_launchers(state);
     sync_document(document, state)?;
     update_gauges(state);
@@ -1761,10 +1770,7 @@ fn handle_menu_action(
         }
         "menu.folder" => {
             let path = create_new_folder(&state.directory).map_err(|error| format!("{error:?}"))?;
-            state
-                .model
-                .rescan(&state.directory, &OutputId::new("default"), state.grid)
-                .map_err(|error| format!("{error:?}"))?;
+            rescan_desktop(state)?;
             refresh_launchers(state);
             let id = path.to_string_lossy().into_owned();
             state.selection.clear();
@@ -1818,10 +1824,7 @@ fn handle_menu_action(
         "confirm.delete" => {
             if let Some(path) = state.pending_delete.take() {
                 delete_permanent(&path)?;
-                state
-                    .model
-                    .rescan(&state.directory, &OutputId::new("default"), state.grid)
-                    .map_err(|error| format!("{error:?}"))?;
+                rescan_desktop(state)?;
                 refresh_launchers(state);
             }
             hide_confirm(document, &mut state.menu_rects)?;
@@ -1864,10 +1867,7 @@ fn open_rename(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    let selected = state
-        .menu
-        .as_ref()
-        .and_then(|menu| menu.selected_id.clone());
+    let selected = selected_menu_id(state);
     let Some(id) = selected else {
         state.menu = None;
         return sync_menu(document, state);
@@ -2024,10 +2024,7 @@ fn insert_workspace_after(
 /// suffix, other sources become symlinks. Pure path math plus direct fs
 /// calls; no shell strings.
 fn create_shortcut(state: &mut DesktopState) -> Result<(), String> {
-    let selected = state
-        .menu
-        .as_ref()
-        .and_then(|menu| menu.selected_id.clone());
+    let selected = selected_menu_id(state);
     let Some(id) = selected else {
         return Ok(());
     };
@@ -2052,10 +2049,7 @@ fn create_shortcut(state: &mut DesktopState) -> Result<(), String> {
         std::os::unix::fs::symlink(&source, &destination)
             .map_err(|error| format!("symlink {}: {error}", destination.display()))?;
     }
-    state
-        .model
-        .rescan(&state.directory, &OutputId::new("default"), state.grid)
-        .map_err(|error| format!("{error:?}"))?;
+    rescan_desktop(state)?;
     refresh_launchers(state);
     state.selection.clear();
     state
@@ -2420,11 +2414,7 @@ fn restore_original_positions(state: &mut DesktopState, drag: &ItemDrag) -> Resu
             },
         );
     }
-    state
-        .model
-        .rescan(&state.directory, &OutputId::new("default"), state.grid)
-        .map(|_| ())
-        .map_err(|error| format!("{error:?}"))
+    rescan_desktop(state)
 }
 
 fn update_selection_from_rubber(state: &mut DesktopState) {
