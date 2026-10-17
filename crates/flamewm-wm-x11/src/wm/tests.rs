@@ -14,17 +14,12 @@ fn desktop_configure_is_forced_to_bottom_and_keeps_geometry() {
     assert_eq!((aux.x, aux.y, aux.width, aux.height), (Some(0), Some(0), Some(1350), Some(641)));
     // A desktop geometry-only request (no stack mask) still ends at the bottom.
     let geometry_only = ConfigureWindowAux::new().width(1350).height(600);
-    assert_eq!(
-        desktop_stack_policy(geometry_only, WindowKind::Desktop).stack_mode,
-        Some(StackMode::BELOW)
-    );
+    assert_eq!(desktop_stack_policy(geometry_only, WindowKind::Desktop).stack_mode, Some(StackMode::BELOW));
 }
 
 #[test]
 fn non_desktop_configure_keeps_stack_intent() {
-    let request = ConfigureWindowAux::new()
-        .sibling(0x200000)
-        .stack_mode(StackMode::ABOVE);
+    let request = ConfigureWindowAux::new().sibling(0x200000).stack_mode(StackMode::ABOVE);
     for kind in [WindowKind::Normal, WindowKind::Utility, WindowKind::Dock, WindowKind::Popup] {
         let aux = desktop_stack_policy(request, kind);
         assert_eq!(aux.stack_mode, Some(StackMode::ABOVE), "{kind:?}");
@@ -63,22 +58,10 @@ fn focus_reverts_to_pointer_root_so_root_shortcut_grabs_survive_focus_loss() {
 
 #[test]
 fn wm_class_parse_characterization_trims_and_keeps_empty_tokens() {
-    assert_eq!(
-        parse_wm_class(b"firefox\0Firefox\0"),
-        ("firefox".to_owned(), "Firefox".to_owned())
-    );
-    assert_eq!(
-        parse_wm_class(b" app \0class\0"),
-        ("app".to_owned(), "class".to_owned())
-    );
-    assert_eq!(
-        parse_wm_class(b"firefox\0Firefox\0\0\0"),
-        ("firefox".to_owned(), "Firefox".to_owned())
-    );
-    assert_eq!(
-        parse_wm_class(b"firefox"),
-        ("firefox".to_owned(), String::new())
-    );
+    assert_eq!(parse_wm_class(b"firefox\0Firefox\0"), ("firefox".to_owned(), "Firefox".to_owned()));
+    assert_eq!(parse_wm_class(b" app \0class\0"), ("app".to_owned(), "class".to_owned()));
+    assert_eq!(parse_wm_class(b"firefox\0Firefox\0\0\0"), ("firefox".to_owned(), "Firefox".to_owned()));
+    assert_eq!(parse_wm_class(b"firefox"), ("firefox".to_owned(), String::new()));
     assert_eq!(parse_wm_class(b""), (String::new(), String::new()));
     assert_eq!(
         parse_wm_class(b"\xffapp\0Cl\xe9ss\0"),
@@ -201,26 +184,13 @@ fn next_wait_timeout_is_none_without_pending_deadline() {
 
 #[test]
 fn next_wait_timeout_returns_remaining_time_until_deadline() {
-    assert_eq!(
-        next_wait_timeout(1_000, Some(1_500)),
-        Some(std::time::Duration::from_millis(500))
-    );
+    assert_eq!(next_wait_timeout(1_000, Some(1_500)), Some(std::time::Duration::from_millis(500)));
 }
 
 #[test]
 fn next_wait_timeout_clamps_past_deadline_to_zero() {
-    assert_eq!(
-        next_wait_timeout(2_000, Some(1_500)),
-        Some(std::time::Duration::ZERO)
-    );
-    assert_eq!(
-        next_wait_timeout(1_500, Some(1_500)),
-        Some(std::time::Duration::ZERO)
-    );
-}
-
-fn observed_release_mapping(target: SnapTarget) -> ReleaseAction {
-    release_action(target)
+    assert_eq!(next_wait_timeout(2_000, Some(1_500)), Some(std::time::Duration::ZERO));
+    assert_eq!(next_wait_timeout(1_500, Some(1_500)), Some(std::time::Duration::ZERO));
 }
 
 fn observed_release_action(
@@ -266,12 +236,7 @@ fn own_workspace_metadata_publish_echo_does_not_bump_workspace_revision() {
     assert!(!workspace_metadata_is_external(Some(2), &names, 2, &names));
     // A foreign count or name change must still advance the fence.
     assert!(workspace_metadata_is_external(Some(3), &names, 2, &names));
-    assert!(workspace_metadata_is_external(
-        Some(2),
-        b"Web\0Mail\0",
-        2,
-        &names
-    ));
+    assert!(workspace_metadata_is_external(Some(2), b"Web\0Mail\0", 2, &names));
     // Unreadable count is treated as external (conservative fence advance).
     assert!(workspace_metadata_is_external(None, &names, 2, &names));
 }
@@ -288,10 +253,7 @@ fn workspace_switch_marks_windows_only_on_visibility_or_focus_change() {
 #[test]
 fn resize_from_left_preserves_right_edge() {
     let original = Rect::new(100, 100, 600, 400);
-    let edges = ResizeEdges {
-        left: true,
-        ..ResizeEdges::default()
-    };
+    let edges = ResizeEdges { left: true, ..ResizeEdges::default() };
     let resized = ResizeEdges::resized_rect(original, edges, 100, 0);
     assert_eq!(resized, Rect::new(200, 100, 500, 400));
 }
@@ -299,11 +261,7 @@ fn resize_from_left_preserves_right_edge() {
 #[test]
 fn resize_enforces_minimum_size() {
     let original = Rect::new(100, 100, 600, 400);
-    let edges = ResizeEdges {
-        left: true,
-        top: true,
-        ..ResizeEdges::default()
-    };
+    let edges = ResizeEdges { left: true, top: true, ..ResizeEdges::default() };
     let resized = ResizeEdges::resized_rect(original, edges, 1_000, 1_000);
     assert_eq!(resized.width, 160);
     assert_eq!(resized.height, 96);
@@ -582,7 +540,7 @@ fn t10_release_action_mapping_is_total() {
     let mismatches = cases
         .into_iter()
         .filter_map(|(target, expected)| {
-            let actual = observed_release_mapping(target);
+            let actual = release_action(target);
             (actual != expected).then_some((target, expected, actual))
         })
         .collect::<Vec<_>>();
@@ -604,10 +562,7 @@ fn t10_release_action_mapping_is_total() {
 fn t11_unactivated_move_release_is_not_snap_eligible() {
     let session = pending_move();
     assert!(matches!(session, InteractionSession::Move(_)));
-    assert_eq!(
-        observed_release_action(session, PlacementMode::Floating, SnapTarget::LeftHalf),
-        ReleaseAction::None
-    );
+    assert_eq!(observed_release_action(session, PlacementMode::Floating, SnapTarget::LeftHalf), ReleaseAction::None);
 }
 
 #[test]
