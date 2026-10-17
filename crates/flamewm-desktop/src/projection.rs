@@ -35,24 +35,8 @@ pub fn project_background(
 ) -> Result<(), String> {
     let has_image = matches!(presentation, WallpaperPresentation::Image(_));
     let (background, watermark) = match presentation {
-        WallpaperPresentation::Solid([r, g, b]) => (
-            UiColor {
-                r: *r,
-                g: *g,
-                b: *b,
-                a: 255,
-            },
-            false,
-        ),
-        _ => (
-            UiColor {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            true,
-        ),
+        WallpaperPresentation::Solid([r, g, b]) => (UiColor { r: *r, g: *g, b: *b, a: 255 }, false),
+        _ => (UiColor { r: 0, g: 0, b: 0, a: 255 }, true),
     };
     document.background("desktop", background)?;
     document.visible("desktop-watermark", watermark)?;
@@ -358,10 +342,7 @@ impl ParallelIconService {
         self.service
             .drain_ready()
             .into_iter()
-            .map(|result| {
-                let raster = result.result.ok();
-                (result.key, raster)
-            })
+            .map(|result| (result.key, result.result.ok()))
             .collect()
     }
 
