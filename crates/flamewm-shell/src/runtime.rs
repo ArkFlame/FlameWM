@@ -1786,6 +1786,7 @@ pub fn projection_counter(kind: ProjectionKind) -> &'static flamewm_profiler::Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flamewm_api::{PanelEdge, Rect};
 
     fn test_output_rect() -> flamewm_api::Rect {
         flamewm_api::Rect::new(0, 0, 1920, 1080)
@@ -1793,7 +1794,6 @@ mod tests {
 
     #[test]
     fn floating_bottom_bar_inset_is_consistent_and_start_popover_stays_above_it() {
-        use flamewm_api::Rect;
         let output = Rect::new(0, 0, 1350, 641);
         // Floating bottom bar: 8 px margin below it, so bottom != output.bottom().
         let floating = Rect::new(8, 589, 1334, 44);
@@ -2096,7 +2096,6 @@ mod tests {
 
     #[test]
     fn panel_context_top_to_bottom_recompute() {
-        use flamewm_api::PanelEdge;
         let top = placement_snapshot(
             flamewm_api::Rect::new(0, 0, 1920, 1080),
             flamewm_api::Rect::new(0, 0, 1920, 44),
@@ -2122,7 +2121,6 @@ mod tests {
 
     #[test]
     fn panel_context_bottom_excludes_panel_and_starts_above() {
-        use flamewm_api::PanelEdge;
         let snapshot = placement_snapshot(
             flamewm_api::Rect::new(0, 0, 1920, 1080),
             flamewm_api::Rect::new(0, 1036, 1920, 44),
@@ -2141,7 +2139,6 @@ mod tests {
 
     #[test]
     fn panel_context_quick_anchor_above_and_negative_origins() {
-        use flamewm_api::PanelEdge;
         use flamewm_shell_core::popup::fitted_start_placement;
         let output = flamewm_api::Rect::new(-1920, 0, 1920, 1080);
         let snapshot = placement_snapshot(
@@ -2170,7 +2167,6 @@ mod tests {
 
     #[test]
     fn panel_context_hidpi_panel_rect_used_as_is() {
-        use flamewm_api::PanelEdge;
         let snapshot = placement_snapshot(
             flamewm_api::Rect::new(0, 0, 3840, 2160),
             flamewm_api::Rect::new(0, 2072, 3840, 88),
@@ -2184,7 +2180,6 @@ mod tests {
 
     #[test]
     fn f10_top_to_bottom_resync_uses_bottom() {
-        use flamewm_api::PanelEdge;
         use flamewm_shell_core::popup::work_area_for_panel;
         let output = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let top = placement_snapshot(
@@ -2233,7 +2228,6 @@ mod tests {
 
     #[test]
     fn panel_context_missing_output_returns_none() {
-        use flamewm_api::PanelEdge;
         let mut snapshot = placement_snapshot(
             flamewm_api::Rect::new(0, 0, 1920, 1080),
             flamewm_api::Rect::new(0, 1036, 1920, 44),
@@ -2244,10 +2238,7 @@ mod tests {
         snapshot.displays.outputs.clear();
         assert!(panel_context_for_snapshot(&snapshot, PanelEdge::Bottom).is_none());
         let mut empty = ShellSnapshot::default();
-        empty.displays.outputs = vec![panel_output(
-            "HDMI-1",
-            flamewm_api::Rect::new(0, 0, 1920, 1080),
-        )];
+        empty.displays.outputs = vec![panel_output("HDMI-1", test_output_rect())];
         assert!(panel_context_for_snapshot(&empty, PanelEdge::Bottom).is_none());
     }
 
@@ -2310,14 +2301,15 @@ mod tests {
         flamewm_api::WindowRef::new(id, 1)
     }
 
+    fn activated(id: u64) -> Option<Vec<ControlRequest>> {
+        Some(vec![ControlRequest::ActivateWindow(win_ref(id))])
+    }
+
     #[test]
     fn task_slot_click_maps_to_the_task_on_the_shown_panel_output() {
         // Window 1 on A: slot 0 of the shown panel A is window 1; B holds window 2 only.
         let mut runtime = ShellRuntime::new(task_slot_snapshot(&["A", "B"]));
-        assert_eq!(
-            runtime.task_click_requests_for_slot(0),
-            Some(vec![ControlRequest::ActivateWindow(win_ref(1))])
-        );
+        assert_eq!(runtime.task_click_requests_for_slot(0), activated(1));
         assert_eq!(runtime.task_click_requests_for_slot(1), None);
 
         // Window 1 moves to B: panel A now shows nothing, so slot 0 no longer maps to window 1.
@@ -2327,14 +2319,8 @@ mod tests {
         let mut snapshot = task_slot_snapshot(&["B", "B"]);
         snapshot.panels.panels.reverse();
         runtime = ShellRuntime::new(snapshot);
-        assert_eq!(
-            runtime.task_click_requests_for_slot(0),
-            Some(vec![ControlRequest::ActivateWindow(win_ref(1))])
-        );
-        assert_eq!(
-            runtime.task_click_requests_for_slot(1),
-            Some(vec![ControlRequest::ActivateWindow(win_ref(2))])
-        );
+        assert_eq!(runtime.task_click_requests_for_slot(0), activated(1));
+        assert_eq!(runtime.task_click_requests_for_slot(1), activated(2));
     }
 
     #[test]
@@ -2423,7 +2409,6 @@ mod tests {
 
     #[test]
     fn two_outputs_two_panels_yield_one_context_per_output() {
-        use flamewm_api::PanelEdge;
         let snapshot = two_output_snapshot();
         let contexts = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
         assert_eq!(contexts.len(), 2);
@@ -2454,7 +2439,6 @@ mod tests {
 
     #[test]
     fn single_output_contexts_match_legacy_single_context() {
-        use flamewm_api::PanelEdge;
         let snapshot = placement_snapshot(
             flamewm_api::Rect::new(0, 0, 1920, 1080),
             flamewm_api::Rect::new(0, 1036, 1920, 44),
