@@ -124,13 +124,7 @@ fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Optio
         _ => return None,
     };
     let natural = decode_bytes(&bytes, format).ok()?;
-    let cover = cover_rgba(&natural, width, height)?;
-    Some(RuntimeImage {
-        source,
-        width: cover.width,
-        height: cover.height,
-        pixels: cover.pixels,
-    })
+    Some(runtime_image(source, cover_rgba(&natural, width, height)?))
 }
 
 /// Scales `image` to fully cover `width` x `height` and crops the centre.
@@ -441,12 +435,7 @@ fn svg_image(bytes: &[u8], size: u32) -> Result<RuntimeImage, String> {
     } else {
         svg::render(bytes, size, size)?
     };
-    Ok(RuntimeImage {
-        source: format!("lock-svg-{size}"),
-        width: image.width,
-        height: image.height,
-        pixels: image.pixels,
-    })
+    Ok(runtime_image(format!("lock-svg-{size}"), image))
 }
 
 /// The avatar ring at `size`, with the profile picture composited inside it when one decodes.
@@ -467,12 +456,7 @@ fn avatar_runtime(settings: &LockSettings, size: u32) -> Result<RuntimeImage, St
     };
     let offset = (size - inner) / 2;
     composite_over(&mut base, &picture, offset, offset);
-    Ok(RuntimeImage {
-        source: format!("lock-avatar-picture-{size}"),
-        width: base.width,
-        height: base.height,
-        pixels: base.pixels,
-    })
+    Ok(runtime_image(format!("lock-avatar-picture-{size}"), base))
 }
 
 fn decode_file(path: &Path) -> Option<RgbaImage> {
@@ -525,6 +509,10 @@ fn composite_over(base: &mut RgbaImage, top: &RgbaImage, x0: u32, y0: u32) {
             base.pixels[dst + 3] = (oa * 255.0).round() as u8;
         }
     }
+}
+
+fn runtime_image(source: String, image: RgbaImage) -> RuntimeImage {
+    RuntimeImage { source, width: image.width, height: image.height, pixels: image.pixels }
 }
 
 fn scaled(reference_px: f64, s: f64) -> u32 {
@@ -817,23 +805,13 @@ mod tests {
         assert_eq!((builtin.width, builtin.height), (64, 36));
         assert_ne!(builtin.pixels, background::reference_navy(64, 36));
 
-        let missing = LockSettings {
-            background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
-            background_mode: LockBackgroundMode::Custom,
-            blur_percent: 0,
-            dim_percent: 0,
-            ..LockSettings::default()
-        };
+        let missing = unreadable(LockBackgroundMode::Custom);
         let navy = background_image(&missing, 64, 36);
         assert_eq!(navy.pixels, background::reference_navy(64, 36));
 
         let custom = LockSettings {
             background_color: [1, 2, 3],
-            background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
-            background_mode: LockBackgroundMode::Custom,
-            blur_percent: 0,
-            dim_percent: 0,
-            ..LockSettings::default()
+            ..unreadable(LockBackgroundMode::Custom)
         };
         let flat = background_image(&custom, 4, 4);
         assert_eq!(&flat.pixels[..4], &[1, 2, 3, 255]);
@@ -842,16 +820,21 @@ mod tests {
     #[test]
     fn solid_mode_paints_the_colour_and_default_mode_keeps_the_builtin_picture() {
         let builtin = background_image(&LockSettings::default(), 64, 36);
-        let solid = LockSettings {
-            background_mode: LockBackgroundMode::Solid,
-            background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
-            blur_percent: 0,
-            dim_percent: 0,
-            ..LockSettings::default()
-        };
+        let solid = unreadable(LockBackgroundMode::Solid);
         let cleared = background_image(&solid, 64, 36);
         assert_eq!(cleared.pixels, background::reference_navy(64, 36));
         assert_ne!(builtin.pixels, cleared.pixels, "Clear must not look like Default");
+    }
+
+    /// Settings whose picture path does not exist, with blur and dim off.
+    fn unreadable(mode: LockBackgroundMode) -> LockSettings {
+        LockSettings {
+            background_image: Some("/nonexistent/flamewm-lock-background.png".into()),
+            background_mode: mode,
+            blur_percent: 0,
+            dim_percent: 0,
+            ..LockSettings::default()
+        }
     }
 
     fn solid(width: u32, height: u32) -> RgbaImage {
