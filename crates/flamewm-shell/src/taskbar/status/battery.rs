@@ -66,10 +66,9 @@ pub fn tray_visible(power: &PowerSnapshot, enabled: bool, only_when_relevant: bo
 /// power; empty when the rate is unknown.
 #[must_use]
 pub fn rate_text(rate_mw: Option<u32>) -> String {
-    match rate_mw {
-        Some(milliwatts) => format!("Battery {}.{} W", milliwatts / 1000, (milliwatts % 1000) / 100),
-        None => String::new(),
-    }
+    rate_mw
+        .map(|milliwatts| format!("Battery {}.{} W", milliwatts / 1000, (milliwatts % 1000) / 100))
+        .unwrap_or_default()
 }
 
 /// Bucket rule: 0..=10 is Caution; above that the level rounds UP to the next
