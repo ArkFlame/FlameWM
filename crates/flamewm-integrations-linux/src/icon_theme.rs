@@ -1293,6 +1293,11 @@ mod tests {
         assert!(throttled.is_none(), "second check inside 5s must be throttled");
     }
 
+    fn build_index(data: &Path, names: &[&str]) -> IconLookupIndex {
+        let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        IconLookupIndex::build(&names, &[data.to_path_buf()], 1)
+    }
+
     fn theme_fixture(data: &Path, name: &str, index: &str, icon: Option<&str>) {
         let base = data.join("icons").join(name);
         fs::create_dir_all(base.join("16x16/apps")).expect("theme fixture dirs");
@@ -1314,8 +1319,7 @@ mod tests {
         fs::write(apps.join("loop-app.png"), b"").expect("icon fixture");
         std::os::unix::fs::symlink(data.join("icons/loopy"), apps.join("up")).expect("loop link");
         std::os::unix::fs::symlink(&apps, apps.join("self")).expect("self link");
-        let names = vec!["loopy".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["loopy"]);
         let _ = fs::remove_dir_all(&data);
         let (paths, hit) = index.lookup("loop-app", 16);
         assert!(hit);
@@ -1332,8 +1336,7 @@ mod tests {
         fs::create_dir_all(data.join("icons/linked")).expect("theme dir");
         fs::write(real.join("linked-app.png"), b"").expect("icon fixture");
         std::os::unix::fs::symlink(&real, data.join("icons/linked/alias")).expect("dir link");
-        let names = vec!["linked".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["linked"]);
         let _ = fs::remove_dir_all(&data);
         let (paths, hit) = index.lookup("linked-app", 16);
         assert!(hit, "valid symlinked subdir must stay indexed");
@@ -1348,8 +1351,7 @@ mod tests {
         theme_fixture(&data, "Numix-Circle-Light", FIXED_16, Some("chain-app.png"));
         theme_fixture(&data, "Breeze", FIXED_16, Some("chain-app.png"));
         theme_fixture(&data, "hicolor", FIXED_16, Some("chain-app.png"));
-        let names = vec!["McMojave-circle".to_owned(), "Breeze".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["McMojave-circle", "Breeze"]);
         let _ = fs::remove_dir_all(&data);
         let (paths, hit) = index.lookup("chain-app", 16);
         assert!(hit);
@@ -1363,8 +1365,7 @@ mod tests {
         let data = fixture_root("case", line!());
         // Host ships lowercase `breeze`; the chain names `Breeze`.
         theme_fixture(&data, "breeze", FIXED_16, Some("case-app.png"));
-        let names = vec!["Breeze".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["Breeze"]);
         let _ = fs::remove_dir_all(&data);
         let (paths, hit) = index.lookup("case-app", 16);
         assert!(hit, "Breeze must resolve to the installed breeze directory");
@@ -1375,8 +1376,7 @@ mod tests {
     fn missing_selected_theme_falls_back_to_breeze_not_blank() {
         let data = fixture_root("missing", line!());
         theme_fixture(&data, "Breeze", FIXED_16, Some("fallback-app.png"));
-        let names = vec!["McMojave-circle".to_owned(), "Breeze".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["McMojave-circle", "Breeze"]);
         let (paths, hit) = index.lookup("fallback-app", 16);
         let (missing, missing_hit) = index.lookup("never-installed-icon", 16);
         let _ = fs::remove_dir_all(&data);
@@ -1396,9 +1396,8 @@ mod tests {
             "[Icon Theme]\nName=Mine\nInherits=Breeze\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n",
         )
         .expect("selected index.theme");
-        let names = vec!["Mine".to_owned()];
         INDEX_THEME_READS.with(|c| c.set(0));
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["Mine"]);
         let reads = INDEX_THEME_READS.with(|c| c.get());
         let (paths, hit) = index.lookup("once-app", 16);
         let _ = fs::remove_dir_all(&data);
@@ -1428,8 +1427,7 @@ mod tests {
         fs::write(base.join("16x16/apps/flame-fixture-app.png"), b"").expect("16 png");
         fs::write(base.join("32x32/apps/flame-fixture-app.svg"), b"").expect("32 svg");
         fs::write(base.join("32x32/apps/flame-fixture-app.png"), b"").expect("32 png");
-        let names = vec!["FlameFixture".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["FlameFixture"]);
         let at_32 = index.lookup("flame-fixture-app", 32).0;
         let at_16 = index.lookup("flame-fixture-app", 16).0;
         let svg = index.lookup("flame-fixture-app.svg", 16).0;
@@ -1477,8 +1475,7 @@ mod tests {
         for raw in [b"a\xff.png".to_vec(), b"a\xfe.png".to_vec()] {
             fs::write(apps.join(std::ffi::OsString::from_vec(raw)), b"").expect("raw icon fixture");
         }
-        let names = vec!["RawNames".to_owned()];
-        let index = IconLookupIndex::build(&names, std::slice::from_ref(&data), 1);
+        let index = build_index(&data, &["RawNames"]);
         let _ = fs::remove_dir_all(&data);
         // Both names lossy-decode to `a\u{FFFD}`; the key must stay exact.
         let copies = index.files.get("a\u{FFFD}").map_or(0, |files| files.len());
