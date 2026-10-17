@@ -592,14 +592,7 @@ impl SurfaceRuntime {
         node: u32,
     ) -> Result<flamewm_render_core::Rect, UiBackendError> {
         let document = self.document_mut(surface)?;
-        let (width, height) = document_space_extent(document);
-        let layout = flamewm_render_core::LayoutEngine::compute(
-            document,
-            width,
-            height,
-            flamewm_render_core::InteractionState::default(),
-        );
-        layout
+        default_layout(document)
             .boxes
             .get(node as usize)
             .map(|entry| entry.rect)
@@ -786,14 +779,7 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
     ) -> Result<(f32, f32), UiBackendError> {
         let document = self.document_mut(surface)?;
-        let (width, height) = document_space_extent(document);
-        let layout = flamewm_render_core::LayoutEngine::compute(
-            document,
-            width,
-            height,
-            flamewm_render_core::InteractionState::default(),
-        );
-        let extent = layout.content_extent(document.document.root);
+        let extent = default_layout(document).content_extent(document.document.root);
         Ok((extent.width.max(0.0), extent.height.max(0.0)))
     }
 }
@@ -864,6 +850,17 @@ fn document_space_extent(document: &RuntimeDocument) -> (f32, f32) {
         _ => 641.0,
     };
     (width.max(1.0), height.max(1.0))
+}
+
+/// Layout at the document-space extent, shared by the node-rect and intrinsic-size queries.
+fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResult {
+    let (width, height) = document_space_extent(document);
+    flamewm_render_core::LayoutEngine::compute(
+        document,
+        width,
+        height,
+        flamewm_render_core::InteractionState::default(),
+    )
 }
 
 fn effective_output_scale(scale: f32) -> f32 {
