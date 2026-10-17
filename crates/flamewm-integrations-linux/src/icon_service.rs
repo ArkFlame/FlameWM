@@ -977,6 +977,15 @@ mod tests {
         }
     }
 
+    fn fake_service(workers: usize) -> (IconService<FakeResolver>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = IconService::new(workers, 8, {
+            let calls = Arc::clone(&calls);
+            move || FakeResolver(Arc::clone(&calls))
+        });
+        (service, calls)
+    }
+
     fn key(name: &str) -> IconKey {
         IconKey::new(
             IconLookupPurpose::Application,
@@ -1086,11 +1095,7 @@ mod tests {
 
     #[test]
     fn duplicate_key_resolves_once_and_result_has_no_target() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let mut service = IconService::new(2, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (mut service, calls) = fake_service(2);
         let job = IconJob {
             key: key("same"),
             priority: IconPriority::High,
@@ -1104,11 +1109,7 @@ mod tests {
 
     #[test]
     fn installed_theme_index_bumps_generation_and_old_generation_keys_miss() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let mut service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (mut service, _calls) = fake_service(1);
         assert_eq!(service.theme_generation(), 0);
         let next = Arc::new(IconLookupIndex::new(
             Vec::new(),
@@ -1153,11 +1154,7 @@ mod tests {
 
     #[test]
     fn late_theme_rebuild_result_cannot_replace_newer_installed_generation() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (service, _calls) = fake_service(1);
         let index = |generation| {
             Arc::new(IconLookupIndex::new(
                 Vec::new(),
@@ -1221,11 +1218,7 @@ mod tests {
 
     #[test]
     fn submitted_theme_rebuild_completes_off_thread_with_next_generation() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (service, _calls) = fake_service(1);
         let (root, stale) = stale_watch_index("rebuild");
         service.install_theme_index(Arc::new(stale));
 
@@ -1241,11 +1234,7 @@ mod tests {
 
     #[test]
     fn requested_theme_chain_builds_off_thread_with_next_generation() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (service, _calls) = fake_service(1);
         service.install_theme_index(Arc::new(IconLookupIndex::build(&[], &[], 5)));
 
         let chain = vec!["flame-no-such-theme".to_owned(), "hicolor".to_owned()];
@@ -1259,11 +1248,7 @@ mod tests {
 
     #[test]
     fn published_theme_rebuild_wakes_reactor_fd() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (service, _calls) = fake_service(1);
         let (root, stale) = stale_watch_index("wake");
         service.install_theme_index(Arc::new(stale));
         let mut reader = service
@@ -1284,11 +1269,7 @@ mod tests {
 
     #[test]
     fn unchanged_theme_queues_check_but_yields_no_new_index() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let service = IconService::new(1, 8, {
-            let calls = Arc::clone(&calls);
-            move || FakeResolver(Arc::clone(&calls))
-        });
+        let (service, _calls) = fake_service(1);
         // Built index records the live watch mtime, so the check finds no change.
         let current = IconLookupIndex::build(&[], &[], 5);
         service.install_theme_index(Arc::new(current));
