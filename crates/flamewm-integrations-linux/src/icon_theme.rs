@@ -130,22 +130,20 @@ impl IconThemeCaches {
 
     #[must_use]
     pub fn memory_estimate_bytes(&self) -> usize {
-        let mut bytes = 0;
-        for ((path, _), _) in &self.exists {
-            bytes += path.as_os_str().len() + 16;
-        }
-        bytes
+        self.exists
+            .keys()
+            .map(|(path, _)| path.as_os_str().len() + 16)
+            .sum()
     }
 
     fn clear_generation(&mut self) {
         // Generations are key-scoped so no clear is required; this hook keeps
         // the bound small if a host cycles generations rapidly.
         while self.len() > 4096 {
-            if let Some(first) = self.exists.keys().next().cloned() {
-                self.exists.remove(&first);
-            } else {
+            let Some(first) = self.exists.keys().next().cloned() else {
                 break;
-            }
+            };
+            self.exists.remove(&first);
         }
     }
 
@@ -197,25 +195,23 @@ impl IconThemeIndex {
         let header = sections.get("Icon Theme").cloned().unwrap_or_default();
         let directories = split_list(header.get("Directories").map(String::as_str).unwrap_or(""));
         let inherits = split_list(header.get("Inherits").map(String::as_str).unwrap_or(""));
-        let mut dirs = HashMap::new();
-        for dir in &directories {
-            if let Some(section) = sections.get(dir.as_str()) {
-                dirs.insert(dir.clone(), parse_dir(section));
-            }
-        }
+        let mut dirs: HashMap<String, _> = directories
+            .iter()
+            .filter_map(|dir| Some((dir.clone(), parse_dir(sections.get(dir.as_str())?))))
+            .collect();
         // ScaledDirectories entries share the same section format.
-        if let Some(scaled) = header.get("ScaledDirectories") {
-            for dir in split_list(scaled) {
-                if !dirs.contains_key(&dir) {
-                    if let Some(section) = sections.get(dir.as_str()) {
-                        let mut entry = parse_dir(section);
-                        if entry.scale == 1 {
-                            entry.scale = 2;
-                        }
-                        dirs.insert(dir.clone(), entry);
-                    }
-                }
+        for dir in header.get("ScaledDirectories").map(String::as_str).map(split_list).unwrap_or_default() {
+            if dirs.contains_key(&dir) {
+                continue;
             }
+            let Some(section) = sections.get(dir.as_str()) else {
+                continue;
+            };
+            let mut entry = parse_dir(section);
+            if entry.scale == 1 {
+                entry.scale = 2;
+            }
+            dirs.insert(dir, entry);
         }
         Self {
             name: name.to_owned(),
