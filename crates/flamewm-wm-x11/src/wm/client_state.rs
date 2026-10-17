@@ -198,7 +198,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn read_title(&self, client: Window) -> Result<String, ReplyError> {
-        let utf8 = self
+        let mut value = self
             .conn
             .get_property(
                 false,
@@ -208,19 +208,16 @@ impl<'a, C: Connection> Wm<'a, C> {
                 0,
                 1024,
             )?
-            .reply()?;
-        if !utf8.value.is_empty() {
-            return Ok(String::from_utf8_lossy(&utf8.value)
-                .trim_matches('\0')
-                .to_owned());
+            .reply()?
+            .value;
+        if value.is_empty() {
+            value = self
+                .conn
+                .get_property(false, client, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)?
+                .reply()?
+                .value;
         }
-        let legacy = self
-            .conn
-            .get_property(false, client, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)?
-            .reply()?;
-        Ok(String::from_utf8_lossy(&legacy.value)
-            .trim_matches('\0')
-            .to_owned())
+        Ok(String::from_utf8_lossy(&value).trim_matches('\0').to_owned())
     }
 
     pub(super) fn read_transient_for(&self, client: Window) -> Result<Option<Window>, ReplyError> {
