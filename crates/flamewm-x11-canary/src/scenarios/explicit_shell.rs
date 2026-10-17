@@ -193,7 +193,6 @@ pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
             viewable(canary, TASK_MENU).is_some()
         });
     checks.push(("button3-opens-task-menu", opened, String::new()));
-    let mut row_count = 0usize;
     if let Some(menu) = viewable(canary, TASK_MENU) {
         let rect = (
             i32::from(menu.x),
@@ -202,7 +201,7 @@ pub fn run_s1(canary: &Canary, args: &[String]) -> (bool, String) {
             u32::from(menu.height),
         );
         let bands = ink_bands(canary, rect, 8, Ink::DeltaFromBackground).unwrap_or_default();
-        row_count = bands.len();
+        let row_count = bands.len();
         let shot = screenshot(&dir, "s1-taskbar-menu-open.png");
         checks.push((
             "one-settings-row",
@@ -478,7 +477,7 @@ pub fn run_s3(canary: &Canary, args: &[String]) -> (bool, String) {
             Some(expected) => {
                 // Bounded settle: the tab must show its reference state within 1.5s.
                 // First-attempt misses are counted, never hidden.
-                let differs_now = |canary: &Canary| {
+                let differs_now = |_canary: &Canary| {
                     capture()
                         .map(|now| differing_permille(&now, expected, content.2))
                         .unwrap_or(u32::MAX)
@@ -778,7 +777,7 @@ pub fn run_osd(canary: &Canary, args: &[String]) -> (bool, String) {
         Ok(d) => d,
         Err(e) => return (false, e),
     };
-    let panel = match panel_of(canary) {
+    let _panel = match panel_of(canary) {
         Ok(p) => p,
         Err(e) => return (false, e),
     };

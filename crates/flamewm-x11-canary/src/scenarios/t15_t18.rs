@@ -10,7 +10,8 @@
 use std::time::{Duration, Instant};
 
 use super::interaction_regressions::{
-    maximized_both, native_configures, root_point, root_work_area, wait_until,
+    bottom_right, maximized, maximized_both, native_configures, root_point, root_work_area,
+    title, wait_until, wm_state,
 };
 use super::{xtest_button_press, xtest_button_release, xtest_drag_path, xtest_motion};
 use x11rb::connection::Connection as _;
@@ -71,20 +72,6 @@ where
     found.then_some(stable).flatten()
 }
 
-fn title(frame: &crate::WinInfo) -> (i16, i16) {
-    (
-        frame.x.saturating_add(frame.width as i16 / 2),
-        frame.y.saturating_add(8),
-    )
-}
-
-fn bottom_right(frame: &crate::WinInfo) -> (i16, i16) {
-    (
-        frame.x.saturating_add(frame.width as i16 - 3),
-        frame.y.saturating_add(frame.height as i16 - 3),
-    )
-}
-
 fn input_surface(canary: &crate::Canary, client: &crate::WinInfo) -> Option<crate::WinInfo> {
     canary.by_id(client.parent).filter(|frame| {
         frame.parent == canary.root
@@ -99,21 +86,6 @@ fn input_surface(canary: &crate::Canary, client: &crate::WinInfo) -> Option<crat
 
 fn target(canary: &crate::Canary, args: &[String]) -> Option<crate::WinInfo> {
     super::window_interaction::resolve_target(canary, args)
-}
-
-fn state(canary: &crate::Canary, window: u32) -> Vec<u32> {
-    canary.prop_u32(window, "_NET_WM_STATE")
-}
-
-fn maximized(canary: &crate::Canary, window: u32) -> bool {
-    let values = state(canary, window);
-    let horizontal = canary
-        .intern("_NET_WM_STATE_MAXIMIZED_HORZ")
-        .is_some_and(|atom| values.contains(&atom));
-    let vertical = canary
-        .intern("_NET_WM_STATE_MAXIMIZED_VERT")
-        .is_some_and(|atom| values.contains(&atom));
-    horizontal || vertical
 }
 
 fn left_snap_geometry(area: (i32, i32, u32, u32)) -> (i32, i32, u32, u32) {
@@ -595,7 +567,7 @@ fn normalize_t17_baseline(
     baseline: &T17Baseline,
 ) -> Option<(crate::WinInfo, crate::WinInfo)> {
     let client = canary.by_id(target.id)?;
-    let frame = input_surface(canary, &client)?;
+    let _frame = input_surface(canary, &client)?;
     if client.width != baseline.client.width || client.height != baseline.client.height {
         canary
             .conn
@@ -1009,7 +981,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let initial_client = baseline.client.clone();
     let initial_frame = baseline.frame.clone();
     let baseline_area = baseline.work_area;
-    let initial_state = state(canary, client_id);
+    let initial_state = wm_state(canary, client_id);
     let move_from = title(&initial_frame);
     let move_to = (
         move_from.0.saturating_add(48),
@@ -1159,7 +1131,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let max_geometry = frame_matches(&max_frame, baseline_area);
     let max_actual = t17_geometry(&max_frame);
-    let max_state = state(canary, client_id);
+    let max_state = wm_state(canary, client_id);
     let restore_from = title(&max_frame);
     let restore_to = (
         baseline_area
@@ -1223,7 +1195,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let restore_configures = restored_frame
         .as_ref()
         .map_or(0, |frame| matching_frame_configures(canary, frame, 250));
-    let restore_state = state(canary, client_id);
+    let restore_state = wm_state(canary, client_id);
     let Some(restored_frame) = restored_frame else {
         let diagnostic = t17_restore_diagnostic(
             canary,
@@ -1378,7 +1350,7 @@ pub fn run_t17(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         && canary
             .by_id(frame_id)
             .is_some_and(|frame| frame.parent == canary.root && frame.map_state == 2);
-    let final_state = state(canary, client_id);
+    let final_state = wm_state(canary, client_id);
     let cleanup_floating = canary.by_id(frame_id).is_some_and(|frame| {
         !maximized(canary, client_id) && !frame_matches_known_snap(&frame, baseline_area)
     });

@@ -7,7 +7,7 @@ use super::{center, real_click, xtest_button_press, xtest_button_release, xtest_
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
-use x11rb::protocol::xproto::{AtomEnum, ClientMessageData, ClientMessageEvent, EventMask};
+use x11rb::protocol::xproto::{ClientMessageData, ClientMessageEvent, EventMask};
 
 const WORKSPACE_CONVERGENCE_BUDGET_MS: u128 = 50;
 const WORKSPACE_CONVERGENCE_SAMPLES: usize = 100;
@@ -40,6 +40,17 @@ fn current_workspace(canary: &crate::Canary) -> Option<u32> {
         .copied()
 }
 
+/// Sticky colour of one pixel from its `r, g, b` channels.
+fn classify(r: u8, g: u8, b: u8) -> StickyPixel {
+    if r >= 220 && g >= 190 && g <= 250 && b <= 140 && r > g + 20 {
+        StickyPixel::Yellow
+    } else if r >= 160 && r <= 225 && g >= 200 && b >= 70 && b <= 190 && g > r + 15 {
+        StickyPixel::Green
+    } else {
+        StickyPixel::Other
+    }
+}
+
 fn color_bounds(data: &[u8], width: u16, height: u16, color: StickyPixel) -> Option<ColorBounds> {
     let mut bounds: Option<ColorBounds> = None;
     for (index, pixel) in data.chunks_exact(4).enumerate() {
@@ -48,17 +59,7 @@ fn color_bounds(data: &[u8], width: u16, height: u16, color: StickyPixel) -> Opt
         if y >= usize::from(height) {
             break;
         }
-        let b = pixel[0];
-        let g = pixel[1];
-        let r = pixel[2];
-        let matches = match color {
-            StickyPixel::Yellow => r >= 220 && g >= 190 && g <= 250 && b <= 140 && r > g + 20,
-            StickyPixel::Green => {
-                r >= 160 && r <= 225 && g >= 200 && b >= 70 && b <= 190 && g > r + 15
-            }
-            StickyPixel::Other => false,
-        };
-        if !matches {
+        if color == StickyPixel::Other || classify(pixel[2], pixel[1], pixel[0]) != color {
             continue;
         }
         let x = u16::try_from(x).unwrap_or(u16::MAX);
@@ -113,13 +114,7 @@ fn sticky_pixel(canary: &crate::Canary, point: (i16, i16)) -> StickyPixel {
         return StickyPixel::Other;
     };
     let (_, _, r, g, b) = crate::Canary::pixel_stats(&data);
-    if r >= 220 && g >= 190 && g <= 250 && b <= 140 && r > g + 20 {
-        StickyPixel::Yellow
-    } else if r >= 160 && r <= 225 && g >= 200 && b >= 70 && b <= 190 && g > r + 15 {
-        StickyPixel::Green
-    } else {
-        StickyPixel::Other
-    }
+    classify(r, g, b)
 }
 
 fn sticky_signature(canary: &crate::Canary, probes: &[(i16, i16); 2]) -> StickySignature {
@@ -507,8 +502,6 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     }
     std::thread::sleep(std::time::Duration::from_millis(150));
     let pass = clicked && (max_sent && maxed) && snapped && (fs_sent && fs || fs);
-    let _ = AtomEnum::ATOM;
-    let _ = CURRENT_TIME;
     (
         pass,
         format!(
@@ -547,20 +540,7 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let mut legs = 0;
     let mut visible = 0;
     for ws in 0..cycles {
-        let ev = ClientMessageEvent {
-            response_type: 33,
-            format: 32,
-            sequence: 0,
-            window: canary.root,
-            type_: cur_atom,
-            data: ClientMessageData::from([ws, CURRENT_TIME, 0, 0, 0]),
-        };
-        let sent = canary
-            .conn
-            .send_event(false, canary.root, EventMask::SUBSTRUCTURE_REDIRECT, ev)
-            .map(|c| c.check().is_ok())
-            .unwrap_or(false);
-        let _ = canary.conn.flush();
+        let sent = ewmh_request(canary, canary.root, "_NET_CURRENT_DESKTOP", ws, CURRENT_TIME);
         std::thread::sleep(std::time::Duration::from_millis(200));
         if !sent {
             continue;
@@ -584,18 +564,7 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         }
     }
     // Restore original workspace.
-    let ev = ClientMessageEvent {
-        response_type: 33,
-        format: 32,
-        sequence: 0,
-        window: canary.root,
-        type_: cur_atom,
-        data: ClientMessageData::from([orig, CURRENT_TIME, 0, 0, 0]),
-    };
-    let _ = canary
-        .conn
-        .send_event(false, canary.root, EventMask::SUBSTRUCTURE_REDIRECT, ev);
-    let _ = canary.conn.flush();
+    let _ = ewmh_request(canary, canary.root, "_NET_CURRENT_DESKTOP", orig, CURRENT_TIME);
     let pass = legs == cycles && visible == legs;
     (
         pass,

@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageData, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
-    CreateWindowAux, EventMask, PropMode, WindowClass,
+    AtomEnum, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, PropMode, WindowClass,
 };
 
 use super::interaction_regressions::root_work_area;
+use super::snap_border::{fail, maximize_msg, send_root_message};
 use super::window_interaction::input_surface;
 use super::xtest_drag_path;
 
@@ -44,10 +44,6 @@ const PANEL: &str = "FlameWM panel";
 /// Outer frame rectangle (x, y, w, h) as laid out by the X server.
 type Rect = (i32, i32, u32, u32);
 
-fn fail(message: impl Into<String>) -> (bool, String) {
-    (false, format!("observed=false {} {PATH}", message.into()))
-}
-
 fn rect(r: Rect) -> String {
     format!("{}x{}+{}+{}", r.2, r.3, r.0, r.1)
 }
@@ -74,6 +70,24 @@ fn frame_of(canary: &crate::Canary, client: u32) -> Option<Rect> {
         u32::from(geom.width) + 2 * bw,
         u32::from(geom.height) + 2 * bw,
     ))
+}
+
+/// Poll for the managed frame of a new client (about 2 s).
+fn wait_frame(canary: &crate::Canary, client: u32) -> Option<Rect> {
+    (0..50).find_map(|_| {
+        sleep_ms(40);
+        frame_of(canary, client)
+    })
+}
+
+/// Shot directory from `--shot-dir`, created on demand.
+fn shot_dir(args: &[String]) -> Result<std::path::PathBuf, (bool, String)> {
+    let Some(dir) = crate::arg(args, "--shot-dir") else {
+        return Err(fail("--shot-dir <path> required"));
+    };
+    let dir = std::path::PathBuf::from(dir);
+    fs::create_dir_all(&dir).map_err(|e| fail(format!("shot dir: {e}")))?;
+    Ok(dir)
 }
 
 /// Poll until the frame equals `expected` or the deadline passes.
@@ -212,32 +226,6 @@ fn create_client(canary: &crate::Canary) -> Result<u32, String> {
     Ok(wid)
 }
 
-fn send_state(canary: &crate::Canary, window: u32, action: u32) -> bool {
-    let Some(type_) = canary.intern("_NET_WM_STATE") else {
-        return false;
-    };
-    let horz = canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0);
-    let vert = canary.intern("_NET_WM_STATE_MAXIMIZED_VERT").unwrap_or(0);
-    let ev = ClientMessageEvent {
-        response_type: 33,
-        format: 32,
-        sequence: 0,
-        window,
-        type_,
-        data: ClientMessageData::from([action, horz, vert, 1, 0]),
-    };
-    canary
-        .conn
-        .send_event(
-            false,
-            canary.root,
-            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-            ev,
-        )
-        .is_ok_and(|cookie| cookie.check().is_ok())
-        && canary.conn.flush().is_ok()
-}
-
 /// Visible span of `[start, start+len)` clipped to `[0, limit)`.
 fn visible(start: i32, len: u32, limit: i32) -> i32 {
     (start + len as i32).min(limit) - start.max(0)
@@ -253,13 +241,10 @@ struct Case {
 
 /// B16 explicit-window-overflow (A14): overflow limits, taskbar stacking, snap and maximize.
 pub fn run_overflow(canary: &crate::Canary, args: &[String]) -> (bool, String) {
-    let Some(dir) = crate::arg(args, "--shot-dir") else {
-        return fail("--shot-dir <path> required");
+    let dir = match shot_dir(args) {
+        Ok(dir) => dir,
+        Err(result) => return result,
     };
-    let dir = std::path::PathBuf::from(dir);
-    if let Err(e) = fs::create_dir_all(&dir) {
-        return fail(format!("shot dir: {e}"));
-    }
     let screen = canary.root_geometry();
     let (sw, sh) = (i32::from(screen.0), i32::from(screen.1));
     let Some(panel) = canary.find(PANEL).into_iter().find(|w| w.map_state == 2) else {
@@ -282,10 +267,7 @@ pub fn run_overflow(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Ok(w) => w,
         Err(e) => return fail(e),
     };
-    let Some(start) = (0..50).find_map(|_| {
-        sleep_ms(40);
-        frame_of(canary, client)
-    }) else {
+    let Some(start) = wait_frame(canary, client) else {
         return fail("client not managed");
     };
     let (cx, cy) = (i32::from(CLIENT_AT.0), i32::from(CLIENT_AT.1));
@@ -376,19 +358,17 @@ pub fn run_overflow(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     parts.push(snap_detail);
 
     // Maximize: frame must cover the work area exactly.
-    let sent = send_state(canary, client, 1);
-    let (ax, ay, aw, ah) = area;
-    let max_expected = (ax, ay, aw, ah);
-    let max_observed = settle_frame(canary, client, max_expected);
-    let max_ok = sent && max_observed == Some(max_expected);
+    let sent = send_root_message(canary, client, "_NET_WM_STATE", maximize_msg(canary, 1));
+    let max_observed = settle_frame(canary, client, area);
+    let max_ok = sent && max_observed == Some(area);
     pass &= max_ok;
     parts.push(format!(
         "maximize[pass={max_ok} observed={} expected={}]",
         max_observed.map(rect).unwrap_or_default(),
-        rect(max_expected)
+        rect(area)
     ));
     let _ = screenshot(&dir, "overflow-maximized.png");
-    let _ = send_state(canary, client, 0);
+    let _ = send_root_message(canary, client, "_NET_WM_STATE", maximize_msg(canary, 0));
     let _ = canary.conn.destroy_window(client);
     let _ = canary.conn.flush();
 
@@ -437,23 +417,17 @@ fn keep_visible_bounds(outer: Rect, screen: (i32, i32)) -> ((i32, i32), (i32, i3
 /// directions. Each landing must equal the keep-visible bound exactly. The titlebar route
 /// is measured (not asserted) with the pointer at the top margin and at the y=0 edge.
 pub fn run_clamp(canary: &crate::Canary, args: &[String]) -> (bool, String) {
-    let Some(dir) = crate::arg(args, "--shot-dir") else {
-        return fail("--shot-dir <path> required");
+    let dir = match shot_dir(args) {
+        Ok(dir) => dir,
+        Err(result) => return result,
     };
-    let dir = std::path::PathBuf::from(dir);
-    if let Err(e) = fs::create_dir_all(&dir) {
-        return fail(format!("shot dir: {e}"));
-    }
     let screen = canary.root_geometry();
     let (sw, sh) = (i32::from(screen.0), i32::from(screen.1));
     let client = match create_client(canary) {
         Ok(w) => w,
         Err(e) => return fail(e),
     };
-    let Some(start) = (0..50).find_map(|_| {
-        sleep_ms(40);
-        frame_of(canary, client)
-    }) else {
+    let Some(start) = wait_frame(canary, client) else {
         return fail("client not managed");
     };
     let (cx, cy) = (i32::from(CLIENT_AT.0), i32::from(CLIENT_AT.1));

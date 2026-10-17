@@ -44,6 +44,7 @@ pub fn incr_chunk_len(max_request_bytes: usize) -> usize {
 
 /// Splits `data` into slices of at most `chunk` bytes; the terminating
 /// zero-length chunk is sent separately by the owner.
+#[cfg(test)]
 pub fn incr_chunks(data: &[u8], chunk: usize) -> Vec<&[u8]> {
     data.chunks(chunk.max(1)).collect()
 }

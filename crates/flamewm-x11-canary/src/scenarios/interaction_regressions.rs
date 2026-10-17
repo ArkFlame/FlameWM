@@ -20,7 +20,7 @@ struct Case {
     delta: (i16, i16),
 }
 
-fn title(w: &crate::WinInfo) -> (i16, i16) {
+pub(crate) fn title(w: &crate::WinInfo) -> (i16, i16) {
     (
         w.x.saturating_add(w.width as i16 / 2),
         w.y.saturating_add(8),
@@ -47,7 +47,7 @@ fn bottom_left(w: &crate::WinInfo) -> (i16, i16) {
     )
 }
 
-fn bottom_right(w: &crate::WinInfo) -> (i16, i16) {
+pub(crate) fn bottom_right(w: &crate::WinInfo) -> (i16, i16) {
     (
         w.x.saturating_add(w.width as i16 - 3),
         w.y.saturating_add(w.height as i16 - 3),
@@ -169,6 +169,16 @@ enum X03ProbeError {
     IdentityChange(String),
     RouteMismatch(String),
     XtestFailed(String),
+}
+
+impl X03ProbeError {
+    fn detail(&self) -> &str {
+        match self {
+            Self::IdentityChange(detail) | Self::RouteMismatch(detail) | Self::XtestFailed(detail) => {
+                detail
+            }
+        }
+    }
 }
 
 fn x03_identity(
@@ -419,13 +429,14 @@ fn x03_maximize(
     })
 }
 
-fn x03_failure(pinned: PinnedX03, error: impl std::fmt::Debug, logs: &[String]) -> (bool, String) {
+fn x03_failure(pinned: PinnedX03, error: X03ProbeError, logs: &[String]) -> (bool, String) {
     (
         false,
         format!(
-            "scenario=X03 client={} frame={} assertions=false probe_failure={error:?} diagnostics=[{}]",
+            "scenario=X03 client={} frame={} assertions=false probe_failure={error:?} probe_detail={} diagnostics=[{}]",
             pinned.client,
             pinned.frame,
+            error.detail(),
             logs.join(" | ")
         ),
     )
@@ -484,11 +495,11 @@ fn expected(case: &Case, before: &crate::WinInfo, after: &crate::WinInfo) -> boo
     }
 }
 
-fn wm_state(canary: &crate::Canary, window: u32) -> Vec<u32> {
+pub(crate) fn wm_state(canary: &crate::Canary, window: u32) -> Vec<u32> {
     canary.prop_u32(window, "_NET_WM_STATE")
 }
 
-fn maximized(canary: &crate::Canary, window: u32) -> bool {
+pub(crate) fn maximized(canary: &crate::Canary, window: u32) -> bool {
     let state = wm_state(canary, window);
     let horz = canary
         .intern("_NET_WM_STATE_MAXIMIZED_HORZ")
@@ -737,7 +748,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             &logs,
         );
     };
-    let Some(floating_surface) = canary
+    let Some(_floating_surface) = canary
         .by_id(pinned.frame)
         .filter(|window| window.parent == canary.root)
     else {
@@ -1846,7 +1857,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             .by_id(client_id)
             .filter(|client| client.parent == frame_id)
             .and_then(|client| input_surface(canary, &client))
-            .is_some_and(|frame| !maximized(canary, client_id))
+            .is_some_and(|_frame| !maximized(canary, client_id))
     });
     let final_client = canary
         .by_id(client_id)

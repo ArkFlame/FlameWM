@@ -20,65 +20,40 @@ pub fn run_t13(args: &[String]) -> (bool, String) {
     // here we implement the file-retention half: run A requires --digest-of,
     // run B compares current --digest-of to the stored file.
     let current = crate::arg(args, "--digest-of").unwrap_or_default();
-    if which == "a" {
-        if current.is_empty() {
-            return (
-                false,
-                format!(
-                    "run=a needs --digest-of <hex> file={} path=file-retention",
-                    path.display()
-                ),
-            );
-        }
-        match std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))
+    let file = path.display();
+    let needs_digest = |run: &str| {
+        (
+            false,
+            format!("run={run} needs --digest-of <hex> file={file} path=file-retention"),
+        )
+    };
+    match (which.as_str(), current.is_empty()) {
+        ("a" | "b", true) => needs_digest(&which),
+        ("a", false) => match std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))
             .and_then(|()| std::fs::write(&path, format!("{current}\n")))
         {
             Ok(()) => (
                 true,
-                format!(
-                    "run=a stored digest={current} file={} path=file-retention",
-                    path.display()
-                ),
+                format!("run=a stored digest={current} file={file} path=file-retention"),
             ),
-            Err(e) => (
-                false,
-                format!(
-                    "run=a write failed {e} file={} path=file-retention",
-                    path.display()
-                ),
-            ),
-        }
-    } else if which == "b" {
-        if current.is_empty() {
-            return (
-                false,
-                format!(
-                    "run=b needs --digest-of <hex> file={} path=file-retention",
-                    path.display()
-                ),
-            );
-        }
-        match std::fs::read_to_string(&path) {
+            Err(e) => (false, format!("run=a write failed {e} file={file} path=file-retention")),
+        },
+        ("b", false) => match std::fs::read_to_string(&path) {
             Ok(stored) => {
                 let stored = stored.trim().to_owned();
                 let pass = stored == current;
                 (
                     pass,
                     format!(
-                        "run=b stored={stored} current={current} match={pass} file={} path=file-retention",
-                        path.display()
+                        "run=b stored={stored} current={current} match={pass} file={file} path=file-retention"
                     ),
                 )
             }
             Err(e) => (
                 false,
-                format!(
-                    "run=b missing run-a artifact {e} file={} path=file-retention",
-                    path.display()
-                ),
+                format!("run=b missing run-a artifact {e} file={file} path=file-retention"),
             ),
-        }
-    } else {
-        (false, "--run must be a|b path=file-retention".to_owned())
+        },
+        _ => (false, "--run must be a|b path=file-retention".to_owned()),
     }
 }

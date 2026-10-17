@@ -144,7 +144,12 @@ fn drag(
     xtest_button_release(canary, to.0, to.1, 1)
 }
 
-fn send_root_message(canary: &crate::Canary, window: u32, type_name: &str, data: [u32; 5]) -> bool {
+pub(super) fn send_root_message(
+    canary: &crate::Canary,
+    window: u32,
+    type_name: &str,
+    data: [u32; 5],
+) -> bool {
     let Some(type_) = canary.intern(type_name) else {
         return false;
     };
@@ -250,6 +255,27 @@ fn wait_managed(canary: &crate::Canary, client: u32) -> Option<Frame> {
     settle(3_000, || frame_of(canary, client), |_| true)
 }
 
+/// Wait for the frame to reach the exact `expected` outer rectangle (2 s budget).
+fn settle_outer(canary: &crate::Canary, client: u32, expected: (i32, i32, u32, u32)) -> Option<Frame> {
+    settle(2_000, || frame_of(canary, client), |f| f.outer() == expected)
+}
+
+/// `_NET_FRAME_EXTENTS` with no left, right or top border (snapped and maximized).
+fn no_edge_extents(e: &[u32; 4]) -> bool {
+    e[0] == 0 && e[1] == 0 && e[3] == 0
+}
+
+/// `_NET_WM_STATE` client message data toggling maximize (`action` 1 add, 0 remove).
+pub(super) fn maximize_msg(canary: &crate::Canary, action: u32) -> [u32; 5] {
+    [
+        action,
+        canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0),
+        canary.intern("_NET_WM_STATE_MAXIMIZED_VERT").unwrap_or(0),
+        1,
+        0,
+    ]
+}
+
 fn destroy_client(canary: &crate::Canary, client: u32) {
     let _ = canary.conn.destroy_window(client);
     let _ = canary.conn.flush();
@@ -266,7 +292,7 @@ fn new_client(canary: &crate::Canary) -> Result<(u32, Frame), String> {
     }
 }
 
-fn fail(message: impl Into<String>) -> (bool, String) {
+pub(super) fn fail(message: impl Into<String>) -> (bool, String) {
     (false, format!("observed=false {} {PATH}", message.into()))
 }
 
@@ -284,11 +310,7 @@ fn snap_case(
     let to = (point.0 as i16, point.1 as i16);
     let dragged = drag(canary, title_point(frame), to, 0, 400);
     let expected = quarter(area, corner);
-    let observed = settle(
-        2_000,
-        || frame_of(canary, client),
-        |f| f.outer() == expected,
-    );
+    let observed = settle_outer(canary, client, expected);
     destroy_client(canary, client);
     let Some(observed) = observed else {
         return fail("frame vanished");
@@ -347,11 +369,7 @@ pub fn run_s2(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     };
     let expected = quarter(area, Corner::Tl);
     let dragged_in = drag(canary, title_point(floating), (0, 0), 0, 400);
-    let snapped = settle(
-        2_000,
-        || frame_of(canary, client),
-        |f| f.outer() == expected,
-    );
+    let snapped = settle_outer(canary, client, expected);
     let snapped_bw = snapped.map(|f| f.bw);
     let (cx, cy) = (
         area.0 + area.2 as i32 / 2 + 40,
@@ -395,17 +413,9 @@ pub fn run_s3(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
 
     let expected = quarter(area, Corner::Tl);
     let dragged_in = drag(canary, title_point(floating_frame), (0, 0), 0, 400);
-    let _ = settle(
-        2_000,
-        || frame_of(canary, client),
-        |f| f.outer() == expected,
-    );
-    let snapped = settle(
-        2_000,
-        || frame_extents(canary, client),
-        |e| e[0] == 0 && e[1] == 0 && e[3] == 0,
-    );
-    let snapped_ok = snapped.is_some_and(|e| e[0] == 0 && e[1] == 0 && e[3] == 0);
+    let _ = settle_outer(canary, client, expected);
+    let snapped = settle(2_000, || frame_extents(canary, client), no_edge_extents);
+    let snapped_ok = snapped.as_ref().is_some_and(no_edge_extents);
 
     let snapped_frame = frame_of(canary, client);
     let cx = (area.0 + area.2 as i32 / 2 + 40) as i16;
@@ -418,32 +428,15 @@ pub fn run_s3(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         canary,
         client,
         "_NET_WM_STATE",
-        [
-            1,
-            canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0),
-            canary.intern("_NET_WM_STATE_MAXIMIZED_VERT").unwrap_or(0),
-            1,
-            0,
-        ],
+        maximize_msg(canary, 1),
     );
-    let maximized = settle(
-        2_000,
-        || frame_extents(canary, client),
-        |e| e[0] == 0 && e[1] == 0 && e[3] == 0,
-    );
-    let maximized_ok =
-        maximized_sent && maximized.is_some_and(|e| e[0] == 0 && e[1] == 0 && e[3] == 0);
+    let maximized = settle(2_000, || frame_extents(canary, client), no_edge_extents);
+    let maximized_ok = maximized_sent && maximized.as_ref().is_some_and(no_edge_extents);
     let unmaximized_sent = send_root_message(
         canary,
         client,
         "_NET_WM_STATE",
-        [
-            0,
-            canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0),
-            canary.intern("_NET_WM_STATE_MAXIMIZED_VERT").unwrap_or(0),
-            1,
-            0,
-        ],
+        maximize_msg(canary, 0),
     );
     let restored_max = settle(2_000, || frame_extents(canary, client), |e| *e == floating);
     let max_restored = unmaximized_sent && restored_max == Some(floating);

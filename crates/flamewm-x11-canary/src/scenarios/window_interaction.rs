@@ -89,7 +89,7 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             ));
         }
     };
-    let Some(surface) = input_surface(canary, &before) else {
+    let Some(_surface) = input_surface(canary, &before) else {
         return diagnostic(false, format!(
             "observed=false target {} frame not ready path=real-pointer",
             target.id

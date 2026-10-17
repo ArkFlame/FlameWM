@@ -171,13 +171,7 @@ impl Canary {
 
     pub(crate) fn text_prop(&self, window: Window, names: &[&str]) -> String {
         for name in names {
-            let atom = self
-                .conn
-                .intern_atom(false, name.as_bytes())
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .map(|r| r.atom);
-            if let Some(atom) = atom {
+            if let Some(atom) = self.intern(name) {
                 let bytes = self.prop_bytes(window, atom);
                 if !bytes.is_empty() {
                     // WM_CLASS is NUL-separated instance\0class\0; use class part.
