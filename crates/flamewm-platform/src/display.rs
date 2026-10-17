@@ -76,20 +76,14 @@ impl DisplayCoordinator {
                 "invalid display transaction",
             ));
         }
-        self.pending = Some(PendingDisplayChange {
+        Ok(self.pending.insert(PendingDisplayChange {
             transaction,
             output,
             mode,
             topology_generation,
             started_ms: now_ms,
             deadline_ms: now_ms.saturating_add(DISPLAY_CONFIRM_TIMEOUT_MS),
-        });
-        self.pending.as_ref().ok_or_else(|| {
-            FlameError::new(
-                ErrorCode::InternalFailure,
-                "failed to install display transaction",
-            )
-        })
+        }))
     }
 
     pub fn keep(&mut self, transaction: TransactionId) -> FlameResult<DisplayDecision> {
@@ -104,11 +98,7 @@ impl DisplayCoordinator {
 
     #[must_use]
     pub fn tick(&mut self, now_ms: u64) -> Option<DisplayDecision> {
-        let expired = self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| now_ms >= pending.deadline_ms);
-        if !expired {
+        if !self.is_expired(now_ms) {
             return None;
         }
         self.pending
@@ -118,11 +108,7 @@ impl DisplayCoordinator {
 
     #[must_use]
     pub fn topology_changed(&mut self, generation: u64) -> Option<DisplayDecision> {
-        let stale = self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| generation > pending.topology_generation.saturating_add(1));
-        if !stale {
+        if !self.topology_is_stale(generation) {
             return None;
         }
         self.pending
@@ -171,9 +157,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mode_apply_generation_increment_is_not_hotplug() {
-        let mut coordinator = DisplayCoordinator::default();
+    fn begin_hdmi_mode_change(coordinator: &mut DisplayCoordinator) {
         coordinator
             .begin(
                 TransactionId(7),
@@ -183,21 +167,19 @@ mod tests {
                 0,
             )
             .expect("valid transaction");
+    }
+
+    #[test]
+    fn mode_apply_generation_increment_is_not_hotplug() {
+        let mut coordinator = DisplayCoordinator::default();
+        begin_hdmi_mode_change(&mut coordinator);
         assert_eq!(coordinator.topology_changed(9), None);
     }
 
     #[test]
     fn external_topology_jump_forces_revert() {
         let mut coordinator = DisplayCoordinator::default();
-        coordinator
-            .begin(
-                TransactionId(7),
-                OutputId::new("edid:HDMI-1"),
-                ModeId(9),
-                8,
-                0,
-            )
-            .expect("valid transaction");
+        begin_hdmi_mode_change(&mut coordinator);
         assert_eq!(
             coordinator.topology_changed(10),
             Some(DisplayDecision::Revert(TransactionId(7)))
