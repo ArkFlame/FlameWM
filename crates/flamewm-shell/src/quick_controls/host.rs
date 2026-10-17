@@ -25,7 +25,7 @@ use flamewm_shell_core::weather::WeatherFeed;
 use crate::projection::project_weather_popup;
 use crate::weather_host::{spawn_location_search, LocationSearch, SearchStatus};
 use flamewm_ui_x11::{
-    decode_document, ActionPhase, PointerButton, SlideConfig, SurfaceConfig, SurfaceHandle,
+    decode_document, ActionPhase, SlideConfig, SurfaceConfig, SurfaceHandle,
     SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
@@ -176,6 +176,30 @@ pub struct QuickControlSnapshot {
 }
 
 impl QuickControlSnapshot {
+    /// Every field at its default around `system`.
+    pub fn new(system: flamewm_api::system::SystemSnapshot) -> Self {
+        Self {
+            system,
+            audio_tab: AudioTab::default(),
+            audio_settings: AudioSettings::default(),
+            audio_drag_slot: None,
+            audio_scroll_offset: 0,
+            network_query: NetworkQuery::default(),
+            network_scroll_offset: 0,
+            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
+            weather: WeatherFeed::default(),
+            weather_search: LocationSearch::default(),
+            network_secret_masked_len: 0,
+            network_secret: String::new(),
+            network_secret_request: None,
+            network_secret_focused: false,
+            network_filter_focused: false,
+            network_secret_error: false,
+            network_secret_submit_id: None,
+            settings: SettingsSnapshot::new(0),
+        }
+    }
+
     /// Replaces the popup's weather view. A changed location or enabled flag ends the picker session.
     pub fn apply_weather_feed(&mut self, feed: WeatherFeed) {
         if feed.settings.location != self.weather.settings.location
@@ -188,26 +212,7 @@ impl QuickControlSnapshot {
 
     pub fn load(client: &ControlClient) -> Result<Self, HostError> {
         match client.call(&ControlRequest::GetSystem) {
-            Ok(flamewm_control_core::ControlResponse::System(system)) => Ok(Self {
-                system,
-                audio_tab: AudioTab::default(),
-                audio_settings: AudioSettings::default(),
-                audio_drag_slot: None,
-                audio_scroll_offset: 0,
-                network_query: NetworkQuery::default(),
-                network_scroll_offset: 0,
-                calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
-                weather: WeatherFeed::default(),
-                weather_search: LocationSearch::default(),
-                network_secret_masked_len: 0,
-                network_secret: String::new(),
-                network_secret_request: None,
-                network_secret_focused: false,
-                network_filter_focused: false,
-                network_secret_error: false,
-                network_secret_submit_id: None,
-                settings: SettingsSnapshot::new(0),
-            }),
+            Ok(flamewm_control_core::ControlResponse::System(system)) => Ok(Self::new(system)),
             Ok(response) => Err(HostError::Control(format!(
                 "GetSystem returned {response:?}"
             ))),
@@ -229,14 +234,10 @@ impl QuickControlSnapshot {
     /// Stores one settings snapshot: presentation for the shared menu background and the
     /// audio tab/settings projection.
     pub fn store_settings(&mut self, snapshot: SettingsSnapshot) {
-        self.settings = snapshot.clone();
-        apply_settings(snapshot, &mut self.audio_settings);
-    }
-}
-
-fn apply_settings(snapshot: SettingsSnapshot, settings: &mut AudioSettings) {
-    if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY) {
-        settings.raise_maximum = *raise;
+        if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY) {
+            self.audio_settings.raise_maximum = *raise;
+        }
+        self.settings = snapshot;
     }
 }
 
@@ -261,13 +262,11 @@ struct HostState {
 /// duplicate path (try_clone) keeps fd 0 stdio-owned while the clone
 /// gets its own description flags via set_nonblocking.
 fn stdin_nonblocking_dup() -> Result<std::fs::File, HostError> {
-    use std::os::unix::io::AsFd;
     let file = std::fs::File::open("/dev/stdin").map_err(HostError::Io)?;
     let flags = rustix::fs::fcntl_getfl(&file)
         .map_err(|error| HostError::Io(io::Error::from_raw_os_error(error.raw_os_error())))?;
     rustix::fs::fcntl_setfl(&file, flags | rustix::fs::OFlags::NONBLOCK)
         .map_err(|error| HostError::Io(io::Error::from_raw_os_error(error.raw_os_error())))?;
-    let _ = file.as_fd();
     Ok(file)
 }
 
@@ -498,7 +497,6 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
         )
         .map_err(|error| HostError::Control(format!("register profile timer: {error}")))?;
     // Keep the nonblocking stdin description alive until the loop returns.
-    let _stdin_keepalive = Arc::clone(&stdin_holder);
     let _stdin_file = stdin_holder;
 
     let event_state = std::rc::Rc::clone(&state);
@@ -1105,13 +1103,6 @@ pub fn route_helper_event(
 ) -> bool {
     sync_network_secret(snapshot);
     let action = event.action.action.as_str();
-    if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
-        let input = event.action.text.as_deref().unwrap_or_default();
-        if input == "\u{1b}" {
-            surfaces.close(runtime);
-            return true;
-        }
-    }
     if action == "network.secret.focus" {
         snapshot.network_secret_focused = true;
         snapshot.network_filter_focused = false;
@@ -1129,6 +1120,10 @@ pub fn route_helper_event(
     }
     if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
         if let Some(text) = event.action.text.as_deref() {
+            if text == "\u{1b}" {
+                surfaces.close(runtime);
+                return true;
+            }
             if snapshot.weather_search.focused {
                 match text {
                     "\u{8}" | "\u{7f}" => {
@@ -1288,7 +1283,6 @@ pub fn route_helper_event(
         if let Some(request) = helper_control_request(action, snapshot) {
             crate::control_actions::enqueue_action(dispatcher, request);
         }
-        let _ = PointerButton::from_raw_x(event.action.button);
     }
     true
 }
@@ -1527,9 +1521,6 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
             system, &path, false, false,
         );
     }
-    if action == "audio.raise.toggle" {
-        return None;
-    }
     let row = if matches!(action, "volume.mute" | "volume.down" | "volume.up") {
         crate::taskbar::status::audio::default_endpoint_row(&system.audio)
     } else if let Some((kind_slot, _)) = action
@@ -1724,26 +1715,7 @@ mod tests {
 
     /// Every field at its default, so fixtures only spell out what they change.
     pub(super) fn blank_snapshot() -> QuickControlSnapshot {
-        QuickControlSnapshot {
-            system: flamewm_api::system::SystemSnapshot::default(),
-            audio_tab: AudioTab::default(),
-            audio_settings: AudioSettings::default(),
-            audio_drag_slot: None,
-            audio_scroll_offset: 0,
-            network_query: NetworkQuery::default(),
-            network_scroll_offset: 0,
-            calendar: crate::calendar::CalendarState::for_today(crate::projection::local_date()),
-            weather: WeatherFeed::default(),
-            weather_search: LocationSearch::default(),
-            network_secret_masked_len: 0,
-            network_secret: String::new(),
-            network_secret_request: None,
-            network_secret_focused: false,
-            network_filter_focused: false,
-            network_secret_error: false,
-            network_secret_submit_id: None,
-            settings: SettingsSnapshot::new(0),
-        }
+        QuickControlSnapshot::new(flamewm_api::system::SystemSnapshot::default())
     }
 
     #[test]
