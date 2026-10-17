@@ -16,6 +16,15 @@ fn fixture_node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> Com
     }
 }
 
+fn image_asset(source: &str, width: u32, height: u32, pixels: Vec<u8>) -> ImageAsset {
+    ImageAsset {
+        source: source.to_string(),
+        width,
+        height,
+        pixels,
+    }
+}
+
 fn fixture_document(nodes: Vec<CompiledNode>, assets: Vec<ImageAsset>) -> RuntimeDocument {
     RuntimeDocument::new(CompiledDocument {
         source_fingerprint: 0,
@@ -186,18 +195,12 @@ mod image_replace_tests {
     use super::*;
 
     fn image_doc() -> RuntimeDocument {
-        let asset = ImageAsset {
-            source: "old".to_string(),
-            width: 2,
-            height: 1,
-            pixels: vec![10, 20, 30, 255, 40, 50, 60, 255],
-        };
         fixture_document(
             vec![
                 fixture_node(NodeKind::Image, "icon", "", Some(0)),
                 fixture_node(NodeKind::Text, "label", "hi", None),
             ],
-            vec![asset],
+            vec![image_asset("old", 2, 1, vec![10, 20, 30, 255, 40, 50, 60, 255])],
         )
     }
 
@@ -280,18 +283,12 @@ mod image_replace_tests {
     }
 
     fn shared_asset_doc() -> RuntimeDocument {
-        let asset = ImageAsset {
-            source: "shared".to_string(),
-            width: 1,
-            height: 1,
-            pixels: vec![9, 9, 9, 255],
-        };
         fixture_document(
             vec![
                 fixture_node(NodeKind::Image, "a", "", Some(0)),
                 fixture_node(NodeKind::Image, "b", "", Some(0)),
             ],
-            vec![asset],
+            vec![image_asset("shared", 1, 1, vec![9, 9, 9, 255])],
         )
     }
 
@@ -332,12 +329,13 @@ mod image_replace_tests {
         let layout2 =
             crate::layout::LayoutEngine::compute(&doc, 50.0, 50.0, InteractionState::default());
         let after = crate::paint::build_paint_commands(&doc, &layout2, InteractionState::default());
-        let rev = |cmds: &Vec<crate::paint::PaintCommand>| match cmds.iter().find_map(|c| match c {
-            crate::paint::PaintCommand::Image { revision, .. } => Some(*revision),
-            _ => None,
-        }) {
-            Some(v) => v,
-            None => panic!("expected image command"),
+        let rev = |cmds: &Vec<crate::paint::PaintCommand>| {
+            cmds.iter()
+                .find_map(|c| match c {
+                    crate::paint::PaintCommand::Image { revision, .. } => Some(*revision),
+                    _ => None,
+                })
+                .expect("expected image command")
         };
         assert_eq!(rev(&before), 0);
         assert_eq!(rev(&after), 1);
@@ -362,12 +360,7 @@ mod idempotent_mutation_tests {
                 fixture_node(NodeKind::Text, "", "12:00", None),
                 fixture_node(NodeKind::Image, "icon", "", Some(0)),
             ],
-            vec![ImageAsset {
-                source: "old".to_string(),
-                width: 1,
-                height: 1,
-                pixels: vec![1, 2, 3, 255],
-            }],
+            vec![image_asset("old", 1, 1, vec![1, 2, 3, 255])],
         )
     }
 
