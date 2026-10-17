@@ -40,15 +40,12 @@ impl IconDir {
     #[must_use]
     pub fn distance(&self, requested: u32) -> u64 {
         let req = u64::from(requested);
+        let nominal = u64::from(self.size) * u64::from(self.scale.max(1));
         match self.dir_type {
-            IconDirType::Fixed => {
-                let nominal = u64::from(self.size) * u64::from(self.scale.max(1));
-                req.abs_diff(nominal)
-            }
+            IconDirType::Fixed => req.abs_diff(nominal),
             IconDirType::Scalable => {
                 let (mut lo, mut hi) = (u64::from(self.min_size), u64::from(self.max_size));
                 if lo == 0 && hi == 0 {
-                    let nominal = u64::from(self.size) * u64::from(self.scale.max(1));
                     return req.abs_diff(nominal);
                 }
                 if lo > hi {
@@ -63,7 +60,6 @@ impl IconDir {
                 }
             }
             IconDirType::Threshold => {
-                let nominal = u64::from(self.size) * u64::from(self.scale.max(1));
                 let t = u64::from(self.threshold);
                 if req.abs_diff(nominal) <= t {
                     0
@@ -240,39 +236,29 @@ impl IconThemeIndex {
     }
 }
 
+/// Numeric `key` from an index.theme section, or `default` when absent or unparsable.
+fn dir_num<T: std::str::FromStr>(section: &HashMap<String, String>, key: &str, default: T) -> T {
+    section
+        .get(key)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
 fn parse_dir(section: &HashMap<String, String>) -> IconDir {
-    let size = section
-        .get("Size")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let scale = section
-        .get("Scale")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
+    let size = dir_num(section, "Size", 0);
+    let scale: u32 = dir_num(section, "Scale", 1);
     let dir_type = match section.get("Type").map(String::as_str).unwrap_or("") {
         "Fixed" => IconDirType::Fixed,
         "Scalable" => IconDirType::Scalable,
         _ => IconDirType::Threshold,
     };
-    let threshold = section
-        .get("Threshold")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2);
-    let min_size = section
-        .get("MinSize")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(size);
-    let max_size = section
-        .get("MaxSize")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(size);
     IconDir {
         size,
         scale: scale.max(1),
         dir_type,
-        min_size,
-        max_size,
-        threshold,
+        min_size: dir_num(section, "MinSize", size),
+        max_size: dir_num(section, "MaxSize", size),
+        threshold: dir_num(section, "Threshold", 2),
     }
 }
 
@@ -371,22 +357,12 @@ fn child_filter(paths: &[PathBuf], explicit: Option<&str>) -> Vec<PathBuf> {
 }
 
 fn directory_distance(index: &IconLookupIndex, file: &IndexedIconFile, physical: u32) -> u64 {
-    let theme = match index.ordered_themes.get(file.theme_rank as usize) {
-        Some(t) => t,
-        None => return u64::MAX / 2,
-    };
-    let dirs = match index.indexes.get(theme).and_then(|o| o.as_ref()) {
-        Some(d) => d,
-        None => return u64::MAX / 2,
-    };
-    let dir_name = match dirs.directories.get(file.directory_rank as usize) {
-        Some(d) => d,
-        None => return u64::MAX / 2,
-    };
-    dirs.dirs
-        .get(dir_name)
-        .map(|e| e.distance(physical))
-        .unwrap_or(u64::MAX / 2)
+    let dirs = index
+        .ordered_themes
+        .get(file.theme_rank as usize)
+        .and_then(|theme| index.indexes.get(theme)?.as_ref());
+    dirs.and_then(|d| d.dirs.get(d.directories.get(file.directory_rank as usize)?))
+        .map_or(u64::MAX / 2, |e| e.distance(physical))
 }
 
 /// Depth below each search root that is watched for new icons.
@@ -463,16 +439,10 @@ fn log_watch_cap_once() {
 }
 
 fn current_watch_mtime(roots: &[PathBuf], data_dirs: &[PathBuf]) -> Option<std::time::SystemTime> {
-    let mut latest: Option<std::time::SystemTime> = None;
-    for top in &watch_dirs(roots, data_dirs) {
-        let mtime = fs::metadata(top).and_then(|m| m.modified()).ok();
-        latest = match (latest, mtime) {
-            (None, m) => m,
-            (Some(a), None) => Some(a),
-            (Some(a), Some(b)) => Some(a.max(b)),
-        };
-    }
-    latest
+    watch_dirs(roots, data_dirs)
+        .iter()
+        .filter_map(|top| fs::metadata(top).and_then(|m| m.modified()).ok())
+        .max()
 }
 
 /// Value of `key` inside `[section]` of an INI-style text (KDE `kdeglobals`,
@@ -534,10 +504,10 @@ fn expand(
     chain: &mut Vec<String>,
     visiting: &mut Vec<String>,
 ) {
-    if name.is_empty() || chain.iter().any(|item| item == name) {
-        return;
-    }
-    if visiting.iter().any(|item| item == name) {
+    if name.is_empty()
+        || chain.iter().any(|item| item == name)
+        || visiting.iter().any(|item| item == name)
+    {
         return;
     }
     visiting.push(name.to_owned());
@@ -580,10 +550,11 @@ fn theme_dir(root: &Path, theme: &str) -> Option<PathBuf> {
 #[must_use]
 pub fn search_roots(data_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        if !home.as_os_str().is_empty() {
-            roots.push(home.join(".icons"));
-        }
+    if let Some(home) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| !home.as_os_str().is_empty())
+    {
+        roots.push(home.join(".icons"));
     }
     for data_dir in data_dirs {
         roots.push(data_dir.join("icons"));
@@ -978,25 +949,15 @@ impl IconLookupIndex {
             }
         }
         let mut pixmaps: HashMap<String, Vec<PathBuf>> = HashMap::new();
-        let mut pixmap_dirs: Vec<PathBuf> = Vec::new();
-        for root in &roots {
-            if let Some(parent) = root.parent() {
-                let dir = parent.join("pixmaps");
-                if !pixmap_dirs.contains(&dir) {
-                    pixmap_dirs.push(dir);
-                }
-            }
-        }
-        for data_dir in data_dirs {
-            let dir = data_dir.join("pixmaps");
-            if !pixmap_dirs.contains(&dir) {
-                pixmap_dirs.push(dir);
-            }
-        }
-        let usr = Path::new("/usr/share/pixmaps");
-        if !pixmap_dirs.contains(&usr.to_path_buf()) {
-            pixmap_dirs.push(usr.to_path_buf());
-        }
+        let pixmap_dirs = unique_paths(
+            roots
+                .iter()
+                .filter_map(|root| root.parent())
+                .map(|parent| parent.join("pixmaps"))
+                .chain(data_dirs.iter().map(|data_dir| data_dir.join("pixmaps")))
+                .chain(std::iter::once(PathBuf::from("/usr/share/pixmaps")))
+                .collect(),
+        );
         for dir in &pixmap_dirs {
             let Ok(read) = fs::read_dir(dir) else {
                 continue;
@@ -1165,12 +1126,7 @@ impl IconLookupIndex {
 
     fn memo_store(&self, name: &str, physical: u32, paths: Vec<PathBuf>) {
         if let Ok(mut memo) = self.memo.lock() {
-            if memo.len() >= self.memo_cap && !memo.contains_key(&(name.to_owned(), physical)) {
-                if let Some(first) = memo.keys().next().cloned() {
-                    memo.remove(&first);
-                }
-            }
-            memo.insert((name.to_owned(), physical), paths);
+            bound_insert(&mut memo, (name.to_owned(), physical), paths, self.memo_cap);
         }
     }
 
