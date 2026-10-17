@@ -6,8 +6,7 @@ pub use flamewm_image_core::wallpaper::{compose, parse};
 mod tests {
     use super::*;
     use flamewm_api::background::WallpaperFit;
-    use flamewm_image_core::RgbaImage;
-    use flamewm_image_core::wallpaper::BACKGROUND;
+    use flamewm_image_core::{RgbaImage, wallpaper::BACKGROUND};
 
     /// 4x2 image: red encodes the column (0, 60, 120, 180), green encodes the row (0, 100).
     fn columns_image() -> RgbaImage {
