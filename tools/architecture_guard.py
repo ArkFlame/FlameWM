@@ -1000,13 +1000,6 @@ def j12h_violations(root):
     def live(path):
         return code(_owner_text(root, path))
 
-    def desktop_css():
-        for name in ("ui/desktop/desktop.css", "ui/shell/flamewm.css"):
-            path = root / name
-            if path.is_file():
-                return path.read_text(encoding="utf-8")
-        raise SystemExit("ERROR architecture guard: expected owner file missing: ui/desktop/desktop.css or ui/shell/flamewm.css")
-
     paint_core = live("crates/flamewm-render-core/src/paint.rs")
     start_menu = live("crates/flamewm-shell-core/src/start_menu.rs")
     proj = live("crates/flamewm-shell/src/projection.rs")
@@ -1062,8 +1055,11 @@ def j12h_violations(root):
     if "ServiceAvailability::Available" not in network:
         found.add(("crates/flamewm-shell/src/taskbar/status/network.rs", "j12h-g07-no-live-authority"))
     # J12H-G08: context border 0.
-    if "border-width:0" not in desktop_css().replace(" ", ""):
-        found.add(("ui/desktop/desktop.css", "j12h-g08-context-border-zero"))
+    # Menu rows/buttons are owned by the shared sheet (ui/shared/menu.css),
+    # which the desktop build links with desktop.css; the zero border lives there.
+    menu_css = (root / "ui/shared/menu.css").read_text(encoding="utf-8")
+    if "border-width:0" not in menu_css.replace(" ", ""):
+        found.add(("ui/shared/menu.css", "j12h-g08-context-border-zero"))
     # J12H-G09: NOREPLACE rename.
     if "RenameFlags::NOREPLACE" not in file_actions:
         found.add(("crates/flamewm-desktop-core/src/file_actions.rs", "j12h-g09-noreplace-rename"))

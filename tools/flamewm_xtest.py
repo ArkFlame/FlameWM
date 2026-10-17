@@ -224,6 +224,16 @@ def drag_events(backend, start, end, steps: int, hold_ms: int, release: bool = T
             raise RuntimeError("XTEST drag release rejected")
 
 
+def rclick_events(backend, x: int, y: int) -> None:
+    """Move to X,Y, then press and release button 3 (right button) once. A rejected event aborts."""
+    if not backend.fake_motion(x, y):
+        raise RuntimeError("XTEST right-click motion rejected")
+    if not backend.fake_button(3, True):
+        raise RuntimeError("XTEST right-click press rejected")
+    if not backend.fake_button(3, False):
+        raise RuntimeError("XTEST right-click release rejected")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--display", required=True, help="nested display in :97..:119 only")
@@ -231,6 +241,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--owner-marker", required=True, help="private marker written by owning Xephyr harness")
     parser.add_argument("--click", metavar="X,Y", help="move pointer and click button 1 at coordinates")
     parser.add_argument("--move", metavar="X,Y", help="move pointer without a button event")
+    parser.add_argument("--rclick", metavar="X,Y", help="move pointer and click button 3 (right button) at coordinates")
     parser.add_argument("--key", metavar="KEYSYM", help="press and release an X keysym")
     parser.add_argument("--key-down", metavar="KEYSYM", help="press KEYSYM and leave it down until --key-up")
     parser.add_argument("--key-up", metavar="KEYSYM", help="release a KEYSYM previously left down by --key-down")
@@ -254,11 +265,11 @@ def parse_args() -> argparse.Namespace:
         parser.error("--display must be a nested display in :97..:119")
     if not re.fullmatch(r"[0-9a-f]{64}", args.owner_token):
         parser.error("--owner-token must be a 256-bit hexadecimal token")
-    input_actions = (args.click or args.move or args.key or args.chord or args.key_down or args.key_up or args.hold
-                     or args.wheel or args.drag or args.release)
+    input_actions = (args.click or args.rclick or args.move or args.key or args.chord or args.key_down or args.key_up
+                     or args.hold or args.wheel or args.drag or args.release)
     modifier_actions = args.query_modifiers or args.release_modifiers
     if not (input_actions or modifier_actions):
-        parser.error("request at least one of --click, --move, --key, --chord, --key-down, --key-up, --hold, "
+        parser.error("request at least one of --click, --rclick, --move, --key, --chord, --key-down, --key-up, --hold, "
                      "--wheel, --drag, --release, --query-modifiers or --release-modifiers")
     if modifier_actions and input_actions:
         parser.error("--query-modifiers and --release-modifiers cannot be combined with input actions")
@@ -284,6 +295,11 @@ def parse_args() -> argparse.Namespace:
         if not match:
             parser.error("--click must be X,Y non-negative integers")
         args.click_xy = tuple(map(int, match.groups()))
+    if args.rclick:
+        match = re.fullmatch(r"(\d+),(\d+)", args.rclick)
+        if not match:
+            parser.error("--rclick must be X,Y non-negative integers")
+        args.rclick_xy = tuple(map(int, match.groups()))
     if args.move:
         match = re.fullmatch(r"(\d+),(\d+)", args.move)
         if not match:
@@ -339,6 +355,8 @@ def main() -> int:
             x, y = args.move_xy
             if not xtst.XTestFakeMotionEvent(display, -1, x, y, 0):
                 raise RuntimeError("XTEST pointer motion was rejected")
+        if args.rclick:
+            rclick_events(X11Backend(x11, xtst, display), *args.rclick_xy)
         if args.key:
             symbol = x11.XStringToKeysym(args.key.encode())
             code = x11.XKeysymToKeycode(display, symbol) if symbol else 0
@@ -392,6 +410,7 @@ def main() -> int:
         x11.XSync(display, 0)
         print(
             f"INPUT_SENT_UNVERIFIED: display={args.display} click={args.click or 'none'} "
+            f"rclick={args.rclick or 'none'} "
             f"key={args.key or 'none'} chord={args.chord or 'none'} "
             f"key_down={args.key_down or 'none'} key_up={args.key_up or 'none'} hold={args.hold or 'none'} "
             f"wheel={args.wheel or 'none'} drag={args.drag or 'none'}"
