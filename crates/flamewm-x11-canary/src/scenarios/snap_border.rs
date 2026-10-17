@@ -359,10 +359,7 @@ pub fn run_s2(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     let dragged_in = drag(canary, title_point(floating), (0, 0), 0, 400);
     let snapped = settle_outer(canary, client, expected);
     let snapped_bw = snapped.map(|f| f.bw);
-    let (cx, cy) = (
-        area.0 + area.2 as i32 / 2 + 40,
-        area.1 + area.3 as i32 / 2 + 40,
-    );
+    let (cx, cy) = (area.0 + area.2 as i32 / 2 + 40, area.1 + area.3 as i32 / 2 + 40);
     let dragged_out =
         snapped.is_some_and(|s| drag(canary, title_point(s), (cx as i16, cy as i16), 0, 400));
     let restored = settle(2_000, || frame_of(canary, client), |f| f.bw == 1);
@@ -456,8 +453,8 @@ pub fn run_s4(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
         .conn
         .configure_window(client, &ConfigureWindowAux::new().width(100).height(50));
     let _ = canary.conn.flush();
-    let size_configure = settle(1_000, || client_size(canary, client), |s| *s == FIXED);
-    let size_configure = size_configure.unwrap_or((0, 0));
+    let size_configure =
+        settle(1_000, || client_size(canary, client), |s| *s == FIXED).unwrap_or((0, 0));
 
     let frame0 = frame_of(canary, client).unwrap_or(frame0);
     let from = title_point(frame0);
