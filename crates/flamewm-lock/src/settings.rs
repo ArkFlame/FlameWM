@@ -165,12 +165,8 @@ fn percent_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str,
         .map_or(default, |value| value.clamp(0, i64::from(max)) as u8)
 }
 
-/// Trimmed `key` value when it is an absolute path; relative or missing values give `None`.
 fn absolute_path<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Option<PathBuf> {
-    lookup(key)
-        .map(str::trim)
-        .filter(|path| path.starts_with('/'))
-        .map(PathBuf::from)
+    lookup(key).map(str::trim).filter(|p| p.starts_with('/')).map(PathBuf::from)
 }
 
 fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConfig {
