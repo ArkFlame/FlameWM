@@ -133,47 +133,6 @@ pub fn intent_for_click(
     })
 }
 
-/// Map a task entry action to a typed operation. Window state stays platform-owned.
-#[must_use]
-pub fn intent_for_action(
-    id: &TaskEntryId,
-    action: TaskAction,
-    panels: &PanelsSnapshot,
-) -> Option<TaskIntent> {
-    let entry = panels.tasks.iter().find(|entry| &entry.id == id)?;
-    match action {
-        TaskAction::Activate => entry_window(entry).map(TaskIntent::Activate),
-        TaskAction::Minimize => entry_window(entry).map(TaskIntent::Minimize),
-        TaskAction::Restore => entry_window(entry).map(TaskIntent::Restore),
-        TaskAction::Close => None,
-        TaskAction::Pin => (!entry.id.is_pinned()).then(|| TaskIntent::Pin {
-            app: entry.app_id.clone(),
-            expected_revision: panels.revision,
-        }),
-        TaskAction::Unpin => entry.id.is_pinned().then(|| TaskIntent::Unpin {
-            app: entry.app_id.clone(),
-            expected_revision: panels.revision,
-        }),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskAction {
-    Activate,
-    Minimize,
-    Restore,
-    Close,
-    Pin,
-    Unpin,
-}
-
-fn entry_window(entry: &flamewm_api::panels::TaskEntry) -> Option<WindowRef> {
-    match entry.kind {
-        flamewm_api::panels::TaskEntryKind::PinnedSlot { window } => window,
-        flamewm_api::panels::TaskEntryKind::Window { window } => Some(window),
-    }
-}
-
 #[must_use]
 pub fn begin_reorder(panels: &PanelsSnapshot, source: usize) -> Option<TaskReorderSession> {
     let mut strip = TaskStrip::default();
@@ -216,20 +175,6 @@ mod tests {
             }],
             pinned_apps: Vec::new(),
         }
-    }
-
-    #[test]
-    fn action_maps_to_control_request_with_snapshot_revision() {
-        let snapshot = panels();
-        let intent = intent_for_action(&snapshot.tasks[0].id, TaskAction::Pin, &snapshot)
-            .expect("unpinned task can be pinned");
-        assert_eq!(
-            intent.into_control_request(),
-            ControlRequest::PinApp {
-                app: DesktopAppId::new("terminal"),
-                expected_revision: 7,
-            }
-        );
     }
 
     #[test]
