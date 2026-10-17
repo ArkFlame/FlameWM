@@ -185,18 +185,12 @@ fn wait_workspace(canary: &crate::Canary, target: u32, timeout_ms: u64) -> bool 
 }
 
 fn restore_workspace(canary: &crate::Canary, original: u32) -> bool {
-    let restored = if original <= 1 {
-        real_workspace_click(canary, original) && wait_workspace(canary, original, 500)
+    let switched = if original <= 1 {
+        real_workspace_click(canary, original)
     } else {
-        ewmh_request(
-            canary,
-            canary.root,
-            "_NET_CURRENT_DESKTOP",
-            original,
-            CURRENT_TIME,
-        ) && wait_workspace(canary, original, 500)
+        ewmh_request(canary, canary.root, "_NET_CURRENT_DESKTOP", original, CURRENT_TIME)
     };
-    restored && current_workspace(canary) == Some(original)
+    switched && wait_workspace(canary, original, 500) && current_workspace(canary) == Some(original)
 }
 
 /// T21/T22: real pager clicks must converge the sticky A/B projection without
@@ -382,11 +376,11 @@ fn has_state(canary: &crate::Canary, wid: u32, state: &str) -> bool {
         return false;
     }
     let bytes = canary.prop_bytes(wid, canary.intern("_NET_WM_STATE").unwrap_or(needle));
+    let horz = (state == "_NET_WM_STATE_MAXIMIZED_VERT")
+        .then(|| canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0));
     bytes.chunks_exact(4).any(|c| {
-        u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) == needle
-            || (state == "_NET_WM_STATE_MAXIMIZED_VERT"
-                && u32::from_ne_bytes([c[0], c[1], c[2], c[3]])
-                    == canary.intern("_NET_WM_STATE_MAXIMIZED_HORZ").unwrap_or(0))
+        let atom = u32::from_ne_bytes([c[0], c[1], c[2], c[3]]);
+        atom == needle || Some(atom) == horz
     })
 }
 
@@ -470,7 +464,7 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     std::thread::sleep(std::time::Duration::from_millis(150));
-    let pass = clicked && (max_sent && maxed) && snapped && (fs_sent && fs || fs);
+    let pass = clicked && max_sent && maxed && snapped && fs;
     (
         pass,
         format!(
