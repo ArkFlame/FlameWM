@@ -746,15 +746,11 @@ fn document_space_extent(document: &RuntimeDocument) -> (f32, f32) {
         document.document.root,
         flamewm_render_core::InteractionState::default(),
     );
-    let width = match style.width {
+    let px = |length: flamewm_render_core::Length, fallback: f32| match length {
         flamewm_render_core::Length::Px(value) => value,
-        _ => 1350.0,
+        _ => fallback,
     };
-    let height = match style.height {
-        flamewm_render_core::Length::Px(value) => value,
-        _ => 641.0,
-    };
-    (width.max(1.0), height.max(1.0))
+    (px(style.width, 1350.0).max(1.0), px(style.height, 641.0).max(1.0))
 }
 
 /// Layout at the document-space extent, shared by the node-rect and intrinsic-size queries.
@@ -769,11 +765,7 @@ fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResu
 }
 
 fn effective_output_scale(scale: f32) -> f32 {
-    if scale.is_finite() && (0.5..=4.0).contains(&scale) {
-        scale
-    } else {
-        1.0
-    }
+    (scale.is_finite() && (0.5..=4.0).contains(&scale)).then_some(scale).unwrap_or(1.0)
 }
 
 #[cfg(test)]
