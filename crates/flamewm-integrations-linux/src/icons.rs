@@ -406,9 +406,7 @@ impl IconResolver {
             theme_caches: ThemeLookupCaches::default(),
             raster: RasterCache {
                 budget_bytes: 512 * 1024,
-                used_bytes: 0,
-                entries: HashMap::new(),
-                order: std::collections::VecDeque::new(),
+                ..RasterCache::default()
             },
             shared_index,
         }
@@ -674,22 +672,19 @@ impl IconResolver {
         if let Some(result) = self.cache.get(&key) {
             return result.clone();
         }
-        if size.physical == 0 {
-            let result = Err(IconError::InvalidSize {
+        let result = if size.physical == 0 {
+            Err(IconError::InvalidSize {
                 logical: size.logical,
                 physical: size.physical,
-            });
-            self.cache.insert(key, result.clone());
-            self.enforce_request_bound();
-            return result;
-        }
-        let result = resolve(&mut *self);
+            })
+        } else {
+            resolve(&mut *self)
+        };
         // Warm path: seed the bounded raster LRU so the repeat request needs
         // no FS probe or decode even before the request-level entry is hit.
         if let Ok(raster) = &result {
-            let path = PathBuf::from(&raster.source);
             let raster_key = RasterKey {
-                path,
+                path: PathBuf::from(&raster.source),
                 physical: raster.height.max(raster.width),
                 origin: raster.origin,
             };
