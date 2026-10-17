@@ -80,6 +80,12 @@ fn overlay_config(width: u32, height: u32, title: &str) -> SurfaceConfig {
     }
 }
 
+/// Shows and raises `surface`; `what` names it in the error.
+fn show_raised(runtime: &mut SurfaceRuntime, surface: SurfaceHandle, what: &str) -> Result<(), String> {
+    runtime.show(surface).map_err(|error| format!("show {what} surface: {error:?}"))?;
+    runtime.raise(surface).map_err(|error| format!("raise {what} surface: {error:?}"))
+}
+
 /// The lock projection for a preview, built only for the non-Ribbons preview. Ribbons
 /// shows no lock UI, so `project` is never called for it.
 fn preview_lock_ui<T>(ribbons: bool, project: impl FnOnce() -> T) -> Option<T> {
@@ -132,12 +138,7 @@ fn preview_loop(settings: &LockSettings, username: &str, ribbons: bool) -> Resul
             }
         })
         .map_err(|error| format!("theme preview surface: {error:?}"))?;
-    runtime
-        .show(surface)
-        .map_err(|error| format!("show preview surface: {error:?}"))?;
-    runtime
-        .raise(surface)
-        .map_err(|error| format!("raise preview surface: {error:?}"))?;
+    show_raised(&mut runtime, surface, "preview")?;
     let mapped = Instant::now();
 
     // Input is read by polling, so no grab is needed. The timer bounds each wait.
@@ -256,12 +257,7 @@ fn lock_on(
         unlocked: false,
     };
     lock.repaint(runtime);
-    runtime
-        .show(surface)
-        .map_err(|error| format!("show lock surface: {error:?}"))?;
-    runtime
-        .raise(surface)
-        .map_err(|error| format!("raise lock surface: {error:?}"))?;
+    show_raised(runtime, surface, "lock")?;
     // The lock is already visible under its keyboard grab; a pointer grab that is not yet
     // granted is retried every tick, so the lock never drops for it.
     let _ = runtime.grab_pointer(surface);
