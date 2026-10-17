@@ -147,7 +147,6 @@ pub struct RuntimeImageOverride {
 }
 
 #[derive(Clone, Debug)]
-
 pub struct RuntimeDocument {
     pub document: CompiledDocument,
     pub variable_values: Vec<Color>,
@@ -283,11 +282,7 @@ impl RuntimeDocument {
         rgba8: Vec<u8>,
     ) -> Result<(), String> {
         let index = self.require_node(node_id)?;
-        let node = self
-            .document
-            .nodes
-            .get(index as usize)
-            .ok_or_else(|| format!("no node with id '{node_id}'"))?;
+        let node = &self.document.nodes[index as usize];
         if node.kind != NodeKind::Image {
             return Err(format!("node '{node_id}' is not an image node"));
         }
@@ -360,8 +355,7 @@ impl RuntimeDocument {
                 entry.rgba8.as_slice(),
             ));
         }
-        let node = self.document.nodes.get(index as usize)?;
-        let asset_id = node.image?;
+        let asset_id = self.document.nodes.get(index as usize)?.image?;
         let asset = self.document.assets.get(asset_id as usize)?;
         Some((
             Some(asset_id),
