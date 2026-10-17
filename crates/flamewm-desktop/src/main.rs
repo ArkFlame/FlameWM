@@ -941,19 +941,12 @@ fn desktop_surface_rect(root_width: u32, root_height: u32) -> Rect {
 fn resolve_work_area() -> Result<Rect, String> {
     let (width, height) = root_geometry()?;
     let root = Rect::new(0, 0, width as i32, height as i32);
-    match panel_geometries() {
-        Ok(panels) => {
-            let mut area = root;
-            for panel in panels {
-                area = subtract_panel_strip(area, panel);
-            }
-            Ok(area)
-        }
-        Err(error) => {
+    Ok(panel_geometries()
+        .map(|panels| panels.into_iter().fold(root, subtract_panel_strip))
+        .unwrap_or_else(|error| {
             eprintln!("desktop: degraded work area: {error}; using full root geometry");
-            Ok(root)
-        }
-    }
+            root
+        }))
 }
 
 fn panel_geometries() -> Result<Vec<Rect>, String> {
