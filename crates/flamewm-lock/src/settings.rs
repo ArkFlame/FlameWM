@@ -94,10 +94,7 @@ impl LockSettings {
         let background_color = lookup("lockBackgroundColor")
             .and_then(parse_hex_color)
             .unwrap_or(defaults.background_color);
-        let background_image = lookup("lockBackgroundImage")
-            .map(str::trim)
-            .filter(|path| path.starts_with('/'))
-            .map(PathBuf::from);
+        let background_image = absolute_path(&lookup, "lockBackgroundImage");
         // Files written before `lockBackgroundMode` existed derive the mode from the saved values.
         let background_mode = lookup("lockBackgroundMode")
             .and_then(LockBackgroundMode::parse)
@@ -114,10 +111,7 @@ impl LockSettings {
             background_color,
             background_image,
             background_mode,
-            avatar_image: lookup("avatarImage")
-                .map(str::trim)
-                .filter(|path| path.starts_with('/'))
-                .map(PathBuf::from),
+            avatar_image: absolute_path(&lookup, "avatarImage"),
             clock_format: lookup("lockClockFormat")
                 .and_then(ClockFormat::parse)
                 .unwrap_or(defaults.clock_format),
@@ -169,6 +163,14 @@ fn percent_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str,
     lookup(key)
         .and_then(|text| text.trim().parse::<i64>().ok())
         .map_or(default, |value| value.clamp(0, i64::from(max)) as u8)
+}
+
+/// Trimmed `key` value when it is an absolute path; relative or missing values give `None`.
+fn absolute_path<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Option<PathBuf> {
+    lookup(key)
+        .map(str::trim)
+        .filter(|path| path.starts_with('/'))
+        .map(PathBuf::from)
 }
 
 fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConfig {
