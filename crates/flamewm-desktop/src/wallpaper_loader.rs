@@ -524,25 +524,19 @@ mod tests {
     }
 
     fn ppm(path: &Path, color: [u8; 3]) {
-        fs::write(
-            path,
-            [
-                b'P', b'6', b'\n', b'1', b' ', b'1', b'\n', b'2', b'5', b'5', b'\n', color[0],
-                color[1], color[2],
-            ],
-        )
-        .expect("write test PPM");
+        fs::write(path, [b"P6\n1 1\n255\n".as_slice(), &color[..]].concat())
+            .expect("write test PPM");
     }
 
     fn wait_for(loader: &mut WallpaperLoader, generation: u64) -> PollOutcome {
         for _ in 0..5_000 {
             let outcome = loader.poll();
-            if !matches!(outcome, PollOutcome::Idle) {
-                if matches!(outcome, PollOutcome::Applied { generation: value } if value == generation)
-                    || matches!(outcome, PollOutcome::Failed { generation: value } if value == generation)
-                {
-                    return outcome;
-                }
+            if matches!(
+                outcome,
+                PollOutcome::Applied { generation: value } | PollOutcome::Failed { generation: value }
+                    if value == generation
+            ) {
+                return outcome;
             }
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -723,14 +717,7 @@ mod tests {
         // natural image or a square raster; a fit change re-renders the same path.
         // FAILURE MUTATION: skip compose (natural 2x1) or keep the square rasterize; this turns red.
         let path = temp_path("ppm");
-        fs::write(
-            &path,
-            [
-                b'P', b'6', b'\n', b'2', b' ', b'1', b'\n', b'2', b'5', b'5', b'\n', 9, 9, 9, 7, 7,
-                7,
-            ],
-        )
-        .expect("write 2x1 PPM");
+        fs::write(&path, b"P6\n2 1\n255\n\x09\x09\x09\x07\x07\x07").expect("write 2x1 PPM");
         let mut loader = WallpaperLoader::new(4, 2, packaged_root()).expect("start loader");
         let center = loader
             .request(&path, WallpaperFit::Center)
