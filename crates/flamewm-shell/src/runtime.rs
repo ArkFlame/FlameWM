@@ -308,10 +308,6 @@ impl ShellRuntime {
         &self.snapshot
     }
 
-    pub fn replace_snapshot(&mut self, snapshot: ShellSnapshot) {
-        self.snapshot = snapshot;
-    }
-
     #[must_use]
     pub fn control_request_for_action(&self, action: &str) -> Option<ControlRequest> {
         let slot = action
@@ -521,10 +517,6 @@ impl ShellRuntime {
         )
     }
 
-    pub fn open_task_context_for_slot(&mut self, slot: usize) {
-        self.open_task_context_at_slot(slot, None);
-    }
-
     /// Pointer-anchored variant: `pointer` is the root-coordinate click
     /// point (local x/y + source surface global rect).
     pub fn open_task_context_at_slot(&mut self, slot: usize, pointer: Option<flamewm_api::Point>) {
@@ -547,10 +539,6 @@ impl ShellRuntime {
                 revision,
                 anchor,
             }));
-    }
-
-    pub fn open_workspace_context_for_slot(&mut self, slot: usize) {
-        self.open_workspace_context_at_slot(slot, None);
     }
 
     /// Pointer-anchored variant: `pointer` is the root-coordinate click
@@ -1217,20 +1205,6 @@ impl ShellSurfaces {
     #[must_use]
     pub fn is_media_open(&self) -> bool {
         self.transient == Some(Transient::Media)
-    }
-
-    #[must_use]
-    pub fn is_network_open(&self) -> bool {
-        false
-    }
-
-    /// Closes the unified Start surface with a single ungrab,
-    /// tolerating any legacy stray state through `close_transients`.
-    pub fn close_start_group(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
-        if self.transient == Some(Transient::StartGroup) {
-            return self.close_transients(runtime);
-        }
-        Ok(())
     }
 
     pub fn open_status(&mut self, runtime: &mut SurfaceRuntime, name: &str) -> Result<(), String> {
