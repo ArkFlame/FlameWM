@@ -250,7 +250,7 @@ def violations(root):
             source_path = relative_path(root, source)
             if FORBIDDEN_X11_SOURCE.search(text):
                 found.add((source_path, "x11rb-symbol"))
-            if FORBIDDEN_RENDERER_SOURCE.search(_j6_strip_comments(text)):
+            if FORBIDDEN_RENDERER_SOURCE.search(_strip_rust_comments(text)):
                 found.add((source_path, "renderer-symbol"))
             if RAW_FFI_SOURCE.search(text):
                 found.add((source_path, "raw-ffi-boundary"))
@@ -306,6 +306,20 @@ def _j7_production_sources(root):
             yield path
 
 
+def _struct_count(root, name):
+    return sum(
+        len(re.findall(rf"struct {name}", _strip_rust_comments(p.read_text(encoding="utf-8"))))
+        for p in _j7_production_sources(root)
+    )
+
+
+def _production_text_outside(root, owners):
+    for path in _j7_production_sources(root):
+        rel = relative_path(root, path)
+        if rel not in owners:
+            yield rel, _strip_rust_comments(path.read_text(encoding="utf-8"))
+
+
 def _j7_declared(text):
     body = re.sub(r"#\[cfg\(test\)\].*?\nmod tests \{.*?\n\}\n", "", text, flags=re.S)
     return body
@@ -324,9 +338,7 @@ def j7_violations(root):
     # documented opaque fallback.
     for path in _j7_production_sources(root):
         text = _j7_declared(path.read_text(encoding="utf-8"))
-        if re.search(r"\bblend_over_black\b", text) and not owned(path):
-            found.add((rel(path), "j7-g1-no-blend-over-black"))
-        if re.search(r"fallback-black|fallback_black|FallbackBlack", text) and not owned(path):
+        if not owned(path) and re.search(r"\bblend_over_black\b|fallback-black|fallback_black|FallbackBlack", text):
             found.add((rel(path), "j7-g1-no-blend-over-black"))
     # J7-G2: only the Xlib FFI declaration owner may declare
     # XCreateSimpleWindow; canonical Flame surface state lives in target.rs.
@@ -339,8 +351,6 @@ def j7_violations(root):
     # Compiled shell templates are owned by the G01 template guard; the guard
     # tables themselves are not icon consumers. Test-only files are excluded.
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue;
         text = _j7_declared(path.read_text(encoding="utf-8"))
         for match in re.findall(r"[A-Za-z0-9_./-]+\.ppm", text):
             if match.rsplit("/", 1)[-1] in J7_KNOWN_KEYED_PPMS:
@@ -405,8 +415,9 @@ J6_PENDING: list[str] = []
 # TODO(J12-PENDING): promote J6-G5/G6 to violation entries once migrations land.
 
 
-def _j6_strip_comments(text: str) -> str:
-    return _strip_rust_comments(text)
+def _live(root, rel):
+    """Comment-stripped owner text; optional owners read as ""."""
+    return _strip_rust_comments(_owner_text(root, rel))
 
 
 # Owner paths that are intentionally absent. Each entry names why it is gone;
@@ -457,7 +468,7 @@ def j6_violations(root):
     if "Self::Start" in text and "IconTreatment::Original" not in text:
         found.add((J6_SKIN_OWNER, "j6-g1-start-full-color"))
     chrome = _owner_path(root, J6_CHROME_FILE)
-    text = _j6_strip_comments(chrome.read_text(encoding="utf-8"))
+    text = _strip_rust_comments(chrome.read_text(encoding="utf-8"))
     if "struct X11ChromePainter" in text:
         found.add((J6_CHROME_FILE, "j6-g2-no-local-chrome-painter"))
     if re.search(r"fn draw_title_run", text) and "poly_fill_rectangle" in text:
@@ -467,19 +478,19 @@ def j6_violations(root):
     ):
         found.add((J6_CHROME_FILE, "j6-g4-no-procedural-glyphs"))
     icons = _owner_path(root, J6_ICONS_FILE)
-    text = _j6_strip_comments(icons.read_text(encoding="utf-8"))
+    text = _strip_rust_comments(icons.read_text(encoding="utf-8"))
     pack = text.find("packaged_candidates(name)")
     theme = text.find("theme_candidates(name")
     if pack != -1 and theme != -1 and pack < theme:
         J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g5-system-before-packaged: {J6_ICONS_FILE}")
     for rel in J6_MODEL_FILES:
-        model_text = _j6_strip_comments(_owner_path(root, rel).read_text(encoding="utf-8"))
+        model_text = _strip_rust_comments(_owner_path(root, rel).read_text(encoding="utf-8"))
         if re.search(r"z_index_overrides|set_z_index|effective_z_index", model_text):
             J6_PENDING.append(f"WARN TODO(J12-PENDING) j6-g6-no-new-zindex-store: {rel}")
     shell = _owner_path(root, J6_SHELL_MAIN)
     if re.search(
         r"root_pointer\(\s*0(\.0)?\s*,\s*0(\.0)?\s*\)",
-        _j6_strip_comments(shell.read_text(encoding="utf-8")),
+        _strip_rust_comments(shell.read_text(encoding="utf-8")),
     ):
         found.add((J6_SHELL_MAIN, "j6-g7-no-root-pointer-zero"))
     return found
@@ -498,16 +509,14 @@ J11_WM_DIR = "crates/flamewm-wm-x11/src/wm"
 J11_FRAME_PATH_OWNER = "crates/flamewm-wm-x11/src/wm/paint.rs"
 
 
-def _j11_wm_text(root, code):
+def _j11_wm_text(root):
     """Concatenate every production file of the split wm/ layout (tests excluded)."""
-    wm_dir = root / J11_WM_DIR
-    if not wm_dir.is_dir():
-        raise SystemExit(f"ERROR architecture guard: expected owner directory missing: {J11_WM_DIR}")
+    wm_dir = _owner_dir(root, J11_WM_DIR)
     _owner_path(root, J11_FRAME_PATH_OWNER)
     parts = []
     for path in sorted(wm_dir.rglob("*.rs")):
         if not _j7_is_test(path):
-            parts.append(code(path.read_text(encoding="utf-8")))
+            parts.append(_strip_rust_comments(path.read_text(encoding="utf-8")))
     return "\n".join(parts)
 
 
@@ -549,45 +558,34 @@ def _j11_strip_cfgs(text):
 
 def j11_violations(root):
     found = set()
-    code = _j6_strip_comments
-
-    def live(path):
-        return code(_owner_text(root, path))
-
-    def prod(path):
-        return code(path.read_text(encoding="utf-8"))
 
     # J11-G01: move_resize owns commit_geometry + native move; no other
     # production file issues XMoveResizeWindow.
-    mr = live(J11_MOVE_RESIZE_OWNER)
+    mr = _live(root, J11_MOVE_RESIZE_OWNER)
     mr_body = _j11_fn_body(mr, "move_resize")
-    if "commit_geometry" not in mr_body:
-        found.add((J11_MOVE_RESIZE_OWNER, "j11-g01-move-resize-commits-geometry"))
-    if "XMoveResizeWindow" not in mr_body:
+    if "commit_geometry" not in mr_body or "XMoveResizeWindow" not in mr_body:
         found.add((J11_MOVE_RESIZE_OWNER, "j11-g01-move-resize-commits-geometry"))
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs" or relative_path(root, path) in (J11_MOVE_RESIZE_OWNER, J11_XLIB_DECL):
+        if relative_path(root, path) in (J11_MOVE_RESIZE_OWNER, J11_XLIB_DECL):
             continue
-        if "XMoveResizeWindow" in code(path.read_text(encoding="utf-8")):
+        if "XMoveResizeWindow" in _strip_rust_comments(path.read_text(encoding="utf-8")):
             found.add((relative_path(root, path), "j11-g01-move-resize-commits-geometry"))
     # J11-G02: no split start_submenu runtime surface.
     for target in ("crates/flamewm-shell/src/runtime.rs", "crates/flamewm-shell/src/main.rs"):
-        if re.search(r"(?<![A-Za-z0-9_])start_submenu(?![A-Za-z0-9_])", live(target)):
+        if re.search(r"(?<![A-Za-z0-9_])start_submenu(?![A-Za-z0-9_])", _live(root, target)):
             found.add((target, "j11-g02-no-submenu-surface"))
     # J11-G03: no procedural solid-red fallback in production code.
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        text = _j11_strip_cfgs(code(path.read_text(encoding="utf-8")))
+        text = _j11_strip_cfgs(_strip_rust_comments(path.read_text(encoding="utf-8")))
         if re.search(r"255\s*,\s*0\s*,\s*0\s*,\s*255", text):
             found.add((relative_path(root, path), "j11-g03-no-solid-red-fallback"))
     # J11-G04: desktop cold miss keeps the synchronous fallback arm.
-    desk = live("crates/flamewm-desktop/src/projection.rs")
+    desk = _live(root, "crates/flamewm-desktop/src/projection.rs")
     if "flame_fallback" not in _j11_fn_body(desk, "project_row"):
         found.add(("crates/flamewm-desktop/src/projection.rs", "j11-g04-desktop-cold-fallback"))
     # J11-G05: no sync IconResolver in WM draw/manage (generic
     # IconService<IconResolver> import is async-service use, not sync).
-    wm = _j11_wm_text(root, code)
+    wm = _j11_wm_text(root)
     if (
         "prepare_application" in wm
         or "prepare_semantic" in wm
@@ -610,7 +608,7 @@ def j11_violations(root):
             found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
     if has_chrome:
         chrome_body = _j11_fn_body(wm, "paint_chrome")
-        chrome_runtime = live("crates/flamewm-wm-x11/src/wm/chrome_runtime.rs")
+        chrome_runtime = _live(root, "crates/flamewm-wm-x11/src/wm/chrome_runtime.rs")
         _owner_path(root, "crates/flamewm-wm-x11/src/wm/chrome_runtime.rs")
         if re.search(r"paint::paint_frame|image_text8|XDrawString|XRenderComposite", chrome_body):
             found.add((J11_FRAME_PATH_OWNER, "j11-g06-renderer-frame-path"))
@@ -631,9 +629,7 @@ def j11_violations(root):
         found.add(("tools/performance_retention.py", "j11-g07-cleanup-default-on"))
     # J11-G08: no unprefixed env literals.
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        text = code(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
         for lit in re.findall(r'env::(?:var|var_os)\(\s*"([^"]+)"', text):
             if not J11_ENV_OK.match(lit):
                 found.add((relative_path(root, path), "j11-g08-prefixed-env"))
@@ -644,7 +640,7 @@ def j11_violations(root):
                 break
     # J11-G09: once-per-generation profile truncate, single owner.
     rep_path = "crates/flamewm-profiler/src/report.rs"
-    rep = live(rep_path)
+    rep = _live(root, rep_path)
     trunc = _j11_fn_body(rep, "truncate_profile_log_once")
     if "truncate_profile_log_once" not in rep or ".truncate(true)" not in trunc:
         found.add((rep_path, "j11-g09-profile-truncate-once"))
@@ -654,13 +650,13 @@ def j11_violations(root):
         found.add((rep_path, "j11-g09-profile-truncate-once"))
     # J11-G10: gauges are live, never no-op.
     mem_path = "crates/flamewm-profiler/src/memory.rs"
-    mem = live(mem_path)
+    mem = _live(root, mem_path)
     if ".store(" not in _j11_fn_body(mem, "set"):
         found.add((mem_path, "j11-g10-live-gauges"))
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs" or path.name == "memory.rs":
+        if path.name == "memory.rs":
             continue
-        text = code(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
         if "MemoryGauge::new" in text and ".set(" not in text:
             found.add((relative_path(root, path), "j11-g10-live-gauges"))
     return found
@@ -678,9 +674,7 @@ J12_PAINT_OWNER = "crates/flamewm-render-core/src/paint.rs"
 
 def _j12_title_scan_paths(root):
     """Production files that may carry the fixed-font/legacy title path; a missing owner is a hard error."""
-    wm_dir = root / J11_WM_DIR
-    if not wm_dir.is_dir():
-        raise SystemExit(f"ERROR architecture guard: expected owner directory missing: {J11_WM_DIR}")
+    wm_dir = _owner_dir(root, J11_WM_DIR)
     paths = [p for p in sorted(wm_dir.rglob("*.rs")) if not _j7_is_test(p)]
     paths.append(_owner_path(root, "crates/flamewm-wm-x11/src/chrome.rs"))
     deco_dir = root / "crates/flamewm-wm-x11/src/decoration"
@@ -691,22 +685,14 @@ def _j12_title_scan_paths(root):
 
 def j12_violations(root):
     found = set()
-    code = _j6_strip_comments
-
-    def live(path):
-        return code(_owner_text(root, path))
 
     # J12-G01: invalid clamp(12.0,track) in live code.
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        if re.search(r"\bclamp\s*\(\s*12\.0", code(path.read_text(encoding="utf-8"))):
+        if re.search(r"\bclamp\s*\(\s*12\.0", _strip_rust_comments(path.read_text(encoding="utf-8"))):
             found.add((relative_path(root, path), "j12-g01-no-invalid-clamp"))
     # J12-G02: replace_image must not mutate document.assets.
     for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        body = code(path.read_text(encoding="utf-8"))
+        body = _strip_rust_comments(path.read_text(encoding="utf-8"))
         if re.search(r"fn replace_image", body) and re.search(
             r"\.assets\s*(\[[^\]]*\]\s*=|\.push\s*\(|\.insert\s*\(|\.clear\s*\()", body
         ):
@@ -722,61 +708,53 @@ def j12_violations(root):
         ):
             found.add((relative_path(root, tpl), "j12-g03-no-display-none-transient"))
     # J12-G04: desktop root on SurfaceBackground.
-    if "UiLayer::SurfaceBackground" not in live(J12_DESKTOP_PROJ):
+    if "UiLayer::SurfaceBackground" not in _live(root, J12_DESKTOP_PROJ):
         found.add((J12_DESKTOP_PROJ, "j12-g04-surface-background-root"))
     # J12-G05: semantic SVG themed render.
-    if "render_with_color_scheme" not in live(J12_SVG):
+    if "render_with_color_scheme" not in _live(root, J12_SVG):
         found.add((J12_SVG, "j12-g05-semantic-svg-render"))
-    if "SymbolicForeground" not in live(J12_PAINT_OWNER):
+    if "SymbolicForeground" not in _live(root, J12_PAINT_OWNER):
         found.add((J12_PAINT_OWNER, "j12-g05-semantic-svg-render"))
     # J12-G06: hidden create must not force redraw (body-bound).
-    match = re.search(r"fn create_surface\(", live(J12_SURFACE_RT))
+    match = re.search(r"fn create_surface\(", _live(root, J12_SURFACE_RT))
     if match:
-        rest = live(J12_SURFACE_RT)[match.end():]
+        rest = _live(root, J12_SURFACE_RT)[match.end():]
         nxt = re.search(r"pub fn ", rest)
         body = rest[:nxt.start()] if nxt else rest[:800]
         if re.search(r"redraw|mark_full|Damage::Full", body):
             found.add((J12_SURFACE_RT, "j12-g06-hidden-create-no-redraw"))
     # J12-G07: popup raise policy hide-previous + show-next.
-    popup = live(J12_POPUP)
+    popup = _live(root, J12_POPUP)
     if "runtime.hide" not in popup or "runtime.show" not in popup:
         found.add((J12_POPUP, "j12-g07-popup-raise-policy"))
     # J12-G08: no sync IconResolver in category hot path.
-    if "IconResolver" in live(J12_START_MENU):
+    if "IconResolver" in _live(root, J12_START_MENU):
         found.add((J12_START_MENU, "j12-g08-no-sync-icon-resolver"))
     # J12-G09: Unknown stays unbucketed.
-    start = live(J12_START_MENU)
+    start = _live(root, J12_START_MENU)
     if "_ => None" not in start:
         found.add((J12_START_MENU, "j12-g09-unknown-not-visible"))
     # J12-G10: no image_text8/fixed-font normal decoration path.
     for deco in _j12_title_scan_paths(root):
-        text = code(deco.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(deco.read_text(encoding="utf-8"))
         if re.search(
             r"image_text8|XDrawString|fixed_font|fixed-font|9x15|TITLE_CHAR_ADVANCE", text
         ):
             found.add((relative_path(root, deco), "j12-g10-no-fixed-font-decoration"))
     # J12-G11: exactly one DecorationManager owner (J16 cutover: deleted;
     # successor is the frame-engine FrameResources registry).
-    count = sum(
-        len(re.findall(r"struct DecorationManager", code(p.read_text(encoding="utf-8"))))
-        for p in _j7_production_sources(root)
-        if p.suffix == ".rs"
-    )
-    frame_count = sum(
-        len(re.findall(r"struct FrameResources", code(p.read_text(encoding="utf-8"))))
-        for p in _j7_production_sources(root)
-        if p.suffix == ".rs"
-    )
+    count = _struct_count(root, "DecorationManager")
+    frame_count = _struct_count(root, "FrameResources")
     if not (count == 1 or (count == 0 and frame_count == 1)):
         found.add(("crates/flamewm-wm-x11/src/frame/resources.rs", "j12-g11-single-decoration-manager"))
     # J12-G12: wallpaper present, CPU out of desktop owner.
-    if "wallpaper" not in live(J12_DESKTOP_PROJ).lower():
+    if "wallpaper" not in _live(root, J12_DESKTOP_PROJ).lower():
         found.add((J12_DESKTOP_PROJ, "j12-g12-wallpaper-not-cpu"))
     desk = _owner_dir(root, "crates/flamewm-desktop/src")
     for path in sorted(desk.rglob("*.rs")):
         if _j7_is_test(path):
             continue
-        if re.search(r"(?i)\bcpu\b", code(path.read_text(encoding="utf-8"))):
+        if re.search(r"(?i)\bcpu\b", _strip_rust_comments(path.read_text(encoding="utf-8"))):
             found.add((relative_path(root, path), "j12-g12-wallpaper-not-cpu"))
             break
     # J12-G13: .performance stays ignored.
@@ -787,10 +765,10 @@ def j12_violations(root):
     # theme + XCURSOR env; frame engine owns cursor-region binding via
     # cursor_for_region (frame/resources.rs). J16 cutover deleted
     # decoration/paint.rs, so the frame-engine binding is the successor anchor.
-    session = live(J12_SESSION)
+    session = _live(root, J12_SESSION)
     if "FlameWM-Breeze-Dark" not in session or "XCURSOR" not in session:
         found.add((J12_SESSION, "j12-g14-breeze-cursor-intact"))
-    frame_res = live("crates/flamewm-wm-x11/src/frame/resources.rs")
+    frame_res = _live(root, "crates/flamewm-wm-x11/src/frame/resources.rs")
     if "cursor_for_region" not in frame_res:
         found.add((
             "crates/flamewm-wm-x11/src/frame/resources.rs",
@@ -814,10 +792,6 @@ J10_PROF_CALL = re.compile(
 
 def j10_violations(root):
     found = set()
-    code = _j6_strip_comments
-
-    def live(path):
-        return code(_owner_text(root, path))
 
     def prod_sources(base):
         for path in sorted((root / base).rglob("*.rs")):
@@ -834,14 +808,12 @@ def j10_violations(root):
         if re.search(r"DBUS_SESSION_BUS_ADDRESS|host\.session|host_session", text):
             found.add((perf, "j10-g02-no-host-session-in-perf"))
     # J10-G03 (WARN-only): parent ShellSurfaces still owns helper surfaces pre-J07.
-    rt = live("crates/flamewm-shell/src/runtime.rs")
+    rt = _live(root, "crates/flamewm-shell/src/runtime.rs")
     if "struct ShellSurfaces" in rt and all(k in rt for k in ("self.audio", "self.network", "self.calendar")):
         J6_PENDING.append("WARN TODO(J07-PENDING) j10-g03-parent-native-surfaces: crates/flamewm-shell/src/runtime.rs")
     # J10-G04: helper cannot own NetworkManager/Pulse provider directly.
     for path in prod_sources("crates/flamewm-shell/src/quick_controls"):
-        if path.suffix != ".rs":
-            continue
-        text = code(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
         if re.search(r"NetworkManagerProvider|PulseProvider|PulseAudioProvider|pulse::|network_manager::", text):
             found.add((relative_path(root, path), "j10-g04-helper-no-provider"))
     # J10-G05 (WARN-only): fitted_start_placement migration not in runtime yet.
@@ -850,14 +822,12 @@ def j10_violations(root):
     # J10-G06: no start_submenu native surface.
     for target in ("crates/flamewm-shell/src/runtime.rs", "crates/flamewm-shell/src/main.rs",
                    "crates/flamewm-shell/build.rs"):
-        text = live(target) if target.endswith(".rs") else _owner_path(root, target).read_text(encoding="utf-8")
+        text = _live(root, target) if target.endswith(".rs") else _owner_path(root, target).read_text(encoding="utf-8")
         if re.search(r"flamewm-start-submenu|start_submenu.*Surface|Surface.*start_submenu|create_surface\([^)]*submenu", text):
             found.add((target, "j10-g06-no-submenu-surface"))
     # J10-G07: no blocking Child::wait (allow wait_timeout/try_wait/kill+wait).
     for path in prod_sources("crates/flamewm-shell/src"):
-        if path.suffix != ".rs":
-            continue
-        text = code(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
         if re.search(r"\.wait_timeout\s*\(", text):
             continue
         for m in re.finditer(r"\.wait\s*\(\s*\)", text):
@@ -870,23 +840,19 @@ def j10_violations(root):
     # String literals and #[cfg(test)] modules are stripped: protocol
     # tests embed shell metacharacters as rejected-input fixtures.
     def unquoted(text):
-        text = re.sub(r"#\[cfg\(test\)\].*?\nmod tests \{.*?\n\}\n", "", text, flags=re.S)
+        text = _j7_declared(text)
         return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
 
     for path in prod_sources("crates/flamewm-shell/src/quick_controls"):
-        if path.suffix != ".rs":
-            continue
-        text = unquoted(code(path.read_text(encoding="utf-8")))
+        text = unquoted(_strip_rust_comments(path.read_text(encoding="utf-8")))
         if re.search(r'sh\s+-c|Command::new\(\s*"sh"|/bin/sh|\beval\s*\(|\bsystem\s*\(|`[^`]*`|\$\(', text):
             found.add((relative_path(root, path), "j10-g08-no-shell-interpolation"))
-    proto = live("crates/flamewm-shell/src/quick_controls/protocol.rs")
+    proto = _live(root, "crates/flamewm-shell/src/quick_controls/protocol.rs")
     if proto and "split_ascii_whitespace" not in proto and "split_whitespace" not in proto:
         found.add(("crates/flamewm-shell/src/quick_controls/protocol.rs", "j10-g08-no-shell-interpolation"))
     # J10-G09: no dynamic profiler labels on hot paths.
-    for path in sorted((root / "crates").rglob("*.rs")):
-        if _j7_is_test(path) or path.suffix != ".rs":
-            continue
-        if J10_PROF_CALL.search(code(path.read_text(encoding="utf-8"))):
+    for path in _j7_production_sources(root):
+        if J10_PROF_CALL.search(_strip_rust_comments(path.read_text(encoding="utf-8"))):
             found.add((relative_path(root, path), "j10-g09-static-profiler-labels"))
     return found
 
@@ -914,10 +880,6 @@ J18_TITLE_OWNER_FILES = (
 
 def j18_violations(root):
     found = set()
-    code = _j6_strip_comments
-
-    def live(path):
-        return code(_owner_text(root, path))
 
     # J18-G01: window-geometry authority lives only in the frame engine.
     # Direct outer-rect writes inside the live wm-x11 crate but outside the
@@ -932,21 +894,13 @@ def j18_violations(root):
         rel = relative_path(root, path)
         if rel in J18_GEOMETRY_OWNER_FILES:
             continue
-        text = code(path.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(path.read_text(encoding="utf-8"))
         if re.search(r"\.outer\s*=", text) or re.search(r"\.restore\s*=", text):
             found.add((rel, "j18-g01-frame-geometry-owner"))
     # J18-G02: exactly one live window-geometry/decoration owner pair.
     # A second PlacementState or GeometryPlan struct is a second live owner.
-    geo_count = sum(
-        len(re.findall(r"struct PlacementState", code(p.read_text(encoding="utf-8"))))
-        for p in _j7_production_sources(root)
-        if p.suffix == ".rs"
-    )
-    plan_count = sum(
-        len(re.findall(r"struct GeometryPlan", code(p.read_text(encoding="utf-8"))))
-        for p in _j7_production_sources(root)
-        if p.suffix == ".rs"
-    )
+    geo_count = _struct_count(root, "PlacementState")
+    plan_count = _struct_count(root, "GeometryPlan")
     if geo_count != 1:
         found.add(("crates/flamewm-wm-x11/src/frame/model.rs", "j18-g02-single-geometry-owner"))
     if plan_count != 1:
@@ -954,39 +908,18 @@ def j18_violations(root):
     # J18-G03: single pointer-hit owner. A second hit resolver
     # (resolve_pointer_intent / target_for_xid / pointer_intent_at definition)
     # outside the hit owner is rejected.
-    hit_defs = []
-    for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        rel = relative_path(root, path)
-        if rel in J18_HIT_OWNER_FILES:
-            continue
-        text = code(path.read_text(encoding="utf-8"))
-        if re.search(r"fn\s+(resolve_pointer_intent|target_for_xid|pointer_intent_at)\s*\(", text):
-            hit_defs.append(rel)
+    # J18-G03: single pointer-hit owner; J18-G04/G05: no old paint / raw title
+    # renderer outside the title owner (manager facade is the live caller).
+    hit_defs = [
+        rel
+        for rel, text in _production_text_outside(root, J18_HIT_OWNER_FILES)
+        if re.search(r"fn\s+(resolve_pointer_intent|target_for_xid|pointer_intent_at)\s*\(", text)
+    ]
     for rel in hit_defs:
         found.add((rel, "j18-g03-single-pointer-hit-owner"))
-    # J18-G04: no production old decoration paint call. Direct
-    # paint::paint_frame invocations outside the title owner are rejected
-    # (the manager facade is the live caller; tests construct outcomes).
-    for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        rel = relative_path(root, path)
-        if rel in J18_TITLE_OWNER_FILES:
-            continue
-        text = code(path.read_text(encoding="utf-8"))
+    for rel, text in _production_text_outside(root, J18_TITLE_OWNER_FILES):
         if re.search(r"paint::paint_frame\s*\(", text):
             found.add((rel, "j18-g04-no-old-decoration-paint"))
-    # J18-G05: no new raw title renderer in wm-x11. Direct renderer
-    # draw_title calls outside the title owner are rejected.
-    for path in _j7_production_sources(root):
-        if path.suffix != ".rs":
-            continue
-        rel = relative_path(root, path)
-        if rel in J18_TITLE_OWNER_FILES:
-            continue
-        text = code(path.read_text(encoding="utf-8"))
         if re.search(r"\.draw_title\s*\(", text):
             found.add((rel, "j18-g05-no-raw-title-renderer"))
     return found
@@ -995,37 +928,29 @@ def j18_violations(root):
 # --- J12 handoff guards (J12H-G01..G15), exception-ratchet tagged ---
 def j12h_violations(root):
     found = set()
-    code = _j6_strip_comments
 
-    def live(path):
-        return code(_owner_text(root, path))
-
-    paint_core = live("crates/flamewm-render-core/src/paint.rs")
-    start_menu = live("crates/flamewm-shell-core/src/start_menu.rs")
-    proj = live("crates/flamewm-shell/src/projection.rs")
-    app = live("crates/flamewm-shell/src/app.rs")
-    runtime = live("crates/flamewm-shell/src/runtime.rs")
-    popup_controller = live("crates/flamewm-shell/src/popup_controller.rs")
-    status_surface = live("crates/flamewm-shell/src/runtime/status_surface.rs")
-    main = live("crates/flamewm-shell/src/main.rs")
-    audio = live("crates/flamewm-shell/src/taskbar/status/audio.rs")
-    network = live("crates/flamewm-shell/src/taskbar/status/network.rs")
-    file_actions = live("crates/flamewm-desktop-core/src/file_actions.rs")
+    paint_core = _live(root, "crates/flamewm-render-core/src/paint.rs")
+    start_menu = _live(root, "crates/flamewm-shell-core/src/start_menu.rs")
+    proj = _live(root, "crates/flamewm-shell/src/projection.rs")
+    app = _live(root, "crates/flamewm-shell/src/app.rs")
+    runtime = _live(root, "crates/flamewm-shell/src/runtime.rs")
+    popup_controller = _live(root, "crates/flamewm-shell/src/popup_controller.rs")
+    status_surface = _live(root, "crates/flamewm-shell/src/runtime/status_surface.rs")
+    main = _live(root, "crates/flamewm-shell/src/main.rs")
+    audio = _live(root, "crates/flamewm-shell/src/taskbar/status/audio.rs")
+    network = _live(root, "crates/flamewm-shell/src/taskbar/status/network.rs")
+    file_actions = _live(root, "crates/flamewm-desktop-core/src/file_actions.rs")
     persist = _owner_path(root, "crates/flamewm-desktop-core/src/sticky_persistence.rs").read_text(encoding="utf-8")
-    ext = live("crates/flamewm-render-x11/src/external_drawable.rs")
-    chrome = live("crates/flamewm-wm-x11/src/chrome.rs")
-    paint_decor = live("crates/flamewm-wm-x11/src/decoration/paint.rs")
-    palette = live("crates/flamewm-skin/src/palette.rs")
-    span = live("crates/flamewm-profiler/src/span.rs")
+    ext = _live(root, "crates/flamewm-render-x11/src/external_drawable.rs")
+    chrome = _live(root, "crates/flamewm-wm-x11/src/chrome.rs")
+    paint_decor = _live(root, "crates/flamewm-wm-x11/src/decoration/paint.rs")
+    palette = _live(root, "crates/flamewm-skin/src/palette.rs")
+    span = _live(root, "crates/flamewm-profiler/src/span.rs")
     # J12H-G01: StrokeRect radius.
     if "StrokeRect" not in paint_core or "radius" not in paint_core:
         found.add(("crates/flamewm-render-core/src/paint.rs", "j12h-g01-strokerect-radius"))
     # J12H-G02: one StartModel.
-    count = sum(
-        len(re.findall(r"struct StartModel", code(p.read_text(encoding="utf-8"))))
-        for p in _j7_production_sources(root)
-        if p.suffix == ".rs"
-    )
+    count = _struct_count(root, "StartModel")
     if count != 1:
         found.add(("crates/flamewm-shell-core/src/start_menu.rs", "j12h-g02-single-startmodel"))
     # J12H-G03: borrowed query hot path.
@@ -1083,7 +1008,7 @@ def j12h_violations(root):
         found.add(("crates/flamewm-wm-x11/src/chrome.rs", "j12h-g12-skin-metrics"))
     # J12H-G13: no legacy title path; measured intent success (missing-tolerant).
     for deco in _j12_title_scan_paths(root):
-        text = code(deco.read_text(encoding="utf-8"))
+        text = _strip_rust_comments(deco.read_text(encoding="utf-8"))
         if "image_text8" in text or "XDrawString" in text:
             found.add((relative_path(root, deco), "j12h-g13-no-legacy-title"))
     if (root / "crates/flamewm-wm-x11/src/decoration/paint.rs").is_file() and "title_drawn = true" not in paint_decor:
@@ -1092,7 +1017,7 @@ def j12h_violations(root):
     if "0x1b1e20" not in palette.lower():
         found.add(("crates/flamewm-skin/src/palette.rs", "j12h-g14-panel-1b1e20"))
     # J12H-G15: scoped profiler spans.
-    span_all = span + live("crates/flamewm-profiler/src/point.rs") + live("crates/flamewm-profiler/src/lib.rs")
+    span_all = span + _live(root, "crates/flamewm-profiler/src/point.rs") + _live(root, "crates/flamewm-profiler/src/lib.rs")
     if span_all and "&'static str" not in span_all:
         found.add(("crates/flamewm-profiler/src/span.rs", "j12h-g15-scoped-spans"))
     if 'ProfilePoint::new("shell.' not in main and "flamewm_profiler::start(" not in main:
