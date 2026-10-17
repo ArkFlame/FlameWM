@@ -70,13 +70,6 @@ impl NetworkManagerSlot {
         }
     }
 
-    pub fn provider_mut(&mut self) -> Option<&mut NetworkManagerProvider> {
-        match self {
-            Self::Connected(provider) => Some(provider),
-            Self::Unavailable(_) => None,
-        }
-    }
-
     #[must_use]
     pub fn snapshot(&self) -> NetworkSnapshot {
         match self {
