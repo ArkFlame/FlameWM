@@ -126,10 +126,7 @@ pub fn popup_view(state: &WeatherState, settings: &WeatherSettings) -> WeatherPo
     };
     match snapshot {
         Some(s) => WeatherPopupView {
-            location: match s.location.country.as_deref() {
-                Some(country) => format!("{}, {country}", s.location.name),
-                None => s.location.name.clone(),
-            },
+            location: place_name(&s.location.name, s.location.country.as_deref()),
             condition: s.condition,
             temperature: format!("{}\u{b0}", settings.units.convert_c(s.temperature_c)),
             status: status.to_owned(),
@@ -158,6 +155,19 @@ pub fn popup_view(state: &WeatherState, settings: &WeatherSettings) -> WeatherPo
     }
 }
 
+/// `Name, Country`, or just the name when the country is unknown.
+fn place_name(name: &str, country: Option<&str>) -> String {
+    country.map_or_else(|| name.to_owned(), |country| format!("{name}, {country}"))
+}
+
+/// One icon node per condition under `prefix`; only `active` is visible, and only when `shown`.
+fn set_icons(document: &mut impl UiDocumentAccess, prefix: &str, active: Option<WeatherCondition>, shown: bool) -> Result<(), String> {
+    for condition in WEATHER_CONDITIONS {
+        document.visible(&format!("{prefix}{}", icon_suffix(condition)), shown && active == Some(condition))?;
+    }
+    Ok(())
+}
+
 /// Taskbar tray entry: visibility, one condition icon, and the temperature text under it.
 pub fn project_weather_tray(
     document: &mut impl UiDocumentAccess,
@@ -167,12 +177,7 @@ pub fn project_weather_tray(
 ) -> Result<(), String> {
     let view = tray_view(state, units, shown);
     document.visible("tray-weather", view.visible)?;
-    for condition in WEATHER_CONDITIONS {
-        document.visible(
-            &format!("tray-weather-{}", icon_suffix(condition)),
-            view.visible && condition == view.condition,
-        )?;
-    }
+    set_icons(document, "tray-weather-", Some(view.condition), view.visible)?;
     document.text("tray-weather-temp", view.temperature)
 }
 
@@ -216,12 +221,7 @@ pub fn project_weather_popup(
     document.text("weather-temp", view.temperature)?;
     document.text("weather-condition", condition_label(view.condition).to_owned())?;
     document.text("weather-state", view.status)?;
-    for condition in WEATHER_CONDITIONS {
-        document.visible(
-            &format!("weather-icon-{}", icon_suffix(condition)),
-            condition == view.condition,
-        )?;
-    }
+    set_icons(document, "weather-icon-", Some(view.condition), true)?;
     for row in 1..=WEATHER_DAY_ROWS {
         let day = view.days.get(row - 1);
         let shown = day.is_some() && !picker;
@@ -235,12 +235,7 @@ pub fn project_weather_popup(
             day.map_or_else(String::new, |d| d.range.clone()),
         )?;
         document.visible(&format!("weather-day-{row}-range"), shown)?;
-        for condition in WEATHER_CONDITIONS {
-            document.visible(
-                &format!("weather-day-{row}-icon-{}", icon_suffix(condition)),
-                shown && day.is_some_and(|d| d.condition == condition),
-            )?;
-        }
+        set_icons(document, &format!("weather-day-{row}-icon-"), day.map(|d| d.condition), shown)?;
     }
     document.visible("weather-offline-veil", offline_dimmed(state))?;
     document.background("weather-offline-veil", UiColor { a: 160, ..veil })?;
@@ -250,10 +245,7 @@ pub fn project_weather_popup(
         let location = search.results.get(row - 1).filter(|_| picker);
         document.text(
             &format!("weather-result-{row}"),
-            location.map_or_else(String::new, |l| match l.country.as_deref() {
-                Some(country) => format!("{}, {country}", l.name),
-                None => l.name.clone(),
-            }),
+            location.map_or_else(String::new, |l| place_name(&l.name, l.country.as_deref())),
         )?;
         document.visible(&format!("weather-result-{row}"), location.is_some())?;
     }
