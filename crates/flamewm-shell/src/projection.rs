@@ -772,7 +772,53 @@ fn runtime_image(raster: Rgb8Raster) -> RuntimeImage {
 mod panel_template_tests {
     use super::*;
 
+    use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+
     const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
+
+    fn decode_panel() -> flamewm_ui_x11::UiDocument {
+        flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode")
+    }
+
+    fn power_snapshot(
+        available: ServiceAvailability,
+        present: bool,
+        percent: u8,
+        state: PowerState,
+    ) -> PowerSnapshot {
+        PowerSnapshot {
+            available,
+            present,
+            percent,
+            state,
+            cpu_percent: None,
+            power_rate_mw: None,
+        }
+    }
+
+    fn glyph_node_ids(prefix: &str) -> Vec<String> {
+        use crate::taskbar::status::battery::BATTERY_GLYPHS;
+        BATTERY_GLYPHS
+            .iter()
+            .flat_map(|glyph| {
+                [
+                    format!("{prefix}{}", glyph.id_suffix()),
+                    format!("{prefix}{}-charging", glyph.id_suffix()),
+                ]
+            })
+            .collect()
+    }
+
+    fn box_width(document: &flamewm_ui_x11::UiDocument, id: &str, viewport: (f32, f32)) -> f32 {
+        document.layout_box_by_id(id, viewport).map_or(0.0, |rect| rect.2)
+    }
+
+    fn lit_ids<'a>(document: &flamewm_ui_x11::UiDocument, ids: &'a [String], viewport: (f32, f32)) -> Vec<&'a str> {
+        ids.iter()
+            .map(String::as_str)
+            .filter(|id| box_width(document, id, viewport) > 0.0)
+            .collect()
+    }
 
     // CONTRACT-REGRESSION: the clock and workspace pager text targets and the
     // tray visibility targets written by the panel projection must exist in the
@@ -783,8 +829,7 @@ mod panel_template_tests {
     // MUTATION: drop the text child of #clock-time; project_clock_at must be refused.
     #[test]
     fn every_projected_panel_clock_and_pager_target_is_writable() {
-        let mut document =
-            flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
+        let mut document = decode_panel();
         project_clock_at(&mut document, Local::now(), ClockDisplay::default())
             .unwrap_or_else(|error| panic!("panel clock refused: {error}"));
         for slot in 1..=PAGE_SIZE {
@@ -813,8 +858,7 @@ mod panel_template_tests {
     // and the rightmost nodes fall outside and this test fails.
     #[test]
     fn panel_clock_pager_tray_lay_out_inside_scaled_window() {
-        let mut document =
-            flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
+        let mut document = decode_panel();
         // Live panel: 1350x90 device px window, 125% output scale, logical 72.
         let output = flamewm_api::OutputId::new("HDMI-1");
         let mut snapshot = crate::ShellSnapshot::default();
@@ -898,8 +942,6 @@ mod panel_template_tests {
     // MUTATION: keep a retired low node or project the wrong bucket in the menu.
     #[test]
     fn battery_menu_shows_exactly_one_glyph_on_real_artifact() {
-        use crate::taskbar::status::battery::BATTERY_GLYPHS;
-        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
         const BATTERY_ARTIFACT: &[u8] =
             include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-battery.rwr"));
         let cases = [
@@ -909,34 +951,13 @@ mod panel_template_tests {
             (100, PowerState::Discharging, "battery-icon-100"),
             (45, PowerState::Charging, "battery-icon-050-charging"),
         ];
-        let ids: Vec<String> = BATTERY_GLYPHS
-            .iter()
-            .flat_map(|glyph| {
-                [
-                    format!("battery-icon-{}", glyph.id_suffix()),
-                    format!("battery-icon-{}-charging", glyph.id_suffix()),
-                ]
-            })
-            .collect();
+        let ids = glyph_node_ids("battery-icon-");
         for (percent, state, expected) in cases {
-            let power = PowerSnapshot {
-                available: ServiceAvailability::Available,
-                present: true,
-                percent,
-                state,
-                cpu_percent: None,
-                power_rate_mw: None,
-            };
+            let power = power_snapshot(ServiceAvailability::Available, true, percent, state);
             let mut document =
                 flamewm_ui_x11::decode_document(BATTERY_ARTIFACT).expect("battery artifact must decode");
             project_battery_menu(&mut document, &power, 268.0).expect("battery menu projects");
-            let viewport = (300.0, 132.0);
-            let lit: Vec<&str> = ids
-                .iter()
-                .map(String::as_str)
-                .filter(|id| document.layout_box_by_id(id, viewport).map_or(0.0, |rect| rect.2) > 0.0)
-                .collect();
-            assert_eq!(lit, vec![expected], "{percent}% {state:?}");
+            assert_eq!(lit_ids(&document, &ids, (300.0, 132.0)), vec![expected], "{percent}% {state:?}");
         }
     }
 
@@ -951,41 +972,23 @@ mod panel_template_tests {
     // hidden there, so that path's case fails) or skip the glyph bucket.
     #[test]
     fn tray_battery_button_follows_power_bucket_on_real_artifact() {
-        use crate::taskbar::status::battery::BATTERY_GLYPHS;
-        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
-        let glyphs: Vec<String> = BATTERY_GLYPHS
-            .iter()
-            .flat_map(|glyph| {
-                [
-                    format!("tray-battery-{}", glyph.id_suffix()),
-                    format!("tray-battery-{}-charging", glyph.id_suffix()),
-                ]
-            })
-            .collect();
-        let power = |available, present, percent, state| PowerSnapshot {
-            available,
-            present,
-            percent,
-            state,
-            cpu_percent: None,
-            power_rate_mw: None,
-        };
+        let glyphs = glyph_node_ids("tray-battery-");
         let avail = ServiceAvailability::Available;
         let cases: [(PowerSnapshot, Option<&str>); 14] = [
-            (power(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
-            (power(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
-            (power(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
-            (power(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
-            (power(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
-            (power(avail, true, 30, PowerState::Charging), Some("tray-battery-030-charging")),
-            (power(avail, true, 79, PowerState::Charging), Some("tray-battery-080-charging")),
-            (power(avail, true, 80, PowerState::Charging), Some("tray-battery-080-charging")),
-            (power(avail, true, 100, PowerState::Charging), Some("tray-battery-100-charging")),
-            (power(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
-            (power(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
-            (power(avail, true, 80, PowerState::Discharging), Some("tray-battery-080")),
-            (power(avail, true, 100, PowerState::Full), Some("tray-battery-100")),
-            (power(avail, false, 45, PowerState::Discharging), None),
+            (power_snapshot(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
+            (power_snapshot(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
+            (power_snapshot(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
+            (power_snapshot(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
+            (power_snapshot(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
+            (power_snapshot(avail, true, 30, PowerState::Charging), Some("tray-battery-030-charging")),
+            (power_snapshot(avail, true, 79, PowerState::Charging), Some("tray-battery-080-charging")),
+            (power_snapshot(avail, true, 80, PowerState::Charging), Some("tray-battery-080-charging")),
+            (power_snapshot(avail, true, 100, PowerState::Charging), Some("tray-battery-100-charging")),
+            (power_snapshot(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
+            (power_snapshot(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
+            (power_snapshot(avail, true, 80, PowerState::Discharging), Some("tray-battery-080")),
+            (power_snapshot(avail, true, 100, PowerState::Full), Some("tray-battery-100")),
+            (power_snapshot(avail, false, 45, PowerState::Discharging), None),
         ];
         for (power, expected) in cases {
             let mut snapshot = crate::ShellSnapshot::default();
@@ -1024,22 +1027,12 @@ mod panel_template_tests {
                 }),
             ];
             for (path, project_path) in paths {
-                let mut document =
-                    flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
+                let mut document = decode_panel();
                 project_path(&mut document, &snapshot);
                 let viewport = (1080.0, 72.0);
-                let width = |id: &str| {
-                    document
-                        .layout_box_by_id(id, viewport)
-                        .map_or(0.0, |rect| rect.2)
-                };
-                let button = width("tray-battery") > 0.0;
+                let button = box_width(&document, "tray-battery", viewport) > 0.0;
                 assert_eq!(button, expected.is_some(), "{path}: button for {:?}", snapshot.system.power);
-                let lit: Vec<&str> = glyphs
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|id| width(id) > 0.0)
-                    .collect();
+                let lit = lit_ids(&document, &glyphs, viewport);
                 match expected {
                     Some(glyph) => assert_eq!(lit, vec![glyph], "{path}: glyph for {:?}", snapshot.system.power),
                     None => assert!(lit.is_empty(), "{path}: no glyph while hidden for {:?}", snapshot.system.power),
@@ -1055,8 +1048,6 @@ mod panel_template_tests {
     // hide rule at 80%.
     #[test]
     fn battery_tray_matrix_shows_one_glyph_and_charging_variant_only_while_charging() {
-        use crate::taskbar::status::battery::BATTERY_GLYPHS;
-        use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
         let glyph_for = |percent: u8| match percent {
             15 => "020",
             45 => "050",
@@ -1064,15 +1055,7 @@ mod panel_template_tests {
             100 => "100",
             other => panic!("matrix has no expected glyph for {other}%"),
         };
-        let all_ids: Vec<String> = BATTERY_GLYPHS
-            .iter()
-            .flat_map(|glyph| {
-                [
-                    format!("tray-battery-{}", glyph.id_suffix()),
-                    format!("tray-battery-{}-charging", glyph.id_suffix()),
-                ]
-            })
-            .collect();
+        let all_ids = glyph_node_ids("tray-battery-");
         for state in [
             PowerState::Charging,
             PowerState::Discharging,
@@ -1082,32 +1065,19 @@ mod panel_template_tests {
         ] {
             for percent in [15_u8, 45, 79, 80, 100] {
                 for present in [true, false] {
-                    let power = PowerSnapshot {
-                        available: ServiceAvailability::Available,
-                        present,
-                        percent,
-                        state,
-                        cpu_percent: None,
-                        power_rate_mw: None,
-                    };
+                    let power = power_snapshot(ServiceAvailability::Available, present, percent, state);
                     let charging = state == PowerState::Charging;
                     let visible = present;
-                    let mut document = flamewm_ui_x11::decode_document(PANEL_ARTIFACT)
-                        .expect("panel artifact must decode");
+                    let mut document = decode_panel();
                     project_battery_tray(&mut document, &power, TaskbarItems::default())
                         .expect("tray battery projects");
                     let viewport = (1080.0, 72.0);
-                    let width = |id: &str| {
-                        document
-                            .layout_box_by_id(id, viewport)
-                            .map_or(0.0, |rect| rect.2)
-                    };
-                    assert_eq!(width("tray-battery") > 0.0, visible, "{state:?} {percent}% present={present}");
-                    let lit: Vec<&str> = all_ids
-                        .iter()
-                        .map(String::as_str)
-                        .filter(|id| width(id) > 0.0)
-                        .collect();
+                    assert_eq!(
+                        box_width(&document, "tray-battery", viewport) > 0.0,
+                        visible,
+                        "{state:?} {percent}% present={present}"
+                    );
+                    let lit = lit_ids(&document, &all_ids, viewport);
                     let expected = if visible {
                         let suffix = if charging { "-charging" } else { "" };
                         vec![format!("tray-battery-{}{suffix}", glyph_for(percent))]
@@ -1125,8 +1095,7 @@ mod panel_template_tests {
     // before the later nodes are written.
     #[test]
     fn full_panel_projection_succeeds_on_real_artifact() {
-        let mut document =
-            flamewm_ui_x11::decode_document(PANEL_ARTIFACT).expect("panel artifact must decode");
+        let mut document = decode_panel();
         let snapshot = crate::ShellSnapshot::default();
         crate::async_projection::project_panel_async(
             &mut document,
