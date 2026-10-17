@@ -2039,11 +2039,21 @@ mod controller_geometry_tests {
         [RootRect::new(0, 0, width, 1080)]
     }
 
+    fn fetch(
+        cache: &mut ControllerGeometryCache,
+        client: Window,
+        base: u32,
+        regions: [Option<FrameRegion>; 12],
+        width: i32,
+    ) -> &ControllerGeometry {
+        cache.fetch(client, children(base), regions, outputs(width).into_iter())
+    }
+
     #[test]
     fn unchanged_motions_rebuild_once() {
         let mut cache = ControllerGeometryCache::default();
         for _ in 0..1000 {
-            let geometry = cache.fetch(7, children(100), regions(), outputs(1920).into_iter());
+            let geometry = fetch(&mut cache, 7, 100, regions(), 1920);
             assert_eq!(geometry.region_map.get(&108), Some(&FrameRegion::TitleDrag));
             assert_eq!(geometry.region_map.len(), 1);
             assert_eq!(geometry.outputs, outputs(1920));
@@ -2054,17 +2064,17 @@ mod controller_geometry_tests {
     #[test]
     fn client_region_or_output_change_rebuilds() {
         let mut cache = ControllerGeometryCache::default();
-        cache.fetch(7, children(100), regions(), outputs(1920).into_iter());
-        cache.fetch(8, children(100), regions(), outputs(1920).into_iter());
+        fetch(&mut cache, 7, 100, regions(), 1920);
+        fetch(&mut cache, 8, 100, regions(), 1920);
         assert_eq!(cache.rebuilds, 2);
-        cache.fetch(8, children(200), regions(), outputs(1920).into_iter());
+        fetch(&mut cache, 8, 200, regions(), 1920);
         assert_eq!(cache.rebuilds, 3);
         let mut moved = regions();
         moved[8] = None;
-        let geometry = cache.fetch(8, children(200), moved, outputs(1920).into_iter());
+        let geometry = fetch(&mut cache, 8, 200, moved, 1920);
         assert!(geometry.region_map.is_empty());
         assert_eq!(cache.rebuilds, 4);
-        cache.fetch(8, children(200), moved, outputs(1280).into_iter());
+        fetch(&mut cache, 8, 200, moved, 1280);
         assert_eq!(cache.rebuilds, 5);
     }
 }
