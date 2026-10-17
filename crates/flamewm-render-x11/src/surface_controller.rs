@@ -70,45 +70,6 @@ pub fn outside_release_event(
     }
 }
 
-pub fn run_with_surface_controller_events<F>(
-    mut document: RuntimeDocument,
-    config: X11Config,
-    mut on_event: F,
-) -> Result<(), String>
-where
-    F: FnMut(&SurfaceControllerEvent, &mut RuntimeDocument) -> Result<(), String>,
-{
-    unsafe {
-        let display = XOpenDisplay(ptr::null());
-        if display.is_null() {
-            return Err("XOpenDisplay failed; DISPLAY is unset or unreachable".to_string());
-        }
-        let mut app = match X11App::new(display, &config) {
-            Ok(app) => app,
-            Err(error) => {
-                XCloseDisplay(display);
-                return Err(error);
-            }
-        };
-        let surface = SurfaceId(1);
-        let result = app.event_loop(&mut document, &mut |event, document| {
-            on_event(
-                &SurfaceControllerEvent {
-                    surface,
-                    event: event.clone(),
-                },
-                document,
-            )
-        });
-        // SAFETY: covered by the enclosing `unsafe` block above; this call is not re-wrapped.
-        let deferred_native = app.take_deferred_native_libraries();
-        drop(app);
-        XCloseDisplay(display);
-        drop(deferred_native);
-        result
-    }
-}
-
 /// Headless/test fallback extent (device pixels at scale 1.0). Used only
 /// when no retained layout exists; mapped-surface queries never hit it.
 pub const HEADLESS_FALLBACK_EXTENT: (f32, f32) = (1350.0, 641.0);
