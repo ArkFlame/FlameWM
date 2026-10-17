@@ -554,6 +554,7 @@ fn runtime_image(raster: Rgba8Raster) -> RuntimeImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     // No-op `UiDocumentAccess` methods shared by every probe below; each probe
     // lists only the methods it records or overrides.
@@ -676,7 +677,6 @@ mod tests {
 
     #[test]
     fn file_item_semantic_icon_is_packaged_document_not_brand_fallback() {
-        use std::path::Path;
         let (packaged_root, mut resolver) = workspace_resolver();
         let name = icon_name(DesktopItemKind::File);
         let raster = resolver
@@ -708,7 +708,6 @@ mod tests {
 
     #[test]
     fn directory_item_icon_resolves_to_packaged_folder_not_document_edit() {
-        use std::path::Path;
         let (packaged_root, mut resolver) = workspace_resolver();
         let name = icon_name(DesktopItemKind::Directory);
         assert_eq!(name, "folder");
@@ -1079,50 +1078,38 @@ mod tests {
 
     #[test]
     fn unchanged_wallpaper_skips_clone_and_changed_wallpaper_resends() {
-        let first = WallpaperPresentation::Image(wallpaper_raster(10));
-        let same = WallpaperPresentation::Image(wallpaper_raster(10));
-        let changed = WallpaperPresentation::Image(wallpaper_raster(200));
+        let first = wallpaper_raster(10);
+        let same = wallpaper_raster(10);
+        let changed = wallpaper_raster(200);
         let mut cache = None;
         let mut probe = WallpaperImageProbe::default();
 
-        let WallpaperPresentation::Image(raster) = &first else {
-            unreachable!()
-        };
-        project_wallpaper_image(&mut probe, &mut cache, raster).expect("first projection");
+        project_wallpaper_image(&mut probe, &mut cache, &first).expect("first projection");
         assert_eq!(probe.sent, vec![vec![10, 10, 10, 255]]);
 
         // Same loader raster: no image write, document keeps the prior pixels.
-        project_wallpaper_image(&mut probe, &mut cache, raster).expect("unchanged projection");
+        project_wallpaper_image(&mut probe, &mut cache, &first).expect("unchanged projection");
         assert_eq!(probe.sent.len(), 1, "unchanged wallpaper must not resend");
 
         // Equal content in a new buffer is a new raster and resends.
-        let WallpaperPresentation::Image(raster) = &same else {
-            unreachable!()
-        };
-        project_wallpaper_image(&mut probe, &mut cache, raster).expect("reloaded projection");
+        project_wallpaper_image(&mut probe, &mut cache, &same).expect("reloaded projection");
         assert_eq!(probe.sent.len(), 2, "replaced raster must resend");
 
-        let WallpaperPresentation::Image(raster) = &changed else {
-            unreachable!()
-        };
-        project_wallpaper_image(&mut probe, &mut cache, raster).expect("changed projection");
+        project_wallpaper_image(&mut probe, &mut cache, &changed).expect("changed projection");
         assert_eq!(probe.sent.last(), Some(&vec![200, 200, 200, 255]));
         assert_eq!(probe.sent.len(), 3);
     }
 
     #[test]
     fn rejected_wallpaper_write_is_retried_on_next_projection() {
-        let presentation = WallpaperPresentation::Image(wallpaper_raster(42));
-        let WallpaperPresentation::Image(raster) = &presentation else {
-            unreachable!()
-        };
+        let raster = wallpaper_raster(42);
         let mut cache = None;
         let mut probe = WallpaperImageProbe {
             sent: Vec::new(),
             fail_next: true,
         };
-        assert!(project_wallpaper_image(&mut probe, &mut cache, raster).is_err());
-        project_wallpaper_image(&mut probe, &mut cache, raster).expect("retry");
+        assert!(project_wallpaper_image(&mut probe, &mut cache, &raster).is_err());
+        project_wallpaper_image(&mut probe, &mut cache, &raster).expect("retry");
         assert_eq!(probe.sent.len(), 1);
     }
 
