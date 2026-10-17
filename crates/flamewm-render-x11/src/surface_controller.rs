@@ -309,11 +309,9 @@ impl SurfaceController {
             instance.app.redraw(&instance.document).map_err(mark_x_error)?;
         }
         unsafe {
+            XMapWindow(self.display, window);
             if surface_role_needs_popup_raise(role) {
-                XMapWindow(self.display, window);
                 XRaiseWindow(self.display, window);
-            } else {
-                XMapWindow(self.display, window);
             }
             instance.app.present_scene().map_err(mark_x_error)?;
             XFlush(self.display);
@@ -472,8 +470,7 @@ impl SurfaceController {
         cycle.advance("present")?;
         cycle.advance("grab_flush")?;
         debug_assert!(cycle.is_complete());
-        let instance = self.instance_mut(id)?;
-        instance.shown = true;
+        self.instance_mut(id)?.shown = true;
         Ok(())
     }
 
@@ -594,23 +591,20 @@ impl SurfaceController {
     /// controller owns) to a root-space rect. Errors from a vanished client
     /// are ignored by the protocol handler; the caller never aborts.
     pub fn set_window_icon_geometry(&mut self, window: u64, rect: [u32; 4]) -> Result<(), String> {
-        let property = self.icon_geometry_atom();
-        crate::app::apply_window_icon_geometry(
-            self.display,
-            window as Window,
-            property,
-            Some(rect.map(u64::from)),
-        );
-        unsafe { XFlush(self.display) };
+        self.apply_icon_geometry(window, Some(rect.map(u64::from)));
         Ok(())
     }
 
     /// Deletes `_NET_WM_ICON_GEOMETRY` from a client window.
     pub fn clear_window_icon_geometry(&mut self, window: u64) -> Result<(), String> {
-        let property = self.icon_geometry_atom();
-        crate::app::apply_window_icon_geometry(self.display, window as Window, property, None);
-        unsafe { XFlush(self.display) };
+        self.apply_icon_geometry(window, None);
         Ok(())
+    }
+
+    fn apply_icon_geometry(&mut self, window: u64, rect: Option<[u64; 4]>) {
+        let property = self.icon_geometry_atom();
+        crate::app::apply_window_icon_geometry(self.display, window as Window, property, rect);
+        unsafe { XFlush(self.display) };
     }
 
     fn icon_geometry_atom(&mut self) -> Atom {
@@ -670,9 +664,7 @@ impl SurfaceController {
             popup_restore_focus(display, &mut instance.app);
         }
         instance.app.pointer_grabbed = false;
-        unsafe {
-            XFlush(display);
-        }
+        unsafe { XFlush(display) };
         Ok(())
     }
 
@@ -857,13 +849,11 @@ impl SurfaceController {
     }
 
     pub fn surface_role(&self, id: SurfaceId) -> Result<SurfaceRole, String> {
-        Ok(self.instance_ref(id)?
-            .role)
+        Ok(self.instance_ref(id)?.role)
     }
 
     pub fn surface_input_mode(&self, id: SurfaceId) -> Result<SurfaceInputMode, String> {
-        Ok(self.instance_ref(id)?
-            .input)
+        Ok(self.instance_ref(id)?.input)
     }
 
     /// Overlay management policy: overlays stay raisable but are never
@@ -873,9 +863,7 @@ impl SurfaceController {
     }
 
     pub fn is_pointer_grabbed(&self, id: SurfaceId) -> Result<bool, String> {
-        Ok(self.instance_ref(id)?
-            .app
-            .pointer_grabbed)
+        Ok(self.instance_ref(id)?.app.pointer_grabbed)
     }
 
     /// Registers the X connection as a read wakeup source; X readiness only wakes dispatch.
@@ -1015,45 +1003,21 @@ impl SurfaceController {
                 role: role_label,
             });
         span_trace.native_request((x, y, width.max(1) as i32, height.max(1) as i32));
-        if size_changed {
-            let display = self.display;
-            let instance = self.instance_mut(id)?;
-            unsafe {
-                instance
-                    .app
-                    .commit_geometry(&instance.document, width, height)
-                    .map_err(mark_x_error)?
-            };
-            unsafe {
-                XMoveResizeWindow(
-                    display,
-                    instance.app.window,
-                    x,
-                    y,
-                    instance.app.width,
-                    instance.app.height,
-                )
-            };
-            instance.origin = (x, y);
-            instance.slide_drawn = None;
-            span_trace.retained((x, y, instance.app.width as i32, instance.app.height as i32));
-            if instance.role == SurfaceRole::Dock {
-                let (w, h) = (instance.app.width, instance.app.height);
-                sync_dock_geometry(display, instance, x, y, w, h);
-            }
-            unsafe { XFlush(display) };
-            return Ok(());
-        }
         let display = self.display;
         let instance = self.instance_mut(id)?;
+        if size_changed {
+            unsafe {
+                instance.app.commit_geometry(&instance.document, width, height).map_err(mark_x_error)?
+            };
+        }
         let (w, h) = (instance.app.width, instance.app.height);
         unsafe { XMoveResizeWindow(display, instance.app.window, x, y, w, h) };
         instance.origin = (x, y);
         instance.slide_drawn = None;
+        span_trace.retained((x, y, w as i32, h as i32));
         if instance.role == SurfaceRole::Dock {
             sync_dock_geometry(display, instance, x, y, w, h);
         }
-        span_trace.retained((x, y, w as i32, h as i32));
         unsafe { XFlush(display) };
         Ok(())
     }
