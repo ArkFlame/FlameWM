@@ -50,38 +50,22 @@ pub fn build_coverage_scaled(
     let mut clips: Vec<Rect> = Vec::new();
     for command in commands {
         match command {
+            // Stroke masks cover the full rounded outline so paint and shape agree.
             PaintCommand::FillRect {
                 rect,
                 color,
                 radius: r,
-            } => {
-                if color.a == 0 {
-                    continue;
-                }
-                let rr = if *r > 0.0 {
-                    scale_one(*r)
-                } else {
-                    scale_one(radius)
-                };
-                push_rect_spans(&mut spans, scale_rect(*rect), rr, &clips, width, height);
             }
-            PaintCommand::StrokeRect {
+            | PaintCommand::StrokeRect {
                 rect,
                 color,
-                width: w,
                 radius: r,
+                ..
             } => {
                 if color.a == 0 {
                     continue;
                 }
-                // Paint strokes `round(width*scale)` inset outlines; the mask
-                // covers the full rounded outline so paint and shape agree.
-                let _ = scale_one(*w);
-                let rr = if *r > 0.0 {
-                    scale_one(*r)
-                } else {
-                    scale_one(radius)
-                };
+                let rr = scale_one(if *r > 0.0 { *r } else { radius });
                 push_rect_spans(&mut spans, scale_rect(*rect), rr, &clips, width, height);
             }
             PaintCommand::Image { rect, .. }
@@ -178,21 +162,39 @@ mod tests {
     use super::*;
     use flamewm_render_core::Color;
 
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn red(a: u8) -> Color {
+        Color { r: 255, g: 0, b: 0, a }
+    }
+
     fn fill(x: f32, y: f32, w: f32, h: f32, a: u8, radius: f32) -> PaintCommand {
         PaintCommand::FillRect {
-            rect: Rect {
-                x,
-                y,
-                width: w,
-                height: h,
-            },
-            color: Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a,
-            },
+            rect: rect(x, y, w, h),
+            color: red(a),
             radius,
+        }
+    }
+
+    fn stroke(x: f32, y: f32, w: f32, h: f32, width: f32, radius: f32) -> PaintCommand {
+        PaintCommand::StrokeRect {
+            rect: rect(x, y, w, h),
+            color: red(255),
+            width,
+            radius,
+        }
+    }
+
+    fn clip(x: f32, y: f32, w: f32, h: f32) -> PaintCommand {
+        PaintCommand::PushClip {
+            rect: rect(x, y, w, h),
         }
     }
 
@@ -214,12 +216,7 @@ mod tests {
 
     fn image_at(x: f32, y: f32, w: f32, h: f32) -> PaintCommand {
         PaintCommand::Image {
-            rect: Rect {
-                x,
-                y,
-                width: w,
-                height: h,
-            },
+            rect: rect(x, y, w, h),
             asset: 0,
             node: 0,
             revision: 0,
@@ -244,14 +241,7 @@ mod tests {
     #[test]
     fn clip_restricts_coverage() {
         let cmds = vec![
-            PaintCommand::PushClip {
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 4.0,
-                    height: 8.0,
-                },
-            },
+            clip(0.0, 0.0, 4.0, 8.0),
             fill(0.0, 0.0, 8.0, 8.0, 255, 0.0),
             PaintCommand::PopClip,
         ];
@@ -277,22 +267,7 @@ mod tests {
         let fill_spans = build_coverage(&fill_cmds, 8, 8, 0.0);
         let fill_row0 = fill_spans.iter().find(|(y, _, _)| *y == 0).unwrap();
         assert_eq!((fill_row0.1, fill_row0.2), (2, 6));
-        let stroke_cmds = vec![PaintCommand::StrokeRect {
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 8.0,
-                height: 8.0,
-            },
-            color: Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            width: 1.0,
-            radius: 4.0,
-        }];
+        let stroke_cmds = vec![stroke(0.0, 0.0, 8.0, 8.0, 1.0, 4.0)];
         let stroke_spans = build_coverage(&stroke_cmds, 8, 8, 0.0);
         let stroke_row0 = stroke_spans.iter().find(|(y, _, _)| *y == 0).unwrap();
         assert_eq!((stroke_row0.1, stroke_row0.2), (2, 6));
@@ -307,14 +282,7 @@ mod tests {
     fn scale_one_matches_unscaled_entry_point() {
         let cmds = vec![
             fill(0.0, 0.0, 8.0, 8.0, 255, 4.0),
-            PaintCommand::PushClip {
-                rect: Rect {
-                    x: 1.0,
-                    y: 1.0,
-                    width: 6.0,
-                    height: 6.0,
-                },
-            },
+            clip(1.0, 1.0, 6.0, 6.0),
             image_at(0.0, 0.0, 8.0, 8.0),
             PaintCommand::PopClip,
             text_at(2.0, 2.0),
@@ -336,72 +304,23 @@ mod tests {
 
     #[test]
     fn scaled_stroke_parity_at_1_5() {
-        let layout_cmds = vec![PaintCommand::StrokeRect {
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 8.0,
-                height: 8.0,
-            },
-            color: Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            width: 2.0,
-            radius: 2.0,
-        }];
+        let layout_cmds = vec![stroke(0.0, 0.0, 8.0, 8.0, 2.0, 2.0)];
         let scaled = build_coverage_scaled(&layout_cmds, 12, 12, 0.0, 1.5);
-        let prescaled = build_coverage(
-            &[PaintCommand::StrokeRect {
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 12.0,
-                    height: 12.0,
-                },
-                color: Color {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-                width: 3.0,
-                radius: 3.0,
-            }],
-            12,
-            12,
-            0.0,
-        );
+        let prescaled = build_coverage(&[stroke(0.0, 0.0, 12.0, 12.0, 3.0, 3.0)], 12, 12, 0.0);
         assert_eq!(scaled, prescaled);
     }
 
     #[test]
     fn scaled_clipped_image_parity_at_2x() {
         let layout_cmds = vec![
-            PaintCommand::PushClip {
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 4.0,
-                    height: 8.0,
-                },
-            },
+            clip(0.0, 0.0, 4.0, 8.0),
             image_at(0.0, 0.0, 8.0, 8.0),
             PaintCommand::PopClip,
         ];
         let scaled = build_coverage_scaled(&layout_cmds, 16, 16, 0.0, 2.0);
         let prescaled = build_coverage(
             &[
-                PaintCommand::PushClip {
-                    rect: Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 8.0,
-                        height: 16.0,
-                    },
-                },
+                clip(0.0, 0.0, 8.0, 16.0),
                 image_at(0.0, 0.0, 16.0, 16.0),
                 PaintCommand::PopClip,
             ],
