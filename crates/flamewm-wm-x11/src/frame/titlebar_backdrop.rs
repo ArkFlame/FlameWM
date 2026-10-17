@@ -465,6 +465,24 @@ fn masked_from_natural(
 
 /// Wallpaper pixels for the root-relative `rect`, edge-clamped; solid or fallback colour when
 /// no image is available.
+fn solid_rgba(rgb: [u8; 3], w: u32, h: u32) -> Vec<u8> {
+    [rgb[0], rgb[1], rgb[2], 255].repeat(w as usize * h as usize)
+}
+
+/// Root canvas for an image source, composed once per root size. `None` for solid or no source,
+/// and when the image fails to decode.
+fn canvas_image<'a>(
+    source: Option<&WallpaperSource>,
+    canvas: &'a mut Option<((u32, u32), Option<RgbaImage>)>,
+    root: (u32, u32),
+) -> Option<&'a RgbaImage> {
+    let Some(WallpaperSource::Image { path, fit }) = source else { return None };
+    if canvas.as_ref().map(|(size, _)| *size) != Some(root) {
+        *canvas = Some((root, compose_canvas(path, *fit, root)));
+    }
+    canvas.as_ref().and_then(|(_, image)| image.as_ref())
+}
+
 fn wallpaper_rect(
     source: Option<&WallpaperSource>,
     canvas: &mut Option<((u32, u32), Option<RgbaImage>)>,
@@ -472,18 +490,12 @@ fn wallpaper_rect(
     root: (u32, u32),
 ) -> Vec<u8> {
     let (x, y, w, h) = rect;
-    let solid = |rgb: [u8; 3]| [rgb[0], rgb[1], rgb[2], 255].repeat(w as usize * h as usize);
-    let image = match source {
-        Some(WallpaperSource::Solid(rgb)) => return solid(*rgb),
-        Some(WallpaperSource::Image { path, fit }) => {
-            if canvas.as_ref().map(|(size, _)| *size) != Some(root) {
-                *canvas = Some((root, compose_canvas(path, *fit, root)));
-            }
-            canvas.as_ref().and_then(|(_, image)| image.as_ref())
-        }
-        None => None,
+    if let Some(WallpaperSource::Solid(rgb)) = source {
+        return solid_rgba(*rgb, w, h);
+    }
+    let Some(image) = canvas_image(source, canvas, root) else {
+        return solid_rgba(FALLBACK_BACKDROP, w, h);
     };
-    let Some(image) = image else { return solid(FALLBACK_BACKDROP) };
     let mut out = Vec::with_capacity(w as usize * h as usize * 4);
     for row in 0..h {
         let sy = (y + row as i32).clamp(0, image.height as i32 - 1) as usize;
@@ -534,9 +546,7 @@ pub fn needs_drag_backdrop(alpha: u8) -> bool {
 /// Flat opaque titlebar over [`FALLBACK_BACKDROP`] (no geometry / no wallpaper).
 #[must_use]
 pub fn flat_pixels(width: u32, height: u32, rgb: (u8, u8, u8), alpha: u8) -> Vec<u8> {
-    let backdrop = [FALLBACK_BACKDROP[0], FALLBACK_BACKDROP[1], FALLBACK_BACKDROP[2], 255]
-        .repeat(width as usize * height as usize);
-    compose_rgba(&backdrop, rgb, alpha)
+    compose_rgba(&solid_rgba(FALLBACK_BACKDROP, width, height), rgb, alpha)
 }
 
 /// Opaque RGBA titlebar pixels for the frame at root `origin`, `width` x `height`.
@@ -601,36 +611,14 @@ fn build_backdrop(
     radius: f32,
 ) -> Vec<u8> {
     let (x, y, w, h) = rect;
-    let solid = |rgb: [u8; 3]| [rgb[0], rgb[1], rgb[2], 255].repeat(w as usize * h as usize);
-    let image = match source {
-        Some(WallpaperSource::Solid(rgb)) => return solid(*rgb),
-        Some(WallpaperSource::Image { path, fit }) => {
-            if canvas.as_ref().map(|(size, _)| *size) != Some(root) {
-                *canvas = Some((root, compose_canvas(path, *fit, root)));
-            }
-            canvas.as_ref().and_then(|(_, image)| image.as_ref())
-        }
-        None => None,
-    };
-    let Some(image) = image else { return solid(FALLBACK_BACKDROP) };
+    if let Some(WallpaperSource::Solid(rgb)) = source {
+        return solid_rgba(*rgb, w, h);
+    }
     // Padded gather with edge clamping so the blur has real neighbours and off-screen columns
     // replicate the nearest wallpaper pixel.
     let pad = radius.ceil() as u32;
     let (pw, ph) = (w + 2 * pad, h + 2 * pad);
-    let mut region = Vec::with_capacity(pw as usize * ph as usize * 4);
-    for row in 0..ph {
-        let sy = (y + row as i32 - pad as i32).clamp(0, image.height as i32 - 1) as usize;
-        for col in 0..pw {
-            let sx = (x + col as i32 - pad as i32).clamp(0, image.width as i32 - 1) as usize;
-            let at = (sy * image.width as usize + sx) * 4;
-            region.extend_from_slice(&[
-                image.pixels[at],
-                image.pixels[at + 1],
-                image.pixels[at + 2],
-                255,
-            ]);
-        }
-    }
+    let mut region = wallpaper_rect(source, canvas, (x - pad as i32, y - pad as i32, pw, ph), root);
     if radius > 0.0 {
         if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut region, pw, ph, radius) {
             eprintln!("flamewm-wm-x11: titlebar backdrop blur skipped: {error:?}");
@@ -790,6 +778,13 @@ mod tests {
         let base = wallpaper_base(Some(&image_source), &mut failed, (2, 1));
         assert_eq!(base, [0x1b, 0x1e, 0x20, 255].repeat(2));
         assert_eq!(failed, Some(((2, 1), None)), "failed decode stays cached");
+    }
+
+    #[test]
+    fn fallback_backdrop_blur_stays_flat() {
+        let mut canvas = None;
+        let px = build_backdrop(None, &mut canvas, (0, 0, 4, 2), (8, 8), 3.0);
+        assert_eq!(px, [FALLBACK_BACKDROP[0], FALLBACK_BACKDROP[1], FALLBACK_BACKDROP[2], 255].repeat(8));
     }
 
     #[test]

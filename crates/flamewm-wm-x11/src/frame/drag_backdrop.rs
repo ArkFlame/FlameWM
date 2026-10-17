@@ -117,6 +117,11 @@ impl DragSnapshot {
     }
 }
 
+/// `v` as an index when it lies in `0..len`.
+fn index_in(v: i64, len: u32) -> Option<usize> {
+    usize::try_from(v).ok().filter(|&i| i < len as usize)
+}
+
 /// Source-over of one premultiplied pixel onto `dst`.
 fn composite_pixel(dst: &mut [u8], src: &[u8]) {
     let inv = 255 - u32::from(src[3]);
@@ -153,17 +158,11 @@ impl DragSnapshot {
                 });
             }
             for ly in 0..layer.h {
-                let dy = i64::from(layer.y) + i64::from(ly);
-                if dy < 0 || dy >= i64::from(height) {
-                    continue;
-                }
+                let Some(dy) = index_in(i64::from(layer.y) + i64::from(ly), height) else { continue };
                 for lx in 0..layer.w {
-                    let dx = i64::from(layer.x) + i64::from(lx);
-                    if dx < 0 || dx >= i64::from(width) {
-                        continue;
-                    }
+                    let Some(dx) = index_in(i64::from(layer.x) + i64::from(lx), width) else { continue };
                     let s = (ly as usize * layer.w as usize + lx as usize) * 4;
-                    let d = (dy as usize * width as usize + dx as usize) * 4;
+                    let d = (dy * width as usize + dx) * 4;
                     composite_pixel(&mut pixels[d..d + 4], &layer.rgba[s..s + 4]);
                 }
             }

@@ -91,15 +91,6 @@ pub fn layout_frame_children(
     let mid_w = (strip_w - cw).max(0);
     let side_h = (h - tb - t).max(0);
 
-    let top_left = FrameRect::new(0, 0, t, t);
-    let top_right = FrameRect::new(w - t, 0, t, t);
-    let bottom_left = FrameRect::new(0, h - t, t, t);
-    let bottom_right = FrameRect::new(w - t, h - t, t, t);
-    let top = FrameRect::new(t, 0, mid_w, t);
-    let bottom = FrameRect::new(t, h - t, strip_w, t);
-    let left = FrameRect::new(0, tb, t, side_h);
-    let right = FrameRect::new(w - t, tb, t, side_h);
-
     // Controls from the skin formula, then clipped below the top strip
     // when touching it (control top lives at y=0, strip owns y=0..t).
     let controls = std::array::from_fn(|i| {
@@ -111,18 +102,16 @@ pub fn layout_frame_children(
         }
     });
 
-    let title_drag = FrameRect::new(t, t, mid_w, (tb - t).max(0));
-
     FrameChildLayout {
-        top_left,
-        top_right,
-        bottom_left,
-        bottom_right,
-        top,
-        bottom,
-        left,
-        right,
-        title_drag,
+        top_left: FrameRect::new(0, 0, t, t),
+        top_right: FrameRect::new(w - t, 0, t, t),
+        bottom_left: FrameRect::new(0, h - t, t, t),
+        bottom_right: FrameRect::new(w - t, h - t, t, t),
+        top: FrameRect::new(t, 0, mid_w, t),
+        bottom: FrameRect::new(t, h - t, strip_w, t),
+        left: FrameRect::new(0, tb, t, side_h),
+        right: FrameRect::new(w - t, tb, t, side_h),
+        title_drag: FrameRect::new(t, t, mid_w, (tb - t).max(0)),
         controls,
     }
 }
