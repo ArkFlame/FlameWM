@@ -27,13 +27,10 @@ impl ScaleManager {
 
     pub fn cached_physical_size(&mut self, logical: i32, requested_scale: u16) -> i32 {
         let scale = nearest_supported_scale(requested_scale);
-        let key = (logical, scale, self.theme_generation);
-        if let Some(value) = self.cache.get(&key) {
-            return *value;
-        }
-        let value = scale_value(logical, scale);
-        self.cache.insert(key, value);
-        value
+        *self
+            .cache
+            .entry((logical, scale, self.theme_generation))
+            .or_insert_with(|| scale_value(logical, scale))
     }
 
     pub fn set_theme_generation(&mut self, generation: u64) {
