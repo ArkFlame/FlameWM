@@ -475,12 +475,7 @@ mod tests {
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
             .expect("begin capture");
-        let key = flamewm_ui_x11::UiKeyEvent {
-            phase: flamewm_ui_x11::UiKeyPhase::Release,
-            key: "Left".to_owned(),
-            modifiers: vec!["Ctrl".to_owned(), "Super".to_owned()],
-            text: None,
-        };
+        let key = key_release("Left", &["Ctrl", "Super"]);
         let result = application.handle_key_event(&key, &mut document);
         assert!(result.is_err(), "duplicate binding must be rejected");
         assert!(result.unwrap_err().contains("Desktop left"));
@@ -520,12 +515,7 @@ mod tests {
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
             .expect("begin capture");
-        let backspace = flamewm_ui_x11::UiKeyEvent {
-            phase: flamewm_ui_x11::UiKeyPhase::Release,
-            key: "Backspace".to_owned(),
-            modifiers: Vec::new(),
-            text: None,
-        };
+        let backspace = key_release("Backspace", &[]);
         application
             .handle_key_event(&backspace, &mut document)
             .expect("backspace resets");
@@ -537,12 +527,7 @@ mod tests {
             matches!(requests.borrow().get(3), Some(ControlRequest::ResetShortcut { action, .. }) if action == "ToggleStartMenu")
         );
         // Capture is over: a later stray key release must not write anything.
-        let stray = flamewm_ui_x11::UiKeyEvent {
-            phase: flamewm_ui_x11::UiKeyPhase::Release,
-            key: "A".to_owned(),
-            modifiers: Vec::new(),
-            text: None,
-        };
+        let stray = key_release("A", &[]);
         application
             .handle_key_event(&stray, &mut document)
             .expect("stray key ignored");
@@ -1326,23 +1311,9 @@ mod tests {
             .handle_action(&release("settings.avatar.clear"), &mut document)
             .expect("avatar clear");
 
-        let keys: Vec<(String, Option<SettingValue>)> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .map(|change| (change.key.clone(), change.value.clone())),
-                _ => None,
-            })
-            .collect();
         assert_eq!(
-            keys,
-            vec![(
-                "avatarImage".to_owned(),
-                Some(SettingValue::Text(String::new()))
-            )]
+            applied_writes(&requests),
+            vec![("avatarImage".to_owned(), SettingValue::Text(String::new()))]
         );
     }
 
@@ -1573,18 +1544,8 @@ mod tests {
                 .expect("background mode action");
         }
 
-        let written: Vec<(String, SettingValue)> = requests
-            .borrow()
-            .iter()
-            .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .and_then(|change| Some((change.key.clone(), change.value.clone()?))),
-                _ => None,
-            })
-            .collect();
-        let text = |value: &str| SettingValue::Text(value.to_owned());
+        let written = applied_writes(&requests);
+        let text =|value: &str| SettingValue::Text(value.to_owned());
         assert_eq!(
             written,
             vec![
