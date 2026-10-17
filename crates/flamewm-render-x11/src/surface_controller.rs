@@ -97,10 +97,8 @@ pub fn stack_order_ok(bottom_to_top: &[SurfaceRole]) -> bool {
         let rank = rank(*role);
         // Non-decreasing rank keeps equal-class siblings total without
         // imposing an order inside one class.
-        if let Some(prev) = last {
-            if rank < prev {
-                return false;
-            }
+        if last.is_some_and(|prev| rank < prev) {
+            return false;
         }
         last = Some(rank);
     }
@@ -942,11 +940,7 @@ impl SurfaceController {
             let instance = self.instance_ref(id)?;
             width.max(1) != instance.app.width || height.max(1) != instance.app.height
         };
-        let role_label = self
-            .surfaces
-            .get(&id)
-            .map(|instance| surface_role_label(instance.role))
-            .unwrap_or("unknown");
+        let role_label = surface_role_label(self.surface_role(id)?);
         let span_trace = trace
             .map(|t| t.for_surface(id.get()))
             .unwrap_or_else(|| GeometryTrace {
