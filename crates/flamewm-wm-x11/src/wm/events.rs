@@ -87,21 +87,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         };
         match action.as_str() {
-            ACTION_WINDOW_CLOSE => {
-                if let Some(client) = self.active {
-                    self.request_close(client)?;
-                }
-            }
-            ACTION_WINDOW_MINIMIZE => {
-                if let Some(client) = self.active {
-                    self.minimize(client)?;
-                }
-            }
-            ACTION_WINDOW_MAXIMIZE => {
-                if let Some(client) = self.active {
-                    self.toggle_maximize(client)?;
-                }
-            }
+            ACTION_WINDOW_CLOSE => self.on_active(Self::request_close)?,
+            ACTION_WINDOW_MINIMIZE => self.on_active(Self::minimize)?,
+            ACTION_WINDOW_MAXIMIZE => self.on_active(Self::toggle_maximize)?,
             // Left/Up step to the previous workspace, Right/Down to the next; both clamp.
             ACTION_WORKSPACE_LEFT | ACTION_WORKSPACE_RIGHT | ACTION_WORKSPACE_UP
             | ACTION_WORKSPACE_DOWN => {
@@ -128,6 +116,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             other => log_unhandled_shortcut_once(other),
         }
         Ok(())
+    }
+
+    fn on_active(&mut self, act: fn(&mut Self, Window) -> Result<(), ReplyError>) -> Result<(), ReplyError> {
+        match self.active {
+            Some(client) => act(self, client),
+            None => Ok(()),
+        }
     }
 
     /// Bare-Super release only completes a tap; Start toggles at batch commit.
@@ -206,12 +201,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         let kind = self.window_kind(window, false)?;
-        match kind {
-            WindowKind::Normal | WindowKind::Utility => {
-                let geometry = self.conn.get_geometry(window)?.reply()?;
-                return self.manage(window, &geometry, false, kind);
-            }
-            _ => {}
+        if matches!(kind, WindowKind::Normal | WindowKind::Utility) {
+            let geometry = self.conn.get_geometry(window)?.reply()?;
+            return self.manage(window, &geometry, false, kind);
         }
         Ok(())
     }
@@ -248,9 +240,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             if atom == self.atoms.net_current_desktop {
                 // Our own publish echoes back here after the snapshot was already
                 // emitted; bumping for it would make the shell's revision stale.
-                let value = self
-                    .read_cardinals(window, atom, 1)
-                    .and_then(|values| values.first().copied());
+                let value = self.read_first_cardinal(window, atom);
                 if desktop_change_is_external(value, self.current_workspace) {
                     crate::bump_workspace_generation();
                     // Count adoption reads the root current desktop too, so a target
@@ -266,9 +256,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             {
                 // Our own metadata publish echoes back here; only a value that
                 // differs from what we wrote is a real external change.
-                let count = self
-                    .read_cardinals(window, self.atoms.net_number_of_desktops, 1)
-                    .and_then(|values| values.first().copied());
+                let count = self.read_first_cardinal(window, self.atoms.net_number_of_desktops);
                 let names = self
                     .conn
                     .get_property(false, window, self.atoms.net_desktop_names, AtomEnum::ANY, 0, u32::MAX)
@@ -283,9 +271,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                         Some(external) if external != self.workspace_count => {
                             // Adopt the root's current desktop before republishing so the
                             // metadata publish does not revert an external switch.
-                            let current = self
-                                .read_cardinals(window, self.atoms.net_current_desktop, 1)
-                                .and_then(|values| values.first().copied());
+                            let current = self.read_first_cardinal(window, self.atoms.net_current_desktop);
                             if let Some(value) = current.map(|v| v as usize) {
                                 if value < external {
                                     self.current_workspace = value;
@@ -305,9 +291,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         if atom == self.atoms.net_wm_desktop && self.clients.contains_key(&window) {
             // Client-side or transactional desktop rewrites (e.g. a workspace plan
             // applied off-WM) must update the WM's per-client workspace.
-            let value = self
-                .read_cardinals(window, atom, 1)
-                .and_then(|values| values.first().copied());
+            let value = self.read_first_cardinal(window, atom);
             // Not filtered by the old count: the root count may still be pending. The
             // count adoption (shrink) moves clients beyond the new count.
             if let Some(target) = external_desktop_target(value) {
@@ -383,6 +367,14 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
+    fn read_first_cardinal(&self, window: Window, atom: Atom) -> Option<u32> {
+        self.read_cardinals(window, atom, 1).and_then(|values| values.first().copied())
+    }
+
+    fn is_maximize_atom(&self, atom: Atom) -> bool {
+        atom == self.atoms.net_wm_state_maximized_horz || atom == self.atoms.net_wm_state_maximized_vert
+    }
+
     pub(super) fn handle_client_message(&mut self, event: ClientMessageEvent) -> Result<(), ReplyError> {
         if event.type_ == self.atoms.wm_change_state && self.clients.contains_key(&event.window) {
             let data = event.data.as_data32();
@@ -418,10 +410,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         } else if event.type_ == self.atoms.net_wm_state && self.clients.contains_key(&event.window)
         {
-            let wants_maximize = [data[1], data[2]].iter().any(|atom| {
-                *atom == self.atoms.net_wm_state_maximized_horz
-                    || *atom == self.atoms.net_wm_state_maximized_vert
-            });
+            let wants_maximize = [data[1], data[2]].iter().any(|&atom| self.is_maximize_atom(atom));
             let before = self
                 .clients
                 .get(&event.window)
@@ -435,20 +424,15 @@ impl<'a, C: Connection> Wm<'a, C> {
                 .get(&event.window)
                 .map(|state| state.placement.mode);
             if let (Some(before), Some(after)) = (before, after) {
+                let session = self.sessions.get(&event.window).map(|session| session.session);
                 flamewm_debug::emit(
                     flamewm_debug::WM_FRAME_EVENT_DISPATCH,
                     std::time::Duration::ZERO,
                     || {
                         format!(
-                            "phase=client_message client={} source={} region=None pointer=None pre_session={:?} post_session={:?} placement={before:?} post_placement={after:?} maximize_request={wants_maximize} state_mutation={}",
+                            "phase=client_message client={} source={} region=None pointer=None pre_session={session:?} post_session={session:?} placement={before:?} post_placement={after:?} maximize_request={wants_maximize} state_mutation={}",
                             event.window,
                             event.window,
-                            self.sessions
-                                .get(&event.window)
-                                .map(|session| session.session),
-                            self.sessions
-                                .get(&event.window)
-                                .map(|session| session.session),
                             before != after,
                         )
                     },
@@ -466,10 +450,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         second: Atom,
     ) -> Result<(), ReplyError> {
         let atoms = [first, second];
-        let wants_maximize = atoms.iter().any(|atom| {
-            *atom == self.atoms.net_wm_state_maximized_horz
-                || *atom == self.atoms.net_wm_state_maximized_vert
-        });
+        let wants_maximize = atoms.iter().any(|&atom| self.is_maximize_atom(atom));
         let wants_fullscreen = atoms.contains(&self.atoms.net_wm_state_fullscreen);
         let wants_hidden = atoms.contains(&self.atoms.net_wm_state_hidden);
         if wants_hidden {
@@ -488,30 +469,28 @@ impl<'a, C: Connection> Wm<'a, C> {
                 .clients
                 .get(&client)
                 .is_some_and(|state| state.is_fullscreen());
-            let enable = match action {
-                0 => false,
-                1 => true,
-                2 => !currently,
-                _ => currently,
-            };
-            return self.set_fullscreen(client, enable);
+            return self.set_fullscreen(client, net_wm_state_enable(action, currently));
         }
         if wants_maximize {
             let currently = self
                 .clients
                 .get(&client)
                 .is_some_and(|state| state.is_maximized());
-            let enable = match action {
-                0 => false,
-                1 => true,
-                2 => !currently,
-                _ => currently,
-            };
-            if enable != currently {
+            if net_wm_state_enable(action, currently) != currently {
                 self.toggle_maximize(client)?;
             }
         }
         Ok(())
+    }
+}
+
+/// Resolves a `_NET_WM_STATE` action (0 remove, 1 add, 2 toggle, else keep) against the current state.
+fn net_wm_state_enable(action: u32, currently: bool) -> bool {
+    match action {
+        0 => false,
+        1 => true,
+        2 => !currently,
+        _ => currently,
     }
 }
 
