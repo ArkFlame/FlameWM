@@ -179,7 +179,6 @@ pub struct SurfaceController {
     raw_press_observations: Vec<RawPressObservation>,
 }
 
-
 impl SurfaceController {
     pub fn new() -> Result<Self, String> {
         unsafe {
@@ -616,27 +615,19 @@ impl SurfaceController {
         self.icon_geometry_atom
     }
 
-    /// Retained native origin update (root-space device pixels). Called
-    /// after a successful move so geometry queries track the window.
-    pub fn set_origin(&mut self, id: SurfaceId, x: i32, y: i32) -> Result<(), String> {
-        self.instance_mut(id)?.origin = (x, y);
-        Ok(())
-    }
-
     pub fn grab_pointer(&mut self, id: SurfaceId) -> Result<(), String> {
-        let instance = self.instance_ref(id)?;
-        if !instance.input.allows_grab() {
-            return Err(format!(
-                "surface {} is pass-through; pointer grab refused",
-                id.0
-            ));
-        }
         let display = self.display;
         let root = self.root_window();
         let instance = self
             .surfaces
             .get_mut(&id)
             .ok_or_else(|| format!("unknown surface {}", id.0))?;
+        if !instance.input.allows_grab() {
+            return Err(format!(
+                "surface {} is pass-through; pointer grab refused",
+                id.0
+            ));
+        }
         if instance.overlay.is_some() && !instance.shown {
             // The real window maps when the opening flight lands; grab then.
             instance.grab_pending = true;
@@ -1116,7 +1107,6 @@ impl SurfaceController {
         }
         unsafe { XFlush(display) };
     }
-
 }
 /// Borrowed X connection fd wrapper for reactor registration.
 /// The display outlives the registration; calloop never owns the fd.
