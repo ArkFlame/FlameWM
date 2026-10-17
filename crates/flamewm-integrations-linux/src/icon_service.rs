@@ -372,8 +372,7 @@ impl<R: IconResolve> IconService<R> {
     pub fn result_cache_len(&self) -> usize {
         self.result_cache
             .lock()
-            .map(|cache| cache.entries.len())
-            .unwrap_or(0)
+            .map_or(0, |cache| cache.entries.len())
     }
 
     /// Raw FD readable whenever a result completes (edge: drain `wake_drain`).
@@ -386,13 +385,7 @@ impl<R: IconResolve> IconService<R> {
     pub fn wake_drain(&mut self) {
         if let Some(reader) = &mut self.wake_reader {
             let mut buf = [0_u8; 64];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(_) => continue,
-                    Err(_) => break,
-                }
-            }
+            while reader.read(&mut buf).is_ok_and(|n| n > 0) {}
         }
     }
 
@@ -407,12 +400,7 @@ impl<R: IconResolve> IconService<R> {
     /// Emits a 5000ms-cooldown service summary from existing counters.
     fn emit_service_summary(&self, context: &str) {
         let (submitted, completed, coalesced, dropped_low) = self.counters();
-        let queue_len = self
-            .shared
-            .queue
-            .lock()
-            .map(|queue| queue.len())
-            .unwrap_or(0);
+        let queue_len = self.shared.queue.lock().map_or(0, |queue| queue.len());
         flamewm_debug::emit(
             flamewm_debug::ICON_SERVICE_SUMMARY,
             flamewm_debug::ICON_SERVICE_SUMMARY_COOLDOWN,
@@ -509,11 +497,10 @@ impl<R: IconResolve> IconService<R> {
                 || cache.bytes + cost > RESULT_CACHE_BYTES)
                 && !cache.entries.is_empty()
             {
-                if let Some(first) = cache.entries.keys().next().cloned() {
-                    cache.remove(&first);
-                } else {
+                let Some(first) = cache.entries.keys().next().cloned() else {
                     break;
-                }
+                };
+                cache.remove(&first);
             }
             cache.insert(result.key.clone(), result.result.clone());
         }
@@ -651,12 +638,7 @@ impl ThemeRebuilder {
         if self.state.in_flight.swap(true, Ordering::AcqRel) {
             return false;
         }
-        let has_ready = self
-            .state
-            .ready
-            .lock()
-            .map(|slot| slot.is_some())
-            .unwrap_or(true);
+        let has_ready = self.state.ready.lock().map_or(true, |slot| slot.is_some());
         if has_ready || tx.send(job).is_err() {
             self.state.in_flight.store(false, Ordering::Release);
             return false;
