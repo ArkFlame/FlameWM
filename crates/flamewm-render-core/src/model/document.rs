@@ -89,10 +89,8 @@ impl CompiledDocument {
                 ("first_child", node.first_child),
                 ("next_sibling", node.next_sibling),
             ] {
-                if let Some(link) = link {
-                    if link as usize >= self.nodes.len() {
-                        return Err(format!("node {index} has invalid {field} index {link}"));
-                    }
+                if let Some(link) = link.filter(|&link| link as usize >= self.nodes.len()) {
+                    return Err(format!("node {index} has invalid {field} index {link}"));
                 }
             }
             if let Some(asset) = node.image {
@@ -174,18 +172,17 @@ impl RuntimeDocument {
         document.validate()?;
         let mut id_index = HashMap::new();
         for (index, node) in document.nodes.iter().enumerate() {
-            if !node.id.is_empty() {
-                if id_index.insert(node.id.clone(), index as u32).is_some() {
-                    return Err(format!("duplicate runtime id '{}'", node.id));
-                }
+            if !node.id.is_empty() && id_index.insert(node.id.clone(), index as u32).is_some() {
+                return Err(format!("duplicate runtime id '{}'", node.id));
             }
         }
-        let mut variable_index = HashMap::new();
-        let mut variable_values = Vec::with_capacity(document.variables.len());
-        for (index, variable) in document.variables.iter().enumerate() {
-            variable_index.insert(variable.name.clone(), index as u16);
-            variable_values.push(variable.default);
-        }
+        let variable_index = document
+            .variables
+            .iter()
+            .enumerate()
+            .map(|(index, variable)| (variable.name.clone(), index as u16))
+            .collect();
+        let variable_values = document.variables.iter().map(|variable| variable.default).collect();
         Ok(Self {
             document,
             variable_values,
@@ -310,8 +307,7 @@ impl RuntimeDocument {
         let revision = self
             .node_image_overrides
             .get(&index)
-            .map(|entry| entry.revision)
-            .unwrap_or(0)
+            .map_or(0, |entry| entry.revision)
             .wrapping_add(1);
         self.node_image_overrides.insert(
             index,
@@ -371,12 +367,8 @@ impl RuntimeDocument {
         if let Some(entry) = self.node_image_overrides.get(&index) {
             return entry.revision;
         }
-        self.document
-            .nodes
-            .get(index as usize)
-            .and_then(|node| node.image)
-            .map(|asset_id| self.image_revision(asset_id))
-            .unwrap_or(0)
+        let asset_id = self.document.nodes.get(index as usize).and_then(|node| node.image);
+        asset_id.map_or(0, |asset_id| self.image_revision(asset_id))
     }
 
     pub fn image_revision(&self, asset_id: u16) -> u64 {
