@@ -272,22 +272,10 @@ pub fn project_panel(
             document.image_rgb8(&icon_id, icon)?;
             document.text(&label_id, label.to_owned())?;
             document.visible(&line_id, state.running)?;
+            document.background_clear(&slot_id)?;
             if state.focused {
-                document.background_clear(&slot_id)?;
                 document.background(&line_id, task_accent())?;
-            } else if state.minimized {
-                document.background_clear(&slot_id)?;
-                document.background(
-                    &line_id,
-                    UiColor {
-                        r: 135,
-                        g: 145,
-                        b: 155,
-                        a: 255,
-                    },
-                )?;
             } else {
-                document.background_clear(&slot_id)?;
                 document.background(
                     &line_id,
                     UiColor {
