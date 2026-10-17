@@ -197,14 +197,11 @@ fn release_lost_capture_owner<E: EnginePorts>(
         return;
     };
     match dispatcher.dispatch(host, ControlRequest::EndHotkeyCapture { lease }) {
-        Ok(_) => capture_owner.borrow_mut().record_end(lease),
-        Err(error) if error.code == ErrorCode::NotFound => {
-            capture_owner.borrow_mut().record_end(lease);
-        }
-        Err(error) => eprintln!(
+        Err(error) if error.code != ErrorCode::NotFound => eprintln!(
             "flamewm: hotkey capture restore after owner {name} left failed: {}",
             error.message
         ),
+        _ => capture_owner.borrow_mut().record_end(lease),
     }
 }
 
@@ -550,12 +547,7 @@ mod tests {
     fn wire_signal_message(wire: &WireSignal) -> Message {
         let mut message =
             Message::new_signal(OBJECT_PATH, &wire.interface, &wire.member).expect("signal");
-        let items = wire
-            .args
-            .iter()
-            .map(to_item)
-            .collect::<Result<Vec<_>, _>>();
-        message.append_items(&items.expect("args"));
+        append_wire_values(&mut message, &wire.args).expect("args");
         message
     }
 
@@ -900,7 +892,6 @@ mod tests {
         let mut reply = call.error(&name, &message);
         reply.as_result().expect_err("method error reply")
     }
-
 }
 
 #[cfg(test)]
