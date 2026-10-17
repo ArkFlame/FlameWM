@@ -111,7 +111,7 @@ impl HotkeyCapture {
 /// Number of display-mode slots the Displays page exposes.
 pub const DISPLAY_MODE_SLOTS: usize = 8;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettingsUiState {
     pub page: SettingsPage,
     pub selected_output: Option<OutputId>,
@@ -119,18 +119,6 @@ pub struct SettingsUiState {
     /// Server-owned grab suspension; shortcut writes are forbidden until it is ended.
     pub hotkey_capture_lease: Option<u64>,
     pub pending_display_transaction: Option<TransactionId>,
-}
-
-impl Default for SettingsUiState {
-    fn default() -> Self {
-        Self {
-            page: SettingsPage::Appearance,
-            selected_output: None,
-            hotkey_capture: None,
-            hotkey_capture_lease: None,
-            pending_display_transaction: None,
-        }
-    }
 }
 
 pub struct SettingsClient<T: ControlTransport> {
@@ -545,14 +533,12 @@ impl<T: ControlTransport> SettingsClient<T> {
             .selected_output
             .clone()
             .ok_or_else(|| missing_snapshot("selected output"))?;
-        let response = self.transport.call(ControlRequest::SetShellScale {
+        expect_unit(self.transport.call(ControlRequest::SetShellScale {
             output,
             percent,
             expected_revision: snapshot.generation,
-        })?;
-        expect_unit(response)?;
-        self.refresh_displays()?;
-        Ok(())
+        })?)?;
+        self.refresh_displays()
     }
 
     pub fn set_panel_edge(
@@ -792,27 +778,23 @@ mod tests {
 
     #[test]
     fn escape_capture_commits_clear_binding() {
-        let mut transport = FakeTransport::default();
-        transport.responses.push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
-            revision: 1,
-            bindings: [(
-                "ToggleStartMenu".to_owned(),
-                flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())),
-            )].into_iter().collect(),
-        })));
-        transport.responses.push_back(Ok(ControlResponse::CaptureLease(9)));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport.responses.push_back(Ok(ControlResponse::Unit));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+        let mut client = fake_client([
+            Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
+                revision: 1,
+                bindings: [(
+                    "ToggleStartMenu".to_owned(),
+                    flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())),
+                )].into_iter().collect(),
+            })),
+            Ok(ControlResponse::CaptureLease(9)),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Unit),
+            Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 2,
                 bindings: Default::default(),
-            })));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
-        let mut client = SettingsClient::new(transport);
+            })),
+            Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
+        ]);
         client.refresh_shortcuts().expect("initial shortcut snapshot");
         client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
         assert!(client.capture_hotkey("Escape"));
@@ -945,8 +927,7 @@ mod tests {
 
     #[test]
     fn hotkey_cancel_restores_grabs_and_end_failure_blocks_mutation() {
-        let mut transport = FakeTransport::default();
-        transport.responses.extend([
+        let mut client = fake_client([
             Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 3,
                 bindings: [("ToggleWorkspaceLeft".to_owned(),
@@ -961,7 +942,6 @@ mod tests {
             }),
             Ok(ControlResponse::Unit),
         ]);
-        let mut client = SettingsClient::new(transport);
         client.refresh_shortcuts().expect("initial shortcut snapshot");
         client.begin_hotkey_capture("ToggleWorkspaceLeft").expect("begin lease");
         assert!(client.capture_hotkey("Super+Left"));
@@ -1269,16 +1249,14 @@ mod tests {
     #[test]
     fn settings_reset_error_preserves_cached_authoritative_snapshot() {
         let initial = SettingsSnapshot::new(4);
-        let mut transport = FakeTransport::default();
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Settings(initial.clone())));
-        transport.responses.push_back(Err(ControlError {
-            name: "com.arkflame.FlameWM1.Error.StaleRevision",
-            code: flamewm_api::ErrorCode::StaleRevision,
-            message: "settings revision is stale".to_owned(),
-        }));
-        let mut client = SettingsClient::new(transport);
+        let mut client = fake_client([
+            Ok(ControlResponse::Settings(initial.clone())),
+            Err(ControlError {
+                name: "com.arkflame.FlameWM1.Error.StaleRevision",
+                code: flamewm_api::ErrorCode::StaleRevision,
+                message: "settings revision is stale".to_owned(),
+            }),
+        ]);
         client
             .refresh_settings()
             .expect("initial settings snapshot");
