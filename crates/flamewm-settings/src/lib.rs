@@ -2313,8 +2313,10 @@ macro_rules! forward_writes {
     ($($name:ident($($arg:ident: $ty:ty),*);)*) => {
         $(
             fn $name(&mut self, $($arg: $ty),*) -> Result<(), String> {
-                let result = self.inner.$name($($arg),*);
-                self.record(result)
+                if let Err(error) = self.inner.$name($($arg),*) {
+                    self.failures.push(error);
+                }
+                Ok(())
             }
         )*
     };
@@ -2329,13 +2331,6 @@ struct NodeFailures<'a, D: UiDocumentAccess + ?Sized> {
 }
 
 impl<D: UiDocumentAccess + ?Sized> NodeFailures<'_, D> {
-    fn record(&mut self, result: Result<(), String>) -> Result<(), String> {
-        if let Err(error) = result {
-            self.failures.push(error);
-        }
-        Ok(())
-    }
-
     fn into_result(self) -> Result<(), String> {
         if self.failures.is_empty() {
             Ok(())
