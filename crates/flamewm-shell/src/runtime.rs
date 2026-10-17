@@ -2079,6 +2079,16 @@ mod tests {
         }
     }
 
+    fn bottom_panel_snapshot(generation: u64, revision: u64) -> ShellSnapshot {
+        placement_snapshot(
+            flamewm_api::Rect::new(0, 0, 1920, 1080),
+            flamewm_api::Rect::new(0, 1036, 1920, 44),
+            PanelEdge::Bottom,
+            generation,
+            revision,
+        )
+    }
+
     fn placement_snapshot(
         output_geo: flamewm_api::Rect,
         panel_geo: flamewm_api::Rect,
@@ -2107,13 +2117,7 @@ mod tests {
         assert_eq!(ctx.work_area, flamewm_api::Rect::new(0, 44, 1920, 1036));
         assert_eq!((ctx.display_generation, ctx.panels_revision), (1, 1));
         // Mixed edge rejected: Bottom snapshot against Top expectation.
-        let bottom = placement_snapshot(
-            flamewm_api::Rect::new(0, 0, 1920, 1080),
-            flamewm_api::Rect::new(0, 1036, 1920, 44),
-            PanelEdge::Bottom,
-            2,
-            2,
-        );
+        let bottom = bottom_panel_snapshot(2, 2);
         assert!(panel_context_for_snapshot(&bottom, PanelEdge::Top).is_none());
         let ctx2 = panel_context_for_snapshot(&bottom, PanelEdge::Bottom).expect("bottom context");
         assert_eq!(ctx2.work_area, flamewm_api::Rect::new(0, 0, 1920, 1036));
@@ -2121,13 +2125,7 @@ mod tests {
 
     #[test]
     fn panel_context_bottom_excludes_panel_and_starts_above() {
-        let snapshot = placement_snapshot(
-            flamewm_api::Rect::new(0, 0, 1920, 1080),
-            flamewm_api::Rect::new(0, 1036, 1920, 44),
-            PanelEdge::Bottom,
-            3,
-            5,
-        );
+        let snapshot = bottom_panel_snapshot(3, 5);
         let ctx = panel_context_for_snapshot(&snapshot, PanelEdge::Bottom).expect("context");
         assert_eq!(ctx.work_area.bottom(), 1036);
         assert!(ctx.work_area.height < 1080);
@@ -2191,13 +2189,7 @@ mod tests {
         );
         let initial = panel_context_for_snapshot(&top, PanelEdge::Top).expect("top context");
         assert_eq!(initial.panel.edge, PanelEdge::Top);
-        let bottom = placement_snapshot(
-            output,
-            flamewm_api::Rect::new(0, 1036, 1920, 44),
-            PanelEdge::Bottom,
-            2,
-            2,
-        );
+        let bottom = bottom_panel_snapshot(2, 2);
         // Next Start/Quick resolve through the synced resolver: stored Top
         // misses the gated path, the geometry-driven fallback returns the
         // Bottom context with Bottom generation/revision/work area.
@@ -2228,13 +2220,7 @@ mod tests {
 
     #[test]
     fn panel_context_missing_output_returns_none() {
-        let mut snapshot = placement_snapshot(
-            flamewm_api::Rect::new(0, 0, 1920, 1080),
-            flamewm_api::Rect::new(0, 1036, 1920, 44),
-            PanelEdge::Bottom,
-            1,
-            1,
-        );
+        let mut snapshot = bottom_panel_snapshot(1, 1);
         snapshot.displays.outputs.clear();
         assert!(panel_context_for_snapshot(&snapshot, PanelEdge::Bottom).is_none());
         let mut empty = ShellSnapshot::default();
@@ -2439,13 +2425,7 @@ mod tests {
 
     #[test]
     fn single_output_contexts_match_legacy_single_context() {
-        let snapshot = placement_snapshot(
-            flamewm_api::Rect::new(0, 0, 1920, 1080),
-            flamewm_api::Rect::new(0, 1036, 1920, 44),
-            PanelEdge::Bottom,
-            1,
-            1,
-        );
+        let snapshot = bottom_panel_snapshot(1, 1);
         let contexts = panel_contexts_for_snapshot(&snapshot, PanelEdge::Bottom);
         let legacy = panel_context_for_snapshot(&snapshot, PanelEdge::Bottom);
         assert_eq!(contexts.len(), 1);
