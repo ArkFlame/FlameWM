@@ -78,6 +78,36 @@ mod tests {
         }
     }
 
+    /// Controller over `transport`, with the queued settings snapshot already loaded.
+    fn settings_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_settings()
+            .expect("settings snapshot");
+        application
+    }
+
+    /// Controller over `transport`, with the queued display snapshot already loaded.
+    fn displays_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_displays()
+            .expect("display snapshot");
+        application
+    }
+
+    /// Controller over `transport`, with the queued shortcut snapshot already loaded.
+    fn shortcuts_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
+        let mut application = SettingsApplication::new(transport);
+        application
+            .client_mut()
+            .refresh_shortcuts()
+            .expect("shortcut snapshot");
+        application
+    }
+
     /// Values written to `key` by `ApplySettings` requests, in request order.
     fn written_values(requests: &RefCell<Vec<ControlRequest>>, key: &str) -> Vec<SettingValue> {
         requests
@@ -290,11 +320,7 @@ mod tests {
                 code: flamewm_api::ErrorCode::Unavailable,
                 message: "service busy".to_owned(),
             }));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("settings snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         let result = application.handle_action(&release("settings.toggle.fontBold"), &mut document);
         assert!(result.is_err());
@@ -345,11 +371,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Displays(two_output_display_snapshot())));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.select.1"), &mut document)
@@ -466,11 +488,7 @@ mod tests {
             .responses
             .push_back(Ok(ControlResponse::CaptureLease(12)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -521,11 +539,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -599,11 +613,7 @@ mod tests {
             .responses
             .push_back(Ok(ControlResponse::CaptureLease(13)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.up"), &mut document)
@@ -623,11 +633,7 @@ mod tests {
             Ok(ControlResponse::CaptureLease(31)),
             Ok(ControlResponse::Unit),
         ]);
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -696,11 +702,7 @@ mod tests {
             Ok(ControlResponse::CaptureLease(19)),
             Ok(ControlResponse::Unit),
         ]);
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -748,11 +750,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(SettingsSnapshot::new(3))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -786,11 +784,7 @@ mod tests {
             .responses
             .push_back(Ok(ControlResponse::CaptureLease(21)));
         transport.responses.push_back(Ok(ControlResponse::Unit));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_shortcuts()
-            .expect("shortcut snapshot");
+        let mut application = shortcuts_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.hotkey.start"), &mut document)
@@ -852,11 +846,7 @@ mod tests {
             .push_back(Ok(ControlResponse::Settings(decoration_snapshot(
                 3, "rounded",
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         application
@@ -919,11 +909,7 @@ mod tests {
                 2,
                 Some("light"),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -955,11 +941,7 @@ mod tests {
             )))]),
             ..RecordingTransport::default()
         };
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -1049,11 +1031,7 @@ mod tests {
                 "startAnimation",
                 "fade",
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         for (key, value) in &writes {
@@ -1116,11 +1094,7 @@ mod tests {
                     SettingValue::Integer(*minutes),
                 ))));
         }
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         for minutes in minutes_options {
@@ -1211,11 +1185,7 @@ mod tests {
                 transport.responses.push_back(Ok(ControlResponse::Settings(
                     taskbar_visibility_snapshot(key, value),
                 )));
-                let mut application = SettingsApplication::new(transport);
-                application
-                    .client_mut()
-                    .refresh_settings()
-                    .expect("settings snapshot");
+                let application = settings_application(transport);
                 let mut document = ProbeDocument::default();
                 application.sync(&mut document).expect("sync");
                 assert_eq!(document.visible.get(on_id), Some(&expected_on), "{key} {value:?} on");
@@ -1351,11 +1321,7 @@ mod tests {
             transport
                 .responses
                 .push_back(Ok(ControlResponse::Settings(after)));
-            let mut application = SettingsApplication::new(transport);
-            application
-                .client_mut()
-                .refresh_settings()
-                .expect("initial snapshot");
+            let mut application = settings_application(transport);
             let mut document = ProbeDocument::default();
 
             application
@@ -1389,11 +1355,7 @@ mod tests {
                 "avatarImage",
                 SettingValue::Text(String::new()),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         application
@@ -1451,11 +1413,7 @@ mod tests {
                     key,
                     SettingValue::Integer(expected),
                 ))));
-            let mut application = SettingsApplication::new(transport);
-            application
-                .client_mut()
-                .refresh_settings()
-                .expect("initial snapshot");
+            let mut application = settings_application(transport);
             let mut document = ProbeDocument::default();
 
             application
@@ -1488,11 +1446,7 @@ mod tests {
                 "taskbarFloatingMargin",
                 SettingValue::Integer(32),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         application
@@ -1535,11 +1489,7 @@ mod tests {
                 "screensaverRibbonWidthTenths",
                 SettingValue::Integer(110),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         application
@@ -1581,11 +1531,7 @@ mod tests {
                 "taskbarStyle",
                 SettingValue::Text("floating".to_owned()),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -1632,11 +1578,7 @@ mod tests {
                 "cursorSize",
                 SettingValue::Integer(64),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -1666,11 +1608,7 @@ mod tests {
                     SettingValue::Text("default".to_owned()),
                 ))));
         }
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         for action in [
             "settings.wallpaper.default",
@@ -1724,11 +1662,7 @@ mod tests {
                 "wallpaperFit",
                 SettingValue::Text("fit".to_owned()),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
 
         application
@@ -1757,11 +1691,7 @@ mod tests {
                 "weatherUnits",
                 SettingValue::Text("fahrenheit".to_owned()),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -1819,11 +1749,7 @@ mod tests {
                 "weatherLocation",
                 SettingValue::Text(String::new()),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -1858,11 +1784,7 @@ mod tests {
                 "focusFollowsMouse",
                 SettingValue::Boolean(true),
             ))));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
         application
             .sync(&mut document)
@@ -1928,11 +1850,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Displays(display_snapshot())));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         application
             .handle_action(
                 &release("settings.display.select.0"),
@@ -1966,11 +1884,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(updated)));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("settings snapshot");
+        let mut application = settings_application(transport);
         application
             .handle_action(
                 &release("settings.toggle.fontBold"),
@@ -2038,11 +1952,7 @@ mod tests {
                 .responses
                 .push_back(Ok(ControlResponse::Settings(snapshot.clone())));
         }
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let application = settings_application(transport);
         (application, requests)
     }
 
@@ -2232,11 +2142,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Settings(teal)));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_settings()
-            .expect("initial snapshot");
+        let mut application = settings_application(transport);
 
         let mut press = release("settings.accent.blue");
         press.phase = UiActionPhase::Press;
@@ -2397,11 +2303,7 @@ mod tests {
         transport
             .responses
             .push_back(Ok(ControlResponse::Displays(two_mode_display_snapshot())));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.select.0"), &mut document)
@@ -2434,11 +2336,7 @@ mod tests {
             .push_back(Ok(ControlResponse::Transaction(
                 flamewm_api::TransactionId(11),
             )));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.select.0"), &mut document)
@@ -2469,11 +2367,7 @@ mod tests {
             .push_back(Ok(ControlResponse::Transaction(
                 flamewm_api::TransactionId(12),
             )));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.select.1"), &mut document)
@@ -2527,11 +2421,7 @@ mod tests {
             } else {
                 transport.responses.push_back(response);
             }
-            let mut application = SettingsApplication::new(transport);
-            application
-                .client_mut()
-                .refresh_displays()
-                .expect("pending display snapshot");
+            let mut application = displays_application(transport);
             let mut document = ProbeDocument::default();
             let before = crate::monotonic_now_ms();
             let result = application.handle_action(&release(action), &mut document);
@@ -2609,11 +2499,7 @@ mod tests {
             .push_back(Ok(ControlResponse::Transaction(
                 flamewm_api::TransactionId(31),
             )));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.modes.next"), &mut document)
@@ -2631,11 +2517,7 @@ mod tests {
         transport.responses.push_back(Ok(
             ControlResponse::Displays(five_output_display_snapshot()),
         ));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.outputs.next"), &mut document)
@@ -2665,11 +2547,7 @@ mod tests {
         transport.responses.push_back(Ok(
             ControlResponse::Displays(twelve_mode_display_snapshot()),
         ));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.modes.next"), &mut document)
@@ -2702,11 +2580,7 @@ mod tests {
         transport.responses.push_back(Ok(
             ControlResponse::Displays(twelve_mode_display_snapshot()),
         ));
-        let mut application = SettingsApplication::new(transport);
-        application
-            .client_mut()
-            .refresh_displays()
-            .expect("display snapshot");
+        let mut application = displays_application(transport);
         let mut document = ProbeDocument::default();
         application
             .handle_action(&release("settings.display.modes.prev"), &mut document)
