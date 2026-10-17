@@ -187,25 +187,13 @@ impl From<ControlError> for WireError {
 }
 
 pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
-    let bad = |message: &str| ControlError {
-        name: flamewm_control_core::error_name(ErrorCode::InvalidArgument),
-        code: ErrorCode::InvalidArgument,
-        message: message.to_owned(),
-    };
-
     match (call.interface.as_str(), call.member.as_str()) {
-        (IFACE_ROOT, "Ping") => expect_arity(call, 0).map(|()| ControlRequest::Ping),
-        (IFACE_ROOT, "GetVersion") => expect_arity(call, 0).map(|()| ControlRequest::GetVersion),
-        (IFACE_ROOT, "GetCapabilities") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetCapabilities)
-        }
-        (IFACE_ROOT, "GetShellBootstrap") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetShellBootstrap)
-        }
-        (IFACE_WINDOWS, "GetWindows") => expect_arity(call, 0).map(|()| ControlRequest::GetWindows),
-        (IFACE_APPLICATIONS, "GetApplications") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetApplications)
-        }
+        (IFACE_ROOT, "Ping") => nullary(call, ControlRequest::Ping),
+        (IFACE_ROOT, "GetVersion") => nullary(call, ControlRequest::GetVersion),
+        (IFACE_ROOT, "GetCapabilities") => nullary(call, ControlRequest::GetCapabilities),
+        (IFACE_ROOT, "GetShellBootstrap") => nullary(call, ControlRequest::GetShellBootstrap),
+        (IFACE_WINDOWS, "GetWindows") => nullary(call, ControlRequest::GetWindows),
+        (IFACE_APPLICATIONS, "GetApplications") => nullary(call, ControlRequest::GetApplications),
         (IFACE_APPLICATIONS, "LaunchApplication") => {
             expect_arity(call, 3)?;
             Ok(ControlRequest::LaunchApplication {
@@ -232,9 +220,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
                 _ => ControlRequest::CloseWindow(window),
             })
         }
-        (IFACE_SETTINGS, "GetSnapshot") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetSettings)
-        }
+        (IFACE_SETTINGS, "GetSnapshot") => nullary(call, ControlRequest::GetSettings),
         (IFACE_SETTINGS, "Apply") => {
             expect_arity(call, 2)?;
             let expected_revision = required_u64(&call.args[0], "expectedRevision")?;
@@ -262,9 +248,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
                 reset_section: Some(required_string(&call.args[1], "section")?.to_owned()),
             }))
         }
-        (IFACE_WORKSPACES, "GetSnapshot") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetWorkspaces)
-        }
+        (IFACE_WORKSPACES, "GetSnapshot") => nullary(call, ControlRequest::GetWorkspaces),
         (IFACE_WORKSPACES, "Activate") => {
             workspace_index_request(call, |index, expected_revision| {
                 ControlRequest::ActivateWorkspace {
@@ -289,9 +273,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
                 }
             })
         }
-        (IFACE_DISPLAYS, "GetSnapshot") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetDisplays)
-        }
+        (IFACE_DISPLAYS, "GetSnapshot") => nullary(call, ControlRequest::GetDisplays),
         (IFACE_DISPLAYS, "BeginModeChange") => {
             expect_arity(call, 3)?;
             Ok(ControlRequest::BeginDisplayMode {
@@ -319,13 +301,11 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
             let percent = required_u32(&call.args[1], "percent")?;
             Ok(ControlRequest::SetShellScale {
                 output: OutputId::new(required_string(&call.args[0], "outputKey")?),
-                percent: u16::try_from(percent).map_err(|_| bad("percent exceeds u16"))?,
+                percent: u16::try_from(percent).map_err(|_| invalid("percent exceeds u16"))?,
                 expected_revision: required_u64(&call.args[2], "expectedRevision")?,
             })
         }
-        (IFACE_SHORTCUTS, "GetSnapshot") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetShortcuts)
-        }
+        (IFACE_SHORTCUTS, "GetSnapshot") => nullary(call, ControlRequest::GetShortcuts),
         (IFACE_SHORTCUTS, "BeginCapture") => {
             shortcut_action_request(call, |action, expected_revision| {
                 ControlRequest::BeginHotkeyCapture {
@@ -364,7 +344,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
                 }
             })
         }
-        (IFACE_PANELS, "GetSnapshot") => expect_arity(call, 0).map(|()| ControlRequest::GetPanels),
+        (IFACE_PANELS, "GetSnapshot") => nullary(call, ControlRequest::GetPanels),
         (IFACE_PANELS, "SetEdge") => {
             expect_arity(call, 3)?;
             Ok(ControlRequest::SetPanelEdge {
@@ -378,7 +358,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
             Ok(ControlRequest::SetPanelSize {
                 output: OutputId::new(required_string(&call.args[0], "outputKey")?),
                 logical_size: u16::try_from(required_u32(&call.args[1], "size")?)
-                    .map_err(|_| bad("size exceeds u16"))?,
+                    .map_err(|_| invalid("size exceeds u16"))?,
                 expected_revision: required_u64(&call.args[2], "expectedRevision")?,
             })
         }
@@ -399,13 +379,11 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
             Ok(ControlRequest::ReorderTask {
                 entry_id: TaskEntryId::new(required_string(&call.args[0], "entryId")?),
                 index: usize::try_from(required_u32(&call.args[1], "index")?)
-                    .map_err(|_| bad("index does not fit usize"))?,
+                    .map_err(|_| invalid("index does not fit usize"))?,
                 expected_revision: required_u64(&call.args[2], "expectedRevision")?,
             })
         }
-        (IFACE_SESSION, "GetCapabilities") => {
-            expect_arity(call, 0).map(|()| ControlRequest::GetSessionCapabilities)
-        }
+        (IFACE_SESSION, "GetCapabilities") => nullary(call, ControlRequest::GetSessionCapabilities),
         (IFACE_SESSION, "Lock") => session_action(call, SessionAction::Lock),
         (IFACE_SESSION, "LockPreview") => session_action(call, SessionAction::LockPreview),
         (IFACE_SESSION, "Logout") => session_action(call, SessionAction::Logout),
@@ -415,7 +393,7 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
         (IFACE_SESSION, "ScreensaverPreview") => {
             session_action(call, SessionAction::ScreensaverPreview)
         }
-        (IFACE_SYSTEM, "GetSnapshot") => expect_arity(call, 0).map(|()| ControlRequest::GetSystem),
+        (IFACE_SYSTEM, "GetSnapshot") => nullary(call, ControlRequest::GetSystem),
         (IFACE_SYSTEM, member) => system_action_request(call, member),
         _ => Err(ControlError {
             name: flamewm_control_core::error_name(ErrorCode::NotFound),
@@ -431,15 +409,15 @@ pub fn decode_call(call: &WireCall) -> Result<ControlRequest, ControlError> {
 /// Encode typed client request arguments for the D-Bus adapter.
 pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
     let call = match request {
-        ControlRequest::Ping => WireCall::new(IFACE_ROOT, "Ping", Vec::new()),
-        ControlRequest::GetVersion => WireCall::new(IFACE_ROOT, "GetVersion", Vec::new()),
-        ControlRequest::GetCapabilities => WireCall::new(IFACE_ROOT, "GetCapabilities", Vec::new()),
+        ControlRequest::Ping => nullary_call(IFACE_ROOT, "Ping"),
+        ControlRequest::GetVersion => nullary_call(IFACE_ROOT, "GetVersion"),
+        ControlRequest::GetCapabilities => nullary_call(IFACE_ROOT, "GetCapabilities"),
         ControlRequest::GetShellBootstrap => {
-            WireCall::new(IFACE_ROOT, "GetShellBootstrap", Vec::new())
+            nullary_call(IFACE_ROOT, "GetShellBootstrap")
         }
-        ControlRequest::GetWindows => WireCall::new(IFACE_WINDOWS, "GetWindows", Vec::new()),
+        ControlRequest::GetWindows => nullary_call(IFACE_WINDOWS, "GetWindows"),
         ControlRequest::GetApplications => {
-            WireCall::new(IFACE_APPLICATIONS, "GetApplications", Vec::new())
+            nullary_call(IFACE_APPLICATIONS, "GetApplications")
         }
         ControlRequest::LaunchApplication { app, options } => WireCall::new(
             IFACE_APPLICATIONS,
@@ -454,7 +432,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
         ControlRequest::MinimizeWindow(window) => window_call("MinimizeWindow", *window),
         ControlRequest::RestoreWindow(window) => window_call("RestoreWindow", *window),
         ControlRequest::CloseWindow(window) => window_call("CloseWindow", *window),
-        ControlRequest::GetSettings => WireCall::new(IFACE_SETTINGS, "GetSnapshot", Vec::new()),
+        ControlRequest::GetSettings => nullary_call(IFACE_SETTINGS, "GetSnapshot"),
         ControlRequest::ApplySettings(transaction) => match &transaction.reset_section {
             Some(section) => WireCall::new(
                 IFACE_SETTINGS,
@@ -484,7 +462,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
                 ],
             ),
         },
-        ControlRequest::GetWorkspaces => WireCall::new(IFACE_WORKSPACES, "GetSnapshot", Vec::new()),
+        ControlRequest::GetWorkspaces => nullary_call(IFACE_WORKSPACES, "GetSnapshot"),
         ControlRequest::ActivateWorkspace {
             index,
             expected_revision,
@@ -497,7 +475,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             index,
             expected_revision,
         } => workspace_call("Remove", *index, *expected_revision),
-        ControlRequest::GetDisplays => WireCall::new(IFACE_DISPLAYS, "GetSnapshot", Vec::new()),
+        ControlRequest::GetDisplays => nullary_call(IFACE_DISPLAYS, "GetSnapshot"),
         ControlRequest::BeginDisplayMode {
             output,
             mode,
@@ -533,7 +511,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
                 WireValue::U64(*expected_revision),
             ],
         ),
-        ControlRequest::GetShortcuts => WireCall::new(IFACE_SHORTCUTS, "GetSnapshot", Vec::new()),
+        ControlRequest::GetShortcuts => nullary_call(IFACE_SHORTCUTS, "GetSnapshot"),
         ControlRequest::BeginHotkeyCapture {
             action,
             expected_revision,
@@ -583,7 +561,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
                 WireValue::U64(*expected_revision),
             ],
         ),
-        ControlRequest::GetPanels => WireCall::new(IFACE_PANELS, "GetSnapshot", Vec::new()),
+        ControlRequest::GetPanels => nullary_call(IFACE_PANELS, "GetSnapshot"),
         ControlRequest::SetPanelEdge {
             output,
             edge,
@@ -632,9 +610,9 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
             ],
         ),
         ControlRequest::GetSessionCapabilities => {
-            WireCall::new(IFACE_SESSION, "GetCapabilities", Vec::new())
+            nullary_call(IFACE_SESSION, "GetCapabilities")
         }
-        ControlRequest::GetSystem => WireCall::new(IFACE_SYSTEM, "GetSnapshot", Vec::new()),
+        ControlRequest::GetSystem => nullary_call(IFACE_SYSTEM, "GetSnapshot"),
         ControlRequest::SystemAction {
             action,
             expected_revision,
@@ -2631,6 +2609,14 @@ pub const fn edge_name(edge: PanelEdge) -> &'static str {
         PanelEdge::Left => "left",
         PanelEdge::Right => "right",
     }
+}
+
+fn nullary(call: &WireCall, request: ControlRequest) -> Result<ControlRequest, ControlError> {
+    expect_arity(call, 0).map(|()| request)
+}
+
+fn nullary_call(interface: &str, member: &str) -> WireCall {
+    WireCall::new(interface, member, Vec::new())
 }
 
 fn invalid(message: &str) -> ControlError {
