@@ -138,15 +138,12 @@ fn fill_row_runs(width: u32, height: u32, radius: u32, row: u32) -> Vec<Run> {
         return runs;
     }
     let (lo, full) = left_run(height, radius, row);
-    let partial: Vec<f32> = (lo..full)
-        .map(|col| left_alpha(height, radius, row, col))
-        .collect();
-    for (col, &alpha) in (lo..full).zip(&partial) {
-        push_run(&mut runs, col, 1, alpha);
+    for col in lo..full {
+        push_run(&mut runs, col, 1, left_alpha(height, radius, row, col));
     }
     push_run(&mut runs, full, width.saturating_sub(full * 2), 1.0);
-    for (col, &alpha) in (lo..full).zip(&partial).rev() {
-        push_run(&mut runs, width - 1 - col, 1, alpha);
+    for col in (lo..full).rev() {
+        push_run(&mut runs, width - 1 - col, 1, left_alpha(height, radius, row, col));
     }
     runs
 }
@@ -167,23 +164,21 @@ fn stroke_row_runs(width: u32, height: u32, radius: u32, thickness: u32, row: u3
     let (_, full) = left_run(height, radius, row);
     let (_, inner_full) = left_run(inner_h, inner_r, inner_row);
     let ring_hi = full.max(thickness + inner_full);
-    let left: Vec<(u32, f32)> = (0..ring_hi)
-        .map(|col| {
-            let outer = left_alpha(height, radius, row, col);
-            let inner = if col < thickness {
-                0.0
-            } else {
-                left_alpha(inner_h, inner_r, inner_row, col - thickness)
-            };
-            (col, (outer - inner).clamp(0.0, 1.0))
-        })
-        .collect();
+    let ring_alpha = |col: u32| {
+        let outer = left_alpha(height, radius, row, col);
+        let inner = if col < thickness {
+            0.0
+        } else {
+            left_alpha(inner_h, inner_r, inner_row, col - thickness)
+        };
+        (outer - inner).clamp(0.0, 1.0)
+    };
     let mut runs = Vec::new();
-    for &(col, alpha) in &left {
-        push_run(&mut runs, col, 1, alpha);
+    for col in 0..ring_hi {
+        push_run(&mut runs, col, 1, ring_alpha(col));
     }
-    for &(col, alpha) in left.iter().rev() {
-        push_run(&mut runs, width - 1 - col, 1, alpha);
+    for col in (0..ring_hi).rev() {
+        push_run(&mut runs, width - 1 - col, 1, ring_alpha(col));
     }
     runs
 }
