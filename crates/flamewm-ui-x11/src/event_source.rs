@@ -13,13 +13,17 @@ where
     runtime
         .controller
         .pump_events(|event: &SurfaceControllerEvent, _document| {
-            on_event(SurfaceEvent {
-                surface: crate::SurfaceHandle::from_id(event.surface),
-                action: event.event.clone(),
-            });
+            on_event(to_surface_event(event));
             Ok(())
         })
         .map_err(UiBackendError::Renderer)
+}
+
+fn to_surface_event(event: &SurfaceControllerEvent) -> SurfaceEvent {
+    SurfaceEvent {
+        surface: crate::SurfaceHandle::from_id(event.surface),
+        action: event.event.clone(),
+    }
 }
 
 /// Block on the shared reactor, pump X events when the connection is
@@ -45,10 +49,7 @@ where
         .run_with_reactor(
             reactor,
             |event: &SurfaceControllerEvent, _document| {
-                on_event(SurfaceEvent {
-                    surface: crate::SurfaceHandle::from_id(event.surface),
-                    action: event.event.clone(),
-                });
+                on_event(to_surface_event(event));
                 Ok(())
             },
             |_controller| on_tick(),

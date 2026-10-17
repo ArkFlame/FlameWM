@@ -183,9 +183,7 @@ impl SurfaceRuntime {
         scale: f32,
     ) -> Result<f32, UiBackendError> {
         let scale = effective_output_scale(scale);
-        self.controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?
+        self.document_mut(surface)?
             .set_ui_scale(scale)
             .map_err(UiBackendError::Document)?;
         Ok(scale)
@@ -468,10 +466,7 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         apply: impl FnOnce(&mut UiDocumentView<'_>) -> Result<R, String>,
     ) -> Result<R, UiBackendError> {
-        let document = self
-            .controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?;
+        let document = self.document_mut(surface)?;
         apply(&mut UiDocumentView { document }).map_err(UiBackendError::Document)
     }
 
@@ -596,10 +591,7 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         node: u32,
     ) -> Result<flamewm_render_core::Rect, UiBackendError> {
-        let document = self
-            .controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?;
+        let document = self.document_mut(surface)?;
         let (width, height) = document_space_extent(document);
         let layout = flamewm_render_core::LayoutEngine::compute(
             document,
@@ -729,10 +721,7 @@ impl SurfaceRuntime {
                 .unwrap_or(1.0),
         )
         .map_err(UiBackendError::Document)?;
-        let document = self
-            .controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?;
+        let document = self.document_mut(surface)?;
         let scale = document.ui_scale();
         let measured = flamewm_render_core::LayoutEngine::measure_root(
             document,
@@ -769,10 +758,7 @@ impl SurfaceRuntime {
                 .unwrap_or(1.0),
         )
         .map_err(UiBackendError::Document)?;
-        let document = self
-            .controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?;
+        let document = self.document_mut(surface)?;
         let scale = document.ui_scale();
         let measured = flamewm_render_core::LayoutEngine::measure_node(
             document,
@@ -804,10 +790,7 @@ impl SurfaceRuntime {
         max_device_w: f32,
         max_device_h: f32,
     ) -> Result<(f32, f32), UiBackendError> {
-        let node = self
-            .controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?
+        let node = self.document_mut(surface)?
             .node_by_id(node_id)
             .ok_or_else(|| {
                 UiBackendError::Document(format!("missing semantic node '{node_id}'"))
@@ -820,10 +803,7 @@ impl SurfaceRuntime {
         &mut self,
         surface: SurfaceHandle,
     ) -> Result<(f32, f32), UiBackendError> {
-        let document = self
-            .controller
-            .document_mut(surface.0)
-            .map_err(UiBackendError::Document)?;
+        let document = self.document_mut(surface)?;
         let (width, height) = document_space_extent(document);
         let layout = flamewm_render_core::LayoutEngine::compute(
             document,

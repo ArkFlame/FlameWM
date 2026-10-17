@@ -113,26 +113,11 @@ impl UiDocument {
     }
 
     pub fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        validate_rgba8(&image)?;
-        self.document.replace_image_for_node(
-            id,
-            image.source,
-            image.width,
-            image.height,
-            image.pixels,
-        )
+        replace_rgba8(&mut self.document, id, image)
     }
 
     pub fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
-        let recipe = flamewm_skin::recipes::toggle::TOGGLE;
-        let color = if checked { recipe.on } else { recipe.off };
-        self.document.set_background_color(track_id, rgb(color.0))?;
-        let left = if checked {
-            recipe.width - recipe.knob - 2
-        } else {
-            2
-        };
-        self.document.set_position_px(knob_id, left as f32, 2.0)
+        set_toggle(&mut self.document, track_id, knob_id, checked)
     }
 
     pub fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
@@ -295,25 +280,11 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
     }
 
     fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        validate_rgba8(&image)?;
-        self.document.replace_image_for_node(
-            id,
-            image.source,
-            image.width,
-            image.height,
-            image.pixels,
-        )
+        replace_rgba8(self.document, id, image)
     }
 
     fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        validate_rgba8(&image)?;
-        self.document.replace_image_for_node(
-            id,
-            image.source,
-            image.width,
-            image.height,
-            image.pixels,
-        )
+        replace_rgba8(self.document, id, image)
     }
 
     fn image_reset(&mut self, id: &str) -> Result<(), String> {
@@ -325,15 +296,7 @@ impl<'a> UiDocumentAccess for UiDocumentView<'a> {
     }
 
     fn toggle(&mut self, track_id: &str, knob_id: &str, checked: bool) -> Result<(), String> {
-        let recipe = flamewm_skin::recipes::toggle::TOGGLE;
-        let color = if checked { recipe.on } else { recipe.off };
-        self.document.set_background_color(track_id, rgb(color.0))?;
-        let left = if checked {
-            recipe.width - recipe.knob - 2
-        } else {
-            2
-        };
-        self.document.set_position_px(knob_id, left as f32, 2.0)
+        set_toggle(self.document, track_id, knob_id, checked)
     }
 
     fn position(&mut self, id: &str, left: f32, top: f32) -> Result<(), String> {
@@ -420,6 +383,32 @@ impl From<UiColor> for flamewm_render_core::Color {
 
 fn rgb(value: u32) -> flamewm_render_core::Color {
     flamewm_render_core::Color::rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
+}
+
+fn replace_rgba8(
+    document: &mut RuntimeDocument,
+    id: &str,
+    image: RuntimeImage,
+) -> Result<(), String> {
+    validate_rgba8(&image)?;
+    document.replace_image_for_node(id, image.source, image.width, image.height, image.pixels)
+}
+
+fn set_toggle(
+    document: &mut RuntimeDocument,
+    track_id: &str,
+    knob_id: &str,
+    checked: bool,
+) -> Result<(), String> {
+    let recipe = flamewm_skin::recipes::toggle::TOGGLE;
+    let color = if checked { recipe.on } else { recipe.off };
+    document.set_background_color(track_id, rgb(color.0))?;
+    let left = if checked {
+        recipe.width - recipe.knob - 2
+    } else {
+        2
+    };
+    document.set_position_px(knob_id, left as f32, 2.0)
 }
 
 fn validate_rgba8(image: &RuntimeImage) -> Result<(), String> {

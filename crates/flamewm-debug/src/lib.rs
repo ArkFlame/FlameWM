@@ -145,18 +145,22 @@ pub fn init_process_in(dir: &std::path::Path, process_name: &str, is_enabled: bo
     let _ = fs::create_dir_all(&dir);
     let file = file_for_process(process_name).map(|name| dir.join(name));
     if let Ok(mut guard) = state().lock() {
-        guard.file = file;
+        guard.file = file.clone();
         guard.capped = false;
     }
-    if !is_enabled {
-        return;
-    }
-    let Some(path) = file_for_process(process_name).map(|name| dir.join(name)) else {
+    let (true, Some(path)) = (is_enabled, file) else {
         return;
     };
-    let line = session_header(process_name);
     if let Ok(mut guard) = state().lock() {
-        write_line(&path, &line, &mut guard.capped);
+        write_line(&path, &session_header(process_name), &mut guard.capped);
+    }
+}
+
+const CAP_MARKER: &str = "CAP reached 1MiB, dropping further lines";
+
+fn append_line(path: &std::path::Path, text: &str) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{text}");
     }
 }
 
@@ -166,15 +170,13 @@ fn write_line(path: &std::path::Path, line: &str, capped: &mut bool) {
     }
     let current_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if current_len >= MAX_FILE_BYTES {
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(f, "CAP reached 1MiB, dropping further lines");
-        }
+        append_line(path, CAP_MARKER);
         *capped = true;
         return;
     }
     // Truncate the single line if it alone would overflow the cap.
-    let mut text = line;
     let owned;
+    let mut text = line;
     if current_len + line.len() as u64 + 1 > MAX_FILE_BYTES {
         let allowed = MAX_FILE_BYTES.saturating_sub(current_len + 1) as usize;
         owned = line
@@ -183,15 +185,10 @@ fn write_line(path: &std::path::Path, line: &str, capped: &mut bool) {
             .map(|(_, c)| c)
             .collect::<String>();
         text = &owned;
-        // Fall through to write the truncated line, then mark capped.
     }
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{text}");
-    }
+    append_line(path, text);
     if current_len + line.len() as u64 + 1 >= MAX_FILE_BYTES {
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(f, "CAP reached 1MiB, dropping further lines");
-        }
+        append_line(path, CAP_MARKER);
         *capped = true;
     }
 }
@@ -230,7 +227,7 @@ pub fn emit(id: DebugEventId, cooldown: Duration, message: impl FnOnce() -> Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{debug_dir_for, enabled_for, file_for_process, session_header};
+    use super::{debug_dir_for, enabled_for, file_for_process};
     use std::ffi::OsString;
     use std::fs;
 
