@@ -422,10 +422,9 @@ impl<T: ControlTransport> SettingsClient<T> {
     }
 
     pub fn commit_hotkey_capture(&mut self) -> Result<(), ControlError> {
-        let Some(capture) = self.ui.hotkey_capture.as_ref() else {
+        let Some(capture) = self.ui.hotkey_capture.clone() else {
             return Ok(());
         };
-        let capture = capture.clone();
         let lease = self.ui.hotkey_capture_lease.ok_or_else(|| unexpected_response("hotkey capture lease"))?;
         // Restore WM grabs before the shortcut mutation. If End fails, retain the lease
         // and capture so the UI can retry or cancel instead of mutating under suspension.
