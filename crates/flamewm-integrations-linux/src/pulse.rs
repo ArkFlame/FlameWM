@@ -262,8 +262,7 @@ impl PulseAdapter {
         }
 
         self.with_ready_context(|context| {
-            let mut introspector = context.introspect();
-            let _operation = introspector.set_sink_mute_by_index(
+            let _operation = context.introspect().set_sink_mute_by_index(
                 endpoint_id,
                 action.muted,
                 Some(self.write_failure_callback(action.generation, "sink mute")),
@@ -576,7 +575,6 @@ fn request_reconcile(
             &sink_context,
             &sink_controller,
             &sink_snapshot,
-            &sink_timer,
             generation,
             sink_name.to_string(),
             server
@@ -592,7 +590,6 @@ fn request_audio_lists(
     context_slot: &Weak<RefCell<Option<Context>>>,
     controller: &Arc<Mutex<PulseController>>,
     on_snapshot: &Arc<Mutex<Box<SnapshotCallback>>>,
-    _timer: &Weak<RefCell<Option<PulseTimer>>>,
     generation: u64,
     default_sink_name: String,
     default_source_name: String,
@@ -661,8 +658,7 @@ fn request_sink_list(
                 is_default,
             });
         }
-        ListResult::End => complete_audio_list(&state, &controller, &on_snapshot, generation),
-        ListResult::Error => complete_audio_list(&state, &controller, &on_snapshot, generation),
+        _ => complete_audio_list(&state, &controller, &on_snapshot, generation),
     });
 }
 
@@ -691,8 +687,7 @@ fn request_source_list(
                 is_default,
             });
         }
-        ListResult::End => complete_audio_list(&state, &controller, &on_snapshot, generation),
-        ListResult::Error => complete_audio_list(&state, &controller, &on_snapshot, generation),
+        _ => complete_audio_list(&state, &controller, &on_snapshot, generation),
     });
 }
 
@@ -712,8 +707,7 @@ fn request_stream_list(
             info.mute,
             |key| info.proplist.get_str(key),
         )),
-        ListResult::End => complete_audio_list(&state, &controller, &on_snapshot, generation),
-        ListResult::Error => complete_audio_list(&state, &controller, &on_snapshot, generation),
+        _ => complete_audio_list(&state, &controller, &on_snapshot, generation),
     });
 }
 
@@ -858,9 +852,6 @@ fn pulse_volume(percent: u8) -> Volume {
 
 fn volume_percent(volume: Volume) -> u8 {
     let normal = u64::from(Volume::NORMAL.0);
-    if normal == 0 {
-        return 0;
-    }
     ((u64::from(volume.0)
         .saturating_mul(100)
         .saturating_add(normal / 2))
