@@ -922,10 +922,7 @@ impl ShellLoop {
         let mut need_panel = false;
         let mut need_submenu = false;
         for res in results {
-            let raster = match res.raster {
-                Some(r) => r,
-                None => continue,
-            };
+            let Some(raster) = res.raster else { continue };
             let image = flamewm_ui_x11::RuntimeImage {
                 source: raster.source.clone(),
                 width: raster.width,
@@ -1188,12 +1185,8 @@ impl ShellLoop {
             };
             if projected.is_ok() && open.is_some() {
                 flamewm_shell::runtime::projection_counter(ProjectionKind::Popup).increment();
-                let surface = match open {
-                    Some("media") => Some(self.surfaces.media),
-                    _ => None,
-                };
-                if let Some(surface) = surface {
-                    let _ = runtime.redraw(surface);
+                if let Some("media") = open {
+                    let _ = runtime.redraw(self.surfaces.media);
                 }
             }
         }
@@ -1706,13 +1699,10 @@ impl ShellLoop {
             projection::project_weather_tray(document, &feed.state, units, shown)
         });
         // Pending clears only after a successful tray write; failures stay loud and retry.
-        let tray_ok = match projected {
-            Ok(()) => true,
-            Err(error) => {
-                eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
-                false
-            }
-        };
+        if let Err(error) = &projected {
+            eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
+        }
+        let tray_ok = projected.is_ok();
         let _ = runtime.redraw(self.surfaces.panel());
         self.push_weather_feed();
         if !tray_ok {
