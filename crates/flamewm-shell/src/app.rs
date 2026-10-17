@@ -1261,8 +1261,7 @@ impl ShellLoop {
                 .panels
                 .panels
                 .first()
-                .map(|panel| panel.geometry != self.surfaces.panel_geometry())
-                .unwrap_or(false)
+                .is_some_and(|panel| panel.geometry != self.surfaces.panel_geometry())
             || self.surfaces.output_scale_drifted(snapshot)
     }
 
