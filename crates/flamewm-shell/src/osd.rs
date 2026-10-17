@@ -20,7 +20,6 @@ const COMPILED_UI: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-osd
 pub const OSD_WIDTH: i32 = 215;
 pub const OSD_HEIGHT: i32 = 37;
 pub const OSD_RADIUS: i32 = 18;
-pub const TRACK_X: i32 = 40;
 pub const TRACK_W: i32 = 129;
 pub const TRACK_H: i32 = 5;
 pub const VOLUME_MAX: u8 = 150;
