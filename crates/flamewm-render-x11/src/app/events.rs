@@ -168,6 +168,13 @@ fn range_drag_text(track_x: f32, track_w: f32, min: f32, max: f32, x: f32) -> St
     slider_value_from_pointer(track, min, max, 0.0, x).to_string()
 }
 
+/// Keysyms at shift level 0 and at the level the event's Shift state selects.
+unsafe fn key_symbols(key: &mut XKeyEvent) -> (u64, u64) {
+    let shift = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
+    // SAFETY: key is an initialized XKeyEvent copied from a key XEvent.
+    unsafe { (XLookupKeysym(key, 0), XLookupKeysym(key, shift)) }
+}
+
 fn emit_typed_key<F>(
     key: &XKeyEvent,
     symbol: u64,
@@ -393,12 +400,8 @@ impl X11App {
                 KEY_PRESS => {
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
                     let mut key = unsafe { event.xkey };
-                    // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
-                    let symbol = unsafe { XLookupKeysym(&mut key, 0) };
-                    let shift_index = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
-                    // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
-                    let typed_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
+                    let (symbol, typed_symbol) = unsafe { key_symbols(&mut key) };
                     emit_typed_key(
                         &key,
                         typed_symbol,
@@ -465,12 +468,8 @@ impl X11App {
                 KEY_RELEASE => {
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
                     let mut key = unsafe { event.xkey };
-                    // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
-                    let symbol = unsafe { XLookupKeysym(&mut key, 0) };
-                    let shift_index = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
-                    // SAFETY: key points to the initialized XKeyEvent copied from XEvent.
-                    let typed_symbol = unsafe { XLookupKeysym(&mut key, shift_index) };
+                    let (symbol, typed_symbol) = unsafe { key_symbols(&mut key) };
                     emit_typed_key(
                         &key,
                         typed_symbol,
