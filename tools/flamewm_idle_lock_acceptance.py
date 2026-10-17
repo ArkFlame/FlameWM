@@ -20,7 +20,6 @@ Exit status: 0 no FAIL, 1 any FAIL, 2 usage error, 3 environment blocked.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import secrets
@@ -30,6 +29,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from flamewm_harness_common import write_json
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
@@ -243,7 +244,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def write_doc(run: Path, doc: dict) -> None:
-    (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    write_json(run / "result.json", doc)
 
 
 def block(results: dict[str, dict], reason: str) -> None:

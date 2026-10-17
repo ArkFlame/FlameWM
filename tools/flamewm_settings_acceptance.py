@@ -55,6 +55,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from flamewm_harness_common import display_in_use, stop_process, write_json
+
 try:  # Pillow is preferred for NATIVE_HOTKEY_INPUT crops and pixel diffs; ImageMagick is the fallback.
     from PIL import Image, ImageChops
 except ImportError:
@@ -74,7 +76,7 @@ SCHEMA = "flamewm-settings-acceptance/2"
 PAGES = ("appearance", "desktop", "taskbar", "displays", "fonts", "hotkeys", "about")
 SIZES = ((760, 500), (820, 540), (960, 640))
 MIN_SCREEN = (max(w for w, _ in SIZES), max(h for _, h in SIZES))  # largest matrix size
-SAFE_DISPLAYS = tuple(f":{n}" for n in range(90, 100))
+SAFE_DISPLAYS = tuple(f":{n}" for n in (*range(90, 100), 102))
 PREFERRED_DISPLAYS = tuple(f":{n}" for n in (97, 98, 99, 90, 91, 92, 93, 94, 95, 96))
 XTEST_DISPLAY_RANGE = range(97, 120)
 X11_SOCKET_DIR = Path("/tmp/.X11-unix")
@@ -98,6 +100,8 @@ TREE_WINDOW_RE = re.compile(
 DESKTOP_OPACITY_MAX = 60
 # SS10 target: the 125 percent Displays scale button (ui/settings.html display-scale-125).
 SS10_TARGET_SCALE = 125
+# SS05 wallpaper row (ui/settings.html: Choose, Clear, Default). Choose centre at 960x640 is screen x 637..725.
+SS05_CHOOSE_CLIENT_DEFAULT = "681,195"
 # At 820x540 the scale row is below the fold, so SS10 uses a client that shows it. When the output lists
 # modes, SS10 wheel-scrolls the page with the pointer at the client centre before the scrolled click.
 # Rightmost client columns hold the scrollbar track; keep it out of OCR crops.
@@ -182,7 +186,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--run-dir", required=True, help="new private run directory (must not exist or be empty)")
     parser.add_argument("--geometry", default="1280x800", help="Xephyr screen WxH (default 1280x800, minimum 960x640)")
-    parser.add_argument("--display", default=None, help="explicit display in :90..:99; refused when already in use")
+    parser.add_argument("--display", default=None, help="explicit display in :90..:99 or :102; refused when already in use")
     parser.add_argument("--wm-bin", default=str(ROOT / ".target/debug/flamewm"))
     parser.add_argument("--settings-bin", default=None, help="default: flamewm-settings next to --wm-bin")
     parser.add_argument("--shell-bin", default=None, help="default: flamewm-shell next to --wm-bin")
@@ -209,8 +213,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="flamewm-x11-canary binary used by SS17 j07 rows")
     parser.add_argument("--ss14-accent-pixel", metavar="X,Y", default="100,92",
                         help="SS14 client-relative point inside the selected nav-row background (default: 100,92)")
-    parser.add_argument("--ss05-click", metavar="X,Y", default="755,195",
-                        help="SS05 client-relative wallpaper Choose center measured at 960x640 (default: 755,195)")
+    parser.add_argument("--ss05-click", metavar="X,Y", default=SS05_CHOOSE_CLIENT_DEFAULT,
+                        help="SS05 client-relative wallpaper Choose center at 960x640, left of Clear and Default "
+                             f"(default: {SS05_CHOOSE_CLIENT_DEFAULT})")
     parser.add_argument("--ss10-scale-click", metavar="X,Y", default="751,553",
                         help="SS10 client-relative click on the 125 scale button of the Displays page (960x640 client, scale row visible); default measured")
     parser.add_argument("--ss10-wheel-steps", metavar="N", type=int, default=None,
@@ -249,7 +254,7 @@ def validate(args: argparse.Namespace) -> Path:
     if width < MIN_SCREEN[0] or height < MIN_SCREEN[1]:
         raise SystemExit("error: --geometry must be at least 960x640 so the size matrix fits")
     if args.display is not None and args.display not in SAFE_DISPLAYS:
-        raise SystemExit("error: --display must be one of :90..:99")
+        raise SystemExit("error: --display must be one of :90..:99 or :102")
     if args.hotkey_click is not None and not re.fullmatch(r"\d+,\d+", args.hotkey_click):
         raise SystemExit("error: --hotkey-click must be X,Y")
     if args.hotkey_click is not None:
@@ -396,13 +401,7 @@ class Ctx:
     def stop(owned: Owned | None) -> None:
         if owned is None:
             return
-        if owned.proc.poll() is None:
-            owned.proc.terminate()
-            try:
-                owned.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                owned.proc.kill()
-                owned.proc.wait(timeout=5)
+        stop_process(owned.proc)
 
     def teardown(self) -> dict:
         for owned in reversed(self.owned):
@@ -419,7 +418,7 @@ def pick_display(explicit: str | None) -> str | None:
     candidates = [explicit] if explicit else list(PREFERRED_DISPLAYS)
     for display in candidates:
         number = display[1:]
-        if (X11_SOCKET_DIR / f"X{number}").exists() or Path(f"/tmp/.X{number}-lock").exists():
+        if display_in_use(number):
             if explicit:
                 raise SystemExit(f"error: display {display} is already in use; refusing")
             continue
@@ -4446,7 +4445,7 @@ def inner(args: argparse.Namespace, run: Path) -> int:
             "finished_utc": utc_now(),
             "teardown": teardown,
         })
-        (run / "result.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", document)
     return document["exit_code"]
 
 def main(argv: list[str] | None = None) -> int:
@@ -4467,7 +4466,7 @@ def main(argv: list[str] | None = None) -> int:
         results["SS00"] = blocked("SS00", "dbus-run-session not found on PATH")
         results["NATIVE_PID_CLEANUP"] = blocked("NATIVE_PID_CLEANUP", "dbus-run-session not found on PATH")
         document = {"run_dir": str(run), **compose_document(results)}
-        (run / "result.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", document)
         print(run / "result.json")
         return 3
 

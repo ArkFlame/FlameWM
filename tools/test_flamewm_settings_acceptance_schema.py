@@ -269,11 +269,12 @@ class AddedNativeScenarioContractTests(unittest.TestCase):
         point = tuple(int(part) for part in acc.parse_args([
             "--run-dir", "/tmp/unused", "--settings-bin", "settings", "--wm-bin", "wm"
         ]).ss05_click.split(","))
-        self.assertEqual(point, (755, 195))
+        # Choose (not Clear, which the 755 centre hit after the Clear button was added in 3176c10d).
+        self.assertEqual(point, (681, 195))
         self.assertEqual(acc.ss05_choose_screen_point(
-            {"x": 0, "y": 31, "width": 960, "height": 640}, point), (755, 226))
+            {"x": 0, "y": 31, "width": 960, "height": 640}, point), (681, 226))
         self.assertEqual(acc.ss05_choose_screen_point(
-            {"x": 17, "y": 43, "width": 960, "height": 640}, point), (772, 238))
+            {"x": 17, "y": 43, "width": 960, "height": 640}, point), (698, 238))
 
     def test_ss14_reads_real_monitor_filename_signals_and_dynamic_row_pixel(self) -> None:
         fixture = ("method call sender=:1.8 -> dest=:1.0; interface=com.arkflame.FlameWM1.Settings; member=Apply\n"
@@ -1484,6 +1485,18 @@ class SS05ManagedWallpaperTests(unittest.TestCase):
             self.assertFalse(acc.ss05_wallpaper_matches_fixture(str(outside), fixture, run))
             self.assertFalse(acc.ss05_wallpaper_matches_fixture("", fixture, run))
             self.assertFalse(acc.ss05_wallpaper_matches_fixture(None, fixture, run))
+
+
+class RunnerDisplayAndWallpaperDefaultTests(unittest.TestCase):
+    def test_display_102_is_accepted_and_97_stays_listed(self):
+        self.assertIn(":102", acc.SAFE_DISPLAYS)
+        self.assertIn(":98", acc.SAFE_DISPLAYS)
+
+    def test_ss05_default_click_is_the_choose_button_not_clear(self):
+        # Wallpaper row at 960x640 (window x=0): Choose spans screen x 637..725, Clear 733..820; client y 195.
+        x, y = (int(part) for part in acc.SS05_CHOOSE_CLIENT_DEFAULT.split(","))
+        self.assertTrue(637 <= x <= 725, x)
+        self.assertEqual(y, 195)
 
 
 if __name__ == "__main__":

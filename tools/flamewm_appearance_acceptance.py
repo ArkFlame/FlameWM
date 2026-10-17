@@ -42,6 +42,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from flamewm_harness_common import write_json
+
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 
@@ -1591,7 +1593,7 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                     "started_utc": started, "finished_utc": utc_now(), "teardown": teardown})
         if not teardown["ok"]:
             doc["verdict"], doc["exit_code"] = "FAIL", 1
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
     return doc["exit_code"]
 
 
@@ -1619,7 +1621,7 @@ def main(argv: list[str] | None = None) -> int:
         results: dict[str, dict] = {}
         raise_block(results, reason)
         doc = compose_document(results) | {"run_dir": str(run)}
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
         print(run / "result.json")
         return 3
     for binary in (args.wm_bin, args.shell_bin, args.settings_bin):

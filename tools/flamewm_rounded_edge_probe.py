@@ -16,7 +16,6 @@ Exit: 0 PASS, 1 FAIL, 3 ENVIRONMENT_BLOCKED. Settings toggle: see result.json (N
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import shutil
@@ -26,6 +25,8 @@ import tempfile
 import time
 from collections import Counter
 from pathlib import Path
+
+from flamewm_harness_common import write_json
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
@@ -227,7 +228,7 @@ def inner(args: argparse.Namespace, run: Path) -> int:
             verdict, code = "FAIL", 1
         doc["verdict"], doc["exit_code"] = verdict, code
         doc["finished_utc"] = base.utc_now()
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
     return code
 
 

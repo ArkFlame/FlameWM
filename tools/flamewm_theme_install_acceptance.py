@@ -37,6 +37,8 @@ import tarfile
 import time
 from pathlib import Path
 
+from flamewm_harness_common import write_json
+
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 
@@ -730,7 +732,7 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                     "started_utc": started, "finished_utc": ap.utc_now(), "teardown": teardown})
         if not teardown["ok"]:
             doc["verdict"], doc["exit_code"] = "FAIL", 1
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
     return doc["exit_code"]
 
 
@@ -753,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
                                          "" if base.Image is not None else "PIL unavailable"]))
         results = {sid: entry(sid, ENV_BLOCKED, reason) for sid in IDS}
         doc = compose_document(results) | {"run_dir": str(run)}
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
         print(run / "result.json")
         return 3
     for binary in (args.wm_bin, args.shell_bin, args.settings_bin):

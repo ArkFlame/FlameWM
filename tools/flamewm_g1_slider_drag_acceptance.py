@@ -34,6 +34,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from flamewm_harness_common import write_json
+
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import flamewm_osd_audio_acceptance as osd  # noqa: E402  (private stack helpers)
@@ -375,7 +377,7 @@ def inner(args: argparse.Namespace, run: Path) -> int:
         if not teardown["ok"]:
             verdict, code = "FAIL", 1
         doc["verdict"], doc["exit_code"] = verdict, code
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
     return code
 
 

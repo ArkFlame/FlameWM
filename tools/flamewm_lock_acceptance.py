@@ -56,6 +56,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from flamewm_harness_common import write_json
+
 TOOLS =Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 
@@ -1394,7 +1396,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def write_doc(run: Path, doc: dict) -> None:
-    (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    write_json(run / "result.json", doc)
 
 
 def run_inner(args: argparse.Namespace, run: Path) -> int:

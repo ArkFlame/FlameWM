@@ -10,7 +10,6 @@ directories; it receives only binaries from the staged prefix.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +17,8 @@ import subprocess
 import sys
 import tomllib
 from typing import Any
+
+from flamewm_harness_common import sha256_file as sha256, write_json
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "flamewm_settings_acceptance.py"
@@ -71,14 +72,6 @@ def inside(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -209,7 +202,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "runner_stdout": completed.stdout,
         "runner_stderr": completed.stderr,
     }
-    (run_dir / "installed-result.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    write_json(run_dir / "installed-result.json", document)
     return document, 0 if status == "PASS" else (1 if status == "FAIL" else 3)
 
 

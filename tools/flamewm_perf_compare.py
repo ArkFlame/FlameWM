@@ -21,8 +21,6 @@ DIR/result.md; the markdown table is printed on stdout. Exit: 0 all phases compl
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import math
 import os
 import re
@@ -33,6 +31,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from flamewm_harness_common import sha256_file as sha256, write_json
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
@@ -292,10 +292,6 @@ def build_summary(sets: list[dict]) -> dict[str, dict]:
     return summary
 
 
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--old-bin-dir", default="/tmp/claude-1000/perf-base-target/release")
@@ -368,7 +364,7 @@ def run_inner(args: argparse.Namespace, run: Path) -> int:
                 "started_utc": started, "finished_utc": ap.utc_now(), "teardown": teardown, "sets": sets}
         if not teardown["ok"]:
             doc["verdict"], doc["exit_code"] = "FAILED", 1
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
         if doc.get("markdown"):
             (run / "result.md").write_text(doc["markdown"], encoding="utf-8")
             print(doc["markdown"])

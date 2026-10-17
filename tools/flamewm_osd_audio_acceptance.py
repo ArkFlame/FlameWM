@@ -40,6 +40,8 @@ import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from flamewm_harness_common import display_in_use, write_json
+
 TOOLS = Path(__file__).resolve().parent
 ROOT = TOOLS.parent
 SINK_NAME = "alsa_output.pci-0000_00_1f.3.analog-stereo"
@@ -120,7 +122,7 @@ def pick_display(explicit: str | None) -> str | None:
         number = display[1:]
         if display not in CANDIDATE_DISPLAYS:
             raise SystemExit(f"error: display {display} is outside the B15 private range")
-        if (X_SOCKET_DIR / f"X{number}").exists() or Path(f"/tmp/.X{number}-lock").exists():
+        if display_in_use(number):
             if explicit:
                 raise SystemExit(f"error: display {display} is already in use; refusing")
             continue
@@ -323,7 +325,7 @@ def inner(args: argparse.Namespace, run: Path) -> int:
         if not teardown["ok"]:
             verdict, code = STATUS_FAIL, 1
         doc["verdict"], doc["exit_code"] = verdict, code
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
     return doc["exit_code"]
 
 

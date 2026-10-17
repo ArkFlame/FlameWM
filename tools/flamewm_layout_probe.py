@@ -27,6 +27,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from flamewm_harness_common import write_json
+
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import flamewm_osd_audio_acceptance as base  # noqa: E402  (private display, env, process helpers)
@@ -160,7 +162,7 @@ def inner(args: argparse.Namespace, run: Path) -> int:
             verdict, code = "FAIL", 1
         doc["verdict"], doc["exit_code"] = verdict, code
         doc["finished_utc"] = base.utc_now()
-        (run / "result.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(run / "result.json", doc)
     return code
 
 

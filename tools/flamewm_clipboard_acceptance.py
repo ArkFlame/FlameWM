@@ -40,6 +40,8 @@ from Xlib import display as xdisplay  # noqa: E402
 from Xlib import error as xerror  # noqa: E402
 from Xlib.protocol import event as xevent  # noqa: E402
 
+from flamewm_harness_common import display_in_use, stop_process  # noqa: E402
+
 DISPLAY_RANGE = range(90, 100)
 INCR_THRESHOLD = 200000
 INCR_CHUNK = 65536
@@ -353,20 +355,15 @@ def start_xvfb(num, env):
 
 def pick_display():
     for n in DISPLAY_RANGE:
-        if not os.path.exists(f"/tmp/.X{n}-lock") and not os.path.exists(f"/tmp/.X11-unix/X{n}"):
+        if not display_in_use(str(n)):
             return n
     return None
 
 
 def stop_proc(proc):
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return
-    proc.terminate()
-    try:
-        proc.wait(5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(5)
+    stop_process(proc)
 
 
 def main(argv=None):
