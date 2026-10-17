@@ -1931,12 +1931,7 @@ fn desktop_change_is_external(published: Option<u32>, own_current: usize) -> boo
 
 /// Payload of `_NET_DESKTOP_NAMES` for `count` workspaces: NUL-terminated names.
 fn desktop_names_payload(count: usize) -> Vec<u8> {
-    let mut names = Vec::new();
-    for index in 0..count {
-        names.extend_from_slice(format!("Workspace {}", index + 1).as_bytes());
-        names.push(0);
-    }
-    names
+    (1..=count).flat_map(|index| format!("Workspace {index}\0").into_bytes()).collect()
 }
 
 /// True when `_NET_NUMBER_OF_DESKTOPS` or `_NET_DESKTOP_NAMES` differ from what
