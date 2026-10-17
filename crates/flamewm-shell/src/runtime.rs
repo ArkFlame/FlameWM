@@ -1418,10 +1418,9 @@ impl ShellSurfaces {
                     .outputs
                     .iter()
                     .find(|output| output.id == *id && output.connected)
-                    .map(|output| {
+                    .is_some_and(|output| {
                         output.shell_scale_percent != record.placement.output.shell_scale_percent
                     })
-                    .unwrap_or(false)
         })
     }
 
