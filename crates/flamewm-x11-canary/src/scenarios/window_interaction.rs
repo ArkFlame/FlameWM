@@ -80,14 +80,8 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let reset_floating =
         super::interaction_regressions::establish_known_floating(canary, &target, work_area);
-    let before = match canary.by_id(target.id) {
-        Some(w) => w,
-        None => {
-            return diagnostic(false, format!(
-                "observed=false target {} gone path=real-pointer",
-                target.id
-            ));
-        }
+    let Some(before) = canary.by_id(target.id) else {
+        return diagnostic(false, format!("observed=false target {} gone path=real-pointer", target.id));
     };
     let Some(_surface) = input_surface(canary, &before) else {
         return diagnostic(false, format!(
@@ -253,20 +247,11 @@ pub fn run_t07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(target) = resolve_target(canary, args) else {
         return (false, "no target path=real-pointer".to_owned());
     };
-    let before = match canary.by_id(target.id) {
-        Some(w) => w,
-        None => {
-            return (
-                false,
-                format!("target {} gone path=real-pointer", target.id),
-            );
-        }
+    let Some(before) = canary.by_id(target.id) else {
+        return (false, format!("target {} gone path=real-pointer", target.id));
     };
     let Some(surface) = input_surface(canary, &before) else {
-        return (
-            false,
-            format!("target {} frame not ready path=real-pointer", target.id),
-        );
+        return (false, format!("target {} frame not ready path=real-pointer", target.id));
     };
     // 8 edge/corner grips in root coordinates.
     let x0 = surface.x;
