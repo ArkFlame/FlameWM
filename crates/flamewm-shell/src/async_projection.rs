@@ -85,6 +85,7 @@ impl IconCache {
     }
 
     /// Membership test that does not touch LRU recency.
+    #[cfg(test)]
     fn contains(&self, key: &IconCacheKey) -> bool {
         self.entries.contains_key(key)
     }
@@ -159,7 +160,6 @@ counter! {
     coalesced_counter = "shell.icon.coalesced";
     dropped_low_counter = "shell.icon.dropped_low";
     fallback_counter = "shell.icon.empty_placeholder";
-    prewarm_counter = "shell.icon.prewarm";
 }
 
 /// Start and task slot ranges; prewarm sentinels past the range never bind a node.
@@ -369,6 +369,7 @@ fn cached_image(name: &str, w: u32, h: u32) -> Option<RuntimeImage> {
     icon_cache().lock().ok()?.get(&(name.to_owned(), w, h))
 }
 
+#[cfg(test)]
 fn cached_contains(name: &str, w: u32, h: u32) -> bool {
     icon_cache()
         .lock()
