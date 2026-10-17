@@ -1036,6 +1036,23 @@ fn release_top_hold_without_snap(canary: &crate::Canary, setup: &TopHoldSetup) -
     moved && released
 }
 
+fn top_hold_stable(setup: &TopHoldSetup, hold: &TopHoldObservation) -> bool {
+    let route_ok = hold.capture_route
+        || hold.native_route == Some(setup.client.id)
+        || hold.native_route == Some(setup.frame.id);
+    setup.activated_floating
+        && hold.motion_count >= TOP_HOLD_MOTIONS
+        && hold.identity_stable
+        && hold.dimensions_stable
+        && hold.state_stable
+        && !hold.maximized_seen
+        && setup.ewmh
+        && setup.selected_structure_notify
+        && hold.active
+        && route_ok
+        && hold.process_health == Some(true)
+}
+
 fn run_x04(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let setup = match begin_top_hold(canary, args) {
         Ok(setup) => setup,
@@ -1049,18 +1066,7 @@ fn run_x04(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let counters_available = unsupported_assertions().is_empty();
     // Compute this verdict before cleanup release.  X04 must prove that the
     // held gesture itself did not release or commit a maximize.
-    let hold_assertions = setup.activated_floating
-        && hold.motion_count >= TOP_HOLD_MOTIONS
-        && hold.identity_stable
-        && hold.dimensions_stable
-        && ewmh_state_unchanged
-        && !hold.maximized_seen
-        && setup.ewmh
-        && setup.selected_structure_notify
-        && hold.active
-        && route_ok
-        && hold.process_health == Some(true)
-        && counters_available;
+    let hold_assertions = top_hold_stable(&setup, &hold) && counters_available;
     let cleanup_release = release_top_hold_without_snap(canary, &setup);
     let pass = hold_assertions && cleanup_release;
     (
@@ -1116,17 +1122,7 @@ fn run_x05(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let route_ok = hold.capture_route
         || hold.native_route == Some(setup.client.id)
         || hold.native_route == Some(setup.frame.id);
-    let hold_floating = setup.activated_floating
-        && hold.motion_count >= TOP_HOLD_MOTIONS
-        && hold.identity_stable
-        && hold.dimensions_stable
-        && hold.state_stable
-        && !hold.maximized_seen
-        && setup.ewmh
-        && setup.selected_structure_notify
-        && hold.active
-        && route_ok
-        && hold.process_health == Some(true);
+    let hold_floating = top_hold_stable(&setup, &hold);
     // This is the only release in X05.  It is intentionally after the full
     // top-zone hold observation so the release is the commit under test.
     let release_count = 1;
@@ -1216,21 +1212,6 @@ enum ProbeSnapTarget {
     BottomRightQuarter,
 }
 
-impl ProbeSnapTarget {
-    fn label(self) -> &'static str {
-        match self {
-            Self::LeftHalf => "LeftHalf",
-            Self::RightHalf => "RightHalf",
-            Self::TopHalf => "TopHalf",
-            Self::BottomHalf => "BottomHalf",
-            Self::TopLeftQuarter => "TopLeftQuarter",
-            Self::TopRightQuarter => "TopRightQuarter",
-            Self::BottomLeftQuarter => "BottomLeftQuarter",
-            Self::BottomRightQuarter => "BottomRightQuarter",
-        }
-    }
-}
-
 const PROBE_SNAP_TARGETS: [ProbeSnapTarget; 8] = [
     ProbeSnapTarget::LeftHalf,
     ProbeSnapTarget::RightHalf,
@@ -1258,40 +1239,17 @@ fn probe_snap_geometry(
     let right_width = width - left_width;
     let top_height = height / 2;
     let bottom_height = height - top_height;
+    let split_x = x + i32::try_from(left_width).unwrap_or(i32::MAX);
+    let split_y = y + i32::try_from(top_height).unwrap_or(i32::MAX);
     match target {
         ProbeSnapTarget::LeftHalf => (x, y, left_width, height),
-        ProbeSnapTarget::RightHalf => (
-            x + i32::try_from(left_width).unwrap_or(i32::MAX),
-            y,
-            right_width,
-            height,
-        ),
+        ProbeSnapTarget::RightHalf => (split_x, y, right_width, height),
         ProbeSnapTarget::TopHalf => (x, y, width, top_height),
-        ProbeSnapTarget::BottomHalf => (
-            x,
-            y + i32::try_from(top_height).unwrap_or(i32::MAX),
-            width,
-            bottom_height,
-        ),
+        ProbeSnapTarget::BottomHalf => (x, split_y, width, bottom_height),
         ProbeSnapTarget::TopLeftQuarter => (x, y, left_width, top_height),
-        ProbeSnapTarget::TopRightQuarter => (
-            x + i32::try_from(left_width).unwrap_or(i32::MAX),
-            y,
-            right_width,
-            top_height,
-        ),
-        ProbeSnapTarget::BottomLeftQuarter => (
-            x,
-            y + i32::try_from(top_height).unwrap_or(i32::MAX),
-            left_width,
-            bottom_height,
-        ),
-        ProbeSnapTarget::BottomRightQuarter => (
-            x + i32::try_from(left_width).unwrap_or(i32::MAX),
-            y + i32::try_from(top_height).unwrap_or(i32::MAX),
-            right_width,
-            bottom_height,
-        ),
+        ProbeSnapTarget::TopRightQuarter => (split_x, y, right_width, top_height),
+        ProbeSnapTarget::BottomLeftQuarter => (x, split_y, left_width, bottom_height),
+        ProbeSnapTarget::BottomRightQuarter => (split_x, split_y, right_width, bottom_height),
     }
 }
 
@@ -1328,11 +1286,7 @@ fn frame_matches_probe_target(
     target: ProbeSnapTarget,
     work_area: (i32, i32, u32, u32),
 ) -> bool {
-    let (x, y, width, height) = probe_snap_geometry(target, work_area);
-    i32::from(frame.x) == x
-        && i32::from(frame.y) == y
-        && u32::from(frame.width) == width
-        && u32::from(frame.height) == height
+    frame_matches_geometry(frame, probe_snap_geometry(target, work_area))
 }
 
 fn frame_matches_geometry(frame: &crate::WinInfo, geometry: (i32, i32, u32, u32)) -> bool {
@@ -1383,9 +1337,6 @@ fn probe_policy_ok(
 ) -> bool {
     match target {
         ProbeSnapTarget::TopHalf => maximized_both(canary, client_id),
-        ProbeSnapTarget::BottomHalf => {
-            !maximized(canary, client_id) && initial_state == final_state
-        }
         _ => !maximized(canary, client_id) && initial_state == final_state,
     }
 }
@@ -1446,8 +1397,7 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         let Some(target) = super::window_interaction::resolve_target(canary, args) else {
             all_pass = false;
             details.push(format!(
-                "scenario=X06 target={} target_not_ready path=real-pointer",
-                target_kind.label()
+                "scenario=X06 target={target_kind:?} target_not_ready path=real-pointer"
             ));
             continue;
         };
@@ -1458,20 +1408,14 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         else {
             all_pass = false;
             details.push(format!(
-                "scenario=X06 target={} client={} frame={} target_gone_after_reset",
-                target_kind.label(),
-                client_id,
-                frame_id
+                "scenario=X06 target={target_kind:?} client={client_id} frame={frame_id} target_gone_after_reset"
             ));
             continue;
         };
         let Some(surface) = input_surface(canary, &before) else {
             all_pass = false;
             details.push(format!(
-                "scenario=X06 target={} client={} frame={} frame_not_ready",
-                target_kind.label(),
-                client_id,
-                frame_id
+                "scenario=X06 target={target_kind:?} client={client_id} frame={frame_id} frame_not_ready"
             ));
             continue;
         };
@@ -1578,9 +1522,8 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         let classification = if assertions { "PASS" } else { "FAIL" };
         all_pass &= assertions;
         details.push(format!(
-            "scenario=X06 classification={} target={} client={} frame={} start=({}, {}) destination=({}, {}) reset_floating={} selected_structure_notify={} floating_restore_baseline={} dragged={} committed={} expected_policy={} expected_geometry={} actual_geometry={} mode=policy-geometry={} geometry_ok={} ewmh={} state_before={:?} state_after={:?} preview_hidden={} policy_ok={} active={} process_health={} native_configures={} native_route={} capture_route={} route_observation={} route_status=DIAGNOSTIC_UNSUPPORTED snap_transition=unsupported-wm-counters assertions={} path={}",
+            "scenario=X06 classification={} target={target_kind:?} client={} frame={} start=({}, {}) destination=({}, {}) reset_floating={} selected_structure_notify={} floating_restore_baseline={} dragged={} committed={} expected_policy={} expected_geometry={} actual_geometry={} mode=policy-geometry={} geometry_ok={} ewmh={} state_before={:?} state_after={:?} preview_hidden={} policy_ok={} active={} process_health={} native_configures={} native_route={} capture_route={} route_observation={} route_status=DIAGNOSTIC_UNSUPPORTED snap_transition=unsupported-wm-counters assertions={} path={}",
             classification,
-            target_kind.label(),
             client_id,
             frame_id,
             start.0,
@@ -2041,10 +1984,7 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             && health == Some(true)
             && unsupported_assertions().is_empty();
         all_pass &= assertions;
-        let final_geometry = after.map_or_else(
-            || "gone".to_owned(),
-            |w| format!("{}x{}+{}+{}", w.width, w.height, w.x, w.y),
-        );
+        let final_geometry = after.map_or_else(|| "gone".to_owned(), |w| x03_rect(&w));
         details.push(format!(
             "scenario={} case={} source_xid={} region={} button=1 target_xid={} session_start=({}, {}) selected_structure_notify={} dragged={} native_configure_window_calls={} final={} geometry_ok={} ewmh={} active={} max_before={} max_after={} resize_no_snap={} preview_hidden={} process_health={} assertions={} unsupported={} path={}",
             case.id,
