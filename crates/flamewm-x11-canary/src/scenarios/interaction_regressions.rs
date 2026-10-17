@@ -11,6 +11,10 @@ use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConnectionExt as _, EventMask, WindowClass,
 };
 
+fn fail(detail: impl Into<String>) -> (bool, String) {
+    (false, detail.into())
+}
+
 #[derive(Clone, Copy)]
 struct Case {
     id: &'static str,
@@ -606,20 +610,14 @@ fn run_drag_max_probe(canary: &crate::Canary, args: &[String]) -> (bool, String)
 
 fn run_x01(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(target) = super::window_interaction::resolve_target(canary, args) else {
-        return (
-            false,
-            "scenario=X01 target_not_ready path=real-pointer".to_owned(),
-        );
+        return fail("scenario=X01 target_not_ready path=real-pointer");
     };
     let reset = establish_floating(canary, &target);
     let Some(before) = canary.by_id(target.id) else {
         return (false, format!("scenario=X01 id={} target_gone", target.id));
     };
     let Some(surface) = input_surface(canary, &before) else {
-        return (
-            false,
-            format!("scenario=X01 id={} frame_not_ready", target.id),
-        );
+        return fail(format!("scenario=X01 id={} frame_not_ready", target.id));
     };
     let selected = prepare_native_measurement(canary, &before);
     let start = title(&surface);
@@ -653,34 +651,22 @@ fn run_x01(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 
 fn run_x02(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(target) = super::window_interaction::resolve_target(canary, args) else {
-        return (
-            false,
-            "scenario=X02 target_not_ready path=real-pointer".to_owned(),
-        );
+        return fail("scenario=X02 target_not_ready path=real-pointer");
     };
     let reset = establish_floating(canary, &target);
     let Some(before) = canary.by_id(target.id) else {
         return (false, format!("scenario=X02 id={} target_gone", target.id));
     };
     let Some(_surface) = input_surface(canary, &before) else {
-        return (
-            false,
-            format!("scenario=X02 id={} frame_not_ready", target.id),
-        );
+        return fail(format!("scenario=X02 id={} frame_not_ready", target.id));
     };
     let selected = prepare_native_measurement(canary, &before);
     let maximized_once = reset && maximize_with_xtest(canary, &before);
     let Some(current) = super::window_interaction::resolve_target(canary, args) else {
-        return (
-            false,
-            format!("scenario=X02 id={} target_lost_after_maximize", target.id),
-        );
+        return fail(format!("scenario=X02 id={} target_lost_after_maximize", target.id));
     };
     let Some(max_surface) = input_surface(canary, &current) else {
-        return (
-            false,
-            format!("scenario=X02 id={} max_frame_not_ready", target.id),
-        );
+        return fail(format!("scenario=X02 id={} max_frame_not_ready", target.id));
     };
     let jitter_start = title(&max_surface);
     let jitter_end = (
@@ -710,10 +696,7 @@ fn run_x02(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 
 fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(target) = super::window_interaction::resolve_target(canary, args) else {
-        return (
-            false,
-            "scenario=X03 target_not_ready path=real-pointer".to_owned(),
-        );
+        return fail("scenario=X03 target_not_ready path=real-pointer");
     };
     let pinned = PinnedX03 {
         client: target.id,
@@ -1361,10 +1344,7 @@ pub(crate) fn establish_known_floating(
 
 fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(work_area) = root_work_area(canary) else {
-        return (
-            false,
-            "scenario=X06 work_area_unavailable path=real-pointer".to_owned(),
-        );
+        return fail("scenario=X06 work_area_unavailable path=real-pointer");
     };
     let mut all_pass = true;
     let mut details = Vec::with_capacity(PROBE_SNAP_TARGETS.len());
@@ -1547,38 +1527,26 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 
 fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(work_area) = root_work_area(canary) else {
-        return (
-            false,
-            "scenario=X07 work_area_unavailable path=real-pointer".to_owned(),
-        );
+        return fail("scenario=X07 work_area_unavailable path=real-pointer");
     };
     let Some(target) = super::window_interaction::resolve_target(canary, args) else {
-        return (
-            false,
-            "scenario=X07 target_not_ready path=real-pointer".to_owned(),
-        );
+        return fail("scenario=X07 target_not_ready path=real-pointer");
     };
     let client_id = target.id;
     let frame_id = target.parent;
     let reset_floating = establish_known_floating(canary, &target, work_area);
     let Some(initial_client) = child_of(canary, client_id, frame_id)
     else {
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} target_gone_after_reset",
-                client_id, frame_id
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} target_gone_after_reset",
+            client_id, frame_id
+        ));
     };
     let Some(initial_frame) = input_surface(canary, &initial_client) else {
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} frame_not_ready",
-                client_id, frame_id
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} frame_not_ready",
+            client_id, frame_id
+        ));
     };
     let selected = prepare_native_measurement(canary, &initial_client);
     let initial_state = wm_state(canary, client_id);
@@ -1593,22 +1561,16 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     });
     let Some(snapped_client) = child_of(canary, client_id, frame_id)
     else {
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_client_missing",
-                client_id, frame_id, snap_dragged, snap_committed
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_client_missing",
+            client_id, frame_id, snap_dragged, snap_committed
+        ));
     };
     let Some(snapped_frame) = input_surface(canary, &snapped_client) else {
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_frame_missing",
-                client_id, frame_id, snap_dragged, snap_committed
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_frame_missing",
+            client_id, frame_id, snap_dragged, snap_committed
+        ));
     };
     let snap_mode =
         frame_matches_probe_target(&snapped_frame, ProbeSnapTarget::LeftHalf, work_area)
@@ -1619,13 +1581,10 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let pressed = xtest_motion(canary, press_point.0, press_point.1)
         && xtest_button_press(canary, press_point.0, press_point.1, 1);
     if !pressed {
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} snap_mode={} snap_dragged={} snap_committed={} pressed=false",
-                client_id, frame_id, snap_mode, snap_dragged, snap_committed
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} snap_mode={} snap_dragged={} snap_committed={} pressed=false",
+            client_id, frame_id, snap_mode, snap_dragged, snap_committed
+        ));
     }
     let jitter_points = [
         root_point(i32::from(press_point.0) + 1, i32::from(press_point.1) + 1),
@@ -1654,13 +1613,10 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let jitter_native = native_configures(canary, &snapped_client, 250);
     if !jittered {
         let _ = xtest_button_release(canary, press_point.0, press_point.1, 1);
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} snap_mode={} snap_dragged={} snap_committed={} pressed=true jittered=false release_cleanup=true",
-                client_id, frame_id, snap_mode, snap_dragged, snap_committed
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} snap_mode={} snap_dragged={} snap_committed={} pressed=true jittered=false release_cleanup=true",
+            client_id, frame_id, snap_mode, snap_dragged, snap_committed
+        ));
     }
     let away = root_point(i32::from(press_point.0) + 96, i32::from(press_point.1) + 64);
     let activated_motion = xtest_motion(canary, away.0, away.1);
@@ -1685,13 +1641,10 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .and_then(|client| input_surface(canary, &client))
     else {
         let _ = xtest_button_release(canary, away.0, away.1, 1);
-        return (
-            false,
-            format!(
-                "scenario=X07 client={} frame={} snap_mode={} jittered=true jitter_stable={} activated=false release_cleanup=true",
-                client_id, frame_id, snap_mode, jitter_stable
-            ),
-        );
+        return fail(format!(
+            "scenario=X07 client={} frame={} snap_mode={} jittered=true jitter_stable={} activated=false release_cleanup=true",
+            client_id, frame_id, snap_mode, jitter_stable
+        ));
     };
     let later = root_point(i32::from(away.0) + 20, i32::from(away.1) + 12);
     let later_motion = xtest_motion(canary, later.0, later.1);
