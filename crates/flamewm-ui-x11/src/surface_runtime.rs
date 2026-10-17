@@ -455,12 +455,6 @@ impl SurfaceRuntime {
             .map_err(UiBackendError::Renderer)
     }
 
-    /// External drawable bridge: measure/draw/fill/blit/shape/flush target
-    /// types re-exported from the render crate for wm-owned drawables.
-    pub fn external_target_note(&self) -> &'static str {
-        "use flamewm_render_x11::{ExternalDrawableSession, ExternalDrawableTarget}"
-    }
-
     pub fn with_document<R>(
         &mut self,
         surface: SurfaceHandle,
@@ -533,55 +527,6 @@ impl SurfaceRuntime {
         next
     }
 
-    /// Begin a thumb drag on a scrollbar thumb.
-    pub fn begin_thumb_drag(&mut self, surface: SurfaceHandle, node: u32, horizontal: bool) {
-        self.thumb_drag = Some(ThumbDrag {
-            surface: surface.0.get(),
-            node,
-            horizontal,
-        });
-    }
-
-    /// Move an active thumb drag: pointer position on the track maps to a
-    /// content offset in [0, max_offset].
-    pub fn move_thumb_drag(
-        &mut self,
-        surface: SurfaceHandle,
-        pointer_in_track: f32,
-        track_len: f32,
-        thumb_len: f32,
-        max_offset: f32,
-    ) -> Option<flamewm_render_core::ScrollState> {
-        let drag = self.thumb_drag?;
-        if drag.surface != surface.0.get() {
-            return None;
-        }
-        let offset = flamewm_ui_core::scroll::thumb_drag_offset(
-            pointer_in_track,
-            track_len,
-            thumb_len,
-            max_offset,
-        );
-        let current = self.scroll_offset(surface, drag.node);
-        let next = if drag.horizontal {
-            flamewm_render_core::ScrollState {
-                offset_x: offset,
-                offset_y: current.offset_y,
-            }
-        } else {
-            flamewm_render_core::ScrollState {
-                offset_x: current.offset_x,
-                offset_y: offset,
-            }
-        };
-        self.scroll_offsets.insert((drag.surface, drag.node), next);
-        Some(next)
-    }
-
-    pub fn end_thumb_drag(&mut self) {
-        self.thumb_drag = None;
-    }
-
     /// Global rect of one node (layout box in surface coordinates).
     /// Needs a display; queries the render-owned layout via redraw path.
     /// Returns the document-space box by recomputing layout at the last
@@ -597,21 +542,6 @@ impl SurfaceRuntime {
             .get(node as usize)
             .map(|entry| entry.rect)
             .ok_or_else(|| UiBackendError::Document(format!("node {node} has no layout box")))
-    }
-
-    /// Global rect of one node by string id (layout box in surface coords).
-    /// Resolves the compiled node id, then delegates to `node_global_rect`.
-    pub fn node_global_rect_by_id(
-        &mut self,
-        surface: SurfaceHandle,
-        id: &str,
-    ) -> Option<flamewm_render_core::Rect> {
-        let node = self
-            .controller
-            .document_mut(surface.0)
-            .ok()
-            .and_then(|document| document.node_by_id(id))?;
-        self.node_global_rect(surface, node).ok()
     }
 
     /// Retained-live surface extent in root space (native origin + size).
@@ -694,22 +624,6 @@ impl SurfaceRuntime {
         self.controller
             .close_surface(surface.0)
             .map_err(UiBackendError::Renderer)
-    }
-
-    /// Intrinsic outer size in device pixels under finite device constraints.
-    /// Pure measure path: doc + ui_scale -> logical -> `measure_root` ->
-    /// device. No X11 roundtrip, no hardcoded fallback extent.
-    pub fn measure_outer_intrinsic_device_size(
-        &mut self,
-        surface: SurfaceHandle,
-        max_device_w: f32,
-        max_device_h: f32,
-    ) -> Result<(f32, f32), UiBackendError> {
-        self.measure_device_size(surface, max_device_w, max_device_h, |doc, w, h| {
-            flamewm_render_core::LayoutEngine::measure_root(doc, w, h, Default::default())
-                .map(|size| (size.width, size.height))
-                .map_err(|error| error.to_string())
-        })
     }
 
     /// Intrinsic outer size of one node in device pixels under finite device
