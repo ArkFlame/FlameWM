@@ -340,10 +340,7 @@ pub fn taskbar_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
 /// Start popup `(opacity, blur)` percents for its pseudo-transparency backdrop: the shared
 /// `surfaceOpacity` / `surfaceBlurPercent` pair.
 pub fn start_backdrop_percents(snapshot: &SettingsSnapshot) -> (u8, u8) {
-    (
-        percent_setting(snapshot, "surfaceOpacity", DEFAULT_SURFACE_OPACITY),
-        percent_setting(snapshot, "surfaceBlurPercent", DEFAULT_SURFACE_BLUR_PERCENT),
-    )
+    taskbar_backdrop_percents(snapshot)
 }
 
 fn percent_setting(snapshot: &SettingsSnapshot, key: &str, default: u8) -> u8 {
@@ -919,14 +916,7 @@ mod tests {
             "accent",
             DEFAULT_ACCENT,
         );
-        assert_eq!(
-            (bad.r, bad.g, bad.b),
-            (
-                (DEFAULT_ACCENT >> 16) as u8,
-                (DEFAULT_ACCENT >> 8) as u8,
-                DEFAULT_ACCENT as u8
-            )
-        );
+        assert_eq!(bad, rgb(DEFAULT_ACCENT, 255));
         let missing = color_setting(&SettingsSnapshot::new(1), "surfaceColor", 0x191b1d);
         assert_eq!(missing.r, 0x19);
     }
