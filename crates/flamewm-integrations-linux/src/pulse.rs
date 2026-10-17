@@ -141,18 +141,6 @@ impl PulseAdapter {
         lock(&self.controller).generation()
     }
 
-    /// Queues a user-requested sink volume change. The resulting state arrives through the normal
-    /// sink subscription; this method never synthesizes optimistic state.
-    pub fn set_default_volume(&self, percent: u8, caller_generation: u64) -> FlameResult<()> {
-        let snapshot = self.snapshot();
-        self.set_volume_for_sink(
-            &snapshot.sink_name,
-            percent,
-            caller_generation,
-            snapshot.server_generation,
-        )
-    }
-
     /// Queues a volume change for the sink named by the system snapshot.
     pub fn set_volume_for_sink(
         &self,
@@ -215,17 +203,6 @@ impl PulseAdapter {
                 });
             Ok(())
         })
-    }
-
-    /// Queues a user-requested sink mute change. Actual state remains subscription-driven.
-    pub fn set_default_mute(&self, muted: bool, caller_generation: u64) -> FlameResult<()> {
-        let snapshot = self.snapshot();
-        self.set_mute_for_sink(
-            &snapshot.sink_name,
-            muted,
-            caller_generation,
-            snapshot.server_generation,
-        )
     }
 
     /// Queues a mute change for the sink named by the system snapshot.
