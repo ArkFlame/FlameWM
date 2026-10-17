@@ -386,16 +386,9 @@ impl<'a, C: Connection> Wm<'a, C> {
     pub(super) fn handle_client_message(&mut self, event: ClientMessageEvent) -> Result<(), ReplyError> {
         if event.type_ == self.atoms.wm_change_state && self.clients.contains_key(&event.window) {
             let data = event.data.as_data32();
-            flamewm_debug::emit(
-                flamewm_debug::DebugEventId("restore.trace.wm.change_state"),
-                std::time::Duration::ZERO,
-                || {
-                    let ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_millis());
-                    format!("t_ms={ms} window={} state={}", event.window, data[0])
-                },
-            );
+            trace_restore("restore.trace.wm.change_state", || {
+                format!("window={} state={}", event.window, data[0])
+            });
             if data[0] == WM_STATE_ICONIC {
                 return self.minimize(event.window);
             }
@@ -480,16 +473,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         let wants_fullscreen = atoms.contains(&self.atoms.net_wm_state_fullscreen);
         let wants_hidden = atoms.contains(&self.atoms.net_wm_state_hidden);
         if wants_hidden {
-            flamewm_debug::emit(
-                flamewm_debug::DebugEventId("restore.trace.wm.net_wm_state_hidden"),
-                std::time::Duration::ZERO,
-                || {
-                    let ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_millis());
-                    format!("t_ms={ms} window={client} action={action}")
-                },
-            );
+            trace_restore("restore.trace.wm.net_wm_state_hidden", || {
+                format!("window={client} action={action}")
+            });
             // Add/toggle hides; Remove (the control plane's RestoreWindow) un-minimizes.
             return if action == 0 {
                 self.restore_minimized(client)

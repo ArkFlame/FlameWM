@@ -28,19 +28,18 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.raise_docks_above_normal(client, state.frame)?;
         }
         if self.supports_protocol(client, self.atoms.wm_take_focus)? {
-            let event = ClientMessageEvent::new(
-                32,
-                client,
-                self.atoms.wm_protocols,
-                [self.atoms.wm_take_focus, CURRENT_TIME, 0, 0, 0],
-            );
-            self.conn
-                .send_event(false, client, EventMask::NO_EVENT, event)?;
+            self.send_protocol(client, self.atoms.wm_take_focus)?;
         }
         self.active = Some(client);
         self.mark_windows();
         self.publish_active()?;
         self.publish_client_list()?;
+        Ok(())
+    }
+
+    fn send_protocol(&self, client: Window, protocol: Atom) -> Result<(), ReplyError> {
+        let event = ClientMessageEvent::new(32, client, self.atoms.wm_protocols, [protocol, CURRENT_TIME, 0, 0, 0]);
+        self.conn.send_event(false, client, EventMask::NO_EVENT, event)?;
         Ok(())
     }
 
@@ -86,29 +85,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn close(&self, client: Window) -> Result<(), ReplyError> {
-        let reply = self
-            .conn
-            .get_property(
-                false,
-                client,
-                self.atoms.wm_protocols,
-                AtomEnum::ATOM,
-                0,
-                32,
-            )?
-            .reply()?;
-        let supports_delete = reply
-            .value32()
-            .is_some_and(|mut values| values.any(|atom| atom == self.atoms.wm_delete_window));
-        if supports_delete {
-            let event = ClientMessageEvent::new(
-                32,
-                client,
-                self.atoms.wm_protocols,
-                [self.atoms.wm_delete_window, CURRENT_TIME, 0, 0, 0],
-            );
-            self.conn
-                .send_event(false, client, EventMask::NO_EVENT, event)?;
+        if self.supports_protocol(client, self.atoms.wm_delete_window)? {
+            self.send_protocol(client, self.atoms.wm_delete_window)?;
         } else {
             self.conn.kill_client(client)?;
         }
@@ -158,21 +136,12 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn restore_minimized(&mut self, client: Window) -> Result<(), ReplyError> {
-        flamewm_debug::emit(
-            flamewm_debug::DebugEventId("restore.trace.wm.restore_minimized"),
-            std::time::Duration::ZERO,
-            || {
-                let ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis());
-                format!(
-                    "t_ms={ms} window={client} known={} minimized={:?} animator_running={:?}",
+        trace_restore("restore.trace.wm.restore_minimized", || {
+            format!("window={client} known={} minimized={:?} animator_running={:?}",
                     self.clients.contains_key(&client),
                     self.clients.get(&client).map(|state| state.minimized),
-                    self.animator.running(client)
-                )
-            },
-        );
+                    self.animator.running(client))
+        });
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
         };
@@ -180,16 +149,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         let owned_by_flight = self.begin_transition(client, Effect::Restore)?;
-        flamewm_debug::emit(
-            flamewm_debug::DebugEventId("restore.trace.wm.begin_transition"),
-            std::time::Duration::ZERO,
-            || {
-                let ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis());
-                format!("t_ms={ms} window={client} owned_by_flight={owned_by_flight}")
-            },
-        );
+        trace_restore("restore.trace.wm.begin_transition", || {
+            format!("window={client} owned_by_flight={owned_by_flight}")
+        });
         if owned_by_flight {
             return Ok(());
         }
@@ -197,16 +159,9 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn commit_restore(&mut self, client: Window) -> Result<(), ReplyError> {
-        flamewm_debug::emit(
-            flamewm_debug::DebugEventId("restore.trace.wm.commit_restore"),
-            std::time::Duration::ZERO,
-            || {
-                let ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis());
-                format!("t_ms={ms} window={client}")
-            },
-        );
+        trace_restore("restore.trace.wm.commit_restore", || {
+            format!("window={client}")
+        });
         let frame = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());

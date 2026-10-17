@@ -1,6 +1,11 @@
 use super::*;
 
 impl<'a, C: Connection> Wm<'a, C> {
+    fn set_property32(&self, window: Window, property: Atom, ty: AtomEnum, data: &[u32]) -> Result<(), ReplyError> {
+        self.conn.change_property32(PropMode::REPLACE, window, property, ty, data)?;
+        Ok(())
+    }
+
     pub(super) fn reconcile_work_area(&mut self) -> Result<(), ReplyError> {
         self.snap_preview.hide();
         let ids = self.clients.keys().copied().collect::<Vec<_>>();
@@ -28,27 +33,9 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     pub(super) fn publish_desktop_state(&self) -> Result<(), ReplyError> {
         let root = self.screen().root;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_supported,
-            AtomEnum::ATOM,
-            &self.atoms.supported(),
-        )?;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_supporting_wm_check,
-            AtomEnum::WINDOW,
-            &[self.support_window],
-        )?;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            self.support_window,
-            self.atoms.net_supporting_wm_check,
-            AtomEnum::WINDOW,
-            &[self.support_window],
-        )?;
+        self.set_property32(root, self.atoms.net_supported, AtomEnum::ATOM, &self.atoms.supported())?;
+        self.set_property32(root, self.atoms.net_supporting_wm_check, AtomEnum::WINDOW, &[self.support_window])?;
+        self.set_property32(self.support_window, self.atoms.net_supporting_wm_check, AtomEnum::WINDOW, &[self.support_window])?;
         self.conn.change_property8(
             PropMode::REPLACE,
             self.support_window,
@@ -66,34 +53,16 @@ impl<'a, C: Connection> Wm<'a, C> {
     pub(super) fn publish_current_workspace(&self) -> Result<(), ReplyError> {
         let _guard = flamewm_profiler::start("wm.workspace.switch.ewmh_current");
         workspace_counters().ewmh_current.increment();
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            self.screen().root,
-            self.atoms.net_current_desktop,
-            AtomEnum::CARDINAL,
-            &[self.current_workspace as u32],
-        )?;
+        self.set_property32(self.screen().root, self.atoms.net_current_desktop, AtomEnum::CARDINAL, &[self.current_workspace as u32])?;
         Ok(())
     }
 
     pub(super) fn publish_workspace_metadata(&self) -> Result<(), ReplyError> {
         let root = self.screen().root;
         let work = self.work_area();
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_number_of_desktops,
-            AtomEnum::CARDINAL,
-            &[self.workspace_count as u32],
-        )?;
+        self.set_property32(root, self.atoms.net_number_of_desktops, AtomEnum::CARDINAL, &[self.workspace_count as u32])?;
         // _NET_CURRENT_DESKTOP owned by publish_current_workspace only.
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_desktop_geometry,
-            AtomEnum::CARDINAL,
-            &[self.screen_rect.width, self.screen_rect.height],
-        )?;
+        self.set_property32(root, self.atoms.net_desktop_geometry, AtomEnum::CARDINAL, &[self.screen_rect.width, self.screen_rect.height])?;
         let mut viewport = Vec::with_capacity(self.workspace_count * 2);
         let mut workareas = Vec::with_capacity(self.workspace_count * 4);
         let names = desktop_names_payload(self.workspace_count);
@@ -101,20 +70,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             viewport.extend_from_slice(&[0, 0]);
             workareas.extend_from_slice(&[work.x as u32, work.y as u32, work.width, work.height]);
         }
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_desktop_viewport,
-            AtomEnum::CARDINAL,
-            &viewport,
-        )?;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_workarea,
-            AtomEnum::CARDINAL,
-            &workareas,
-        )?;
+        self.set_property32(root, self.atoms.net_desktop_viewport, AtomEnum::CARDINAL, &viewport)?;
+        self.set_property32(root, self.atoms.net_workarea, AtomEnum::CARDINAL, &workareas)?;
         self.conn.change_property8(
             PropMode::REPLACE,
             root,
@@ -122,13 +79,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.atoms.utf8_string,
             &names,
         )?;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_showing_desktop,
-            AtomEnum::CARDINAL,
-            &[0],
-        )?;
+        self.set_property32(root, self.atoms.net_showing_desktop, AtomEnum::CARDINAL, &[0])?;
         Ok(())
     }
 
@@ -149,32 +100,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             .filter(|window| self.clients.contains_key(window))
             .collect::<Vec<_>>();
         let root = self.screen().root;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_client_list,
-            AtomEnum::WINDOW,
-            &client_list,
-        )?;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_client_list_stacking,
-            AtomEnum::WINDOW,
-            &windows,
-        )?;
+        self.set_property32(root, self.atoms.net_client_list, AtomEnum::WINDOW, &client_list)?;
+        self.set_property32(root, self.atoms.net_client_list_stacking, AtomEnum::WINDOW, &windows)?;
         Ok(())
     }
 
     pub(super) fn publish_active(&self) -> Result<(), ReplyError> {
         let root = self.screen().root;
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            root,
-            self.atoms.net_active_window,
-            AtomEnum::WINDOW,
-            &[self.active.unwrap_or(0)],
-        )?;
+        self.set_property32(root, self.atoms.net_active_window, AtomEnum::WINDOW, &[self.active.unwrap_or(0)])?;
         Ok(())
     }
 }

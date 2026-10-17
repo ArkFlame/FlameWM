@@ -16,10 +16,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         });
         if effect_boundary == Some("first") {
-            let session = self
-                .sessions
-                .get(&client)
-                .map_or(InteractionSession::Idle, |state| state.session);
+            let session = self.session_of(client);
             if let Some(probe) = self.resize_probe.as_ref() {
                 emit_resize_probe(
                     "effect",
@@ -152,21 +149,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                     }
                     FrameEffect::NotifyClientRoot { x, y, w, h } => {
                         let _guard = flamewm_profiler::start("wm.move.notify");
-                        let event = ConfigureNotifyEvent {
-                            response_type: CONFIGURE_NOTIFY_EVENT,
-                            sequence: 0,
-                            event: client,
-                            window: client,
-                            above_sibling: 0,
-                            x: clamp_i16(x),
-                            y: clamp_i16(y),
-                            width: clamp_u16(w.max(1) as u32),
-                            height: clamp_u16(h.max(1)),
-                            border_width: 0,
-                            override_redirect: false,
-                        };
-                        self.conn
-                            .send_event(false, client, EventMask::STRUCTURE_NOTIFY, event)?;
+                        self.send_notify_event(
+                            client,
+                            clamp_i16(x),
+                            clamp_i16(y),
+                            clamp_u16(w.max(1) as u32),
+                            clamp_u16(h.max(1)),
+                        )?;
                     }
                     FrameEffect::SnapPreview { target } => {
                         if target.is_none() {
@@ -182,10 +171,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.abort_session_to_idle(client);
         }
         if effect_boundary == Some("last") {
-            let session = self
-                .sessions
-                .get(&client)
-                .map_or(InteractionSession::Idle, |state| state.session);
+            let session = self.session_of(client);
             if let Some(probe) = self.resize_probe.as_ref() {
                 emit_resize_probe(
                     "effect",

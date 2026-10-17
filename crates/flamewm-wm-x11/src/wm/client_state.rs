@@ -87,16 +87,33 @@ impl<'a, C: Connection> Wm<'a, C> {
             state.outer.height.max(1) as i32,
             self.extents(),
         );
+        self.send_notify_event(
+            client,
+            clamp_i16(notify.x),
+            clamp_i16(notify.y),
+            clamp_u16(notify.w),
+            clamp_u16(notify.h),
+        )
+    }
+
+    pub(super) fn send_notify_event(
+        &self,
+        client: Window,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ReplyError> {
         let event = ConfigureNotifyEvent {
             response_type: CONFIGURE_NOTIFY_EVENT,
             sequence: 0,
             event: client,
             window: client,
             above_sibling: 0,
-            x: clamp_i16(notify.x),
-            y: clamp_i16(notify.y),
-            width: clamp_u16(notify.w),
-            height: clamp_u16(notify.h),
+            x,
+            y,
+            width,
+            height,
             border_width: 0,
             override_redirect: false,
         };

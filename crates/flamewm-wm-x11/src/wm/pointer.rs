@@ -10,10 +10,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         // must not reconfigure native input children, or each Enter =>
         // ConfigureNotify => Enter feedback loop sustains a motion storm.
         // Focus/hover state updates stay; layout stays frozen.
-        let active_session = self
-            .sessions
-            .get(&client_id)
-            .map_or(false, |session| !session.session.is_idle());
+        let active_session = self.is_session_active(client_id);
         if active_session {
             return Ok(());
         }
@@ -31,10 +28,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         let Some(client_id) = self.client_for(source) else {
             return Ok(());
         };
-        let active_session = self
-            .sessions
-            .get(&client_id)
-            .map_or(false, |session| !session.session.is_idle());
+        let active_session = self.is_session_active(client_id);
         if active_session {
             return Ok(());
         }
@@ -70,16 +64,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.focus(client_id)?;
         // Route press through controller reduce(); execute FrameEffects diff-aware.
         let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
-        let had_session = self
-            .sessions
-            .get(&client_id)
-            .map_or(false, |session| !session.session.is_idle());
+        let had_session = self.is_session_active(client_id);
         let _ = had_session;
         let event = FrameEvent::Press { source, pointer };
-        let pre = self
-            .sessions
-            .get(&client_id)
-            .map_or(InteractionSession::Idle, |session| session.session);
+        let pre = self.session_of(client_id);
         let region = self
             .registry
             .lookup_by_xid(source)
@@ -118,10 +106,7 @@ impl<'a, C: Connection> Wm<'a, C> {
         );
         match self.reduce_and_execute(client_id, event) {
             Ok(()) => {
-                let grabbed = self
-                    .sessions
-                    .get(&client_id)
-                    .map_or(false, |session| !session.session.is_idle());
+                let grabbed = self.is_session_active(client_id);
                 if !grabbed {
                     // No session (grab failed or Noop region): treat as control click.
                     self.handle_control_click(client_id)?;
@@ -288,16 +273,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                     _ => None,
                 });
         let move_active = move_session.is_some();
-        let active = self
-            .sessions
-            .get(&client_id)
-            .map_or(false, |session| !session.session.is_idle());
+        let active = self.is_session_active(client_id);
         if active {
             let frame_event = FrameEvent::Motion { pointer };
-            let pre = self
-                .sessions
-                .get(&client_id)
-                .map_or(InteractionSession::Idle, |session| session.session);
+            let pre = self.session_of(client_id);
             // One snap target per motion, shared by the trace and the preview.
             let motion_snap = move_active.then(|| {
                 let _guard = flamewm_profiler::start("wm.move.snap_target");

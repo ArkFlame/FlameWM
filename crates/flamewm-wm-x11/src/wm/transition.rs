@@ -8,16 +8,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         let now = std::time::Instant::now();
         if let Some(current) = self.animator.running(client) {
             if current == effect {
-                flamewm_debug::emit(
-                    flamewm_debug::DebugEventId("restore.trace.wm.transition_absorbed"),
-                    std::time::Duration::ZERO,
-                    || {
-                        let ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| d.as_millis());
-                        format!("t_ms={ms} window={client} effect={effect:?} reason=repeat")
-                    },
-                );
+                trace_restore("restore.trace.wm.transition_absorbed", || {
+                    format!("window={client} effect={effect:?} reason=repeat")
+                });
                 return Ok(true);
             }
             if matches!(
@@ -25,18 +18,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 (Effect::Minimize, Effect::Restore) | (Effect::Restore, Effect::Minimize)
             ) {
                 self.animator.start(client, effect, now);
-                flamewm_debug::emit(
-                    flamewm_debug::DebugEventId("restore.trace.wm.transition_absorbed"),
-                    std::time::Duration::ZERO,
-                    || {
-                        let ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| d.as_millis());
-                        format!(
-                            "t_ms={ms} window={client} effect={effect:?} current={current:?} reason=opposite"
-                        )
-                    },
-                );
+                trace_restore("restore.trace.wm.transition_absorbed", || {
+                    format!("window={client} effect={effect:?} current={current:?} reason=opposite")
+                });
                 return Ok(true);
             }
             if let Some(running) = self.animator.cancel(client) {
@@ -91,16 +75,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 }
                 Tick::Complete { client, effect } => {
                     if effect == Effect::Restore {
-                        flamewm_debug::emit(
-                            flamewm_debug::DebugEventId("restore.trace.wm.pump_complete"),
-                            std::time::Duration::ZERO,
-                            || {
-                                let ms = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map_or(0, |d| d.as_millis());
-                                format!("t_ms={ms} window={client} effect={effect:?}")
-                            },
-                        );
+                        trace_restore("restore.trace.wm.pump_complete", || {
+                            format!("window={client} effect={effect:?}")
+                        });
                     }
                     self.finish_transition(client, effect)?
                 }

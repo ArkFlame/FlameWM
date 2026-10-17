@@ -88,6 +88,30 @@ fn warp_rect(rect: animation::Rect) -> WarpRect {
     }
 }
 
+/// Emits a `restore.trace.*` event whose message is prefixed with wall-clock `t_ms=`.
+fn trace_restore(id: &'static str, detail: impl FnOnce() -> String) {
+    flamewm_debug::emit(flamewm_debug::DebugEventId(id), std::time::Duration::ZERO, || {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        format!("t_ms={ms} {}", detail())
+    });
+}
+
+impl<'a, C: Connection> Wm<'a, C> {
+    fn session_of(&self, client: Window) -> InteractionSession {
+        self.sessions
+            .get(&client)
+            .map_or(InteractionSession::Idle, |state| state.session)
+    }
+
+    fn is_session_active(&self, client: Window) -> bool {
+        self.sessions
+            .get(&client)
+            .is_some_and(|state| !state.session.is_idle())
+    }
+}
+
 use flamewm_api::shortcuts::{
     ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
@@ -1753,10 +1777,7 @@ impl<'a, C: Connection> Wm<'a, C> {
     fn controller_for(&mut self, client: Window) -> Option<ControllerState> {
         let state = self.clients.get(&client)?;
         let res = self.registry.lookup_by_client(client)?;
-        let session = self
-            .sessions
-            .get(&client)
-            .map_or(InteractionSession::Idle, |session| session.session);
+        let session = self.session_of(client);
         let children = res.children();
         let regions = children.map(|xid| self.registry.lookup_by_xid(xid).map(|target| target.region));
         let outputs = self.output_work_areas.iter().map(|output| to_root_rect(output.geometry));
