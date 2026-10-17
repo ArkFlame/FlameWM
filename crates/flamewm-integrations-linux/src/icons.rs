@@ -1031,9 +1031,13 @@ fn rasterize_path_with_origin(
     let decode: fn(&Path, &[u8], IconSize, IconOrigin) -> Result<Rgb8Raster, RasterError> =
         match extension.as_str() {
             "ppm" => decode_ppm,
-            "xpm" => decode_xpm,
+            "xpm" => |path, bytes, size, origin| {
+                decode_natural(path, "XPM", flamewm_image_core::xpm::decode(bytes), size, origin)
+            },
             "svg" => decode_svg,
-            "png" => decode_png,
+            "png" => |path, bytes, size, origin| {
+                decode_natural(path, "PNG", flamewm_image_core::png::decode(bytes), size, origin)
+            },
             "webp" => decode_webp,
             _ => {
                 return Err(RasterError::UnsupportedFormat {
@@ -1116,18 +1120,18 @@ fn decode_svg(
     Ok(raster_from_image(path, image, origin))
 }
 
-fn decode_png(
+fn decode_natural(
     path: &Path,
-    bytes: &[u8],
+    format: &'static str,
+    natural: Result<flamewm_image_core::RgbaImage, String>,
     size: IconSize,
     origin: IconOrigin,
 ) -> Result<Rgb8Raster, RasterError> {
-    let natural = flamewm_image_core::png::decode(bytes)
-        .map_err(|message| invalid_raster_error(path, "PNG", &message))?;
+    let natural = natural.map_err(|message| invalid_raster_error(path, format, &message))?;
     if natural.width == 0 || natural.height == 0 {
-        return Err(invalid_raster_error(path, "PNG", "dimensions must be non-zero"));
+        return Err(invalid_raster_error(path, format, "dimensions must be non-zero"));
     }
-    let image = scale_to_physical(path, "PNG", natural, size)?;
+    let image = scale_to_physical(path, format, natural, size)?;
     Ok(raster_from_image(path, image, origin))
 }
 
@@ -1170,21 +1174,6 @@ fn map_ppm_error(path: &Path, message: &str) -> RasterError {
         path: path.to_path_buf(),
         message: message.to_owned(),
     }
-}
-
-fn decode_xpm(
-    path: &Path,
-    bytes: &[u8],
-    size: IconSize,
-    origin: IconOrigin,
-) -> Result<Rgb8Raster, RasterError> {
-    let natural = flamewm_image_core::xpm::decode(bytes)
-        .map_err(|message| invalid_raster_error(path, "XPM", &message))?;
-    if natural.width == 0 || natural.height == 0 {
-        return Err(invalid_raster_error(path, "XPM", "dimensions must be non-zero"));
-    }
-    let image = scale_to_physical(path, "XPM", natural, size)?;
-    Ok(raster_from_image(path, image, origin))
 }
 
 fn valid_icon_name(name: &str) -> bool {
