@@ -18,6 +18,14 @@ pub(super) fn signal_callback_source() -> &'static str {
     )
 }
 
+fn settings_projection_source() -> &'static str {
+    source_between(
+        include_str!("main.rs"),
+        "fn refresh_settings_projection",
+        "fn refresh_if_changed",
+    )
+}
+
 #[test]
 fn t10_settings_snapshot_changed_projects_payload_without_fetch_or_rescan() {
     // CONTRACT: SettingsSnapshotChanged is the complete live settings authority.
@@ -61,16 +69,11 @@ fn t10_settings_projection_applies_sticky_selection_and_wallpaper_together() {
     // wallpaper call is the only settings-related presentation path.
     // FAILURE MUTATION: omit any one visual owner or route through filesystem refresh;
     // this regression must turn red.
-    let source = include_str!("main.rs");
     assert!(
-        source.contains("fn refresh_settings_projection"),
+        include_str!("main.rs").contains("fn refresh_settings_projection"),
         "settings changes need a dedicated desktop projection seam"
     );
-    let projection = source_between(
-        source,
-        "fn refresh_settings_projection",
-        "fn refresh_if_changed",
-    );
+    let projection = settings_projection_source();
     for marker in [
         "sync_sticky",
         "sync_selection_visuals",
@@ -96,12 +99,7 @@ fn t10_settings_projection_retints_desktop_menus_from_surfaces() {
     // through the settings projection, not only on the next menu open.
     // FAILURE MUTATION: drop the MENU_SURFACE_IDS loop or read the stale hardcoded CSS
     // fill; this regression must turn red.
-    let source = include_str!("main.rs");
-    let projection = source_between(
-        source,
-        "fn refresh_settings_projection",
-        "fn refresh_if_changed",
-    );
+    let projection = settings_projection_source();
     assert!(
         projection.contains("for id in projection::MENU_SURFACE_IDS")
             && projection
