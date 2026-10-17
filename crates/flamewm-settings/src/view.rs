@@ -13,6 +13,10 @@ pub fn document() -> Result<UiDocument, String> {
 mod tests {
     use super::*;
 
+    const HTML: &str = include_str!("../../../ui/settings.html");
+    const CSS: &str = include_str!("../../../ui/settings.css");
+    const DISPATCH: &str = include_str!("lib.rs");
+
     const PROJECTED_TEXT_IDS: &[&str] = &[
         "display-mode-slot-0",
         "display-mode-slot-1",
@@ -109,6 +113,20 @@ mod tests {
         })
     }
 
+    fn attr_values<'a>(html: &'a str, prefix: &str) -> Vec<&'a str> {
+        html.split(prefix)
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect()
+    }
+
+    fn page_between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
+        html.split_once(&format!("id=\"{from}\""))
+            .and_then(|(_, rest)| rest.split_once(&format!("id=\"{to}\"")))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| panic!("settings page {from} must precede {to}"))
+    }
+
     #[test]
     fn compiled_display_output_name_slots_are_mutable_text_targets() {
         let mut document = document().expect("settings artifact must decode");
@@ -125,32 +143,23 @@ mod tests {
     #[test]
     fn auto_location_toggle_stacks_under_its_description_so_it_stays_visible() {
         // A long description on a side-by-side row pushed the toggle off the right edge at 820px.
-        let html = include_str!("../../../ui/settings.html");
-        assert!(html.contains(
+        assert!(HTML.contains(
             "<div class=\"setting-block lock-stacked\"><div class=\"setting-copy\"><div class=\"setting-title\">Automatically detect my location</div>"
         ));
-        assert!(html.contains("Approximate location from your IP address (ipwho.is, ipinfo.io). Only the city is stored."));
+        assert!(HTML.contains("Approximate location from your IP address (ipwho.is, ipinfo.io). Only the city is stored."));
     }
 
     #[test]
     fn lock_preview_button_is_in_the_lock_screen_card() {
-        let html = include_str!("../../../ui/settings.html");
-        assert!(html.contains(
+        assert!(HTML.contains(
             "id=\"lock-preview\" data-action=\"settings.lock.preview\">Preview lock screen</button>"
         ));
     }
 
     #[test]
     fn surface_colour_is_one_control_on_the_surfaces_page() {
-        let html = include_str!("../../../ui/settings.html");
-        let section = |id: &str, next: &str| {
-            html.split_once(&format!("id=\"{id}\""))
-                .and_then(|(_, rest)| rest.split_once(&format!("id=\"{next}\"")))
-                .map(|(body, _)| body)
-                .unwrap_or_else(|| panic!("settings page {id} must precede {next}"))
-        };
-        let surfaces = section("page-surfaces", "page-animations");
-        let taskbar = section("page-taskbar", "page-displays");
+        let surfaces = page_between(HTML, "page-surfaces", "page-animations");
+        let taskbar = page_between(HTML, "page-taskbar", "page-displays");
         assert!(surfaces.contains("id=\"color-surface-wheel\""));
         assert!(surfaces.contains("data-action=\"settings.picker.open.surface\""));
         assert!(surfaces.contains("id=\"surface-opacity-value\""));
@@ -161,21 +170,16 @@ mod tests {
         );
         assert!(!taskbar.contains("taskbar-opacity-value"));
         assert!(!taskbar.contains("taskbar-blur-value"));
-        assert!(!html.contains("taskbar-color-value"));
-        assert!(!html.contains("settings.taskbar.color"));
-        assert!(!html.contains("settings.taskbar-blur"));
-        assert!(!html.contains("settings.taskbar-opacity"));
-        assert_eq!(html.matches("id=\"color-surface-wheel\"").count(), 1);
+        assert!(!HTML.contains("taskbar-color-value"));
+        assert!(!HTML.contains("settings.taskbar.color"));
+        assert!(!HTML.contains("settings.taskbar-blur"));
+        assert!(!HTML.contains("settings.taskbar-opacity"));
+        assert_eq!(HTML.matches("id=\"color-surface-wheel\"").count(), 1);
     }
 
     #[test]
     fn appearance_tabs_are_six_pages_in_nav_order_with_unique_ids() {
-        let html = include_str!("../../../ui/settings.html");
-        let nav: Vec<&str> = html
-            .split("data-action=\"settings.page.")
-            .skip(1)
-            .filter_map(|rest| rest.split('"').next())
-            .collect();
+        let nav = attr_values(HTML, "data-action=\"settings.page.");
         assert_eq!(
             nav,
             [
@@ -195,19 +199,14 @@ mod tests {
         );
         for page in nav {
             let id = format!("id=\"page-{page}\"");
-            assert_eq!(html.matches(&id).count(), 1, "one section for nav {page}");
+            assert_eq!(HTML.matches(&id).count(), 1, "one section for nav {page}");
         }
-        assert!(!html.contains("id=\"page-appearance\""));
+        assert!(!HTML.contains("id=\"page-appearance\""));
     }
 
     #[test]
     fn appearance_sub_pages_have_no_duplicate_controls() {
-        let html = include_str!("../../../ui/settings.html");
-        let mut ids: Vec<&str> = html
-            .split("id=\"")
-            .skip(1)
-            .filter_map(|rest| rest.split('"').next())
-            .collect();
+        let mut ids = attr_values(HTML, "id=\"");
         let total = ids.len();
         ids.sort_unstable();
         ids.dedup();
@@ -216,27 +215,21 @@ mod tests {
             total,
             "every element id must be unique in settings.html"
         );
-        assert!(!html.contains("id=\"accent-reset\""));
-        assert!(!html.contains("settings.accent.reset"));
-        assert!(!html.contains("Accent preset"));
+        assert!(!HTML.contains("id=\"accent-reset\""));
+        assert!(!HTML.contains("settings.accent.reset"));
+        assert!(!HTML.contains("Accent preset"));
     }
 
     #[test]
     fn screensaver_preview_is_labelled_and_uses_the_screensaver_action() {
-        let html = include_str!("../../../ui/settings.html");
-        assert!(html.contains(
+        assert!(HTML.contains(
             "id=\"screensaver-preview\" data-action=\"settings.screensaver.preview\">Preview</button>"
         ));
     }
 
     #[test]
     fn start_icon_controls_are_on_the_start_menu_page() {
-        let html = include_str!("../../../ui/settings.html");
-        let start = html
-            .split_once("id=\"page-start-menu\"")
-            .and_then(|(_, rest)| rest.split_once("id=\"page-surfaces\""))
-            .map(|(body, _)| body)
-            .expect("start menu page");
+        let start = page_between(HTML, "page-start-menu", "page-surfaces");
         assert!(
             start.contains("id=\"start-icon-choose\" data-action=\"settings.start-icon.choose\"")
         );
@@ -248,8 +241,6 @@ mod tests {
 
     #[test]
     fn settings_source_preserves_native_canvas_and_page_contract() {
-        let html = include_str!("../../../ui/settings.html");
-        let css = include_str!("../../../ui/settings.css");
         for page in [
             "theme",
             "start-menu",
@@ -264,20 +255,19 @@ mod tests {
             "hotkeys",
             "about",
         ] {
-            assert!(html.contains(&format!("id=\"page-{page}\"")));
+            assert!(HTML.contains(&format!("id=\"page-{page}\"")));
         }
-        assert!(css_rule(css, "body").contains("width:100%"));
-        assert!(css_rule(css, ".settings-nav").contains("width:208px"));
-        assert!(css.contains(".nav-selection { position:absolute; left:8px; width:192px;"));
+        assert!(css_rule(CSS, "body").contains("width:100%"));
+        assert!(css_rule(CSS, ".settings-nav").contains("width:208px"));
+        assert!(CSS.contains(".nav-selection { position:absolute; left:8px; width:192px;"));
     }
 
     #[test]
     fn native_settings_window_matches_the_authored_root_geometry() {
-        let css = include_str!("../../../ui/settings.css");
         assert_eq!(SETTINGS_DEFAULT_WIDTH, 820);
         assert_eq!(SETTINGS_DEFAULT_HEIGHT, 540);
 
-        let authored_root = css_rule(css, "body");
+        let authored_root = css_rule(CSS, "body");
         assert!(
             css_value(authored_root, "width") == Some("100%")
                 && css_value(authored_root, "height") == Some("100%"),
@@ -289,11 +279,10 @@ mod tests {
 
     #[test]
     fn settings_root_is_not_fixed_across_the_resize_viewport_matrix() {
-        let css = include_str!("../../../ui/settings.css");
-        let root = css_rule(css, "body");
-        let nav = css_rule(css, ".settings-nav");
-        let main = css_rule(css, ".settings-main");
-        let page = css_rule(css, ".settings-page");
+        let root = css_rule(CSS, "body");
+        let nav = css_rule(CSS, ".settings-nav");
+        let main = css_rule(CSS, ".settings-main");
+        let page = css_rule(CSS, ".settings-page");
 
         for (width, height) in [(760, 500), (820, 540), (960, 640)] {
             assert!(
@@ -360,8 +349,6 @@ mod tests {
     #[test]
     fn compiled_wallpaper_controls_are_addressable_and_use_production_actions() {
         let mut document = document().expect("settings artifact must decode");
-        let html = include_str!("../../../ui/settings.html");
-        let dispatch = include_str!("lib.rs");
 
         for (id, action, label) in [
             ("wallpaper-choose", "settings.wallpaper.choose", "Choose…"),
@@ -387,11 +374,11 @@ mod tests {
             ),
         ] {
             assert!(
-                html.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
                 "wallpaper control {id} must retain its production action"
             );
             assert!(
-                dispatch.contains(&format!("\"{action}\" =>")),
+                DISPATCH.contains(&format!("\"{action}\" =>")),
                 "wallpaper action {action} must have a production dispatch branch"
             );
             document
@@ -403,19 +390,17 @@ mod tests {
     #[test]
     fn compiled_application_appearance_selector_is_addressable_and_labelled() {
         let mut document = document().expect("settings artifact must decode");
-        let html = include_str!("../../../ui/settings.html");
-        let dispatch = include_str!("lib.rs");
-        assert!(html.contains("Applies to newly opened applications."));
+        assert!(HTML.contains("Applies to newly opened applications."));
         for (id, action, label) in [
             ("appearance-apps-dark", "settings.appearance.apps.dark", "Dark"),
             ("appearance-apps-light", "settings.appearance.apps.light", "Light"),
         ] {
             assert!(
-                html.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
                 "application appearance {id} must retain its production action"
             );
             assert!(
-                dispatch.contains(&format!("\"{action}\" =>")),
+                DISPATCH.contains(&format!("\"{action}\" =>")),
                 "application appearance action {action} must have a production dispatch branch"
             );
             document
@@ -430,7 +415,6 @@ mod tests {
     #[test]
     fn compiled_accent_swatches_have_action_ancestors_and_measurable_client_points() {
         let document = document().expect("settings artifact must decode");
-        let html = include_str!("../../../ui/settings.html");
         let viewport = (820.0, 540.0);
 
         for (name, action) in [
@@ -449,7 +433,7 @@ mod tests {
             assert!(center.0 >= 0.0 && center.0 < viewport.0);
             assert!(center.1 >= 0.0 && center.1 < viewport.1);
             assert!(
-                html.contains(&format!(
+                HTML.contains(&format!(
                     "<button class=\"accent-swatch swatch-{name}\" data-action=\"{action}\"><span id=\"{selected_dot}\""
                 )),
                 "compiled hit target {selected_dot} must be nested under the {action} button"
@@ -457,7 +441,7 @@ mod tests {
         }
 
         assert!(
-            !html.contains("settings.accent.reset"),
+            !HTML.contains("settings.accent.reset"),
             "the accent preset reset is removed; the saved accent stays"
         );
     }
@@ -503,10 +487,9 @@ mod tests {
 
     #[test]
     fn pager_controls_have_stable_ids_and_data_actions() {
-        let html = include_str!("../../../ui/settings.html");
         for (id, action) in PAGER_CONTROLS {
             assert!(
-                html.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
+                HTML.contains(&format!("id=\"{id}\" data-action=\"{action}\"")),
                 "pager control {id} must bind data-action {action}"
             );
         }
@@ -514,11 +497,8 @@ mod tests {
 
     #[test]
     fn pager_action_names_in_markup_match_the_frozen_contract() {
-        let html = include_str!("../../../ui/settings.html");
-        let markup_actions = html
-            .split("data-action=\"")
-            .skip(1)
-            .filter_map(|rest| rest.split('"').next())
+        let markup_actions = attr_values(HTML, "data-action=\"")
+            .into_iter()
             .filter(|action| {
                 action.starts_with("settings.display.outputs.")
                     || action.starts_with("settings.display.modes.")
@@ -535,10 +515,9 @@ mod tests {
 
     #[test]
     fn pager_disabled_states_are_inert_non_button_twins() {
-        let html = include_str!("../../../ui/settings.html");
         for id in PAGER_DISABLED_TWINS {
             assert!(
-                html.contains(&format!(
+                HTML.contains(&format!(
                     "<div class=\"pager-off is-disabled\" id=\"{id}\">"
                 )),
                 "disabled pager twin {id} must be an inert div with no data-action"
@@ -562,10 +541,9 @@ mod tests {
 
     #[test]
     fn pager_actions_have_settings_dispatch_branches() {
-        let dispatch = include_str!("lib.rs");
         for (_, action) in PAGER_CONTROLS {
             assert!(
-                dispatch.contains(&format!("\"{action}\"")),
+                DISPATCH.contains(&format!("\"{action}\"")),
                 "pager action {action} must have a dispatch branch in lib.rs (W2)"
             );
         }
@@ -573,24 +551,21 @@ mod tests {
 
     #[test]
     fn state_classes_are_styled_and_applied_in_the_markup() {
-        let css = include_str!("../../../ui/settings.css");
-        let html = include_str!("../../../ui/settings.html");
         for class in STATE_CLASSES {
             assert!(
-                css.contains(&format!(".{class} {{")),
+                CSS.contains(&format!(".{class} {{")),
                 "state class .{class} must be styled in settings.css"
             );
         }
-        assert!(html.contains("class=\"settings-inline-error is-error\""));
-        assert!(html.contains("class=\"setting-block is-pending\" id=\"display-confirm\""));
+        assert!(HTML.contains("class=\"settings-inline-error is-error\""));
+        assert!(HTML.contains("class=\"setting-block is-pending\" id=\"display-confirm\""));
     }
 
     #[test]
     fn settings_css_uses_no_unsupported_pseudo_states_or_attribute_selectors() {
-        let css = include_str!("../../../ui/settings.css");
         for unsupported in [":focus", ":disabled", ":checked", "["] {
             assert!(
-                !css.contains(unsupported),
+                !CSS.contains(unsupported),
                 "settings CSS must not use {unsupported}; the render compiler does not support it"
             );
         }
@@ -601,8 +576,7 @@ mod tests {
         // Render-core measures scroll extent from auto-height content; a
         // percent height resolves against an unbounded probe (~3e35 px) and
         // wheel scrolling never reaches a clamp.
-        let css = include_str!("../../../ui/settings.css");
-        let page = css_rule(css, ".settings-page");
+        let page = css_rule(CSS, ".settings-page");
         assert_eq!(
             css_value(page, "height"),
             None,
@@ -613,14 +587,12 @@ mod tests {
 
     #[test]
     fn scroll_pages_reserve_room_above_the_inline_footer_at_760x500() {
-        let css = include_str!("../../../ui/settings.css");
-        let html = include_str!("../../../ui/settings.html");
-        let footer = css_rule(css, ".settings-inline-error");
+        let footer = css_rule(CSS, ".settings-inline-error");
         let footer_height = css_value(footer, "height")
             .and_then(|value| value.strip_suffix("px"))
             .and_then(|value| value.parse::<u32>().ok())
             .expect("footer must declare a pixel height");
-        let scroll = css_rule(css, ".page-scroll");
+        let scroll = css_rule(CSS, ".page-scroll");
         let reserved = css_value(scroll, "padding-bottom")
             .and_then(|value| value.strip_suffix("px"))
             .and_then(|value| value.parse::<u32>().ok())
@@ -630,6 +602,6 @@ mod tests {
             "scroll content must clear the {footer_height}px footer at 760x500"
         );
         assert_eq!(css_value(scroll, "overflow-y"), Some("auto"));
-        assert!(html.contains("id=\"page-displays\" class=\"settings-page page-scroll\""));
+        assert!(HTML.contains("id=\"page-displays\" class=\"settings-page page-scroll\""));
     }
 }
