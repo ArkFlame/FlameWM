@@ -22,25 +22,19 @@ use crate::{ACCENT_NODE_IDS, OUTPUT_PAGE_SLOTS, SETTING_TWINS, SettingsApplicati
 
 const MARKUP: &str = include_str!("../../../ui/settings.html");
 
-/// Every `id="..."` declared in the Settings markup, parsed once.
-fn markup_ids() -> &'static BTreeSet<String> {
-    static IDS: OnceLock<BTreeSet<String>> = OnceLock::new();
-    IDS.get_or_init(|| {
-        MARKUP
-            .split("id=\"")
-            .skip(1)
-            .filter_map(|fragment| fragment.split('"').next())
-            .map(str::to_owned)
-            .collect()
-    })
-}
-
-fn markup_actions() -> Vec<&'static str> {
+/// Every value of `attribute="..."` declared in the Settings markup, in document order.
+fn markup_attr(attribute: &str) -> Vec<&'static str> {
     MARKUP
-        .split("data-action=\"")
+        .split(format!("{attribute}=\"").as_str())
         .skip(1)
         .filter_map(|fragment| fragment.split('"').next())
         .collect()
+}
+
+/// Every `id="..."` declared in the Settings markup, parsed once.
+fn markup_ids() -> &'static BTreeSet<String> {
+    static IDS: OnceLock<BTreeSet<String>> = OnceLock::new();
+    IDS.get_or_init(|| markup_attr("id").into_iter().map(str::to_owned).collect())
 }
 
 /// Records every write and rejects ids that the markup does not declare.
@@ -263,12 +257,8 @@ fn release(action: &str) -> UiActionEvent {
 #[test]
 fn markup_ids_are_unique() {
     let mut seen = BTreeSet::new();
-    for fragment in MARKUP.split("id=\"").skip(1) {
-        let id = fragment.split('"').next().unwrap_or_default();
-        assert!(
-            seen.insert(id.to_owned()),
-            "duplicate id in settings.html: {id}"
-        );
+    for id in markup_attr("id") {
+        assert!(seen.insert(id), "duplicate id in settings.html: {id}");
     }
 }
 
@@ -306,7 +296,7 @@ fn every_static_node_the_controller_writes_is_declared_in_markup() {
 
 #[test]
 fn every_markup_action_parses_to_a_controller_action() {
-    let actions = markup_actions();
+    let actions = markup_attr("data-action");
     assert!(!actions.is_empty(), "settings markup declares actions");
     for action in actions {
         assert!(
@@ -373,7 +363,7 @@ fn every_navigation_page_syncs_on_the_strict_document() {
         settings_fixture("#EF4048", "dark"),
         display_fixtures().remove(1),
     );
-    for action in markup_actions()
+    for action in markup_attr("data-action")
         .into_iter()
         .filter(|a| a.starts_with("settings.page."))
     {
