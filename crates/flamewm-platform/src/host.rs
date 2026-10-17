@@ -122,10 +122,7 @@ impl<E: EnginePorts> PlatformHost<E> {
     /// The generation is re-read per entry because each applied scale bumps it.
     fn seed_persisted_shell_scales(&mut self) -> FlameResult<()> {
         for (output, scale) in &self.settings.current().per_output_scale {
-            let generation = self
-                .displays
-                .cached()
-                .map_or(0, |snapshot| snapshot.generation);
+            let generation = self.cached_generation();
             match self
                 .displays
                 .set_shell_scale(&OutputId::new(output.clone()), *scale, generation)
@@ -195,6 +192,11 @@ impl<E: EnginePorts> PlatformHost<E> {
         }
     }
 
+    /// Generation of the cached display snapshot; 0 before the first display refresh.
+    fn cached_generation(&self) -> u64 {
+        self.displays.cached().map_or(0, |snapshot| snapshot.generation)
+    }
+
     pub fn stop(&mut self) {
         if !self.started {
             return;
@@ -248,8 +250,7 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 
     pub fn activate_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
-        self.workspaces
-            .activate(&mut self.engine, index, expected_revision)
+        self.workspaces.activate(&mut self.engine, index, expected_revision)
     }
 
     pub fn insert_workspace_after(
@@ -257,13 +258,11 @@ impl<E: EnginePorts> PlatformHost<E> {
         index: usize,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.workspaces
-            .insert_after(&mut self.engine, index, expected_revision)
+        self.workspaces.insert_after(&mut self.engine, index, expected_revision)
     }
 
     pub fn remove_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
-        self.workspaces
-            .remove(&mut self.engine, index, expected_revision)
+        self.workspaces.remove(&mut self.engine, index, expected_revision)
     }
 
     pub fn move_window_to_workspace(
@@ -271,8 +270,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         window: WindowRef,
         target: usize,
     ) -> FlameResult<()> {
-        self.workspaces
-            .move_window(&mut self.engine, window, target)
+        self.workspaces.move_window(&mut self.engine, window, target)
     }
 
     pub fn apply_window_feature(
@@ -281,8 +279,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         feature: WindowFeature,
         action: FeatureAction,
     ) -> FlameResult<()> {
-        self.windows
-            .apply_feature(&mut self.engine, window, feature, action)
+        self.windows.apply_feature(&mut self.engine, window, feature, action)
     }
 
     pub fn showing_desktop(&self) -> FlameResult<bool> {
@@ -300,21 +297,18 @@ impl<E: EnginePorts> PlatformHost<E> {
         window: WindowRef,
         span: FullscreenMonitorSpan,
     ) -> FlameResult<()> {
-        self.windows
-            .set_fullscreen_monitors(&mut self.engine, window, span)
+        self.windows.set_fullscreen_monitors(&mut self.engine, window, span)
     }
 
     pub fn begin_interactive_move_resize(
         &mut self,
         request: InteractiveMoveResize,
     ) -> FlameResult<()> {
-        self.windows
-            .begin_interactive_move_resize(&mut self.engine, request)
+        self.windows.begin_interactive_move_resize(&mut self.engine, request)
     }
 
     pub fn cancel_interactive_move_resize(&mut self, window: WindowRef) -> FlameResult<()> {
-        self.windows
-            .cancel_interactive_move_resize(&mut self.engine, window)
+        self.windows.cancel_interactive_move_resize(&mut self.engine, window)
     }
 
     pub fn display_snapshot(&mut self) -> FlameResult<DisplaySnapshot> {
@@ -333,8 +327,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         expected_generation: u64,
         now_ms: u64,
     ) -> FlameResult<TransactionId> {
-        self.displays
-            .begin_mode(&mut self.engine, output, mode, expected_generation, now_ms)
+        self.displays.begin_mode(&mut self.engine, output, mode, expected_generation, now_ms)
     }
 
     pub fn keep_display_mode(
@@ -385,10 +378,7 @@ impl<E: EnginePorts> PlatformHost<E> {
             // Persist before the panel resync so a failed write leaves no runtime-only scale behind.
             if let Err(error) = self.settings.persist_scale(output.as_str(), percent) {
                 if let Some(previous) = previous {
-                    let generation = self
-                        .displays
-                        .cached()
-                        .map_or(0, |snapshot| snapshot.generation);
+                    let generation = self.cached_generation();
                     if let Err(restore_error) =
                         self.displays.set_shell_scale(output, previous, generation)
                     {
@@ -576,8 +566,7 @@ impl<E: EnginePorts> PlatformHost<E> {
         logical_size: u16,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.panels
-            .set_size(output, logical_size, expected_revision)
+        self.panels.set_size(output, logical_size, expected_revision)
     }
 
     pub fn pin_app(&mut self, app: DesktopAppId, expected_revision: u64) -> FlameResult<bool> {
@@ -1141,10 +1130,7 @@ mod tests {
         host.clear_shortcut(ACTION_TOGGLE_START_MENU, revision + 1)
             .expect("repeated clear applies");
         let persisted = std::fs::read_to_string(&path).expect("clear is persisted");
-        assert!(
-            persisted.contains("hotkey.ToggleStartMenu=\n"),
-            "{persisted}"
-        );
+        assert!(persisted.contains("hotkey.ToggleStartMenu=\n"), "{persisted}");
 
         let reloaded = started_hotkey_host(&path);
         assert_eq!(
@@ -1165,10 +1151,7 @@ mod tests {
         host.set_shortcut(ACTION_WINDOW_CLOSE, "Super+F8", revision)
             .expect("set applies");
         let persisted = std::fs::read_to_string(&path).expect("set is persisted");
-        assert!(
-            persisted.contains("hotkey.WindowClose=Super+F8\n"),
-            "{persisted}"
-        );
+        assert!(persisted.contains("hotkey.WindowClose=Super+F8\n"), "{persisted}");
 
         let reloaded = started_hotkey_host(&path);
         assert_eq!(
