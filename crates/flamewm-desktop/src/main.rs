@@ -1610,17 +1610,13 @@ fn open_item_inner(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> 
             entry
                 .launch(&ApplicationLaunchOptions::default())
                 .map(|_| ())
-                .map_err(|error| format!("{error:?}"))?;
-            Ok(())
+                .map_err(|error| format!("{error:?}"))
         }
-        LauncherOpen::RegularFile => {
-            Command::new("xdg-open")
-                .arg(path)
-                .spawn()
-                .map(|_| ())
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        }
+        LauncherOpen::RegularFile => Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
     }
 }
 
@@ -1639,11 +1635,7 @@ fn spawn_intent(intent: &CommandIntent) -> Result<(), String> {
     if let Some(cwd) = &intent.cwd {
         command.current_dir(cwd);
     }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("spawn {}: {error}", intent.program))?;
-    Ok(())
+    command.spawn().map(|_| ()).map_err(|error| format!("spawn {}: {error}", intent.program))
 }
 
 fn handle_menu_action(
