@@ -197,10 +197,6 @@ impl PanelService {
         self.mutate_tasks(expected_revision, |tasks| tasks.unpin_app(app))
     }
 
-    pub fn reorder(&mut self, from: usize, to: usize, expected_revision: u64) -> FlameResult<bool> {
-        self.mutate_tasks(expected_revision, |tasks| tasks.reorder_on_release(from, to))
-    }
-
     pub fn reorder_entry(
         &mut self,
         entry_id: &TaskEntryId,
