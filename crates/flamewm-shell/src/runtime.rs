@@ -270,27 +270,20 @@ impl ShellRuntime {
     /// any fetch. Every steady-state domain is supplied by a snapshot signal;
     /// this method only consumes dirty flags and never owns a control client.
     pub fn reconcile_dirty(&mut self) -> ChangedDomains {
-        let mut changed = ChangedDomains::default();
-        if self.dirty.windows {
-            changed.windows = true;
-            self.dirty.windows = false;
-            domain_reconcile_counter(DomainKind::Windows).increment();
-        }
-        if self.dirty.workspaces {
-            changed.workspaces = true;
-            self.dirty.workspaces = false;
-            domain_reconcile_counter(DomainKind::Workspaces).increment();
-        }
-        if self.dirty.panels {
-            changed.panels = true;
-            self.dirty.panels = false;
-            domain_reconcile_counter(DomainKind::Panels).increment();
-        }
-        if self.dirty.system {
-            changed.system = true;
-            self.dirty.system = false;
-            domain_reconcile_counter(DomainKind::System).increment();
-        }
+        let mut take = |flag: &mut bool, kind: DomainKind| {
+            let set = std::mem::take(flag);
+            if set {
+                domain_reconcile_counter(kind).increment();
+            }
+            set
+        };
+        let changed = ChangedDomains {
+            windows: take(&mut self.dirty.windows, DomainKind::Windows),
+            workspaces: take(&mut self.dirty.workspaces, DomainKind::Workspaces),
+            panels: take(&mut self.dirty.panels, DomainKind::Panels),
+            system: take(&mut self.dirty.system, DomainKind::System),
+            applications: false,
+        };
         // No application signal is owned by this reconciliation path; keep
         // the flag consumed if a producer marks it before a future snapshot
         // contract is added.
