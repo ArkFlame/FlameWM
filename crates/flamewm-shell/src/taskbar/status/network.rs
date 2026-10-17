@@ -229,7 +229,6 @@ pub fn popover_view(snapshot: &SystemSnapshot) -> Option<NetworkPopoverView> {
         })
         .collect();
     Some(NetworkPopoverView {
-        popover: popover.clone(),
         connected_label: popover.details.clone(),
         wifi_enabled: popover.wifi_enabled,
         can_scan: popover.can_scan,
@@ -242,6 +241,7 @@ pub fn popover_view(snapshot: &SystemSnapshot) -> Option<NetworkPopoverView> {
             .as_ref()
             .map(|request| request.access_point_path.clone()),
         secret_masked: network.pending_secret.is_some(),
+        popover,
     })
 }
 
