@@ -28,6 +28,7 @@ Exit status: 0 when no AP FAILs, 1 when any AP FAILs, 2 usage error, 3 environme
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import ctypes.util
 import hashlib
@@ -846,23 +847,29 @@ def nonblack_bbox(pixels: list[tuple[int, int, int]], width: int, y_limit: int) 
     return (min(xs), ys[0], max(xs), ys[-1]) if xs else None
 
 
+@contextlib.contextmanager
+def root_grab(s: Session):
+    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
+    grab = lamp.RootGrab(s.ctx.display)
+    try:
+        yield grab
+    finally:
+        grab.close()
+
+
 def grab_flight(s: Session, seconds: float, measure) -> list:
     """measure(img) for each in-process root grab of the strip above the taskbar, one per START_SAMPLE_PERIOD.
 
     Screenshot tools take ~0.3 s per frame, too slow for an ~0.8 s flight; XGetImage does not."""
-    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
 
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
     out: list = []
-    grab = lamp.RootGrab(s.ctx.display)
-    try:
+    with root_grab(s) as grab:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             started = time.monotonic()
             out.append(measure(grab.grab(0, 0, s.args.screen_w, strip_y)))
             time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
-    finally:
-        grab.close()
     return out
 
 
@@ -922,14 +929,12 @@ def sample_flight(s: Session, seconds: float, measure, observe=None, done=None) 
 
     Stops one grab after either `done(sample)` is true or an overlay reported by observe() has appeared and
     disappeared, and never later than `seconds`. Returns (samples, overlay nodes per observe tick)."""
-    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
 
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
     samples: list = []
     ticks: list[list[dict]] = []
     seen: set[str] = set()
-    grab = lamp.RootGrab(s.ctx.display)
-    try:
+    with root_grab(s) as grab:
         deadline = time.monotonic() + seconds
         finished = False
         while time.monotonic() < deadline:
@@ -946,8 +951,6 @@ def sample_flight(s: Session, seconds: float, measure, observe=None, done=None) 
                 finished = finished or flight_finished(seen, ids)
                 seen |= ids
             time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
-    finally:
-        grab.close()
     return samples, ticks
 
 
@@ -1668,7 +1671,6 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
 
     slide: the popup top moves. fade: geometry stays put while region brightness ramps up.
     magic-lamp: the popup width is not rigid across frames. none: the final state at the first sample."""
-    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
 
     ev: list[str] = []
     tag = f"AP06-{style}"
@@ -1684,8 +1686,7 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
         return [f"{style}: Start popup not found in the X tree"], ev
     rest = {"x": rest_node["x"], "y": rest_node["y"], "w": rest_node["w"], "h": rest_node["h"]}
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
-    grab = lamp.RootGrab(s.ctx.display)
-    try:
+    with root_grab(s) as grab:
         # The popup must be fully gone before the next open is sampled, or the flight is read
         # against a closing popup. Wait for an empty rest rect, up to 3 s.
         pre_open = None
@@ -1708,8 +1709,6 @@ def start_style_check(s: Session, style: str) -> tuple[list[str], list[str]]:
                     s.ctx.run / "shots" / f"{tag}-flight-{len(frames):02d}.png")
             time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
         s.input(key=base.SHORTCUT_DEFAULT_BINDING)
-    finally:
-        grab.close()
     boxes = [m["bbox"] for _, m in frames if m["bbox"] is not None]
     bright = [m["brightness"] for _, m in frames]
     ev.append(f"{tag}: rest={rest} frames={len(frames)} boxes_seen={len(boxes)}")
@@ -1814,7 +1813,6 @@ def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[s
     The popup's own light pixels are measured first with no client present (reference). During the flight,
     client-white pixels inside the popup area may not exceed that reference (the popup covers the client).
     For slide the popup must stay out of the taskbar strip while it moves (the panel clip)."""
-    import flamewm_lamp_acceptance as lamp  # RootGrab: in-process XGetImage, shared with the lamp run
 
     ev: list[str] = []
     tag = f"AP06-above-{style}"
@@ -1824,8 +1822,7 @@ def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[s
     s.ctx.stop(s.client)
     s.client = None
     strip_y = s.args.screen_h - TASKBAR_HEIGHT
-    grab = lamp.RootGrab(s.ctx.display)
-    try:
+    with root_grab(s) as grab:
         s.input(key=base.SHORTCUT_DEFAULT_BINDING)
         time.sleep(s.args.settle_seconds)
         rest_node = find_named(s.tree(f"{tag}-rest"), "FlameWM start")
@@ -1863,8 +1860,6 @@ def start_above_windows_check(s: Session, style: str) -> tuple[list[str], list[s
                     s.ctx.run / "shots" / f"{tag}-flight-{len(frames):02d}.png")
             time.sleep(max(0.0, START_SAMPLE_PERIOD - (time.monotonic() - started)))
         s.input(key=base.SHORTCUT_DEFAULT_BINDING)
-    finally:
-        grab.close()
     settled_strip = frames[-1][2]
     below = [strip_changed(f[2], settled_strip, (rest[0], rest[0] + rest[2])) if f[0] is not None else 0
              for f in frames]
