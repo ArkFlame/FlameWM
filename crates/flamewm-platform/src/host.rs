@@ -9,9 +9,7 @@ use flamewm_api::session::{SessionAction, SessionCapabilities};
 use flamewm_api::settings::{SettingsSnapshot, SettingsTransaction};
 use flamewm_api::shortcuts::{KeyBinding, ShortcutSnapshot};
 use flamewm_api::system::{SystemAction, SystemSnapshot};
-use flamewm_api::wm_features::{
-    FeatureAction, FullscreenMonitorSpan, InteractiveMoveResize, WindowFeature,
-};
+use flamewm_api::wm_features::{FullscreenMonitorSpan, InteractiveMoveResize};
 use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_api::{
     DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, PanelEdge, TaskEntryId,
@@ -207,11 +205,6 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 
     #[must_use]
-    pub const fn is_started(&self) -> bool {
-        self.started
-    }
-
-    #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
@@ -263,23 +256,6 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     pub fn remove_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
         self.workspaces.remove(&mut self.engine, index, expected_revision)
-    }
-
-    pub fn move_window_to_workspace(
-        &mut self,
-        window: WindowRef,
-        target: usize,
-    ) -> FlameResult<()> {
-        self.workspaces.move_window(&mut self.engine, window, target)
-    }
-
-    pub fn apply_window_feature(
-        &mut self,
-        window: WindowRef,
-        feature: WindowFeature,
-        action: FeatureAction,
-    ) -> FlameResult<()> {
-        self.windows.apply_feature(&mut self.engine, window, feature, action)
     }
 
     pub fn showing_desktop(&self) -> FlameResult<bool> {
