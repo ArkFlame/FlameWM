@@ -260,8 +260,7 @@ pub fn project_panel(
         write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
         line_id.clear();
         write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
-        let state = states.get(index);
-        if let Some(state) = state {
+        if let Some(state) = states.get(index) {
             let label = snapshot
                 .applications
                 .iter()
@@ -304,7 +303,7 @@ pub fn project_panel(
             document.visible(&line_id, false)?;
             document.background_clear(&slot_id)?;
         }
-        document.visible(&slot_id, state.is_some())?;
+        document.visible(&slot_id, states.get(index).is_some())?;
     }
 
     for index in 0..PAGE_SIZE {
