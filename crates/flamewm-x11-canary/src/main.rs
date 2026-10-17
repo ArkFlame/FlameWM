@@ -1249,6 +1249,17 @@ fn cmd_profile_window(canary: &Canary, args: &[String]) {
     }
 }
 
+/// Runs `probe` against the first "flame" window; a missing window is a failure.
+fn probe_flame(
+    canary: &Canary,
+    probe: impl FnOnce(&WinInfo) -> (bool, String),
+) -> (bool, String) {
+    match canary.find("flame").into_iter().next() {
+        Some(w) => probe(&w),
+        None => (false, "no target".to_owned()),
+    }
+}
+
 /// J12 canary scenarios: focused assertions without fragile full-screen
 /// hashes. Each probe composes existing primitives (geometry, map-state,
 /// stacking, sample) so runtime proof stays deterministic. Extended J12
@@ -1666,56 +1677,48 @@ fn cmd_j06(canary: &Canary, args: &[String]) {
         }
     }
     if scenario == "all" || scenario == "postreg-title-centered" {
-        let target = canary.find("flame").into_iter().next();
-        let (ok, detail) = match target {
-            Some(w) => {
-                let text_w = (w.name.chars().count().max(1) * 8) as u32;
-                let off = j06_title_center_offset(u32::from(w.width.max(1)), text_w);
-                let centered = off >= 0
-                    && (text_w >= u32::from(w.width)
-                        || off == ((u32::from(w.width) - text_w) / 2) as i16);
-                (
-                    w.width > 0 && centered,
-                    format!(
-                        "id={} frame_w={} text_w~{text_w} offset={off} centered={centered}",
-                        w.id, w.width
-                    ),
-                )
-            }
-            None => (false, "no target".to_owned()),
-        };
+        let (ok, detail) = probe_flame(canary, |w| {
+            let text_w = (w.name.chars().count().max(1) * 8) as u32;
+            let off = j06_title_center_offset(u32::from(w.width.max(1)), text_w);
+            let centered = off >= 0
+                && (text_w >= u32::from(w.width)
+                    || off == ((u32::from(w.width) - text_w) / 2) as i16);
+            (
+                w.width > 0 && centered,
+                format!(
+                    "id={} frame_w={} text_w~{text_w} offset={off} centered={centered}",
+                    w.id, w.width
+                ),
+            )
+        });
         results.push(check("postreg-title-centered", ok, detail));
     }
     if scenario == "all" || scenario == "postreg-resize-8" {
-        let target = canary.find("flame").into_iter().next();
-        let (ok, detail) = match target {
-            Some(w) => {
-                let cx = w.width as i16 / 2;
-                let cy = w.height as i16 / 2;
-                let pts = [
-                    (cx, 2),
-                    (cx, w.height as i16 - 3),
-                    (2, cy),
-                    (w.width as i16 - 3, cy),
-                    (2, 2),
-                    (w.width as i16 - 3, 2),
-                    (2, w.height as i16 - 3),
-                    (w.width as i16 - 3, w.height as i16 - 3),
-                ];
-                let mut matched = 0;
-                for (x, y) in pts {
-                    let (l, r, t, b) = j13_resize_edges(w.width.into(), w.height.into(), x, y);
-                    if l || r || t || b {
-                        matched += 1;
-                    }
+        let (ok, detail) = probe_flame(canary, |w| {
+            let cx = w.width as i16 / 2;
+            let cy = w.height as i16 / 2;
+            let pts = [
+                (cx, 2),
+                (cx, w.height as i16 - 3),
+                (2, cy),
+                (w.width as i16 - 3, cy),
+                (2, 2),
+                (w.width as i16 - 3, 2),
+                (2, w.height as i16 - 3),
+                (w.width as i16 - 3, w.height as i16 - 3),
+            ];
+            let mut matched = 0;
+            for (x, y) in pts {
+                let (l, r, t, b) = j13_resize_edges(w.width.into(), w.height.into(), x, y);
+                if l || r || t || b {
+                    matched += 1;
                 }
-                (
-                    matched == 8,
-                    format!("matched={matched}/8 geom={}x{}", w.width, w.height),
-                )
             }
-            None => (false, "no target".to_owned()),
-        };
+            (
+                matched == 8,
+                format!("matched={matched}/8 geom={}x{}", w.width, w.height),
+            )
+        });
         results.push(check("postreg-resize-8", ok, detail));
     }
     if scenario == "all" || scenario == "postreg-fixed-size" {
@@ -1829,19 +1832,15 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
     }
     // task-activate: send _NET_ACTIVE_WINDOW client message, read back root property.
     if scenario == "all" || scenario == "task-activate" {
-        let target = canary.find("flame").into_iter().next();
-        let (ok, detail) = match target {
-            Some(w) => {
-                let sent = canary.send_active_window(w.id).is_ok();
-                std::thread::sleep(Duration::from_millis(200));
-                let active = canary.active_window();
-                (
-                    sent && active.is_some(),
-                    format!("sent={sent} active={active:?} target={}", w.id),
-                )
-            }
-            None => (false, "no target".to_owned()),
-        };
+        let (ok, detail) = probe_flame(canary, |w| {
+            let sent = canary.send_active_window(w.id).is_ok();
+            std::thread::sleep(Duration::from_millis(200));
+            let active = canary.active_window();
+            (
+                sent && active.is_some(),
+                format!("sent={sent} active={active:?} target={}", w.id),
+            )
+        });
         results.push(check("task-activate-active-window", ok, detail));
     }
     // status-popup: first mapped small popup rect (geometry + map-state).
@@ -1885,74 +1884,66 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
     // black-frame: sequence samples on first mapped popup/frame; pass when all
     // samples deliver and at least one is non-black.
     if scenario == "all" || scenario == "black-frame" {
-        let target = canary.find("flame").into_iter().next();
-        let (ok, detail) = match target {
-            Some(w) => {
-                let sw = w.width.max(1).min(32);
-                let sh = w.height.max(1).min(32);
-                let mut delivered = 0;
-                let mut non_black = 0;
-                for _ in 0..3 {
-                    if let Ok(d) = canary.sample(w.id, 0, 0, sw, sh) {
-                        delivered += 1;
-                        if !Canary::pixel_stats(&d).0 {
-                            non_black += 1;
-                        }
+        let (ok, detail) = probe_flame(canary, |w| {
+            let sw = w.width.max(1).min(32);
+            let sh = w.height.max(1).min(32);
+            let mut delivered = 0;
+            let mut non_black = 0;
+            for _ in 0..3 {
+                if let Ok(d) = canary.sample(w.id, 0, 0, sw, sh) {
+                    delivered += 1;
+                    if !Canary::pixel_stats(&d).0 {
+                        non_black += 1;
                     }
-                    std::thread::sleep(Duration::from_millis(100));
                 }
-                (
-                    delivered == 3 && non_black >= 1,
-                    format!(
-                        "delivered={delivered}/3 non_black={non_black}/3 id={}",
-                        w.id
-                    ),
-                )
+                std::thread::sleep(Duration::from_millis(100));
             }
-            None => (false, "no target".to_owned()),
-        };
+            (
+                delivered == 3 && non_black >= 1,
+                format!(
+                    "delivered={delivered}/3 non_black={non_black}/3 id={}",
+                    w.id
+                ),
+            )
+        });
         results.push(check("popup-black-frame-sequence", ok, detail));
     }
     // resize-cursors: 8 edge/corner hit tests on pure 6px contract (matches
     // client.rs ResizeEdges::at); geometry sampled from live target.
     if scenario == "all" || scenario == "resize-cursors" {
-        let target = canary.find("flame").into_iter().next();
-        let (ok, detail) = match target {
-            Some(w) => {
-                let cx = w.width as i16 / 2;
-                let cy = w.height as i16 / 2;
-                let pts = [
-                    ("top", cx, 2),
-                    ("bottom", cx, w.height as i16 - 3),
-                    ("left", 2, cy),
-                    ("right", w.width as i16 - 3, cy),
-                    ("top-left", 2, 2),
-                    ("top-right", w.width as i16 - 3, 2),
-                    ("bottom-left", 2, w.height as i16 - 3),
-                    ("bottom-right", w.width as i16 - 3, w.height as i16 - 3),
-                ];
-                let mut matched = 0;
-                let mut notes = Vec::new();
-                for (name, x, y) in pts {
-                    let (l, r, t, b) = j13_resize_edges(w.width.into(), w.height.into(), x, y);
-                    let any = l || r || t || b;
-                    if any {
-                        matched += 1;
-                    }
-                    notes.push(format!("{name}={any}"));
+        let (ok, detail) = probe_flame(canary, |w| {
+            let cx = w.width as i16 / 2;
+            let cy = w.height as i16 / 2;
+            let pts = [
+                ("top", cx, 2),
+                ("bottom", cx, w.height as i16 - 3),
+                ("left", 2, cy),
+                ("right", w.width as i16 - 3, cy),
+                ("top-left", 2, 2),
+                ("top-right", w.width as i16 - 3, 2),
+                ("bottom-left", 2, w.height as i16 - 3),
+                ("bottom-right", w.width as i16 - 3, w.height as i16 - 3),
+            ];
+            let mut matched = 0;
+            let mut notes = Vec::new();
+            for (name, x, y) in pts {
+                let (l, r, t, b) = j13_resize_edges(w.width.into(), w.height.into(), x, y);
+                let any = l || r || t || b;
+                if any {
+                    matched += 1;
                 }
-                (
-                    matched == 8,
-                    format!(
-                        "matched={matched}/8 geom={}x{} {}",
-                        w.width,
-                        w.height,
-                        notes.join(" ")
-                    ),
-                )
+                notes.push(format!("{name}={any}"));
             }
-            None => (false, "no target".to_owned()),
-        };
+            (
+                matched == 8,
+                format!(
+                    "matched={matched}/8 geom={}x{} {}",
+                    w.width,
+                    w.height,
+                    notes.join(" ")
+                ),
+            )
+        });
         results.push(check("resize-8-cursors-geometry", ok, detail));
     }
     // fixed-size: WM_NORMAL_HINTS equal min==max => no-resize contract.
@@ -2023,24 +2014,20 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
     // title-maximize: click title/middle-top, watch maximized state bit via
     // _NET_WM_STATE poll; deterministic report of pre/post toggle attempt.
     if scenario == "all" || scenario == "title-maximize" {
-        let target = canary.find("flame").into_iter().next();
-        let (ok, detail) = match target {
-            Some(w) => {
-                let state_before = canary.prop_u32(w.id, "_NET_WM_STATE").len();
-                let x = (w.width / 2) as i16;
-                let press = canary.send_button(w.id, x, 6, true).is_ok();
-                let release = canary.send_button(w.id, x, 6, false).is_ok();
-                std::thread::sleep(Duration::from_millis(200));
-                let state_after = canary.prop_u32(w.id, "_NET_WM_STATE").len();
-                (
-                    press && release,
-                    format!(
-                        "press={press} release={release} state_cards_before={state_before} after={state_after}"
-                    ),
-                )
-            }
-            None => (false, "no target".to_owned()),
-        };
+        let (ok, detail) = probe_flame(canary, |w| {
+            let state_before = canary.prop_u32(w.id, "_NET_WM_STATE").len();
+            let x = (w.width / 2) as i16;
+            let press = canary.send_button(w.id, x, 6, true).is_ok();
+            let release = canary.send_button(w.id, x, 6, false).is_ok();
+            std::thread::sleep(Duration::from_millis(200));
+            let state_after = canary.prop_u32(w.id, "_NET_WM_STATE").len();
+            (
+                press && release,
+                format!(
+                    "press={press} release={release} state_cards_before={state_before} after={state_after}"
+                ),
+            )
+        });
         results.push(check("title-maximize-toggle", ok, detail));
     }
     // sticky-create: sticky visibility across workspaces (visible_on contract:
