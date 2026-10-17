@@ -57,11 +57,9 @@ fn external_content_hash(rgba8: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     hash ^= rgba8.len() as u64;
     hash = hash.wrapping_mul(0x100000001b3);
-    for chunk in rgba8.chunks(4096) {
-        for &byte in chunk {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
+    for &byte in rgba8 {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
 }
@@ -264,9 +262,7 @@ impl ExternalDrawableTarget {
             return Ok(());
         }
         if let Some(xrender) = self.xrender.as_mut() {
-            if let Err(error) = unsafe { xrender.set_drawable(drawable) } {
-                return Err(error);
-            }
+            unsafe { xrender.set_drawable(drawable) }?;
         }
         if let Some(xft) = self.xft.as_mut() {
             unsafe { xft.set_drawable(drawable) };
@@ -327,11 +323,7 @@ impl ExternalDrawableTarget {
     /// Drop every cached pixmap (freed when a session is bound), clear the
     /// LRU, and zero the gauge.
     fn free_all_images(&mut self) {
-        let display = if self.session.is_null() {
-            ptr::null_mut()
-        } else {
-            unsafe { (*self.session).display }
-        };
+        let display = self.session_view().map_or(ptr::null_mut(), |view| view.display);
         let cache = std::mem::take(&mut self.image_cache);
         for (_, cached) in cache {
             self.free_image(display, cached);
@@ -544,11 +536,7 @@ impl ExternalDrawableTarget {
             )
         };
         // Without XRender there is no true alpha; report it explicitly.
-        let has_alpha = match &built {
-            Some(words) => has_non_opaque_word(words),
-            None => has_non_opaque_word(&argb()),
-        };
-        if has_alpha {
+        if has_non_opaque_word(&built.unwrap_or_else(argb)) {
             return Err("external alpha blit requires XRender (unavailable)".to_string());
         }
         Ok(())
@@ -776,11 +764,7 @@ fn alloc_pixel(display: *mut Display, colormap: Colormap, color: Color) -> Resul
 pub(crate) fn match_argb32_visual(display: *mut Display, screen: i32) -> Option<*mut Visual> {
     let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
     let matched = unsafe { XMatchVisualInfo(display, screen, 32, TRUE_COLOR_CLASS, &mut vinfo) };
-    if matched != 0 && !vinfo.visual.is_null() {
-        Some(vinfo.visual)
-    } else {
-        None
-    }
+    (matched != 0 && !vinfo.visual.is_null()).then_some(vinfo.visual)
 }
 
 fn upload_argb32(
