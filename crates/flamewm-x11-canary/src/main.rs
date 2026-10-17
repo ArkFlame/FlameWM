@@ -486,6 +486,30 @@ pub(crate) fn has(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
 }
 
+fn viewable_count(hits: &[WinInfo]) -> usize {
+    hits.iter().filter(|w| w.map_state == u8::from(MapState::VIEWABLE)).count()
+}
+
+fn emit_results(scenario: &str, results: &[(String, bool, String)], json: bool) -> bool {
+    let pass = results.iter().all(|(_, ok, _)| *ok);
+    if json {
+        let items: Vec<String> = results
+            .iter()
+            .map(|(n, ok, d)| format!("{{\"name\":{n:?},\"pass\":{ok},\"detail\":{d:?}}}"))
+            .collect();
+        println!(
+            "{{\"scenario\":\"{scenario}\",\"pass\":{pass},\"checks\":[{}]}}",
+            items.join(",")
+        );
+    } else {
+        for (name, ok, detail) in results {
+            println!("CANARY_{scenario} {name} pass={ok} {detail}");
+        }
+        println!("CANARY_{scenario} pass={pass} checks={}", results.len());
+    }
+    pass
+}
+
 pub(crate) fn arg_num<T: std::str::FromStr>(args: &[String], flag: &str, default: T) -> T {
     arg(args, flag).map_or(default, |v| {
         v.parse()
@@ -683,10 +707,7 @@ fn cmd_sr05(canary: &Canary, args: &[String]) {
     let limit = Duration::from_secs(timeout.max(1));
     loop {
         let hits = canary.find(&name);
-        let viewable = hits
-            .iter()
-            .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-            .count();
+        let viewable = viewable_count(&hits);
         if viewable > 0 {
             let first = &hits
                 .iter()
@@ -769,10 +790,7 @@ fn cmd_sr07(canary: &Canary, args: &[String]) {
             w.name.to_lowercase().contains(&needle) || w.class.to_lowercase().contains(&needle)
         });
     }
-    let viewable = rows
-        .iter()
-        .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-        .count();
+    let viewable = viewable_count(&rows);
     if has(args, "--json") {
         let items: Vec<String> = rows.iter().map(WinInfo::to_json).collect();
         println!(
@@ -1040,10 +1058,7 @@ fn cmd_profile_startup(canary: &Canary, args: &[String]) {
     let limit = Duration::from_secs(timeout.max(1));
     loop {
         let hits = canary.find(&name);
-        let viewable = hits
-            .iter()
-            .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-            .count();
+        let viewable = viewable_count(&hits);
         let startup_ms = start.elapsed().as_millis();
         if viewable > 0 {
             let first = &hits
@@ -1237,10 +1252,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     // j12-panel: first panel viewable pre-input (geometry + map-state).
     if scenario == "all" || scenario == "panel" {
         let hits = canary.find("flame");
-        let viewable = hits
-            .iter()
-            .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-            .count();
+        let viewable = viewable_count(&hits);
         results.push(check(
             "panel-pre-input",
             viewable > 0,
@@ -1354,10 +1366,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     if scenario == "all" || scenario == "start-power" {
         let order_before = canary.stacking_order().unwrap_or_default().len();
         let hits = canary.find("flame");
-        let viewable = hits
-            .iter()
-            .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-            .count();
+        let viewable = viewable_count(&hits);
         for name in ["start", "power", "internet"] {
             let _ = canary.find(name).len();
         }
@@ -1416,10 +1425,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
     if scenario == "all" || scenario == "calendar" {
         let hits = canary.find("calendar");
         let clock = canary.find("clock").len();
-        let viewable = hits
-            .iter()
-            .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-            .count();
+        let viewable = viewable_count(&hits);
         results.push(check(
             "calendar-probe",
             !hits.is_empty() || clock > 0,
@@ -1482,22 +1488,7 @@ fn cmd_j12(canary: &Canary, args: &[String]) {
             format!("geom_ok={geom_ok} non_black={non_black}"),
         ));
     }
-    let pass = results.iter().all(|(_, ok, _)| *ok);
-    if json {
-        let items: Vec<String> = results
-            .iter()
-            .map(|(n, ok, d)| format!("{{\"name\":{n:?},\"pass\":{ok},\"detail\":{d:?}}}"))
-            .collect();
-        println!(
-            "{{\"scenario\":\"J12\",\"pass\":{pass},\"checks\":[{}]}}",
-            items.join(",")
-        );
-    } else {
-        for (name, ok, detail) in &results {
-            println!("CANARY_J12 {name} pass={ok} {detail}");
-        }
-        println!("CANARY_J12 pass={pass} checks={}", results.len());
-    }
+    let pass = emit_results("J12", &results, json);
     if !pass {
         std::process::exit(1);
     }
@@ -1517,10 +1508,7 @@ fn cmd_j06(canary: &Canary, args: &[String]) {
             let hits = canary.find("calendar");
             let clock = canary.find("clock").len();
             matched = hits.len() + clock;
-            viewable = hits
-                .iter()
-                .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-                .count();
+            viewable = viewable_count(&hits);
             if viewable > 0 {
                 break;
             }
@@ -1538,10 +1526,7 @@ fn cmd_j06(canary: &Canary, args: &[String]) {
     }
     if scenario == "all" || scenario == "postreg-start-single-surface" {
         let starts = canary.find("start");
-        let viewable = starts
-            .iter()
-            .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-            .count();
+        let viewable = viewable_count(&starts);
         let active = canary.active_window();
         let toplevel = canary.stacking_order().map(|o| o.len()).unwrap_or(0);
         results.push(check(
@@ -1613,10 +1598,7 @@ fn cmd_j06(canary: &Canary, args: &[String]) {
         loop {
             let hits = canary.find("file");
             let matched = hits.len();
-            let viewable = hits
-                .iter()
-                .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
-                .count();
+            let viewable = viewable_count(&hits);
             if viewable > 0 || start.elapsed() >= limit {
                 results.push(check(
                     "postreg-filemanager-map-latency",
@@ -1729,22 +1711,7 @@ fn cmd_j06(canary: &Canary, args: &[String]) {
             ),
         ));
     }
-    let pass = results.iter().all(|(_, ok, _)| *ok);
-    if json {
-        let items: Vec<String> = results
-            .iter()
-            .map(|(n, ok, d)| format!("{{\"name\":{n:?},\"pass\":{ok},\"detail\":{d:?}}}"))
-            .collect();
-        println!(
-            "{{\"scenario\":\"J06\",\"pass\":{pass},\"checks\":[{}]}}",
-            items.join(",")
-        );
-    } else {
-        for (name, ok, detail) in &results {
-            println!("CANARY_J06 {name} pass={ok} {detail}");
-        }
-        println!("CANARY_J06 pass={pass} checks={}", results.len());
-    }
+    let pass = emit_results("J06", &results, json);
     if !pass {
         std::process::exit(1);
     }
@@ -2058,22 +2025,7 @@ fn cmd_j13(canary: &Canary, args: &[String]) {
         let _ = timeout;
         results.push(check("multi-resolution-geometry", ok, notes.join(" ")));
     }
-    let pass = results.iter().all(|(_, ok, _)| *ok);
-    if json {
-        let items: Vec<String> = results
-            .iter()
-            .map(|(n, ok, d)| format!("{{\"name\":{n:?},\"pass\":{ok},\"detail\":{d:?}}}"))
-            .collect();
-        println!(
-            "{{\"scenario\":\"J13\",\"pass\":{pass},\"checks\":[{}]}}",
-            items.join(",")
-        );
-    } else {
-        for (name, ok, detail) in &results {
-            println!("CANARY_J13 {name} pass={ok} {detail}");
-        }
-        println!("CANARY_J13 pass={pass} checks={}", results.len());
-    }
+    let pass = emit_results("J13", &results, json);
     if !pass {
         std::process::exit(1);
     }
