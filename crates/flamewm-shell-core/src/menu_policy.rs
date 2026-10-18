@@ -28,12 +28,7 @@ pub fn task_menu_for_entry(
         return Vec::new();
     };
     if entry.id.is_pinned() {
-        return vec![MenuEntry::Action {
-            id: TASK_ROW_UNPIN.to_owned(),
-            label: "Unpin".to_owned(),
-            icon: None,
-            enabled: true,
-        }];
+        return vec![action(TASK_ROW_UNPIN, "Unpin")];
     }
     let window = match entry.kind {
         TaskEntryKind::PinnedSlot { window } => window,
@@ -45,19 +40,18 @@ pub fn task_menu_for_entry(
         return Vec::new();
     }
     vec![
-        MenuEntry::Action {
-            id: TASK_ROW_ACTIVATE.to_owned(),
-            label: "Activate".to_owned(),
-            icon: None,
-            enabled: true,
-        },
-        MenuEntry::Action {
-            id: TASK_ROW_CLOSE.to_owned(),
-            label: "Close".to_owned(),
-            icon: None,
-            enabled: true,
-        },
+        action(TASK_ROW_ACTIVATE, "Activate"),
+        action(TASK_ROW_CLOSE, "Close"),
     ]
+}
+
+fn action(id: &str, label: &str) -> MenuEntry {
+    MenuEntry::Action {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        icon: None,
+        enabled: true,
+    }
 }
 
 /// Stable row identity for a task entry slot: entry id plus policy row id.
