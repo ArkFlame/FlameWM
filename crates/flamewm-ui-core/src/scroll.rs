@@ -29,12 +29,11 @@ impl ScrollStore {
         max_y: f32,
     ) -> ScrollOffset {
         let current = self.offset(node);
-        let next = ScrollOffset {
-            x: (current.x + delta_x).clamp(0.0, max_x.max(0.0)),
-            y: (current.y + delta_y).clamp(0.0, max_y.max(0.0)),
+        let target = ScrollOffset {
+            x: current.x + delta_x,
+            y: current.y + delta_y,
         };
-        self.offsets.insert(node, next);
-        next
+        self.set_offset(node, target, max_x, max_y)
     }
 
     pub fn set_offset(
@@ -51,7 +50,6 @@ impl ScrollStore {
         self.offsets.insert(node, next);
         next
     }
-
 }
 
 /// Pure thumb-drag mapping: pointer position on a track of `track_len` with
