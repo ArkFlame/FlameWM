@@ -515,14 +515,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
         ControlRequest::BeginHotkeyCapture {
             action,
             expected_revision,
-        } => WireCall::new(
-            IFACE_SHORTCUTS,
-            "BeginCapture",
-            vec![
-                WireValue::String(action.clone()),
-                WireValue::U64(*expected_revision),
-            ],
-        ),
+        } => named_call(IFACE_SHORTCUTS, "BeginCapture", action, *expected_revision),
         ControlRequest::EndHotkeyCapture { lease } => {
             WireCall::new(IFACE_SHORTCUTS, "EndCapture", vec![WireValue::U64(*lease)])
         }
@@ -542,25 +535,11 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
         ControlRequest::ClearShortcut {
             action,
             expected_revision,
-        } => WireCall::new(
-            IFACE_SHORTCUTS,
-            "ClearBinding",
-            vec![
-                WireValue::String(action.clone()),
-                WireValue::U64(*expected_revision),
-            ],
-        ),
+        } => named_call(IFACE_SHORTCUTS, "ClearBinding", action, *expected_revision),
         ControlRequest::ResetShortcut {
             action,
             expected_revision,
-        } => WireCall::new(
-            IFACE_SHORTCUTS,
-            "ResetBinding",
-            vec![
-                WireValue::String(action.clone()),
-                WireValue::U64(*expected_revision),
-            ],
-        ),
+        } => named_call(IFACE_SHORTCUTS, "ResetBinding", action, *expected_revision),
         ControlRequest::GetPanels => nullary_call(IFACE_PANELS, "GetSnapshot"),
         ControlRequest::SetPanelEdge {
             output,
@@ -591,11 +570,11 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
         ControlRequest::PinApp {
             app,
             expected_revision,
-        } => panel_call("Pin", app.as_str(), *expected_revision),
+        } => named_call(IFACE_PANELS, "Pin", app.as_str(), *expected_revision),
         ControlRequest::UnpinApp {
             app,
             expected_revision,
-        } => panel_call("Unpin", app.as_str(), *expected_revision),
+        } => named_call(IFACE_PANELS, "Unpin", app.as_str(), *expected_revision),
         ControlRequest::ReorderTask {
             entry_id,
             index,
@@ -638,11 +617,11 @@ fn workspace_call(member: &str, index: usize, revision: u64) -> WireCall {
     )
 }
 
-fn panel_call(member: &str, app: &str, revision: u64) -> WireCall {
+fn named_call(interface: &str, member: &str, name: &str, revision: u64) -> WireCall {
     WireCall::new(
-        IFACE_PANELS,
+        interface,
         member,
-        vec![WireValue::String(app.to_owned()), WireValue::U64(revision)],
+        vec![WireValue::String(name.to_owned()), WireValue::U64(revision)],
     )
 }
 
@@ -768,10 +747,7 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
                 .map(application_snapshot)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
-        (IFACE_SETTINGS, "GetSnapshot") => Ok(ControlResponse::Settings(settings_snapshot(
-            required_dict(single_reply(reply)?, "snapshot")?,
-        )?)),
-        (IFACE_SETTINGS, "Apply" | "ResetSection") => Ok(ControlResponse::Settings(
+        (IFACE_SETTINGS, "GetSnapshot" | "Apply" | "ResetSection") => Ok(ControlResponse::Settings(
             settings_snapshot(required_dict(single_reply(reply)?, "snapshot")?)?,
         )),
         (IFACE_WORKSPACES, "GetSnapshot") => Ok(ControlResponse::Workspaces(workspace_snapshot(
@@ -817,11 +793,8 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
             | "SetMute"
             | "BatteryMenuOpened"
             | "BatteryMenuClosed",
-        ) => {
-            expect_reply_arity(reply, 0)?;
-            Ok(ControlResponse::Unit)
-        }
-        (IFACE_WORKSPACES, "Activate" | "InsertAfter" | "Remove")
+        )
+        | (IFACE_WORKSPACES, "Activate" | "InsertAfter" | "Remove")
         | (IFACE_DISPLAYS, "Keep" | "Revert" | "SetShellScale")
         | (IFACE_SHORTCUTS, "SetBinding" | "ClearBinding" | "ResetBinding" | "EndCapture")
         | (IFACE_PANELS, "SetEdge" | "SetSize" | "Pin" | "Unpin" | "Reorder")
@@ -2058,23 +2031,17 @@ pub fn panels_dict(snapshot: &PanelsSnapshot) -> WireDict {
 
 #[must_use]
 pub fn session_capability_names(capabilities: SessionCapabilities) -> Vec<String> {
-    let mut out = Vec::new();
-    if capabilities.lock {
-        out.push("lock".to_owned());
-    }
-    if capabilities.logout {
-        out.push("logout".to_owned());
-    }
-    if capabilities.suspend {
-        out.push("suspend".to_owned());
-    }
-    if capabilities.reboot {
-        out.push("reboot".to_owned());
-    }
-    if capabilities.shutdown {
-        out.push("shutdown".to_owned());
-    }
-    out
+    [
+        (capabilities.lock, "lock"),
+        (capabilities.logout, "logout"),
+        (capabilities.suspend, "suspend"),
+        (capabilities.reboot, "reboot"),
+        (capabilities.shutdown, "shutdown"),
+    ]
+    .into_iter()
+    .filter(|(enabled, _)| *enabled)
+    .map(|(_, name)| name.to_owned())
+    .collect()
 }
 
 fn output_wire_value(output: &OutputSnapshot) -> WireValue {
