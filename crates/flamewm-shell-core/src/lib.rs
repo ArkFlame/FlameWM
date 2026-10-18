@@ -70,13 +70,11 @@ impl StatusViews {
     pub fn from_snapshot(system: &SystemSnapshot) -> Self {
         let network_enabled = system.network.availability == ServiceAvailability::Available;
         let network_icon = match system.network.kind {
-            flamewm_api::system::NetworkKind::Wired => IconRole::NetworkWired,
-            flamewm_api::system::NetworkKind::Wireless => {
-                wifi_icon(system.network.strength_percent)
+            NetworkKind::Wired => IconRole::NetworkWired,
+            NetworkKind::Wireless => wifi_icon(system.network.strength_percent),
+            NetworkKind::Disconnected | NetworkKind::Connecting | NetworkKind::Unavailable => {
+                IconRole::NetworkOffline
             }
-            flamewm_api::system::NetworkKind::Disconnected
-            | flamewm_api::system::NetworkKind::Connecting
-            | flamewm_api::system::NetworkKind::Unavailable => IconRole::NetworkOffline,
         };
         let audio_enabled = system.audio.availability == ServiceAvailability::Available;
         let audio_icon = if system.audio.muted {
@@ -631,6 +629,13 @@ pub struct TaskVisualState {
     pub minimized: bool,
 }
 
+fn entry_window(entry: &TaskEntry) -> Option<WindowRef> {
+    match entry.kind {
+        TaskEntryKind::PinnedSlot { window } => window,
+        TaskEntryKind::Window { window } => Some(window),
+    }
+}
+
 #[must_use]
 pub fn task_visual_states(
     panels: &PanelsSnapshot,
@@ -654,10 +659,7 @@ pub fn task_visual_states_on_output(
         .tasks
         .iter()
         .filter_map(|entry| {
-            let window = match entry.kind {
-                TaskEntryKind::PinnedSlot { window } => window,
-                TaskEntryKind::Window { window } => Some(window),
-            };
+            let window = entry_window(entry);
             let snapshot = window
                 .and_then(|reference| windows.iter().find(|item| item.reference == reference));
             if let (Some(output), Some(snapshot)) = (output, snapshot) {
@@ -694,11 +696,7 @@ pub enum TaskClickAction {
 
 #[must_use]
 pub fn task_click_action(entry: &TaskEntry, windows: &[WindowSnapshot]) -> TaskClickAction {
-    let window = match entry.kind {
-        TaskEntryKind::PinnedSlot { window } => window,
-        TaskEntryKind::Window { window } => Some(window),
-    };
-    let Some(window) = window else {
+    let Some(window) = entry_window(entry) else {
         return TaskClickAction::Launch(entry.app_id.clone());
     };
     let Some(snapshot) = windows.iter().find(|item| item.reference == window) else {
