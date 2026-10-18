@@ -1,4 +1,7 @@
 use flamewm_api::applications::DesktopApplication;
+use flamewm_api::{OutputId, PanelEdge, Rect};
+use flamewm_ui_core::style::ShellMetrics;
+use flamewm_ui_core::{PopoverDirection, anchor_popover};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartCategory {
@@ -71,15 +74,14 @@ impl StartCategory {
 #[must_use]
 pub fn presentation_key(raw_category: &str) -> Option<StartBucket> {
     match raw_category.to_ascii_lowercase().as_str() {
-        "accessories" | "utility" => Some(StartBucket::Utilities),
+        "accessories" | "utility" | "education" | "office" | "science" => {
+            Some(StartBucket::Utilities)
+        }
         "development" => Some(StartBucket::Development),
-        "education" => Some(StartBucket::Utilities),
         "game" | "games" => Some(StartBucket::Games),
         "graphics" => Some(StartBucket::Graphics),
         "network" | "internet" => Some(StartBucket::Internet),
         "audiovideo" | "audio" | "video" | "multimedia" => Some(StartBucket::Multimedia),
-        "office" => Some(StartBucket::Utilities),
-        "science" => Some(StartBucket::Utilities),
         "settings" | "system" => Some(StartBucket::System),
         _ => None,
     }
@@ -150,6 +152,19 @@ impl StartEntry {
             || self.keywords.iter().any(|keyword| keyword.contains(needle))
             || self.categories.iter().any(|value| value.contains(needle))
     }
+}
+
+/// Indices into `entries`, sorted by (name, id) with stable ties.
+fn sorted_indices(entries: &[StartEntry]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by(|&left, &right| {
+        entries[left]
+            .name
+            .cmp(&entries[right].name)
+            .then_with(|| entries[left].id.cmp(&entries[right].id))
+            .then_with(|| left.cmp(&right))
+    });
+    order
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,14 +270,12 @@ impl StartModel {
 
     #[must_use]
     pub fn results(&self) -> Vec<&DesktopApplication> {
-        let query = self.query.clone();
-        self.query_view(&query)
+        self.query_view(&self.query)
     }
 
     #[must_use]
     pub fn results_for_category(&self, category: StartCategory) -> Vec<&DesktopApplication> {
-        let query = self.query.clone();
-        self.filter_view(category, &query)
+        self.filter_view(category, &self.query)
     }
 
     #[must_use]
@@ -271,27 +284,12 @@ impl StartModel {
         first_slot: usize,
         slot_count: usize,
     ) -> Vec<&DesktopApplication> {
-        let query = self.query.clone();
-        self.query_view(&query)
-            .into_iter()
-            .skip(first_slot)
-            .take(slot_count)
-            .collect()
+        self.slot_view(StartCategory::All, &self.query, first_slot, slot_count)
     }
 
     fn rebuild(&mut self) {
-        let mut entries = Vec::with_capacity(self.applications.len());
-        entries.extend(self.applications.iter().map(StartEntry::build));
-        self.entries = entries;
-        self.sorted = Vec::with_capacity(self.applications.len());
-        self.sorted.extend(0..self.applications.len());
-        self.sorted.sort_by(|&left, &right| {
-            self.entries[left]
-                .name
-                .cmp(&self.entries[right].name)
-                .then_with(|| self.entries[left].id.cmp(&self.entries[right].id))
-                .then_with(|| left.cmp(&right))
-        });
+        self.entries = self.applications.iter().map(StartEntry::build).collect();
+        self.sorted = sorted_indices(&self.entries);
     }
 
     /// Slice path used by the free-function shims. Normalizes each entry once
@@ -303,15 +301,7 @@ impl StartModel {
     ) -> Vec<&'a DesktopApplication> {
         let needle = query.trim().to_lowercase();
         let entries: Vec<StartEntry> = applications.iter().map(StartEntry::build).collect();
-        let mut order: Vec<usize> = (0..applications.len()).collect();
-        order.sort_by(|&left, &right| {
-            entries[left]
-                .name
-                .cmp(&entries[right].name)
-                .then_with(|| entries[left].id.cmp(&entries[right].id))
-                .then_with(|| left.cmp(&right))
-        });
-        order
+        sorted_indices(&entries)
             .into_iter()
             .filter(|&index| category.accepts(entries[index].category))
             .filter(|&index| entries[index].matches(&needle))
@@ -329,10 +319,10 @@ pub struct StartSurfaceLayout {
 
 #[must_use]
 pub fn start_surface_layout(
-    output: flamewm_api::OutputId,
-    output_rect: flamewm_api::Rect,
-    edge: flamewm_api::PanelEdge,
-    metrics: flamewm_ui_core::style::ShellMetrics,
+    output: OutputId,
+    output_rect: Rect,
+    edge: PanelEdge,
+    metrics: ShellMetrics,
 ) -> StartSurfaceLayout {
     let (button_w, button_h) = if edge.is_horizontal() {
         (
@@ -346,16 +336,16 @@ pub fn start_surface_layout(
         )
     };
     let anchor = match edge {
-        flamewm_api::PanelEdge::Bottom => flamewm_api::Rect::new(
+        PanelEdge::Bottom => Rect::new(
             output_rect.x,
             output_rect.bottom() - button_h,
             button_w,
             button_h,
         ),
-        flamewm_api::PanelEdge::Top | flamewm_api::PanelEdge::Left => {
-            flamewm_api::Rect::new(output_rect.x, output_rect.y, button_w, button_h)
+        PanelEdge::Top | PanelEdge::Left => {
+            Rect::new(output_rect.x, output_rect.y, button_w, button_h)
         }
-        flamewm_api::PanelEdge::Right => flamewm_api::Rect::new(
+        PanelEdge::Right => Rect::new(
             output_rect.right() - button_w,
             output_rect.y,
             button_w,
@@ -363,12 +353,12 @@ pub fn start_surface_layout(
         ),
     };
     let direction = match edge {
-        flamewm_api::PanelEdge::Bottom => flamewm_ui_core::PopoverDirection::Above,
-        flamewm_api::PanelEdge::Top => flamewm_ui_core::PopoverDirection::Below,
-        flamewm_api::PanelEdge::Left => flamewm_ui_core::PopoverDirection::RightOf,
-        flamewm_api::PanelEdge::Right => flamewm_ui_core::PopoverDirection::LeftOf,
+        PanelEdge::Bottom => PopoverDirection::Above,
+        PanelEdge::Top => PopoverDirection::Below,
+        PanelEdge::Left => PopoverDirection::RightOf,
+        PanelEdge::Right => PopoverDirection::LeftOf,
     };
-    let popover = flamewm_ui_core::anchor_popover(
+    let popover = anchor_popover(
         output,
         output_rect,
         anchor,
@@ -381,7 +371,7 @@ pub fn start_surface_layout(
     )
     .rect;
     StartSurfaceLayout {
-        button: flamewm_api::Rect::new(0, 0, button_w, button_h),
+        button: Rect::new(0, 0, button_w, button_h),
         anchor,
         popover,
     }
