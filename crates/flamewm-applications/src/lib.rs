@@ -138,10 +138,7 @@ impl ApplicationCatalog {
         entries.sort_by(|a, b| a.id.cmp(&b.id));
         let mut catalog = Self {
             applications: entries,
-            by_id: std::collections::BTreeMap::new(),
-            by_wm_class: std::collections::BTreeMap::new(),
-            by_stem: std::collections::BTreeMap::new(),
-            by_exec: std::collections::BTreeMap::new(),
+            ..Self::default()
         };
         catalog.rebuild_indexes();
         Ok(catalog)
@@ -211,23 +208,13 @@ impl ApplicationCatalog {
         if candidates.is_empty() {
             return None;
         }
-        // Priority 1: StartupWMClass exact case-insensitive match.
-        for needle in &candidates {
-            if let Some(index) = self.by_wm_class.get(needle) {
-                return self.applications.get(*index);
-            }
-        }
-        // Priority 2: desktop-file id stem exact match (e.g. "org.mozilla.firefox" or
-        // "firefox" from "org.mozilla.firefox.desktop").
-        for needle in &candidates {
-            if let Some(index) = self.by_stem.get(needle) {
-                return self.applications.get(*index);
-            }
-        }
-        // Priority 3: Exec basename exact match (case-insensitive).
-        for needle in &candidates {
-            if let Some(index) = self.by_exec.get(needle) {
-                return self.applications.get(*index);
+        // Priorities: StartupWMClass, then desktop-file id stem (e.g. "firefox" from
+        // "org.mozilla.firefox.desktop"), then Exec basename; all exact, case-insensitive.
+        for index_map in [&self.by_wm_class, &self.by_stem, &self.by_exec] {
+            for needle in &candidates {
+                if let Some(index) = index_map.get(needle) {
+                    return self.applications.get(*index);
+                }
             }
         }
         None
