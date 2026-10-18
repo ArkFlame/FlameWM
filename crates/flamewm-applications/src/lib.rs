@@ -473,11 +473,7 @@ fn parse_desktop_entry(path: &Path, id: DesktopAppId) -> FlameResult<Option<Desk
             values.insert(key.trim().to_owned(), value.trim().to_owned());
         }
     }
-    if values
-        .get("Type")
-        .map(String::as_str)
-        .unwrap_or("Application")
-        != "Application"
+    if values.get("Type").map_or("Application", String::as_str) != "Application"
         || is_true(values.get("Hidden"))
         || is_true(values.get("NoDisplay"))
     {
@@ -486,17 +482,11 @@ fn parse_desktop_entry(path: &Path, id: DesktopAppId) -> FlameResult<Option<Desk
     if !desktop_environment_matches(&values) || !try_exec_is_available(values.get("TryExec")) {
         return Ok(None);
     }
-    let exec = match values.get("Exec") {
-        Some(value) => value,
-        None => return Ok(None),
+    let Some(exec) = values.get("Exec") else {
+        return Ok(None);
     };
     let argv = tokenize_exec(exec)?;
-    if values
-        .get("Name")
-        .map(|value| value.trim())
-        .unwrap_or("")
-        .is_empty()
-    {
+    if values.get("Name").is_none_or(|value| value.trim().is_empty()) {
         return Ok(None);
     }
     let app = DesktopApplication {
@@ -541,9 +531,7 @@ fn exec_basename(exec: &str) -> Option<String> {
 }
 
 fn is_true(value: Option<&String>) -> bool {
-    value
-        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
-        .unwrap_or(false)
+    value.is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
 }
 fn list_value(value: Option<&String>) -> Vec<String> {
     value
