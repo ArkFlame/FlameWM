@@ -59,24 +59,13 @@ pub enum Alignment {
     Stretch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Measure {
     pub mode: MeasureMode,
     pub value: i32,
     pub minimum: i32,
     /// `None` means unbounded.
     pub maximum: Option<i32>,
-}
-
-impl Default for Measure {
-    fn default() -> Self {
-        Self {
-            mode: MeasureMode::Content,
-            value: 0,
-            minimum: 0,
-            maximum: None,
-        }
-    }
 }
 
 impl Measure {
@@ -173,23 +162,12 @@ pub struct LayoutResult {
     pub visible: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LayoutOptions {
     pub gap: i32,
     pub padding: Insets,
     pub horizontal: Alignment,
     pub vertical: Alignment,
-}
-
-impl Default for LayoutOptions {
-    fn default() -> Self {
-        Self {
-            gap: 0,
-            padding: Insets::default(),
-            horizontal: Alignment::Stretch,
-            vertical: Alignment::Stretch,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -274,16 +252,8 @@ pub fn solve_grid(
             let cell_x = bounds.x + options.padding.left + column * (cell_width + options.gap);
             let cell_y = bounds.y + options.padding.top + row * (cell_height + options.gap);
             let cell_extent = cell_width * span + options.gap * (span - 1);
-            let horizontal = if options.horizontal == Alignment::Stretch {
-                item.spec.horizontal
-            } else {
-                options.horizontal
-            };
-            let vertical = if options.vertical == Alignment::Stretch {
-                item.spec.vertical
-            } else {
-                options.vertical
-            };
+            let horizontal = resolve_alignment(options.horizontal, item.spec.horizontal);
+            let vertical = resolve_alignment(options.vertical, item.spec.vertical);
             let width = if horizontal == Alignment::Stretch {
                 cell_extent
             } else {
@@ -314,28 +284,20 @@ fn solve_linear(
     horizontal: bool,
     options: LayoutOptions,
 ) -> Vec<LayoutResult> {
-    let origin = if horizontal {
-        bounds.x + options.padding.left
-    } else {
-        bounds.y + options.padding.top
-    };
-    let cross_origin = if horizontal {
-        bounds.y + options.padding.top
-    } else {
-        bounds.x + options.padding.left
-    };
-    let available = if horizontal {
-        bounds.width - options.padding.left - options.padding.right
-    } else {
-        bounds.height - options.padding.top - options.padding.bottom
-    }
-    .max(0);
-    let cross = if horizontal {
-        bounds.height - options.padding.top - options.padding.bottom
-    } else {
-        bounds.width - options.padding.left - options.padding.right
-    }
-    .max(0);
+    let origin = pick(
+        horizontal,
+        bounds.x + options.padding.left,
+        bounds.y + options.padding.top,
+    );
+    let cross_origin = pick(
+        horizontal,
+        bounds.y + options.padding.top,
+        bounds.x + options.padding.left,
+    );
+    let inner_width = bounds.width - options.padding.left - options.padding.right;
+    let inner_height = bounds.height - options.padding.top - options.padding.bottom;
+    let available = pick(horizontal, inner_width, inner_height).max(0);
+    let cross = pick(horizontal, inner_height, inner_width).max(0);
 
     let mut sizes = vec![0; items.len()];
     let mut used = 0;
@@ -347,11 +309,7 @@ fn solve_linear(
         }
         sizes[index] = basis(item, horizontal);
         used += sizes[index];
-        let measure = if horizontal {
-            item.spec.width
-        } else {
-            item.spec.height
-        };
+        let measure = pick(horizontal, item.spec.width, item.spec.height);
         if measure.mode == MeasureMode::Flex {
             flex_weight += measure.value.max(1);
         }
@@ -364,11 +322,7 @@ fn solve_linear(
             if !item.spec.visible {
                 continue;
             }
-            let measure = if horizontal {
-                item.spec.width
-            } else {
-                item.spec.height
-            };
+            let measure = pick(horizontal, item.spec.width, item.spec.height);
             if measure.mode == MeasureMode::Flex {
                 let part = extra * measure.value.max(1) / flex_weight;
                 sizes[index] = clamp_measure(sizes[index] + part, measure);
@@ -383,11 +337,7 @@ fn solve_linear(
         .map(|(size, _)| *size)
         .sum::<i32>()
         + (visible_count - 1).max(0) * options.gap;
-    let main_alignment = if horizontal {
-        options.horizontal
-    } else {
-        options.vertical
-    };
+    let main_alignment = pick(horizontal, options.horizontal, options.vertical);
     let mut cursor = origin + aligned_offset(available, content_extent, main_alignment);
     let mut result = Vec::with_capacity(items.len());
 
@@ -400,26 +350,10 @@ fn solve_linear(
             });
             continue;
         }
-        let cross_measure = if horizontal {
-            item.spec.height
-        } else {
-            item.spec.width
-        };
-        let option_alignment = if horizontal {
-            options.vertical
-        } else {
-            options.horizontal
-        };
-        let item_alignment = if horizontal {
-            item.spec.vertical
-        } else {
-            item.spec.horizontal
-        };
-        let cross_alignment = if option_alignment == Alignment::Stretch {
-            item_alignment
-        } else {
-            option_alignment
-        };
+        let cross_measure = pick(horizontal, item.spec.height, item.spec.width);
+        let option_alignment = pick(horizontal, options.vertical, options.horizontal);
+        let item_alignment = pick(horizontal, item.spec.vertical, item.spec.horizontal);
+        let cross_alignment = resolve_alignment(option_alignment, item_alignment);
         let mut cross_size =
             if cross_measure.mode == MeasureMode::Flex || cross_alignment == Alignment::Stretch {
                 cross
@@ -446,17 +380,26 @@ fn solve_linear(
     result
 }
 
+fn pick<T>(horizontal: bool, horizontal_value: T, vertical_value: T) -> T {
+    if horizontal {
+        horizontal_value
+    } else {
+        vertical_value
+    }
+}
+
+/// Item alignment applies unless the container sets an explicit alignment.
+fn resolve_alignment(container: Alignment, item: Alignment) -> Alignment {
+    if container == Alignment::Stretch {
+        item
+    } else {
+        container
+    }
+}
+
 fn basis(item: &LayoutItem, horizontal: bool) -> i32 {
-    let measure = if horizontal {
-        item.spec.width
-    } else {
-        item.spec.height
-    };
-    let content = if horizontal {
-        item.spec.content.width
-    } else {
-        item.spec.content.height
-    };
+    let measure = pick(horizontal, item.spec.width, item.spec.height);
+    let content = pick(horizontal, item.spec.content.width, item.spec.content.height);
     match measure.mode {
         MeasureMode::Fixed | MeasureMode::Flex => clamp_measure(measure.value, measure),
         MeasureMode::Content => clamp_measure(content, measure),
