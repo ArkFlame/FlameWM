@@ -83,11 +83,6 @@ impl SessionPaths {
     pub fn cursor_search_root(&self) -> PathBuf {
         self.data_root.join("icons")
     }
-
-    #[must_use]
-    pub fn cursor_path(&self) -> PathBuf {
-        self.cursor_search_root()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,7 +230,7 @@ fn flame_environment(
     // never inherit the host XCURSOR_PATH.
     let search_root = non_empty("FLAMEWM_CURSOR_PATH")
         .cloned()
-        .unwrap_or_else(|| paths.cursor_path().display().to_string());
+        .unwrap_or_else(|| paths.cursor_search_root().display().to_string());
     let combined_cursor_path = cursor_library_path
         .filter(|value| !value.is_empty())
         .map_or(search_root.clone(), |existing| {
@@ -370,8 +365,6 @@ impl ProcessSupervisorPolicy {
             .min(self.policy.maximum_backoff_ms)
     }
 }
-
-pub type DesktopSupervisorPolicy = ProcessSupervisorPolicy;
 
 #[must_use]
 pub fn default_paths_from_home(bindir: impl AsRef<Path>, home: impl AsRef<Path>) -> SessionPaths {
