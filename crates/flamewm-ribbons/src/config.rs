@@ -69,17 +69,10 @@ pub(crate) fn union_bounds(rects: &[Rect]) -> Rect {
             h: DEFAULT_VIEWPORT.1,
         };
     }
-    let (x0, y0, x1, y1) = rects.iter().fold(
-        (i64::MAX, i64::MAX, i64::MIN, i64::MIN),
-        |(x0, y0, x1, y1), r| {
-            (
-                x0.min(r.x as i64),
-                y0.min(r.y as i64),
-                x1.max(r.x as i64 + r.w as i64),
-                y1.max(r.y as i64 + r.h as i64),
-            )
-        },
-    );
+    let (x0, y0, x1, y1) = rects.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(a, b, c, d), r| {
+        let (x, y) = (r.x as i64, r.y as i64);
+        (a.min(x), b.min(y), c.max(x + r.w as i64), d.max(y + r.h as i64))
+    });
     Rect {
         x: x0 as i32,
         y: y0 as i32,
