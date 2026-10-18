@@ -201,67 +201,48 @@ pub fn fitted_start_placement(
     }
     let area_w = work_area.width.max(0);
     let area_h = work_area.height.max(0);
+    let placed = |rect: Rect| StartPlacement {
+        rect,
+        content_was_capped: rect.width != intrinsic.width || rect.height != intrinsic.height,
+    };
+    let fit = |available: i32| {
+        (available > 0)
+            .then_some(available)
+            .ok_or(PopupRefusal::PendingLayout)
+    };
     match panel_edge {
         PanelEdge::Bottom => {
             // Work-area edge (live panel outer top), not the inset node top.
             let limit = anchor.y.min(work_area.bottom());
-            let available = limit - work_area.y - gap;
-            if available <= 0 {
-                return Err(PopupRefusal::PendingLayout);
-            }
-            let height = intrinsic.height.min(available);
+            let height = intrinsic.height.min(fit(limit - work_area.y - gap)?);
             let width = intrinsic.width.min(area_w);
             let y = limit - gap - height;
             let x = clamp_start(anchor.x, width, work_area.x, work_area.right());
-            Ok(StartPlacement {
-                rect: Rect::new(x, y, width, height),
-                content_was_capped: width != intrinsic.width || height != intrinsic.height,
-            })
+            Ok(placed(Rect::new(x, y, width, height)))
         }
         PanelEdge::Top => {
             let limit = anchor.bottom().max(work_area.y);
-            let available = work_area.bottom() - limit - gap;
-            if available <= 0 {
-                return Err(PopupRefusal::PendingLayout);
-            }
-            let height = intrinsic.height.min(available);
+            let height = intrinsic.height.min(fit(work_area.bottom() - limit - gap)?);
             let width = intrinsic.width.min(area_w);
             let y = limit + gap;
             let x = clamp_start(anchor.x, width, work_area.x, work_area.right());
-            Ok(StartPlacement {
-                rect: Rect::new(x, y, width, height),
-                content_was_capped: width != intrinsic.width || height != intrinsic.height,
-            })
+            Ok(placed(Rect::new(x, y, width, height)))
         }
         PanelEdge::Left => {
             let limit = anchor.right().max(work_area.x);
-            let available = work_area.right() - limit - gap;
-            if available <= 0 {
-                return Err(PopupRefusal::PendingLayout);
-            }
-            let width = intrinsic.width.min(available);
+            let width = intrinsic.width.min(fit(work_area.right() - limit - gap)?);
             let height = intrinsic.height.min(area_h);
             let x = limit + gap;
             let y = clamp_start(anchor.y, height, work_area.y, work_area.bottom());
-            Ok(StartPlacement {
-                rect: Rect::new(x, y, width, height),
-                content_was_capped: width != intrinsic.width || height != intrinsic.height,
-            })
+            Ok(placed(Rect::new(x, y, width, height)))
         }
         PanelEdge::Right => {
             let limit = anchor.x.min(work_area.right());
-            let available = limit - work_area.x - gap;
-            if available <= 0 {
-                return Err(PopupRefusal::PendingLayout);
-            }
-            let width = intrinsic.width.min(available);
+            let width = intrinsic.width.min(fit(limit - work_area.x - gap)?);
             let height = intrinsic.height.min(area_h);
             let x = limit - gap - width;
             let y = clamp_start(anchor.y, height, work_area.y, work_area.bottom());
-            Ok(StartPlacement {
-                rect: Rect::new(x, y, width, height),
-                content_was_capped: width != intrinsic.width || height != intrinsic.height,
-            })
+            Ok(placed(Rect::new(x, y, width, height)))
         }
     }
 }
