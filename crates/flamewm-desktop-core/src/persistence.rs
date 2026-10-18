@@ -74,13 +74,7 @@ impl LayoutStore {
 
 #[must_use]
 pub(super) fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    out
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub(super) fn unhex(
