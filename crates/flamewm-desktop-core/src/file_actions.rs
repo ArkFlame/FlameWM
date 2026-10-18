@@ -119,13 +119,7 @@ pub fn entry_context_menu(is_trash: bool) -> Vec<EntryMenuAction> {
 pub fn validate_rename_name(name: &str) -> FlameResult<String> {
     use std::path::Component;
     let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
-        return Err(FlameError::new(
-            ErrorCode::InvalidArgument,
-            "invalid rename name",
-        ));
-    }
-    if trimmed.contains('/') || trimmed.contains('\0') {
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains(['/', '\0']) {
         return Err(FlameError::new(
             ErrorCode::InvalidArgument,
             "invalid rename name",
