@@ -1850,24 +1850,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Writes the authoritative value text into every value pill and select
     /// label. Missing snapshot values leave the authored placeholder untouched.
     fn sync_value_text(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let values = self.client.settings().map(|snapshot| &snapshot.values);
-        let percent = |key: &str| {
-            values.and_then(|values| match values.get(key) {
-                Some(SettingValue::Percent(value)) => Some(*value),
-                _ => None,
-            })
+        let percent = |key: &str| match self.setting_value(key) {
+            Some(SettingValue::Percent(value)) => Some(*value),
+            _ => None,
         };
-        let integer = |key: &str| {
-            values.and_then(|values| match values.get(key) {
-                Some(SettingValue::Integer(value)) => Some(*value),
-                _ => None,
-            })
+        let integer = |key: &str| match self.setting_value(key) {
+            Some(SettingValue::Integer(value)) => Some(*value),
+            _ => None,
         };
-        let text = |key: &str| {
-            values.and_then(|values| match values.get(key) {
-                Some(SettingValue::Text(value)) => Some(value.clone()),
-                _ => None,
-            })
+        let text = |key: &str| match self.setting_value(key) {
+            Some(SettingValue::Text(value)) => Some(value.clone()),
+            _ => None,
         };
         if let Some(value) = percent("DesktopSelectionFillOpacity") {
             document.text("selection-opacity-value", format!("{value}%"))?;
