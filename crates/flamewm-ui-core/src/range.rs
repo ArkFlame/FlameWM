@@ -63,23 +63,23 @@ impl RangeState {
         match action {
             RangeAction::SetValue(value) => Self {
                 value: spec.snap(value),
-                dragging: self.dragging,
+                ..self
             },
             RangeAction::StepUp => Self {
                 value: spec.snap(self.value + spec.step.max(f32::EPSILON)),
-                dragging: self.dragging,
+                ..self
             },
             RangeAction::StepDown => Self {
                 value: spec.snap(self.value - spec.step.max(f32::EPSILON)),
-                dragging: self.dragging,
+                ..self
             },
             RangeAction::BeginDrag => Self {
-                value: self.value,
                 dragging: true,
+                ..self
             },
             RangeAction::EndDrag => Self {
-                value: self.value,
                 dragging: false,
+                ..self
             },
         }
     }
