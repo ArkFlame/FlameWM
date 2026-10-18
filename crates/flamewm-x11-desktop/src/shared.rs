@@ -82,14 +82,10 @@ pub fn send_state(
 
 /// `property32` reads a root-window property as 32-bit words for the owner's connection.
 pub fn root_work_area(property32: impl Fn(&str) -> FlameResult<Vec<u32>>) -> FlameResult<Rect> {
-    let desktop = property32("_NET_CURRENT_DESKTOP")?
-        .first()
-        .copied()
-        .unwrap_or(0) as usize;
+    let invalid = || FlameError::unavailable("root _NET_WORKAREA is invalid");
+    let desktop = property32("_NET_CURRENT_DESKTOP")?.first().copied().unwrap_or(0) as usize;
     let values = property32("_NET_WORKAREA")?;
-    let start = desktop
-        .checked_mul(4)
-        .ok_or_else(|| FlameError::unavailable("root _NET_WORKAREA is invalid"))?;
+    let start = desktop.checked_mul(4).ok_or_else(invalid)?;
     if values.len() < start.saturating_add(4) {
         return Err(FlameError::unavailable("root _NET_WORKAREA is unavailable"));
     }
@@ -99,9 +95,7 @@ pub fn root_work_area(property32: impl Fn(&str) -> FlameResult<Vec<u32>>) -> Fla
         values[start + 2] as i32,
         values[start + 3] as i32,
     );
-    area.is_valid()
-        .then_some(area)
-        .ok_or_else(|| FlameError::unavailable("root _NET_WORKAREA is invalid"))
+    area.is_valid().then_some(area).ok_or_else(invalid)
 }
 
 pub fn text_from_bytes(bytes: &[u8]) -> String {
