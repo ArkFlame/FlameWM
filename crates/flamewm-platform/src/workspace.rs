@@ -45,16 +45,6 @@ impl TwoRowTopology {
     }
 
     #[must_use]
-    pub fn move_left(index: usize, total: usize) -> usize {
-        let pos = Self::index_to_position(index, total);
-        if pos.column == 0 {
-            index.min(total.saturating_sub(1))
-        } else {
-            Self::position_to_index(pos.row, pos.column - 1, total)
-        }
-    }
-
-    #[must_use]
     pub fn move_right(index: usize, total: usize) -> usize {
         let pos = Self::index_to_position(index, total);
         if pos.column + 1 >= Self::columns_for(total) {
