@@ -2538,6 +2538,16 @@ fn integer_choice_action(
         .ok_or_else(|| format!("unknown {label} '{raw}'"))
 }
 
+/// Keys that `settings.toggle.<key>` may flip, in no particular order.
+const TOGGLE_KEYS: [&str; 24] = [
+    "stickyNotesEnabled", "fontBold", "animationsEnabled", "startAnimationEnabled",
+    "windowOpenAnimationEnabled", "minimizeAnimationEnabled", "maximizeAnimationEnabled", "lockShowDate",
+    "lockShowUsername", "lockOnSuspend", "taskbarShowSeconds", "taskbarShowDate",
+    "taskbarShowWeather", "taskbarShowVolume", "taskbarShowNetwork", "taskbarShowBattery",
+    "taskbarBatteryOnlyWhenRelevant", "taskbarShowClock", "taskbarShowWorkspaces", "weatherEnabled",
+    "autoLocationEnabled", "autoTimeZoneEnabled", "snapPreviewEnabled", "focusFollowsMouse",
+];
+
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
 fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if action.starts_with("keyboard.") {
@@ -2564,35 +2574,11 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         };
     }
     if let Some(key) = action.strip_prefix("settings.toggle.") {
-        return match key {
-            "stickyNotesEnabled" => Ok(SettingsAction::Toggle("stickyNotesEnabled")),
-            "fontBold" => Ok(SettingsAction::Toggle("fontBold")),
-            "animationsEnabled" => Ok(SettingsAction::Toggle("animationsEnabled")),
-            "startAnimationEnabled" => Ok(SettingsAction::Toggle("startAnimationEnabled")),
-            "windowOpenAnimationEnabled" => Ok(SettingsAction::Toggle("windowOpenAnimationEnabled")),
-            "minimizeAnimationEnabled" => Ok(SettingsAction::Toggle("minimizeAnimationEnabled")),
-            "maximizeAnimationEnabled" => Ok(SettingsAction::Toggle("maximizeAnimationEnabled")),
-            "lockShowDate" => Ok(SettingsAction::Toggle("lockShowDate")),
-            "lockShowUsername" => Ok(SettingsAction::Toggle("lockShowUsername")),
-            "lockOnSuspend" => Ok(SettingsAction::Toggle("lockOnSuspend")),
-            "taskbarShowSeconds" => Ok(SettingsAction::Toggle("taskbarShowSeconds")),
-            "taskbarShowDate" => Ok(SettingsAction::Toggle("taskbarShowDate")),
-            "taskbarShowWeather" => Ok(SettingsAction::Toggle("taskbarShowWeather")),
-            "taskbarShowVolume" => Ok(SettingsAction::Toggle("taskbarShowVolume")),
-            "taskbarShowNetwork" => Ok(SettingsAction::Toggle("taskbarShowNetwork")),
-            "taskbarShowBattery" => Ok(SettingsAction::Toggle("taskbarShowBattery")),
-            "taskbarBatteryOnlyWhenRelevant" => {
-                Ok(SettingsAction::Toggle("taskbarBatteryOnlyWhenRelevant"))
-            }
-            "taskbarShowClock" => Ok(SettingsAction::Toggle("taskbarShowClock")),
-            "taskbarShowWorkspaces" => Ok(SettingsAction::Toggle("taskbarShowWorkspaces")),
-            "weatherEnabled" => Ok(SettingsAction::Toggle("weatherEnabled")),
-            "autoLocationEnabled" => Ok(SettingsAction::Toggle("autoLocationEnabled")),
-            "autoTimeZoneEnabled" => Ok(SettingsAction::Toggle("autoTimeZoneEnabled")),
-            "snapPreviewEnabled" => Ok(SettingsAction::Toggle("snapPreviewEnabled")),
-            "focusFollowsMouse" => Ok(SettingsAction::Toggle("focusFollowsMouse")),
-            _ => Err(format!("unknown toggle '{key}'")),
-        };
+        return TOGGLE_KEYS
+            .into_iter()
+            .find(|known| *known == key)
+            .map(SettingsAction::Toggle)
+            .ok_or_else(|| format!("unknown toggle '{key}'"));
     }
     if let Some(rest) = action.strip_prefix("settings.color.") {
         return parse_color_preset(rest);
