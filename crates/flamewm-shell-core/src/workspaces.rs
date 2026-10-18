@@ -29,14 +29,14 @@ pub const PAGE_SIZE: usize = 4;
 /// clamped to `views[page_base..min(page_base + PAGE_SIZE, len)]`.
 #[must_use]
 pub fn visible_page(views: &[WorkspaceView]) -> Vec<&WorkspaceView> {
-    if views.is_empty() {
-        return Vec::new();
-    }
-    let active_pos = views.iter().position(|view| view.active).unwrap_or(0);
-    let page_base = (active_pos / PAGE_SIZE) * PAGE_SIZE;
-    let start = page_base.min(views.len());
+    let start = active_page_base(views).min(views.len());
     let end = (start + PAGE_SIZE).min(views.len());
     views[start..end].iter().collect()
+}
+
+fn active_page_base(views: &[WorkspaceView]) -> usize {
+    let active_pos = views.iter().position(|view| view.active).unwrap_or(0);
+    (active_pos / PAGE_SIZE) * PAGE_SIZE
 }
 
 /// Maps a global workspace index to its `(row, column)` slot in the visible page.
@@ -50,11 +50,7 @@ pub fn visible_page(views: &[WorkspaceView]) -> Vec<&WorkspaceView> {
 /// outside the current visible page.
 #[must_use]
 pub fn slot_position(global_index: usize, views: &[WorkspaceView]) -> Option<(usize, usize)> {
-    if views.is_empty() {
-        return None;
-    }
-    let active_pos = views.iter().position(|view| view.active).unwrap_or(0);
-    let page_base = (active_pos / PAGE_SIZE) * PAGE_SIZE;
+    let page_base = active_page_base(views);
     let target_pos = views.iter().position(|view| view.index == global_index)?;
     let window_end = (page_base + PAGE_SIZE).min(views.len());
     if target_pos < page_base || target_pos >= window_end {
@@ -80,8 +76,7 @@ pub fn project(snapshot: Option<&WorkspaceSnapshot>) -> Vec<WorkspaceView> {
     let labels = workspace_labels(snapshot.count);
     names
         .into_iter()
-        .take(snapshot.count)
-        .zip(labels.into_iter().take(snapshot.count))
+        .zip(labels)
         .enumerate()
         .map(|(index, (name, label))| WorkspaceView {
             index,
