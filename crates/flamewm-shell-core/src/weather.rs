@@ -132,8 +132,9 @@ pub struct WeatherSnapshot {
     pub fetched_at: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum WeatherState {
+    #[default]
     Disabled,
     Unconfigured,
     Loading,
@@ -187,6 +188,15 @@ impl TemperatureUnit {
             Self::Fahrenheit => (f64::from(celsius) * 9.0 / 5.0 + 32.0).round() as i32,
         }
     }
+
+    /// Stored and wire tag for this unit.
+    #[must_use]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Celsius => "celsius",
+            Self::Fahrenheit => "fahrenheit",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -220,10 +230,6 @@ impl WeatherSettings {
     /// clears the stored key.
     #[must_use]
     pub fn to_changes(&self) -> Vec<SettingsChange> {
-        let units = match self.units {
-            TemperatureUnit::Celsius => "celsius",
-            TemperatureUnit::Fahrenheit => "fahrenheit",
-        };
         let location = self
             .location
             .as_ref()
@@ -234,7 +240,10 @@ impl WeatherSettings {
                 Some(SettingValue::Boolean(self.enabled)),
             ),
             (Self::LOCATION_KEY, location),
-            (Self::UNITS_KEY, Some(SettingValue::Text(units.to_owned()))),
+            (
+                Self::UNITS_KEY,
+                Some(SettingValue::Text(self.units.tag().to_owned())),
+            ),
         ]
         .into_iter()
         .map(|(key, value)| SettingsChange {
@@ -268,19 +277,10 @@ fn decode_location(text: &str) -> Option<WeatherLocation> {
 }
 
 /// Main shell -> quick-control popup host: the settings and state the popup projects.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct WeatherFeed {
     pub settings: WeatherSettings,
     pub state: WeatherState,
-}
-
-impl Default for WeatherFeed {
-    fn default() -> Self {
-        Self {
-            settings: WeatherSettings::default(),
-            state: WeatherState::Disabled,
-        }
-    }
 }
 
 /// Feed fields are joined by U+001F; snapshot fields by U+001E. Labels reject
@@ -301,10 +301,6 @@ impl WeatherFeed {
             WeatherState::Offline(None) => ("offline-none", String::new()),
             WeatherState::Error(error) => ("error", error_tag(*error).to_owned()),
         };
-        let units = match self.settings.units {
-            TemperatureUnit::Celsius => "celsius",
-            TemperatureUnit::Fahrenheit => "fahrenheit",
-        };
         let location = self
             .settings
             .location
@@ -313,7 +309,7 @@ impl WeatherFeed {
             .unwrap_or_default();
         [
             if self.settings.enabled { "1" } else { "0" },
-            units,
+            self.settings.units.tag(),
             &location,
             tag,
             &payload,
