@@ -16,17 +16,9 @@ pub enum AudioTab {
 
 /// Persisted audio UX settings. `raise_maximum` caps the slider at 100/150
 /// and persists via the `audioRaiseMaximum` settings key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AudioSettings {
     pub raise_maximum: bool,
-}
-
-impl Default for AudioSettings {
-    fn default() -> Self {
-        Self {
-            raise_maximum: false,
-        }
-    }
 }
 
 impl AudioSettings {
@@ -85,9 +77,6 @@ impl NetworkQuery {
     #[must_use]
     pub fn matches(&self, label: &str) -> bool {
         let needle = self.filter.trim().to_lowercase();
-        if needle.is_empty() {
-            return true;
-        }
-        label.to_lowercase().contains(&needle)
+        needle.is_empty() || label.to_lowercase().contains(&needle)
     }
 }
