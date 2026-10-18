@@ -394,19 +394,16 @@ pub fn start_screensaver_preview() -> FlameResult<()> {
 }
 
 #[cfg(test)]
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("flamewm-lock-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+#[cfg(test)]
 mod lock_preview_tests {
     use super::*;
-    use std::time::Duration;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "flamewm-lock-preview-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
 
     /// Fake lock binary: logs its argv once per launch, then runs until killed.
     fn fake_lock(dir: &Path) -> PathBuf {
@@ -533,16 +530,6 @@ mod lock_preview_tests {
 #[cfg(test)]
 mod lock_resolution_tests {
     use super::*;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "flamewm-lock-resolve-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
 
     fn write_binary(dir: &Path, mode: u32) {
         let path = dir.join(LOCK_SCREEN_BINARY);
@@ -687,9 +674,6 @@ pub fn apply_workspace_plan_to_root(
     result?;
     conn.flush().map_err(io_error)
 }
-fn signed(value: u32) -> i32 {
-    value as i32
-}
 
 impl WindowPort for X11Desktop {
     fn get(&self, reference: WindowRef) -> FlameResult<flamewm_api::window::WindowSnapshot> {
@@ -768,7 +752,7 @@ impl WindowPort for X11Desktop {
                 .first()
                 .copied()
                 == Some(window),
-            workspace: WorkspaceRef::new(signed(desktop) as i32, workspace.revision),
+            workspace: WorkspaceRef::new(desktop as i32, workspace.revision),
             output,
             state_generation: 0,
         })
@@ -779,11 +763,8 @@ impl WindowPort for X11Desktop {
         Ok(windows
             .into_iter()
             .filter(|&window| {
-                self.property_bytes(window, "WM_CLASS")
-                    .map_or(false, |value| !value.is_empty())
-                    || self
-                        .property_bytes(window, "_NET_WM_NAME")
-                        .map_or(false, |value| !value.is_empty())
+                self.property_bytes(window, "WM_CLASS").is_ok_and(|v| !v.is_empty())
+                    || self.property_bytes(window, "_NET_WM_NAME").is_ok_and(|v| !v.is_empty())
             })
             .filter_map(|window| self.get(WindowRef::new(u64::from(window), 0)).ok())
             .collect())
