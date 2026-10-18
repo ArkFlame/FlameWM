@@ -172,38 +172,27 @@ fn find_first_tag(nodes: &[HtmlNode], tag: &str) -> Option<usize> {
 }
 
 fn collect_style_text(nodes: &[HtmlNode]) -> String {
-    let mut css = String::new();
-    for node in nodes {
-        if node.kind != HtmlNodeKind::Element || node.tag != "style" {
-            continue;
-        }
-        for child in &node.children {
-            if nodes[*child].kind == HtmlNodeKind::Text {
-                css.push_str(&nodes[*child].text);
-                css.push('\n');
-            }
-        }
-    }
-    css
+    nodes
+        .iter()
+        .filter(|node| node.kind == HtmlNodeKind::Element && node.tag == "style")
+        .flat_map(|node| &node.children)
+        .filter(|child| nodes[**child].kind == HtmlNodeKind::Text)
+        .map(|child| format!("{}\n", nodes[*child].text))
+        .collect()
 }
 
 fn collect_stylesheet_links(nodes: &[HtmlNode]) -> Vec<String> {
-    let mut links = Vec::new();
-    for node in nodes {
-        if node.kind != HtmlNodeKind::Element || node.tag != "link" {
-            continue;
-        }
-        let rel = node.attrs.get("rel").map(String::as_str).unwrap_or("");
-        let href = node.attrs.get("href").map(String::as_str).unwrap_or("");
-        if rel
-            .split_ascii_whitespace()
-            .any(|part| part.eq_ignore_ascii_case("stylesheet"))
-            && !href.is_empty()
-        {
-            links.push(href.to_string());
-        }
-    }
-    links
+    nodes
+        .iter()
+        .filter(|node| node.kind == HtmlNodeKind::Element && node.tag == "link")
+        .filter(|node| {
+            let rel = node.attrs.get("rel").map(String::as_str).unwrap_or("");
+            rel.split_ascii_whitespace()
+                .any(|part| part.eq_ignore_ascii_case("stylesheet"))
+        })
+        .filter_map(|node| node.attrs.get("href").filter(|href| !href.is_empty()))
+        .cloned()
+        .collect()
 }
 
 fn find_tag_end(input: &str, start: usize) -> Result<usize, String> {
