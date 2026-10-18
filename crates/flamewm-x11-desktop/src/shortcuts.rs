@@ -79,10 +79,7 @@ const KEYSYM_NAMES: &[(&str, u32)] = &[
 #[must_use]
 pub fn keysym_for_name(name: &str) -> Option<u32> {
     let mut chars = name.chars();
-    let single = match (chars.next(), chars.next()) {
-        (Some(only), None) => Some(only),
-        _ => None,
-    };
+    let single = chars.next().filter(|_| chars.next().is_none());
     if let Some(only) = single.filter(char::is_ascii_alphanumeric) {
         return Some(u32::from(only.to_ascii_lowercase()));
     }
@@ -146,17 +143,15 @@ pub fn parse_binding(normalized: &str) -> FlameResult<KeyChord> {
         })?;
         modifiers |= bit;
     }
-    let keysym = if prefix.is_empty() {
-        modifier_only_keysym(key).or_else(|| keysym_for_name(key))
-    } else {
-        keysym_for_name(key)
-    }
-    .ok_or_else(|| {
-        FlameError::new(
-            ErrorCode::NotFound,
-            format!("shortcut key is not recognised: {key}"),
-        )
-    })?;
+    let keysym = modifier_only_keysym(key)
+        .filter(|_| prefix.is_empty())
+        .or_else(|| keysym_for_name(key))
+        .ok_or_else(|| {
+            FlameError::new(
+                ErrorCode::NotFound,
+                format!("shortcut key is not recognised: {key}"),
+            )
+        })?;
     Ok(KeyChord { keysym, modifiers })
 }
 
@@ -300,8 +295,7 @@ impl ShortcutGrabs {
         lookup: &dyn KeycodeLookup,
     ) -> FlameResult<()> {
         self.staged = None;
-        let staged = build_staged(desired, lookup)?;
-        self.staged = Some(staged);
+        self.staged = Some(build_staged(desired, lookup)?);
         Ok(())
     }
 
@@ -330,13 +324,10 @@ impl ShortcutGrabs {
                         entry.action, error.message
                     );
                     // A binding is all-or-nothing across its NumLock/CapsLock variants.
-                    let mut kept = Vec::with_capacity(granted.len());
-                    for granted_entry in granted {
-                        if granted_entry.action == entry.action {
-                            backend.ungrab(granted_entry.grab);
-                        } else {
-                            kept.push(granted_entry);
-                        }
+                    let (dropped, kept): (Vec<_>, Vec<_>) =
+                        granted.into_iter().partition(|g| g.action == entry.action);
+                    for dropped_entry in dropped {
+                        backend.ungrab(dropped_entry.grab);
                     }
                     granted = kept;
                     skipped.insert(entry.action);
@@ -368,10 +359,8 @@ impl ShortcutGrabs {
     /// missing, they are re-grabbed here.
     pub fn rollback(&mut self, backend: &mut dyn GrabBackend) {
         self.staged = None;
-        if self.degraded {
-            if self.regrab_active(backend).is_ok() {
-                self.degraded = false;
-            }
+        if self.degraded && self.regrab_active(backend).is_ok() {
+            self.degraded = false;
         }
     }
 
@@ -557,6 +546,12 @@ mod tests {
         Grab { keycode, modifiers }
     }
 
+    /// Stages `pairs` against the standard lookup and commits them.
+    fn install(grabs: &mut ShortcutGrabs, backend: &mut FakeBackend, pairs: &[(&str, &str)]) {
+        grabs.prepare(&desired(pairs), &FakeLookup::standard()).unwrap();
+        grabs.commit(backend).unwrap();
+    }
+
     #[test]
     fn unresolvable_key_name_is_rejected_with_typed_error() {
         let error = parse_binding("Ctrl+NoSuchKey").expect_err("unknown key must fail");
@@ -595,10 +590,7 @@ mod tests {
         let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        grabs
-            .prepare(&desired(&[("WindowClose", "Alt+F4")]), &lookup)
-            .unwrap();
-        grabs.commit(&mut backend).unwrap();
+        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
         let active_before = grabs.active().to_vec();
 
         grabs
@@ -621,10 +613,7 @@ mod tests {
         let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        grabs
-            .prepare(&desired(&[("WindowClose", "Alt+F4")]), &lookup)
-            .unwrap();
-        grabs.commit(&mut backend).unwrap();
+        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
 
         let error = grabs
             .prepare(&desired(&[("WorkspaceLeft", "Ctrl+Bogus")]), &lookup)
@@ -639,10 +628,7 @@ mod tests {
         let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        grabs
-            .prepare(&desired(&[("WindowClose", "Alt+F4")]), &lookup)
-            .unwrap();
-        grabs.commit(&mut backend).unwrap();
+        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
 
         grabs
             .prepare(&desired(&[("WindowClose", "Ctrl+Super+Up")]), &lookup)
@@ -667,10 +653,7 @@ mod tests {
         let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        grabs
-            .prepare(&desired(&[("WindowClose", "Alt+F4")]), &lookup)
-            .unwrap();
-        grabs.commit(&mut backend).unwrap();
+        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
         let previous = grabs.active().to_vec();
         let held_before = backend.held.clone();
 
@@ -696,10 +679,7 @@ mod tests {
         let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        grabs
-            .prepare(&desired(&[("WindowClose", "Alt+F4")]), &lookup)
-            .unwrap();
-        grabs.commit(&mut backend).unwrap();
+        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
         let held_before = backend.held.clone();
 
         grabs
@@ -732,13 +712,9 @@ mod tests {
 
     #[test]
     fn lock_state_does_not_prevent_dispatch() {
-        let lookup = FakeLookup::standard();
         let mut backend = FakeBackend::default();
         let mut grabs = ShortcutGrabs::new();
-        grabs
-            .prepare(&desired(&[("WindowClose", "Alt+F4")]), &lookup)
-            .unwrap();
-        grabs.commit(&mut backend).unwrap();
+        install(&mut grabs, &mut backend, &[("WindowClose", "Alt+F4")]);
         assert_eq!(
             grabs.action_for_key(70, MOD_ALT | MOD_NUM_LOCK),
             Some("WindowClose")
