@@ -61,22 +61,25 @@ impl Config {
 
 /// Union of all rects, or the default viewport when there are none.
 pub(crate) fn union_bounds(rects: &[Rect]) -> Rect {
-    let Some(first) = rects.first() else {
+    if rects.is_empty() {
         return Rect {
             x: 0,
             y: 0,
             w: DEFAULT_VIEWPORT.0,
             h: DEFAULT_VIEWPORT.1,
         };
-    };
-    let (mut x0, mut y0) = (first.x as i64, first.y as i64);
-    let (mut x1, mut y1) = (x0 + first.w as i64, y0 + first.h as i64);
-    for r in &rects[1..] {
-        x0 = x0.min(r.x as i64);
-        y0 = y0.min(r.y as i64);
-        x1 = x1.max(r.x as i64 + r.w as i64);
-        y1 = y1.max(r.y as i64 + r.h as i64);
     }
+    let (x0, y0, x1, y1) = rects.iter().fold(
+        (i64::MAX, i64::MAX, i64::MIN, i64::MIN),
+        |(x0, y0, x1, y1), r| {
+            (
+                x0.min(r.x as i64),
+                y0.min(r.y as i64),
+                x1.max(r.x as i64 + r.w as i64),
+                y1.max(r.y as i64 + r.h as i64),
+            )
+        },
+    );
     Rect {
         x: x0 as i32,
         y: y0 as i32,
