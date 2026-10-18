@@ -360,24 +360,22 @@ pub fn rounded_rect_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32
     if radius <= 1 {
         return (0..height).map(|row| (row, 0, width)).collect();
     }
-    (0..height)
-        .map(|row| {
-            let corner_row = row.min(height - 1 - row);
-            let inset = if corner_row >= radius {
-                0
-            } else {
-                let r = f64::from(radius);
-                let dy = r - (f64::from(corner_row) + 0.5);
-                let dx = (r * r - dy * dy).max(0.0).sqrt();
-                // Floor matches the render-side corner rasterization: mask spans
-                // and painted pixels use one formula.
-                (r - dx).floor().clamp(0.0, r) as u32
-            };
-            let start = inset.min(width);
-            let end = width.saturating_sub(inset).max(start);
-            (row, start, end)
-        })
-        .collect()
+    (0..height).map(|row| {
+        let corner_row = row.min(height - 1 - row);
+        let inset = if corner_row >= radius {
+            0
+        } else {
+            let r = f64::from(radius);
+            let dy = r - (f64::from(corner_row) + 0.5);
+            let dx = (r * r - dy * dy).max(0.0).sqrt();
+            // Floor matches the render-side corner rasterization: mask spans
+            // and painted pixels use one formula.
+            (r - dx).floor().clamp(0.0, r) as u32
+        };
+        let start = inset.min(width);
+        let end = width.saturating_sub(inset).max(start);
+        (row, start, end)
+    }).collect()
 }
 
 pub fn decode_document(bytes: &[u8]) -> Result<UiDocument, String> {
