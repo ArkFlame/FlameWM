@@ -37,9 +37,7 @@ pub fn compile_str(
     if !html.linked_css.is_empty() {
         return Err("compile_str cannot resolve <link rel=\"stylesheet\">; use compile_file or pass CSS explicitly".to_string());
     }
-    let mut css = html.embedded_css.clone();
-    css.push('\n');
-    css.push_str(extra_css);
+    let css = format!("{}\n{extra_css}", html.embedded_css);
     compile_parsed(html_source, &css, html, options, None)
 }
 
@@ -193,7 +191,7 @@ impl<'a> Compiler<'a> {
                 next_sibling: None,
                 id: String::new(),
                 action: String::new(),
-                text: source.text.clone(),
+                text: source.text,
                 image: None,
                 style,
                 hover_style: None,
@@ -602,10 +600,9 @@ fn parse_number(input: &str) -> Result<f32, String> {
 }
 
 fn parse_edges(input: &str) -> Result<Edges, String> {
-    let parts: Vec<&str> = input.split_ascii_whitespace().collect();
-    let values: Vec<f32> = parts
-        .iter()
-        .map(|part| parse_px(part))
+    let values: Vec<f32> = input
+        .split_ascii_whitespace()
+        .map(parse_px)
         .collect::<Result<_, _>>()?;
     match values.as_slice() {
         [all] => Ok(Edges {
@@ -789,12 +786,29 @@ mod tests {
         );
     }
 
+    fn compile_body(html: &str) -> CompileOutput {
+        compile_str(html, "", CompileOptions::default()).unwrap()
+    }
+
+    fn style_of(output: &CompileOutput, id: &str) -> Style {
+        output.document.nodes.iter().find(|node| node.id == id).unwrap().style.clone()
+    }
+
+    fn temp_fixture_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "flamewm-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|v| v.as_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
     fn interactive_fixture() -> CompileOutput {
-        compile_str(
+        compile_body(
             r#"<body><style>:root { --accent: #ef4444; } body { display:flex; } button { background: var(--accent); width: 100px; } button:hover { background:#ffffff; }</style><button id="start" data-action="start.toggle">Start</button></body>"#,
-            "",
-            CompileOptions::default(),
-        ).unwrap()
+        )
     }
 
     #[test]
@@ -813,11 +827,9 @@ mod tests {
 
     #[test]
     fn compiles_pointer_cursor() {
-        let output = compile_str(
+        let output = compile_body(
             r#"<body><style>button { cursor: pointer; }</style><button id="open">Open</button></body>"#,
-            "",
-            CompileOptions::default(),
-        ).unwrap();
+        );
         let node = output
             .document
             .nodes
@@ -830,22 +842,10 @@ mod tests {
     #[test]
     fn compiles_wrap_and_break_anywhere() {
         use flamewm_render_core::TextWrap;
-        let output = compile_str(
+        let output = compile_body(
             r#"<body><style>.a { white-space: normal; } .b { white-space: nowrap; } .c { overflow-wrap: anywhere; }</style><div class="a" id="a">x</div><div class="b" id="b">x</div><div class="c" id="c">x</div></body>"#,
-            "",
-            CompileOptions::default(),
-        )
-        .unwrap();
-        let find = |id: &str| {
-            output
-                .document
-                .nodes
-                .iter()
-                .find(|node| node.id == id)
-                .unwrap()
-                .style
-                .clone()
-        };
+        );
+        let find = |id: &str| style_of(&output, id);
         assert_eq!(find("a").text_wrap, TextWrap::Wrap);
         assert!(!find("a").break_anywhere);
         assert_eq!(find("b").text_wrap, TextWrap::NoWrap);
@@ -873,16 +873,7 @@ mod tests {
             CompileOptions::default(),
         )
         .unwrap();
-        let find = |id: &str| {
-            output
-                .document
-                .nodes
-                .iter()
-                .find(|node| node.id == id)
-                .unwrap()
-                .style
-                .clone()
-        };
+        let find = |id: &str| style_of(&output, id);
         let sticky = find("sticky");
         assert_eq!(sticky.text_wrap, TextWrap::Wrap);
         assert!(sticky.break_anywhere);
@@ -928,12 +919,7 @@ mod tests {
 
     #[test]
     fn zero_width_seed_keeps_runtime_text_slot_mutable() {
-        let output = compile_str(
-            r#"<body><div id="slot">&#8203;</div></body>"#,
-            "",
-            CompileOptions::default(),
-        )
-        .unwrap();
+        let output = compile_body(r#"<body><div id="slot">&#8203;</div></body>"#);
         let slot = output
             .document
             .nodes
@@ -959,14 +945,7 @@ mod tests {
     #[test]
     fn opaque_ppm_asset_compiles_to_fully_opaque_rgba8() {
         use std::io::Write;
-        let dir = std::env::temp_dir().join(format!(
-            "flamewm-j05-ppm-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|v| v.as_nanos())
-                .unwrap_or(0)
-        ));
+        let dir = temp_fixture_dir("j05-ppm");
         std::fs::create_dir_all(&dir).expect("temp dir");
         let ppm = dir.join("icon.ppm");
         let mut bytes = b"P6\n1 1\n255\n".to_vec();
@@ -993,14 +972,7 @@ mod tests {
         let breeze =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/breeze");
         let bytes = std::fs::read(breeze.join(name)).expect("read breeze svg");
-        let dir = std::env::temp_dir().join(format!(
-            "flamewm-j03-svg-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|v| v.as_nanos())
-                .unwrap_or(0)
-        ));
+        let dir = temp_fixture_dir(&format!("j03-svg-{name}"));
         std::fs::create_dir_all(&dir).expect("temp dir");
         std::fs::write(dir.join(name), &bytes).expect("copy svg");
         let html = dir.join("doc.html");
@@ -1070,14 +1042,7 @@ mod tests {
             let breeze =
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/web/breeze");
             let bytes = std::fs::read(breeze.join("folder.svg")).expect("read breeze svg");
-            let dir = std::env::temp_dir().join(format!(
-                "flamewm-j03-dedup-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|v| v.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let dir = temp_fixture_dir("j03-dedup");
             std::fs::create_dir_all(&dir).expect("temp dir");
             std::fs::write(dir.join("folder.svg"), &bytes).expect("copy svg");
             let html = dir.join("doc.html");
