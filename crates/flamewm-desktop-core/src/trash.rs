@@ -196,20 +196,15 @@ fn is_valid_shared_trash(path: &Path) -> bool {
 }
 
 fn ensure_location(location: &TrashLocation) -> FlameResult<()> {
-    if location.scope == TrashScope::TopDirectory {
-        if let Some(top) = location.top_directory.as_ref() {
-            if location.base
-                == top
-                    .join(".Trash")
-                    .join(location.base.file_name().unwrap_or_default())
-            {
-                if !is_valid_shared_trash(&top.join(".Trash")) {
-                    return Err(FlameError::new(
-                        ErrorCode::PermissionDenied,
-                        "shared .Trash is unsafe",
-                    ));
-                }
-            }
+    if let (TrashScope::TopDirectory, Some(top)) = (location.scope, &location.top_directory) {
+        let shared = top.join(".Trash");
+        if location.base == shared.join(location.base.file_name().unwrap_or_default())
+            && !is_valid_shared_trash(&shared)
+        {
+            return Err(FlameError::new(
+                ErrorCode::PermissionDenied,
+                "shared .Trash is unsafe",
+            ));
         }
     }
     ensure_private_dir(&location.base)?;
