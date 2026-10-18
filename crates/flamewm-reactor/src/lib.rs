@@ -121,13 +121,12 @@ impl Reactor {
         &mut self,
         source: F,
         interest: Interest,
-        callback: C,
+        mut callback: C,
     ) -> calloop::Result<RegistrationToken>
     where
         F: AsFd + AsRawFd + 'static,
         C: FnMut(i32, FdReadiness) + 'static,
     {
-        let mut callback = callback;
         self.register_fd_with_action(source, interest, move |fd, readiness| {
             callback(fd, readiness);
             FdAction::Continue
@@ -142,27 +141,15 @@ impl Reactor {
         &mut self,
         source: F,
         interest: Interest,
-        callback: C,
+        mut callback: C,
     ) -> calloop::Result<RegistrationToken>
     where
         F: AsFd + AsRawFd + 'static,
         C: FnMut(i32, FdReadiness) -> FdAction + 'static,
     {
-        let fd = source.as_raw_fd();
-        let mut callback = callback;
-        self.event_loop
-            .handle()
-            .insert_source(
-                Generic::new(source, interest, Mode::Level),
-                move |readiness, _, _| {
-                    let action = callback(fd, readiness.into());
-                    Ok(match action {
-                        FdAction::Continue => PostAction::Continue,
-                        FdAction::Remove => PostAction::Remove,
-                    })
-                },
-            )
-            .map_err(Into::into)
+        self.register_fd_with_source_action(source, interest, move |fd, _, readiness| {
+            callback(fd, readiness)
+        })
     }
 
     /// Registers an owned source and exposes it to the readiness callback for nonblocking reads.
@@ -170,14 +157,13 @@ impl Reactor {
         &mut self,
         source: F,
         interest: Interest,
-        callback: C,
+        mut callback: C,
     ) -> calloop::Result<RegistrationToken>
     where
         F: AsFd + AsRawFd + 'static,
         C: FnMut(i32, &mut F, FdReadiness) -> FdAction + 'static,
     {
         let fd = source.as_raw_fd();
-        let mut callback = callback;
         self.event_loop
             .handle()
             .insert_source(
@@ -215,7 +201,7 @@ impl Reactor {
         &mut self,
         delay: Duration,
         repeat: bool,
-        callback: C,
+        mut callback: C,
     ) -> calloop::Result<RegistrationToken>
     where
         C: FnMut() + 'static,
@@ -232,7 +218,6 @@ impl Reactor {
                 site.line()
             ));
         }
-        let mut callback = callback;
         self.event_loop
             .handle()
             .insert_source(Timer::from_duration(delay), move |_, _, _| {
@@ -304,7 +289,7 @@ impl Reactor {
         &mut self,
         clock: W,
         with_seconds: bool,
-        callback: C,
+        mut callback: C,
     ) -> calloop::Result<RegistrationToken>
     where
         W: WallClockSource + 'static,
@@ -323,8 +308,6 @@ impl Reactor {
                 site.line()
             ));
         }
-        let mut callback = callback;
-        let clock = clock;
         self.event_loop
             .handle()
             .insert_source(
