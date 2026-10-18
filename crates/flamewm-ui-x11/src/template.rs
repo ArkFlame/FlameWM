@@ -669,15 +669,13 @@ mod tests {
             };
         }
         let count = doc.document.document.nodes.len();
+        let mut z_order: Vec<u32> = (0..count as u32).collect();
+        z_order.sort_by_key(|index| (doc.document.effective_z_index(*index), *index as i64));
         let layout = flamewm_render_core::LayoutResult {
             boxes,
             contents: vec![flamewm_render_core::Rect::default(); count],
             revision: doc.document.revision(),
-            z_order: {
-                let mut order: Vec<u32> = (0..count as u32).collect();
-                order.sort_by_key(|index| (doc.document.effective_z_index(*index), *index as i64));
-                order
-            },
+            z_order,
         };
         (doc, layout)
     }
