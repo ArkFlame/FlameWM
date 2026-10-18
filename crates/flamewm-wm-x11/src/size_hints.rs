@@ -44,16 +44,7 @@ impl Default for ClientSizeHints {
 impl ClientSizeHints {
     #[must_use]
     pub fn parse(values: &[u32]) -> Self {
-        let mut out = Self {
-            min: None,
-            max: None,
-            base: None,
-            inc: None,
-            min_aspect: None,
-            max_aspect: None,
-            gravity: None,
-            resizable: true,
-        };
+        let mut out = Self::default();
         let Some(&flags) = values.first() else {
             return out;
         };
