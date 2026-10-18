@@ -151,11 +151,7 @@ pub fn pick_active<'a>(players: impl Iterator<Item = &'a PlayerInfo>) -> Option<
             PlaybackState::Paused => &mut paused,
             PlaybackState::Stopped | PlaybackState::Unavailable => &mut remaining,
         };
-        let should_replace = match *target {
-            Some(current) => player.bus_name.as_str() < current,
-            None => true,
-        };
-        if should_replace {
+        if target.is_none_or(|current| player.bus_name.as_str() < current) {
             *target = Some(player.bus_name.as_str());
         }
     }
