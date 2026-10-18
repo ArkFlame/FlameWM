@@ -135,11 +135,9 @@ impl DesktopModel {
                 position.cell = next;
             }
         }
-        for item in self.items.values_mut() {
-            if item.output == *output {
-                if let Some(position) = self.positions.get(&item.path) {
-                    item.cell = position.cell;
-                }
+        for item in self.items.values_mut().filter(|item| item.output == *output) {
+            if let Some(position) = self.positions.get(&item.path) {
+                item.cell = position.cell;
             }
         }
     }
@@ -201,12 +199,8 @@ fn classify(entry: &fs::DirEntry) -> FlameResult<DesktopItemKind> {
     if file_type.is_dir() {
         return Ok(DesktopItemKind::Directory);
     }
-    if entry
-        .path()
-        .extension()
-        .and_then(|extension| extension.to_str())
-        == Some("desktop")
-    {
+    let path = entry.path();
+    if path.extension().and_then(|extension| extension.to_str()) == Some("desktop") {
         return Ok(DesktopItemKind::DesktopLauncher);
     }
     Ok(DesktopItemKind::File)
