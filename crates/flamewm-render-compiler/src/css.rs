@@ -350,20 +350,13 @@ fn matches_compound(html: &ParsedHtml, index: usize, compound: &CompoundSelector
             return false;
         }
     }
-    if !compound.classes.is_empty() {
-        let Some(class_attr) = node.attrs.get("class") else {
-            return false;
-        };
-        for wanted in &compound.classes {
-            if !class_attr
+    compound.classes.iter().all(|wanted| {
+        node.attrs.get("class").is_some_and(|class_attr| {
+            class_attr
                 .split_ascii_whitespace()
                 .any(|actual| actual == wanted)
-            {
-                return false;
-            }
-        }
-    }
-    true
+        })
+    })
 }
 
 fn strip_comments(input: &str) -> Result<String, String> {
