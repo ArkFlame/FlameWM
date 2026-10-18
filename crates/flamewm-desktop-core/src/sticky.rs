@@ -217,10 +217,7 @@ impl StickyNoteStore {
     }
 
     pub fn set_color(&mut self, id: &str, preset: usize) -> bool {
-        let Some(note) = self.get_mut(id) else {
-            return false;
-        };
-        note.set_color(preset)
+        self.get_mut(id).is_some_and(|note| note.set_color(preset))
     }
 
     #[must_use]
@@ -277,10 +274,7 @@ impl StickyNoteStore {
 
     pub fn apply_workspace_mapping(&mut self, old_to_new: &[Option<usize>]) {
         self.notes.retain_mut(|note| {
-            let Some(mapping) = old_to_new.get(note.workspace) else {
-                return false;
-            };
-            let Some(new_workspace) = *mapping else {
+            let Some(Some(new_workspace)) = old_to_new.get(note.workspace).copied() else {
                 return false;
             };
             note.workspace = new_workspace;
