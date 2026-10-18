@@ -128,6 +128,10 @@ mod tests {
             .collect()
     }
 
+    fn publish(prev: &PublishedState, entries: &[(&str, XSettingsValue)]) -> PublishedState {
+        next_publication(prev, &desired(entries)).expect("change")
+    }
+
     #[test]
     fn blob_matches_byte_exact_integer_vector() {
         let state = PublishedState {
@@ -215,19 +219,14 @@ mod tests {
 
     #[test]
     fn removed_setting_bumps_serial_and_is_dropped() {
-        let first = next_publication(
+        let first = publish(
             &PublishedState::default(),
-            &desired(&[
+            &[
                 ("Xft/Antialias", XSettingsValue::Integer(1)),
                 ("Xft/Hinting", XSettingsValue::Integer(1)),
-            ]),
-        )
-        .expect("first");
-        let second = next_publication(
-            &first,
-            &desired(&[("Xft/Antialias", XSettingsValue::Integer(1))]),
-        )
-        .expect("removal");
+            ],
+        );
+        let second = publish(&first, &[("Xft/Antialias", XSettingsValue::Integer(1))]);
         assert_eq!(second.serial, 2);
         assert!(!second.settings.contains_key("Xft/Hinting"));
     }
@@ -327,27 +326,15 @@ mod tests {
                 },
             )]),
         };
-        let next = next_publication(
-            &previous,
-            &desired(&[("A", XSettingsValue::Integer(2))]),
-        )
-        .expect("change");
+        let next = publish(&previous, &[("A", XSettingsValue::Integer(2))]);
         assert_eq!(next.serial, 0);
         assert_eq!(next.settings["A"].last_change_serial, 0);
     }
 
     #[test]
     fn same_value_with_different_type_counts_as_change() {
-        let first = next_publication(
-            &PublishedState::default(),
-            &desired(&[("Xft/RGBA", XSettingsValue::Integer(1))]),
-        )
-        .expect("first");
-        let second = next_publication(
-            &first,
-            &desired(&[("Xft/RGBA", XSettingsValue::Text("1".to_owned()))]),
-        )
-        .expect("type change");
+        let first = publish(&PublishedState::default(), &[("Xft/RGBA", XSettingsValue::Integer(1))]);
+        let second = publish(&first, &[("Xft/RGBA", XSettingsValue::Text("1".to_owned()))]);
         assert_eq!(second.serial, 2);
     }
 
