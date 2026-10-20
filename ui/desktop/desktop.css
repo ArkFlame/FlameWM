@@ -7,10 +7,13 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .desktop-item:hover { background:var(--desktop-hover); border-color:var(--desktop-hover-border); }
 .desktop-glyph { position:absolute; left:18px; top:5px; width:44px; height:44px; display:block; }
 .desktop-label { position:absolute; left:2px; top:52px; width:76px; height:30px; display:flex; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; }
-.desktop-label-line { width:76px; height:15px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.desktop-label-line { width:76px; height:15px; display:flex; align-items:center; justify-content:center; overflow:hidden; text-shadow:0px 1px #000000b8; }
 .selection { position:absolute; display:block; background:var(--selection-fill); border:1px solid var(--accent-strong); }
 .sticky { position:absolute; left:220px; top:180px; width:190px; height:190px; padding:12px; display:flex; flex-direction:column; gap:12px; background:#ffe56b; color:#171717; border:1px solid #d0b941; border-radius:5px; cursor:default; }
-.desktop-drag-ghost { position:absolute; width:82px; height:82px; display:flex; flex-direction:column; align-items:center; padding:0px; border:1px solid var(--desktop-hover-border); border-radius:4px; color:white; background:var(--desktop-hover); opacity:0.76; box-sizing:border-box; cursor:default; }
+.desktop-drag-ghost { position:absolute; width:82px; height:82px; display:flex; flex-direction:column; align-items:center; padding:0px; border:1px solid transparent; border-radius:4px; color:white; background:transparent; opacity:0.50; box-sizing:border-box; cursor:default; }
+#desktop-drag-ghost-label-1, #desktop-drag-ghost-label-2 { color:#ffffff80; }
+.desktop-convert-preview { position:absolute; width:82px; height:82px; display:flex; flex-direction:column; align-items:center; background:transparent; color:white; opacity:0.50; }
+.desktop-convert-preview-status { position:absolute; left:0px; top:71px; width:82px; height:11px; display:flex; align-items:center; justify-content:center; color:white; font-size:9px; }
 .desktop-drag-count { position:absolute; right:2px; top:2px; min-width:18px; height:18px; display:flex; align-items:center; justify-content:center; background:var(--accent); color:white; border-radius:9px; font-size:11px; }
 .desktop-rename { position:absolute; display:flex; flex-direction:row; align-items:center; gap:8px; box-sizing:border-box; background:#202326; border:1px solid #474b4f; border-radius:4px; padding:6px 8px; }
 .desktop-rename-value { flex-grow:1; min-width:0; min-height:20px; color:#f1f2f3; font-size:13px; white-space:nowrap; overflow:hidden; }
@@ -23,3 +26,20 @@ body { position:relative; background:#000000; color:#f1f2f3; font-size:13px; }
 .sticky-resize-ne { position:absolute; right:-6px; top:-6px; width:10px; height:10px; cursor:nesw-resize; }
 .sticky-resize-sw { position:absolute; left:-6px; bottom:-6px; width:10px; height:10px; cursor:nesw-resize; }
 .sticky-resize-se { position:absolute; right:-6px; bottom:-6px; width:10px; height:10px; cursor:nwse-resize; }
+
+/* Neutral radial surface. Canonical projection supplies live surface colour,
+   alpha, blur, corner mask and accent highlight. No petal artwork or static wedges. */
+.context-menu.convert-wheel { position:absolute; width:328px; height:328px; min-width:328px; padding:0px; border:0px solid transparent; border-radius:164px; background:transparent; box-sizing:border-box; display:block; }
+.convert-wheel-highlight { position:absolute; left:0px; top:0px; width:328px; height:328px; }
+/* True centerline labels: all eight centers sit on the same 113px polar radius.
+   Keep rectangles narrow to avoid overlap; clicks/hover resolve from the ring itself. */
+.convert-wheel-hub { position:absolute; left:116px; top:138px; width:96px; height:52px; border-radius:26px; background:var(--accent-soft); display:flex; align-items:center; justify-content:center; color:#f4f6fb; font-size:14px; font-weight:700; }
+.context-menu .convert-wheel-option { position:absolute; width:80px; height:32px; padding:0px; display:flex; align-items:center; justify-content:center; color:#f4f6fb; background:transparent; border:0px solid transparent; border-radius:0px; cursor:default; font-size:15px; font-weight:650; }
+.convert-wheel-pos-0 { left:124px; top:35px; }
+.convert-wheel-pos-1 { left:204px; top:69px; }
+.convert-wheel-pos-2 { left:237px; top:148px; }
+.convert-wheel-pos-3 { left:204px; top:228px; }
+.convert-wheel-pos-4 { left:124px; top:261px; }
+.convert-wheel-pos-5 { left:44px; top:228px; }
+.convert-wheel-pos-6 { left:11px; top:148px; }
+.convert-wheel-pos-7 { left:44px; top:69px; }

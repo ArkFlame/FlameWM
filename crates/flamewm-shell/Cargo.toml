@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 flamewm-api = { path = "../flamewm-api" }
+flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-control-wire = { path = "../flamewm-control-wire" }

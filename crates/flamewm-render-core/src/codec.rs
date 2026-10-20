@@ -100,7 +100,7 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
     // existing PPM build artifacts keep decoding. Unknown versions are
     // rejected explicitly; no silent reinterpretation of pixel bytes.
     let bytes_per_pixel: u32 = match version {
-        FORMAT_VERSION | FORMAT_VERSION_TREATMENT_LEGACY | FORMAT_VERSION_RGBA8_LEGACY => 4,
+        FORMAT_VERSION | FORMAT_VERSION_TEXT_WRAP_LEGACY | FORMAT_VERSION_TREATMENT_LEGACY | FORMAT_VERSION_RGBA8_LEGACY => 4,
         FORMAT_VERSION_RGB8_LEGACY => 3,
         other => {
             return Err(format!(
@@ -334,6 +334,15 @@ impl Writer {
         self.tag(style.image_treatment);
         self.tag(style.text_wrap);
         self.u8(u8::from(style.break_anywhere));
+        match style.text_shadow {
+            Some(shadow) => {
+                self.u8(1);
+                self.f32(shadow.offset_x);
+                self.f32(shadow.offset_y);
+                self.color_value(shadow.color);
+            }
+            None => self.u8(0),
+        }
     }
 }
 
@@ -486,18 +495,19 @@ impl<'a> Reader<'a> {
                 self.tag()?
             },
             image_treatment: if version == FORMAT_VERSION
+                || version == FORMAT_VERSION_TEXT_WRAP_LEGACY
                 || version == FORMAT_VERSION_TREATMENT_LEGACY
             {
                 self.tag()?
             } else {
                 ImageTreatment::Original
             },
-            text_wrap: if version == FORMAT_VERSION {
+            text_wrap: if version >= FORMAT_VERSION_TEXT_WRAP_LEGACY {
                 self.tag()?
             } else {
                 TextWrap::NoWrap
             },
-            break_anywhere: if version == FORMAT_VERSION {
+            break_anywhere: if version >= FORMAT_VERSION_TEXT_WRAP_LEGACY {
                 match self.u8()? {
                     0 => false,
                     1 => true,
@@ -505,6 +515,19 @@ impl<'a> Reader<'a> {
                 }
             } else {
                 false
+            },
+            text_shadow: if version == FORMAT_VERSION {
+                match self.u8()? {
+                    0 => None,
+                    1 => Some(TextShadow {
+                        offset_x: self.f32()?,
+                        offset_y: self.f32()?,
+                        color: self.color_value()?,
+                    }),
+                    v => return Err(format!("invalid text shadow flag {v}")),
+                }
+            } else {
+                None
             },
         })
     }
@@ -675,11 +698,11 @@ mod tests {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
         let mut bytes = encode(&document).unwrap();
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_RGBA8_LEGACY.to_le_bytes());
-        // v5 appends 3 wrap bytes per style (treatment+wrap+break);
-        // strip them so the payload matches v3 layout.
-        assert_eq!(FORMAT_VERSION, 5);
-        let tail = bytes.len() - 5;
-        bytes.drain(tail..tail + 3);
+        // v6 adds one shadow-presence byte in addition to the v5
+        // treatment+wrap+break fields. Strip four bytes for v3.
+        assert_eq!(FORMAT_VERSION, 6);
+        let tail = bytes.len() - 6;
+        bytes.drain(tail..tail + 4);
         let decoded = decode(&bytes).unwrap();
         assert_eq!(
             decoded.nodes[0].style.image_treatment,
@@ -695,11 +718,11 @@ mod tests {
     fn v4_style_decodes_with_wrap_defaults() {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
         let mut bytes = encode(&document).unwrap();
-        assert_eq!(FORMAT_VERSION, 5);
+        assert_eq!(FORMAT_VERSION, 6);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_TREATMENT_LEGACY.to_le_bytes());
-        // v5 appends wrap+break after treatment; strip those 2 bytes.
-        let tail = bytes.len() - 4;
-        bytes.drain(tail..tail + 2);
+        // Strip v5 wrap+break and v6 shadow flag after treatment.
+        let tail = bytes.len() - 5;
+        bytes.drain(tail..tail + 3);
         let decoded = decode(&bytes).unwrap();
         assert_eq!(
             decoded.nodes[0].style.image_treatment,
@@ -710,14 +733,37 @@ mod tests {
     }
 
     #[test]
+    fn v6_shadow_roundtrip_preserves_offset_and_color() {
+        let mut document = roundtrip_node(ImageTreatment::Original);
+        document.nodes[0].style.text_shadow = Some(TextShadow {
+            offset_x: -1.0,
+            offset_y: 2.0,
+            color: ColorValue::Literal(Color { r: 0, g: 0, b: 0, a: 180 }),
+        });
+        assert_eq!(decode(&encode(&document).unwrap()).unwrap(), document);
+    }
+
+    #[test]
+    fn v5_style_decodes_without_text_shadow() {
+        let document = roundtrip_node(ImageTreatment::Original);
+        let mut bytes = encode(&document).unwrap();
+        bytes[4..6].copy_from_slice(&FORMAT_VERSION_TEXT_WRAP_LEGACY.to_le_bytes());
+        // The last two bytes are the optional hover/active style flags.
+        // The v6 shadow flag appears immediately before them.
+        bytes.remove(bytes.len() - 3);
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.nodes[0].style.text_shadow, None);
+    }
+
+    #[test]
     fn v2_style_decodes_with_original_treatment_and_overflow_defaults() {
         let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode(&document).unwrap();
-        assert_eq!(FORMAT_VERSION, 5);
-        // Convert to v2 layout: version=2 plus strip 3 wrap bytes and the
-        // 2 overflow bytes from the single node style (v2 predates both).
-        let style_tail = bytes.len() - 7;
-        bytes.drain(style_tail..style_tail + 5);
+        assert_eq!(FORMAT_VERSION, 6);
+        // Convert to v2: strip treatment, wrap, break, shadow, and two
+        // overflow bytes from the single-node style.
+        let style_tail = bytes.len() - 8;
+        bytes.drain(style_tail..style_tail + 6);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_RGB8_LEGACY.to_le_bytes());
         let decoded = decode(&bytes).unwrap();
         assert_eq!(

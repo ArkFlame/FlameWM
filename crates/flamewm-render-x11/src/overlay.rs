@@ -24,6 +24,7 @@ use crate::external_drawable::match_argb32_visual;
 use crate::lamp::{self, LampBand, PanelEdge};
 use crate::warp::{self, WarpRect, WarpSource};
 use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb_owned, upload_argb_pixmap};
+use crate::xshape::{XShapeBridge, rounded_mask_spans};
 use crate::xlib::{
     CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
     Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreateWindow,
@@ -205,6 +206,8 @@ pub struct WarpOverlay {
     crossfade: Option<TransitionDirection>,
     /// `Stretch` style: the whole capture moves rect-to-rect through one band per frame.
     stretch: bool,
+    /// Optional maximize scale moves linearly instead of applying another ease-out.
+    linear_stretch: bool,
     /// Warp capture uploaded once on the first warp frame and reused until Drop.
     warp_source: Option<WarpSource>,
     /// Window and taskbar icon in root coordinates, and the panel edge the bend pulls toward.
@@ -216,6 +219,11 @@ pub struct WarpOverlay {
     /// Transparent solid used to clear the ARGB window before each warp frame.
     clear: c_ulong,
     mapped: bool,
+    /// Render-owned XShape bounding authority shared by fade, scale and lamp. Without
+    /// an actual compositor, a root snapshot can only be a fallback *inside* the
+    /// warped content; every pixel outside the current outline shows the live root.
+    shape: Option<XShapeBridge>,
+    corner_radius: u32,
 }
 
 /// Smallest integer rect covering both `source` and `target` in root coordinates.
@@ -262,6 +270,7 @@ impl WarpOverlay {
             fade_clear: 0,
             crossfade: None,
             stretch: false,
+            linear_stretch: false,
             window_root,
             icon_root,
             edge,
@@ -269,6 +278,8 @@ impl WarpOverlay {
             clear: 0,
             warp_source: None,
             mapped: false,
+            shape: None,
+            corner_radius: 0,
         }
     }
 
@@ -358,6 +369,9 @@ impl WarpOverlay {
                 }
             }
         }
+        // An opaque overlay without XShape would expose frozen backdrop pixels outside
+        // the animated silhouette. Fail the optional effect instead of showing artifacts.
+        self.shape = Some(unsafe { XShapeBridge::new(display)? });
         Ok(())
     }
 
@@ -398,7 +412,93 @@ impl WarpOverlay {
         overlay.upload_fade_source()?;
         // SAFETY: `display` is live; the solid transparent picture is owned by `overlay`.
         overlay.fade_clear = unsafe { overlay.api.create_solid_fill(display, 0, 0, 0, 0) }?;
+        // No shape means square/black corners on the ARGB fallback. Prefer
+        // skipping an optional animation to presenting visibly wrong pixels.
+        overlay.shape = Some(unsafe { XShapeBridge::new(display)? });
         Ok(overlay)
+    }
+
+    /// Uses the same rounded-corner policy for every transition (fade, scale,
+    /// lamp) instead of baking square/black corners into a root snapshot.
+    pub fn set_corner_radius(&mut self, radius: u32) {
+        self.corner_radius = radius;
+    }
+
+    /// Only maximize/demaximize uses constant-speed scaling. Other stretch
+    /// consumers retain the existing eased motion.
+    pub fn set_linear_stretch(&mut self, enabled: bool) {
+        self.linear_stretch = enabled;
+    }
+
+    /// Clip the visible transition to its current painted content, not the
+    /// once-captured root image. The X server reveals *live* content outside
+    /// the shape, even on a system with no compositing manager.
+    fn apply_content_mask(&self, spans: &[(u32, u32, u32)]) {
+        if let Some(shape) = self.shape.as_ref() {
+            let _ = unsafe {
+                shape.apply_clipped_mask(
+                    self.window, spans, (0, 0, self.size.0, self.size.1),
+                )
+            };
+        }
+    }
+
+    /// Window-local rounded mask at `rect`; fractional transforms use the
+    /// same canonical rounded spans as FlameWM's other native X11 surfaces.
+    fn mask_for_rect(&self, rect: WarpRect) -> Vec<(u32, u32, u32)> {
+        let (x, y, w, h) = enclose(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
+        let scale = (rect.width / f64::from(self.capture.width.max(1)))
+            .min(rect.height / f64::from(self.capture.height.max(1)));
+        let radius = (f64::from(self.corner_radius) * scale).round().max(0.0) as u32;
+        let mut spans = Vec::new();
+        for (row, start, end) in rounded_mask_spans(w, h, radius) {
+            let yy = i64::from(y) + i64::from(row);
+            let xx = i64::from(x) + i64::from(start);
+            let ex = i64::from(x) + i64::from(end);
+            if yy >= 0 && yy < i64::from(self.size.1) {
+                let left = xx.max(0).min(i64::from(self.size.0)) as u32;
+                let right = ex.max(0).min(i64::from(self.size.0)) as u32;
+                if left < right { spans.push((yy as u32, left, right)); }
+            }
+        }
+        spans
+    }
+
+    /// Combine all lamp bands into a single row-major silhouette. Bending
+    /// narrows individual rows; a fixed full-window mask would leave a frozen
+    /// rectangle of background behind the lamp, especially at the corners.
+    fn mask_for_bands(&self, bands: &[LampBand]) -> Vec<(u32, u32, u32)> {
+        let mut rows = vec![None::<(u32, u32)>; self.size.1 as usize];
+        let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
+        for band in bands {
+            let Some(((x, y, w, h), _)) = warp::band_transform(band, origin) else { continue };
+            let left = x.max(0).min(self.size.0 as i32) as u32;
+            let right = (i64::from(x) + i64::from(w)).max(0).min(i64::from(self.size.0)) as u32;
+            if right <= left { continue; }
+            for yy in y.max(0)..(i64::from(y) + i64::from(h)).min(i64::from(self.size.1)) as i32 {
+                let row = &mut rows[yy as usize];
+                *row = Some(row.map_or((left, right), |(a,b)| (a.min(left), b.max(right))));
+            }
+        }
+        let top = rows.iter().position(Option::is_some);
+        let bottom = rows.iter().rposition(Option::is_some);
+        let (Some(top), Some(bottom)) = (top, bottom) else { return Vec::new() };
+        let min_x = rows.iter().flatten().map(|(start, _)| *start).min().unwrap_or(0);
+        let max_x = rows.iter().flatten().map(|(_, end)| *end).max().unwrap_or(0);
+        let width = max_x.saturating_sub(min_x);
+        let height = (bottom - top + 1) as u32;
+        let ratio = (f64::from(width) / f64::from(self.capture.width.max(1)))
+            .min(f64::from(height) / f64::from(self.capture.height.max(1)));
+        let radius = (f64::from(self.corner_radius) * ratio).round() as u32;
+        let corners = rounded_mask_spans(width, height, radius);
+        rows.into_iter().enumerate().filter_map(|(y, row)| {
+            let (left, right) = row?;
+            let local_row = y.checked_sub(top)?;
+            let (_, clip_start, clip_end) = *corners.get(local_row)?;
+            let a = left.max(min_x + clip_start);
+            let b = right.min(min_x + clip_end);
+            (b > a).then_some((y as u32, a, b))
+        }).collect()
     }
 
     /// Draws the effect at `progress` and maps the window on first call.
@@ -417,6 +517,12 @@ impl WarpOverlay {
         // SAFETY: `display` is live; the window is ours until Drop.
         unsafe {
             if !self.mapped {
+                // Native map and first paint are separate X requests. Without
+                // an empty initial bounding region, an unpainted full rectangle
+                // can flash before the compositor processes the initial paint.
+                if let Some(shape) = self.shape.as_ref() {
+                    let _ = shape.apply_clipped_mask(self.window, &[], (0,0,0,0));
+                }
                 XMapWindow(self.display, self.window);
                 self.mapped = true;
             }
@@ -441,12 +547,18 @@ impl WarpOverlay {
             PanelEdge::Left | PanelEdge::Right => self.window_root.width,
         };
         let bands = lamp::lamp_bands(self.window_root, self.icon_root, self.edge, progress, extent)?;
-        self.paint_bands(&bands)
+        self.paint_bands(&bands)?;
+        self.apply_content_mask(&self.mask_for_bands(&bands));
+        Ok(())
     }
 
     /// Stretch frame: the whole capture at the eased rect, one band, one affine transform.
     fn paint_stretch(&mut self, progress: f64) -> Result<(), String> {
-        let rect = stretch_frame(self.window_root, self.icon_root, progress);
+        let rect = if self.linear_stretch {
+            lerp_rect(self.window_root, self.icon_root, progress.clamp(0.0, 1.0))
+        } else {
+            stretch_frame(self.window_root, self.icon_root, progress)
+        };
         if !(rect.width > 0.0 && rect.height > 0.0) {
             return Err("overlay: stretch rect has no area".to_string());
         }
@@ -454,7 +566,14 @@ impl WarpOverlay {
             src: (0.0, 0.0, f64::from(self.capture.width), f64::from(self.capture.height)),
             dst: (rect.x, rect.y, rect.width, rect.height),
         };
-        self.paint_bands(&[band])
+        self.paint_bands(&[band])?;
+        let local = WarpRect {
+            x: rect.x - f64::from(self.origin.0),
+            y: rect.y - f64::from(self.origin.1),
+            ..rect
+        };
+        self.apply_content_mask(&self.mask_for_rect(local));
+        Ok(())
     }
 
     /// Clears or snapshots the surface, then paints `bands` of the capture onto it.
@@ -537,6 +656,14 @@ impl WarpOverlay {
                 self.composite_alpha(display, self.picture, rect, alpha)?;
             }
         }
+        self.apply_content_mask(&if alpha <= 0.0 {
+            Vec::new()
+        } else {
+            self.mask_for_rect(WarpRect {
+                x: f64::from(rect.0), y: f64::from(rect.1),
+                width: f64::from(rect.2), height: f64::from(rect.3),
+            })
+        });
         Ok(())
     }
 
@@ -577,6 +704,11 @@ impl WarpOverlay {
                 self.api.composite_src(display, dest, self.picture, (0, 0, w, h));
             }
         }
+        self.apply_content_mask(&if alpha <= 0.0 {
+            Vec::new()
+        } else {
+            self.mask_for_rect(rect)
+        });
         Ok(())
     }
 

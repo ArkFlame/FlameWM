@@ -141,8 +141,8 @@ button { padding:0; border-width:0px; border-color:transparent; background:trans
 .step-control { display:flex; align-items:center; gap:5px; }
 .step-button { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid #4a5056; border-radius:4px; background:#202326; font-size:16px; }
 .step-button:hover { border-color:var(--accent); background:#303438; }
-.workspace-pager { width:51px; height:44px; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:1px; padding:4px 3px; }
-.workspace-column { width:22px; height:33px; display:flex; flex-direction:column; gap:1px; }
+.workspace-pager { width:51px; height:44px; display:flex; flex-direction:row; align-items:center; justify-content:center; gap:1px; padding:4px 3px; overflow:hidden; }
+.workspace-column { position:absolute; top:0px; width:22px; height:33px; display:flex; flex-direction:column; gap:1px; }
 .workspace-button { width:22px; height:16px; display:flex; align-items:center; justify-content:center; border:1px solid #51565b; border-radius:1px; background:#24272a; font-size:9px; }
 .workspace-button:hover { border-color:var(--accent); }
 .files-line, .code-line { background:#87919b; }

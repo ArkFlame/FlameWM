@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Remove the previous Cargo-discovered helper after Pass 30 extraction.
+set -Eeuo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+python3 -I - <<'PY'
+from pathlib import Path
+import tomllib
+
+root = Path.cwd()
+package = root / 'crates/flamewm-wm'
+manifest = tomllib.loads((package / 'Cargo.toml').read_text())
+targets = {b['name']: b['path'] for b in manifest.get('bin', [])}
+expected = {'flamewm': 'src/main.rs', 'flamewm-session': 'src/bin/flamewm-session.rs'}
+if manifest['package'].get('autobins') is not False or targets != expected:
+    raise SystemExit('FAIL: FlameWM Cargo targets are not the Pass 30 manifest; refusing cleanup')
+runner = (package / 'src/bin/flamewm-session.rs').read_text()
+new_path = package / 'src/session_app_compat.rs'
+if ('#[path = "../session_app_compat.rs"]' not in runner
+    or 'mod session_app_compat;' not in runner
+    or 'session_app_compat::configure(' not in runner
+    or 'session_app_compat::finalize_pam_kwallet_login(' not in runner
+    or not new_path.is_file()
+    or 'pub fn configure(' not in new_path.read_text()):
+    raise SystemExit('FAIL: private session-compat source is not complete; refusing cleanup')
+stale = package / 'src/bin/desktop_compat.rs'
+if stale.exists():
+    if not stale.is_file():
+        raise SystemExit('FAIL: unexpected desktop_compat path type; refusing cleanup')
+    stale.unlink()
+    print('REMOVED obsolete src/bin/desktop_compat.rs (Cargo E0601 trigger)')
+print('PASS: Pass 30 cargo targets and session module layout validated')
+PY
+if command -v cargo >/dev/null 2>&1; then
+  python3 -I - <<'PY'
+import json
+import subprocess
+from pathlib import Path
+result = subprocess.run(
+    ['cargo', 'metadata', '--offline', '--no-deps', '--format-version', '1'],
+    capture_output=True, text=True,
+)
+if result.returncode != 0:
+    raise SystemExit(f'FAIL: Cargo metadata: {result.stderr.strip()}')
+data = json.loads(result.stdout)
+package = next((p for p in data['packages'] if p['name'] == 'flamewm-wm'), None)
+if package is None:
+    raise SystemExit('FAIL: flamewm-wm missing from Cargo metadata')
+actual = {t['name'] for t in package['targets'] if 'bin' in t['kind']}
+if actual != {'flamewm', 'flamewm-session'}:
+    raise SystemExit(f'FAIL: unexpected Cargo binaries: {sorted(actual)}')
+print('PASS: Cargo metadata only reports flamewm + flamewm-session')
+PY
+else
+  echo 'NOTICE: Cargo not installed; native target discovery not verified'
+fi

@@ -44,6 +44,8 @@ struct StrictDocument {
     texts: BTreeMap<String, String>,
     visible: BTreeMap<String, bool>,
     backgrounds: BTreeMap<String, UiColor>,
+    borders: BTreeMap<String, UiColor>,
+    font_defaults: Option<(f32, bool)>,
     rejected: Vec<String>,
 }
 
@@ -101,8 +103,10 @@ impl UiDocumentAccess for StrictDocument {
         self.backgrounds.insert(id.to_owned(), color);
         Ok(())
     }
-    fn border(&mut self, id: &str, _color: UiColor) -> Result<(), String> {
-        self.known(id)
+    fn border(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+        self.known(id)?;
+        self.borders.insert(id.to_owned(), color);
+        Ok(())
     }
     fn corner_radius(&mut self, id: &str, _radius_px: f32) -> Result<(), String> {
         self.known(id)
@@ -129,6 +133,10 @@ impl UiDocumentAccess for StrictDocument {
     }
     fn font_weight(&mut self, id: &str, _weight: u16) -> Result<(), String> {
         self.known(id)
+    }
+    fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {
+        self.font_defaults = Some((size_offset, bold));
+        Ok(())
     }
     fn overflow(&mut self, id: &str, _x: Overflow, _y: Overflow) -> Result<(), String> {
         self.known(id)
@@ -404,6 +412,14 @@ fn every_visible_mode_slot_resolves_on_every_page() {
                 visible.len(),
                 (modes - page * DISPLAY_MODE_SLOTS).min(DISPLAY_MODE_SLOTS)
             );
+            for slot in 0..DISPLAY_MODE_SLOTS {
+                assert_eq!(
+                    document.visible.get(&format!("display-mode-slot-{slot}")),
+                    Some(&visible.contains(&slot)),
+                    "page {page} slot {slot} visibility"
+                );
+            }
+            assert_eq!(document.visible.get("display-mode-overflow"), Some(&false));
             for slot in visible {
                 let mut sink = StrictDocument::new();
                 if let Err(error) = app.handle_action(
@@ -421,6 +437,22 @@ fn every_visible_mode_slot_resolves_on_every_page() {
                 .expect("mode page step");
         }
     }
+}
+
+#[test]
+fn settings_sync_projects_live_font_defaults_and_accent_scale_outline() {
+    let mut settings = settings_fixture("#3DAEE9", "dark");
+    settings.values.insert("fontSizeOffset".into(), SettingValue::Integer(2));
+    settings.values.insert("fontBold".into(), SettingValue::Boolean(true));
+    let mut app = application(settings, display_fixtures().remove(0));
+    let mut document = StrictDocument::new();
+    app.sync(&mut document).expect("settings sync");
+
+    // This fixture is the single HDMI-1 output; DP-1 belongs to the separate mode-paging fixture.
+    assert_eq!(document.texts.get("display-output-name-0").map(String::as_str), Some("1 · HDMI-1"));
+    assert_eq!(document.font_defaults, Some((2.0, true)));
+    assert_eq!(document.borders.get("display-scale-100"), Some(&UiColor { r: 61, g: 174, b: 233, a: 255 }));
+    assert_eq!(document.borders.get("display-scale-125"), Some(&UiColor { r: 74, g: 80, b: 86, a: 255 }));
 }
 
 fn hex_rgb(value: &str) -> (u8, u8, u8) {

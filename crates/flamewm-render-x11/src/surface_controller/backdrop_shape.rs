@@ -1,11 +1,12 @@
-
 use super::*;
 
 /// Device-px corner radius of a popup, the same value the retained shape mask uses
 /// (`app::render::backdrop_corner_radius_px`, duplicated here because that module is private).
 pub(super) fn popup_backdrop_radius_px(document: &RuntimeDocument, width: u32, height: u32) -> u32 {
-    let radius =
-        flamewm_render_core::paint::root_corner_radius(document, flamewm_render_core::InteractionState::default());
+    let radius = flamewm_render_core::paint::root_corner_radius(
+        document,
+        flamewm_render_core::InteractionState::default(),
+    );
     flamewm_render_core::paint::surface_shape_pixels(width, height, radius * document.ui_scale()).2
 }
 
@@ -46,7 +47,11 @@ pub(super) fn round_backdrop_words(words: &mut [u32], width: u32, height: u32, r
 impl SurfaceController {
     /// Sets (or clears with `None`) the `(opacity, blur)` percents of the backdrop captured for
     /// the popup's next first show. Opaque popups (`opacity >= 100`) never capture.
-    pub fn set_popup_backdrop(&mut self, id: SurfaceId, percents: Option<(u8, u8)>) -> Result<(), String> {
+    pub fn set_popup_backdrop(
+        &mut self,
+        id: SurfaceId,
+        percents: Option<(u8, u8)>,
+    ) -> Result<(), String> {
         self.instance_mut(id)?.popup_backdrop = percents;
         Ok(())
     }
@@ -54,20 +59,30 @@ impl SurfaceController {
     /// Sets (or clears with `None`) the root-sized `(width, height, RGBA8)` wallpaper canvas the
     /// popup's next first-show backdrop is cropped from, instead of a root capture (which would
     /// blur whatever windows or the taskbar sit under the popup).
-    pub fn set_popup_wallpaper(&mut self, id: SurfaceId, canvas: Option<(u32, u32, Vec<u8>)>) -> Result<(), String> {
+    pub fn set_popup_wallpaper(
+        &mut self,
+        id: SurfaceId,
+        canvas: Option<(u32, u32, Vec<u8>)>,
+    ) -> Result<(), String> {
         self.instance_mut(id)?.popup_wallpaper = canvas;
         Ok(())
     }
 
     /// Popup-sized backdrop source: the wallpaper crop under the popup when set, else the root capture.
-    fn popup_backdrop_source(&self, id: SurfaceId) -> Result<crate::backdrop::BackdropCapture, String> {
-        let Some((canvas_w, canvas_h, pixels)) = self.instance_ref(id)?.popup_wallpaper.as_ref() else {
+    fn popup_backdrop_source(
+        &self,
+        id: SurfaceId,
+    ) -> Result<crate::backdrop::BackdropCapture, String> {
+        let Some((canvas_w, canvas_h, pixels)) = self.instance_ref(id)?.popup_wallpaper.as_ref()
+        else {
             return self.capture_root_under(id);
         };
         let rect = self.surface_device_rect(id)?;
         let (x, y) = (rect.x as u32, rect.y as u32);
         let (w, h) = (rect.width as u32, rect.height as u32);
-        if x.checked_add(w).is_none_or(|end| end > *canvas_w) || y.checked_add(h).is_none_or(|end| end > *canvas_h) {
+        if x.checked_add(w).is_none_or(|end| end > *canvas_w)
+            || y.checked_add(h).is_none_or(|end| end > *canvas_h)
+        {
             return Err("popup rect lies outside the wallpaper canvas".to_owned());
         }
         let stride = *canvas_w as usize * 4;
@@ -76,7 +91,11 @@ impl SurfaceController {
             let start = row as usize * stride + x as usize * 4;
             cropped.extend_from_slice(&pixels[start..start + w as usize * 4]);
         }
-        Ok(crate::backdrop::BackdropCapture { width: w, height: h, pixels: cropped })
+        Ok(crate::backdrop::BackdropCapture {
+            width: w,
+            height: h,
+            pixels: cropped,
+        })
     }
 
     /// Captures the root under an unmapped popup, blurs it, and installs it beneath the translucent
@@ -113,19 +132,30 @@ impl SurfaceController {
 
     /// Root pixels under the surface's current device rect, as straight RGBA8. Feeds the
     /// pseudo-transparency snapshot; the caller owns blur and refresh policy.
-    pub fn capture_root_under(&self, id: SurfaceId) -> Result<crate::backdrop::BackdropCapture, String> {
+    pub fn capture_root_under(
+        &self,
+        id: SurfaceId,
+    ) -> Result<crate::backdrop::BackdropCapture, String> {
         let rect = self.surface_device_rect(id)?;
         let root = unsafe { XRootWindow(self.display, self.screen) };
         crate::backdrop::capture_drawable_rect(
             self.display,
             root as u64,
-            (rect.x as i32, rect.y as i32, rect.width as u32, rect.height as u32),
+            (
+                rect.x as i32,
+                rect.y as i32,
+                rect.width as u32,
+                rect.height as u32,
+            ),
         )
     }
 
     /// Root pixels under a mapped surface, read with the surface unmapped so its own translucent
     /// fills never enter the snapshot. A surface that was mapped is mapped again before returning.
-    pub fn capture_root_under_unmapped(&mut self, id: SurfaceId) -> Result<crate::backdrop::BackdropCapture, String> {
+    pub fn capture_root_under_unmapped(
+        &mut self,
+        id: SurfaceId,
+    ) -> Result<crate::backdrop::BackdropCapture, String> {
         let display = self.display;
         let instance = self.instance_mut(id)?;
         let (window, was_shown) = (instance.app.window, instance.shown);
@@ -165,5 +195,4 @@ impl SurfaceController {
         }
         self.redraw(id)
     }
-
 }

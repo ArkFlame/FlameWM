@@ -40,8 +40,8 @@ pub fn decode_file(path: &Path) -> Result<RgbaImage, String> {
 }
 
 /// Composes `natural` onto a `width` x `height` canvas. Returns `None` for zero-sized inputs or
-/// dimension overflow. Full-canvas composition keeps the scale-then-blit form (no per-pixel taps),
-/// so it costs the same as the original `compose`; [`compose_region`] must match it pixel for pixel.
+/// dimension overflow. Direct, fully covered scaling keeps the fast scale path. Cropped `Fill`
+/// uses [`compose_region`] to avoid allocating an oversized offscreen scaled image.
 #[must_use]
 pub fn compose(
     natural: &RgbaImage,
@@ -60,6 +60,17 @@ pub fn compose(
             x,
             y,
         } => {
+            // A cropped Fill used to allocate a full oversized scaled layer *and* the
+            // destination canvas. The existing pixel-identical region compositor
+            // samples only the visible destination pixels into one canvas. Keep the
+            // cheap borrowed blit for unscaled natural images and the normal direct
+            // scale path when the layer exactly covers the destination.
+            if fit == WallpaperFit::Fill
+                && (sw, sh) != (width, height)
+                && (sw, sh) != (natural.width, natural.height)
+            {
+                return compose_region(natural, width, height, fit, (0, 0, width, height));
+            }
             let scaled = if (sw, sh) == (natural.width, natural.height) {
                 Cow::Borrowed(natural)
             } else {
@@ -259,10 +270,16 @@ fn solid(width: u32, height: u32, colour: [u8; 4]) -> Option<RgbaImage> {
     let count = (width as usize)
         .checked_mul(height as usize)?
         .checked_mul(4)?;
+    // `cycle().take(count).collect()` has no exact lower size hint, so a
+    // multi-monitor background can over-allocate while growing the Vec.
+    let mut pixels = vec![0u8; count];
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&colour);
+    }
     Some(RgbaImage {
         width,
         height,
-        pixels: colour.iter().copied().cycle().take(count).collect(),
+        pixels,
     })
 }
 
@@ -469,6 +486,35 @@ mod region_tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn solid_canvas_reserves_once_and_preserves_all_channels() {
+        let fill = [17, 61, 119, 203];
+        for (width, height) in [(1, 1), (101, 137), (192, 108)] {
+            let canvas = super::solid(width, height, fill).expect("canvas");
+            assert_eq!(canvas.pixels.len(), width as usize * height as usize * 4);
+            assert!(canvas.pixels.chunks_exact(4).all(|pixel| pixel == fill.as_slice()));
+        }
+    }
+
+    #[test]
+    fn cropped_fill_uses_only_the_visible_canvas_and_matches_reference() {
+        // Both overdraw orientations, including dimensions that require resampling.
+        // Every RGBA channel must match the previous scale-and-blit implementation.
+        for (source, target) in [
+            ((41, 13), (18, 24)),
+            ((17, 43), (31, 12)),
+            ((29, 19), (15, 13)),
+            ((27, 9), (7, 19)),
+        ] {
+            let natural = natural(source.0, source.1);
+            let previous = reference_compose(&natural, target.0, target.1, WallpaperFit::Fill)
+                .expect("reference wallpaper");
+            let composed = compose(&natural, target.0, target.1, WallpaperFit::Fill)
+                .expect("composed wallpaper");
+            assert_eq!(composed, previous, "source {source:?} target {target:?}");
         }
     }
 

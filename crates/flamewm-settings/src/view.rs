@@ -22,10 +22,6 @@ mod tests {
         "display-mode-slot-1",
         "display-mode-slot-2",
         "display-mode-slot-3",
-        "display-mode-slot-4",
-        "display-mode-slot-5",
-        "display-mode-slot-6",
-        "display-mode-slot-7",
         "display-mode-overflow",
         "display-output-name-0",
         "display-output-size-0",
@@ -37,7 +33,6 @@ mod tests {
         "display-output-size-3",
         "display-selected-title",
         "display-selected-resolution",
-        "display-selected-scale",
         "selection-opacity-value",
         "snap-opacity-value",
         "surface-blur-value",
@@ -157,6 +152,31 @@ mod tests {
             DISPATCH.contains(&format!("\"{action}\" =>")),
             "action {action} must have a production dispatch branch"
         );
+    }
+
+    #[test]
+    fn display_outputs_are_compact_numbered_entries_without_duplicate_previews() {
+        let selection = css_rule(CSS, ".display-output-selector");
+        assert_eq!(css_value(selection, "flex-direction"), Some("column"));
+        assert!(!HTML.contains("display-topology-map"));
+        assert!(!HTML.contains("monitor-screen"));
+        assert!(!CSS.contains(".display-layout"));
+        for slot in 0..4 {
+            assert!(HTML.contains(&format!(
+                "id=\"display-output-{slot}\" data-action=\"settings.display.select.{slot}\""
+            )));
+            assert!(HTML.contains(&format!("id=\"display-output-name-{slot}\"")));
+            assert!(HTML.contains(&format!("id=\"display-output-size-{slot}\"")));
+        }
+    }
+
+    #[test]
+    fn display_modes_use_one_clipped_current_page_column() {
+        let grid = css_rule(CSS, ".mode-grid");
+        assert_eq!(css_value(grid, "flex-direction"), Some("column"));
+        assert_eq!(css_value(grid, "overflow"), Some("hidden"));
+        assert!(!HTML.contains("display-mode-slot-4"));
+        assert!(!HTML.contains("mode-column"));
     }
 
     #[test]

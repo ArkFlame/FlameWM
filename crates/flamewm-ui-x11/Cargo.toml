@@ -19,6 +19,7 @@ flamewm-render-core = { path = "../flamewm-render-core" }
 flamewm-render-x11 = { path = "../flamewm-render-x11" }
 flamewm-reactor = { path = "../flamewm-reactor" }
 calloop.workspace = true
+x11rb.workspace = true
 
 [lints]
 workspace = true

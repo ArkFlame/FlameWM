@@ -3,6 +3,8 @@
 pub mod backdrop;
 mod event_source;
 mod input;
+mod startup_protocol;
+pub use startup_protocol::{StartupX11Event, StartupX11Observer};
 mod popup;
 mod reconcile;
 mod surface_runtime;

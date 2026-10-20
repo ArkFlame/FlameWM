@@ -3,8 +3,7 @@ use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -16,6 +15,7 @@ use flamewm_applications::DesktopEntry;
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::{ControlClient, ControlSignalClient, MutationDispatcher};
 use flamewm_dbus_reactor::BusKind;
+use flamewm_desktop_core::conversion::{offered_formats, convert_file};
 use flamewm_desktop_core::file_actions::{
     CommandIntent, EntryMenuAction, LauncherOpen, create_new_folder,
     entry_context_menu, launcher_open_kind, open_terminal, rename_entry_no_replace,
@@ -42,7 +42,8 @@ use flamewm_ui_core::context_menu::MenuPart;
 use flamewm_ui_x11::PointerButton;
 use flamewm_ui_x11::{
     RawPress, RawPressWatch, UiActionEvent, UiActionPhase, UiColor, UiControllerEvent,
-    UiDocumentAccess, UiWindowConfig, UiWindowRole, WindowGeometry, WindowGeometrySlot,
+    UiKeyEvent, UiKeyPhase, RuntimeImage,
+    UiDocumentAccess, UiWindowConfig, UiWindowRole, WindowGeometrySlot,
     decode_document, pointer_button_from_raw, root_geometry,
     run_with_controller_events_role_with_presses_and_reactor_geometry,
 };
@@ -63,6 +64,9 @@ macro_rules! point_fn {
 }
 
 mod projection;
+mod convert_wheel;
+#[path = "../ui_contract.rs"]
+mod ui_contract;
 mod sticky;
 mod wallpaper_fit;
 mod wallpaper_loader;
@@ -112,7 +116,12 @@ point_fn!(icon_gauge, MemoryGauge, "desktop.icon");
 fn rescan_desktop(state: &mut DesktopState) -> Result<(), String> {
     state
         .model
-        .rescan(&state.directory, &OutputId::new("default"), state.grid)
+        .rescan_with_grids(
+            &state.directory,
+            &state.default_output,
+            &state.output_grids,
+            state.grid,
+        )
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))
 }
@@ -135,15 +144,17 @@ const BLANK_ROW_IDS: [&str; 5] = [
     "menu-row-desktop",
     "menu-row-settings",
 ];
-const ENTRY_ROW_IDS: [&str; 4] = [
+const ENTRY_ROW_IDS: [&str; 5] = [
     "menu-row-empty-trash",
     "menu-row-rename",
     "menu-row-shortcut",
+    "menu-row-convert",
     "menu-row-delete",
 ];
 
 struct LauncherMeta {
     icon: String,
+    name: String,
     valid: bool,
 }
 
@@ -151,12 +162,14 @@ struct LauncherMeta {
 enum MenuKind {
     Blank,
     Entry,
+    ConvertWheel,
     Sticky,
 }
 
 struct MenuState {
     kind: MenuKind,
     anchor: Point,
+    output: OutputId,
     selected_id: Option<String>,
 }
 
@@ -171,23 +184,29 @@ struct DesktopState {
     directory: PathBuf,
     model: DesktopModel,
     grid: GridConfig,
+    output_grids: BTreeMap<OutputId, GridConfig>,
+    output_geometries: Vec<(OutputId, Rect)>,
+    default_output: OutputId,
     icons: projection::ParallelIconService,
     icon_slots: Vec<Option<IconKey>>,
     layout_path: PathBuf,
     sticky: sticky::StickyState,
     selection: SelectionModel,
     selection_start: Option<Point>,
+    selection_output: Option<OutputId>,
     item_drag: Option<ItemDrag>,
     launchers: BTreeMap<PathBuf, LauncherMeta>,
     menu: Option<MenuState>,
     /// Rects of the menus and confirm currently shown (logical px); empty when none is open.
     menu_rects: Vec<Rect>,
-    pending_delete: Option<PathBuf>,
+    wheel_hover: Option<usize>,
+    pending_delete: Option<Vec<PathBuf>>,
     last_click: Option<ClickRecord>,
     dirty: Arc<AtomicBool>,
     icons_pending: Arc<AtomicBool>,
     rename: Option<RenameState>,
     drag_ghost: Option<DragGhost>,
+    conversion_preview: Option<ConversionPreview>,
     workspace: workspace_sync::WorkspaceAuthority,
     workspace_visual_dirty: bool,
     workspace_present_pending: bool,
@@ -210,7 +229,15 @@ struct RenameState {
     buffer: String,
 }
 
+struct ConversionPreview {
+    output: OutputId,
+    cell: Cell,
+    destination: PathBuf,
+    result: Arc<Mutex<Option<Result<PathBuf, String>>>>,
+}
+
 struct DragGhost {
+    source_ids: Vec<String>,
     kind: DesktopItemKind,
     icon_override: Option<String>,
     label: String,
@@ -236,6 +263,7 @@ struct OriginalItem {
     path: PathBuf,
     output: OutputId,
     cell: Cell,
+    drag_cell: Cell,
 }
 
 fn main() -> Result<(), String> {
@@ -247,24 +275,27 @@ fn main() -> Result<(), String> {
     let directory = DesktopDirResolver::resolve(&home, user_dirs.as_deref());
     fs::create_dir_all(&directory).map_err(|error| format!("create desktop directory: {error}"))?;
 
-    let work_area = resolve_work_area()?;
     let (root_width, root_height) = root_geometry()?;
     let surface = desktop_surface_rect(root_width, root_height);
-    let grid = GridConfig::compute(work_area, 100);
+    let (output_geometries, output_grids, default_output) = resolve_output_layout(surface);
+    let grid = output_grids
+        .get(&default_output)
+        .copied()
+        .unwrap_or_else(|| GridConfig::compute(surface, 100));
     let settings = query_settings();
     let mut wallpaper_loader = wallpaper_loader::WallpaperLoader::new(
         surface.width as u32,
         surface.height as u32,
         packaged_root(),
     )?;
-    request_wallpaper(&mut wallpaper_loader, &settings.values)
+    let wallpaper_monitors = output_geometries.iter().map(|(_, rect)| *rect).collect::<Vec<_>>();
+    request_wallpaper(&mut wallpaper_loader, &settings, &wallpaper_monitors)
         .map_err(|_| "wallpaper loader closed during startup".to_owned())?;
     let mut model = DesktopModel::default();
-    let output = OutputId::new("default");
     {
         let _span = scan_point().start();
         model
-            .rescan(&directory, &output, grid)
+            .rescan_with_grids(&directory, &default_output, &output_grids, grid)
             .map_err(|error| format!("{error:?}"))?;
     }
     let layout_path = state_path("desktop-layout.state")?;
@@ -273,7 +304,7 @@ fn main() -> Result<(), String> {
             model.set_position(path, position);
         }
         model
-            .rescan(&directory, &output, grid)
+            .rescan_with_grids(&directory, &default_output, &output_grids, grid)
             .map_err(|error| format!("{error:?}"))?;
     }
     let sticky_path = sticky_persistence::state_path().map_err(|error| format!("{error:?}"))?;
@@ -299,6 +330,9 @@ fn main() -> Result<(), String> {
             directory,
             model,
             grid,
+            output_grids,
+            output_geometries,
+            default_output,
             icons: projection::ParallelIconService::spawn(packaged_root()),
             icon_slots: vec![None; SLOT_COUNT],
             layout_path,
@@ -309,16 +343,19 @@ fn main() -> Result<(), String> {
             ),
             selection: SelectionModel::default(),
             selection_start: None,
+            selection_output: None,
             item_drag: None,
             launchers: BTreeMap::new(),
             menu: None,
             menu_rects: Vec::new(),
+            wheel_hover: None,
             pending_delete: None,
             last_click: None,
             dirty: Arc::clone(&dirty),
             icons_pending: Arc::clone(&icons_pending),
             rename: None,
             drag_ghost: None,
+            conversion_preview: None,
             workspace: workspace_sync::WorkspaceAuthority::new(workspace),
             workspace_visual_dirty: false,
             workspace_present_pending: false,
@@ -339,8 +376,10 @@ fn main() -> Result<(), String> {
         env!("OUT_DIR"),
         "/flamewm-desktop.rwr"
     )))?;
+    ui_contract::require_desktop_nodes(|id| document.has_node(id))?;
     {
         let state = state_cell.borrow();
+        projection::project_global_font_defaults(&mut document, &state.settings)?;
         projection::project_background(
             &mut document,
             state.settings.values.get("wallpaper"),
@@ -404,9 +443,14 @@ fn main() -> Result<(), String> {
                                 snapshot,
                             } => {
                                 let mut state = state_cell.borrow_mut();
-                                if let Err(error) =
-                                    request_wallpaper(&mut state.wallpaper_loader, &snapshot.values)
-                                {
+                                let monitors = state.output_geometries.iter()
+                                    .map(|(_, rect)| *rect)
+                                    .collect::<Vec<_>>();
+                                if let Err(error) = request_wallpaper(
+                                    &mut state.wallpaper_loader,
+                                    &snapshot,
+                                    &monitors,
+                                ) {
                                     eprintln!(
                                         "desktop: wallpaper settings request failed: {error:?}"
                                     );
@@ -436,7 +480,9 @@ fn main() -> Result<(), String> {
                             flamewm_control_wire::ControlSignal::PanelsSnapshotChanged {
                                 ..
                             }
-                            | flamewm_control_wire::ControlSignal::PanelsChanged { .. } => {
+                            | flamewm_control_wire::ControlSignal::PanelsChanged { .. }
+                            | flamewm_control_wire::ControlSignal::DisplaysSnapshotChanged { .. }
+                            | flamewm_control_wire::ControlSignal::DisplayTransactionChanged { .. } => {
                                 panels_flag.set(true);
                             }
                             _ => {}
@@ -537,9 +583,6 @@ fn main() -> Result<(), String> {
     if let Err(error) = registration {
         eprintln!("desktop: degraded wallpaper completion subscription: {error}");
     }
-    // Known outer rect of the desktop window (created at the work area); updated
-    // whenever a geometry request is issued. Read back by the resize decision.
-    let mut window_rect = surface;
     let geometry_slot = WindowGeometrySlot::default();
     // Armed while a menu or the delete confirm is open: root presses reach the close path.
     let press_watch = RawPressWatch::default();
@@ -566,6 +609,7 @@ fn main() -> Result<(), String> {
                     press,
                     document,
                     &mut state.menu_rects,
+                    &mut state.menu,
                     &mut state.pending_delete,
                 )
             }
@@ -579,15 +623,16 @@ fn main() -> Result<(), String> {
                 let mut state = state_cell.borrow_mut();
                 refresh_settings_projection(document, &mut state)?;
                 refresh_icon_theme(document, &mut state)?;
-                refresh_if_changed(document, &mut state)?;
                 refresh_workspace_projection(document, &mut state)?;
+                refresh_if_changed(document, &mut state)?;
                 apply_pending_icon_results(document, &mut state)?;
+                sync_conversion_preview(document, &mut state)?;
                 sticky::poll_persist(document, &mut state)?;
                 let result = match event {
                     UiControllerEvent::Action(action) => {
                         handle_event(action, document, &mut state, mutation_dispatcher.as_ref())
                     }
-                    UiControllerEvent::Key(_) => Ok(()),
+                    UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state),
                 };
                 event_watch.set(menus_open(&state.menu_rects));
                 result
@@ -596,17 +641,36 @@ fn main() -> Result<(), String> {
         {
             let flush_cell = std::rc::Rc::clone(&state_cell);
             let panels_flag = std::rc::Rc::clone(&panels_dirty);
-            let mut current_work_area = work_area;
-            let geometry_out = std::rc::Rc::clone(&geometry_slot);
             let reactor_watch = std::rc::Rc::clone(&press_watch);
             move |document| {
                 if panels_flag.replace(false) {
-                    refresh_work_area_after_panel_change(
-                        &mut current_work_area,
-                        &mut window_rect,
-                        &geometry_out,
-                        surface,
-                    );
+                    let (next_outputs, next_grids, next_default) = refresh_output_layout(surface);
+                    let mut state = flush_cell.borrow_mut();
+                    if next_outputs != state.output_geometries
+                        || next_grids != state.output_grids
+                        || next_default != state.default_output
+                    {
+                        state.output_geometries = next_outputs;
+                        state.output_grids = next_grids;
+                        state.default_output = next_default;
+                        state.grid = state.output_grids.get(&state.default_output)
+                            .copied().unwrap_or(state.grid);
+                        let monitors = state.output_geometries.iter()
+                            .map(|(_, rect)| *rect).collect::<Vec<_>>();
+                        let DesktopState { wallpaper_loader, settings, .. } = &mut *state;
+                        if let Err(error) = request_wallpaper(
+                            wallpaper_loader,
+                            settings,
+                            &monitors,
+                        ) {
+                            eprintln!("desktop: wallpaper topology refresh failed: {error:?}");
+                        }
+                        if let Err(error) = rescan_desktop(&mut state) {
+                            eprintln!("desktop: output layout refresh failed: {error}");
+                        }
+                        sync_document(document, &mut state)?;
+                        state.settings_visual_dirty = true;
+                    }
                 }
                 let state_cell = &flush_cell;
                 let mut state = state_cell.borrow_mut();
@@ -614,9 +678,10 @@ fn main() -> Result<(), String> {
                 let _completed_workspace_present = state.workspace_present_span.take();
                 refresh_settings_projection(document, &mut state)?;
                 refresh_icon_theme(document, &mut state)?;
-                refresh_if_changed(document, &mut state)?;
                 refresh_workspace_projection(document, &mut state)?;
+                refresh_if_changed(document, &mut state)?;
                 apply_pending_icon_results(document, &mut state)?;
+                sync_conversion_preview(document, &mut state)?;
                 sticky::poll_persist(document, &mut state)?;
                 let result = sticky::flush_persist_if_due(document, &mut state);
                 match result {
@@ -679,12 +744,14 @@ fn query_settings() -> SettingsSnapshot {
     }
 }
 
-/// Resolves `wallpaperMode` (+ custom path / solid color) and requests it. Runs on every
-/// settings snapshot, so a mode or color change refreshes even when the path is unchanged.
+/// Resolves wallpaper settings and requests a root canvas fitted independently per output unless
+/// the user opts into the legacy shared canvas.
 fn request_wallpaper(
     loader: &mut wallpaper_loader::WallpaperLoader,
-    values: &std::collections::BTreeMap<String, SettingValue>,
+    snapshot: &SettingsSnapshot,
+    monitors: &[Rect],
 ) -> Result<u64, wallpaper_loader::LoaderClosed> {
+    let values = &snapshot.values;
     let text = |key: &str| match values.get(key) {
         Some(SettingValue::Text(value)) => value.clone(),
         _ => String::new(),
@@ -697,7 +764,13 @@ fn request_wallpaper(
     match source {
         wallpaper_loader::WallpaperSource::Solid(rgb) => loader.request_solid(rgb),
         wallpaper_loader::WallpaperSource::Image(path) => {
-            loader.request(path, wallpaper_fit::parse(&text("wallpaperFit")))
+            let share = setting_bool(snapshot, "shareWallpaper", false);
+            loader.request_layout(
+                path,
+                wallpaper_fit::parse(&text("wallpaperFit")),
+                monitors,
+                share,
+            )
         }
     }
 }
@@ -826,6 +899,17 @@ mod accent_token_tests {
     }
 
     #[test]
+    fn embedded_desktop_document_has_all_required_convert_nodes() {
+        let document = decode_document(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/flamewm-desktop.rwr"
+        )))
+        .expect("decode embedded compiled RWR");
+        ui_contract::require_desktop_nodes(|id| document.has_node(id))
+            .expect("embedded desktop UI must satisfy runtime ID contract");
+    }
+
+    #[test]
     fn desktop_compiled_document_declares_every_accent_token() {
         let mut document = decode_document(include_bytes!(concat!(
             env!("OUT_DIR"),
@@ -882,6 +966,7 @@ fn refresh_settings_projection(
     // DesktopSelectionFillOpacity; wallpaper stays on the bounded loader path.
     state.sticky.notes_enabled = setting_bool(&state.settings, "stickyNotesEnabled", true);
     let wallpaper = state.settings.values.get("wallpaper");
+    projection::project_global_font_defaults(document, &state.settings)?;
     projection::project_background(
         document,
         wallpaper,
@@ -895,6 +980,11 @@ fn refresh_settings_projection(
     sticky::sync_sticky(document, state)?;
     for id in projection::MENU_SURFACE_IDS {
         projection::project_menu_surface(document, id, &state.settings)?;
+    }
+    // Redraw the active radial hover with the current accent after live theme
+    // changes; clearing the stamp forces regeneration of the one segment only.
+    if let Some(sector) = state.wheel_hover.take() {
+        update_wheel_hover(document, state, Some(sector))?;
     }
     sync_cursor_theme(state);
     state.settings_visual_dirty = false;
@@ -930,88 +1020,153 @@ fn cursor_theme_reload(applied: Option<&str>, requested: &str, search_path: &str
 }
 
 /// Root geometry comes from the actual X root through the X11 runtime owner.
-/// Panel struts are subtracted when Control GetPanels answers; otherwise the
-/// full root rect is used with exactly one degraded warning. No constant size.
+/// The root-sized surface paints wallpaper under panels; per-output grids subtract panel geometry.
 /// The desktop surface spans the whole root at origin 0,0 so the wallpaper paints under panels
 /// and struts. Icon layout and selection stay in the work area (`GridConfig::work_area`).
 fn desktop_surface_rect(root_width: u32, root_height: u32) -> Rect {
     Rect::new(0, 0, root_width.max(1) as i32, root_height.max(1) as i32)
 }
 
-fn resolve_work_area() -> Result<Rect, String> {
-    let (width, height) = root_geometry()?;
-    let root = Rect::new(0, 0, width as i32, height as i32);
-    Ok(panel_geometries()
-        .map(|panels| panels.into_iter().fold(root, subtract_panel_strip))
+fn resolve_output_layout(surface: Rect) -> (Vec<(OutputId, Rect)>, BTreeMap<OutputId, GridConfig>, OutputId) {
+    let outputs = control_client()
+        .and_then(|client| match client.call(&ControlRequest::GetDisplays) {
+            Ok(ControlResponse::Displays(snapshot)) => Ok(snapshot.outputs
+                .into_iter().filter(|output| output.connected).collect::<Vec<_>>()),
+            Ok(response) => Err(format!("GetDisplays returned {response:?}")),
+            Err(error) => Err(error.message),
+        })
         .unwrap_or_else(|error| {
-            eprintln!("desktop: degraded work area: {error}; using full root geometry");
-            root
-        }))
+            eprintln!("desktop: degraded monitor geometry: {error}; using full root geometry");
+            Vec::new()
+        });
+    let raw = outputs.iter().map(|output|
+        (output.id.clone(), output.geometry, output.primary)).collect::<Vec<_>>();
+    let (mut geometries, origin_x, origin_y) = normalize_outputs(&raw, surface);
+    let default_output = outputs.iter().find(|output| output.primary
+        && geometries.iter().any(|(id, _)| id == &output.id))
+        .map(|output| output.id.clone())
+        .or_else(|| geometries.first().map(|(id, _)| id.clone()))
+        .unwrap_or_else(|| OutputId::new("default"));
+    if geometries.is_empty() {
+        geometries.push((default_output.clone(), surface));
+    }
+    let panels = match panel_geometries() {
+        Ok(panels) => panels,
+        Err(error) => {
+            eprintln!("desktop: degraded work areas: {error}; using monitor bounds");
+            Vec::new()
+        }
+    };
+    let panels = panels.into_iter().map(|(id, rect)| (
+        id,
+        Rect::new(rect.x.saturating_sub(origin_x), rect.y.saturating_sub(origin_y),
+            rect.width, rect.height),
+    )).collect::<Vec<_>>();
+    let grids = grids_for_outputs(&geometries, &panels);
+    (geometries, grids, default_output)
 }
 
-fn panel_geometries() -> Result<Vec<Rect>, String> {
+fn grids_for_outputs(
+    outputs: &[(OutputId, Rect)],
+    panels: &[(OutputId, Rect)],
+) -> BTreeMap<OutputId, GridConfig> {
+    outputs.iter().map(|(output, geometry)| {
+        let area = panels.iter().filter(|(panel_output, _)| panel_output == output)
+            .fold(*geometry, |area, (_, panel)| subtract_panel_strip(area, *panel));
+        (output.clone(), GridConfig::compute(area, 100))
+    }).collect()
+}
+
+fn normalize_outputs(raw: &[(OutputId, Rect, bool)], surface: Rect) -> (Vec<(OutputId, Rect)>, i32, i32) {
+    let origin_x = raw.iter().map(|(_, rect, _)| rect.x).min().unwrap_or(0);
+    let origin_y = raw.iter().map(|(_, rect, _)| rect.y).min().unwrap_or(0);
+    let outputs = raw.iter().filter_map(|(id, rect, _)| {
+        Rect::new(rect.x.saturating_sub(origin_x), rect.y.saturating_sub(origin_y),
+            rect.width, rect.height)
+            .intersection(surface)
+            .map(|rect| (id.clone(), rect))
+    }).collect();
+    (outputs, origin_x, origin_y)
+}
+
+fn refresh_output_layout(surface: Rect) -> (Vec<(OutputId, Rect)>, BTreeMap<OutputId, GridConfig>, OutputId) {
+    resolve_output_layout(surface)
+}
+
+fn grid_for_output(state: &DesktopState, output: &OutputId) -> GridConfig {
+    state.output_grids.get(output).copied().unwrap_or(state.grid)
+}
+
+fn output_at(state: &DesktopState, point: Point) -> OutputId {
+    output_at_in(&state.output_geometries, &state.default_output, point)
+}
+
+fn output_at_in(outputs: &[(OutputId, Rect)], fallback: &OutputId, point: Point) -> OutputId {
+    outputs.iter()
+        .find(|(_, rect)| rect.contains(point))
+        .or_else(|| outputs.iter().min_by_key(|(_, rect)| {
+            let x = point.x.clamp(rect.x, rect.right().saturating_sub(1));
+            let y = point.y.clamp(rect.y, rect.bottom().saturating_sub(1));
+            (i64::from(point.x) - i64::from(x)).pow(2)
+                + (i64::from(point.y) - i64::from(y)).pow(2)
+        }))
+        .map_or_else(|| fallback.clone(), |(id, _)| id.clone())
+}
+
+fn pointer_on_output(state: &DesktopState, x: f32, y: f32) -> (OutputId, Point) {
+    let raw = Point::new(x.round() as i32, y.round() as i32);
+    let output = output_at(state, raw);
+    let point = pointer_point_for_grid(raw, grid_for_output(state, &output));
+    (output, point)
+}
+
+fn pointer_point_for_grid(point: Point, grid: GridConfig) -> Point {
+    let bounds = grid.work_area;
+    Point::new(
+        point.x.clamp(bounds.x, bounds.right().saturating_sub(1)),
+        point.y.clamp(bounds.y, bounds.bottom().saturating_sub(1)),
+    )
+}
+
+fn projected_cells(state: &DesktopState) -> BTreeMap<String, (OutputId, Cell)> {
+    let mut result = BTreeMap::new();
+    let mut occupied = BTreeMap::<OutputId, BTreeSet<Cell>>::new();
+    for item in state.model.items().filter(|item| state.output_grids.contains_key(&item.output)) {
+        let grid = grid_for_output(state, &item.output);
+        let cell = grid.clamp_cell(item.cell);
+        occupied.entry(item.output.clone()).or_default().insert(cell);
+        result.insert(item.id.clone(), (item.output.clone(), cell));
+    }
+    let fallback = state.default_output.clone();
+    let grid = grid_for_output(state, &fallback);
+    for item in state.model.items().filter(|item| !state.output_grids.contains_key(&item.output)) {
+        let cells = occupied.entry(fallback.clone()).or_default();
+        let cell = flamewm_desktop_core::model::first_free(cells, grid);
+        cells.insert(cell);
+        result.insert(item.id.clone(), (fallback.clone(), cell));
+    }
+    result
+}
+
+fn panel_geometries() -> Result<Vec<(OutputId, Rect)>, String> {
     let client = ControlClient::connect(BusKind::Session).map_err(|error| format!("{error:?}"))?;
     match client.call(&ControlRequest::GetPanels) {
         Ok(ControlResponse::Panels(snapshot)) => Ok(snapshot
             .panels
             .into_iter()
             .filter(|panel| panel.visible)
-            .map(|panel| panel.geometry)
+            .map(|panel| (panel.output, panel.geometry))
             .collect()),
         Ok(response) => Err(format!("GetPanels returned {response:?}")),
         Err(error) => Err(error.message.clone()),
     }
 }
 
-/// Re-resolves the work area after a panel signal. Errors keep the current
-/// area and are reported once per signal burst. When the desktop window's
-/// known rect differs from the new work area, a move+size request is written
-/// to the geometry slot for the X11 loop to apply.
-fn refresh_work_area_after_panel_change(
-    current: &mut Rect,
-    window: &mut Rect,
-    geometry: &WindowGeometrySlot,
-    surface: Rect,
-) {
-    let next = match resolve_work_area() {
-        Ok(next) => next,
-        Err(error) => {
-            eprintln!("desktop: work area refresh after panel change failed: {error}");
-            return;
-        }
-    };
-    let Some(area) = changed_work_area(*current, next) else {
-        return;
-    };
-    *current = area;
-    let Some(target) = window_resize_request(*window, surface) else {
-        return;
-    };
-    geometry.set(Some(WindowGeometry {
-        x: target.x,
-        y: target.y,
-        width: target.width.max(1) as u32,
-        height: target.height.max(1) as u32,
-    }));
-    *window = target;
-}
-
-/// Pure work-area change detector: `None` means no resize request.
-fn changed_work_area(current: Rect, next: Rect) -> Option<Rect> {
-    (current != next).then_some(next)
-}
-
-/// Pure window decision: `None` when the window already matches the target
-/// rect (position and size), otherwise the rect to request.
-fn window_resize_request(window: Rect, target: Rect) -> Option<Rect> {
-    (window != target).then_some(target)
-}
-
 fn subtract_panel_strip(mut area: Rect, panel: Rect) -> Rect {
     let Some(intersection) = area.intersection(panel) else {
         return area;
     };
-    if intersection.width >= area.width - 1 {
+    if intersection.width >= area.width.saturating_sub(16) {
         if intersection.y <= area.y + area.height / 2 {
             let bottom = intersection.y + intersection.height;
             let shift = bottom - area.y;
@@ -1027,7 +1182,7 @@ fn subtract_panel_strip(mut area: Rect, panel: Rect) -> Rect {
         }
         return area;
     }
-    if intersection.height >= area.height - 1 {
+    if intersection.height >= area.height.saturating_sub(16) {
         if intersection.x <= area.x + area.width / 2 {
             let right = intersection.x + intersection.width;
             let shift = right - area.x;
@@ -1069,6 +1224,23 @@ fn refresh_if_changed(
     Ok(())
 }
 
+/// A workspace transition must never carry a menu (including the delete
+/// confirmation or a conversion wheel) onto a different desktop. This is a
+/// presentation-only transaction; it does not rescan the filesystem.
+fn clear_workspace_menu_state(menu: &mut Option<MenuState>, pending_delete: &mut Option<Vec<PathBuf>>) {
+    *menu = None;
+    *pending_delete = None;
+}
+
+fn dismiss_workspace_menus(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    clear_workspace_menu_state(&mut state.menu, &mut state.pending_delete);
+    hide_menus(document, &mut state.menu_rects)?;
+    hide_confirm(document, &mut state.menu_rects)
+}
+
 fn refresh_workspace_projection(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -1077,8 +1249,10 @@ fn refresh_workspace_projection(
         return Ok(());
     }
     let _project = workspace_project_point().start();
+    // Context menus are transient to the workspace where they were opened.
+    // Do not reproject a stale desktop/file/sticky menu on the newly active one.
+    dismiss_workspace_menus(document, state)?;
     sticky::sync_sticky(document, state)?;
-    sync_menu(document, state)?;
     state.workspace_visual_dirty = false;
     state.workspace_present_pending = true;
     Ok(())
@@ -1094,19 +1268,40 @@ fn refresh_launchers(state: &mut DesktopState) {
             continue;
         }
         let meta = match DesktopEntry::from_file(&item.path) {
-            Ok(Some(entry)) => LauncherMeta { icon: entry.icon().to_owned(), valid: true },
-            Ok(None) | Err(_) => LauncherMeta { icon: String::new(), valid: false },
+            Ok(Some(entry)) => LauncherMeta {
+                icon: entry.icon().to_owned(),
+                name: flamewm_applications::desktop_file_display_name(&item.path)
+                    .unwrap_or_else(|| entry.name().to_owned()),
+                valid: true,
+            },
+            Ok(None) | Err(_) => LauncherMeta {
+                icon: String::new(),
+                name: flamewm_applications::desktop_file_display_name(&item.path)
+                    .unwrap_or_default(),
+                valid: false,
+            },
         };
         state.launchers.insert(item.path.clone(), meta);
     }
 }
 
-fn launcher_icon(state: &DesktopState, path: &Path) -> Option<String> {
-    state
-        .launchers
-        .get(path)
+fn desktop_item_label<'a>(state: &'a DesktopState, item: &'a flamewm_desktop_core::model::DesktopItem) -> &'a str {
+    if item.kind == DesktopItemKind::DesktopLauncher {
+        if let Some(label) = state.launchers.get(&item.path)
+            .filter(|entry| !entry.name.trim().is_empty())
+            .map(|entry| entry.name.as_str())
+        {
+            return label;
+        }
+    }
+    &item.display_name
+}
+
+fn launcher_icon(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> Option<String> {
+    state.launchers.get(path)
         .filter(|meta| meta.valid && !meta.icon.trim().is_empty())
         .map(|meta| meta.icon.clone())
+        .or_else(|| (kind == DesktopItemKind::File).then(|| projection::file_icon_name(path).to_owned()))
 }
 
 fn sync_document(
@@ -1118,13 +1313,15 @@ fn sync_document(
     state.icons.refresh_theme();
     apply_ready_icons(document, state)?;
     let items: Vec<_> = state.model.items().take(SLOT_COUNT).collect();
+    let cells = projected_cells(state);
     for index in 0..SLOT_COUNT {
         let item = items.get(index).copied();
         if let Some(item) = item {
-            let point = state.grid.cell_to_pixel(item.cell);
-            let icon = launcher_icon(state, &item.path);
+            let (output, cell) = &cells[&item.id];
+            let point = grid_for_output(state, output).cell_to_pixel(*cell);
             let kind = item.kind;
-            let label = item.display_name.clone();
+            let icon = launcher_icon(state, kind, &item.path);
+            let label = desktop_item_label(state, item).to_owned();
             {
                 let _icon = icon_point().start();
                 let key = projection::project_item(
@@ -1204,6 +1401,82 @@ fn apply_ready_icons(
                 .apply_if_current(document, index, kind, &expected, &key, raster.clone())?;
         }
     }
+    // A live prediction shares the same async icon cache as real desktop tiles.
+    if let Some(preview) = state.conversion_preview.as_ref() {
+        let key = projection::ParallelIconService::icon_key(
+            DesktopItemKind::File, Some(projection::file_icon_name(&preview.destination)));
+        if let Some(raster) = state.icons.cached(&key) {
+            document.image_rgba8("desktop-convert-preview-icon",
+                flamewm_ui_x11::RuntimeImage {
+                    source: raster.source, width: raster.width, height: raster.height,
+                    pixels: raster.pixels,
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// Desktop keyboard actions are delivered as typed key events, not `keyboard.input`
+/// action strings. Suppress Delete in rename/sticky editors and modifier chords.
+fn handle_desktop_key(
+    key: &UiKeyEvent,
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    if key.phase != UiKeyPhase::Press || key.key != "Delete" || !key.modifiers.is_empty()
+        || state.rename.is_some() || sticky::is_editing(state)
+    {
+        return Ok(());
+    }
+    let paths = state.model.items()
+        .filter(|item| state.selection.selected().contains(&item.id)
+            && item.kind != DesktopItemKind::TrashPseudo)
+        .map(|item| item.path.clone())
+        .collect::<Vec<_>>();
+    if paths.is_empty() { return Ok(()); }
+    state.pending_delete = Some(paths);
+    state.menu = None;
+    hide_menus(document, &mut state.menu_rects)?;
+    show_confirm(document, state)
+}
+
+fn wheel_bounds(state: &DesktopState) -> Option<Rect> {
+    let menu = state.menu.as_ref().filter(|menu| menu.kind == MenuKind::ConvertWheel)?;
+    Some(clamp_menu_anchor(
+        grid_for_output(state, &menu.output).work_area,
+        Rect::new(menu.anchor.x, menu.anchor.y, 328, 328),
+        (328, 328),
+    ))
+}
+
+fn wheel_hit_at(state: &DesktopState, x: f32, y: f32) -> Option<usize> {
+    let bounds = wheel_bounds(state)?;
+    let index = convert_wheel::sector_at(x - bounds.x as f32, y - bounds.y as f32)?;
+    let path = state.menu.as_ref()?.selected_id.as_ref()
+        .and_then(|id| state.model.items().find(|item| &item.id == id))
+        .map(|item| &item.path)?;
+    (index < offered_formats(path).len()).then_some(index)
+}
+
+fn update_wheel_hover(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    sector: Option<usize>,
+) -> Result<(), String> {
+    if state.wheel_hover == sector { return Ok(()); }
+    state.wheel_hover = sector;
+    if let Some(index) = sector {
+        let accent = accent_color(&state.settings);
+        document.image_rgba8("convert-wheel-highlight", RuntimeImage {
+            source: format!("convert-wheel-sector-{index}"),
+            width: convert_wheel::WHEEL_SIZE,
+            height: convert_wheel::WHEEL_SIZE,
+            pixels: convert_wheel::highlight_pixels(index, [accent.r, accent.g, accent.b]),
+        })?;
+        document.visible("convert-wheel-highlight", true)?;
+    } else {
+        document.visible("convert-wheel-highlight", false)?;
+    }
     Ok(())
 }
 
@@ -1213,6 +1486,36 @@ fn handle_event(
     state: &mut DesktopState,
     mutation_dispatcher: Option<&Arc<MutationDispatcher>>,
 ) -> Result<(), String> {
+    // The full annular sector is clickable, not just the format's text box.
+    // An empty part of the wheel receives the root action; its polar hit test
+    // shares geometry with the painted hover sector. Child buttons use the
+    // same test, preventing rectangular hit-box spill into neighbouring slices.
+    if state.menu.as_ref().is_some_and(|menu| menu.kind == MenuKind::ConvertWheel) {
+        // The background is itself a pointer action. Consume its press so the
+        // desktop selection code cannot treat it as a click on empty space.
+        if action.action == "desktop.convert.surface" && action.phase == UiActionPhase::Press {
+            return Ok(());
+        }
+        // All descendants (including the hub, labels and highlight) resolve the
+        // same local polar geometry. Hover and click cannot disagree because a
+        // retained rectangular label happens to sit above a different sector.
+        if matches!(action.phase, UiActionPhase::Hover | UiActionPhase::Motion) {
+            let sector = wheel_hit_at(state, action.x, action.y);
+            update_wheel_hover(document, state, sector)?;
+        }
+        if action.phase == UiActionPhase::Release
+            && pointer_button(action) == PointerButton::Primary
+            && wheel_bounds(state).is_some_and(|bounds| {
+                action.x >= bounds.x as f32 && action.y >= bounds.y as f32
+                    && action.x < bounds.right() as f32 && action.y < bounds.bottom() as f32
+            })
+        {
+            if let Some(index) = wheel_hit_at(state, action.x, action.y) {
+                return handle_menu_action(&format!("convert.slot.{index}"), document, state, mutation_dispatcher);
+            }
+            return Ok(());
+        }
+    }
     if action.action == "keyboard.input" {
         if action.text.as_deref() == Some("") {
             return cancel_transient(document, state);
@@ -1222,6 +1525,19 @@ fn handle_event(
         }
         if sticky::is_editing(state) {
             return sticky::handle_text_input(action, document, state);
+        }
+        if action.text.as_deref() == Some("\u{7f}") && state.pending_delete.is_none() {
+            let paths = state.model.items()
+                .filter(|item| state.selection.selected().contains(&item.id)
+                    && item.kind != DesktopItemKind::TrashPseudo)
+                .map(|item| item.path.clone())
+                .collect::<Vec<_>>();
+            if !paths.is_empty() {
+                state.pending_delete = Some(paths);
+                state.menu = None;
+                hide_menus(document, &mut state.menu_rects)?;
+                return show_confirm(document, state);
+            }
         }
     }
     if action.action == "keyboard.confirm" && state.rename.is_some() {
@@ -1237,12 +1553,21 @@ fn handle_event(
     }
     if matches!(
         action.action.as_str(),
-        "desktop.menu.surface" | "desktop.entry-menu.surface" | "desktop.confirm.surface"
+        "desktop.menu.surface" | "desktop.entry-menu.surface" | "desktop-convert-wheel" | "desktop.confirm.surface"
     ) {
         return Ok(());
     }
     if action.action == "desktop.rename.surface" {
         return Ok(());
+    }
+    if action.action == "desktop.surface"
+        && pointer_button(action) == PointerButton::Primary
+        && matches!(action.phase, UiActionPhase::Motion | UiActionPhase::Release)
+    {
+        let anchor_index = state.item_drag.as_ref().map(|drag| drag.anchor_index);
+        if let Some(index) = anchor_index {
+            return handle_item(action, document, state, index);
+        }
     }
     if action.action == "desktop.surface" {
         return handle_surface(action, document, state);
@@ -1271,9 +1596,18 @@ fn is_menu_action(action: &str) -> bool {
             | "rename.confirm"
             | "rename.cancel"
             | "entry.shortcut"
+            | "entry.convert"
             | "entry.delete"
-            | "confirm.delete"
+            | "confirm.trash"
             | "confirm.cancel"
+            | "convert.slot.0"
+            | "convert.slot.1"
+            | "convert.slot.2"
+            | "convert.slot.3"
+            | "convert.slot.4"
+            | "convert.slot.5"
+            | "convert.slot.6"
+            | "convert.slot.7"
             | "sticky.menu.yellow"
             | "sticky.menu.green"
             | "sticky.menu.pink"
@@ -1288,6 +1622,7 @@ fn cancel_transient(
     state: &mut DesktopState,
 ) -> Result<(), String> {
     state.selection_start = None;
+    state.selection_output = None;
     state.selection.clear_rubber();
     state.item_drag = None;
     state.last_click = None;
@@ -1317,16 +1652,18 @@ fn handle_surface(
             return Ok(());
         }
         context_secondary_counter().increment();
-        let anchor = pointer_point(action, state.grid.work_area);
+        let (output, anchor) = pointer_on_output(state, action.x, action.y);
         sticky::commit_edit(state);
         state.menu = Some(MenuState {
             kind: MenuKind::Blank,
             anchor,
+            output,
             selected_id: None,
         });
         state.pending_delete = None;
         hide_confirm(document, &mut state.menu_rects)?;
         state.selection_start = None;
+        state.selection_output = None;
         state.selection.clear_rubber();
         document.visible("desktop-selection", false)?;
         state.selection.clear();
@@ -1338,28 +1675,35 @@ fn handle_surface(
     }
     match action.phase {
         UiActionPhase::Press => {
+            // Dismiss both the presentation and its semantic owner. Otherwise
+            // a later document re-projection can resurrect an invisible menu.
+            state.menu = None;
             hide_menus(document, &mut state.menu_rects)?;
             hide_confirm(document, &mut state.menu_rects)?;
             state.pending_delete = None;
             state.last_click = None;
             sticky::commit_edit(state);
-            let start = pointer_point(action, state.grid.work_area);
+            let (output, start) = pointer_on_output(state, action.x, action.y);
+            let bounds = grid_for_output(state, &output).work_area;
             state.item_drag = None;
+            state.selection_output = Some(output);
             state.selection_start = Some(start);
             selection_begin_counter().increment();
             state.selection.clear();
             state.selection.set_rubber(normalized_selection_rect(
                 start,
                 start,
-                state.grid.work_area,
+                bounds,
             ));
             document.visible("desktop-selection", false)?;
             sync_selection_visuals(document, state)?;
         }
         UiActionPhase::Motion => {
             if let Some(start) = state.selection_start {
-                let point = pointer_point(action, state.grid.work_area);
-                let rect = normalized_selection_rect(start, point, state.grid.work_area);
+                let bounds = state.selection_output.as_ref()
+                    .map_or(state.grid.work_area, |output| grid_for_output(state, output).work_area);
+                let point = pointer_point(action, bounds);
+                let rect = normalized_selection_rect(start, point, bounds);
                 state.selection.set_rubber(rect);
                 update_selection_from_rubber(state);
                 if rubber_visible(
@@ -1376,12 +1720,15 @@ fn handle_surface(
         }
         UiActionPhase::Release => {
             if let Some(start) = state.selection_start {
-                let point = pointer_point(action, state.grid.work_area);
-                let rect = normalized_selection_rect(start, point, state.grid.work_area);
+                let bounds = state.selection_output.as_ref()
+                    .map_or(state.grid.work_area, |output| grid_for_output(state, output).work_area);
+                let point = pointer_point(action, bounds);
+                let rect = normalized_selection_rect(start, point, bounds);
                 state.selection.set_rubber(rect);
                 update_selection_from_rubber(state);
             }
             state.selection_start = None;
+            state.selection_output = None;
             state.selection.clear_rubber();
             selection_end_counter().increment();
             document.visible("desktop-selection", false)?;
@@ -1410,6 +1757,11 @@ fn handle_item(
             return Ok(());
         };
         let item_id = item.id.clone();
+        let output = if state.output_grids.contains_key(&item.output) {
+            item.output.clone()
+        } else {
+            state.default_output.clone()
+        };
         state.selection.select_exclusive(item_id.clone());
         sticky::commit_edit(state);
         state.item_drag = None;
@@ -1419,7 +1771,8 @@ fn handle_item(
         state.last_click = None;
         state.menu = Some(MenuState {
             kind: MenuKind::Entry,
-            anchor: pointer_point(action, state.grid.work_area),
+            anchor: pointer_point(action, grid_for_output(state, &output).work_area),
+            output,
             selected_id: Some(item_id),
         });
         state.pending_delete = None;
@@ -1432,6 +1785,9 @@ fn handle_item(
     }
     match action.phase {
         UiActionPhase::Press => {
+            // Dismiss both the presentation and its semantic owner. Otherwise
+            // a later document re-projection can resurrect an invisible menu.
+            state.menu = None;
             hide_menus(document, &mut state.menu_rects)?;
             hide_confirm(document, &mut state.menu_rects)?;
             state.pending_delete = None;
@@ -1456,6 +1812,7 @@ fn handle_item(
                 y: action.y,
                 at: Instant::now(),
             });
+            let projected = projected_cells(state);
             let originals = state
                 .model
                 .items()
@@ -1466,6 +1823,7 @@ fn handle_item(
                     path: candidate.path.clone(),
                     output: candidate.output.clone(),
                     cell: candidate.cell,
+                    drag_cell: projected[&candidate.id].1,
                 })
                 .collect();
             state.item_drag = Some(ItemDrag {
@@ -1477,6 +1835,7 @@ fn handle_item(
                 moved: false,
             });
             state.selection_start = None;
+            state.selection_output = None;
             sync_selection_visuals(document, state)?;
         }
         UiActionPhase::Motion => {
@@ -1484,7 +1843,7 @@ fn handle_item(
                 return Ok(());
             };
             let item_id = item.id.clone();
-            let item_label = item.display_name.clone();
+            let item_label = desktop_item_label(state, item).to_owned();
             let item_kind = item.kind;
             let item_path = item.path.clone();
             let anchor_snapshot = state.item_drag.clone();
@@ -1500,12 +1859,15 @@ fn handle_item(
             // Threshold transition: capture icon+label once, then project the
             // ghost; canonical desktop-item-N nodes stay untouched.
             if state.drag_ghost.is_none() {
+                let (output, cell) = projected_cells(state)[&item_id].clone();
+                let origin = grid_for_output(state, &output).cell_to_pixel(cell);
                 state.drag_ghost = Some(DragGhost {
+                    source_ids: drag.originals.iter().map(|item| item.id.clone()).collect(),
                     kind: item_kind,
-                    icon_override: launcher_icon(state, &item_path),
+                    icon_override: launcher_icon(state, item_kind, &item_path),
                     label: item_label,
-                    offset_x: action.x - drag.start_x,
-                    offset_y: action.y - drag.start_y,
+                    offset_x: drag.start_x - origin.x as f32,
+                    offset_y: drag.start_y - origin.y as f32,
                     count: drag.originals.len(),
                     visible: false,
                 });
@@ -1589,11 +1951,8 @@ fn open_item_inner(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> 
                 .map(|_| ())
                 .map_err(|error| format!("{error:?}"))
         }
-        LauncherOpen::RegularFile => Command::new("xdg-open")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
+        LauncherOpen::RegularFile => flamewm_applications::open_target(path.as_os_str())
+            .map_err(|error| format!("{error:?}")),
     }
 }
 
@@ -1607,12 +1966,8 @@ fn general_settings() -> CommandIntent {
 }
 
 fn spawn_intent(intent: &CommandIntent) -> Result<(), String> {
-    let mut command = Command::new(&intent.program);
-    command.args(&intent.argv);
-    if let Some(cwd) = &intent.cwd {
-        command.current_dir(cwd);
-    }
-    command.spawn().map(|_| ()).map_err(|error| format!("spawn {}: {error}", intent.program))
+    flamewm_applications::launch_command(&intent.program, &intent.argv, intent.cwd.as_deref())
+        .map_err(|error| format!("spawn {}: {error:?}", intent.program))
 }
 
 fn handle_menu_action(
@@ -1643,7 +1998,7 @@ fn handle_menu_action(
         }
         "menu.note" => {
             let anchor = state.menu.as_ref().map(|menu| menu.anchor);
-            let anchor = anchor.unwrap_or(state.grid.work_area.origin());
+            let anchor = anchor.unwrap_or_else(|| grid_for_output(state, &state.default_output).work_area.origin());
             sticky::create_note(state, anchor);
             state.menu = None;
             sync_document(document, state)?;
@@ -1657,6 +2012,67 @@ fn handle_menu_action(
             if let Err(error) = spawn_intent(&general_settings()) {
                 report_action_failure("open flamewm settings", error);
                 spawn_failure_counter().increment();
+            }
+            state.menu = None;
+            sync_menu(document, state)?;
+        }
+        "entry.convert" => {
+            let supported = state.menu.as_ref()
+                .filter(|menu| menu.kind == MenuKind::Entry)
+                .and_then(|menu| menu.selected_id.as_ref())
+                .and_then(|id| state.model.items().find(|item| &item.id == id))
+                .is_some_and(|item| item.kind == DesktopItemKind::File
+                    && !offered_formats(&item.path).is_empty());
+            if !supported { return Ok(()); }
+            if let Some(menu) = state.menu.as_mut() {
+                menu.kind = MenuKind::ConvertWheel;
+            }
+            sync_menu(document, state)?;
+        }
+        value if value.starts_with("convert.slot.") => {
+            let Some(slot) = value.strip_prefix("convert.slot.")
+                .and_then(|text| text.parse::<usize>().ok()).filter(|slot| *slot < 8) else {
+                return Ok(());
+            };
+            let path = state.menu.as_ref()
+                .filter(|menu| menu.kind == MenuKind::ConvertWheel)
+                .and_then(|menu| menu.selected_id.as_ref())
+                .and_then(|id| state.model.items().find(|item| &item.id == id))
+                .filter(|item| item.kind == DesktopItemKind::File)
+                .map(|item| item.path.clone());
+            if let Some(path) = path {
+                if let Some(format) = offered_formats(&path).get(slot).copied() {
+                    // At most one visible prediction. The worker is independent;
+                    // previous conversions keep running without a synthetic tile.
+                    let predicted = flamewm_desktop_core::conversion::predicted_destination(&path, format);
+                    let source = state.model.items().find(|item| item.path == path)
+                        .map(|item| (item.output.clone(), item.cell));
+                    if let (Ok(destination), Some((output, source_cell))) = (predicted, source) {
+                        let grid = grid_for_output(state, &output);
+                        let occupied = state.model.items().filter(|item| item.output == output)
+                            .map(|item| item.cell).collect::<BTreeSet<_>>();
+                        let cell = preview_cell_for(source_cell, grid, &occupied);
+                        let result = Arc::new(Mutex::new(None));
+                        let worker_result = Arc::clone(&result);
+                        let worker_dirty = Arc::clone(&state.dirty);
+                        let format = format.to_owned();
+                        match std::thread::Builder::new()
+                            .name("flamewm-convert".to_owned())
+                            .spawn(move || {
+                                let outcome = convert_file(&path, &format);
+                                *worker_result.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+                                worker_dirty.store(true, Ordering::Release);
+                            }) {
+                            Ok(_) => {
+                                state.conversion_preview = Some(ConversionPreview {
+                                    output: output.clone(), cell, destination: destination.clone(), result,
+                                });
+                                show_conversion_preview(document, state, &destination, &output, cell)?;
+                            }
+                            Err(error) => report_action_failure("start conversion", error.to_string()),
+                        }
+                    }
+                }
             }
             state.menu = None;
             sync_menu(document, state)?;
@@ -1681,14 +2097,21 @@ fn handle_menu_action(
                 return sync_menu(document, state);
             };
             hide_menus(document, &mut state.menu_rects)?;
-            state.pending_delete = Some(path);
+            state.pending_delete = Some(vec![path]);
             show_confirm(document, state)?;
         }
-        "confirm.delete" => {
-            if let Some(path) = state.pending_delete.take() {
-                delete_permanent(&path)?;
+        "confirm.trash" => {
+            if let Some(paths) = state.pending_delete.take() {
+                for path in &paths {
+                    if let Err(error) = move_entry_to_trash(path) {
+                        // Partial multi-selection failures remain visible, never
+                        // fall back to irreversible removal.
+                        report_action_failure("move to trash", error);
+                    }
+                }
                 rescan_desktop(state)?;
                 refresh_launchers(state);
+                state.selection.clear();
             }
             hide_confirm(document, &mut state.menu_rects)?;
             sync_document(document, state)?;
@@ -1765,17 +2188,23 @@ fn sync_rename_editor(
         let _ = document.visible("desktop-rename", false);
         return Ok(());
     };
+    let cells = projected_cells(state);
     let anchor = state
         .model
         .items()
         .find(|item| item.id == rename.item_id)
-        .map(|item| state.grid.cell_to_pixel(item.cell))
+        .map(|item| {
+            let (output, cell) = &cells[&item.id];
+            grid_for_output(state, output).cell_to_pixel(*cell)
+        })
         .unwrap_or(state.grid.work_area.origin());
     // Value plus OK/Cancel on one row.
     let width = 300;
     let height = 44;
+    let bounds = state.model.items().find(|item| item.id == rename.item_id)
+        .map_or(state.grid.work_area, |item| grid_for_output(state, &item.output).work_area);
     let placed = clamp_menu_anchor(
-        state.grid.work_area,
+        bounds,
         Rect::new(anchor.x, anchor.y + 84, width, height),
         (width, height),
     );
@@ -1840,10 +2269,7 @@ fn confirm_rename(
         return Ok(());
     }
     state.model.migrate_rename(&rename.source_path, &target);
-    if let Err(error) = state
-        .model
-        .rescan(&state.directory, &OutputId::new("default"), state.grid)
-    {
+    if let Err(error) = rescan_desktop(state) {
         rename_failure_counter().increment();
         eprintln!("desktop: rename rescan failed: {error:?}; keeping editor open");
         return Ok(());
@@ -1921,16 +2347,19 @@ fn create_shortcut(state: &mut DesktopState) -> Result<(), String> {
     Ok(())
 }
 
-/// Permanent delete only runs after the confirmation step armed it.
-fn delete_permanent(path: &Path) -> Result<(), String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("stat {}: {error}", path.display()))?;
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        fs::remove_dir_all(path).map_err(|error| format!("delete {}: {error}", path.display()))?;
-    } else {
-        fs::remove_file(path).map_err(|error| format!("delete {}: {error}", path.display()))?;
-    }
-    Ok(())
+/// Freedesktop Trash replaces irreversible deletion. The user's home is
+/// authoritative for XDG_DATA_HOME, and the UID comes from its metadata.
+fn move_entry_to_trash(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
+    let uid = fs::metadata(&home).map_err(|error| format!("stat HOME: {error}"))?.uid();
+    let data_home = env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    Trash::move_to_trash(path, &home, &data_home, uid)
+        .map(|_| ())
+        .map_err(|error| format!("{error:?}"))
 }
 
 fn empty_home_trash() -> Result<(), String> {
@@ -1965,6 +2394,7 @@ fn entry_row_id(action: EntryMenuAction) -> &'static str {
         EntryMenuAction::EmptyTrash => "menu-row-empty-trash",
         EntryMenuAction::Rename => "menu-row-rename",
         EntryMenuAction::CreateShortcut => "menu-row-shortcut",
+        EntryMenuAction::Convert => "menu-row-convert",
         EntryMenuAction::Delete => "menu-row-delete",
     }
 }
@@ -1973,9 +2403,12 @@ fn hide_menus(document: &mut impl UiDocumentAccess, menu_rects: &mut Vec<Rect>) 
     menu_rects.clear();
     document.visible("desktop-menu", false)?;
     document.visible("desktop-entry-menu", false)?;
+    document.visible("desktop-convert-wheel", false)?;
+    document.visible("convert-wheel-highlight", false)?;
     document.visible("sticky-menu", false)?;
     projection::clear_menu_backdrop(document, "desktop-menu")?;
     projection::clear_menu_backdrop(document, "desktop-entry-menu")?;
+    projection::clear_menu_backdrop(document, "desktop-convert-wheel")?;
     projection::clear_menu_backdrop(document, "sticky-menu")
 }
 
@@ -1996,15 +2429,18 @@ fn close_menus_on_outside_press(
     press: &RawPress,
     document: &mut impl UiDocumentAccess,
     menu_rects: &mut Vec<Rect>,
-    pending_delete: &mut Option<PathBuf>,
+    menu: &mut Option<MenuState>,
+    pending_delete: &mut Option<Vec<PathBuf>>,
 ) -> Result<(), String> {
     if !menus_open(menu_rects) || !press_outside_menus(menu_rects, press.x, press.y) {
         return Ok(());
     }
-    hide_menus(document, menu_rects)?;
-    hide_confirm(document, menu_rects)?;
+    // Drop the semantic owner before hiding the nodes. A subsequent document
+    // rebuild must not resurrect a menu dismissed on the previous frame.
+    *menu = None;
     *pending_delete = None;
-    Ok(())
+    hide_menus(document, menu_rects)?;
+    hide_confirm(document, menu_rects)
 }
 
 fn hide_confirm(document: &mut impl UiDocumentAccess, menu_rects: &mut Vec<Rect>) -> Result<(), String> {
@@ -2017,15 +2453,23 @@ fn show_confirm(document: &mut impl UiDocumentAccess, state: &mut DesktopState) 
     let parts = confirm_menu_parts();
     let measured = context_menu_size(&parts, flamewm_ui_core::context_menu::MIN_ROW_WIDTH);
     let size = (measured.width, measured.height);
+    let bounds = state.pending_delete.as_ref().and_then(|paths| paths.first())
+        .and_then(|path| state.model.items().find(|item| &item.path == path))
+        .map_or(state.grid.work_area, |item| grid_for_output(state, &item.output).work_area);
     let center = Point::new(
-        state.grid.work_area.x + (state.grid.work_area.width - size.0) / 2,
-        state.grid.work_area.y + (state.grid.work_area.height - size.1) / 2,
+        bounds.x + (bounds.width - size.0) / 2,
+        bounds.y + (bounds.height - size.1) / 2,
     );
     let placed = clamp_menu_anchor(
-        state.grid.work_area,
+        bounds,
         Rect::new(center.x, center.y, size.0, size.1),
         size,
     );
+    document.text("confirm-text", if state.pending_delete.as_ref().is_some_and(|paths| paths.len() > 1) {
+        format!("Move {} items to Trash?", state.pending_delete.as_ref().map_or(0, Vec::len))
+    } else {
+        "Move to Trash?".to_owned()
+    })?;
     document.position("desktop-confirm", placed.x as f32, placed.y as f32)?;
     document.size("desktop-confirm", placed.width as f32, placed.height as f32)?;
     projection::project_menu_surface(document, "desktop-confirm", &state.settings)?;
@@ -2042,7 +2486,12 @@ fn sync_menu(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> 
     let Some(menu) = state.menu.as_ref() else {
         return Ok(());
     };
-    match menu.kind {
+    let menu_output = menu.output.clone();
+    let menu_kind = menu.kind;
+    let menu_anchor = menu.anchor;
+    let selected_id = menu.selected_id.clone();
+    let menu_bounds = grid_for_output(state, &menu_output).work_area;
+    match menu_kind {
         MenuKind::Blank => {
             let rows = {
                 let _project = context_open_project_point().start();
@@ -2056,20 +2505,23 @@ fn sync_menu(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> 
                 document,
                 state,
                 "desktop-menu",
-                menu.anchor,
+                &menu_output,
+                menu_anchor,
                 &blank_menu_parts(rows.len()),
             )?;
         }
         MenuKind::Entry => {
-            let selected_kind = menu
-                .selected_id
+            let selected_kind = selected_id
                 .as_ref()
                 .and_then(|id| state.model.items().find(|item| &item.id == id))
                 .map(|item| item.kind);
             let is_trash = selected_kind == Some(DesktopItemKind::TrashPseudo);
+            let convertible = selected_id.as_ref()
+                .and_then(|id| state.model.items().find(|item| &item.id == id))
+                .is_some_and(|item| item.kind == DesktopItemKind::File && !offered_formats(&item.path).is_empty());
             let rows = {
                 let _project = context_open_project_point().start();
-                entry_context_menu(is_trash)
+                entry_context_menu(is_trash, convertible)
             };
             let visible: BTreeSet<&str> = rows.iter().map(|action| entry_row_id(*action)).collect();
             for id in ENTRY_ROW_IDS {
@@ -2079,16 +2531,62 @@ fn sync_menu(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> 
                 document,
                 state,
                 "desktop-entry-menu",
-                menu.anchor,
+                &menu_output,
+                menu_anchor,
                 &entry_menu_parts(rows.len()),
             )?;
+        }
+        MenuKind::ConvertWheel => {
+            // Recreate hover state on the next movement; never carry a sector
+            // from an earlier file or workspace into this wheel.
+            state.wheel_hover = None;
+            document.visible("convert-wheel-highlight", false)?;
+            let path = selected_id.as_ref()
+                .and_then(|id| state.model.items().find(|item| &item.id == id))
+                .map(|item| &item.path);
+            let formats = path.map_or_else(Vec::new, |path| offered_formats(path));
+            for slot in 0..8 {
+                let id = format!("convert-slot-{slot}");
+                let choice = formats.get(slot).copied();
+                document.visible(&id, choice.is_some())?;
+                if let Some(choice) = choice {
+                    document.text(&id, choice.to_ascii_uppercase())?;
+                }
+            }
+            if let Some(path) = path {
+                let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+                let label = if size >= 1_000_000 {
+                    format!("{:.1} MB", size as f64 / 1_000_000.0)
+                } else {
+                    format!("{} KB", size / 1000)
+                };
+                document.text("convert-wheel-hub-text", label)?;
+            }
+            let size = (328, 328);
+            let placed = clamp_menu_anchor(menu_bounds,
+                Rect::new(menu_anchor.x, menu_anchor.y, size.0, size.1), size);
+            document.position("desktop-convert-wheel", placed.x as f32, placed.y as f32)?;
+            document.size("desktop-convert-wheel", size.0 as f32, size.1 as f32)?;
+            // Same Surfaces palette/transparency/blur as Start and other menus;
+            // force a round mask because this control is a radial wheel.
+            projection::project_menu_surface(document, "desktop-convert-wheel", &state.settings)?;
+            document.corner_radius("desktop-convert-wheel", 164.0)?;
+            let accent = accent_color(&state.settings);
+            document.background("convert-wheel-hub", UiColor { a: 64, ..accent })?;
+            for slot in 0..8 {
+                document.foreground(&format!("convert-slot-{slot}"), UiColor {
+                    r: 244, g: 246, b: 251, a: 255,
+                })?;
+            }
+            state.menu_rects.push(placed);
+            document.visible("desktop-convert-wheel", true)?;
         }
         MenuKind::Sticky => {
             let parts = {
                 let _project = context_open_project_point().start();
                 sticky_menu_parts()
             };
-            place_menu_parts(document, state, "sticky-menu", menu.anchor, &parts)?;
+            place_menu_parts(document, state, "sticky-menu", &menu_output, menu_anchor, &parts)?;
         }
     }
     Ok(())
@@ -2098,6 +2596,7 @@ fn place_menu_parts(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
     id: &str,
+    output: &OutputId,
     anchor: Point,
     parts: &[MenuPart],
 ) -> Result<(), String> {
@@ -2107,7 +2606,7 @@ fn place_menu_parts(
     let placed = {
         let _measure = context_open_measure_point().start();
         let _place = context_open_place_point().start();
-        parts_menu_rect(state.grid.work_area, anchor, parts)
+        parts_menu_rect(grid_for_output(state, output).work_area, anchor, parts)
     };
     document.position(id, placed.x as f32, placed.y as f32)?;
     document.size(id, placed.width as f32, placed.height as f32)?;
@@ -2117,6 +2616,64 @@ fn place_menu_parts(
     context_open_counter().increment();
     let _present = context_open_present_point().start();
     document.visible(id, true)
+}
+
+/// Prefer the next grid cell horizontally; never obscure a real desktop item.
+fn preview_cell_for(source: Cell, grid: GridConfig, occupied: &BTreeSet<Cell>) -> Cell {
+    let total = grid.columns.max(1).saturating_mul(grid.rows.max(1));
+    let start = source.row.saturating_mul(grid.columns.max(1)).saturating_add(source.column);
+    for offset in 1..=total {
+        let index = (start + offset).rem_euclid(total);
+        let cell = Cell::new(index.rem_euclid(grid.columns.max(1)),
+            index.div_euclid(grid.columns.max(1)));
+        if !occupied.contains(&cell) { return cell; }
+    }
+    source
+}
+
+fn sync_conversion_preview(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+) -> Result<(), String> {
+    let Some(preview) = state.conversion_preview.as_ref() else {
+        return Ok(());
+    };
+    let outcome = preview.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    let Some(outcome) = outcome else { return Ok(()); };
+    let preview = state.conversion_preview.take().expect("preview observed above");
+    document.visible("desktop-convert-preview", false)?;
+    match outcome {
+        Ok(path) => {
+            state.model.set_position(path, StoredPosition {
+                output: preview.output, cell: preview.cell,
+            });
+            rescan_desktop(state)?;
+            refresh_launchers(state);
+            if let Err(error) = LayoutStore::persist(&state.layout_path, state.model.positions()) {
+                report_action_failure("save converted placement", format!("{error:?}"));
+            }
+            sync_document(document, state)?;
+        }
+        Err(error) => report_action_failure("conversion", error),
+    }
+    Ok(())
+}
+
+fn show_conversion_preview(
+    document: &mut impl UiDocumentAccess,
+    state: &mut DesktopState,
+    destination: &Path,
+    output: &OutputId,
+    cell: Cell,
+) -> Result<(), String> {
+    let point = grid_for_output(state, output).cell_to_pixel(cell);
+    document.position("desktop-convert-preview", point.x as f32, point.y as f32)?;
+    let name = destination.file_name().and_then(|name| name.to_str()).unwrap_or("Converted file");
+    let [first, second] = flamewm_desktop_core::presentation::desktop_label_lines(name, 76.0, 13.0);
+    document.text("desktop-convert-preview-line-1", first)?;
+    document.text("desktop-convert-preview-line-2", second)?;
+    projection::project_conversion_preview_icon(document, &mut state.icons, destination)?;
+    document.visible("desktop-convert-preview", true)
 }
 
 fn show_drag_ghost(
@@ -2140,7 +2697,7 @@ fn show_drag_ghost(
         kind,
         icon_override.as_deref(),
     )?;
-    let (line1, line2) = split_label_lines(&ghost.label);
+    let [line1, line2] = flamewm_desktop_core::presentation::desktop_label_lines(&ghost.label, 76.0, 13.0);
     document.size(
         "desktop-drag-ghost",
         projection::DESKTOP_TILE_WIDTH,
@@ -2152,7 +2709,16 @@ fn show_drag_ghost(
         "desktop-drag-ghost-count",
         format!("{}", ghost.count.max(1)),
     )?;
+    document.visible("desktop-drag-ghost-count", ghost.count > 1)?;
     document.visible("desktop-drag-ghost", true)?;
+    // During a drag the *single* visible item follows the pointer. The
+    // originals retain their model/layout slots and are restored on release;
+    // leaving them painted makes the drag appear frozen at its start cell.
+    for (index, item) in state.model.items().take(SLOT_COUNT).enumerate() {
+        if ghost.source_ids.contains(&item.id) {
+            document.visible(&format!("desktop-item-{index}"), false)?;
+        }
+    }
     Ok(())
 }
 
@@ -2181,15 +2747,29 @@ fn sync_drag_ghost(
     document: &mut impl UiDocumentAccess,
     state: &DesktopState,
 ) -> Result<(), String> {
-    let visible = state.drag_ghost.as_ref().is_some_and(|ghost| ghost.visible);
-    document.visible("desktop-drag-ghost", visible)
+    let ghost = state.drag_ghost.as_ref().filter(|ghost| ghost.visible);
+    document.visible("desktop-drag-ghost", ghost.is_some())?;
+    if let Some(ghost) = ghost {
+        for (index, item) in state.model.items().take(SLOT_COUNT).enumerate() {
+            if ghost.source_ids.contains(&item.id) {
+                document.visible(&format!("desktop-item-{index}"), false)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn hide_drag_ghost(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
 ) -> Result<(), String> {
-    state.drag_ghost = None;
+    if let Some(ghost) = state.drag_ghost.take() {
+        for (index, item) in state.model.items().take(SLOT_COUNT).enumerate() {
+            if ghost.source_ids.contains(&item.id) {
+                document.visible(&format!("desktop-item-{index}"), true)?;
+            }
+        }
+    }
     // Best effort: count node may not exist in the compiled
     // document; the ghost id itself is authoritative for visibility.
     let _ = document.visible("desktop-drag-ghost-count", false);
@@ -2203,54 +2783,80 @@ fn commit_item_drag(
     x: f32,
     y: f32,
 ) -> Result<(), String> {
-    let selected = drag
-        .originals
-        .iter()
-        .map(|item| DragItem {
-            id: item.id.clone(),
-            cell: item.cell,
-        })
-        .collect::<Vec<_>>();
     let selected_ids = drag
         .originals
         .iter()
         .map(|item| item.id.as_str())
         .collect::<BTreeSet<_>>();
-    let occupied = state
-        .model
-        .items()
-        .filter(|item| !selected_ids.contains(item.id.as_str()))
-        .map(|item| item.cell)
-        .collect::<BTreeSet<_>>();
+    let anchor = drag.originals.iter().find(|item| item.id == drag.anchor_id)
+        .ok_or_else(|| "drag anchor disappeared".to_owned())?;
+    let anchor_output = if state.output_grids.contains_key(&anchor.output) {
+        anchor.output.clone()
+    } else {
+        state.default_output.clone()
+    };
+    let anchor_grid = grid_for_output(state, &anchor_output);
     let delta = drag_cell_delta(
         x - drag.start_x,
         y - drag.start_y,
-        state.grid.cell_width,
-        state.grid.cell_height,
+        anchor_grid.cell_width,
+        anchor_grid.cell_height,
     );
-    let updates = match group_drag_transaction(&selected, &occupied, delta, state.grid) {
-        Ok(updates) => updates,
-        Err(_) => {
-            sync_document(document, state)?;
-            return Ok(());
+    let mut updates = BTreeMap::new();
+    let projected = projected_cells(state);
+    let drag_outputs = drag.originals.iter().map(|item| {
+        if state.output_grids.contains_key(&item.output) {
+            item.output.clone()
+        } else {
+            state.default_output.clone()
         }
-    };
+    }).collect::<BTreeSet<_>>();
+    for output in drag_outputs {
+        let selected = drag.originals.iter().filter(|item| {
+            let item_output = if state.output_grids.contains_key(&item.output) {
+                &item.output
+            } else {
+                &state.default_output
+            };
+            item_output == &output
+        })
+            .map(|item| DragItem { id: item.id.clone(), cell: item.drag_cell }).collect::<Vec<_>>();
+        let occupied = state.model.items()
+            .filter(|item| !selected_ids.contains(item.id.as_str()))
+            .filter(|item| {
+                let item_output = if state.output_grids.contains_key(&item.output) {
+                    &item.output
+                } else {
+                    &state.default_output
+                };
+                item_output == &output
+            })
+            .map(|item| projected[&item.id].1).collect::<BTreeSet<_>>();
+        match group_drag_transaction(&selected, &occupied, delta, grid_for_output(state, &output)) {
+            Ok(output_updates) => updates.extend(output_updates),
+            Err(_) => {
+                sync_document(document, state)?;
+                return Ok(());
+            }
+        }
+    }
 
     for original in &drag.originals {
         if let Some(cell) = updates.get(&original.id).copied() {
             state.model.set_position(
                 original.path.clone(),
                 StoredPosition {
-                    output: original.output.clone(),
+                    output: if state.output_grids.contains_key(&original.output) {
+                        original.output.clone()
+                    } else {
+                        state.default_output.clone()
+                    },
                     cell,
                 },
             );
         }
     }
-    if let Err(error) = state
-        .model
-        .rescan(&state.directory, &OutputId::new("default"), state.grid)
-    {
+    if let Err(error) = rescan_desktop(state) {
         restore_original_positions(state, drag)?;
         sync_document(document, state)?;
         return Err(format!("{error:?}"));
@@ -2284,18 +2890,21 @@ fn update_selection_from_rubber(state: &mut DesktopState) {
     let Some(_) = state.selection.rubber() else {
         return;
     };
+    let cells = projected_cells(state);
     let item_rects = state
         .model
         .items()
         .map(|item| {
-            let point = state.grid.cell_to_pixel(item.cell);
+            let (output, cell) = &cells[&item.id];
+            let grid = grid_for_output(state, output);
+            let point = grid.cell_to_pixel(*cell);
             (
                 item.id.clone(),
                 Rect::new(
                     point.x,
                     point.y,
-                    state.grid.cell_width,
-                    state.grid.cell_height,
+                    grid.cell_width,
+                    grid.cell_height,
                 ),
             )
         })
@@ -2395,9 +3004,10 @@ fn installed_data_root(executable: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod work_area_tests {
     use super::{
-        changed_work_area, desktop_surface_rect, subtract_panel_strip, window_resize_request,
+        desktop_surface_rect, grids_for_outputs, normalize_outputs, output_at_in,
+        pointer_point_for_grid, subtract_panel_strip,
     };
-    use flamewm_api::Rect;
+    use flamewm_api::{OutputId, Point, Rect};
     use flamewm_desktop_core::layout::GridConfig;
 
     #[test]
@@ -2447,21 +3057,6 @@ mod work_area_tests {
     }
 
     #[test]
-    fn window_already_matching_work_area_requests_no_resize() {
-        let area = Rect::new(0, 0, 1350, 586);
-
-        assert_eq!(window_resize_request(area, area), None);
-    }
-
-    #[test]
-    fn window_mismatching_work_area_requests_resize_to_target() {
-        let window = Rect::new(0, 0, 1350, 641);
-        let target = Rect::new(0, 0, 1350, 586);
-
-        assert_eq!(window_resize_request(window, target), Some(target));
-    }
-
-    #[test]
     fn bottom_panel_strip_leaves_root_minus_panel_height_at_origin() {
         let root = Rect::new(0, 0, 1350, 641);
         let panel = Rect::new(0, 641 - 55, 1350, 55);
@@ -2470,19 +3065,55 @@ mod work_area_tests {
     }
 
     #[test]
-    fn panel_height_change_produces_new_work_area() {
+    fn each_output_uses_its_own_taskbar_work_area() {
+        let left = OutputId::new("left");
+        let right = OutputId::new("right");
+        let outputs = [
+            (left.clone(), Rect::new(0, 0, 1920, 1080)),
+            (right.clone(), Rect::new(1920, 200, 2560, 1440)),
+        ];
+        let panels = [
+            (left.clone(), Rect::new(4, 1036, 1912, 44)),
+            (right.clone(), Rect::new(1924, 1596, 2552, 44)),
+        ];
+        let grids = grids_for_outputs(&outputs, &panels);
+
+        assert_eq!(grids[&left].work_area, Rect::new(0, 0, 1920, 1036));
+        assert_eq!(grids[&right].work_area, Rect::new(1920, 200, 2560, 1396));
+        assert!(grids[&left].work_area.bottom() <= panels[0].1.y);
+        assert!(grids[&right].work_area.bottom() <= panels[1].1.y);
+    }
+
+    #[test]
+    fn negative_monitor_origin_is_normalized_and_pointer_selects_its_output() {
+        let left = OutputId::new("left");
+        let right = OutputId::new("right");
+        let raw = [
+            (left.clone(), Rect::new(-1920, 0, 1920, 1080), false),
+            (right.clone(), Rect::new(0, 200, 2560, 1440), true),
+        ];
+        let root = Rect::new(0, 0, 4480, 1640);
+        let (outputs, origin_x, origin_y) = normalize_outputs(&raw, root);
+
+        assert_eq!((origin_x, origin_y), (-1920, 0));
+        assert_eq!(outputs[0].1, Rect::new(0, 0, 1920, 1080));
+        assert_eq!(outputs[1].1, Rect::new(1920, 200, 2560, 1440));
+        assert_eq!(output_at_in(&outputs, &left, Point::new(2500, 300)), right);
+        assert_eq!(output_at_in(&outputs, &left, Point::new(1919, 100)), left);
+        assert_eq!(output_at_in(&outputs, &left, Point::new(4600, 100)), right);
+        let work = Rect::new(1920, 200, 2560, 1396);
+        assert_eq!(pointer_point_for_grid(Point::new(2500, 1640), GridConfig::compute(work, 100)),
+            Point::new(2500, 1595));
+    }
+
+    #[test]
+    fn panel_height_change_updates_output_grid() {
         let root = Rect::new(0, 0, 1350, 641);
         let before = subtract_panel_strip(root, Rect::new(0, 641 - 44, 1350, 44));
         let after = subtract_panel_strip(root, Rect::new(0, 641 - 55, 1350, 55));
 
-        assert_eq!(changed_work_area(before, after), Some(Rect::new(0, 0, 1350, 586)));
-    }
-
-    #[test]
-    fn unchanged_work_area_produces_no_resize_request() {
-        let area = Rect::new(0, 0, 1350, 586);
-
-        assert_eq!(changed_work_area(area, area), None);
+        assert_eq!(before, Rect::new(0, 0, 1350, 597));
+        assert_eq!(after, Rect::new(0, 0, 1350, 586));
     }
 }
 
@@ -2619,10 +3250,17 @@ mod outside_press_tests {
     fn outside_press_closes_menus_and_clears_pending_delete() {
         let mut doc = RecordingUiDoc::default();
         let mut rects = vec![Rect::new(10, 10, 20, 20)];
-        let mut pending = Some(PathBuf::from("/tmp/flamewm-pending"));
-        close_menus_on_outside_press(&press(100.0, 100.0), &mut doc, &mut rects, &mut pending)
+        let mut pending = Some(vec![PathBuf::from("/tmp/flamewm-pending")]);
+        let mut menu = Some(MenuState {
+            kind: MenuKind::Entry,
+            anchor: Point::new(10, 10),
+            output: OutputId::new("default"),
+            selected_id: Some("image.png".into()),
+        });
+        close_menus_on_outside_press(&press(100.0, 100.0), &mut doc, &mut rects, &mut menu, &mut pending)
             .expect("close");
         assert!(rects.is_empty());
+        assert!(menu.is_none(), "outside press must release the semantic menu, not just hide it");
         assert!(pending.is_none());
         assert_eq!(doc.visible.get("desktop-menu"), Some(&false));
         assert_eq!(doc.visible.get("desktop-confirm"), Some(&false));
@@ -2632,10 +3270,17 @@ mod outside_press_tests {
     fn inside_press_leaves_menus_and_pending_delete_untouched() {
         let mut doc = RecordingUiDoc::default();
         let mut rects = vec![Rect::new(10, 10, 20, 20)];
-        let mut pending = Some(PathBuf::from("/tmp/flamewm-pending"));
-        close_menus_on_outside_press(&press(12.0, 12.0), &mut doc, &mut rects, &mut pending)
+        let mut pending = Some(vec![PathBuf::from("/tmp/flamewm-pending")]);
+        let mut menu = Some(MenuState {
+            kind: MenuKind::ConvertWheel,
+            anchor: Point::new(10, 10),
+            output: OutputId::new("default"),
+            selected_id: Some("image.png".into()),
+        });
+        close_menus_on_outside_press(&press(12.0, 12.0), &mut doc, &mut rects, &mut menu, &mut pending)
             .expect("inside");
         assert_eq!(rects, vec![Rect::new(10, 10, 20, 20)]);
+        assert!(menu.is_some(), "press inside the wheel must preserve its action target");
         assert!(pending.is_some());
         assert!(doc.visible.is_empty());
     }
@@ -2644,9 +3289,11 @@ mod outside_press_tests {
     fn press_while_closed_is_a_noop() {
         let mut doc = RecordingUiDoc::default();
         let mut rects = Vec::new();
-        let mut pending = Some(PathBuf::from("/tmp/flamewm-pending"));
-        close_menus_on_outside_press(&press(5.0, 5.0), &mut doc, &mut rects, &mut pending)
+        let mut pending = Some(vec![PathBuf::from("/tmp/flamewm-pending")]);
+        let mut menu = None;
+        close_menus_on_outside_press(&press(5.0, 5.0), &mut doc, &mut rects, &mut menu, &mut pending)
             .expect("closed");
+        assert!(menu.is_none());
         assert!(pending.is_some());
         assert!(doc.visible.is_empty());
     }
@@ -2661,5 +3308,26 @@ mod rename_button_tests {
         assert!(is_menu_action("rename.confirm"));
         assert!(is_menu_action("rename.cancel"));
         assert!(is_menu_action("entry.rename"));
+    }
+}
+
+#[cfg(test)]
+mod workspace_menu_lifetime_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_transition_clears_opened_entry_menu_and_delete_confirmation() {
+        for kind in [MenuKind::Blank, MenuKind::Entry, MenuKind::ConvertWheel, MenuKind::Sticky] {
+            let mut menu = Some(MenuState {
+                kind,
+                anchor: Point::new(100, 200),
+                output: OutputId::new("default"),
+                selected_id: Some("/tmp/my-image.png".to_owned()),
+            });
+            let mut pending_delete = Some(vec![PathBuf::from("/tmp/my-image.png")]);
+            clear_workspace_menu_state(&mut menu, &mut pending_delete);
+            assert!(menu.is_none(), "a menu must not survive workspace changes");
+            assert!(pending_delete.is_none(), "a modal delete intent must not survive either");
+        }
     }
 }

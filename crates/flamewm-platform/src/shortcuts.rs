@@ -3,17 +3,22 @@ use std::collections::BTreeMap;
 use flamewm_api::shortcuts::{
     ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
-    ACTION_WORKSPACE_UP, KeyBinding,
+    ACTION_WORKSPACE_UP, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
+    ACTION_SCREENSHOT_WINDOW, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 /// Media-key actions. Their ids are local to the platform shortcut registry; they
 /// are dispatched through `PlatformHost::media_audio_key`.
+pub const ACTION_OPEN_FILES_SUPER: &str = "OpenFilesSuper";
+pub const ACTION_OPEN_FILES_CTRL_ALT: &str = "OpenFilesCtrlAlt";
+pub const ACTION_OPEN_TERMINAL_SUPER: &str = "OpenTerminalSuper";
+pub const ACTION_OPEN_TERMINAL_CTRL_ALT: &str = "OpenTerminalCtrlAlt";
 pub const ACTION_VOLUME_UP: &str = "VolumeUp";
 pub const ACTION_VOLUME_DOWN: &str = "VolumeDown";
 pub const ACTION_VOLUME_MUTE: &str = "VolumeMute";
 
-pub const ACTIONS: [&str; 12] = [
+pub const ACTIONS: [&str; 19] = [
     ACTION_TOGGLE_START_MENU,
     ACTION_WORKSPACE_LEFT,
     ACTION_WORKSPACE_RIGHT,
@@ -23,9 +28,16 @@ pub const ACTIONS: [&str; 12] = [
     ACTION_WINDOW_MINIMIZE,
     ACTION_WINDOW_MAXIMIZE,
     ACTION_SESSION_LOCK,
+    ACTION_SCREENSHOT_FULL,
+    ACTION_SCREENSHOT_REGION,
+    ACTION_SCREENSHOT_WINDOW,
     ACTION_VOLUME_UP,
     ACTION_VOLUME_DOWN,
     ACTION_VOLUME_MUTE,
+    ACTION_OPEN_FILES_SUPER,
+    ACTION_OPEN_FILES_CTRL_ALT,
+    ACTION_OPEN_TERMINAL_SUPER,
+    ACTION_OPEN_TERMINAL_CTRL_ALT,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,8 +73,15 @@ impl Default for ShortcutRegistry {
                 ACTION_WINDOW_CLOSE.to_owned(),
                 KeyBinding::assigned("Alt+F4"),
             ),
+            (ACTION_SCREENSHOT_FULL.to_owned(), KeyBinding::assigned("Print")),
+            (ACTION_SCREENSHOT_REGION.to_owned(), KeyBinding::assigned("Shift+Print")),
+            (ACTION_SCREENSHOT_WINDOW.to_owned(), KeyBinding::assigned("Ctrl+Print")),
             (ACTION_WINDOW_MINIMIZE.to_owned(), KeyBinding::unassigned()),
             (ACTION_WINDOW_MAXIMIZE.to_owned(), KeyBinding::unassigned()),
+            (ACTION_OPEN_FILES_SUPER.to_owned(), KeyBinding::assigned("Super+E")),
+            (ACTION_OPEN_FILES_CTRL_ALT.to_owned(), KeyBinding::assigned("Ctrl+Alt+E")),
+            (ACTION_OPEN_TERMINAL_SUPER.to_owned(), KeyBinding::assigned("Super+T")),
+            (ACTION_OPEN_TERMINAL_CTRL_ALT.to_owned(), KeyBinding::assigned("Ctrl+Alt+T")),
             (
                 ACTION_SESSION_LOCK.to_owned(),
                 KeyBinding::assigned("Super+L"),
@@ -302,6 +321,24 @@ mod tests {
             effective.binding(ACTION_WINDOW_CLOSE),
             Some(&KeyBinding::assigned("Ctrl+Super+Q"))
         );
+    }
+
+    #[test]
+    fn screenshot_shortcuts_are_three_independent_configurable_actions() {
+        let mut registry = ShortcutRegistry::default();
+        for (action, binding) in [
+            (ACTION_SCREENSHOT_FULL, "Print"),
+            (ACTION_SCREENSHOT_REGION, "Shift+Print"),
+            (ACTION_SCREENSHOT_WINDOW, "Ctrl+Print"),
+        ] {
+            assert_eq!(registry.binding(action), Some(&KeyBinding::assigned(binding)));
+            assert!(ACTIONS.contains(&action));
+        }
+        assert_eq!(registry.conflict_for(ACTION_SCREENSHOT_REGION, "Print"), Some(ACTION_SCREENSHOT_FULL.to_owned()));
+        registry.clear(ACTION_SCREENSHOT_REGION).unwrap();
+        assert_eq!(registry.binding(ACTION_SCREENSHOT_REGION), Some(&KeyBinding::unassigned()));
+        registry.reset_one(ACTION_SCREENSHOT_REGION).unwrap();
+        assert_eq!(registry.binding(ACTION_SCREENSHOT_REGION), Some(&KeyBinding::assigned("Shift+Print")));
     }
 
     #[test]

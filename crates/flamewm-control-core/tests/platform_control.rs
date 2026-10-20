@@ -331,6 +331,28 @@ fn platform_start_projects_panel_without_mutating_native_reservations() {
 }
 
 #[test]
+fn shell_bootstrap_reconciles_display_and_panels_before_reply() {
+    let path = settings_path("bootstrap-randr-sync");
+    let mut host = PlatformHost::new(FakeDesktop::new(), path);
+    host.start().expect("host starts");
+    let output = &mut host.engine_mut().display.outputs[0];
+    output.geometry = Rect::new(-1350, 0, 1350, 641);
+    let response = Dispatcher::new()
+        .dispatch(&mut host, ControlRequest::GetShellBootstrap)
+        .expect("bootstrap succeeds");
+    let ControlResponse::ShellBootstrap(snapshot) = response else {
+        panic!("expected shell bootstrap")
+    };
+    assert_eq!(snapshot.displays.outputs[0].geometry, Rect::new(-1350, 0, 1350, 641));
+    assert_eq!(snapshot.panels.panels.len(), 1);
+    let panel = &snapshot.panels.panels[0];
+    // The default taskbar is floating: preserve its 4px gap on each side,
+    // including negative-origin outputs after RandR changes.
+    assert_eq!(panel.output, OutputId::new("eDP-1"));
+    assert_eq!(panel.geometry, Rect::new(-1346, 593, 1342, 44));
+}
+
+#[test]
 fn control_workspace_insert_uses_revisioned_platform_transaction() {
     let path = settings_path("workspace");
     let mut host = PlatformHost::new(FakeDesktop::new(), path);

@@ -1,5 +1,6 @@
 mod app;
 mod event_router;
+mod launch_feedback;
 use flamewm_shell::settings_projection;
 
 use std::cell::RefCell;
@@ -113,6 +114,16 @@ fn execute() -> Result<(), String> {
         surfaces.reopen_panel_capture();
     }
     let loader_root = packaged_root();
+    // Separate X connection observes freedesktop startup notifications from
+    // Flame launchers *and* compliant external launchers (Dolphin/xdg-open).
+    // Failure is nonfatal: a missing X observer must not stop the desktop.
+    let badge = match launch_feedback::LaunchFeedback::connect(loader_root.clone()) {
+        Ok(observer) => Some(Rc::new(RefCell::new(observer))),
+        Err(error) => {
+            eprintln!("flamewm-shell: launch feedback disabled: {error}");
+            None
+        }
+    };
 
     let profile_interval = profile_interval_secs();
     let profile_due = Arc::new(AtomicBool::new(false));
@@ -199,6 +210,19 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register control signal source: {error}"))?;
     }
+    if let Some(observer) = badge.as_ref() {
+        let observer = Rc::clone(observer);
+        let fd = observer.borrow().fd();
+        reactor.register_raw_fd_with_action(fd, calloop::Interest::READ, move |_, _| {
+            match observer.borrow_mut().on_ready() {
+                Ok(()) => flamewm_reactor::FdAction::Continue,
+                Err(error) => {
+                    eprintln!("flamewm-shell: launch notification observer failed: {error}");
+                    flamewm_reactor::FdAction::Remove
+                }
+            }
+        }).map_err(|error| format!("register launch observer: {error}"))?;
+    }
     // Volume OSD and weather: the tick publishes their deadlines to the reactor wake slot.
     state.borrow_mut().attach_wake(reactor.wake_deadline());
     let tick_profile_flag = Arc::clone(&profile_due);
@@ -226,6 +250,8 @@ fn execute() -> Result<(), String> {
             })
             .map_err(|error| format!("register profile timer: {error}"))?;
     }
+    let mut badge_tick = badge;
+    let shared_wake = reactor.wake_deadline();
     run_surface_runtime_with_reactor_access(
         &mut runtime,
         &mut reactor,
@@ -236,7 +262,33 @@ fn execute() -> Result<(), String> {
                 if tick_profile.swap(false, Ordering::Acquire) {
                     let _ = flamewm_profiler::report_window();
                 }
-                tick_state.borrow_mut().tick(runtime, &clock_due)
+                let pointer = if tick_state.borrow().needs_output_pointer() {
+                    badge_tick.as_ref().and_then(|observer| observer.borrow().pointer_position())
+                } else {
+                    None
+                };
+                tick_state.borrow_mut().set_output_pointer(pointer);
+                tick_state.borrow_mut().tick(runtime, &clock_due)?;
+                let badge_result = badge_tick.as_ref().map(|observer| {
+                    let state = tick_state.borrow();
+                    observer.borrow_mut().tick(
+                        runtime, &state.shell.snapshot().displays,
+                        state.settings_cache.as_ref(), std::time::Instant::now(),
+                    )
+                });
+                match badge_result {
+                    Some(Ok(Some(next))) => {
+                        shared_wake.set(Some(shared_wake.get().map_or(next, |old| old.min(next))));
+                    }
+                    Some(Err(error)) => {
+                        // An unavailable XShape/input overlay may disable the badge,
+                        // but must never terminate the shell or its taskbar.
+                        eprintln!("flamewm-shell: launch feedback disabled: {error:?}");
+                        badge_tick = None;
+                    }
+                    _ => {}
+                }
+                Ok(())
             }
         },
     )

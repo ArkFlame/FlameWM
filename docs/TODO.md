@@ -166,8 +166,8 @@ This is the canonical implementation backlog after 0.0.2. A checked item means a
 - [ ] categories sourced from Freedesktop metadata.
 - [ ] exact application icons through icon-theme lookup/fallback policy.
 - [ ] power/session actions wired to session service.
-- [ ] real taskbar workspace pager from WM snapshot.
-- [ ] two-row topology and up/down/left/right navigation.
+- [x] real taskbar workspace pager from WM snapshot.
+- [x] two-row topology and up/down/left/right navigation.
 - [ ] selected workspace context add/remove.
 - [ ] taskbar Bottom/Top/Left/Right renderer and strut integration.
 - [ ] direct blank-surface drag docking with preview.

@@ -1,3 +1,6 @@
+#[path = "../session_app_compat.rs"]
+mod session_app_compat;
+
 use std::collections::BTreeMap;
 use std::env;
 use std::io::{ErrorKind, Read};
@@ -63,13 +66,18 @@ fn execute() -> Result<(), String> {
     let executable = env::current_exe().map_err(|error| format!("locate session executable: {error}"))?;
     let bindir = executable.parent().ok_or_else(|| "session executable has no parent directory".to_owned())?.to_path_buf();
     let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
-    let mut paths = default_paths_from_home(&bindir, home);
+    let mut paths = default_paths_from_home(&bindir, home.clone());
     if let Some(config) = env::var_os("XDG_CONFIG_HOME") {
         paths.config_home = PathBuf::from(config);
     }
     let existing = env::vars().collect::<BTreeMap<_, _>>();
     let args = env::args().skip(1).collect::<Vec<_>>();
-    let plan = build_launch_plan(&paths, &args, &existing);
+    let mut plan = build_launch_plan(&paths, &args, &existing);
+    // Generate only FlameWM-owned XDG overlays; never mutate existing Brave
+    // profiles, wallet contents, Plasma configuration, or desktop identities.
+    if let Err(error) = session_app_compat::configure(&home, &mut plan.processes) {
+        eprintln!("flamewm-session: KDE app compatibility degraded: {error}");
+    }
     if plan.processes.len() != 3
         || plan.processes[0].role != SessionRole::WindowManager
         || plan.processes[1].role != SessionRole::Desktop
@@ -77,6 +85,13 @@ fn execute() -> Result<(), String> {
     {
         return Err("session launch plan does not contain WM, Desktop, Shell in required order".to_owned());
     }
+    // D-Bus/systemd user activation runs outside the process supervisor.
+    // Without updating its environment, a portal or KWallet service activated
+    // after login can inherit stale Plasma credentials, DISPLAY and desktop id.
+    // This never starts an additional session bus or modifies saved wallets.
+    sync_activation_environment(&plan.processes[0].environment);
+    session_app_compat::finalize_pam_kwallet_login(&plan.processes[0].environment);
+    restore_saved_display_order();
     let role_plans = plan.processes;
     let wm = role_plans[0].clone();
     let desktop = role_plans[1].clone();
@@ -116,9 +131,77 @@ fn allocator_tuning_defaults(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str
     ALLOCATOR_TUNING.into_iter().filter(|(key, _)| !is_set(key)).collect()
 }
 
+/// A two-connector preference belongs to FlameWM, not Plasma/KScreen.
+/// Restore only when BOTH connector names are currently active. A stale
+/// hotplug preference does not cause a mode-set or block login.
+fn restore_saved_display_order() {
+    let Some((left, right)) = flamewm_session_core::display_order::load_order() else { return; };
+    let Ok(snapshot) = Command::new("xrandr").arg("--query").output() else { return; };
+    if !snapshot.status.success() { return; }
+    let output = String::from_utf8_lossy(&snapshot.stdout);
+    let connected = |connector: &str| output.lines().any(|line| {
+        line.strip_prefix(connector).is_some_and(|rest| {
+            rest.starts_with(" connected ") && rest.split_whitespace()
+                .any(|token| token.contains('x') && token.contains('+'))
+        })
+    });
+    if !connected(&left) || !connected(&right) { return; }
+    match Command::new("xrandr")
+        .args(["--output", &right, "--right-of", &left]).status() {
+        Ok(status) if status.success() => (),
+        Ok(status) => eprintln!("flamewm-session: monitor order restore rejected: {status}"),
+        Err(error) => eprintln!("flamewm-session: monitor order restore unavailable: {error}"),
+    }
+}
+
+/// Publish the SAME session identity and display coordinates to services
+/// activated later by Dolphin, Brave, xdg-desktop-portal or KWallet.
+/// No credential access and no global user-config mutation.
+fn activation_assignments(
+    environment: &BTreeMap<String, String>, inherited: &BTreeMap<String, String>,
+) -> Vec<String> {
+    const KEYS: &[&str] = &[
+        "DISPLAY", "XAUTHORITY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "QT_QPA_PLATFORMTHEME",
+        "KDE_SESSION_VERSION",
+    ];
+    KEYS.iter().filter_map(|key| {
+        // Unlike other keys, a missing KDE version must CLEAR stale activation
+        // state from a prior Plasma login, not resurrect an inherited value.
+        if *key == "KDE_SESSION_VERSION" {
+            return Some(format!("KDE_SESSION_VERSION={}", environment.get(*key)
+                .map(String::as_str).unwrap_or("")));
+        }
+        environment.get(*key).or_else(|| inherited.get(*key))
+            .filter(|value| !value.is_empty()).map(|value| format!("{key}={value}"))
+    }).collect()
+}
+
+fn sync_activation_environment(environment: &BTreeMap<String, String>) {
+    let mut command = Command::new("dbus-update-activation-environment");
+    command.arg("--systemd").args(activation_assignments(
+        environment, &env::vars().collect::<BTreeMap<_, _>>(),
+    ));
+    match command.status() {
+        Ok(status) if status.success() => (),
+        Ok(status) => eprintln!("flamewm-session: D-Bus activation environment not synchronized: {status}"),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            eprintln!("flamewm-session: dbus-update-activation-environment unavailable; portal session integration degraded");
+        }
+        Err(error) => eprintln!("flamewm-session: activation environment: {error}"),
+    }
+}
+
 fn spawn(plan: ProcessPlan) -> Result<Running, String> {
     let mut command = Command::new(&plan.program);
-    command.args(&plan.arguments).envs(&plan.environment);
+    command
+        .args(&plan.arguments)
+        .envs(&plan.environment)
+        .env("FLAMEWM_SESSION_SUPERVISOR_PID", std::process::id().to_string())
+        .env_remove("FLAMEWM_SESSION_LOGOUT_OWNER");
+    if plan.role == SessionRole::WindowManager {
+        command.env("FLAMEWM_SESSION_LOGOUT_OWNER", "1");
+    }
     for (key, value) in allocator_tuning_defaults(|key| env::var_os(key).is_some() || plan.environment.contains_key(key)) {
         command.env(key, value);
     }
@@ -235,9 +318,117 @@ fn supporting_wm_check_is_valid(root_support: Option<u32>, self_support: Option<
     matches!(root_support, Some(support) if support != 0 && self_support == Some(support))
 }
 
+fn clean_wm_exit(index: usize, status: ExitStatus) -> bool {
+    index == 0 && status.success()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{allocator_tuning_defaults, scan_exits, supporting_wm_check_is_valid};
+    use super::{
+        activation_assignments, allocator_tuning_defaults, clean_wm_exit, scan_exits,
+        stop_all, supporting_wm_check_is_valid, ProcessPlan, Running, WAKEUP,
+    };
+    use std::collections::BTreeMap;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, ExitStatus};
+    use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
+
+    #[test]
+    fn successful_wm_exit_stops_session_without_restarting_it() {
+        assert!(clean_wm_exit(0, ExitStatus::from_raw(0)));
+        assert!(!clean_wm_exit(0, ExitStatus::from_raw(1 << 8)));
+        assert!(!clean_wm_exit(1, ExitStatus::from_raw(0)));
+    }
+
+    #[test]
+    fn logout_cleanup_reaps_only_managed_children_without_restart() {
+        let (reader, _writer) = UnixStream::pair().unwrap();
+        let _ = WAKEUP.set(reader);
+        let make_plan = |role| ProcessPlan {
+            role,
+            program: if role == SessionRole::WindowManager {
+                "/bin/true"
+            } else {
+                "/bin/sleep"
+            }
+            .into(),
+            arguments: if role == SessionRole::WindowManager {
+                Vec::new()
+            } else {
+                vec!["30".into()]
+            },
+            environment: BTreeMap::new(),
+            required: true,
+        };
+        let wm_plan = make_plan(SessionRole::WindowManager);
+        let mut wm_child = Command::new(&wm_plan.program).spawn().unwrap();
+        let wm_pid = wm_child.id();
+        let wm_status = wm_child.wait().unwrap();
+        assert!(clean_wm_exit(0, wm_status));
+        let wm = Running {
+            plan: wm_plan,
+            child: wm_child,
+            supervisor: ProcessSupervisorPolicy::new(SupervisorPolicy {
+                graceful_stop_ms: 5,
+                ..SupervisorPolicy::default()
+            }),
+        };
+        let desktop_plan = make_plan(SessionRole::Desktop);
+        let desktop_child = Command::new(&desktop_plan.program)
+            .args(&desktop_plan.arguments)
+            .spawn()
+            .unwrap();
+        let desktop_pid = desktop_child.id();
+        let desktop = Running {
+            plan: desktop_plan,
+            child: desktop_child,
+            supervisor: ProcessSupervisorPolicy::new(SupervisorPolicy {
+                graceful_stop_ms: 5,
+                ..SupervisorPolicy::default()
+            }),
+        };
+        let mut children = vec![wm, desktop];
+        let managed_pids = [wm_pid, desktop_pid];
+        let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+
+        let cleanup = stop_all(&mut children);
+        let unrelated_status = unrelated.try_wait().unwrap();
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+
+        assert!(cleanup.is_ok(), "managed child cleanup failed: {cleanup:?}");
+        assert!(children.is_empty(), "supervisor retained managed children");
+        assert!(
+            managed_pids
+                .iter()
+                .all(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists()),
+            "managed child remained alive"
+        );
+        assert!(unrelated_status.is_none(), "cleanup affected an unrelated process");
+    }
+
+    #[test]
+    fn activation_clears_stale_kde_backend_without_exporting_pam_credentials() {
+        let live = BTreeMap::from([
+            ("DISPLAY".to_owned(), ":0".to_owned()),
+            ("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned()),
+        ]);
+        let inherited = BTreeMap::from([
+            ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
+            ("KDE_SESSION_VERSION".to_owned(), "5".to_owned()),
+            ("PAM_KWALLET5_LOGIN".to_owned(), "/private/socket".to_owned()),
+        ]);
+        let args = activation_assignments(&live, &inherited);
+        assert!(args.contains(&"XDG_CURRENT_DESKTOP=FlameWM".to_owned()));
+        assert!(args.contains(&"KDE_SESSION_VERSION=".to_owned()));
+        assert!(!args.iter().any(|arg| arg.contains("PAM_KWALLET5_LOGIN")));
+        let kde6 = BTreeMap::from([
+            ("KDE_SESSION_VERSION".to_owned(), "6".to_owned()),
+        ]);
+        let selected = activation_assignments(&kde6, &inherited);
+        assert!(selected.contains(&"KDE_SESSION_VERSION=6".to_owned()));
+    }
 
     #[test]
     fn scan_exits_reports_every_exited_child_before_blocking() {
@@ -295,7 +486,7 @@ fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_pla
             children[index].child.try_wait().map_err(|error| child_error(&children[index], "supervise", error))
         })?;
         if let Some(&(index, status)) = exits.first() {
-            if index == 0 && status.success() {
+            if clean_wm_exit(index, status) {
                 children[0].supervisor.request_stop();
                 return Ok(());
             }
@@ -379,14 +570,26 @@ fn stop_all(children: &mut Vec<Running>) -> Result<(), String> {
 fn stop_role(child: &mut Running) -> Result<(), String> {
     child.supervisor.request_stop();
     let mut failures = Vec::new();
-    if let Some(pid) = Pid::from_raw(child.child.id() as i32) {
-        if let Err(error) = kill_process(pid, Signal::TERM) {
-            if error != rustix::io::Errno::SRCH { failures.push(format!("terminate {:?}: {error}", child.plan.role)); }
+    let mut exited = match child.child.try_wait() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(error) => {
+            failures.push(child_error(child, "check before graceful stop", error));
+            true
+        }
+    };
+    if !exited {
+        if let Some(pid) = Pid::from_raw(child.child.id() as i32) {
+            if let Err(error) = kill_process(pid, Signal::TERM) {
+                if error != rustix::io::Errno::SRCH {
+                    failures.push(format!("terminate {:?}: {error}", child.plan.role));
+                }
+            }
         }
     }
     let deadline = Instant::now() + Duration::from_millis(child.supervisor.graceful_stop_ms());
-    let mut exited = false;
     loop {
+        if exited { break; }
         match child.child.try_wait() {
             Ok(Some(_)) => {
                 exited = true;

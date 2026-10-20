@@ -349,6 +349,11 @@ impl RasterCache {
             return;
         }
         let cost = Self::raster_bytes(&result);
+        // A single oversized icon must not evict the working set and then
+        // remain cached above the byte budget. The caller still gets the raster.
+        if cost > self.budget_bytes {
+            return;
+        }
         while !self.entries.is_empty() && self.used_bytes + cost > self.budget_bytes {
             let Some(old) = self.order.pop_front() else { break };
             if let Some(removed) = self.entries.remove(&old) {
@@ -1141,9 +1146,6 @@ pub fn theme_chain(preferred: Option<&str>) -> Vec<String> {
         }
     }
     theme_names.push(DEFAULT_ICON_THEME.to_owned());
-    // Bridge while PlagueSur is being integrated: the previous bundled default keeps icons
-    // resolving; once McMojave-circle is removed from the bundle this entry simply misses.
-    theme_names.push("McMojave-circle".to_owned());
     theme_names.push("Breeze".to_owned());
     unique_strings(theme_names)
 }
@@ -1696,6 +1698,31 @@ mod tests {
             .prepare_semantic("j2-cached", size)
             .expect("semantic");
         assert!(resolver.cache_len() > after_first + 1 - 1);
+    }
+
+    #[test]
+    fn oversized_raster_does_not_evict_or_escape_byte_budget() {
+        let mut cache = RasterCache { budget_bytes: 160, ..RasterCache::default() };
+        let key = |name: &str| RasterKey {
+            path: PathBuf::from(name),
+            physical: 2,
+            origin: IconOrigin::ExplicitPath,
+        };
+        let raster = |size: usize| Ok(Rgba8Raster {
+            source: "test".into(),
+            width: (size / 4) as u32,
+            height: 1,
+            pixels: vec![255; size],
+            origin: IconOrigin::ExplicitPath,
+            fallback_reason: None,
+        });
+        cache.insert(key("small"), raster(16));
+        let retained = cache.used_bytes;
+        cache.insert(key("oversized"), raster(256));
+        assert_eq!(cache.used_bytes, retained);
+        assert!(cache.used_bytes <= cache.budget_bytes);
+        assert!(cache.get(&key("small")).is_some());
+        assert!(cache.get(&key("oversized")).is_none());
     }
 
     #[test]

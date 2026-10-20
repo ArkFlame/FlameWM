@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 flamewm-api = { path = "../flamewm-api" }
+x11rb.workspace = true
 
 [lints]
 workspace = true

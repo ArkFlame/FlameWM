@@ -166,11 +166,17 @@ impl AnimationStyle {
         };
         let allowed: &[Self] = match key {
             "startAnimation" => &[Self::None, Self::Slide, Self::Fade, Self::MagicLamp],
-            "minimizeAnimation" | "maximizeAnimation" => &[Self::None, Self::Fade, Self::MagicLamp],
+            "minimizeAnimation" => &[Self::None, Self::Fade, Self::MagicLamp],
+            "maximizeAnimation" => &[Self::None, Self::Fade, Self::Scale],
             "windowOpenAnimation" => &[Self::None, Self::Scale, Self::Fade],
             "windowCloseAnimation" => &[Self::None, Self::Fade],
             _ => return None,
         };
+        // Old releases erroneously serialized the maximize Scale effect as
+        // "magic-lamp". Keep persisted profiles working, but normalize them to Scale.
+        if key == "maximizeAnimation" && text == "magic-lamp" {
+            return Some(Self::Scale);
+        }
         allowed.contains(&style).then_some(style)
     }
 }
@@ -187,6 +193,8 @@ pub struct ProductSettings {
     /// Solid desktop colour used when `wallpaper_mode` is `Solid`.
     pub wallpaper_color: String,
     pub wallpaper_fit: WallpaperFit,
+    /// When enabled, the desktop stretches one wallpaper across all outputs.
+    pub share_wallpaper: bool,
     pub desktop_selection_fill_opacity: u8,
     pub window_snap_preview_fill_opacity: u8,
     pub snap_preview_enabled: bool,
@@ -294,6 +302,7 @@ impl Default for ProductSettings {
             wallpaper_mode: BackgroundMode::Default,
             wallpaper_color: "#232629".to_owned(),
             wallpaper_fit: WallpaperFit::Fill,
+            share_wallpaper: false,
             desktop_selection_fill_opacity: 20,
             window_snap_preview_fill_opacity: 20,
             snap_preview_enabled: true,
@@ -352,12 +361,12 @@ impl Default for ProductSettings {
             start_animation: AnimationStyle::Slide,
             start_animation_enabled: true,
             minimize_animation: AnimationStyle::MagicLamp,
-            maximize_animation: AnimationStyle::MagicLamp,
-            window_open_animation: AnimationStyle::Scale,
-            window_open_animation_enabled: true,
+            maximize_animation: AnimationStyle::None,
+            window_open_animation: AnimationStyle::None,
+            window_open_animation_enabled: false,
             window_close_animation: AnimationStyle::Fade,
             minimize_animation_enabled: true,
-            maximize_animation_enabled: true,
+            maximize_animation_enabled: false,
             lock_background_color: "#232629".to_owned(),
             lock_background_image: String::new(),
             lock_background_mode: BackgroundMode::Default,
@@ -1030,6 +1039,7 @@ stable_settings! {
     (true, desktop, "wallpaper", wallpaper),
     (false, desktop, "wallpaperMode", wallpaper_mode),
     (false, desktop, "wallpaperColor", wallpaper_color),
+    (false, desktop, "shareWallpaper", share_wallpaper),
     (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
     (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),
     (true, fonts, "fontFamily", font_family),
@@ -1114,6 +1124,7 @@ stable_settings! {
 
 #[must_use]
 pub(crate) fn stable_setting(key: &str) -> Option<&'static StableSetting> {
+    let key = if key == "wallpaperShare" { "shareWallpaper" } else { key };
     STABLE_SETTINGS.iter().find(|row| row.key == key)
 }
 
@@ -1719,10 +1730,10 @@ mod tests {
         assert_eq!(defaults.animation_speed, 100);
         assert_eq!(defaults.start_animation, AnimationStyle::Slide);
         assert_eq!(defaults.minimize_animation, AnimationStyle::MagicLamp);
-        assert_eq!(defaults.maximize_animation, AnimationStyle::MagicLamp);
-        assert_eq!(defaults.window_open_animation, AnimationStyle::Scale);
+        assert_eq!(defaults.maximize_animation, AnimationStyle::None);
+        assert_eq!(defaults.window_open_animation, AnimationStyle::None);
         assert_eq!(defaults.window_close_animation, AnimationStyle::Fade);
-        assert!(defaults.maximize_animation_enabled);
+        assert!(!defaults.maximize_animation_enabled);
 
         let text = ConfigStore::serialize(&defaults);
         assert!(!text.contains("startMenuColor"));
@@ -1998,7 +2009,8 @@ mod tests {
             "minimizeAnimation=magic-lamp",
             "maximizeAnimation=none",
             "maximizeAnimation=fade",
-            "maximizeAnimation=magic-lamp",
+            "maximizeAnimation=magic-lamp", // legacy spelling is accepted as Scale
+            "maximizeAnimation=scale",
             "windowOpenAnimation=none",
             "windowOpenAnimation=scale",
             "windowOpenAnimation=fade",
@@ -2037,12 +2049,16 @@ mod tests {
         );
         assert_eq!(
             settings.maximize_animation_style(),
-            AnimationStyle::MagicLamp
+            AnimationStyle::None
         );
         assert_eq!(
             settings.window_open_animation_style(),
-            AnimationStyle::Scale
+            AnimationStyle::None
         );
+
+        settings.window_open_animation = AnimationStyle::Scale;
+        settings.window_open_animation_enabled = true;
+        assert_eq!(settings.window_open_animation_style(), AnimationStyle::Scale);
 
         settings.start_animation_enabled = false;
         settings.minimize_animation_enabled = false;
@@ -2070,6 +2086,17 @@ mod tests {
             .expect("style and toggle");
         assert_eq!(parsed.minimize_animation_style(), AnimationStyle::Fade);
         assert_eq!(parsed.maximize_animation_style(), AnimationStyle::None);
+
+        let saved = load("revision=2\nwindowOpenAnimation=scale\nwindowOpenAnimationEnabled=0\n")
+            .expect("disabled style remains saved");
+        assert_eq!(saved.window_open_animation, AnimationStyle::Scale);
+        assert_eq!(saved.window_open_animation_style(), AnimationStyle::None);
+        let serialized = ConfigStore::serialize(&saved);
+        assert!(!serialized.contains("windowOpenAnimationEnabled="));
+        let reloaded = load(&serialized).expect("disabled style round trip");
+        assert_eq!(reloaded.window_open_animation, AnimationStyle::Scale);
+        assert!(!reloaded.window_open_animation_enabled);
+        assert_eq!(reloaded.window_open_animation_style(), AnimationStyle::None);
     }
 
     #[test]
@@ -2087,18 +2114,26 @@ mod tests {
         let serialized = ConfigStore::serialize(&parsed);
         assert!(serialized.contains("startAnimation=fade\n"));
         assert!(serialized.contains("minimizeAnimation=none\n"));
-        assert!(serialized.contains("windowOpenAnimationEnabled=false\n"));
+        assert!(!serialized.contains("windowOpenAnimationEnabled="));
         assert!(serialized.contains("windowCloseAnimation=none\n"));
         assert_eq!(
             load(&serialized).expect("round trip"),
             parsed
         );
+
+        let mut enabled = parsed;
+        enabled.window_open_animation_enabled = true;
+        assert_eq!(enabled.window_open_animation_style(), AnimationStyle::Fade);
+        let serialized = ConfigStore::serialize(&enabled);
+        assert!(serialized.contains("windowOpenAnimationEnabled=true\n"));
+        assert_eq!(load(&serialized).expect("enabled round trip"), enabled);
     }
 
     #[test]
     fn new_customization_defaults_match_contract_and_write_nothing() {
         let defaults = ProductSettings::default();
         assert_eq!(defaults.wallpaper_fit, WallpaperFit::Fill);
+        assert!(!defaults.share_wallpaper);
         assert_eq!(defaults.cursor_size, 24);
         assert_eq!(defaults.taskbar_clock_format, ClockFormat::TwentyFour);
         assert!(!defaults.taskbar_show_seconds);
@@ -2108,6 +2143,7 @@ mod tests {
         let text = ConfigStore::serialize(&defaults);
         for key in [
             "wallpaperFit",
+            "shareWallpaper",
             "cursorSize",
             "taskbarClockFormat",
             "taskbarShowSeconds",
@@ -2140,6 +2176,20 @@ mod tests {
         assert!(text.contains("taskbarClockFormat=12h\n"));
         assert!(text.contains("taskbarShowSeconds=true\n"));
         assert!(text.contains("snapPreviewEnabled=false\n"));
+    }
+
+    #[test]
+    fn shared_wallpaper_toggle_round_trips_and_reads_legacy_spelling() {
+        let enabled = load("revision=2\nshareWallpaper=true\n").expect("canonical setting");
+        assert!(enabled.share_wallpaper);
+        let serialized = ConfigStore::serialize(&enabled);
+        assert!(serialized.contains("shareWallpaper=true\n"));
+        assert!(!serialized.contains("wallpaperShare="));
+        assert!(load(&serialized).expect("canonical reload").share_wallpaper);
+
+        let legacy = load("revision=2\nwallpaperShare=1\n").expect("legacy setting");
+        assert!(legacy.share_wallpaper);
+        assert!(ConfigStore::serialize(&legacy).contains("shareWallpaper=true\n"));
     }
 
     #[test]

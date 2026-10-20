@@ -1,77 +1,65 @@
-use flamewm_api::workspace::{WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot};
+use flamewm_api::workspace::{
+    GridDirection, WORKSPACE_ROWS, WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot, grid_index,
+    grid_neighbor, grid_position, workspace_columns,
+};
 use flamewm_api::{FlameError, FlameResult};
 
+/// Cell of the two-row topology; the grid itself is owned by `flamewm_api::workspace`.
+pub use flamewm_api::workspace::GridPosition;
 pub use flamewm_api::workspace::MAX_WORKSPACES;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GridPosition {
-    pub row: usize,
-    pub column: usize,
-}
 
 pub struct TwoRowTopology;
 
 impl TwoRowTopology {
     #[must_use]
-    pub const fn columns_for(total: usize) -> usize {
-        if total == 0 { 1 } else { total.div_ceil(2) }
+    pub fn columns_for(total: usize) -> usize {
+        workspace_columns(total)
     }
 
+    /// Row-major cell of `index`; an index at or past `total` clamps to the last workspace.
     #[must_use]
-    fn index_to_position(index: usize, total: usize) -> GridPosition {
-        if total == 0 {
-            return GridPosition { row: 0, column: 0 };
-        }
-        let index = index.min(total - 1);
-        GridPosition {
-            row: index % 2,
-            column: index / 2,
-        }
+    pub fn index_to_position(index: usize, total: usize) -> GridPosition {
+        grid_position(index.min(total.saturating_sub(1)), total)
+            .unwrap_or(GridPosition { row: 0, column: 0 })
     }
 
+    /// Index of cell `(row, column)` with both coordinates clamped into the topology; a cell
+    /// outside the filled grid (the odd tail column) falls back to the last workspace.
     #[must_use]
-    fn position_to_index(row: usize, column: usize, total: usize) -> usize {
+    pub fn position_to_index(row: usize, column: usize, total: usize) -> usize {
         if total == 0 {
             return 0;
         }
         let column = column.min(Self::columns_for(total) - 1);
-        let row = row.min(1);
-        let candidate = column * 2 + row;
-        if candidate < total {
-            candidate
-        } else {
-            (column * 2).min(total - 1)
-        }
+        let row = row.min(WORKSPACE_ROWS - 1);
+        grid_index(row, column, total).unwrap_or(total - 1)
+    }
+
+    /// Neighbour in `direction`, or `index` when the grid has no such neighbour.
+    #[must_use]
+    fn step(index: usize, total: usize, direction: GridDirection) -> usize {
+        let index = index.min(total.saturating_sub(1));
+        grid_neighbor(index, total, direction).unwrap_or(index)
+    }
+
+    #[must_use]
+    pub fn move_left(index: usize, total: usize) -> usize {
+        Self::step(index, total, GridDirection::Left)
     }
 
     #[must_use]
     pub fn move_right(index: usize, total: usize) -> usize {
-        let pos = Self::index_to_position(index, total);
-        if pos.column + 1 >= Self::columns_for(total) {
-            index.min(total.saturating_sub(1))
-        } else {
-            Self::position_to_index(pos.row, pos.column + 1, total)
-        }
+        Self::step(index, total, GridDirection::Right)
     }
 
     #[must_use]
     pub fn move_up(index: usize, total: usize) -> usize {
-        let pos = Self::index_to_position(index, total);
-        if pos.row == 0 {
-            index.min(total.saturating_sub(1))
-        } else {
-            Self::position_to_index(0, pos.column, total)
-        }
+        Self::step(index, total, GridDirection::Up)
     }
 
     #[must_use]
     pub fn move_down(index: usize, total: usize) -> usize {
-        let pos = Self::index_to_position(index, total);
-        if pos.row == 1 || (total % 2 == 1 && pos.column + 1 == Self::columns_for(total)) {
-            index.min(total.saturating_sub(1))
-        } else {
-            Self::position_to_index(1, pos.column, total)
-        }
+        Self::step(index, total, GridDirection::Down)
     }
 }
 
@@ -246,13 +234,27 @@ mod tests {
     }
 
     #[test]
-    fn two_row_navigation_matches_pager_topology() {
+    fn two_row_navigation_is_row_major_and_clamps_inside_the_row() {
+        // Five workspaces read 1 2 3 / 4 5, so index 3 (workspace 4) is the first lower-row cell.
+        assert_eq!(TwoRowTopology::columns_for(5), 3);
         assert_eq!(
             TwoRowTopology::index_to_position(3, 5),
-            GridPosition { row: 1, column: 1 }
+            GridPosition { row: 1, column: 0 }
         );
+        assert_eq!(
+            TwoRowTopology::index_to_position(2, 5),
+            GridPosition { row: 0, column: 2 }
+        );
+        assert_eq!(TwoRowTopology::move_down(0, 5), 3);
+        assert_eq!(TwoRowTopology::move_up(3, 5), 0);
+        // Horizontal moves clamp at the row edge instead of crossing rows.
+        assert_eq!(TwoRowTopology::move_right(0, 5), 1);
+        assert_eq!(TwoRowTopology::move_right(2, 5), 2);
+        assert_eq!(TwoRowTopology::move_left(1, 5), 0);
+        assert_eq!(TwoRowTopology::move_left(3, 5), 3);
         assert_eq!(TwoRowTopology::move_right(3, 5), 4);
-        assert_eq!(TwoRowTopology::move_down(4, 5), 4);
-        assert_eq!(TwoRowTopology::move_up(3, 5), 2);
+        assert_eq!(TwoRowTopology::move_left(4, 5), 3);
+        // The odd tail column has nothing under it.
+        assert_eq!(TwoRowTopology::move_down(2, 5), 2);
     }
 }

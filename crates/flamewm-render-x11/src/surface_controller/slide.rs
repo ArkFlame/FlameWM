@@ -26,7 +26,12 @@ pub enum SlideEdge {
 
 /// Window-local clip that keeps a slid popup on the screen side of the dock edge it emerges from.
 /// Without a dock the whole popup is kept.
-pub(super) fn panel_clip(dock: Option<(i32, i32, u32, u32)>, origin: (i32, i32), size: (u32, u32), edge: SlideEdge) -> ClipRect {
+pub(super) fn panel_clip(
+    dock: Option<(i32, i32, u32, u32)>,
+    origin: (i32, i32),
+    size: (u32, u32),
+    edge: SlideEdge,
+) -> ClipRect {
     let Some((dx, dy, dw, dh)) = dock else {
         return (0, 0, size.0, size.1);
     };
@@ -49,7 +54,9 @@ pub enum PopupTransition {
     Slide,
     Fade,
     /// Magic Lamp between the popup and `target`, a root device rect `(x, y, width, height)`.
-    Lamp { target: (i32, i32, u32, u32) },
+    Lamp {
+        target: (i32, i32, u32, u32),
+    },
 }
 
 /// Presentation for a popup anchored to a panel edge.
@@ -63,15 +70,27 @@ pub struct SlideConfig {
 
 impl SlideConfig {
     pub fn slide(edge: SlideEdge, speed: u16) -> Self {
-        Self { edge, speed, transition: PopupTransition::Slide }
+        Self {
+            edge,
+            speed,
+            transition: PopupTransition::Slide,
+        }
     }
 
     pub fn fade(edge: SlideEdge, speed: u16) -> Self {
-        Self { edge, speed, transition: PopupTransition::Fade }
+        Self {
+            edge,
+            speed,
+            transition: PopupTransition::Fade,
+        }
     }
 
     pub fn lamp(edge: SlideEdge, speed: u16, target: (i32, i32, u32, u32)) -> Self {
-        Self { edge, speed, transition: PopupTransition::Lamp { target } }
+        Self {
+            edge,
+            speed,
+            transition: PopupTransition::Lamp { target },
+        }
     }
 }
 
@@ -96,7 +115,9 @@ pub(super) fn overlay_style(transition: PopupTransition) -> TransitionStyle {
 /// Root rect the overlay folds toward: the Start button for Magic Lamp, the popup itself otherwise.
 pub(super) fn overlay_target(transition: PopupTransition, popup: WarpRect) -> WarpRect {
     match transition {
-        PopupTransition::Lamp { target: (x, y, width, height) } => WarpRect {
+        PopupTransition::Lamp {
+            target: (x, y, width, height),
+        } => WarpRect {
             x: f64::from(x),
             y: f64::from(y),
             width: f64::from(width),
@@ -128,7 +149,12 @@ pub(super) struct SlideKind {
 }
 
 /// Native window origin at `progress`: displaced from the final origin toward the panel edge.
-pub(super) fn slide_origin(final_origin: (i32, i32), size: (u32, u32), edge: SlideEdge, progress: f32) -> (i32, i32) {
+pub(super) fn slide_origin(
+    final_origin: (i32, i32),
+    size: (u32, u32),
+    edge: SlideEdge,
+    progress: f32,
+) -> (i32, i32) {
     let remaining = 1.0 - progress.clamp(0.0, 1.0);
     let (width, height) = (size.0 as f32, size.1 as f32);
     let (dx, dy) = match edge {
@@ -145,7 +171,12 @@ pub(super) fn slide_origin(final_origin: (i32, i32), size: (u32, u32), edge: Sli
 
 /// Window origin for one slide frame. The timeline's end progress is exact (1.0 opened, 0.0 closed),
 /// so the landed frame needs no snap: a closed slide ends off the panel edge, never on its origin.
-pub(super) fn landing_frame_origin(final_origin: (i32, i32), size: (u32, u32), edge: SlideEdge, progress: f32) -> (i32, i32) {
+pub(super) fn landing_frame_origin(
+    final_origin: (i32, i32),
+    size: (u32, u32),
+    edge: SlideEdge,
+    progress: f32,
+) -> (i32, i32) {
     slide_origin(final_origin, size, edge, progress)
 }
 
@@ -177,7 +208,10 @@ impl SurfaceController {
             if !active.opening {
                 self.slides.start_towards(
                     key,
-                    SlideKind { edge: config.edge, opening: true },
+                    SlideKind {
+                        edge: config.edge,
+                        opening: true,
+                    },
                     now,
                     SLIDE_OPEN_BASE_MS,
                     Easing::EaseOutCubic,
@@ -210,7 +244,10 @@ impl SurfaceController {
         };
         if self.slides.start_towards(
             key,
-            SlideKind { edge: config.edge, opening: true },
+            SlideKind {
+                edge: config.edge,
+                opening: true,
+            },
             now,
             SLIDE_OPEN_BASE_MS,
             Easing::EaseOutCubic,
@@ -220,6 +257,15 @@ impl SurfaceController {
             return Ok(false);
         }
         let mut overlay = overlay;
+        let radius = {
+            let instance = self.instance_ref(id)?;
+            backdrop_shape::popup_backdrop_radius_px(
+                &instance.document,
+                instance.app.width,
+                instance.app.height,
+            )
+        };
+        overlay.set_corner_radius(radius);
         if let Err(error) = overlay.paint(overlay_paint_progress(config.transition, 0.0)) {
             eprintln!("flamewm: popup overlay paint failed, mapping immediately: {error}");
             self.slides.cancel(key);
@@ -247,7 +293,10 @@ impl SurfaceController {
             if active.opening {
                 self.slides.start_towards(
                     key,
-                    SlideKind { edge: config.edge, opening: false },
+                    SlideKind {
+                        edge: config.edge,
+                        opening: false,
+                    },
                     now,
                     SLIDE_CLOSE_BASE_MS,
                     Easing::EaseOutCubic,
@@ -281,7 +330,10 @@ impl SurfaceController {
         };
         if self.slides.start_towards(
             key,
-            SlideKind { edge: config.edge, opening: false },
+            SlideKind {
+                edge: config.edge,
+                opening: false,
+            },
             now,
             SLIDE_CLOSE_BASE_MS,
             Easing::EaseOutCubic,
@@ -290,6 +342,15 @@ impl SurfaceController {
         {
             return Ok(false);
         }
+        let radius = {
+            let instance = self.instance_ref(id)?;
+            backdrop_shape::popup_backdrop_radius_px(
+                &instance.document,
+                instance.app.width,
+                instance.app.height,
+            )
+        };
+        overlay.set_corner_radius(radius);
         if let Err(error) = overlay.paint(overlay_paint_progress(config.transition, 1.0)) {
             eprintln!("flamewm: popup overlay paint failed, unmapping immediately: {error}");
             self.slides.cancel(key);

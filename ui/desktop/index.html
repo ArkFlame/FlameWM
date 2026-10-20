@@ -5,6 +5,11 @@
   <img id="desktop-watermark" class="watermark" src="assets/watermark.png">
   <!--ITEMS-->
   <div id="desktop-selection" class="selection"></div>
+  <div id="desktop-convert-preview" class="desktop-convert-preview" hidden>
+    <img id="desktop-convert-preview-icon" class="desktop-glyph" src="assets/breeze/folder-documents.svg">
+    <div class="desktop-label"><div id="desktop-convert-preview-line-1" class="desktop-label-line">&#8203;</div><div id="desktop-convert-preview-line-2" class="desktop-label-line">&#8203;</div></div>
+    <div id="desktop-convert-preview-status" class="desktop-convert-preview-status">Converting…</div>
+  </div>
   <div id="desktop-drag-ghost" class="desktop-drag-ghost" hidden><img id="desktop-drag-ghost-icon" class="desktop-glyph" src="assets/breeze/folder.svg"><div class="desktop-label"><div id="desktop-drag-ghost-label-1" class="desktop-label-line">&#8203;</div><div id="desktop-drag-ghost-label-2" class="desktop-label-line">&#8203;</div></div><div id="desktop-drag-ghost-count" class="desktop-drag-count">&#8203;</div></div>
   <div id="desktop-rename" class="desktop-rename" data-action="desktop.rename.surface" hidden><div id="desktop-rename-value" class="desktop-rename-value">&#8203;</div><div class="desktop-rename-actions"><button id="desktop-rename-confirm" class="desktop-rename-button" data-action="rename.confirm">OK</button><button id="desktop-rename-cancel" class="desktop-rename-button" data-action="rename.cancel">Cancel</button></div></div>
   <div id="sticky-1" class="sticky" data-action="sticky.1.move" hidden><div id="sticky-1-title" class="sticky-title">Sticky Note</div><div id="sticky-1-drag" class="sticky-drag" data-action="sticky.1.drag"></div><div id="sticky-1-text" class="sticky-text">&#8203;</div><div id="sticky-1-resize-nw" class="sticky-resize-nw" data-action="sticky.1.resize-nw"></div><div id="sticky-1-resize-ne" class="sticky-resize-ne" data-action="sticky.1.resize-ne"></div><div id="sticky-1-resize-sw" class="sticky-resize-sw" data-action="sticky.1.resize-sw"></div><div id="sticky-1-resize-se" class="sticky-resize-se" data-action="sticky.1.resize-se"></div></div>
@@ -25,20 +30,33 @@
   <div id="sticky-16" class="sticky" data-action="sticky.16.move" hidden><div id="sticky-16-title" class="sticky-title">Sticky Note</div><div id="sticky-16-drag" class="sticky-drag" data-action="sticky.16.drag"></div><div id="sticky-16-text" class="sticky-text">&#8203;</div><div id="sticky-16-resize-nw" class="sticky-resize-nw" data-action="sticky.16.resize-nw"></div><div id="sticky-16-resize-ne" class="sticky-resize-ne" data-action="sticky.16.resize-ne"></div><div id="sticky-16-resize-sw" class="sticky-resize-sw" data-action="sticky.16.resize-sw"></div><div id="sticky-16-resize-se" class="sticky-resize-se" data-action="sticky.16.resize-se"></div></div>
   <section id="desktop-menu" class="desktop-menu context-menu" data-action="desktop.menu.surface">
     <button id="menu-row-terminal" class="menu-row" data-action="menu.terminal"><img src="assets/breeze/utilities-terminal.svg"><span>Open Terminal</span></button>
-    <button id="menu-row-folder" class="menu-row" data-action="menu.folder"><img src="assets/breeze/folder-new.svg"><span>Create New Folder</span></button>
+    <button id="menu-row-folder" class="menu-row" data-action="menu.folder"><img src="assets/breeze/flamewm-new-folder.svg"><span>Create New Folder</span></button>
     <button id="menu-row-note" class="menu-row" data-action="menu.note"><img src="assets/breeze/kwrite.svg"><span>New Sticky Note</span></button>
-    <button id="menu-row-desktop" class="menu-row" data-action="menu.desktop"><img src="assets/breeze/list-add.svg"><span>Add Virtual Desktop</span></button>
+    <button id="menu-row-desktop" class="menu-row" data-action="menu.desktop"><img src="assets/breeze/flamewm-add-workspace.svg"><span>Add Virtual Desktop</span></button>
     <button id="menu-row-settings" class="menu-row" data-action="menu.settings"><img src="assets/breeze/preferences-desktop.svg"><span>FlameWM Settings</span></button>
   </section>
   <section id="desktop-entry-menu" class="desktop-menu context-menu" data-action="desktop.entry-menu.surface">
     <button id="menu-row-rename" class="menu-row" data-action="entry.rename"><img src="assets/breeze/edit-rename.svg"><span>Rename</span></button>
     <button id="menu-row-shortcut" class="menu-row" data-action="entry.shortcut"><img src="assets/breeze/go-next.svg"><span>Create Shortcut</span></button>
-    <button id="menu-row-delete" class="menu-row" data-action="entry.delete"><img src="assets/breeze/edit-delete.svg"><span>Delete</span></button>
+    <button id="menu-row-convert" class="menu-row" data-action="entry.convert" hidden><img src="assets/breeze/flamewm-convert.svg"><span>Convert</span></button>
+    <button id="menu-row-delete" class="menu-row" data-action="entry.delete"><img src="assets/breeze/edit-delete.svg"><span>Move to Trash</span></button>
     <button id="menu-row-empty-trash" class="menu-row" data-action="entry.empty-trash" hidden><img src="assets/breeze/user-trash.svg"><span>Empty Trash</span></button>
   </section>
+  <section id="desktop-convert-wheel" class="context-menu convert-wheel" data-action="desktop.convert.surface" hidden>
+    <img id="convert-wheel-highlight" class="convert-wheel-highlight" src="assets/breeze/folder.svg" hidden>
+    <div id="convert-wheel-hub" class="convert-wheel-hub"><span id="convert-wheel-hub-text">File</span></div>
+    <button id="convert-slot-0" class="convert-wheel-option convert-wheel-pos-0" data-action="convert.slot.0" hidden>FORMAT</button>
+    <button id="convert-slot-1" class="convert-wheel-option convert-wheel-pos-1" data-action="convert.slot.1" hidden>FORMAT</button>
+    <button id="convert-slot-2" class="convert-wheel-option convert-wheel-pos-2" data-action="convert.slot.2" hidden>FORMAT</button>
+    <button id="convert-slot-3" class="convert-wheel-option convert-wheel-pos-3" data-action="convert.slot.3" hidden>FORMAT</button>
+    <button id="convert-slot-4" class="convert-wheel-option convert-wheel-pos-4" data-action="convert.slot.4" hidden>FORMAT</button>
+    <button id="convert-slot-5" class="convert-wheel-option convert-wheel-pos-5" data-action="convert.slot.5" hidden>FORMAT</button>
+    <button id="convert-slot-6" class="convert-wheel-option convert-wheel-pos-6" data-action="convert.slot.6" hidden>FORMAT</button>
+    <button id="convert-slot-7" class="convert-wheel-option convert-wheel-pos-7" data-action="convert.slot.7" hidden>FORMAT</button>
+  </section>
   <section id="desktop-confirm" class="desktop-confirm context-menu" data-action="desktop.confirm.surface">
-    <div id="confirm-text" class="menu-header">Delete permanently?</div>
-    <button id="confirm-delete" class="menu-row" data-action="confirm.delete">Delete</button>
+    <div id="confirm-text" class="menu-header">Move to Trash?</div>
+    <button id="confirm-delete" class="menu-row" data-action="confirm.trash">Move to Trash</button>
     <button id="confirm-cancel" class="menu-row" data-action="confirm.cancel">Cancel</button>
   </section>
   <section id="sticky-menu" class="sticky-menu context-menu" data-action="sticky.menu.surface">

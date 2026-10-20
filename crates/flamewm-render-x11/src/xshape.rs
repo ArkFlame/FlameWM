@@ -156,19 +156,27 @@ impl XShapeBridge {
 pub(crate) type ClipRect = (u32, u32, u32, u32);
 
 fn spans_to_rects(spans: &[(u32, u32, u32)]) -> Vec<XRectangle> {
-    spans
-        .iter()
-        .filter(|(_, start, end)| end > start)
-        .filter_map(|(y, start, end)| {
-            let width = end.checked_sub(*start)?;
-            Some(XRectangle {
-                x: (*start).min(i16::MAX as u32) as i16,
-                y: (*y).min(i16::MAX as u32) as i16,
-                width: width.min(u16::MAX as u32) as u16,
-                height: 1,
-            })
-        })
-        .collect()
+    // Adjacent rows with identical coverage form one XShape rectangle. A
+    // full-height frame is one rectangle rather than hundreds of 1px calls;
+    // curved corners retain their exact independently covered rows.
+    let mut rects: Vec<XRectangle> = Vec::new();
+    for &(y, start, end) in spans {
+        if end <= start { continue; }
+        let x = start.min(i16::MAX as u32) as i16;
+        let yy = y.min(i16::MAX as u32) as i16;
+        let width = end.saturating_sub(start).min(u16::MAX as u32) as u16;
+        if let Some(last) = rects.last_mut() {
+            if last.x == x && last.width == width &&
+                i32::from(last.y) + i32::from(last.height) == i32::from(yy) &&
+                last.height < u16::MAX
+            {
+                last.height += 1;
+                continue;
+            }
+        }
+        rects.push(XRectangle { x, y: yy, width, height: 1 });
+    }
+    rects
 }
 
 /// Intersects row spans with `clip`; order is preserved so YX-sorted Shape requests stay valid.
@@ -233,6 +241,23 @@ pub(crate) fn ring_mask_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coalesced_rectangles_keep_exact_rounded_coverage() {
+        let spans = rounded_mask_spans(100, 80, 12);
+        let rects = spans_to_rects(&spans);
+        assert!(rects.len() < spans.len() / 2);
+        let covered = |x: u32, y: u32| rects.iter().any(|r| {
+            x >= r.x as u32 && x < r.x as u32 + r.width as u32 &&
+            y >= r.y as u32 && y < r.y as u32 + r.height as u32
+        });
+        for y in 0..80 {
+            for x in 0..100 {
+                let original = spans.iter().any(|&(row, start, end)| row == y && x >= start && x < end);
+                assert_eq!(covered(x, y), original, "{x},{y}");
+            }
+        }
+    }
 
     #[test]
     fn ring_mask_keeps_border_and_cuts_interior() {

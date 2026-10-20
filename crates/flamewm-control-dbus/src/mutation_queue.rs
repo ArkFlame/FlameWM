@@ -194,12 +194,13 @@ pub fn drain_queue_inline(queue: &ControlMutationQueue) -> Vec<u64> {
     while let Some(mutation) = queue.try_take_for_test() {
         let id = mutation.id;
         let lane = mutation.lane;
-        queue.push_result(ControlMutationResult {
-            id,
-            lane,
-            outcome: Ok(ControlResponse::Unit),
-        })
-        .expect("write mutation wake byte");
+        queue
+            .push_result(ControlMutationResult {
+                id,
+                lane,
+                outcome: Ok(ControlResponse::Unit),
+            })
+            .expect("write mutation wake byte");
         order.push(id);
     }
     order
@@ -279,9 +280,7 @@ mod tests {
             .expect("submit");
         drain_queue_inline(&queue);
         assert!(
-            queue
-                .wake_ready_probe()
-                .expect("read and re-arm wake byte"),
+            queue.wake_ready_probe().expect("read and re-arm wake byte"),
             "wake fd must fire without sleep"
         );
         assert!(queue.try_recv_result().is_some());

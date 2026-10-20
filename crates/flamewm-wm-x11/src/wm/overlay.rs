@@ -1,6 +1,16 @@
 use super::*;
 
 impl<'a, C: Connection> Wm<'a, C> {
+    /// Single WM-owned frame corner radius used by every transition path,
+    /// including the direct ARGB open-fade fast path.
+    fn transition_corner_radius(&self, client: Window) -> u32 {
+        self.clients.get(&client).map_or(0, |state| {
+            u32::from(flamewm_skin::recipes::decoration::corner_radius(
+                state.is_floating(), self.decoration_tokens.style,
+            ))
+        })
+    }
+
     /// Captures the frame (or reuses the minimize capture for restore) and opens its overlay.
     /// Returns `true` when the frame was unmapped here for the opaque backdrop snapshot.
     pub(super) fn open_overlay(&mut self, client: Window, effect: Effect) -> Result<bool, String> {
@@ -88,6 +98,15 @@ impl<'a, C: Connection> Wm<'a, C> {
                     direction,
                 )
             }
+            // Window-open Scale is a single affine scale of the complete frame.
+            // The old default branch accidentally invoked the Magic Lamp band
+            // warp, dropping the upper content while the window emerged.
+            (Effect::Open, animation::Style::Scale) => {
+                renderer.borrow().open_warp_overlay_styled(
+                    capture, source, warp_rect(target), PanelEdge::Bottom,
+                    TransitionStyle::Stretch, TransitionDirection::In,
+                )
+            }
             (Effect::Maximize | Effect::Unmaximize, animation::Style::Fade) => {
                 renderer.borrow().open_warp_overlay_styled(
                     capture,
@@ -98,7 +117,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                     TransitionDirection::In,
                 )
             }
-            (Effect::Maximize | Effect::Unmaximize, animation::Style::MagicLamp) => {
+            (Effect::Maximize | Effect::Unmaximize, animation::Style::Scale | animation::Style::MagicLamp) => {
                 renderer.borrow().open_warp_overlay_styled(
                     capture,
                     source,
@@ -119,6 +138,13 @@ impl<'a, C: Connection> Wm<'a, C> {
                 return Err(error);
             }
         };
+        // Use the same skin-owned frame radius for all transition styles.
+        // The renderer clips each painted frame instead of showing opaque,
+        // stale root pixels or black capture corners outside this radius.
+        overlay.set_corner_radius(self.transition_corner_radius(client));
+        if matches!(effect, Effect::Maximize | Effect::Unmaximize) {
+            overlay.set_linear_stretch(true);
+        }
         // Map and paint the first frame before the caller hides the client, so the overlay
         // takes over the window's pixels with no empty frame in between.
         if let Err(error) = overlay.paint(animation::overlay_t(0.0, mirrored)) {
@@ -155,7 +181,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         };
         // A blank capture is an unpainted window: keep the gate armed for a later Expose.
-        if !self.open_gate.attempt(client, animation::is_blank_capture(&capture.argb)) {
+        let titlebar_height = u32::try_from(self.extents_for(client).titlebar_h).unwrap_or(0);
+        let unpainted = animation::is_blank_capture(&capture.argb)
+            || animation::is_unpainted_client_capture(
+                &capture.argb, capture.width, capture.height, titlebar_height,
+            );
+        if !self.open_gate.attempt(client, unpainted) {
             return Ok(());
         }
         if self.animator.start(client, Effect::Open, std::time::Instant::now()) != Begin::Started {
@@ -178,7 +209,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         let opened = renderer.borrow().open_fade_overlay(capture, outer.x, outer.y);
         match opened {
-            Ok(overlay) => {
+            Ok(mut overlay) => {
+                // The direct ARGB open-fade path bypasses `open_overlay`; it
+                // must still use the identical skin-derived rounded mask.
+                overlay.set_corner_radius(self.transition_corner_radius(client));
                 self.overlays.insert(
                     client,
                     TransitionOverlay { overlay, mirrored: false, frame_hidden: false },
@@ -207,7 +241,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         let output = self
             .output_for_rect(outer)
             .map_or(self.screen_rect, |output| output.geometry);
-        animation::minimize_target(self.read_icon_geometry(client), anim_rect(output))
+        let output = anim_rect(output);
+        let icon = self.read_icon_geometry(client)
+            .filter(|icon| animation::icon_target_matches_output(*icon, output));
+        animation::minimize_target(icon, output)
     }
 
     /// `_NET_WM_ICON_GEOMETRY` as set by the client's taskbar entry, when present.

@@ -9,6 +9,22 @@ pub const ACTION_WINDOW_CLOSE: &str = "WindowClose";
 pub const ACTION_WINDOW_MINIMIZE: &str = "WindowMinimize";
 pub const ACTION_WINDOW_MAXIMIZE: &str = "WindowMaximize";
 pub const ACTION_SESSION_LOCK: &str = "SessionLock";
+pub const ACTION_SCREENSHOT_FULL: &str = "ScreenshotFull";
+pub const ACTION_SCREENSHOT_REGION: &str = "ScreenshotRegion";
+pub const ACTION_SCREENSHOT_WINDOW: &str = "ScreenshotWindow";
+
+/// Direction a workspace navigation shortcut moves in the two-row topology, or `None` for any
+/// other action. The grid itself lives in [`crate::workspace`].
+#[must_use]
+pub fn workspace_direction(action: &str) -> Option<crate::workspace::GridDirection> {
+    match action {
+        ACTION_WORKSPACE_LEFT => Some(crate::workspace::GridDirection::Left),
+        ACTION_WORKSPACE_RIGHT => Some(crate::workspace::GridDirection::Right),
+        ACTION_WORKSPACE_UP => Some(crate::workspace::GridDirection::Up),
+        ACTION_WORKSPACE_DOWN => Some(crate::workspace::GridDirection::Down),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyBinding(pub Option<String>);

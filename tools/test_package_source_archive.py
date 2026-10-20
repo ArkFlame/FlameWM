@@ -67,6 +67,22 @@ class SourceArchiveTests(unittest.TestCase):
         self.assertTrue((extracted / "flamewm/ui/assets").is_symlink())
         self.assertTrue((extracted / "flamewm/ui/assets").is_dir())
 
+    def test_real_source_manifest_registers_executable_version_script(self):
+        registry = (ROOT / "packaging/source-manifest.txt").read_text(encoding="utf-8")
+        self.assertIn("@exec scripts/version\n", registry)
+        self.assertTrue((ROOT / "scripts/version").stat().st_mode & 0o111)
+
+    def test_executable_version_is_included_once_registered(self):
+        (self.root / "scripts").mkdir()
+        version = self.root / "scripts/version"
+        version.write_text("#!/bin/sh\necho 0.1.0\n", encoding="utf-8")
+        version.chmod(0o755)
+        self.manifest.write_text(self.manifest.read_text() + "scripts/\n@exec scripts/version\n")
+        out = self.root / "version.tgz"
+        self.archive(out)
+        with tarfile.open(out, "r:gz") as archive:
+            self.assertEqual(archive.getmember("flamewm/scripts/version").mode & 0o111, 0o111)
+
     def test_rejects_manifest_traversal_and_absolute_paths(self):
         for invalid in ("../outside\n", "/etc/passwd\n"):
             self.manifest.write_text(invalid, encoding="utf-8")
@@ -79,6 +95,8 @@ class SourceArchiveTests(unittest.TestCase):
         path.chmod(0o755)
         result = subprocess.run([str(BUILDER), str(self.root), str(self.manifest), str(self.root / "bad.tar.gz")], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "bad.tar.gz").exists(),
+                         "invalid manifest must not publish a partial source archive")
 
     def test_rejects_escaping_symlink(self):
         (self.root / "assets/escape").symlink_to("../../outside")

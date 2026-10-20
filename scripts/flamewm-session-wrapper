@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Lifecycle companion: no display/wallet policy changes, no extra session bus.
+set -uo pipefail
+# Keep Plasma/KDE isolation: set FlameWM identity only when SDDM did not.
+if [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then export XDG_CURRENT_DESKTOP=FlameWM; fi
+SESSION="${FLAMEWM_SESSION_BINARY:-/usr/bin/flamewm-session}"
+BRIDGE="${FLAMEWM_SERVICES_BINARY:-/usr/libexec/flamewm/flamewm-desktop-services}"
+bridge_pid=""
+session_pid=""
+if [[ -x "$BRIDGE" ]]; then
+    "$BRIDGE" --run & bridge_pid=$!
+fi
+"$SESSION" "$@" & session_pid=$!
+forward() {
+    trap - INT TERM HUP
+    if [[ -n "$session_pid" ]]; then kill -TERM "$session_pid" 2>/dev/null || :; fi
+}
+trap forward INT TERM HUP
+wait "$session_pid"; result=$?
+if [[ -n "$bridge_pid" ]]; then
+    kill -TERM "$bridge_pid" 2>/dev/null || :
+    wait "$bridge_pid" 2>/dev/null || :
+fi
+exit "$result"

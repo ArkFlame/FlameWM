@@ -36,6 +36,9 @@ xephyr
 @exec assets/web/github.svg
 @exec assets/web/paypal.svg
 @exec scripts/prepare-ibm-plex
+@exec scripts/version
+@exec scripts/build-deb
+@exec scripts/check-cargo
 @exec scripts/settings-installed-acceptance
 @exec scripts/appearance-acceptance
 @exec scripts/lamp-acceptance
@@ -80,3 +83,8 @@ xephyr
 @exec package
 @exec verify-visual
 @exec xephyr
+@exec scripts/flamewm-session-wrapper
+@exec tools/flamewm_desktop_services.py
+@exec scripts/enable-post31-desktop-integration
+@exec scripts/apply-pass33-merge
+@exec scripts/apply-pass30-cargo-layout

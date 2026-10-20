@@ -12,13 +12,31 @@ LINUX_ARCHIVE="$DIST/flamewm-$VERSION-linux-x86_64.tar.gz"
 DEB="$DIST/flamewm_${VERSION}_amd64.deb"
 
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+# If *any* later stage fails, do not leave an apparently installable partial
+# release or a deb from an earlier run. Only publish artifacts on full success.
+package_finished() {
+    local status=$?
+    if (( status != 0 )); then
+        rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/SHA256SUMS"
+        printf 'FLAMEWM-PACKAGE-ERROR: incomplete release; published artifacts removed (exit %s)\n' "$status" >&2
+    fi
+}
+trap package_finished EXIT
 
 [[ -n "$VERSION" ]] || fail 'workspace version is empty'
+# This release script assembles native x86_64 binaries. Fail explicitly rather
+# than emitting a misleading *_amd64.deb on another build architecture.
+if command -v dpkg-deb >/dev/null 2>&1; then
+    command -v dpkg >/dev/null 2>&1 || fail 'dpkg is required alongside dpkg-deb'
+    BUILD_ARCH="$(dpkg --print-architecture)"
+    [[ "$BUILD_ARCH" == amd64 && "$(uname -m)" == x86_64 ]] \
+        || fail "this x86_64 release package requires amd64 host/target; detected $BUILD_ARCH / $(uname -m)"
+fi
 [[ -d "$BUILD_DIR" ]] || fail "missing release directory: $BUILD_DIR"
 mkdir -p "$DIST"
 rm -f "$SOURCE_ARCHIVE" "$LINUX_ARCHIVE" "$DEB" "$DIST/flamewm-$VERSION.tar.gz" "$DIST/SHA256SUMS"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
     [[ -x "$BUILD_DIR/$binary" ]] || fail "missing release binary: $BUILD_DIR/$binary"
 done
 
@@ -28,26 +46,44 @@ for source in \
     "$ROOT/docs/INSTALL.md" \
     "$ROOT/docs/PACKAGING.md" \
     "$ROOT/packaging/flamewm.desktop" \
+    "$ROOT/packaging/flamewm-screenshot.desktop" \
     "$ROOT/packaging/flamewm-session.desktop" \
     "$ROOT/packaging/pam.d/flamewm-lock" \
     "$ROOT/packaging/install-manifest.txt" \
     "$ROOT/packaging/debian/control.in" \
-    "$ROOT/packaging/debian/copyright"; do
+    "$ROOT/packaging/debian/copyright" \
+    "$ROOT/packaging/xdg-desktop-portal/flamewm-portals.conf"; do
     [[ -f "$source" ]] || fail "missing packaging source: $source"
 done
 [[ -d "$ROOT/LICENSES" ]] || fail "missing packaging source directory: $ROOT/LICENSES"
+[[ -d "$ROOT/assets/cursors/cursors" && -d "$ROOT/assets/web/breeze" ]] \
+    || fail "missing full FlameWM runtime assets; use the complete source checkout"
+
+# Validate source manifest and publish deterministic source archive BEFORE
+# copying large icon/theme trees into the install staging directory.
+python3 "$ROOT/scripts/package-source-archive" "$ROOT" \
+    "$ROOT/packaging/source-manifest.txt" "$SOURCE_ARCHIVE"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/flamewm" "$STAGE/etc/pam.d" \
     "$STAGE/usr/share/applications" "$STAGE/usr/share/xsessions" "$STAGE/usr/share/doc/flamewm" \
     "$STAGE/DEBIAN"
 
-for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
+for binary in flamewm flamewm-session flamewm-desktop flamewm-shell flamewm-settings flamewm-screenshot flamewm-render-x11 flamewm-render-compile flamewm-render-inspect flamewm-lock; do
     install -m 0755 "$BUILD_DIR/$binary" "$STAGE/usr/bin/$binary"
 done
 install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-lock"
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"
+install -m 0644 "$ROOT/packaging/flamewm-screenshot.desktop" "$STAGE/usr/share/applications/flamewm-screenshot.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
+install -d -m 0755 "$STAGE/usr/libexec/flamewm"
+install -m 0755 "$ROOT/scripts/flamewm-session-wrapper" "$STAGE/usr/libexec/flamewm/flamewm-session-wrapper"
+install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" "$STAGE/usr/libexec/flamewm/flamewm-desktop-services"
+# Desktop-specific portal backend configuration: never override the user's
+# ~/.config/xdg-desktop-portal preferences or the system's KDE configuration.
+install -d -m 0755 "$STAGE/usr/share/xdg-desktop-portal"
+install -m 0644 "$ROOT/packaging/xdg-desktop-portal/flamewm-portals.conf" \
+    "$STAGE/usr/share/xdg-desktop-portal/flamewm-portals.conf"
 install -m 0644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/flamewm/LICENSE"
 install -m 0644 "$ROOT/README.md" "$STAGE/usr/share/doc/flamewm/README.md"
 cp -a "$ROOT/LICENSES" "$STAGE/usr/share/doc/flamewm/LICENSES"
@@ -64,24 +100,42 @@ cp -a "$ROOT/assets/cursors/cursors" "$STAGE/usr/share/icons/FlameWM-Breeze-Dark
 sed -e 's/^Name=Breeze Dark/Name=FlameWM-Breeze-Dark/' \
     "$ROOT/assets/cursors/index.theme" > "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
 chmod 0644 "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
-# Bundled McMojave icon (light) and cursor themes; installed under their upstream ids.
+# Only PlagueSur and Fluent are selectable icon themes. Cursor themes
+# remain independent; do not install historical McMojave/candy icon packs.
 mkdir -p "$STAGE/usr/share/icons"
-cp -a "$ROOT/assets/themes/icons/McMojave-circle" "$STAGE/usr/share/icons/McMojave-circle"
-cp -a "$ROOT/assets/themes/cursors/McMojave-cursors" "$STAGE/usr/share/icons/McMojave-cursors"
-cp -a "$ROOT/assets/themes/icons/candy-icons" "$STAGE/usr/share/icons/candy-icons"
+# Preserve the existing McMojave cursor package when present.
+if [[ -d "$ROOT/assets/themes/cursors/McMojave-cursors" ]]; then
+    cp -a "$ROOT/assets/themes/cursors/McMojave-cursors" "$STAGE/usr/share/icons/McMojave-cursors"
+fi
+for theme in PlagueSur Fluent; do
+    if [[ -d "$ROOT/assets/themes/icons/$theme" ]]; then
+        cp -a "$ROOT/assets/themes/icons/$theme" "$STAGE/usr/share/icons/$theme"
+    fi
+done
+# An upstream Fluent Yellow installation may use a separate directory name.
+# Install it under the product id Fluent if no canonical copy was supplied.
+if [[ ! -d "$STAGE/usr/share/icons/Fluent" && -d "$ROOT/assets/themes/icons/Fluent-Yellow" ]]; then
+    cp -a "$ROOT/assets/themes/icons/Fluent-Yellow" "$STAGE/usr/share/icons/Fluent"
+    if [[ -f "$STAGE/usr/share/icons/Fluent/index.theme" ]]; then
+        sed -i -E 's/^Name=.*/Name=Fluent/' "$STAGE/usr/share/icons/Fluent/index.theme"
+    fi
+fi
 
 if command -v dpkg-deb >/dev/null 2>&1; then
-    sed -e "s/@VERSION@/$VERSION/g" "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
+    sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCH@/$BUILD_ARCH/g" \
+        "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
+    grep -Fqx "Architecture: $BUILD_ARCH" "$STAGE/DEBIAN/control" \
+        || fail 'invalid Debian binary control architecture'
     printf '%s\n' /etc/pam.d/flamewm-lock > "$STAGE/DEBIAN/conffiles"
     chmod 0644 "$STAGE/DEBIAN/conffiles"
     install -m 0644 "$ROOT/packaging/debian/copyright" "$STAGE/usr/share/doc/flamewm/copyright"
     dpkg-deb --build --root-owner-group "$STAGE" "$DEB" >/dev/null
+    [[ "$(dpkg-deb --field "$DEB" Architecture)" == "$BUILD_ARCH" ]] \
+        || fail "generated .deb architecture mismatch: expected $BUILD_ARCH"
 fi
 rm -rf "$STAGE/DEBIAN"
 
 # Keep source and installable binary artifacts distinct and reproducible.
-python3 "$ROOT/scripts/package-source-archive" "$ROOT" \
-    "$ROOT/packaging/source-manifest.txt" "$SOURCE_ARCHIVE"
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" --owner=0 --group=0 --numeric-owner \
     -czf "$LINUX_ARCHIVE" -C "$DIST" "flamewm-$VERSION"
 ARTIFACTS=("$SOURCE_ARCHIVE" "$LINUX_ARCHIVE")

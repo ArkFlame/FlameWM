@@ -651,7 +651,7 @@ fn compose_canvas(path: &str, fit: WallpaperFit, root: (u32, u32)) -> Option<Rgb
 
 /// Installed data root (`<prefix>/usr/share/flamewm`) when present, else the source tree; the
 /// same resolution the desktop wallpaper owner uses for the bundled default.
-fn packaged_root() -> PathBuf {
+pub(crate) fn packaged_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::env::current_exe()
         .ok()

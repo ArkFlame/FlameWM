@@ -17,6 +17,10 @@ pub struct LockSettings {
     pub show_username: bool,
     pub accent: String,
     pub font_family: String,
+    pub font_bold: bool,
+    pub font_size_offset: i8,
+    /// Whether the lock background is cropped from one shared image across outputs.
+    pub share_wallpaper: bool,
     pub saver: SaverConfig,
     /// Background blur, 0..=100 (`lockBackgroundBlurPercent`).
     pub blur_percent: u8,
@@ -80,6 +84,9 @@ impl Default for LockSettings {
             show_username: true,
             accent: DEFAULT_ACCENT.to_string(),
             font_family: DEFAULT_FONT_FAMILY.to_string(),
+            font_bold: false,
+            font_size_offset: 0,
+            share_wallpaper: false,
             saver: SaverConfig::default(),
             blur_percent: DEFAULT_BLUR_PERCENT,
             dim_percent: DEFAULT_DIM_PERCENT,
@@ -128,9 +135,29 @@ impl LockSettings {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map_or(defaults.font_family, str::to_string),
+            font_bold: lookup("fontBold")
+                .and_then(parse_bool)
+                .unwrap_or(defaults.font_bold),
+            font_size_offset: lookup("fontSizeOffset")
+                .and_then(|value| value.trim().parse::<i8>().ok())
+                .filter(|value| (-2..=4).contains(value))
+                .unwrap_or(defaults.font_size_offset),
+            share_wallpaper: lookup("shareWallpaper")
+                .and_then(parse_bool)
+                .unwrap_or(defaults.share_wallpaper),
             saver: saver_from_lookup(&lookup),
-            blur_percent: percent_from_lookup(&lookup, "lockBackgroundBlurPercent", 100, DEFAULT_BLUR_PERCENT),
-            dim_percent: percent_from_lookup(&lookup, "lockBackgroundDimPercent", 80, DEFAULT_DIM_PERCENT),
+            blur_percent: percent_from_lookup(
+                &lookup,
+                "lockBackgroundBlurPercent",
+                100,
+                DEFAULT_BLUR_PERCENT,
+            ),
+            dim_percent: percent_from_lookup(
+                &lookup,
+                "lockBackgroundDimPercent",
+                80,
+                DEFAULT_DIM_PERCENT,
+            ),
         }
     }
 }
@@ -159,14 +186,22 @@ pub const DEFAULT_BLUR_PERCENT: u8 = 40;
 pub const DEFAULT_DIM_PERCENT: u8 = 25;
 
 /// Integer percentage clamped to `0..=max`; missing or unparsable values give `default`.
-fn percent_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str, max: u8, default: u8) -> u8 {
+fn percent_from_lookup<'a>(
+    lookup: &impl Fn(&str) -> Option<&'a str>,
+    key: &str,
+    max: u8,
+    default: u8,
+) -> u8 {
     lookup(key)
         .and_then(|text| text.trim().parse::<i64>().ok())
         .map_or(default, |value| value.clamp(0, i64::from(max)) as u8)
 }
 
 fn absolute_path<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Option<PathBuf> {
-    lookup(key).map(str::trim).filter(|p| p.starts_with('/')).map(PathBuf::from)
+    lookup(key)
+        .map(str::trim)
+        .filter(|p| p.starts_with('/'))
+        .map(PathBuf::from)
 }
 
 fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConfig {
@@ -178,7 +213,8 @@ fn saver_from_lookup<'a>(lookup: &impl Fn(&str) -> Option<&'a str>) -> SaverConf
             Some("ribbons") => SaverMode::Ribbons,
             _ => defaults.mode,
         },
-        after_lock_minutes: number("screensaverAfterLockMinutes").unwrap_or(defaults.after_lock_minutes),
+        after_lock_minutes: number("screensaverAfterLockMinutes")
+            .unwrap_or(defaults.after_lock_minutes),
         num_ribbons: number("screensaverNumRibbons").map_or(defaults.num_ribbons, |n| n as usize),
         ribbon_width_tenths: number("screensaverRibbonWidthTenths")
             .unwrap_or(defaults.ribbon_width_tenths),
@@ -254,13 +290,19 @@ mod tests {
     fn background_percentages_parse_clamp_and_default() {
         let defaults = LockSettings::default();
         assert_eq!((defaults.blur_percent, defaults.dim_percent), (40, 25));
-        static PAIRS: &[(&str, &str)] = &[("lockBackgroundBlurPercent", "250"), ("lockBackgroundDimPercent", "-4")];
+        static PAIRS: &[(&str, &str)] = &[
+            ("lockBackgroundBlurPercent", "250"),
+            ("lockBackgroundDimPercent", "-4"),
+        ];
         let clamped = LockSettings::from_lookup(lookup_from(PAIRS));
         assert_eq!((clamped.blur_percent, clamped.dim_percent), (100, 0));
         static DIM: &[(&str, &str)] = &[("lockBackgroundDimPercent", "99")];
         assert_eq!(LockSettings::from_lookup(lookup_from(DIM)).dim_percent, 80);
         static JUNK: &[(&str, &str)] = &[("lockBackgroundBlurPercent", "soft")];
-        assert_eq!(LockSettings::from_lookup(lookup_from(JUNK)).blur_percent, 40);
+        assert_eq!(
+            LockSettings::from_lookup(lookup_from(JUNK)).blur_percent,
+            40
+        );
     }
 
     #[test]
@@ -271,7 +313,10 @@ mod tests {
             Some(PathBuf::from("/home/u/face.png"))
         );
         static REL: &[(&str, &str)] = &[("avatarImage", "face.png")];
-        assert_eq!(LockSettings::from_lookup(lookup_from(REL)).avatar_image, None);
+        assert_eq!(
+            LockSettings::from_lookup(lookup_from(REL)).avatar_image,
+            None
+        );
     }
 
     #[test]
@@ -311,6 +356,9 @@ mod tests {
             ("lockShowUsername", "false"),
             ("accent", "#AABBCC"),
             ("fontFamily", " Inter "),
+            ("fontBold", "true"),
+            ("fontSizeOffset", "2"),
+            ("shareWallpaper", "true"),
         ];
         let settings = LockSettings::from_lookup(lookup_from(PAIRS));
         assert_eq!(settings.background_color, [0x10, 0x20, 0x30]);
@@ -322,6 +370,22 @@ mod tests {
         assert!(!settings.show_date && !settings.show_username);
         assert_eq!(settings.accent, "#AABBCC");
         assert_eq!(settings.font_family, "Inter");
+        assert!(settings.font_bold && settings.share_wallpaper);
+        assert_eq!(settings.font_size_offset, 2);
+    }
+
+    #[test]
+    fn global_typography_and_wallpaper_defaults_are_applied_safely() {
+        let defaults = LockSettings::default();
+        assert!(!defaults.font_bold && !defaults.share_wallpaper);
+        assert_eq!(defaults.font_size_offset, 0);
+        let clamped = LockSettings::from_lookup(lookup_from(&[
+            ("fontBold", "invalid"),
+            ("fontSizeOffset", "5"),
+            ("shareWallpaper", "invalid"),
+        ]));
+        assert!(!clamped.font_bold && !clamped.share_wallpaper);
+        assert_eq!(clamped.font_size_offset, 0);
     }
 
     #[test]

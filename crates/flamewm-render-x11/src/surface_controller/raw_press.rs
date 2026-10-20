@@ -40,7 +40,7 @@ pub struct RawPressObservation {
     pub child_window_title: Option<String>,
 }
 
-pub(super) const REVERT_TO_POINTER_ROOT: std::os::raw::c_int = 1;
+pub(crate) const REVERT_TO_POINTER_ROOT: std::os::raw::c_int = 1;
 
 /// XInput2 2.0 raw selection for popup outside-dismissal. RawButtonPress is
 /// delivered to this client without any pointer grab, so every click reaches the
@@ -55,7 +55,10 @@ pub(crate) struct RawPressSelection {
 
 impl RawPressSelection {
     pub(crate) fn new(opcode: Option<std::os::raw::c_int>) -> Self {
-        Self { opcode, armed: HashSet::new() }
+        Self {
+            opcode,
+            armed: HashSet::new(),
+        }
     }
 
     /// XInput2 major opcode of the raw events this selection accepts.
@@ -93,7 +96,11 @@ pub(super) unsafe fn write_raw_press_selection(display: *mut Display, root: Wind
     let mut mask = raw_press_mask();
     let mut event_mask = XIEventMask {
         deviceid: XI_ALL_MASTER_DEVICES,
-        mask_len: if armed { mask.len() as std::os::raw::c_int } else { 0 },
+        mask_len: if armed {
+            mask.len() as std::os::raw::c_int
+        } else {
+            0
+        },
         mask: mask.as_mut_ptr(),
     };
     // SAFETY: live connection; the mask outlives the request.
@@ -201,7 +208,8 @@ pub(crate) fn raw_press_outside_event(
 ) -> Option<SurfaceControllerEvent> {
     let (origin, (width, height)) = popup;
     if event_type != XI_RAW_BUTTON_PRESS
-        || classify_grabbed_press(press.0, press.1, origin, width, height) != GrabbedPressOutcome::Outside
+        || classify_grabbed_press(press.0, press.1, origin, width, height)
+            != GrabbedPressOutcome::Outside
     {
         return None;
     }
@@ -328,10 +336,16 @@ impl SurfaceController {
             .surfaces
             .iter()
             .find(|(id, instance)| {
-                instance.app.pointer_grabbed && !slide_out_swallows_press(self.slides.kind(id.get()))
+                instance.app.pointer_grabbed
+                    && !slide_out_swallows_press(self.slides.kind(id.get()))
             })
             .map(|(id, instance)| {
-                (*id, instance.origin, (instance.app.width, instance.app.height), instance.document.ui_scale())
+                (
+                    *id,
+                    instance.origin,
+                    (instance.app.width, instance.app.height),
+                    instance.document.ui_scale(),
+                )
             });
         let Some((id, origin, size, scale)) = owner else {
             return Ok(());
@@ -360,7 +374,12 @@ impl SurfaceController {
         self.press_observer_armed = true;
         // SAFETY: live controller connection and root window.
         unsafe {
-            grab_popup_presses(self.display, self.root_window(), &mut self.press_selection, PRESS_OBSERVER)
+            grab_popup_presses(
+                self.display,
+                self.root_window(),
+                &mut self.press_selection,
+                PRESS_OBSERVER,
+            )
         };
     }
 
@@ -373,7 +392,12 @@ impl SurfaceController {
         self.raw_press_observations.clear();
         // SAFETY: same live connection; armed by arm_raw_press_observer.
         unsafe {
-            release_popup_presses(self.display, self.root_window(), &mut self.press_selection, PRESS_OBSERVER)
+            release_popup_presses(
+                self.display,
+                self.root_window(),
+                &mut self.press_selection,
+                PRESS_OBSERVER,
+            )
         };
     }
 
@@ -381,5 +405,4 @@ impl SurfaceController {
     pub fn take_raw_press_observations(&mut self) -> Vec<RawPressObservation> {
         std::mem::take(&mut self.raw_press_observations)
     }
-
 }

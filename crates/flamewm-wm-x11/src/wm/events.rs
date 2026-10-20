@@ -90,18 +90,51 @@ impl<'a, C: Connection> Wm<'a, C> {
             ACTION_WINDOW_CLOSE => self.on_active(Self::request_close)?,
             ACTION_WINDOW_MINIMIZE => self.on_active(Self::minimize)?,
             ACTION_WINDOW_MAXIMIZE => self.on_active(Self::toggle_maximize)?,
-            // Left/Up step to the previous workspace, Right/Down to the next; both clamp.
+            // Arrow shortcuts follow the product two-row grid: left/right stay inside the
+            // current row, up/down switch rows, and a missing neighbour is a no-op.
             ACTION_WORKSPACE_LEFT | ACTION_WORKSPACE_RIGHT | ACTION_WORKSPACE_UP
             | ACTION_WORKSPACE_DOWN => {
-                if let Some(delta) = workspace_action_delta(action.as_str()) {
-                    if let Some(target) =
-                        next_workspace(self.current_workspace, self.workspace_count, delta)
-                    {
-                        self.switch_workspace(target)?;
-                    }
+                if let Some(target) = workspace_shortcut_target(
+                    self.current_workspace,
+                    self.workspace_count,
+                    action.as_str(),
+                ) {
+                    self.switch_workspace(target)?;
                 }
             }
             // Same spawn and supervision path as the Lock session action.
+            ACTION_OPEN_FILES_SUPER | ACTION_OPEN_FILES_CTRL_ALT => {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from("/"));
+                if let Err(error) = std::process::Command::new("xdg-open")
+                    .arg(home).spawn()
+                {
+                    eprintln!("flamewm: file explorer shortcut failed: {error}");
+                }
+            }
+            ACTION_OPEN_TERMINAL_SUPER | ACTION_OPEN_TERMINAL_CTRL_ALT => {
+                // Default terminal first, then the Debian x-terminal-emulator
+                // alternative if Konsole is not installed.
+                if let Err(error) = std::process::Command::new("konsole").spawn() {
+                    if let Err(fallback) = std::process::Command::new("x-terminal-emulator").spawn() {
+                        eprintln!("flamewm: terminal shortcut failed: {error}; fallback: {fallback}");
+                    }
+                }
+            }
+            ACTION_SCREENSHOT_FULL | ACTION_SCREENSHOT_REGION | ACTION_SCREENSHOT_WINDOW => {
+                // Screenshot runs on demand in its own process; WM input processing must not wait
+                // for a region gesture or PNG compression to complete.
+                let options: &[&str] = match action.as_str() {
+                    ACTION_SCREENSHOT_FULL => &["--full", "--copy"],
+                    ACTION_SCREENSHOT_REGION => &["--region", "--annotate", "--copy"],
+                    _ => &["--active", "--copy"],
+                };
+                if let Err(error) = std::process::Command::new("flamewm-screenshot")
+                    .args(options).spawn() {
+                    eprintln!("flamewm: screenshot shortcut failed: {error}");
+                }
+            }
             ACTION_SESSION_LOCK => {
                 if let Err(error) = flamewm_x11_desktop::start_lock_screen() {
                     eprintln!("flamewm: lock shortcut failed: {error:?}");
@@ -397,7 +430,13 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         } else if event.type_ == self.atoms.net_active_window {
             if self.clients.contains_key(&event.window) {
-                self.focus(event.window)?;
+                if self.clients.get(&event.window).is_some_and(|state| state.minimized) {
+                    // Restore retains the PlacementState, including Maximized.
+                    // A focus-only activation of an iconic client is not a restore.
+                    self.restore_minimized(event.window)?;
+                } else {
+                    self.focus(event.window)?;
+                }
             }
         } else if event.type_ == self.atoms.net_wm_moveresize
             && self.clients.contains_key(&event.window)

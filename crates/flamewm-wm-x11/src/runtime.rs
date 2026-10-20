@@ -442,8 +442,12 @@ fn run_session(
         }
         let now_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         control_now_ms_for_hook.set(now_ms);
-        // Deadline check only: reverts an unconfirmed display mode once its deadline passes.
-        // RandR hotplug/mode notifications mark the topology dirty; refresh it before comparing.
+        // Capture the old state BEFORE processing RandR events. Previously the
+        // "before" snapshot was taken after refresh, so monitor rearrangements
+        // compared equal and emitted neither the display nor panel update.
+        let display_before = host.cached_display_snapshot();
+        let panels_before = host.panels_snapshot();
+        // RandR hotplug/mode notifications mark the topology dirty.
         if wm.take_display_topology_dirty() {
             match host.display_snapshot() {
                 Ok(displays) => {
@@ -454,7 +458,6 @@ fn run_session(
                 Err(error) => eprintln!("flamewm: display topology refresh failed: {error}"),
             }
         }
-        let display_before = host.cached_display_snapshot();
         // The transaction is retired before any native call, so a failed or disconnected-output
         // revert is reported once here and never retried; it must not abort the WM loop.
         if let Err(error) = host.tick_display_transactions(now_ms) {
@@ -463,8 +466,23 @@ fn run_session(
         let display_after = host.cached_display_snapshot();
         if display_after != display_before {
             if let Some(snapshot) = display_after {
+                // A timeout-driven mode revert can change geometry without an
+                // already-consumed RandR dirty event. Reconcile panels before
+                // publishing either snapshot and before recomputing WM struts.
+                if let Err(error) = host.resync_panels_for_displays(&snapshot) {
+                    eprintln!("flamewm: panel resync after mode transaction failed: {error}");
+                }
                 control_for_hook.emit_signal(&ControlSignal::DisplaysSnapshotChanged { snapshot })?;
             }
+        }
+        // The panel service is changed by resync_panels_for_displays(), not
+        // by WmChangeSet. Emit its authoritative snapshot explicitly, including
+        // when the only change was an XRandR output-coordinate swap.
+        let panels_after = host.panels_snapshot();
+        if panels_after != panels_before {
+            control_for_hook.emit_signal(&ControlSignal::PanelsSnapshotChanged {
+                snapshot: panels_after,
+            })?;
         }
         flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
         let areas = host.output_work_areas();

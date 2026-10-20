@@ -9,10 +9,19 @@ use crate::WindowGeometrySlot;
 fn keyboard_text(symbol: u64) -> Option<String> {
     match symbol {
         XK_BACK_SPACE => Some("\u{8}".to_string()),
+        XK_DELETE => Some("\u{7f}".to_string()),
         XK_RETURN => Some("\n".to_string()),
         XK_ESCAPE => Some("\u{1b}".to_string()),
         _ => printable_key_char(symbol).map(|ch| ch.to_string()),
     }
+}
+
+/// The desktop is intentionally below managed windows and is not normally
+/// focusable through the WM taskbar. A primary click that selects desktop
+/// entries must give it keyboard focus so Delete is delivered there. Other
+/// roles retain their existing focus owner.
+fn desktop_takes_focus_on_press(role: X11WindowRole, button: u32) -> bool {
+    role == X11WindowRole::Desktop && matches!(button, 1 | 3)
 }
 
 const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
@@ -34,6 +43,7 @@ fn normalized_modifiers(state: u32) -> Vec<&'static str> {
 fn canonical_key_name(symbol: u64) -> Cow<'static, str> {
     match symbol {
         XK_BACK_SPACE => Cow::Borrowed("BackSpace"),
+        XK_DELETE => Cow::Borrowed("Delete"),
         XK_TAB => Cow::Borrowed("Tab"),
         XK_SPACE => Cow::Borrowed("Space"),
         XK_RETURN => Cow::Borrowed("Return"),
@@ -373,7 +383,12 @@ impl X11App {
                         if fire_node(on_action, document, &mut buffers, index, &mut event)? || changed {
                             self.mark_full();
                         }
-                    } else if changed {
+                    } else {
+                        // Hover is a *pointer-position* event, not only an enter event.
+                        // Radial controls can cross distinct polar sectors while hit-testing
+                        // the same retained node. Dispatch on each motion and let semantic
+                        // owners deduplicate unchanged state. Only changes of hovered node
+                        // force a renderer redraw; actual document mutations carry damage.
                         if let Some(index) = hover {
                             let mut event = action_event(
                                 document.ui_scale(), ActionPhase::Hover, 0, (motion.x, motion.y),
@@ -381,7 +396,7 @@ impl X11App {
                             );
                             fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
-                        self.mark_full();
+                        if changed { self.mark_full(); }
                     }
                 }
                 LEAVE_NOTIFY => {
@@ -494,6 +509,18 @@ impl X11App {
                     // SAFETY: The discriminator identifies XButtonEvent in this match arm.
                     let button = unsafe { event.xbutton };
                     let raw = pointer_button_from_raw(button.button);
+                    if desktop_takes_focus_on_press(self.role, button.button) {
+                        // SAFETY: The X11App owns the live display and mapped
+                        // desktop window; focus changes only after a real
+                        // primary button press, never on ordinary mouse motion.
+                        unsafe {
+                            crate::surface_controller::raw_press::XSetInputFocus(
+                                self.display, self.window,
+                                crate::surface_controller::raw_press::REVERT_TO_POINTER_ROOT,
+                                button.time,
+                            );
+                        }
+                    }
                     // Wheel Button4/5: scroll delta via existing ActionEvent path
                     // (semantic "scroll" action, Motion phase), no press state.
                     if let Some((dx, dy)) = wheel_scroll_delta(raw) {
@@ -849,8 +876,9 @@ mod pointer_sample_regressions {
 #[cfg(test)]
 mod reactor_presentation_regressions {
     use super::{
-        CONTROL_MASK, MOD4_MASK, XK_ESCAPE, XK_LEFT, XK_SUPER_L, canonical_key_name,
-        normalized_modifiers, printable_key_text,
+        CONTROL_MASK, MOD4_MASK, XK_ESCAPE, XK_LEFT, XK_SUPER_L, X11WindowRole,
+        canonical_key_name, desktop_takes_focus_on_press, normalized_modifiers,
+        printable_key_text,
     };
 
     fn reactor_loop_source() -> &'static str {
@@ -921,6 +949,15 @@ mod reactor_presentation_regressions {
             .find("redraw_if_dirty(document)?")
             .expect("same-turn mutations must present through the retained gate");
         assert!(present > 0);
+    }
+
+    #[test]
+    fn desktop_primary_press_claims_focus_for_selected_file_shortcuts() {
+        assert!(desktop_takes_focus_on_press(X11WindowRole::Desktop, 1));
+        assert!(desktop_takes_focus_on_press(X11WindowRole::Desktop, 3));
+        assert!(!desktop_takes_focus_on_press(X11WindowRole::Desktop, 4));
+        assert!(!desktop_takes_focus_on_press(X11WindowRole::Normal, 1));
+        assert!(!desktop_takes_focus_on_press(X11WindowRole::Dock, 1));
     }
 
     #[test]

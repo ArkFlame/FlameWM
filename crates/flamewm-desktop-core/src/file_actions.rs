@@ -81,12 +81,13 @@ pub fn terminal_program() -> String {
 }
 
 /// Entry context rows. Trash exposes Empty Trash only; normal entries expose
-/// Rename, Create Shortcut, plus Delete (which the caller must confirm first).
+/// Rename, Create Shortcut, plus Move to Trash (confirmation required).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryMenuAction {
     EmptyTrash,
     Rename,
     CreateShortcut,
+    Convert,
     Delete,
 }
 
@@ -97,22 +98,23 @@ impl EntryMenuAction {
             Self::EmptyTrash => "Empty Trash",
             Self::Rename => "Rename",
             Self::CreateShortcut => "Create Shortcut",
-            Self::Delete => "Delete",
+            Self::Convert => "Convert",
+            Self::Delete => "Move to Trash",
         }
     }
 }
 
 #[must_use]
-pub fn entry_context_menu(is_trash: bool) -> Vec<EntryMenuAction> {
+pub fn entry_context_menu(is_trash: bool, convertible: bool) -> Vec<EntryMenuAction> {
     if is_trash {
-        vec![EntryMenuAction::EmptyTrash]
-    } else {
-        vec![
-            EntryMenuAction::Rename,
-            EntryMenuAction::CreateShortcut,
-            EntryMenuAction::Delete,
-        ]
+        return vec![EntryMenuAction::EmptyTrash];
     }
+    let mut rows = vec![EntryMenuAction::Rename, EntryMenuAction::CreateShortcut];
+    if convertible {
+        rows.push(EntryMenuAction::Convert);
+    }
+    rows.push(EntryMenuAction::Delete);
+    rows
 }
 
 /// Validate a proposed entry file name. Returns the trimmed name on success.
@@ -253,15 +255,22 @@ mod tests {
 
     #[test]
     fn entry_menu_maps_trash_to_empty_trash_only() {
-        assert_eq!(entry_context_menu(true), vec![EntryMenuAction::EmptyTrash]);
+        assert_eq!(entry_context_menu(true, true), vec![EntryMenuAction::EmptyTrash]);
         assert_eq!(
-            entry_context_menu(false),
+            entry_context_menu(false, true),
             vec![
                 EntryMenuAction::Rename,
                 EntryMenuAction::CreateShortcut,
+                EntryMenuAction::Convert,
                 EntryMenuAction::Delete
             ]
         );
+    }
+
+    #[test]
+    fn non_convertible_entries_do_not_offer_convert() {
+        assert!(!entry_context_menu(false, false).contains(&EntryMenuAction::Convert));
+        assert!(!entry_context_menu(true, true).contains(&EntryMenuAction::Convert));
     }
 
     #[test]

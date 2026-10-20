@@ -195,11 +195,40 @@ impl<'a, C: Connection> Wm<'a, C> {
         };
         let origin = RootPoint::new(i32::from(geometry.x), i32::from(geometry.y));
         let size = (u32::from(geometry.width).max(1), u32::from(geometry.height).max(1));
-        let initial_plan = crate::frame::geometry::plan_initial_map(&initial_req, origin, size);
         let frame_rect = if adopt {
             crate::frame::geometry::plan_adopt(origin, size, extents)
+        } else if crate::frame::geometry::can_place_near_pointer(
+            adopt,
+            kind == WindowKind::Normal,
+            transient_for.is_some(),
+            hints,
+            origin,
+        ) {
+            // One best-effort pointer snapshot per eligible first map; never poll or
+            // let a transient X11 failure prevent mapping the application.
+            let pointer = self
+                .conn
+                .query_pointer(screen.root)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .filter(|reply| reply.same_screen);
+            if let Some(pointer) = pointer {
+                let point = RootPoint::new(i32::from(pointer.root_x), i32::from(pointer.root_y));
+                let work_area = self
+                    .output_for_point(point.x, point.y, Rect::new(point.x, point.y, 1, 1))
+                    .map_or(work_root, |output| RootRect::from_legacy(output.work_area));
+                crate::frame::geometry::plan_initial_map_near_pointer(
+                    &initial_req,
+                    point,
+                    work_area,
+                    size,
+                )
+                .frame
+            } else {
+                crate::frame::geometry::plan_initial_map(&initial_req, origin, size).frame
+            }
         } else {
-            initial_plan.frame
+            crate::frame::geometry::plan_initial_map(&initial_req, origin, size).frame
         };
         let outer = crate::client::root_to_rect(frame_rect);
 

@@ -10,11 +10,12 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::start::{StartCategory, PRESENTATION_CATEGORIES};
 use crate::taskbar::workspaces::{
-    project as project_workspaces, slot_position, visible_page, WorkspaceView, PAGE_SIZE,
+    cell_left, pager_cell, pager_columns, pager_width, project as project_workspaces, WorkspaceView,
+    PAGER_CELLS, PAGER_COLUMNS, PAGER_HEIGHT,
 };
 use crate::ShellSnapshot;
 use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
-use flamewm_shell_core::{task_visual_states_on_output, StartModel};
+use flamewm_shell_core::{task_visual_states_on_output_and_workspace, StartModel};
 
 #[cfg(test)]
 macro_rules! forward {
@@ -75,6 +76,90 @@ pub(crate) fn pager_active_fill() -> UiColor {
             as u8,
         ..accent
     }
+}
+
+/// Inactive pager cell fill (matches the `.workspace-button` background).
+const PAGER_IDLE_FILL: UiColor = UiColor {
+    r: 36,
+    g: 39,
+    b: 42,
+    a: 255,
+};
+
+/// Projected workspaces paired with the pager cell each one occupies, using the
+/// count-dependent two-row topology (`cell = 2 * column + row + 1`).
+fn pager_cells(
+    snapshot: Option<&flamewm_api::workspace::WorkspaceSnapshot>,
+) -> Vec<(usize, WorkspaceView)> {
+    let count = snapshot.map_or(0, |snapshot| snapshot.count);
+    project_workspaces(snapshot)
+        .into_iter()
+        .filter_map(|view| pager_cell(view.index, count).map(|cell| (cell, view)))
+        .collect()
+}
+
+/// Pager columns, box and cell visibility for `cells`; no labels or fills.
+///
+/// `workspace-column-j` is an absolutely positioned child of the pager, so
+/// hidden columns consume no space and the visible ones keep the screen
+/// positions of the box they replaced: column `j` (1-based) starts at
+/// `cell_left(j - 1)` inside the pager content box.
+fn project_pager_layout(
+    document: &mut impl UiDocumentAccess,
+    snapshot: Option<&flamewm_api::workspace::WorkspaceSnapshot>,
+    cells: &[(usize, WorkspaceView)],
+) -> Result<(), String> {
+    let columns = pager_columns(snapshot.map_or(0, |snapshot| snapshot.count));
+    document.size("workspace-pager", pager_width(columns), PAGER_HEIGHT)?;
+    for column in 0..PAGER_COLUMNS {
+        let column_id = format!("workspace-column-{}", column + 1);
+        if column < columns {
+            document.position(&column_id, cell_left(column), 0.0)?;
+            document.visible(&column_id, true)?;
+        } else {
+            document.visible(&column_id, false)?;
+        }
+    }
+    for cell in 1..=PAGER_CELLS {
+        document.visible(
+            &format!("workspace-{cell}"),
+            cells.iter().any(|(occupied, _)| *occupied == cell),
+        )?;
+    }
+    Ok(())
+}
+
+/// Pager columns, box and cell visibility for the live snapshot; no labels or
+/// fills (the `PanelsChanged` geometry pass uses this alone).
+pub(crate) fn project_pager_visibility(
+    document: &mut impl UiDocumentAccess,
+    snapshot: Option<&flamewm_api::workspace::WorkspaceSnapshot>,
+) -> Result<(), String> {
+    let cells = pager_cells(snapshot);
+    project_pager_layout(document, snapshot, &cells)
+}
+
+/// Pager pass: columns, box, cell visibility, labels and fills.
+///
+/// Single owner of the pager document projection so the sync panel pass and
+/// the async pager pass cannot show different topologies; both call here.
+pub(crate) fn project_pager(
+    document: &mut impl UiDocumentAccess,
+    snapshot: Option<&flamewm_api::workspace::WorkspaceSnapshot>,
+) -> Result<(), String> {
+    let cells = pager_cells(snapshot);
+    project_pager_layout(document, snapshot, &cells)?;
+    for (cell, workspace) in cells {
+        let cell_id = format!("workspace-{cell}");
+        document.text(&cell_id, workspace.label.clone())?;
+        let fill = if workspace.active {
+            pager_active_fill()
+        } else {
+            PAGER_IDLE_FILL
+        };
+        document.background(&cell_id, fill)?;
+    }
+    Ok(())
 }
 
 pub fn taskbar_css_height(logical_size: u16) -> f32 {
@@ -240,14 +325,14 @@ pub fn project_panel(
 ) -> Result<(), String> {
     let snapshot = view.snapshot;
     project_taskbar_height(document, view)?;
-    let states = task_visual_states_on_output(
+    let states = task_visual_states_on_output_and_workspace(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
         view.panel.map(|panel| &panel.output),
+        snapshot.workspaces.as_ref().map(|workspaces| workspaces.active_index),
     );
     let status = crate::taskbar::status::project(&snapshot.system).views;
-    let workspaces = project_workspaces(snapshot.workspaces.as_ref());
     let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
         (String::new(), String::new(), String::new(), String::new());
     for index in 0..TASK_SLOT_COUNT {
@@ -294,36 +379,7 @@ pub fn project_panel(
         document.visible(&slot_id, states.get(index).is_some())?;
     }
 
-    for index in 0..PAGE_SIZE {
-        let button_id = format!("workspace-{}", index + 1);
-        document.visible(&button_id, false)?;
-    }
-    let page: Vec<&WorkspaceView> = visible_page(&workspaces);
-    for workspace in page {
-        let Some((row, column)) = slot_position(workspace.index, &workspaces) else {
-            continue;
-        };
-        let slot = row * 2 + column;
-        if slot >= PAGE_SIZE {
-            continue;
-        }
-        let button_id = format!("workspace-{}", slot + 1);
-        document.text(&button_id, workspace.label.clone())?;
-        document.visible(&button_id, true)?;
-        if workspace.active {
-            document.background(&button_id, pager_active_fill())?;
-        } else {
-            document.background(
-                &button_id,
-                UiColor {
-                    r: 36,
-                    g: 39,
-                    b: 42,
-                    a: 255,
-                },
-            )?;
-        }
-    }
+    project_pager(document, snapshot.workspaces.as_ref())?;
 
     project_clock(document)?;
     document.visible(
@@ -365,7 +421,7 @@ pub fn project_battery_tray(
     power: &flamewm_api::system::PowerSnapshot,
     items: TaskbarItems,
 ) -> Result<(), String> {
-    use crate::taskbar::status::battery::{glyph_for_percent, tray_visible, BATTERY_GLYPHS};
+    use crate::taskbar::status::battery::{glyph_for_percent, tray_visible};
     use flamewm_api::system::PowerState;
     let charging = power.state == PowerState::Charging;
     let glyph = glyph_for_percent(power.percent);
@@ -373,14 +429,25 @@ pub fn project_battery_tray(
         "tray-battery",
         tray_visible(power, items.battery, items.battery_only_when_relevant),
     )?;
+    project_glyph_nodes(document, "tray-battery-", glyph, charging)
+}
+
+/// Shows only `glyph` under `prefix`, using the charging variant while charging.
+fn project_glyph_nodes(
+    document: &mut impl UiDocumentAccess,
+    prefix: &str,
+    glyph: crate::taskbar::status::battery::BatteryGlyph,
+    charging: bool,
+) -> Result<(), String> {
+    use crate::taskbar::status::battery::BATTERY_GLYPHS;
     for candidate in BATTERY_GLYPHS {
         let shown = candidate == glyph;
         document.visible(
-            &format!("tray-battery-{}", candidate.id_suffix()),
+            &format!("{prefix}{}", candidate.id_suffix()),
             shown && !charging,
         )?;
         document.visible(
-            &format!("tray-battery-{}-charging", candidate.id_suffix()),
+            &format!("{prefix}{}-charging", candidate.id_suffix()),
             shown && charging,
         )?;
     }
@@ -395,7 +462,7 @@ pub fn project_battery_menu(
     track_width: f32,
 ) -> Result<(), String> {
     use crate::taskbar::status::battery::{
-        cpu_text, glyph_for_percent, progress_width, rate_text, state_text, BATTERY_GLYPHS,
+        cpu_text, glyph_for_percent, progress_width, rate_text, state_text,
     };
     use flamewm_api::system::PowerState;
     let charging = power.state == PowerState::Charging;
@@ -409,18 +476,7 @@ pub fn project_battery_menu(
         progress_width(power.percent, track_width),
         BATTERY_PROGRESS_HEIGHT,
     )?;
-    for candidate in BATTERY_GLYPHS {
-        let shown = candidate == glyph;
-        document.visible(
-            &format!("battery-icon-{}", candidate.id_suffix()),
-            shown && !charging,
-        )?;
-        document.visible(
-            &format!("battery-icon-{}-charging", candidate.id_suffix()),
-            shown && charging,
-        )?;
-    }
-    Ok(())
+    project_glyph_nodes(document, "battery-icon-", glyph, charging)
 }
 
 /// Height of the battery menu progress fill (matches ui/shell/battery.html).
@@ -634,9 +690,6 @@ pub fn project_media(
     Ok(())
 }
 
-
-
-
 /// Taskbar clock presentation from `taskbarClockFormat`, `taskbarShowSeconds`
 /// and `taskbarShowDate`. Defaults match `ProductSettings::default()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -754,12 +807,14 @@ fn runtime_image(raster: Rgb8Raster) -> RuntimeImage {
     }
 }
 
-
 #[cfg(test)]
 mod panel_template_tests {
     use super::*;
 
     use flamewm_api::system::{PowerSnapshot, PowerState, ServiceAvailability};
+    use flamewm_api::workspace::WorkspaceSnapshot;
+
+    use crate::taskbar::workspaces::cell_index;
 
     const PANEL_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-panel.rwr"));
 
@@ -819,7 +874,7 @@ mod panel_template_tests {
         let mut document = decode_panel();
         project_clock_at(&mut document, Local::now(), ClockDisplay::default())
             .unwrap_or_else(|error| panic!("panel clock refused: {error}"));
-        for slot in 1..=PAGE_SIZE {
+        for slot in 1..=PAGER_CELLS {
             let id = format!("workspace-{slot}");
             document
                 .text(&id, String::new())
@@ -877,7 +932,7 @@ mod panel_template_tests {
             .expect("taskbar size projects from the panel snapshot");
         project_clock_at(&mut document, Local::now(), ClockDisplay::default())
             .expect("clock projects");
-        for slot in 1..=PAGE_SIZE {
+        for slot in 1..=PAGER_CELLS {
             let id = format!("workspace-{slot}");
             document
                 .text(&id, slot.to_string())
@@ -922,6 +977,150 @@ mod panel_template_tests {
             checked.push(id);
         }
         assert_eq!(checked.len(), 12);
+    }
+
+    fn pager_snapshot(count: usize, active_index: usize) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            revision: 1,
+            count,
+            active_index,
+            last_index: None,
+            names: Vec::new(),
+        }
+    }
+
+    // REGRESSION: the pager must draw the same two-row topology the WM
+    // navigates (`1 2 / 3 4`, `1 2 3 / 4 5 6`), not a fixed 2x2 page of four
+    // slots, up to nine columns at the 18 workspace maximum. At four
+    // workspaces every cell keeps the device rect it had before the pager
+    // became count-dependent, and only then does the box grow.
+    // TRIGGER: panel.html pager markup, ui/shell/flamewm.css pager rules or
+    // project_pager changes.
+    // OBSERVABLE: `workspace-column-j` / `workspace-k` device rects on the
+    // compiled panel artifact.
+    // MUTATION: project cell ids by page slot, or drop `position:absolute` from
+    // `.workspace-column` (flow columns take width, so hidden columns would
+    // shift every later cell right).
+    #[test]
+    fn pager_cells_follow_the_two_row_workspace_topology() {
+        let viewport = (1080.0, 72.0);
+        let mut document = decode_panel();
+        document
+            .visible("workspace-pager", true)
+            .expect("pager node projects");
+        let rect = |document: &flamewm_ui_x11::UiDocument, id: &str| {
+            document
+                .layout_box_by_id(id, viewport)
+                .unwrap_or_else(|| panic!("panel node '{id}' missing from artifact"))
+        };
+        let column_rects = |document: &flamewm_ui_x11::UiDocument| {
+            (1..=PAGER_COLUMNS)
+                .map(|column| rect(document, &format!("workspace-column-{column}")))
+                .collect::<Vec<_>>()
+        };
+        let hidden = (0.0, 0.0, 0.0, 0.0);
+
+        // Four workspaces: `1 2 / 3 4`. Workspace index 0/1 fill the upper
+        // cells of columns 1/2, index 2/3 the lower ones.
+        project_pager(&mut document, Some(&pager_snapshot(4, 0))).expect("pager projects");
+        let (pager_x, pager_y, pager_width_px, pager_height) = rect(&document, "workspace-pager");
+        assert_eq!(
+            (pager_width_px, pager_height),
+            (51.0, 44.0),
+            "four workspaces keep today's two-column pager box"
+        );
+        for (index, cell, column, row) in [
+            (0usize, 1usize, 0usize, 0usize),
+            (1, 3, 1, 0),
+            (2, 2, 0, 1),
+            (3, 4, 1, 1),
+        ] {
+            assert_eq!(pager_cell(index, 4), Some(cell), "workspace {index} cell");
+            assert_eq!(
+                rect(&document, &format!("workspace-{cell}")),
+                (
+                    pager_x + 3.0 + column as f32 * 23.0,
+                    pager_y + 4.0 + row as f32 * 17.0,
+                    22.0,
+                    16.0
+                ),
+                "workspace {index} device rect"
+            );
+        }
+        for cell in 5..=PAGER_CELLS {
+            assert_eq!(rect(&document, &format!("workspace-{cell}")), hidden, "cell {cell}");
+        }
+        let columns = column_rects(&document);
+        assert_eq!(columns[0], (pager_x + 3.0, pager_y + 4.0, 22.0, 33.0));
+        assert_eq!(columns[1], (pager_x + 26.0, pager_y + 4.0, 22.0, 33.0));
+        for (index, column) in columns.iter().enumerate().skip(2) {
+            assert_eq!(*column, hidden, "column {}", index + 1);
+        }
+
+        // Six workspaces: `1 2 3 / 4 5 6` needs a third column and a 74px box.
+        project_pager(&mut document, Some(&pager_snapshot(6, 5))).expect("pager projects");
+        let (pager_x, pager_y, pager_width_px, _) = rect(&document, "workspace-pager");
+        assert_eq!(pager_width_px, 74.0);
+        for (index, cell, column, row) in [
+            (0usize, 1usize, 0usize, 0usize),
+            (1, 3, 1, 0),
+            (2, 5, 2, 0),
+            (3, 2, 0, 1),
+            (4, 4, 1, 1),
+            (5, 6, 2, 1),
+        ] {
+            assert_eq!(pager_cell(index, 6), Some(cell), "workspace {index} cell");
+            assert_eq!(
+                rect(&document, &format!("workspace-{cell}")),
+                (
+                    pager_x + 3.0 + column as f32 * 23.0,
+                    pager_y + 4.0 + row as f32 * 17.0,
+                    22.0,
+                    16.0
+                ),
+                "workspace {index} device rect"
+            );
+        }
+        let columns = column_rects(&document);
+        assert_eq!(columns[2], (pager_x + 49.0, pager_y + 4.0, 22.0, 33.0));
+        for (index, column) in columns.iter().enumerate().skip(3) {
+            assert_eq!(*column, hidden, "column {}", index + 1);
+        }
+
+        // Eighteen workspaces: nine columns, a 212px box, every cell filled.
+        project_pager(&mut document, Some(&pager_snapshot(18, 9))).expect("pager projects");
+        let (pager_x, pager_y, pager_width_px, _) = rect(&document, "workspace-pager");
+        assert_eq!(pager_width_px, 212.0);
+        let columns = column_rects(&document);
+        assert_eq!(columns.len(), PAGER_COLUMNS);
+        for (index, column) in columns.iter().enumerate() {
+            assert_eq!(
+                *column,
+                (pager_x + 3.0 + index as f32 * 23.0, pager_y + 4.0, 22.0, 33.0),
+                "column {}",
+                index + 1
+            );
+        }
+        for cell in 1..=PAGER_CELLS {
+            let column = (cell - 1) / 2;
+            let row = (cell - 1) % 2;
+            assert_eq!(
+                rect(&document, &format!("workspace-{cell}")),
+                (
+                    pager_x + 3.0 + column as f32 * 23.0,
+                    pager_y + 4.0 + row as f32 * 17.0,
+                    22.0,
+                    16.0
+                ),
+                "cell {cell} device rect"
+            );
+        }
+        // With eighteen workspaces every cell holds exactly one workspace, so
+        // the cell -> workspace mapping is a bijection over 1..=18.
+        for index in 0..18 {
+            let cell = pager_cell(index, 18).expect("workspace cell");
+            assert_eq!(cell_index(cell, 18), Some(index), "cell {cell} workspace");
+        }
     }
 
     // REGRESSION: the battery popup shows exactly one glyph node, charging-aware,

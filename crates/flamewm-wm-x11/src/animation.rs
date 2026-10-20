@@ -18,7 +18,7 @@ use flamewm_reactor::{Easing, Start, Timeline, TransitionId};
 
 /// Base durations in milliseconds at 1.0x speed.
 pub const MINIMIZE_MS: u32 = 260;
-pub const MAXIMIZE_MS: u32 = 200;
+pub const MAXIMIZE_MS: u32 = 110;
 pub const OPEN_MS: u32 = 160;
 pub const CLOSE_MS: u32 = 160;
 
@@ -148,8 +148,8 @@ impl Settings {
         enabled: true,
         speed: 100,
         minimize: Style::MagicLamp,
-        maximize: Style::MagicLamp,
-        open: Style::Scale,
+        maximize: Style::None,
+        open: Style::None,
         close: Style::Fade,
     };
 }
@@ -212,6 +212,9 @@ pub fn settings_from_snapshot(snapshot: &SettingsSnapshot) -> Settings {
     };
     let minimize_styles = [("none", Style::None), ("fade", Style::Fade), ("magic-lamp", Style::MagicLamp)];
     let open_styles = [("none", Style::None), ("scale", Style::Scale), ("fade", Style::Fade)];
+    let maximize_styles = [("none", Style::None), ("fade", Style::Fade), ("scale", Style::Scale),
+        // Legacy persisted spelling of Scale (not the minimize Magic Lamp warp).
+        ("magic-lamp", Style::Scale)];
     // Close has no separate enabled toggle; the global `animationsEnabled` gate covers it.
     let close = match snapshot.values.get("windowCloseAnimation") {
         Some(SettingValue::Text(text)) => match text.as_str() {
@@ -234,7 +237,7 @@ pub fn settings_from_snapshot(snapshot: &SettingsSnapshot) -> Settings {
             "maximizeAnimationEnabled",
             "maximizeAnimation",
             Settings::DEFAULT.maximize,
-            &minimize_styles,
+            &maximize_styles,
         ),
         open: group(
             "windowOpenAnimationEnabled",
@@ -305,6 +308,20 @@ pub fn minimize_target(icon_geometry: Option<Rect>, output: Rect) -> Rect {
     }
 }
 
+/// Reject a stale panel target on a different output before using it for a flight.
+#[must_use]
+pub fn icon_target_matches_output(icon: Rect, output: Rect) -> bool {
+    if icon.width <= 0 || icon.height <= 0 || output.width <= 0 || output.height <= 0 {
+        return false;
+    }
+    let center_x = i64::from(icon.x) * 2 + i64::from(icon.width);
+    let center_y = i64::from(icon.y) * 2 + i64::from(icon.height);
+    2 * i64::from(output.x) <= center_x
+        && center_x < 2 * (i64::from(output.x) + i64::from(output.width))
+        && 2 * i64::from(output.y) <= center_y
+        && center_y < 2 * (i64::from(output.y) + i64::from(output.height))
+}
+
 /// Overlay warp parameter for a flight progress value. A mirrored overlay (restore) plays
 /// target→source, so progress 0 starts at the target. Reversal keeps the overlay continuous
 /// because the mirror flag never changes after the overlay is opened.
@@ -340,6 +357,28 @@ pub fn is_blank_capture(argb: &[u8]) -> bool {
         return true;
     };
     pixels.all(|pixel| pixel == first)
+}
+
+/// A framed window may have painted its titlebar but not its client area yet.
+/// Treat a wholly uniform client interior as not ready for a transition capture.
+/// This deliberately skips a cosmetic open animation for blank-content windows
+/// rather than scaling a titlebar over an empty rectangle and revealing content
+/// abruptly at the end of the flight.
+#[must_use]
+pub fn is_unpainted_client_capture(argb: &[u8], width: u32, height: u32, titlebar_height: u32) -> bool {
+    let width = width as usize;
+    let height = height as usize;
+    let top = titlebar_height as usize;
+    if width == 0 || height <= top || argb.len() != width.saturating_mul(height).saturating_mul(4) {
+        return true;
+    }
+    let area = &argb[top * width * 4..];
+    let Some(first) = area.get(..4) else { return true };
+    // Sample across the client area without scanning entire high-resolution
+    // frames per Expose. A partial painted client is never mistaken for ready
+    // merely because the titlebar buttons already differ from its background.
+    let stride = (area.len() / 4 / 4096).max(1);
+    !area.chunks_exact(4).step_by(stride).any(|pixel| pixel != first)
 }
 
 /// Pending window-open effects. A managed window arms here when it is mapped; the effect
@@ -537,7 +576,12 @@ impl Animator {
         }
         let id = TransitionId::from(client);
         let base = Self::base_ms(effect);
-        match self.timeline.start(id, effect, now, base, Easing::Smoothstep) {
+        let easing = if matches!(effect, Effect::Maximize | Effect::Unmaximize) {
+            Easing::Linear
+        } else {
+            Easing::Smoothstep
+        };
+        match self.timeline.start(id, effect, now, base, easing) {
             Start::Immediate => Begin::Immediate,
             Start::Started => {
                 self.flights.push(Flight { client, id, effect });
@@ -669,7 +713,7 @@ mod tests {
     #[test]
     fn cancel_all_drains_every_flight_once() {
         let t0 = Instant::now();
-        let mut a = animator();
+        let mut a = Animator::new(true, Settings { open: Style::Scale, ..ON });
         a.start(1, Effect::Minimize, t0);
         a.start(2, Effect::Open, t0);
         let mut drained = a.cancel_all();
@@ -745,6 +789,19 @@ mod tests {
     }
 
     #[test]
+    fn minimize_target_ignores_icon_geometry_from_another_output() {
+        let left = Rect { x: 0, y: 0, width: 1920, height: 1080 };
+        let right = Rect { x: 1920, y: 0, width: 1280, height: 720 };
+        let left_icon = Rect { x: 80, y: 1036, width: 40, height: 40 };
+        assert!(icon_target_matches_output(left_icon, left));
+        assert!(!icon_target_matches_output(left_icon, right));
+        assert_eq!(
+            minimize_target(icon_target_matches_output(left_icon, right).then_some(left_icon), right),
+            Rect { x: 2560, y: 719, width: 1, height: 1 },
+        );
+    }
+
+    #[test]
     fn minimize_target_fallback_is_taskbar_center_not_origin() {
         let out = Rect { x: 1920, y: 0, width: 1920, height: 1080 };
         let empty = Rect { x: 0, y: 0, width: 0, height: 0 };
@@ -766,7 +823,8 @@ mod tests {
         assert!(!mapped.enabled);
         assert_eq!(mapped.speed, 50);
         assert_eq!(mapped.maximize, Style::None);
-        assert!(mapped.minimize != Style::None && mapped.open != Style::None, "missing keys keep the default");
+        assert_eq!(mapped.minimize, Style::MagicLamp, "missing keys keep the default");
+        assert_eq!(mapped.open, Style::None, "window-open animation defaults off");
         assert_eq!(settings_from_snapshot(&SettingsSnapshot::new(1)), Settings::DEFAULT);
     }
 
@@ -807,7 +865,7 @@ mod tests {
         let t0 = Instant::now();
         let mut off = Animator::new(true, Settings { maximize: Style::None, ..ON });
         assert_eq!(off.start(7, Effect::Unmaximize, t0), Begin::Immediate);
-        let mut a = animator();
+        let mut a = Animator::new(true, Settings { maximize: Style::Scale, ..ON });
         assert_eq!(a.start(7, Effect::Unmaximize, t0), Begin::Started);
         assert_eq!(a.running(7), Some(Effect::Unmaximize));
         let late = t0 + Duration::from_secs(5);
@@ -818,7 +876,7 @@ mod tests {
     #[test]
     fn maximize_and_unmaximize_do_not_reverse_each_other() {
         let t0 = Instant::now();
-        let mut a = animator();
+        let mut a = Animator::new(true, Settings { maximize: Style::Scale, ..ON });
         assert_eq!(a.start(7, Effect::Maximize, t0), Begin::Started);
         assert_eq!(a.start(7, Effect::Unmaximize, t0), Begin::AlreadyInFlight);
         assert_eq!(a.running(7), Some(Effect::Maximize));
@@ -881,7 +939,7 @@ mod tests {
     #[test]
     fn open_gate_arming_starts_nothing_until_a_non_blank_expose() {
         let t0 = Instant::now();
-        let mut a = animator();
+        let mut a = Animator::new(true, Settings { open: Style::Scale, ..ON });
         let mut gate = OpenGate::default();
         gate.arm(7);
         assert!(gate.is_armed(7));
@@ -911,13 +969,14 @@ mod tests {
 
     #[test]
     fn open_wants_requires_enabled_capable_and_flag() {
-        let on = Animator::new(true, Settings::DEFAULT);
+        let enabled = Settings { open: Style::Scale, ..Settings::DEFAULT };
+        let on = Animator::new(true, enabled);
         assert!(on.wants(Effect::Open));
-        let flag_off = Animator::new(true, Settings { open: Style::None, ..Settings::DEFAULT });
+        let flag_off = Animator::new(true, Settings { open: Style::None, ..enabled });
         assert!(!flag_off.wants(Effect::Open));
-        let no_cap = Animator::new(false, Settings::DEFAULT);
+        let no_cap = Animator::new(false, enabled);
         assert!(!no_cap.wants(Effect::Open));
-        let disabled = Animator::new(true, Settings { enabled: false, ..Settings::DEFAULT });
+        let disabled = Animator::new(true, Settings { enabled: false, ..enabled });
         assert!(!disabled.wants(Effect::Open));
     }
 
@@ -950,12 +1009,26 @@ mod style_tests {
     }
 
     #[test]
+    fn open_capture_requires_client_pixels_not_only_titlebar() {
+        let (w, h, top) = (8u32, 8u32, 2u32);
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        // The frame titlebar is already colorful while the application body
+        // has not painted; this must NOT start a partially filled scale.
+        pixels[0..4].copy_from_slice(&[255, 60, 70, 255]);
+        assert!(!is_blank_capture(&pixels));
+        assert!(is_unpainted_client_capture(&pixels, w, h, top));
+        let offset = ((top + 2) * w * 4 + 4 * 4) as usize;
+        pixels[offset..offset + 4].copy_from_slice(&[100, 200, 50, 255]);
+        assert!(!is_unpainted_client_capture(&pixels, w, h, top));
+    }
+
+    #[test]
     fn missing_style_keys_keep_defaults() {
         let mapped = settings_from_snapshot(&SettingsSnapshot::new(1));
         assert_eq!(mapped, Settings::DEFAULT);
         assert_eq!(mapped.minimize, Style::MagicLamp);
-        assert_eq!(mapped.maximize, Style::MagicLamp);
-        assert_eq!(mapped.open, Style::Scale);
+        assert_eq!(mapped.maximize, Style::None);
+        assert_eq!(mapped.open, Style::None);
     }
 
     #[test]
@@ -987,8 +1060,8 @@ mod style_tests {
             ("maximizeAnimation", SettingValue::Integer(3)),
         ]));
         assert_eq!(mapped.minimize, Style::MagicLamp);
-        assert_eq!(mapped.open, Style::Scale);
-        assert_eq!(mapped.maximize, Style::MagicLamp);
+        assert_eq!(mapped.open, Style::None);
+        assert_eq!(mapped.maximize, Style::None);
     }
 
     #[test]
@@ -996,11 +1069,14 @@ mod style_tests {
         let mapped = settings_from_snapshot(&snapshot(&[
             ("minimizeAnimationEnabled", SettingValue::Boolean(false)),
             ("minimizeAnimation", text("fade")),
+            ("maximizeAnimationEnabled", SettingValue::Boolean(false)),
+            ("maximizeAnimation", text("fade")),
             ("windowOpenAnimationEnabled", SettingValue::Boolean(false)),
+            ("windowOpenAnimation", text("fade")),
         ]));
         assert_eq!(mapped.minimize, Style::None);
         assert_eq!(mapped.open, Style::None);
-        assert_eq!(mapped.maximize, Style::MagicLamp);
+        assert_eq!(mapped.maximize, Style::None);
     }
 
     #[test]

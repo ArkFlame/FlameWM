@@ -293,7 +293,17 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     /// Reconcile per-output panel surfaces/reservations after a display topology refresh.
     pub fn resync_panels_for_displays(&mut self, displays: &DisplaySnapshot) -> FlameResult<bool> {
-        Ok(self.panels.sync_outputs(displays))
+        let previous_revision = self.panels.revision();
+        self.panels.sync_outputs(displays);
+        // A detached and reattached output creates a fresh OutputPanel. Reapply
+        // persisted presentation policy, otherwise the panel silently reverts
+        // to bottom/44px/classic after RandR hotplug or monitor rearrangement.
+        self.seed_persisted_panel_edges();
+        self.panels
+            .reconcile_taskbar_height(self.settings.current().taskbar_height);
+        self.panels
+            .reconcile_taskbar_frame(TaskbarFrame::from_settings(self.settings.current()));
+        Ok(self.panels.revision() != previous_revision)
     }
 
     pub fn begin_display_mode(
@@ -1092,6 +1102,29 @@ mod tests {
         let mut restarted = host_at(&path, 100);
         restarted.start().expect("restart starts");
         assert_eq!(restarted.panels_snapshot().panels[0].edge, PanelEdge::Top);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn panel_edge_persists_across_output_disconnect_reconnect() {
+        let path = fixture_path("panel-edge-hotplug");
+        std::fs::write(&path, "").expect("create settings fixture");
+        let mut host = host_at(&path, 100);
+        host.start().expect("host starts");
+        host.set_panel_edge(
+            &OutputId::new("default"), PanelEdge::Top, host.panels_snapshot().revision,
+        ).expect("persist panel edge");
+        let original = host.cached_display_snapshot().expect("displays cached");
+        let mut disconnected = original.clone();
+        disconnected.outputs[0].connected = false;
+        disconnected.outputs[0].geometry = Rect::default();
+        assert!(host.resync_panels_for_displays(&disconnected).expect("detach"));
+        assert!(host.panels_snapshot().panels.is_empty());
+        assert!(host.resync_panels_for_displays(&original).expect("reattach"));
+        let panels = host.panels_snapshot();
+        let panel = &panels.panels[0];
+        assert_eq!(panel.edge, PanelEdge::Top);
+        assert_eq!(panel.geometry.y, 4);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -16,7 +16,7 @@ use flamewm_ui_x11::{PointerButton, UiActionEvent, UiActionPhase, UiColor, UiDoc
 use crate::projection;
 use crate::{
     DesktopState, MenuKind, MenuState, context_secondary_counter, hide_confirm, hide_menus,
-    pointer_button, pointer_point, selected_menu_id, sync_menu,
+    pointer_button, pointer_on_output, selected_menu_id, sync_menu,
 };
 
 const STICKY_SLOTS: usize = projection::STICKY_SLOT_COUNT;
@@ -403,10 +403,11 @@ fn open_context_menu(
         return Ok(());
     };
     context_secondary_counter().increment();
-    let anchor = pointer_point(action, state.grid.work_area);
+    let (output, anchor) = pointer_on_output(state, action.x, action.y);
     state.menu = Some(MenuState {
         kind: MenuKind::Sticky,
         anchor,
+        output,
         selected_id: Some(note.id),
     });
     state.pending_delete = None;

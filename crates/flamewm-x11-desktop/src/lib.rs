@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,6 +37,45 @@ pub mod shared;
 pub mod shortcuts;
 
 pub const ICONIC_STATE: u32 = 3;
+const SESSION_SUPERVISOR_PID: &str = "FLAMEWM_SESSION_SUPERVISOR_PID";
+const SESSION_LOGOUT_OWNER: &str = "FLAMEWM_SESSION_LOGOUT_OWNER";
+
+static SESSION_LOGOUT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn session_logout_supported() -> bool {
+    session_logout_owner_matches(
+        std::env::var_os(SESSION_LOGOUT_OWNER).as_deref(),
+        std::env::var_os(SESSION_SUPERVISOR_PID).as_deref(),
+        rustix::process::getppid(),
+    )
+}
+
+pub fn request_session_logout() {
+    SESSION_LOGOUT_REQUESTED.store(true, Ordering::Release);
+}
+
+pub fn take_session_logout_request() -> bool {
+    SESSION_LOGOUT_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+fn supervisor_pid_matches(value: Option<&OsStr>, parent: Option<rustix::process::Pid>) -> bool {
+    let Some(value) = value.and_then(|value| value.to_str()) else {
+        return false;
+    };
+    value
+        .parse::<i32>()
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .is_some_and(|pid| Some(pid) == parent)
+}
+
+fn session_logout_owner_matches(
+    owner: Option<&OsStr>,
+    supervisor: Option<&OsStr>,
+    parent: Option<rustix::process::Pid>,
+) -> bool {
+    owner == Some(OsStr::new("1")) && supervisor_pid_matches(supervisor, parent)
+}
 
 pub struct X11Desktop {
     conn: RustConnection,
@@ -964,11 +1004,7 @@ impl ApplicationPort for X11Desktop {
         catalog.launch(app, options).map(|_| ())
     }
     fn launch_uri(&mut self, uri: &str) -> FlameResult<()> {
-        Command::new("xdg-open")
-            .arg(uri)
-            .spawn()
-            .map(|_| ())
-            .map_err(io_error)
+        flamewm_applications::open_target(std::ffi::OsStr::new(uri))
     }
 }
 
@@ -976,7 +1012,7 @@ impl SessionPort for X11Desktop {
     fn session_capabilities(&self) -> SessionCapabilities {
         SessionCapabilities {
             lock: Path::new("/usr/bin/loginctl").exists(),
-            logout: Path::new("/usr/bin/loginctl").exists(),
+            logout: session_logout_supported(),
             suspend: Path::new("/usr/bin/systemctl").exists(),
             reboot: Path::new("/usr/bin/systemctl").exists(),
             shutdown: Path::new("/usr/bin/systemctl").exists(),
@@ -987,7 +1023,16 @@ impl SessionPort for X11Desktop {
             SessionAction::Lock => return start_lock_screen(),
             SessionAction::LockPreview => return start_lock_preview(),
             SessionAction::ScreensaverPreview => return start_screensaver_preview(),
-            SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
+            SessionAction::Logout => {
+                if !session_logout_supported() {
+                    return Err(FlameError::new(
+                        ErrorCode::Unavailable,
+                        "logout requires a managed FlameWM session",
+                    ));
+                }
+                request_session_logout();
+                return Ok(());
+            }
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),
             SessionAction::Shutdown => ("systemctl", &["poweroff"]),
@@ -1087,6 +1132,13 @@ impl DisplayPort for X11Desktop {
             .map_err(io_error)?
             .reply()
             .map_err(io_error)?;
+        // Stable physical output identity: never infer primary from RandR
+        // resource enumeration order (it can change after hotplug/rotation).
+        let primary_output = self.conn.randr_get_output_primary(self.root)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.output)
+            .unwrap_or(0);
         let mut outputs = Vec::new();
         for output in resources.outputs {
             let info = self
@@ -1139,12 +1191,20 @@ impl DisplayPort for X11Desktop {
                 connector: String::from_utf8_lossy(&info.name).into_owned(),
                 edid_identity: String::new(),
                 connected: true,
-                primary: false,
+                primary: output == primary_output,
                 geometry,
                 current_mode,
                 modes,
                 shell_scale_percent: 100,
             });
+        }
+        // Some nested and legacy X servers do not implement RandR primary.
+        // In that case stabilize fallback by connector, not enumeration order.
+        if !outputs.iter().any(|output| output.primary) {
+            outputs.sort_by(|a, b| a.connector.cmp(&b.connector));
+            if let Some(output) = outputs.iter_mut().find(|output| output.geometry.is_valid()) {
+                output.primary = true;
+            }
         }
         Ok(DisplaySnapshot {
             generation: u64::from(resources.config_timestamp),
@@ -1253,5 +1313,50 @@ mod lock_supervision_tests {
             decide(exited(1), LOCK_RESPAWN_CAP + 3),
             LockSupervision::Stop
         );
+    }
+}
+
+#[cfg(test)]
+mod session_logout_tests {
+    use std::ffi::OsStr;
+
+    use rustix::process::Pid;
+
+    use super::{
+        request_session_logout, session_logout_owner_matches, take_session_logout_request,
+    };
+
+    #[test]
+    fn logout_requires_the_current_supervisor_process() {
+        let supervisor = Pid::from_raw(1234).unwrap();
+        assert!(session_logout_owner_matches(
+            Some(OsStr::new("1")),
+            Some(OsStr::new("1234")),
+            Some(supervisor)
+        ));
+        assert!(!session_logout_owner_matches(
+            None,
+            Some(OsStr::new("1235")),
+            Some(supervisor)
+        ));
+        assert!(!session_logout_owner_matches(
+            Some(OsStr::new("1")),
+            Some(OsStr::new("not-a-pid")),
+            Some(supervisor)
+        ));
+        assert!(!session_logout_owner_matches(
+            Some(OsStr::new("1")),
+            Some(OsStr::new("1235")),
+            Some(supervisor)
+        ));
+    }
+
+    #[test]
+    fn repeated_logout_requests_collapse_to_one_clean_exit_intent() {
+        let _ = take_session_logout_request();
+        request_session_logout();
+        request_session_logout();
+        assert!(take_session_logout_request());
+        assert!(!take_session_logout_request());
     }
 }

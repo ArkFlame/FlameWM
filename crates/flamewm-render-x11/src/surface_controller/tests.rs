@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use super::*;
 use super::backdrop_shape::round_backdrop_words;
+use super::*;
 use flamewm_reactor::timeline::FRAME_INTERVAL;
 use flamewm_reactor::{Easing, Start, Timeline};
 use flamewm_render_core::{Rect, SurfaceDamage};
@@ -33,14 +33,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn root_resize_notification_is_distinct_from_child_configure() {
+        assert!(is_root_geometry_configure(
+            ROOT_CHILD_CONFIGURE_NOTIFY,
+            1,
+            1
+        ));
+        assert!(!is_root_geometry_configure(
+            ROOT_CHILD_CONFIGURE_NOTIFY,
+            2,
+            1
+        ));
+        assert!(!is_root_geometry_configure(ROOT_CHILD_MAP_NOTIFY, 1, 1));
+    }
+
+    #[test]
     fn grabbed_press_classifies_inside_and_outside_in_root_space() {
         let origin = (100, 50);
         // 200x100 popup: [100,300) x [50,150)
-        assert_eq!(classify_grabbed_press(100, 50, origin, 200, 100), GrabbedPressOutcome::Inside);
-        assert_eq!(classify_grabbed_press(299, 149, origin, 200, 100), GrabbedPressOutcome::Inside);
-        assert_eq!(classify_grabbed_press(300, 80, origin, 200, 100), GrabbedPressOutcome::Outside);
-        assert_eq!(classify_grabbed_press(99, 80, origin, 200, 100), GrabbedPressOutcome::Outside);
-        assert_eq!(classify_grabbed_press(150, 150, origin, 200, 100), GrabbedPressOutcome::Outside);
+        assert_eq!(
+            classify_grabbed_press(100, 50, origin, 200, 100),
+            GrabbedPressOutcome::Inside
+        );
+        assert_eq!(
+            classify_grabbed_press(299, 149, origin, 200, 100),
+            GrabbedPressOutcome::Inside
+        );
+        assert_eq!(
+            classify_grabbed_press(300, 80, origin, 200, 100),
+            GrabbedPressOutcome::Outside
+        );
+        assert_eq!(
+            classify_grabbed_press(99, 80, origin, 200, 100),
+            GrabbedPressOutcome::Outside
+        );
+        assert_eq!(
+            classify_grabbed_press(150, 150, origin, 200, 100),
+            GrabbedPressOutcome::Outside
+        );
     }
 
     #[test]
@@ -56,10 +86,22 @@ mod tests {
             include_str!("backdrop_shape.rs"),
         ]
         .concat();
-        assert!(!production.contains("XGrabPointer("), "active pointer grab reintroduced");
-        assert!(!production.contains("XGrabButton("), "passive button grab reintroduced");
-        assert!(!production.contains("XAllowEvents("), "press replay reintroduced");
-        assert!(production.contains("XISelectEvents("), "raw press selection missing");
+        assert!(
+            !production.contains("XGrabPointer("),
+            "active pointer grab reintroduced"
+        );
+        assert!(
+            !production.contains("XGrabButton("),
+            "passive button grab reintroduced"
+        );
+        assert!(
+            !production.contains("XAllowEvents("),
+            "press replay reintroduced"
+        );
+        assert!(
+            production.contains("XISelectEvents("),
+            "raw press selection missing"
+        );
     }
 
     #[test]
@@ -75,8 +117,14 @@ mod tests {
         let mut selection = RawPressSelection::new(Some(2));
         assert!(!selection.disarm(a), "disarm while idle must not write");
         assert!(selection.arm(a), "first arm writes the selection");
-        assert!(!selection.arm(a), "second arm of the same surface must not write again");
-        assert!(selection.disarm(a), "disarm of the last armed surface writes");
+        assert!(
+            !selection.arm(a),
+            "second arm of the same surface must not write again"
+        );
+        assert!(
+            selection.disarm(a),
+            "disarm of the last armed surface writes"
+        );
         assert!(!selection.disarm(a), "second disarm must not write again");
         assert!(selection.arm(a), "re-arm after disarm writes again");
     }
@@ -87,7 +135,10 @@ mod tests {
         let mut selection = RawPressSelection::new(Some(2));
         assert!(selection.arm(a), "first surface writes the selection");
         assert!(!selection.arm(b), "second surface joins without rewriting");
-        assert!(!selection.disarm(a), "closing one popup must keep the selection for the other");
+        assert!(
+            !selection.disarm(a),
+            "closing one popup must keep the selection for the other"
+        );
         assert!(!selection.arm(b), "b stays armed and idempotent");
         assert!(selection.disarm(b), "last surface out clears the selection");
         assert!(!selection.disarm(a), "a already disarmed");
@@ -98,11 +149,26 @@ mod tests {
     fn press_observer_shares_the_root_selection_with_popup_grabs() {
         let mut selection = RawPressSelection::new(Some(2));
         let popup = SurfaceId(7);
-        assert!(selection.arm(PRESS_OBSERVER), "observer writes the root selection");
-        assert!(!selection.arm(popup), "popup rides the observer's selection");
-        assert!(selection.arm(PRESS_OBSERVER) == false, "re-arm is idempotent");
-        assert!(!selection.disarm(PRESS_OBSERVER), "popup keeps the selection");
-        assert!(selection.disarm(popup), "last disarm clears the root selection");
+        assert!(
+            selection.arm(PRESS_OBSERVER),
+            "observer writes the root selection"
+        );
+        assert!(
+            !selection.arm(popup),
+            "popup rides the observer's selection"
+        );
+        assert!(
+            selection.arm(PRESS_OBSERVER) == false,
+            "re-arm is idempotent"
+        );
+        assert!(
+            !selection.disarm(PRESS_OBSERVER),
+            "popup keeps the selection"
+        );
+        assert!(
+            selection.disarm(popup),
+            "last disarm clears the root selection"
+        );
         assert!(!selection.disarm(PRESS_OBSERVER), "disarm is idempotent");
     }
 
@@ -117,8 +183,16 @@ mod tests {
     #[test]
     fn raw_press_outside_maps_only_outside_presses_to_dismiss_event() {
         let popup = ((100, 50), (200, 100));
-        let outside = raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 1, (300, 80), popup, 1.0, 42)
-            .expect("press right of the popup dismisses");
+        let outside = raw_press_outside_event(
+            SurfaceId(3),
+            XI_RAW_BUTTON_PRESS,
+            1,
+            (300, 80),
+            popup,
+            1.0,
+            42,
+        )
+        .expect("press right of the popup dismisses");
         assert_eq!(outside.surface, SurfaceId(3));
         assert_eq!(outside.event.action, OUTSIDE_RELEASE_ACTION);
         assert_eq!(outside.event.phase, ActionPhase::Release);
@@ -127,14 +201,43 @@ mod tests {
         assert_eq!(outside.event.time_ms, 42);
         assert!(!outside.event.inside);
 
-        let scaled = raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 3, (300, 80), popup, 2.0, 7)
-            .expect("scaled outside press dismisses");
+        let scaled = raw_press_outside_event(
+            SurfaceId(3),
+            XI_RAW_BUTTON_PRESS,
+            3,
+            (300, 80),
+            popup,
+            2.0,
+            7,
+        )
+        .expect("scaled outside press dismisses");
         assert_eq!((scaled.event.x, scaled.event.y), (100.0, 15.0));
         assert_eq!(scaled.event.button, 3);
 
-        assert!(raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 1, (150, 80), popup, 1.0, 0).is_none());
-        assert!(raw_press_outside_event(SurfaceId(3), XI_RAW_BUTTON_PRESS, 1, (299, 149), popup, 1.0, 0).is_none());
-        assert!(raw_press_outside_event(SurfaceId(3), 16, 1, (300, 80), popup, 1.0, 0).is_none(), "release is not a press");
+        assert!(raw_press_outside_event(
+            SurfaceId(3),
+            XI_RAW_BUTTON_PRESS,
+            1,
+            (150, 80),
+            popup,
+            1.0,
+            0
+        )
+        .is_none());
+        assert!(raw_press_outside_event(
+            SurfaceId(3),
+            XI_RAW_BUTTON_PRESS,
+            1,
+            (299, 149),
+            popup,
+            1.0,
+            0
+        )
+        .is_none());
+        assert!(
+            raw_press_outside_event(SurfaceId(3), 16, 1, (300, 80), popup, 1.0, 0).is_none(),
+            "release is not a press"
+        );
     }
 
     #[test]
@@ -316,8 +419,16 @@ mod tests {
         round_backdrop_words(&mut words, 12, 12, 6);
         assert_eq!(words[0] >> 24, 0, "top-left corner outside the arc");
         assert_eq!(words[11] >> 24, 0, "top-right corner outside the arc");
-        assert_eq!(words[11 * 12] >> 24, 0, "bottom-left corner outside the arc");
-        assert_eq!(words[11 * 12 + 11] >> 24, 0, "bottom-right corner outside the arc");
+        assert_eq!(
+            words[11 * 12] >> 24,
+            0,
+            "bottom-left corner outside the arc"
+        );
+        assert_eq!(
+            words[11 * 12 + 11] >> 24,
+            0,
+            "bottom-right corner outside the arc"
+        );
         assert_eq!(words[6 * 12 + 6], 0xff80_8080, "centre keeps the snapshot");
         assert!(
             words.iter().any(|w| (1..0xff).contains(&(w >> 24))),
@@ -326,7 +437,10 @@ mod tests {
         for word in &words {
             let alpha = word >> 24;
             for shift in [0, 8, 16] {
-                assert!(((word >> shift) & 0xff) <= alpha, "premultiplied: {word:#010x}");
+                assert!(
+                    ((word >> shift) & 0xff) <= alpha,
+                    "premultiplied: {word:#010x}"
+                );
             }
         }
     }
@@ -335,10 +449,19 @@ mod tests {
     fn slide_out_keeps_grab_only_for_shown_slide_popups() {
         let slide = Some(SlideConfig::slide(SlideEdge::Bottom, 200));
         let fade = Some(SlideConfig::fade(SlideEdge::Bottom, 200));
-        assert!(slide_out_keeps_grab(slide, true), "shown slide keeps grab during slide-out");
-        assert!(!slide_out_keeps_grab(slide, false), "unmapped popup releases at once");
+        assert!(
+            slide_out_keeps_grab(slide, true),
+            "shown slide keeps grab during slide-out"
+        );
+        assert!(
+            !slide_out_keeps_grab(slide, false),
+            "unmapped popup releases at once"
+        );
         assert!(!slide_out_keeps_grab(fade, true), "fade releases at once");
-        assert!(!slide_out_keeps_grab(None, true), "no transition releases at once");
+        assert!(
+            !slide_out_keeps_grab(None, true),
+            "no transition releases at once"
+        );
     }
 
     /// Replays hide() then the landing: returns how many times the grab was released.
@@ -363,8 +486,14 @@ mod tests {
         let slide = Some(SlideConfig::slide(SlideEdge::Bottom, 200));
         assert_eq!(grab_releases(slide, true), (0, 1));
         // A landed opening never releases, and a second landing finds nothing left to release.
-        assert!(!landing_releases_grab(true, true), "opening landing keeps grab");
-        assert!(!landing_releases_grab(false, false), "second landing has nothing to release");
+        assert!(
+            !landing_releases_grab(true, true),
+            "opening landing keeps grab"
+        );
+        assert!(
+            !landing_releases_grab(false, false),
+            "second landing has nothing to release"
+        );
     }
 
     #[test]
@@ -372,7 +501,11 @@ mod tests {
         let fade = Some(SlideConfig::fade(SlideEdge::Bottom, 200));
         let lamp = Some(SlideConfig::lamp(SlideEdge::Bottom, 200, (0, 0, 10, 10)));
         for slide in [fade, lamp, None] {
-            assert_eq!(grab_releases(slide, true), (1, 0), "{slide:?} releases at hide");
+            assert_eq!(
+                grab_releases(slide, true),
+                (1, 0),
+                "{slide:?} releases at hide"
+            );
         }
     }
 
@@ -380,22 +513,50 @@ mod tests {
     fn begin_overlay_hide_never_touches_the_grab() {
         // Overlay close owns only the visual flight; grab release stays in hide() and landing.
         let source = include_str!("slide.rs");
-        let start = source.find("pub(super) fn begin_overlay_hide(").expect("begin_overlay_hide present");
+        let start = source
+            .find("pub(super) fn begin_overlay_hide(")
+            .expect("begin_overlay_hide present");
         let body = &source[start..];
-        let end = body.find("\n    /// Final root-space rect").expect("body end marker");
+        let end = body
+            .find("\n    /// Final root-space rect")
+            .expect("body end marker");
         let body = &body[..end];
-        assert!(!body.contains("release_grab"), "overlay hide must not release the grab");
-        assert!(!body.contains("pointer_grabbed"), "overlay hide must not touch the grab flag");
-        assert!(!body.contains("release_popup_presses"), "overlay hide must not release presses");
+        assert!(
+            !body.contains("release_grab"),
+            "overlay hide must not release the grab"
+        );
+        assert!(
+            !body.contains("pointer_grabbed"),
+            "overlay hide must not touch the grab flag"
+        );
+        assert!(
+            !body.contains("release_popup_presses"),
+            "overlay hide must not release presses"
+        );
     }
 
     #[test]
     fn outside_press_is_swallowed_only_while_sliding_out() {
-        let closing = Some(SlideKind { edge: SlideEdge::Bottom, opening: false });
-        let opening = Some(SlideKind { edge: SlideEdge::Bottom, opening: true });
-        assert!(slide_out_swallows_press(closing), "second outside press during slide-out is ignored");
-        assert!(!slide_out_swallows_press(opening), "a reversed open still dismisses");
-        assert!(!slide_out_swallows_press(None), "settled popup dismisses normally");
+        let closing = Some(SlideKind {
+            edge: SlideEdge::Bottom,
+            opening: false,
+        });
+        let opening = Some(SlideKind {
+            edge: SlideEdge::Bottom,
+            opening: true,
+        });
+        assert!(
+            slide_out_swallows_press(closing),
+            "second outside press during slide-out is ignored"
+        );
+        assert!(
+            !slide_out_swallows_press(opening),
+            "a reversed open still dismisses"
+        );
+        assert!(
+            !slide_out_swallows_press(None),
+            "settled popup dismisses normally"
+        );
     }
 
     #[test]
@@ -494,18 +655,29 @@ mod slide_motion_tests {
     fn closing_landing_frame_stays_off_the_panel_edge() {
         // Close timeline runs progress 1.0 -> 0.0; its landed frame is the off-edge end frame,
         // never the fully visible origin (that frame would flash before the unmap).
-        for edge in [SlideEdge::Bottom, SlideEdge::Top, SlideEdge::Left, SlideEdge::Right] {
+        for edge in [
+            SlideEdge::Bottom,
+            SlideEdge::Top,
+            SlideEdge::Left,
+            SlideEdge::Right,
+        ] {
             let landed = landing_frame_origin(FINAL, SIZE, edge, 0.0);
             assert_eq!(landed, slide_origin(FINAL, SIZE, edge, 0.0), "{edge:?}");
             assert_ne!(landed, FINAL, "{edge:?}");
         }
         // Opening landing still snaps to the final origin.
-        assert_eq!(landing_frame_origin(FINAL, SIZE, SlideEdge::Bottom, 1.0), FINAL);
+        assert_eq!(
+            landing_frame_origin(FINAL, SIZE, SlideEdge::Bottom, 1.0),
+            FINAL
+        );
     }
 
     #[test]
     fn slide_origin_starts_off_the_panel_edge_per_edge() {
-        assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Bottom, 0.0), (100, 900));
+        assert_eq!(
+            slide_origin(FINAL, SIZE, SlideEdge::Bottom, 0.0),
+            (100, 900)
+        );
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Top, 0.0), (100, 100));
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Left, 0.0), (-200, 500));
         assert_eq!(slide_origin(FINAL, SIZE, SlideEdge::Right, 0.0), (400, 500));
@@ -515,19 +687,37 @@ mod slide_motion_tests {
     fn panel_clip_keeps_only_the_screen_side_of_the_dock_edge() {
         // Bottom dock at y 1040..1080: rows above the panel top survive the clip.
         let bottom = Some((0, 1040, 1920, 40));
-        assert_eq!(panel_clip(bottom, (100, 900), (300, 400), SlideEdge::Bottom), (0, 0, 300, 140));
+        assert_eq!(
+            panel_clip(bottom, (100, 900), (300, 400), SlideEdge::Bottom),
+            (0, 0, 300, 140)
+        );
         // Still fully below the panel: nothing may show.
-        assert_eq!(panel_clip(bottom, (100, 1100), (300, 400), SlideEdge::Bottom), (0, 0, 300, 0));
+        assert_eq!(
+            panel_clip(bottom, (100, 1100), (300, 400), SlideEdge::Bottom),
+            (0, 0, 300, 0)
+        );
         // Top dock at y 0..40: rows from the panel bottom down survive.
         let top = Some((0, 0, 1920, 40));
-        assert_eq!(panel_clip(top, (100, -200), (300, 400), SlideEdge::Top), (0, 240, 300, 400));
+        assert_eq!(
+            panel_clip(top, (100, -200), (300, 400), SlideEdge::Top),
+            (0, 240, 300, 400)
+        );
         // Left and right docks clip columns on the same rule.
         let left = Some((0, 0, 60, 1080));
-        assert_eq!(panel_clip(left, (-100, 0), (300, 400), SlideEdge::Left), (160, 0, 300, 400));
+        assert_eq!(
+            panel_clip(left, (-100, 0), (300, 400), SlideEdge::Left),
+            (160, 0, 300, 400)
+        );
         let right = Some((1860, 0, 60, 1080));
-        assert_eq!(panel_clip(right, (1700, 0), (300, 400), SlideEdge::Right), (0, 0, 160, 400));
+        assert_eq!(
+            panel_clip(right, (1700, 0), (300, 400), SlideEdge::Right),
+            (0, 0, 160, 400)
+        );
         // No dock: nothing is clipped.
-        assert_eq!(panel_clip(None, (1, 2), (300, 400), SlideEdge::Bottom), (0, 0, 300, 400));
+        assert_eq!(
+            panel_clip(None, (1, 2), (300, 400), SlideEdge::Bottom),
+            (0, 0, 300, 400)
+        );
     }
 
     #[test]
@@ -535,33 +725,72 @@ mod slide_motion_tests {
         // Quick-control helpers have no Dock surface: the parent's panel rect must stand in.
         let published = Some((0, 1040, 1920, 40));
         assert_eq!(resolve_dock(None, published), published);
-        assert_eq!(resolve_dock(Some((0, 1000, 1920, 80)), published), Some((0, 1000, 1920, 80)));
+        assert_eq!(
+            resolve_dock(Some((0, 1000, 1920, 80)), published),
+            Some((0, 1000, 1920, 80))
+        );
         assert_eq!(resolve_dock(None, None), None);
-        let clip = panel_clip(resolve_dock(None, published), (100, 900), (300, 400), SlideEdge::Bottom);
+        let clip = panel_clip(
+            resolve_dock(None, published),
+            (100, 900),
+            (300, 400),
+            SlideEdge::Bottom,
+        );
         assert_eq!(clip, (0, 0, 300, 140));
     }
 
     #[test]
     fn final_frame_is_exact_anchored_origin_for_every_edge() {
-        for edge in [SlideEdge::Top, SlideEdge::Bottom, SlideEdge::Left, SlideEdge::Right] {
+        for edge in [
+            SlideEdge::Top,
+            SlideEdge::Bottom,
+            SlideEdge::Left,
+            SlideEdge::Right,
+        ] {
             assert_eq!(slide_origin(FINAL, SIZE, edge, 1.0), FINAL, "{edge:?}");
-            assert_eq!(slide_origin(FINAL, SIZE, edge, 1.5), FINAL, "{edge:?} clamped");
+            assert_eq!(
+                slide_origin(FINAL, SIZE, edge, 1.5),
+                FINAL,
+                "{edge:?} clamped"
+            );
         }
     }
 
-    const OPEN: SlideKind = SlideKind { edge: SlideEdge::Bottom, opening: true };
-    const CLOSE: SlideKind = SlideKind { edge: SlideEdge::Bottom, opening: false };
+    const OPEN: SlideKind = SlideKind {
+        edge: SlideEdge::Bottom,
+        opening: true,
+    };
+    const CLOSE: SlideKind = SlideKind {
+        edge: SlideEdge::Bottom,
+        opening: false,
+    };
 
     #[test]
     fn progress_endpoints_and_ease_out_midpoint() {
         let t0 = Instant::now();
         let mut slides = Timeline::new();
-        slides.start_towards(1, OPEN, t0, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0));
+        slides.start_towards(
+            1,
+            OPEN,
+            t0,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseOutCubic,
+            (0.0, 1.0),
+        );
         assert_eq!(slides.progress(1, t0), Some(0.0));
-        assert_eq!(slides.progress(1, t0 + Duration::from_millis(180)), Some(1.0));
+        assert_eq!(
+            slides.progress(1, t0 + Duration::from_millis(180)),
+            Some(1.0)
+        );
         assert_eq!(slides.progress(1, t0 + Duration::from_secs(10)), Some(1.0));
-        assert_eq!(slides.finished(1, t0 + Duration::from_millis(179)), Some(false));
-        assert_eq!(slides.finished(1, t0 + Duration::from_millis(180)), Some(true));
+        assert_eq!(
+            slides.finished(1, t0 + Duration::from_millis(179)),
+            Some(false)
+        );
+        assert_eq!(
+            slides.finished(1, t0 + Duration::from_millis(180)),
+            Some(true)
+        );
         // Ease-out cubic: halfway in time is already past half the travel.
         assert!(slides.progress(1, t0 + Duration::from_millis(90)).unwrap() > 0.5);
     }
@@ -570,27 +799,67 @@ mod slide_motion_tests {
     fn reverse_mid_flight_continues_from_current_progress() {
         let t0 = Instant::now();
         let mut slides = Timeline::new();
-        slides.start_towards(1, OPEN, t0, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0));
+        slides.start_towards(
+            1,
+            OPEN,
+            t0,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseOutCubic,
+            (0.0, 1.0),
+        );
         let now = t0 + Duration::from_millis(60);
         let before = slides.progress(1, now).unwrap();
-        slides.start_towards(1, CLOSE, now, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0));
-        assert!((slides.progress(1, now).unwrap() - before).abs() < 1e-6, "no jump on reverse");
-        assert_eq!(slides.progress(1, now + Duration::from_millis(120)), Some(0.0));
+        slides.start_towards(
+            1,
+            CLOSE,
+            now,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseInCubic,
+            (1.0, 0.0),
+        );
+        assert!(
+            (slides.progress(1, now).unwrap() - before).abs() < 1e-6,
+            "no jump on reverse"
+        );
+        assert_eq!(
+            slides.progress(1, now + Duration::from_millis(180)),
+            Some(0.0)
+        );
         // Reversing back to open from the midpoint is also jump-free.
         let mid = now + Duration::from_millis(40);
         let mid_value = slides.progress(1, mid).unwrap();
-        slides.start_towards(1, OPEN, mid, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0));
+        slides.start_towards(
+            1,
+            OPEN,
+            mid,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseOutCubic,
+            (0.0, 1.0),
+        );
         assert!((slides.progress(1, mid).unwrap() - mid_value).abs() < 1e-6);
-        assert_eq!(slides.progress(1, mid + Duration::from_millis(180)), Some(1.0));
+        assert_eq!(
+            slides.progress(1, mid + Duration::from_millis(180)),
+            Some(1.0)
+        );
     }
 
     #[test]
     fn close_from_fully_shown_starts_at_one_and_ends_at_zero() {
         let t0 = Instant::now();
         let mut slides = Timeline::new();
-        slides.start_towards(1, CLOSE, t0, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0));
+        slides.start_towards(
+            1,
+            CLOSE,
+            t0,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseInCubic,
+            (1.0, 0.0),
+        );
         assert_eq!(slides.progress(1, t0), Some(1.0));
-        assert_eq!(slides.progress(1, t0 + Duration::from_millis(120)), Some(0.0));
+        assert_eq!(
+            slides.progress(1, t0 + Duration::from_millis(180)),
+            Some(0.0)
+        );
     }
 
     #[test]
@@ -605,7 +874,14 @@ mod slide_motion_tests {
         slides.set_enabled(false);
         let now = Instant::now();
         assert_eq!(
-            slides.start_towards(1, OPEN, now, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0)),
+            slides.start_towards(
+                1,
+                OPEN,
+                now,
+                SLIDE_OPEN_BASE_MS,
+                Easing::EaseOutCubic,
+                (0.0, 1.0)
+            ),
             Start::Immediate
         );
         assert!(slides.is_empty());
@@ -616,19 +892,39 @@ mod slide_motion_tests {
     fn durations_scale_with_speed() {
         let mut slides = Timeline::<SlideKind>::new();
         slides.set_speed(100);
-        assert_eq!(slides.duration_for(SLIDE_OPEN_BASE_MS), Duration::from_millis(180));
+        assert_eq!(
+            slides.duration_for(SLIDE_OPEN_BASE_MS),
+            Duration::from_millis(180)
+        );
         slides.set_speed(200);
-        assert_eq!(slides.duration_for(SLIDE_OPEN_BASE_MS), Duration::from_millis(90));
+        assert_eq!(
+            slides.duration_for(SLIDE_OPEN_BASE_MS),
+            Duration::from_millis(90)
+        );
         slides.set_speed(25);
-        assert_eq!(slides.duration_for(SLIDE_OPEN_BASE_MS), Duration::from_millis(720));
+        assert_eq!(
+            slides.duration_for(SLIDE_OPEN_BASE_MS),
+            Duration::from_millis(720)
+        );
     }
 
     #[test]
     fn constructors_pick_each_transition() {
-        assert_eq!(SlideConfig::slide(SlideEdge::Top, 100).transition, PopupTransition::Slide);
-        assert_eq!(SlideConfig::fade(SlideEdge::Top, 100).transition, PopupTransition::Fade);
+        assert_eq!(
+            SlideConfig::slide(SlideEdge::Top, 100).transition,
+            PopupTransition::Slide
+        );
+        assert_eq!(
+            SlideConfig::fade(SlideEdge::Top, 100).transition,
+            PopupTransition::Fade
+        );
         let lamp = SlideConfig::lamp(SlideEdge::Bottom, 100, (10, 900, 48, 40));
-        assert_eq!(lamp.transition, PopupTransition::Lamp { target: (10, 900, 48, 40) });
+        assert_eq!(
+            lamp.transition,
+            PopupTransition::Lamp {
+                target: (10, 900, 48, 40)
+            }
+        );
         assert_eq!(lamp.edge, SlideEdge::Bottom);
     }
 
@@ -642,7 +938,9 @@ mod slide_motion_tests {
 
     #[test]
     fn lamp_paint_runs_target_to_source_on_open_and_back_on_close() {
-        let lamp = PopupTransition::Lamp { target: (0, 0, 1, 1) };
+        let lamp = PopupTransition::Lamp {
+            target: (0, 0, 1, 1),
+        };
         // Open: starts folded into the button (warp progress 1) and unfolds to the window (0).
         assert_eq!(overlay_paint_progress(lamp, 0.0), 1.0);
         assert_eq!(overlay_paint_progress(lamp, 1.0), 0.0);
@@ -651,10 +949,25 @@ mod slide_motion_tests {
 
     #[test]
     fn lamp_target_is_the_start_button_rect_and_fade_keeps_popup_rect() {
-        let popup = WarpRect { x: 100.0, y: 500.0, width: 300.0, height: 400.0 };
+        let popup = WarpRect {
+            x: 100.0,
+            y: 500.0,
+            width: 300.0,
+            height: 400.0,
+        };
         assert_eq!(
-            overlay_target(PopupTransition::Lamp { target: (12, 1050, 48, 36) }, popup),
-            WarpRect { x: 12.0, y: 1050.0, width: 48.0, height: 36.0 }
+            overlay_target(
+                PopupTransition::Lamp {
+                    target: (12, 1050, 48, 36)
+                },
+                popup
+            ),
+            WarpRect {
+                x: 12.0,
+                y: 1050.0,
+                width: 48.0,
+                height: 36.0
+            }
         );
         assert_eq!(overlay_target(PopupTransition::Fade, popup), popup);
     }
@@ -673,11 +986,56 @@ mod slide_motion_tests {
         // paint argument does not jump.
         let t0 = Instant::now();
         let mut slides = Timeline::new();
-        slides.start_towards(1, CLOSE, t0, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0));
+        slides.start_towards(
+            1,
+            CLOSE,
+            t0,
+            SLIDE_CLOSE_BASE_MS,
+            Easing::EaseOutCubic,
+            (1.0, 0.0),
+        );
         let now = t0 + Duration::from_millis(40);
-        let before = overlay_paint_progress(PopupTransition::Fade, slides.progress(1, now).unwrap());
-        slides.start_towards(1, OPEN, now, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0));
+        let before =
+            overlay_paint_progress(PopupTransition::Fade, slides.progress(1, now).unwrap());
+        slides.start_towards(
+            1,
+            OPEN,
+            now,
+            SLIDE_OPEN_BASE_MS,
+            Easing::EaseOutCubic,
+            (0.0, 1.0),
+        );
         let after = overlay_paint_progress(PopupTransition::Fade, slides.progress(1, now).unwrap());
         assert!((before - after).abs() < 1e-6, "no jump on reverse");
+    }
+}
+
+#[cfg(test)]
+mod slide_exit_shape_regression {
+    #[test]
+    fn clipped_and_full_shapes_share_mask_owner() {
+        let render = include_str!("../app/render.rs");
+        assert!(render.contains(
+            "let spans = self.base_shape_spans(&cached.commands, 1.0, backdrop_radius);"
+        ));
+        assert!(
+            render.contains("let spans = self.base_shape_spans(commands, scale, backdrop_radius);")
+        );
+    }
+
+    #[test]
+    fn slide_out_unmaps_before_restoring_full_mask() {
+        let controller = include_str!("../surface_controller.rs");
+        let end = controller
+            .split_once("// Never restore the full shape while still mapped")
+            .unwrap()
+            .1;
+        let close = end.split_once("if landing_releases_grab").unwrap().0;
+        assert!(
+            close.find("XUnmapWindow(display, window)").unwrap()
+                < close
+                    .find("refresh_shape_mask(&instance.document)")
+                    .unwrap()
+        );
     }
 }

@@ -20,6 +20,16 @@ use crate::xlib_ext::{XGetGeometry, free};
 
 /// Largest capture accepted (4K), bounding the copy and upload cost.
 pub const MAX_CAPTURE_PIXELS: u64 = 3840 * 2160;
+/// Bound transient XPutImage upload staging without changing retained captures.
+/// At 4K, eight strips replace one additional 31.6 MiB full-frame copy.
+const MAX_UPLOAD_STAGING_BYTES: usize = 4 * 1024 * 1024;
+
+fn upload_strip_height(width: u32, height: u32) -> u32 {
+    let bytes_per_row = width as usize * 4;
+    (MAX_UPLOAD_STAGING_BYTES / bytes_per_row)
+        .max(1)
+        .min(height as usize) as u32
+}
 
 /// Premultiplied native-endian ARGB32 pixels, `width * height * 4` bytes, in the
 /// layout XRender and XPutImage consume for depth 32.
@@ -273,14 +283,18 @@ pub(crate) unsafe fn upload_pixmap_depth(
         unsafe { XFreePixmap(display, pixmap) };
         return Err("XCreateGC returned NULL".to_string());
     }
-    // XDestroyImage frees the data with the Xlib allocator, so it must be malloc'd.
-    let data = unsafe { malloc(len) } as *mut c_char;
+    // XDestroyImage frees XImage.data, so the reusable staging buffer must
+    // use the Xlib allocator. Keep it to a few MiB instead of duplicating the
+    // whole capture. XPutImage serializes each strip before we reuse its data.
+    let row_bytes = capture.width as usize * 4;
+    let strip_height = upload_strip_height(capture.width, capture.height);
+    let strip_bytes = row_bytes * strip_height as usize;
+    let data = unsafe { malloc(strip_bytes) } as *mut c_char;
     if data.is_null() {
         unsafe { XFreeGC(display, gc) };
         unsafe { XFreePixmap(display, pixmap) };
         return Err("upload: malloc failed".to_string());
     }
-    unsafe { std::ptr::copy_nonoverlapping(capture.argb.as_ptr(), data as *mut u8, len) };
     let image = unsafe {
         XCreateImage(
             display,
@@ -290,9 +304,9 @@ pub(crate) unsafe fn upload_pixmap_depth(
             0,
             data,
             capture.width,
-            capture.height,
+            strip_height,
             32,
-            (capture.width * 4) as c_int,
+            row_bytes as c_int,
         )
     };
     if image.is_null() {
@@ -301,20 +315,17 @@ pub(crate) unsafe fn upload_pixmap_depth(
         unsafe { XFreePixmap(display, pixmap) };
         return Err("XCreateImage returned NULL".to_string());
     }
-    unsafe {
-        XPutImage(
-            display,
-            pixmap,
-            gc,
-            image,
-            0,
-            0,
-            0,
-            0,
-            capture.width,
-            capture.height,
-        )
-    };
+    let mut y = 0;
+    while y < capture.height {
+        let rows = strip_height.min(capture.height - y);
+        let start = y as usize * row_bytes;
+        let bytes = rows as usize * row_bytes;
+        unsafe {
+            std::ptr::copy_nonoverlapping(capture.argb[start..start + bytes].as_ptr(), data.cast(), bytes);
+            XPutImage(display, pixmap, gc, image, 0, 0, 0, y as c_int, capture.width, rows);
+        }
+        y += rows;
+    }
     unsafe { XDestroyImage(image) };
     unsafe { XFreeGC(display, gc) };
     Ok(pixmap)
@@ -323,6 +334,39 @@ pub(crate) unsafe fn upload_pixmap_depth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_staging_strips_cover_capture_without_truncating_last_row() {
+        assert_eq!(upload_strip_height(3840, 2160), 273);
+        assert_eq!(upload_strip_height(1, 1), 1);
+        assert_eq!(upload_strip_height(8_294_400, 1), 1);
+        let (width, height) = (17u32, 19u32);
+        let stride = width as usize * 4;
+        let pixels: Vec<u8> = (0..stride * height as usize)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let mut uploaded = Vec::with_capacity(pixels.len());
+        let mut y = 0;
+        let rows_per_strip = upload_strip_height(width, height);
+        while y < height {
+            let rows = rows_per_strip.min(height - y);
+            let start = y as usize * stride;
+            uploaded.extend_from_slice(&pixels[start..start + rows as usize * stride]);
+            y += rows;
+        }
+        assert_eq!(uploaded, pixels);
+        // The final shorter strip must not read beyond its source.
+        assert_eq!(upload_strip_height(1_048_576, 3), 1);
+        assert_eq!(upload_strip_height(524_288, 5), 2);
+        let mut positions = Vec::new();
+        let mut start_row = 0;
+        while start_row < 5 {
+            let rows = upload_strip_height(524_288, 5).min(5 - start_row);
+            positions.push((start_row, rows));
+            start_row += rows;
+        }
+        assert_eq!(positions, [(0, 2), (2, 2), (4, 1)]);
+    }
 
     #[test]
     fn size_cap_rejects_empty_and_oversize() {

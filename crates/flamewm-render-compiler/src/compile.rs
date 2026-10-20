@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use flamewm_render_core::{
     fnv1a64, AlignItems, Color, ColorValue, ColorVariable, CompiledDocument, CompiledNode,
     CursorKind, Display, Edges, FlexDirection, ImageAsset, ImageTreatment, JustifyContent, Length,
-    NodeKind, Overflow, Position, Style, TextWrap,
+    NodeKind, Overflow, Position, Style, TextShadow, TextWrap,
 };
 
 use crate::css::{parse_declarations, parse_stylesheet, Declaration, PseudoState, Rule};
@@ -439,6 +439,21 @@ impl<'a> Compiler<'a> {
             "border" => apply_border(style, value, self.variable_map)?,
             "font-size" => style.font_size = parse_px(value)?.max(1.0),
             "font-weight" => style.font_weight = parse_font_weight(value)?,
+            "text-shadow" => {
+                if value == "none" {
+                    style.text_shadow = None;
+                } else {
+                    let parts: Vec<&str> = value.split_ascii_whitespace().collect();
+                    if parts.len() != 3 {
+                        return Err(format!("text-shadow '{value}' expects '<x px> <y px> <color>'"));
+                    }
+                    style.text_shadow = Some(TextShadow {
+                        offset_x: parse_signed_px(parts[0])?,
+                        offset_y: parse_signed_px(parts[1])?,
+                        color: parse_color_value(parts[2], self.variable_map)?,
+                    });
+                }
+            }
             "opacity" => style.opacity = parse_number(value)?.clamp(0.0, 1.0),
             "cursor" => {
                 style.cursor = match value {
@@ -553,6 +568,7 @@ fn inherit_text_style(target: &mut Style, inherited: &Style) {
     target.color = inherited.color;
     target.font_size = inherited.font_size;
     target.font_weight = inherited.font_weight;
+    target.text_shadow = inherited.text_shadow;
     target.text_wrap = inherited.text_wrap;
     target.break_anywhere = inherited.break_anywhere;
     target.opacity = inherited.opacity;
@@ -641,6 +657,15 @@ fn parse_flex_grow(input: &str) -> Result<f32, String> {
     Err(format!(
         "flex shorthand '{input}' is not supported; use flex-grow"
     ))
+}
+
+fn parse_signed_px(input: &str) -> Result<f32, String> {
+    let value = input.trim().strip_suffix("px").ok_or_else(|| format!("text-shadow length '{input}' requires px"))?;
+    let parsed: f32 = value.trim().parse().map_err(|_| format!("invalid text-shadow offset '{input}'"))?;
+    if !parsed.is_finite() || parsed.abs() > 16.0 {
+        return Err(format!("text-shadow offset '{input}' is outside -16..16px"));
+    }
+    Ok(parsed)
 }
 
 fn parse_font_weight(input: &str) -> Result<u16, String> {
@@ -854,6 +879,25 @@ mod tests {
     }
 
     #[test]
+    fn desktop_label_text_shadow_is_inherited_but_menus_remain_clean() {
+        let css = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/desktop/desktop.css"));
+        let result = compile_str(
+            r#"<body><div class="desktop-label-line" id="label">Test label</div><div id="menu">Menu</div></body>"#,
+            css,
+            CompileOptions::default(),
+        ).expect("desktop CSS must compile under strict mode");
+        let label_id = result.document.nodes.iter().position(|n| n.id == "label").unwrap();
+        let label = &result.document.nodes[label_id];
+        let shadow = label.style.text_shadow.expect("desktop labels have a shadow");
+        assert_eq!((shadow.offset_x, shadow.offset_y), (0.0, 1.0));
+        let child = &result.document.nodes[label.first_child.unwrap() as usize];
+        assert_eq!(child.style.text_shadow, Some(shadow), "text inherits its label's shadow");
+        assert_eq!(style_of(&result, "menu").text_shadow, None);
+        let binary = flamewm_render_core::encode(&result.document).expect("encode shadowed document");
+        assert_eq!(flamewm_render_core::decode(&binary).expect("decode shadowed document"), result.document);
+    }
+
+    #[test]
     fn desktop_sticky_text_wraps_while_other_ui_stays_nowrap() {
         use flamewm_render_core::TextWrap;
         let css = std::fs::read_to_string(concat!(
@@ -882,6 +926,32 @@ mod tests {
         assert!(!find("label").break_anywhere);
         assert_eq!(find("row").text_wrap, TextWrap::NoWrap);
         assert!(!find("row").break_anywhere);
+    }
+
+    #[test]
+    fn desktop_convert_wheel_css_compiles_with_native_flex_label_centering() {
+        // Regression: the strict RWR compiler rejects `text-align`, which
+        // previously panicked the desktop build script before Xephyr started.
+        // Compile the actual desktop and shared menu styles, not a mock rule.
+        let desktop_css = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ui/desktop/desktop.css"
+        ));
+        let shared_menu_css = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ui/shared/menu.css"
+        ));
+        let css = format!("{desktop_css}\n{shared_menu_css}");
+        let output = compile_str(
+            r#"<html><body><section class="context-menu convert-wheel"><button id="convert-option" class="convert-wheel-option convert-wheel-pos-0">WEBP</button></section></body></html>"#,
+            &css,
+            CompileOptions::default(),
+        )
+        .expect("desktop conversion wheel CSS must compile in strict mode");
+        let style = style_of(&output, "convert-option");
+        assert_eq!(style.display, Display::Flex);
+        assert_eq!(style.justify_content, JustifyContent::Center);
+        assert_eq!(style.align_items, AlignItems::Center);
     }
 
     #[test]

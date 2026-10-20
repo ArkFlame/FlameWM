@@ -242,12 +242,21 @@ fn own_workspace_metadata_publish_echo_does_not_bump_workspace_revision() {
 }
 
 #[test]
+fn workspace_move_maps_only_on_visibility_flips() {
+    assert_eq!(frame_visibility_delta(true, false), Some(false));
+    assert_eq!(frame_visibility_delta(false, true), Some(true));
+    assert_eq!(frame_visibility_delta(false, false), None,
+        "minimized/hidden windows must not produce repeated unmaps");
+    assert_eq!(frame_visibility_delta(true, true), None,
+        "sticky and same-workspace windows must not be remapped");
+}
+
+#[test]
 fn workspace_switch_marks_windows_only_on_visibility_or_focus_change() {
-    assert!(!workspace_switch_touches_windows(&[], false));
-    assert!(!workspace_switch_touches_windows(&[(true, true), (false, false)], false));
-    assert!(workspace_switch_touches_windows(&[(true, false)], false));
-    assert!(workspace_switch_touches_windows(&[(false, true)], false));
-    assert!(workspace_switch_touches_windows(&[], true));
+    assert!(!workspace_switch_touches_windows(false, false));
+    assert!(workspace_switch_touches_windows(true, false));
+    assert!(workspace_switch_touches_windows(false, true));
+    assert!(workspace_switch_touches_windows(true, true));
 }
 
 #[test]
@@ -662,20 +671,285 @@ fn grab_reaches_dismissed_counter_static_shape() {
 }
 
 #[test]
-fn next_workspace_clamps_without_wrap() {
-    assert_eq!(next_workspace(0, 3, -1), None);
-    assert_eq!(next_workspace(2, 3, 1), None);
-    assert_eq!(next_workspace(0, 3, 1), Some(1));
-    assert_eq!(next_workspace(2, 3, -1), Some(1));
-    assert_eq!(next_workspace(0, 1, 1), None);
-    assert_eq!(next_workspace(0, 1, -1), None);
+fn workspace_left_right_stay_inside_the_current_row() {
+    // Four workspaces read 1 2 / 3 4: the row edge is a no-op, never a row jump.
+    assert_eq!(workspace_shortcut_target(0, 4, ACTION_WORKSPACE_RIGHT), Some(1));
+    assert_eq!(workspace_shortcut_target(1, 4, ACTION_WORKSPACE_RIGHT), None);
+    assert_eq!(workspace_shortcut_target(1, 4, ACTION_WORKSPACE_LEFT), Some(0));
+    assert_eq!(workspace_shortcut_target(0, 4, ACTION_WORKSPACE_LEFT), None);
+    assert_eq!(workspace_shortcut_target(2, 4, ACTION_WORKSPACE_RIGHT), Some(3));
+    assert_eq!(workspace_shortcut_target(2, 4, ACTION_WORKSPACE_LEFT), None);
+    assert_eq!(workspace_shortcut_target(3, 4, ACTION_WORKSPACE_RIGHT), None);
+    // Six workspaces read 1 2 3 / 4 5 6 with the same same-row rule.
+    assert_eq!(workspace_shortcut_target(0, 6, ACTION_WORKSPACE_RIGHT), Some(1));
+    assert_eq!(workspace_shortcut_target(2, 6, ACTION_WORKSPACE_RIGHT), None);
+    assert_eq!(workspace_shortcut_target(5, 6, ACTION_WORKSPACE_LEFT), Some(4));
+    assert_eq!(workspace_shortcut_target(3, 6, ACTION_WORKSPACE_LEFT), None);
 }
 
 #[test]
-fn workspace_up_down_map_like_left_right() {
-    assert_eq!(workspace_action_delta(ACTION_WORKSPACE_LEFT), Some(-1));
-    assert_eq!(workspace_action_delta(ACTION_WORKSPACE_UP), Some(-1));
-    assert_eq!(workspace_action_delta(ACTION_WORKSPACE_RIGHT), Some(1));
-    assert_eq!(workspace_action_delta(ACTION_WORKSPACE_DOWN), Some(1));
-    assert_eq!(workspace_action_delta(ACTION_WINDOW_CLOSE), None);
+fn workspace_up_down_switch_rows_without_wrap() {
+    // Four workspaces 1 2 / 3 4: down from 1 lands on 3, never on 2.
+    assert_eq!(workspace_shortcut_target(0, 4, ACTION_WORKSPACE_DOWN), Some(2));
+    assert_eq!(workspace_shortcut_target(2, 4, ACTION_WORKSPACE_UP), Some(0));
+    assert_eq!(workspace_shortcut_target(0, 4, ACTION_WORKSPACE_UP), None);
+    assert_eq!(workspace_shortcut_target(2, 4, ACTION_WORKSPACE_DOWN), None);
+    // Six workspaces 1 2 3 / 4 5 6: down from 3 (index 2) lands on 6 (index 5).
+    assert_eq!(workspace_shortcut_target(2, 6, ACTION_WORKSPACE_DOWN), Some(5));
+    assert_eq!(workspace_shortcut_target(5, 6, ACTION_WORKSPACE_UP), Some(2));
+    // Odd tail: five workspaces 1 2 3 / 4 5 hold no cell under 3.
+    assert_eq!(workspace_shortcut_target(2, 5, ACTION_WORKSPACE_DOWN), None);
+    // Vertical-only topologies: one workspace has no neighbour, a pair moves down/up only.
+    assert_eq!(workspace_shortcut_target(0, 1, ACTION_WORKSPACE_DOWN), None);
+    assert_eq!(workspace_shortcut_target(0, 1, ACTION_WORKSPACE_RIGHT), None);
+    assert_eq!(workspace_shortcut_target(0, 1, ACTION_WORKSPACE_LEFT), None);
+    assert_eq!(workspace_shortcut_target(0, 2, ACTION_WORKSPACE_DOWN), Some(1));
+    assert_eq!(workspace_shortcut_target(1, 2, ACTION_WORKSPACE_UP), Some(0));
+    assert_eq!(workspace_shortcut_target(0, 2, ACTION_WORKSPACE_RIGHT), None);
+}
+
+#[test]
+fn workspace_shortcut_actions_pin_their_grid_direction() {
+    assert_eq!(flamewm_api::shortcuts::workspace_direction(ACTION_WORKSPACE_LEFT), Some(flamewm_api::workspace::GridDirection::Left));
+    assert_eq!(flamewm_api::shortcuts::workspace_direction(ACTION_WORKSPACE_RIGHT), Some(flamewm_api::workspace::GridDirection::Right));
+    assert_eq!(flamewm_api::shortcuts::workspace_direction(ACTION_WORKSPACE_UP), Some(flamewm_api::workspace::GridDirection::Up));
+    assert_eq!(flamewm_api::shortcuts::workspace_direction(ACTION_WORKSPACE_DOWN), Some(flamewm_api::workspace::GridDirection::Down));
+    // The window close shortcut must never resolve to a workspace target.
+    assert_eq!(workspace_shortcut_target(0, 4, ACTION_WINDOW_CLOSE), None);
+    // An out-of-range current workspace is a no-op rather than a panic.
+    assert_eq!(workspace_shortcut_target(9, 4, ACTION_WORKSPACE_LEFT), None);
+}
+
+#[test]
+fn desktop_publish_exposes_the_two_row_grid() {
+    let screen = Rect::new(0, 0, 1920, 1080);
+    // Six workspaces 1 2 3 / 4 5 6 occupy three columns of two rows.
+    assert_eq!(publish::desktop_geometry_payload(6, screen), [5760, 2160]);
+    assert_eq!(
+        publish::desktop_viewport_payload(6, screen),
+        vec![0, 0, 1920, 0, 3840, 0, 0, 1080, 1920, 1080, 3840, 1080]
+    );
+    // Four workspaces 1 2 / 3 4 use two columns; the odd tail of five keeps its own cell.
+    assert_eq!(publish::desktop_geometry_payload(4, screen), [3840, 2160]);
+    assert_eq!(publish::desktop_viewport_payload(4, screen), vec![0, 0, 1920, 0, 0, 1080, 1920, 1080]);
+    assert_eq!(publish::desktop_geometry_payload(5, screen), [5760, 2160]);
+    assert_eq!(
+        publish::desktop_viewport_payload(5, screen),
+        vec![0, 0, 1920, 0, 3840, 0, 0, 1080, 1920, 1080]
+    );
+}
+
+#[test]
+fn drag_edge_wraps_both_directions_and_warps_opposite_at_same_y() {
+    let root = Rect::new(0, 0, 1920, 1080);
+    assert_eq!(drag_edge_at(RootPoint::new(0, 400), root), Some(DragEdge::Left));
+    assert_eq!(drag_edge_at(RootPoint::new(1919, 400), root), Some(DragEdge::Right));
+    assert_eq!(drag_edge_at(RootPoint::new(960, 400), root), None);
+    assert_eq!(drag_edge_target(0, 4, DragEdge::Left), Some(1));
+    assert_eq!(drag_edge_target(3, 4, DragEdge::Right), Some(2));
+    assert_eq!(drag_edge_target(0, 1, DragEdge::Right), None);
+    // Six workspaces are 1 2 3 / 4 5 6. Both edges wrap *inside* that row.
+    assert_eq!(drag_edge_target(2, 6, DragEdge::Right), Some(0));
+    assert_eq!(drag_edge_target(3, 6, DragEdge::Left), Some(5));
+    assert_eq!(drag_edge_target(4, 6, DragEdge::Left), Some(3));
+    assert_eq!(drag_edge_target(4, 6, DragEdge::Right), Some(5));
+    // Five workspaces are 1 2 3 / 4 5; never jump from 5 to row 1.
+    assert_eq!(drag_edge_target(4, 5, DragEdge::Right), Some(3));
+    assert_eq!(drag_edge_target(3, 5, DragEdge::Left), Some(4));
+    // A one-cell lower row has no mouse-edge destination, preventing self-switch.
+    assert_eq!(drag_edge_target(2, 3, DragEdge::Right), None);
+    assert_eq!(drag_edge_target(2, 3, DragEdge::Left), None);
+    assert_eq!(drag_edge_destination(RootPoint::new(1919, 400), root, DragEdge::Right, 400), RootPoint::new(24, 400));
+    assert_eq!(drag_edge_destination(RootPoint::new(0, 400), root, DragEdge::Left, 400), RootPoint::new(1895, 400));
+    assert_eq!(drag_edge_at(RootPoint::new(960, 0), root), Some(DragEdge::Top));
+    assert_eq!(drag_edge_at(RootPoint::new(960, 1079), root), Some(DragEdge::Bottom));
+    assert_eq!(drag_edge_at(RootPoint::new(0, 0), root), Some(DragEdge::Left));
+    assert_eq!(drag_edge_at(RootPoint::new(1919, 1079), root), Some(DragEdge::Right));
+    assert_eq!(drag_edge_at(RootPoint::new(1920, 400), root), None);
+    assert_eq!(drag_edge_target(0, 6, DragEdge::Bottom), Some(3));
+    assert_eq!(drag_edge_target(2, 6, DragEdge::Bottom), Some(5));
+    assert_eq!(drag_edge_target(5, 6, DragEdge::Bottom), Some(2));
+    assert_eq!(drag_edge_target(3, 6, DragEdge::Top), Some(0));
+    assert_eq!(drag_edge_target(2, 5, DragEdge::Bottom), None);
+    assert_eq!(drag_edge_target(0, 1, DragEdge::Top), None);
+    assert_eq!(drag_edge_target(0, 2, DragEdge::Bottom), Some(1));
+    let from_bottom = drag_edge_destination(RootPoint::new(960, 1079), root, DragEdge::Bottom, 400);
+    assert_eq!(from_bottom, RootPoint::new(960, 24));
+    assert_eq!(drag_entry_frame_y(from_bottom, DragEdge::Bottom), 8);
+    let from_top = drag_edge_destination(RootPoint::new(960, 0), root, DragEdge::Top, 400);
+    assert_eq!(from_top, RootPoint::new(960, 895));
+    assert_eq!(drag_entry_frame_y(from_top, DragEdge::Top), 879);
+    assert!(root.bottom() - drag_entry_frame_y(from_top, DragEdge::Top) >= 400 / 2);
+    assert_eq!(DragEdge::Top.axis(), DragEdge::Bottom.axis());
+    assert_ne!(DragEdge::Right.axis(), DragEdge::Top.axis());
+}
+
+#[test]
+fn drag_edge_requires_same_active_move_dwell_and_resets_on_direction_change() {
+    let now = std::time::Instant::now();
+    let ms = std::time::Duration::from_millis;
+    let (pending, ready) = drag_edge_ready(None, 42, DragEdge::Right, now);
+    assert!(!ready);
+    assert_eq!(drag_edge_wait(pending, MouseWorkspaceCooldowns::default(), now, None), Some(ms(220)));
+    assert_eq!(drag_edge_wait(pending, MouseWorkspaceCooldowns::default(), now + ms(110), Some(ms(400))), Some(ms(110)));
+    assert_eq!(drag_edge_wait(pending, MouseWorkspaceCooldowns::default(), now + ms(110), Some(ms(40))), Some(ms(40)));
+    let (pending, ready) = drag_edge_ready(pending, 42, DragEdge::Right, now + ms(219));
+    assert!(!ready);
+    let (_, ready) = drag_edge_ready(pending, 42, DragEdge::Right, now + ms(220));
+    assert!(ready, "no additional motion event is needed when the timer expires");
+    let (pending, ready) = drag_edge_ready(pending, 42, DragEdge::Left, now + ms(221));
+    assert!(!ready);
+    let (_, ready) = drag_edge_ready(pending, 42, DragEdge::Left, now + ms(441));
+    assert!(ready);
+    let (vertical, ready) = drag_edge_ready(pending, 42, DragEdge::Bottom, now + ms(442));
+    assert!(!ready, "changing axis must restart edge dwell");
+    let (_, ready) = drag_edge_ready(vertical, 42, DragEdge::Bottom, now + ms(662));
+    assert!(ready);
+    let (pending, ready) = drag_edge_ready(None, 99, DragEdge::Right, now);
+    assert!(!ready);
+    assert_eq!(drag_edge_wait(pending, MouseWorkspaceCooldowns::default(), now, None), Some(ms(220)));
+    assert_eq!(drag_edge_wait(None, MouseWorkspaceCooldowns::default(), now, None), None);
+}
+
+#[test]
+fn drag_edge_respects_negative_root_origin_and_rebases_titlebar_grip() {
+    let root = Rect::new(-1280, 40, 1280, 900);
+    assert_eq!(drag_edge_at(RootPoint::new(-1279, 240), root), Some(DragEdge::Left));
+    assert_eq!(drag_edge_at(RootPoint::new(-1, 240), root), Some(DragEdge::Right));
+    assert_eq!(drag_edge_destination(RootPoint::new(-1, 240), root, DragEdge::Right, 400), RootPoint::new(-1256, 240));
+    let dest = drag_edge_destination(RootPoint::new(1919, 240), Rect::new(0, 0, 1920, 1080), DragEdge::Right, 400);
+    assert_eq!(drag_entry_frame_x(dest, 700, DragEdge::Right), 8);
+    let dest = drag_edge_destination(RootPoint::new(0, 240), Rect::new(0, 0, 1920, 1080), DragEdge::Left, 400);
+    assert_eq!(drag_entry_frame_x(dest, 700, DragEdge::Left), 1211);
+    assert_eq!(drag_entry_frame_x(RootPoint::new(24, 240), 40, DragEdge::Right), 8);
+    assert_eq!(drag_entry_frame_x(RootPoint::new(1895, 240), 40, DragEdge::Left), 1871);
+}
+
+/// An edge transfer is still an ordinary frame move. Exercise the same pure
+/// reducer that the live transfer uses so a change to move clamping or effect
+/// ordering cannot silently break the arrival position or server-grab safety.
+#[test]
+fn edge_arrival_reducer_preserves_window_geometry_and_defers_renderer_work() {
+    let root = RootRect::new(0, 0, 1920, 1080);
+    let start = RootRect::new(1200, 100, 700, 400);
+    let placement = PlacementState {
+        mode: PlacementMode::Floating,
+        current: start,
+        floating_restore: start,
+        resume: None,
+    };
+    let mut anchor = MoveAnchor::new(20, 700, 30);
+    anchor.activate();
+    let mut controller = interaction::build_controller(
+        42,
+        142,
+        placement,
+        root,
+        root,
+        ClientSizeHints::default(),
+        FrameExtents::new(31, 1),
+        InteractionSession::Move(MoveSession {
+            client: 42,
+            start_pointer: RootPoint::new(1919, 130),
+            start_placement: PlacementSnapshot { mode: PlacementMode::Floating, rect: start },
+            anchor,
+            grab_window: 142,
+        }),
+        HashMap::new(),
+    );
+    let pointer = drag_edge_destination(
+        RootPoint::new(1919, 130), Rect::new(0, 0, 1920, 1080), DragEdge::Right, 400,
+    );
+    let entry_x = drag_entry_frame_x(pointer, start.w, DragEdge::Right);
+    let synthetic_start = RootPoint::new(pointer.x - (entry_x - start.x), pointer.y);
+    if let InteractionSession::Move(ref mut move_session) = controller.session {
+        move_session.start_pointer = synthetic_start;
+        move_session.start_placement = PlacementSnapshot { mode: PlacementMode::Floating, rect: start };
+    }
+    let (next, plan) = interaction::step_owned(controller, FrameEvent::Motion { pointer });
+    assert_eq!(next.placement.current, RootRect::new(entry_x, start.y, start.w, start.h));
+    assert!(plan.effects.iter().any(|effect| matches!(effect, FrameEffect::MoveFrameRoot { .. })));
+    assert!(plan.effects.iter().any(|effect| matches!(effect, FrameEffect::PaintChrome)));
+    let (native, repaint) = defer_drag_arrival_paint(plan).expect("pure move effects are safe in a server grab");
+    assert!(repaint);
+    assert!(native.effects.iter().any(|effect| matches!(effect, FrameEffect::MoveFrameRoot { .. })));
+    assert!(native.effects.iter().any(|effect| matches!(effect, FrameEffect::NotifyClientRoot { .. })));
+    assert!(!native.effects.iter().any(|effect| matches!(effect, FrameEffect::PaintChrome)));
+}
+
+#[test]
+fn vertical_edge_arrival_keeps_pointer_in_titlebar_and_half_frame_visible() {
+    let root = RootRect::new(0, 0, 1920, 1080);
+    let start = RootRect::new(500, 100, 600, 400);
+    let placement = PlacementState {
+        mode: PlacementMode::Floating,
+        current: start,
+        floating_restore: start,
+        resume: None,
+    };
+    let mut anchor = MoveAnchor::new(20, 600, 30);
+    anchor.activate();
+    let mut controller = interaction::build_controller(
+        42, 142, placement, root, root,
+        ClientSizeHints::default(), FrameExtents::new(31, 1),
+        InteractionSession::Move(MoveSession {
+            client: 42,
+            start_pointer: RootPoint::new(760, 0),
+            start_placement: PlacementSnapshot { mode: PlacementMode::Floating, rect: start },
+            anchor,
+            grab_window: 142,
+        }),
+        HashMap::new(),
+    );
+    let pointer = drag_edge_destination(
+        RootPoint::new(760, 0), Rect::new(0, 0, 1920, 1080), DragEdge::Top, start.h,
+    );
+    let entry_y = drag_entry_frame_y(pointer, DragEdge::Top);
+    let synthetic_start = RootPoint::new(pointer.x, pointer.y - (entry_y - start.y));
+    if let InteractionSession::Move(ref mut move_session) = controller.session {
+        move_session.start_pointer = synthetic_start;
+        move_session.start_placement = PlacementSnapshot { mode: PlacementMode::Floating, rect: start };
+    }
+    let (next, commit) = interaction::step_owned(controller, FrameEvent::Motion { pointer });
+    assert_eq!(next.placement.current, RootRect::new(start.x, entry_y, start.w, start.h));
+    assert!(pointer.y >= entry_y && pointer.y < entry_y + 31);
+    assert!(entry_y + start.h / 2 <= root.y + root.h);
+    let (native, repaint) = defer_drag_arrival_paint(commit).expect("vertical move native effects");
+    assert!(repaint);
+    assert!(native.effects.iter().any(|effect| matches!(effect, FrameEffect::MoveFrameRoot { .. })));
+    assert!(!native.effects.iter().any(|effect| matches!(effect, FrameEffect::PaintChrome)));
+}
+
+#[test]
+fn edge_arrival_rejects_non_move_or_grab_effects_while_server_is_grabbed() {
+    let mut plan = interaction::PointerCommit::plan(vec![FrameEffect::PaintChrome]);
+    assert_eq!(defer_drag_arrival_paint(plan.clone()).map(|(_, paint)| paint), Some(true));
+    plan.effects.push(FrameEffect::LayoutInput);
+    assert!(defer_drag_arrival_paint(plan).is_none());
+    assert!(defer_drag_arrival_paint(interaction::PointerCommit::plan(vec![FrameEffect::Ungrab])).is_none());
+}
+
+#[test]
+fn workspace_mouse_cooldowns_are_independent_per_axis() {
+    let now = std::time::Instant::now();
+    let ms = std::time::Duration::from_millis;
+    let mut state = MouseWorkspaceCooldowns::default();
+    state.record(MouseWorkspaceAxis::Horizontal, now);
+    assert_eq!(DragEdge::Left.axis(), DragEdge::Right.axis());
+    assert_eq!(state.remaining(MouseWorkspaceAxis::Horizontal, now + ms(100)), ms(400));
+    assert!(state.remaining(MouseWorkspaceAxis::Vertical, now + ms(100)).is_zero());
+    state.record(MouseWorkspaceAxis::Vertical, now + ms(200));
+    assert_eq!(state.remaining(MouseWorkspaceAxis::Vertical, now + ms(300)), ms(400));
+    assert_eq!(state.remaining(MouseWorkspaceAxis::Horizontal, now + ms(300)), ms(200));
+}
+
+#[test]
+fn workspace_mouse_edge_timer_waits_for_cooldown_without_spinning() {
+    let now = std::time::Instant::now();
+    let ms = std::time::Duration::from_millis;
+    let mut state = MouseWorkspaceCooldowns::default();
+    state.record(MouseWorkspaceAxis::Horizontal, now);
+    let (pending, _) = drag_edge_ready(None, 42, DragEdge::Right, now + ms(100));
+    assert_eq!(drag_edge_wait(pending, state, now + ms(320), None), Some(ms(180)));
+    assert_eq!(drag_edge_wait(pending, state, now + ms(500), None), Some(ms(0)));
 }

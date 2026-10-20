@@ -14,9 +14,6 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 use crate::icon_loader::{IconLoader, IconTarget};
 use crate::projection::{PanelView, TaskbarItems};
 use crate::start::StartCategory;
-use crate::taskbar::workspaces::{
-    project as project_workspaces, slot_position, visible_page, PAGE_SIZE,
-};
 use crate::ShellSnapshot;
 
 pub const TASK_SLOT_COUNT: usize = 8;
@@ -176,35 +173,16 @@ const TASK_LINE_IDLE: UiColor = UiColor {
     b: 155,
     a: 255,
 };
-const PAGER_IDLE_FILL: UiColor = UiColor {
-    r: 36,
-    g: 39,
-    b: 42,
-    a: 255,
-};
 
 fn task_states(view: PanelView<'_>) -> Vec<flamewm_shell_core::TaskVisualState> {
     let snapshot = view.snapshot;
-    flamewm_shell_core::task_visual_states_on_output(
+    flamewm_shell_core::task_visual_states_on_output_and_workspace(
         &snapshot.panels,
         &snapshot.windows,
         &snapshot.applications,
         view.panel.map(|panel| &panel.output),
+        snapshot.workspaces.as_ref().map(|workspaces| workspaces.active_index),
     )
-}
-
-/// Visible-page workspaces paired with their pager slot; those without a slot are skipped.
-fn pager_page_slots(
-    workspaces: &[crate::taskbar::workspaces::WorkspaceView],
-) -> Vec<(usize, &crate::taskbar::workspaces::WorkspaceView)> {
-    visible_page(workspaces)
-        .into_iter()
-        .filter_map(|workspace| {
-            let (row, column) = slot_position(workspace.index, workspaces)?;
-            let slot = row * 2 + column;
-            (slot < PAGE_SIZE).then_some((slot, workspace))
-        })
-        .collect()
 }
 
 /// Exact icon target binding. A worker completion mutates its node only
@@ -582,7 +560,7 @@ pub fn project_panel_async(
 }
 
 /// Subset of panel nodes a changed domain may reproject. Windows owns
-/// task slots only, Workspaces owns the pager only, Panels owns geometry/
+/// task slots only, Workspaces owns the pager and workspace-filtered tasks, Panels owns geometry/
 /// layout + task-slot/pager ownership counts, System owns the status tray
 /// visibility only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -607,7 +585,7 @@ impl PanelScope {
     #[must_use]
     pub fn for_changed(changed: crate::runtime::ChangedDomains) -> Self {
         Self {
-            task_slots: changed.windows,
+            task_slots: changed.windows || changed.workspaces,
             pager: changed.workspaces,
             tray: changed.system,
             geometry: changed.panels,
@@ -648,7 +626,7 @@ pub fn task_icon_prime_still_armed(
 }
 
 /// Domain-scoped panel dispatcher for the shell loop (`refresh_dynamic`):
-/// WindowsChanged -> task slots only, WorkspacesChanged -> pager only,
+/// WindowsChanged -> task slots only, WorkspacesChanged -> pager and task slots,
 /// PanelsChanged -> geometry only, SystemChanged -> tray only. Combined
 /// flags compose (e.g. panels+windows projects geometry+slots, never the
 /// tray). Empty scope is a no-op returning `Ok`. Clock projects only on
@@ -736,30 +714,15 @@ pub fn project_task_slots_async(
     Ok(())
 }
 
-/// WorkspacesChanged -> pager only. Projects the visible workspace page
-/// (labels, visibility, active background) and touches no task, tray, or
-/// geometry node.
+/// WorkspacesChanged also refreshes tasks via PanelScope; this projection
+/// itself owns only pager nodes. Projects the same pager cells, columns and
+/// fills as the sync panel pass (`crate::projection::project_pager`).
 pub fn project_pager_async(
     document: &mut impl UiDocumentAccess,
     snapshot: &ShellSnapshot,
 ) -> Result<(), String> {
     let _span = crate::runtime::shell_span("shell.pager.project").start();
-    let workspaces = project_workspaces(snapshot.workspaces.as_ref());
-    for index in 0..PAGE_SIZE {
-        document.visible(&format!("workspace-{}", index + 1), false)?;
-    }
-    for (slot, workspace) in pager_page_slots(&workspaces) {
-        let button_id = format!("workspace-{}", slot + 1);
-        document.text(&button_id, workspace.label.clone())?;
-        document.visible(&button_id, true)?;
-        let fill = if workspace.active {
-            crate::projection::pager_active_fill()
-        } else {
-            PAGER_IDLE_FILL
-        };
-        document.background(&button_id, fill)?;
-    }
-    Ok(())
+    crate::projection::project_pager(document, snapshot.workspaces.as_ref())
 }
 
 /// SystemChanged -> status tray visibility only. The open popup content
@@ -821,14 +784,7 @@ pub fn project_panel_geometry(
             states.get(index).is_some(),
         )?;
     }
-    let workspaces = project_workspaces(snapshot.workspaces.as_ref());
-    let mut visible = [false; PAGE_SIZE];
-    for (slot, _) in pager_page_slots(&workspaces) {
-        visible[slot] = true;
-    }
-    for (index, shown) in visible.iter().enumerate() {
-        document.visible(&format!("workspace-{}", index + 1), *shown)?;
-    }
+    crate::projection::project_pager_visibility(document, snapshot.workspaces.as_ref())?;
     Ok(())
 }
 
@@ -948,6 +904,7 @@ pub(crate) mod tests {
         pub(crate) texts: HashMap<String, String>,
         pub(crate) images: Vec<String>,
         pub(crate) visible: HashMap<String, bool>,
+        pub(crate) fills: HashMap<String, UiColor>,
     }
 
     impl UiDocumentAccess for FakeDoc {
@@ -976,7 +933,8 @@ pub(crate) mod tests {
         fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
             Ok(())
         }
-        fn background(&mut self, _: &str, _: UiColor) -> Result<(), String> {
+        fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
+            self.fills.insert(id.to_owned(), color);
             Ok(())
         }
         fn border(&mut self, _: &str, _: UiColor) -> Result<(), String> {
@@ -1235,6 +1193,32 @@ pub(crate) mod tests {
         project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("panel B projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&true));
+
+        // Same output, different workspaces. A workspace-only snapshot
+        // change must replace both the task label AND the click-target slot;
+        // minimized windows belong to their original workspace too.
+        snapshot.panels.tasks[0].app_id = DesktopAppId::new("first-app");
+        snapshot.panels.tasks[1].app_id = DesktopAppId::new("second-app");
+        snapshot.windows[0].app_id = DesktopAppId::new("first-app");
+        snapshot.windows[1].app_id = DesktopAppId::new("second-app");
+        snapshot.windows[0].workspace.index = 0;
+        snapshot.windows[1].workspace.index = 1;
+        snapshot.windows[1].state = WindowState::Minimized;
+        snapshot.workspaces = Some(flamewm_api::workspace::WorkspaceSnapshot {
+            revision: 1, count: 2, active_index: 0, last_index: None, names: vec![],
+        });
+        let changed = crate::runtime::ChangedDomains {
+            workspaces: true, ..Default::default()
+        };
+        let first = project_changed(PanelView::first(&snapshot), changed);
+        assert_eq!(first.visible.get("task-slot-1"), Some(&true));
+        assert_eq!(first.visible.get("task-slot-2"), Some(&false));
+        assert_eq!(first.texts.get("task-slot-1-label").map(String::as_str), Some("first-app"));
+        snapshot.workspaces.as_mut().expect("workspace snapshot").active_index = 1;
+        let second = project_changed(PanelView::first(&snapshot), changed);
+        assert_eq!(second.visible.get("task-slot-1"), Some(&true));
+        assert_eq!(second.visible.get("task-slot-2"), Some(&false));
+        assert_eq!(second.texts.get("task-slot-1-label").map(String::as_str), Some("second-app"));
     }
 
     #[test]
@@ -1275,7 +1259,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn workspaces_scope_projects_pager_only() {
+    fn workspaces_scope_projects_pager_and_tasks() {
         let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
         let snapshot = ShellSnapshot::default();
@@ -1286,13 +1270,79 @@ pub(crate) mod tests {
         let doc = project_changed(PanelView::first(&snapshot), changed);
         assert!(doc.visible.contains_key("workspace-1"), "pager projected");
         assert!(
-            !doc.visible.contains_key("task-slot-1"),
-            "task slots untouched on workspaces-only change",
+            doc.visible.contains_key("task-slot-1"),
+            "task slots must update on workspace-only change",
         );
         assert!(
             !doc.visible.contains_key("tray-volume"),
             "tray untouched on workspaces-only change",
         );
+    }
+
+    // REGRESSION: the async pager pass projects the same two-row topology as
+    // the sync panel pass. Six workspaces read `1 2 3 / 4 5 6`, so workspace 4
+    // (index 3) is the lower cell of the first column (cell 2), not the page
+    // slot of an old 2x2 page.
+    // MUTATION: keep the fixed 4-slot page in either pager path.
+    #[test]
+    fn async_pager_projects_the_two_row_topology() {
+        let _guard = icon_test_lock().lock();
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.workspaces = Some(flamewm_api::workspace::WorkspaceSnapshot {
+            revision: 1,
+            count: 6,
+            active_index: 3,
+            last_index: None,
+            names: Vec::new(),
+        });
+        let mut doc = FakeDoc::default();
+        project_pager_async(&mut doc, &snapshot).expect("pager projects");
+        // Labels follow the cell each workspace sits in.
+        assert_eq!(doc.texts.get("workspace-1").map(String::as_str), Some("1"));
+        assert_eq!(doc.texts.get("workspace-3").map(String::as_str), Some("2"));
+        assert_eq!(doc.texts.get("workspace-5").map(String::as_str), Some("3"));
+        assert_eq!(doc.texts.get("workspace-2").map(String::as_str), Some("4"));
+        assert_eq!(doc.texts.get("workspace-4").map(String::as_str), Some("5"));
+        assert_eq!(doc.texts.get("workspace-6").map(String::as_str), Some("6"));
+        // Cells 1..=6 are shown, every later cell and column is hidden.
+        for cell in 1..=6 {
+            assert_eq!(
+                doc.visible.get(&format!("workspace-{cell}")),
+                Some(&true),
+                "cell {cell}"
+            );
+        }
+        for cell in 7..=18 {
+            assert_eq!(
+                doc.visible.get(&format!("workspace-{cell}")),
+                Some(&false),
+                "cell {cell}"
+            );
+        }
+        for column in 1..=3 {
+            assert_eq!(
+                doc.visible.get(&format!("workspace-column-{column}")),
+                Some(&true),
+                "column {column}"
+            );
+        }
+        for column in 4..=9 {
+            assert_eq!(
+                doc.visible.get(&format!("workspace-column-{column}")),
+                Some(&false),
+                "column {column}"
+            );
+        }
+        // Only the active workspace carries the accent fill.
+        let active = crate::projection::pager_active_fill();
+        assert_eq!(doc.fills.get("workspace-2"), Some(&active));
+        for cell in [1, 3, 4, 5, 6] {
+            assert_ne!(
+                doc.fills.get(&format!("workspace-{cell}")),
+                Some(&active),
+                "cell {cell} is not the active workspace"
+            );
+        }
     }
 
     #[test]

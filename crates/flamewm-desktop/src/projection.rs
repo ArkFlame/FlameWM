@@ -53,6 +53,23 @@ pub fn project_background(
     Ok(())
 }
 
+pub fn project_global_font_defaults(
+    document: &mut impl UiDocumentAccess,
+    snapshot: &SettingsSnapshot,
+) -> Result<(), String> {
+    let (size_offset, bold) = global_font_defaults(snapshot);
+    document.ui_font_defaults(size_offset, bold)
+}
+
+fn global_font_defaults(snapshot: &SettingsSnapshot) -> (f32, bool) {
+    let size_offset = match snapshot.values.get("fontSizeOffset") {
+        Some(SettingValue::Integer(value)) => (*value).clamp(-2, 4) as f32,
+        _ => 0.0,
+    };
+    let bold = matches!(snapshot.values.get("fontBold"), Some(SettingValue::Boolean(true)));
+    (size_offset, bold)
+}
+
 /// Identity of the wallpaper last written to the document. The pixel buffer
 /// pointer and length change whenever the loader replaces the raster, so an
 /// unchanged raster skips the full-buffer clone without a content compare.
@@ -114,9 +131,10 @@ fn project_wallpaper_image(
 /// Semantic layer assignment, run once at document init. Static ids plus the
 /// generated item slots; never called per-frame so visibility math stays raw.
 /// Desktop context-menu roots whose surface follows the Surfaces settings.
-pub const MENU_SURFACE_IDS: [&str; 4] = [
+pub const MENU_SURFACE_IDS: [&str; 5] = [
     "desktop-menu",
     "desktop-entry-menu",
+    "desktop-convert-wheel",
     "sticky-menu",
     "desktop-confirm",
 ];
@@ -139,7 +157,7 @@ pub fn project_menu_surface(
             a: fill.alpha,
         },
     )?;
-    document.corner_radius(id, menu_surface(snapshot).radius as f32)?;
+    document.corner_radius(id, if id == "desktop-convert-wheel" { 164.0 } else { menu_surface(snapshot).radius as f32 })?;
     // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
     let blur = match snapshot.values.get("surfaceBlurPercent") {
         Some(SettingValue::Percent(value)) => (*value).min(100),
@@ -164,11 +182,14 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
         document.layer(&format!("desktop-item-{index}"), UiLayer::Content)?;
     }
     document.layer("desktop-selection", UiLayer::Selection)?;
+    document.layer("desktop-drag-ghost", UiLayer::Floating)?;
+    document.layer("desktop-convert-preview", UiLayer::Floating)?;
     for slot in 0..STICKY_SLOT_COUNT {
         document.layer(&format!("sticky-{}", slot + 1), UiLayer::Floating)?;
     }
     document.layer("desktop-menu", UiLayer::Popover)?;
     document.layer("desktop-entry-menu", UiLayer::Popover)?;
+    document.layer("desktop-convert-wheel", UiLayer::Popover)?;
     document.layer("sticky-menu", UiLayer::Popover)?;
     document.layer("desktop-rename", UiLayer::Popover)?;
     document.layer("desktop-confirm", UiLayer::Modal)?;
@@ -177,11 +198,14 @@ pub fn assign_document_layers(document: &mut impl UiDocumentAccess) -> Result<()
 
 const SLOT_COUNT: usize = 128;
 
-pub const TRANSIENT_HIDDEN_IDS: [&str; 6] = [
+pub const TRANSIENT_HIDDEN_IDS: [&str; 9] = [
+    "desktop-convert-preview",
+    "desktop-drag-ghost",
     "desktop-selection",
     "sticky-1",
     "desktop-menu",
     "desktop-entry-menu",
+    "desktop-convert-wheel",
     "sticky-menu",
     "desktop-confirm",
 ];
@@ -413,6 +437,15 @@ pub fn clear_item(document: &mut impl UiDocumentAccess, index: usize) -> Result<
     project_item_label(document, index, "")
 }
 
+/// Half-opacity ghost pixels while preserving straight-alpha RGB and the
+/// original icon cache. This keeps the drag preview visually consistent with
+/// the 50% label and independent of renderer node-group alpha support.
+fn fade_ghost_pixels(pixels: &mut [u8]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[3] = ((u16::from(pixel[3]) + 1) / 2) as u8;
+    }
+}
+
 pub fn project_drag_ghost_icon(
     document: &mut impl UiDocumentAccess,
     icons: &mut ParallelIconService,
@@ -423,12 +456,32 @@ pub fn project_drag_ghost_icon(
     // Miss: Flame fallback now, HIGH request queued, drain replaces it.
     let cached = icons.cached(&key);
     let miss = cached.is_none();
-    let raster = cached.unwrap_or_else(flame_fallback_raster);
+    let mut raster = cached.unwrap_or_else(flame_fallback_raster);
+    // Runtime paint currently applies opacity to each primitive, not as a
+    // composited subtree. Parent CSS opacity alone never fades an Image node.
+    // Fade the RGBA pixels of this drag-only copy, never the icon cache.
+    fade_ghost_pixels(&mut raster.pixels);
     document.image_rgba8("desktop-drag-ghost-icon", runtime_image(raster))?;
     document.visible("desktop-drag-ghost-icon", true)?;
     if miss {
         icons.request_high(key);
     }
+    Ok(())
+}
+
+/// A prediction is an in-memory presentation only. It is not a DesktopItem,
+/// does not watch temporary files and cannot be selected or opened.
+pub fn project_conversion_preview_icon(
+    document: &mut impl UiDocumentAccess,
+    icons: &mut ParallelIconService,
+    output: &std::path::Path,
+) -> Result<(), String> {
+    let key = ParallelIconService::icon_key(DesktopItemKind::File, Some(file_icon_name(output)));
+    let cached = icons.cached(&key);
+    let miss = cached.is_none();
+    document.image_rgba8("desktop-convert-preview-icon",
+        runtime_image(cached.unwrap_or_else(flame_fallback_raster)))?;
+    if miss { icons.request_high(key); }
     Ok(())
 }
 
@@ -474,6 +527,31 @@ pub fn launcher_icon_name(kind: DesktopItemKind, icon_override: Option<&str>) ->
         .unwrap_or_else(|| icon_name(kind).to_owned())
 }
 
+/// Freedesktop MIME-like icon names for desktop files. The theme resolver owns
+/// actual icon lookup; the filename extension only selects its semantic key.
+#[must_use]
+pub fn file_icon_name(path: &std::path::Path) -> &'static str {
+    let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+    match extension.to_ascii_lowercase().as_str() {
+        "png" => "image-png", "jpg" | "jpeg" => "image-jpeg",
+        "webp" => "image-webp", "gif" => "image-gif", "bmp" => "image-bmp",
+        "svg" | "svgz" => "image-svg+xml", "tif" | "tiff" => "image-tiff",
+        "avif" => "image-avif", "heic" | "heif" => "image-heic",
+        "pdf" => "application-pdf", "md" | "markdown" => "text-markdown",
+        "txt" | "log" | "ini" | "conf" => "text-plain",
+        "rs" | "py" | "js" | "ts" | "c" | "h" | "cpp" | "java" | "sh" => "text-x-script",
+        "json" | "xml" | "yaml" | "yml" | "toml" => "text-x-generic",
+        "doc" | "docx" | "odt" => "x-office-document",
+        "xls" | "xlsx" | "ods" | "csv" => "x-office-spreadsheet",
+        "ppt" | "pptx" | "odp" => "x-office-presentation",
+        "zip" => "application-zip", "tar" | "gz" | "xz" | "7z" | "rar" => "package-x-generic",
+        "mp3" | "wav" | "ogg" | "flac" | "m4a" => "audio-x-generic",
+        "mp4" | "mkv" | "avi" | "mov" | "webm" => "video-x-generic",
+        "exe" | "appimage" => "application-x-executable",
+        _ => "text-x-generic",
+    }
+}
+
 /// Projection-only caret: appends a thin `|` glyph to the edit buffer for
 /// display/sync output while a sticky edit is active. A glyph is used because
 /// `UiDocumentAccess` has no text-position query, so a separate element cannot
@@ -512,7 +590,7 @@ fn icon_name(kind: DesktopItemKind) -> &'static str {
     match kind {
         DesktopItemKind::Directory => "folder",
         DesktopItemKind::DesktopLauncher => "desktop",
-        DesktopItemKind::File => "document-edit",
+        DesktopItemKind::File => "text-x-generic",
         DesktopItemKind::Symlink => "link",
         DesktopItemKind::TrashPseudo => "trash",
     }
@@ -753,7 +831,7 @@ mod tests {
             icon_candidates(DesktopItemKind::DesktopLauncher, None),
             vec!["desktop".to_owned(), String::new()]
         );
-        assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("  ")), "document-edit");
+        assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("  ")), "text-x-generic");
         assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("editor")), "editor");
     }
 
@@ -834,7 +912,8 @@ mod tests {
         }
         assert_eq!(probe.corners.len(), MENU_SURFACE_IDS.len());
         for (id, radius) in &probe.corners {
-            assert_eq!(*radius, 0.0, "squared decoration must square {id}");
+            let expected = if id == "desktop-convert-wheel" { 164.0 } else { 0.0 };
+            assert_eq!(*radius, expected, "only the radial wheel keeps its circular shape: {id}");
         }
         for (id, color) in &probe.fills {
             assert_eq!(color.a, 127, "surfaceOpacity 50% must reach {id}");
@@ -1199,5 +1278,51 @@ mod tests {
         let before = THEME_GENERATION.load(Ordering::Acquire);
         assert!(!icons.refresh_theme());
         assert_eq!(THEME_GENERATION.load(Ordering::Acquire), before);
+    }
+}
+
+#[cfg(test)]
+mod desktop_file_mime_icon_tests {
+    use super::file_icon_name;
+    use std::path::Path;
+    #[test]
+    fn images_documents_archives_use_distinct_icons() {
+        assert_eq!(file_icon_name(Path::new("tree.PNG")), "image-png");
+        assert_eq!(file_icon_name(Path::new("tree.webp")), "image-webp");
+        assert_eq!(file_icon_name(Path::new("report.pdf")), "application-pdf");
+        assert_eq!(file_icon_name(Path::new("notes.md")), "text-markdown");
+        assert_eq!(file_icon_name(Path::new("data.zip")), "application-zip");
+        assert_eq!(file_icon_name(Path::new("untitled")), "text-x-generic");
+    }
+}
+
+#[cfg(test)]
+mod desktop_drag_alpha_regressions {
+    use super::fade_ghost_pixels;
+
+    #[test]
+    fn ghost_alpha_fades_actual_pixels_without_colorkey() {
+        let mut pixels = vec![17, 29, 47, 255, 101, 67, 23, 128, 1, 2, 3, 0];
+        fade_ghost_pixels(&mut pixels);
+        assert_eq!(pixels, vec![17, 29, 47, 128, 101, 67, 23, 64, 1, 2, 3, 0]);
+    }
+}
+
+#[cfg(test)]
+mod global_font_setting_tests {
+    use super::global_font_defaults;
+    use flamewm_api::settings::{SettingValue, SettingsSnapshot};
+
+    #[test]
+    fn global_font_defaults_read_typed_live_values_and_bound_size_offset() {
+        let mut settings = SettingsSnapshot::new(1);
+        settings.values.insert("fontSizeOffset".into(), SettingValue::Integer(3));
+        settings.values.insert("fontBold".into(), SettingValue::Boolean(true));
+        assert_eq!(global_font_defaults(&settings), (3.0, true));
+
+        settings.values.insert("fontSizeOffset".into(), SettingValue::Integer(99));
+        assert_eq!(global_font_defaults(&settings), (4.0, true));
+        settings.values.insert("fontBold".into(), SettingValue::Text("true".into()));
+        assert_eq!(global_font_defaults(&settings), (4.0, false));
     }
 }

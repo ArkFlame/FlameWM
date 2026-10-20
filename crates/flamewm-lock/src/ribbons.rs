@@ -43,7 +43,7 @@ impl RibbonFrames {
             seed: SEED,
         };
         Self {
-            ribbons: Ribbons::new(config, 0.0),
+            ribbons: Ribbons::new_fluid_style(config, 0.0),
             rasterizer: Rasterizer::new(quality),
             width,
             height,

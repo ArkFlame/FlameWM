@@ -1,6 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=FlameWM
-Comment=FlameWM X11 desktop session
-Exec=/usr/bin/flamewm-session
+Comment=FlameWM native X11 desktop session
+DesktopNames=FlameWM
+Exec=/usr/libexec/flamewm/flamewm-session-wrapper
 TryExec=/usr/bin/flamewm-session

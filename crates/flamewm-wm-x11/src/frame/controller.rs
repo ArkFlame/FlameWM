@@ -211,14 +211,16 @@ fn configure_effects(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect>
     ]
 }
 
-/// Layout, chrome and shape, then the full configure plan.
+/// Commit native frame/client geometry BEFORE painting its new dimensions.
+/// The old order painted at the old size, then resized the X window: the
+/// server exposed dark/black new titlebar pixels until an unrelated Expose.
 fn full_configure(frame: RootRect, extents: FrameExtents) -> Vec<FrameEffect> {
-    let mut effects = vec![
+    let mut effects = configure_effects(frame, extents);
+    effects.extend([
         FrameEffect::LayoutInput,
         FrameEffect::PaintChrome,
         FrameEffect::ApplyShape,
-    ];
-    effects.extend(configure_effects(frame, extents));
+    ]);
     effects
 }
 
@@ -374,7 +376,12 @@ fn resize_step(
     let effects = if final_effects {
         full_configure(plan.frame, state.extents)
     } else {
-        configure_effects(plan.frame, state.extents)
+        let mut effects = configure_effects(plan.frame, state.extents);
+        // Interactive resize changes exposed titlebar pixels on every committed
+        // size. Redraw after the resize (not only on ButtonRelease); otherwise
+        // the newly uncovered frame background remains black during drag.
+        effects.extend([FrameEffect::PaintChrome, FrameEffect::ApplyShape]);
+        effects
     };
     (state, effects)
 }
@@ -554,8 +561,8 @@ pub fn reduce_owned(
                 return (state, vec![FrameEffect::Noop]);
             }
             state.placement.current = plan.frame;
-            let mut effects = vec![FrameEffect::LayoutInput, FrameEffect::PaintChrome];
-            effects.extend(configure_effects(plan.frame, state.extents));
+            let mut effects = configure_effects(plan.frame, state.extents);
+            effects.extend([FrameEffect::LayoutInput, FrameEffect::PaintChrome, FrameEffect::ApplyShape]);
             (state, effects)
         }
         FrameEvent::Snap { target } => {
@@ -575,15 +582,13 @@ pub fn reduce_owned(
             state.placement.mode = PlacementMode::Snapped(target);
             state.placement.current = rect;
             // Final geometry first, Ungrab last.
-            let mut effects = vec![
+            let mut effects = configure_effects(rect, state.extents);
+            effects.extend([
                 FrameEffect::LayoutInput,
                 FrameEffect::PaintChrome,
                 FrameEffect::ApplyShape,
-                FrameEffect::SnapPreview {
-                    target: Some(target),
-                },
-            ];
-            effects.extend(configure_effects(rect, state.extents));
+                FrameEffect::SnapPreview { target: Some(target) },
+            ]);
             effects.push(FrameEffect::Ungrab);
             (state, effects)
         }
@@ -1082,7 +1087,7 @@ mod tests {
             .position(|e| matches!(e, FrameEffect::ConfigureFrameRoot { .. }))
             .expect("frame");
         assert_eq!(ungrab, e3.len() - 1, "geometry precedes Ungrab on release");
-        assert!(layout < paint && paint < frame && frame < ungrab);
+        assert!(frame < layout && layout < paint && paint < ungrab);
     }
 
     #[test]
@@ -1196,6 +1201,18 @@ mod tests {
         // Repeated pointer position leaves the frame unchanged: no repaint.
         let (_, e4) = reduce(&s3, motion(230, 190));
         assert!(!e4.contains(&FrameEffect::PaintChrome));
+    }
+
+    #[test]
+    fn resize_motion_paints_after_native_resize_not_at_the_old_size() {
+        let s1 = pressed(&floating_state(), 2, 500, 400);
+        let (_, effects) = reduce(&s1, motion(550, 460));
+        let at = |predicate: fn(&FrameEffect) -> bool| effects.iter().position(predicate).expect("effect");
+        let frame = at(|e| matches!(e, FrameEffect::ConfigureFrameRoot { .. }));
+        let client = at(|e| matches!(e, FrameEffect::ConfigureClientLocal { .. }));
+        let paint = at(|e| matches!(e, FrameEffect::PaintChrome));
+        let shape = at(|e| matches!(e, FrameEffect::ApplyShape));
+        assert!(frame < client && client < paint && paint < shape);
     }
 
     #[test]

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use flamewm_api::settings::AppearanceMode;
 
 pub mod appearance;
+pub mod display_order;
 pub use appearance::{
     AppearancePlan, AppearanceProbe, Toolkit, ToolkitStatus, gtk3_theme_name,
     kde_platform_theme_installed, materialize_owned_files, owned_appearance_root, plan_appearance,
@@ -183,6 +184,40 @@ pub fn build_launch_plan_with_cursor_library_path(
     }
 }
 
+/// Select a KDE-generation hint without inspecting browser profiles or wallet secrets.
+/// Explicit provenance wins. If both daemon generations exist, availability
+/// alone is ambiguous and cannot determine the browser's previous backend.
+#[must_use]
+pub fn resolve_kwallet_version(
+    existing_env: &BTreeMap<String, String>,
+    installed5: bool,
+    installed6: bool,
+) -> Option<&'static str> {
+    match existing_env.get("FLAMEWM_BRAVE_PASSWORD_STORE").map(String::as_str) {
+        Some("kwallet5") => return Some("5"),
+        Some("kwallet6") => return Some("6"),
+        Some("gnome-libsecret" | "basic" | "none") => return None,
+        _ => {}
+    }
+    // A leftover KDE_SESSION_VERSION from a different desktop is not
+    // trustworthy. Treat it as provenance only when inherited with a real
+    // KDE desktop identity (or via the explicit FlameWM override above).
+    if existing_env.get("XDG_CURRENT_DESKTOP").is_some_and(|desktop| {
+        desktop.split(':').any(|part| part == "KDE")
+    }) {
+        match existing_env.get("KDE_SESSION_VERSION").map(String::as_str) {
+            Some("5") => return Some("5"),
+            Some("6") => return Some("6"),
+            _ => {}
+        }
+    }
+    match (installed5, installed6) {
+        (true, false) => Some("5"),
+        (false, true) => Some("6"),
+        _ => None,
+    }
+}
+
 fn flame_environment(
     paths: &SessionPaths,
     existing_env: &BTreeMap<String, String>,
@@ -219,12 +254,23 @@ fn flame_environment(
             .unwrap_or_else(|| paths.config_dir().display().to_string()),
     );
     environment.insert("FLAMEWM_DESKTOP".to_owned(), "FlameWM".to_owned());
-    environment.insert(
-        "XDG_CURRENT_DESKTOP".to_owned(),
-        non_empty("XDG_CURRENT_DESKTOP")
-            .cloned()
-            .unwrap_or_else(|| "FlameWM".to_owned()),
-    );
+    // FlameWM is its own desktop. Advertising KDE here causes KDE-only
+    // autostarts (notably KScreen) to compete for RandR ownership when an
+    // application activates KDE services such as Dolphin's Open With dialog.
+    // Desktop-specific KDE MIME defaults and Brave's KWallet backend are
+    // bridged individually by flamewm-session, not through global impersonation.
+    environment.insert("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned());
+    environment.insert("XDG_SESSION_DESKTOP".to_owned(), "flamewm".to_owned());
+    // Keep KDE's version only as a browser compatibility hint; desktop identity
+    // stays FlameWM. A daemon's existence never proves which wallet encrypted a
+    // pre-existing browser profile. Ambiguous generations require provenance.
+    let kde6 = ["/usr/bin/kwalletd6", "/usr/share/dbus-1/services/org.kde.kwalletd6.service"];
+    let kde5 = ["/usr/bin/kwalletd5", "/usr/share/dbus-1/services/org.kde.kwalletd5.service"];
+    let installed6 = kde6.iter().any(|path| Path::new(path).exists());
+    let installed5 = kde5.iter().any(|path| Path::new(path).exists());
+    if let Some(version) = resolve_kwallet_version(existing_env, installed5, installed6) {
+        environment.insert("KDE_SESSION_VERSION".to_owned(), version.to_owned());
+    }
 
     // Search root is the parent of the bundled theme dir (<root>/icons);
     // never inherit the host XCURSOR_PATH.
@@ -382,6 +428,47 @@ pub fn default_paths_from_home(bindir: impl AsRef<Path>, home: impl AsRef<Path>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kwallet_version_requires_unambiguous_provenance() {
+        let empty = BTreeMap::new();
+        assert_eq!(resolve_kwallet_version(&empty, false, false), None);
+        assert_eq!(resolve_kwallet_version(&empty, true, false), Some("5"));
+        assert_eq!(resolve_kwallet_version(&empty, false, true), Some("6"));
+        assert_eq!(resolve_kwallet_version(&empty, true, true), None);
+        let explicit = BTreeMap::from([
+            ("KDE_SESSION_VERSION".into(), "5".into()),
+            ("XDG_CURRENT_DESKTOP".into(), "KDE".into()),
+        ]);
+        assert_eq!(resolve_kwallet_version(&explicit, true, true), Some("5"));
+        let stale = BTreeMap::from([
+            ("KDE_SESSION_VERSION".into(), "5".into()),
+            ("XDG_CURRENT_DESKTOP".into(), "FlameWM".into()),
+        ]);
+        assert_eq!(resolve_kwallet_version(&stale, true, true), None);
+        let selected = BTreeMap::from([
+            ("KDE_SESSION_VERSION".into(), "5".into()),
+            ("FLAMEWM_BRAVE_PASSWORD_STORE".into(), "kwallet6".into()),
+        ]);
+        assert_eq!(resolve_kwallet_version(&selected, true, true), Some("6"));
+        let libsecret = BTreeMap::from([
+            ("FLAMEWM_BRAVE_PASSWORD_STORE".into(), "gnome-libsecret".into()),
+        ]);
+        assert_eq!(resolve_kwallet_version(&libsecret, true, false), None);
+    }
+
+    #[test]
+    fn session_keeps_flamewm_identity_without_inventing_kde_wallet_version() {
+        let paths = default_paths_from_home("/usr/bin", "/home/test");
+        let env = BTreeMap::from([
+            ("KDE_SESSION_VERSION".to_owned(), "7".to_owned()),
+            ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
+        ]);
+        let plan = build_launch_plan(&paths, &[], &env);
+        let session = &plan.processes[0].environment;
+        assert_eq!(session.get("XDG_CURRENT_DESKTOP").map(String::as_str), Some("FlameWM"));
+        assert_ne!(session.get("KDE_SESSION_VERSION").map(String::as_str), Some("7"));
+    }
 
     #[test]
     fn launch_plan_contains_only_flamewm_owned_processes() {

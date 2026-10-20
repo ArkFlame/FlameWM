@@ -116,7 +116,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.conn.sync()?;
         if let Some(renderer) = self.renderer.as_ref() {
             let mut renderer = renderer.borrow_mut();
-            let _ = runtime.paint_cached(&mut renderer, u64::from(frame));
+            if let Err(error) = runtime.paint_cached(&mut renderer, u64::from(frame)) {
+                // A failed chrome paint leaves the frame's dark background visible
+                // during resize/maximize. Surface the error instead of silently
+                // continuing as though the titlebar was painted successfully.
+                eprintln!("FLAMEWM_CHROME_PAINT_FAILED frame={frame} client={client} reason={error}");
+            }
         }
         Ok(())
     }

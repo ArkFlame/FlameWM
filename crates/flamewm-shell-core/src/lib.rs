@@ -655,15 +655,40 @@ pub fn task_visual_states_on_output(
     applications: &[DesktopApplication],
     output: Option<&OutputId>,
 ) -> Vec<TaskVisualState> {
+    task_visual_states_on_output_and_workspace(panels, windows, applications, output, None)
+}
+
+/// The visible taskbar on one monitor and one workspace. Running windows from
+/// other workspaces disappear; sticky windows remain visible. Pinned launchers
+/// remain available everywhere, but do not activate a window on a hidden
+/// workspace (their `window` becomes `None` until it is local again).
+#[must_use]
+pub fn task_visual_states_on_output_and_workspace(
+    panels: &PanelsSnapshot,
+    windows: &[WindowSnapshot],
+    applications: &[DesktopApplication],
+    output: Option<&OutputId>,
+    workspace: Option<usize>,
+) -> Vec<TaskVisualState> {
     panels
         .tasks
         .iter()
         .filter_map(|entry| {
-            let window = entry_window(entry);
-            let snapshot = window
+            let mut window = entry_window(entry);
+            let mut snapshot = window
                 .and_then(|reference| windows.iter().find(|item| item.reference == reference));
-            if let (Some(output), Some(snapshot)) = (output, snapshot) {
-                if &snapshot.output != output {
+            let elsewhere = snapshot.is_some_and(|item| {
+                output.is_some_and(|output| &item.output != output)
+                    || workspace.is_some_and(|index| {
+                        !item.sticky && usize::try_from(item.workspace.index) != Ok(index)
+                    })
+            });
+            if elsewhere {
+                if matches!(entry.kind, TaskEntryKind::PinnedSlot { .. }) {
+                    // A pinned item stays in every workspace as an inert launcher.
+                    window = None;
+                    snapshot = None;
+                } else {
                     return None;
                 }
             }
@@ -892,6 +917,44 @@ mod tests {
             let b = task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")));
             assert_eq!(ids(&a), vec![TaskEntryId::window(WindowRef::new(1, 1))]);
             assert_eq!(ids(&b), vec![TaskEntryId::window(WindowRef::new(2, 1))]);
+        }
+
+        #[test]
+        fn workspace_tasks_are_isolated_even_when_minimized() {
+            let output = OutputId::new("A");
+            let tasks = panels(vec![running(1), running(2), running(3)]);
+            let mut one = window(1, "A", WindowState::Normal);
+            let mut two = window(2, "A", WindowState::Minimized);
+            let mut sticky = window(3, "A", WindowState::Normal);
+            one.workspace.index = 0;
+            two.workspace.index = 1;
+            sticky.workspace.index = 1;
+            sticky.sticky = true;
+            let windows = [one, two, sticky];
+            let visible = |index| {
+                ids(&task_visual_states_on_output_and_workspace(
+                    &tasks, &windows, &[], Some(&output), Some(index),
+                ))
+            };
+            assert_eq!(visible(0), vec![TaskEntryId::window(WindowRef::new(1, 1)), TaskEntryId::window(WindowRef::new(3, 1))]);
+            assert_eq!(visible(1), vec![TaskEntryId::window(WindowRef::new(2, 1)), TaskEntryId::window(WindowRef::new(3, 1))]);
+            let second = task_visual_states_on_output_and_workspace(&tasks, &windows, &[], Some(&output), Some(1));
+            assert!(second[0].minimized);
+        }
+
+        #[test]
+        fn pinned_entry_remains_a_launcher_when_its_window_is_elsewhere() {
+            let tasks = panels(vec![pinned("term", Some(WindowRef::new(1, 1))), running(2)]);
+            let mut remote = window(1, "A", WindowState::Normal);
+            remote.workspace.index = 1;
+            let current = window(2, "A", WindowState::Normal);
+            let states = task_visual_states_on_output_and_workspace(
+                &tasks, &[remote, current], &[], Some(&OutputId::new("A")), Some(0),
+            );
+            assert_eq!(states.len(), 2);
+            assert!(states[0].window.is_none());
+            assert!(!states[0].running);
+            assert_eq!(states[1].window, Some(WindowRef::new(2, 1)));
         }
 
         #[test]

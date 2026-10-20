@@ -23,14 +23,20 @@ pub const MAX_SPEED: u16 = 200;
 pub enum Easing {
     #[default]
     EaseOutCubic,
+    /// Time-reversed counterpart of EaseOutCubic for a symmetric slide-out.
+    EaseInCubic,
     Smoothstep,
+    /// Constant-speed geometry interpolation for short maximize/demaximize moves.
+    Linear,
 }
 
 impl Easing {
     fn apply(self, t: f32) -> f32 {
         match self {
             Self::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
+            Self::EaseInCubic => t.powi(3),
             Self::Smoothstep => t * t * (3.0 - 2.0 * t),
+            Self::Linear => t,
         }
     }
 }
@@ -257,6 +263,14 @@ mod tests {
     }
 
     #[test]
+    fn linear_easing_moves_at_constant_speed() {
+        assert_eq!(Easing::Linear.apply(0.0), 0.0);
+        assert_eq!(Easing::Linear.apply(0.25), 0.25);
+        assert_eq!(Easing::Linear.apply(0.75), 0.75);
+        assert_eq!(Easing::Linear.apply(1.0), 1.0);
+    }
+
+    #[test]
     fn progress_endpoints_are_exact() {
         let t0 = base();
         let mut tl = Timeline::new();
@@ -441,5 +455,20 @@ mod tests {
             Start::Immediate
         );
         assert!(tl.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod slide_symmetry_regression {
+    use super::Easing;
+
+    #[test]
+    fn close_easing_is_exact_time_reverse_of_open() {
+        for i in 0..=20 {
+            let t = i as f32 / 20.0;
+            let opened_in_reverse = Easing::EaseOutCubic.apply(1.0 - t);
+            let closing = 1.0 - Easing::EaseInCubic.apply(t);
+            assert!((opened_in_reverse - closing).abs() < 1e-6, "t={t}");
+        }
     }
 }

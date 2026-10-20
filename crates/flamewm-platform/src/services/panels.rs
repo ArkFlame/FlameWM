@@ -54,7 +54,7 @@ impl PanelService {
         let connected = displays
             .outputs
             .iter()
-            .filter(|output| output.connected)
+            .filter(|output| output.connected && output.geometry.is_valid())
             .collect::<Vec<_>>();
         let desired_ids = connected
             .iter()
@@ -299,6 +299,89 @@ mod tests {
     use super::PanelService;
 
     #[test]
+    fn attached_but_disabled_crtc_cannot_create_phantom_panel() {
+        let mut service = PanelService::default();
+        let output = |name: &str, x: i32, w: i32, primary: bool| OutputSnapshot {
+            id: OutputId::new(name),
+            connector: name.to_owned(),
+            edid_identity: String::new(),
+            connected: true,
+            primary,
+            geometry: Rect::new(x, 0, w, if w == 0 { 0 } else { 1080 }),
+            current_mode: ModeId(if w == 0 { 0 } else { 1 }),
+            modes: Vec::new(),
+            shell_scale_percent: 100,
+        };
+        let first = DisplaySnapshot {
+            generation: 1,
+            outputs: vec![output("DP-1", 0, 1920, true), output("HDMI-1", 0, 0, false)],
+            pending: None,
+        };
+        assert!(service.sync_outputs(&first));
+        assert_eq!(service.snapshot().panels.len(), 1);
+        assert!(service.manager().panel(&OutputId::new("HDMI-1")).is_none());
+        let second = DisplaySnapshot {
+            generation: 2,
+            outputs: vec![output("DP-1", 0, 1920, true), output("HDMI-1", 1920, 1920, false)],
+            pending: None,
+        };
+        assert!(service.sync_outputs(&second));
+        assert_eq!(service.snapshot().panels.len(), 2);
+        let third = DisplaySnapshot {
+            generation: 3,
+            outputs: vec![output("DP-1", 0, 1920, true), output("HDMI-1", 0, 0, false)],
+            pending: None,
+        };
+        assert!(service.sync_outputs(&third));
+        assert_eq!(service.snapshot().panels.len(), 1);
+    }
+
+    #[test]
+    fn legacy_xephyr_root_without_randr_mode_still_has_a_panel() {
+        // A nested X server can have a real drawable root but no mode ID.
+        // Rejecting mode 0 here removed FlameWM's entire shell in Xephyr.
+        let mut service = PanelService::default();
+        assert!(service.sync_outputs(&DisplaySnapshot {
+            generation: 1,
+            outputs: vec![OutputSnapshot {
+                id: OutputId::new("default"),
+                connector: "default".to_owned(),
+                edid_identity: String::new(),
+                connected: true,
+                primary: true,
+                geometry: Rect::new(0, 0, 1350, 641),
+                current_mode: ModeId(0),
+                modes: Vec::new(),
+                shell_scale_percent: 100,
+            }],
+            pending: None,
+        }));
+        let panel = &service.snapshot().panels[0];
+        assert_eq!(panel.output, OutputId::new("default"));
+        assert_eq!(panel.geometry, Rect::new(0, 597, 1350, 44));
+    }
+
+    #[test]
+    fn disconnected_or_geometryless_modes_never_create_panels() {
+        let mut service = PanelService::default();
+        let output = |name: &str, connected: bool, geometry: Rect| OutputSnapshot {
+            id: OutputId::new(name), connector: name.to_owned(),
+            edid_identity: String::new(), connected, primary: false,
+            geometry, current_mode: ModeId(0), modes: Vec::new(),
+            shell_scale_percent: 100,
+        };
+        assert!(!service.sync_outputs(&DisplaySnapshot {
+            generation: 1,
+            outputs: vec![
+                output("DP-1", true, Rect::new(0, 0, 0, 0)),
+                output("HDMI-1", false, Rect::new(0, 0, 1920, 1080)),
+            ],
+            pending: None,
+        }));
+        assert!(service.snapshot().panels.is_empty());
+    }
+
+    #[test]
     fn persisted_taskbar_height_reconciles_panel_geometry_once() {
         let mut service = PanelService::default();
         service.sync_outputs(&DisplaySnapshot {
@@ -390,4 +473,46 @@ mod tests {
         assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1028));
         assert_eq!(panel.panel_rect(), Rect::new(8, 1028, 1904, 44));
     }
+    #[test]
+    fn unequal_output_swap_updates_every_panel_and_work_area() {
+        use flamewm_api::PanelEdge;
+        let make = |id: &str, x: i32, y: i32, width: i32, height: i32, primary: bool| {
+            OutputSnapshot {
+                id: OutputId::new(id), connector: id.to_owned(), edid_identity: id.to_owned(),
+                connected: true, primary, geometry: Rect::new(x, y, width, height),
+                current_mode: ModeId(1), modes: Vec::new(), shell_scale_percent: 100,
+            }
+        };
+        let mut service = PanelService::default();
+        let mut snapshot = DisplaySnapshot { generation: 1, pending: None, outputs: vec![
+            make("DP-1", 0, 0, 1920, 1080, true),
+            make("HDMI-1", 1920, 0, 2560, 1440, false),
+            make("DP-2", 4480, -100, 1200, 1920, false),
+        ] };
+        assert!(service.sync_outputs(&snapshot));
+        let before = service.revision();
+        service.set_edge(&OutputId::new("DP-1"), PanelEdge::Left, before).unwrap();
+        service.set_edge(&OutputId::new("HDMI-1"), PanelEdge::Right, service.revision()).unwrap();
+        service.set_edge(&OutputId::new("DP-2"), PanelEdge::Top, service.revision()).unwrap();
+        snapshot.generation += 1;
+        snapshot.outputs[0].geometry = Rect::new(2560, 0, 1920, 1080);
+        snapshot.outputs[1].geometry = Rect::new(0, 0, 2560, 1440);
+        snapshot.outputs[2].geometry = Rect::new(4480, -100, 1200, 1920);
+        snapshot.outputs[0].primary = false;
+        snapshot.outputs[1].primary = true;
+        assert!(service.sync_outputs(&snapshot));
+        let dp = service.manager().panel(&OutputId::new("DP-1")).unwrap();
+        assert_eq!(dp.panel_rect(), Rect::new(2560, 0, 44, 1080));
+        assert_eq!(dp.work_area(), Rect::new(2604, 0, 1876, 1080));
+        let hdmi = service.manager().panel(&OutputId::new("HDMI-1")).unwrap();
+        assert_eq!(hdmi.panel_rect(), Rect::new(2516, 0, 44, 1440));
+        assert_eq!(hdmi.work_area(), Rect::new(0, 0, 2516, 1440));
+        let portrait = service.manager().panel(&OutputId::new("DP-2")).unwrap();
+        assert_eq!(portrait.panel_rect(), Rect::new(4480, -100, 1200, 44));
+        assert_eq!(portrait.work_area(), Rect::new(4480, -56, 1200, 1876));
+        assert_eq!(service.manager().primary_output(), Some(&OutputId::new("HDMI-1")));
+        assert_eq!(service.snapshot().panels.len(), 3);
+        assert!(!service.sync_outputs(&snapshot));
+    }
+
 }

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Verify the Pass 31 + Pass 32 source closure before building the merged overlay.
+set -Eeuo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+./scripts/apply-pass30-cargo-layout
+./scripts/enable-post31-desktop-integration --dry-run
+./scripts/enable-post31-desktop-integration
+python3 -I tools/test_flamewm_pass33_merge_contract.py -q
+printf '\nFLAMEWM-PASS33-MERGE-READY: four agent source sets + session integration verified\n'

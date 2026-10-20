@@ -3,16 +3,15 @@
 use std::fs;
 use std::path::Path;
 
-use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
-use flamewm_image_core::{ImageSourceFormat, RgbaImage, SvgColorScheme, decode_bytes, svg};
-use flamewm_ui_x11::{
-    RuntimeImage, UiColor, UiDocumentAccess, UiTemplate, decode_document,
-};
+use flamewm_api::Rect;
+use flamewm_image_core::scale::{scale_rgba, ScaleFilter};
+use flamewm_image_core::{decode_bytes, svg, ImageSourceFormat, RgbaImage, SvgColorScheme};
+use flamewm_ui_x11::{decode_document, RuntimeImage, UiColor, UiDocumentAccess, UiTemplate};
 
 use crate::background;
 use crate::layout::{self, LockLayout, Placed, RefRect};
-use crate::power::{POWER_ORDER, PowerView};
-use crate::settings::{DEFAULT_BACKGROUND, LockBackgroundMode, LockSettings};
+use crate::power::{PowerView, POWER_ORDER};
+use crate::settings::{LockBackgroundMode, LockSettings, DEFAULT_BACKGROUND};
 use crate::view::LockView;
 
 const LOCK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-lock.rwr"));
@@ -30,11 +29,31 @@ const AVATAR_OUTLINE: &[u8] = include_bytes!("../../../assets/web/lock/avatar-ou
 /// Profile picture diameter as a share of the avatar ring, so the ring stays visible.
 const AVATAR_PICTURE_SCALE: f64 = 0.8;
 /// Liquid-glass password field: a translucent white fill and a lighter rim (iOS style).
-const FIELD_GLASS: UiColor = UiColor { r: 255, g: 255, b: 255, a: 46 };
-const FIELD_RIM: UiColor = UiColor { r: 255, g: 255, b: 255, a: 97 };
+const FIELD_GLASS: UiColor = UiColor {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 46,
+};
+const FIELD_RIM: UiColor = UiColor {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 97,
+};
 /// The error state keeps the glass but tints it red.
-const FIELD_FAILED_GLASS: UiColor = UiColor { r: 255, g: 90, b: 90, a: 56 };
-const FIELD_FAILED_RIM: UiColor = UiColor { r: 255, g: 90, b: 90, a: 140 };
+const FIELD_FAILED_GLASS: UiColor = UiColor {
+    r: 255,
+    g: 90,
+    b: 90,
+    a: 56,
+};
+const FIELD_FAILED_RIM: UiColor = UiColor {
+    r: 255,
+    g: 90,
+    b: 90,
+    a: 140,
+};
 
 /// Reference-canvas font sizes for elements the shared layout does not size.
 const INITIAL_FONT: f64 = 20.0;
@@ -100,12 +119,72 @@ pub fn background_image(settings: &LockSettings, width: u32, height: u32) -> Run
     image
 }
 
+/// Uses an independent cover crop by default, or the matching crop from one root-sized lock
+/// background when `shareWallpaper` is enabled.
+pub fn background_for_output(settings: &LockSettings, root: Rect, output: Rect) -> RuntimeImage {
+    let width = output.width.max(1) as u32;
+    let height = output.height.max(1) as u32;
+    if settings.share_wallpaper && root.is_valid() && output.is_valid() {
+        let canvas = background_image(settings, root.width as u32, root.height as u32);
+        if let Some(crop) = crop_runtime_image(
+            &canvas,
+            (output.x - root.x).max(0) as u32,
+            (output.y - root.y).max(0) as u32,
+            width,
+            height,
+        ) {
+            return crop;
+        }
+    }
+    background_image(settings, width, height)
+}
+
+fn crop_runtime_image(
+    image: &RuntimeImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Option<RuntimeImage> {
+    if width == 0
+        || height == 0
+        || x.checked_add(width)? > image.width
+        || y.checked_add(height)? > image.height
+    {
+        return None;
+    }
+    let stride = usize::try_from(image.width).ok()?.checked_mul(4)?;
+    let row_bytes = usize::try_from(width).ok()?.checked_mul(4)?;
+    let capacity = row_bytes.checked_mul(usize::try_from(height).ok()?)?;
+    if image.pixels.len() != stride.checked_mul(usize::try_from(image.height).ok()?)? {
+        return None;
+    }
+    let left = usize::try_from(x).ok()?.checked_mul(4)?;
+    let top = usize::try_from(y).ok()?;
+    let mut pixels = Vec::with_capacity(capacity);
+    for row in top..top + usize::try_from(height).ok()? {
+        let start = row.checked_mul(stride)?.checked_add(left)?;
+        pixels.extend_from_slice(image.pixels.get(start..start.checked_add(row_bytes)?)?);
+    }
+    Some(RuntimeImage {
+        source: image.source.clone(),
+        width,
+        height,
+        pixels,
+    })
+}
+
 /// Reads and cover-scales the configured background image to the screen, or the
 /// built-in lock background when none is configured. Any failure returns `None`,
 /// so the caller falls back to a colour.
 fn decoded_background(settings: &LockSettings, width: u32, height: u32) -> Option<RuntimeImage> {
-    let (source, natural) = match (settings.background_mode, settings.background_image.as_deref()) {
-        (LockBackgroundMode::Custom, Some(path)) => (path.display().to_string(), decode_file(path)?),
+    let (source, natural) = match (
+        settings.background_mode,
+        settings.background_image.as_deref(),
+    ) {
+        (LockBackgroundMode::Custom, Some(path)) => {
+            (path.display().to_string(), decode_file(path)?)
+        }
         (LockBackgroundMode::Default, _) => (
             BUILTIN_BACKGROUND_SOURCE.to_string(),
             decode_bytes(BUILTIN_BACKGROUND, ImageSourceFormat::Webp).ok()?,
@@ -151,7 +230,7 @@ pub fn apply_document<V: UiDocumentAccess>(
     let s = layout.fit.s;
     let [r, g, b] = settings.background_color;
     view.background("lock-root", UiColor { r, g, b, a: 255 })?;
-    view.font_family(settings.font_family.clone())?;
+    apply_typography(view, settings)?;
 
     view.image_rgba8(BACKGROUND_ID, background)?;
     place(
@@ -192,7 +271,10 @@ pub fn apply_document<V: UiDocumentAccess>(
         view,
         "lock-field-shade",
         Placed {
-            rect: RefRect { y: field.y + s, ..field },
+            rect: RefRect {
+                y: field.y + s,
+                ..field
+            },
             font_px: 0,
         },
     )?;
@@ -271,13 +353,28 @@ pub fn apply_document<V: UiDocumentAccess>(
         ("lock-other-logout", layout::OTHER_LOGOUT, label_px),
         ("lock-other-cancel", layout::OTHER_CANCEL, label_px),
     ] {
-        place(view, id, Placed { rect: layout.fit.map_rect(rect), font_px })?;
+        place(
+            view,
+            id,
+            Placed {
+                rect: layout.fit.map_rect(rect),
+                font_px,
+            },
+        )?;
     }
     view.text("lock-confirm-text", CONFIRM_PROMPT.to_string())?;
     view.text("lock-confirm-cancel", "Cancel".to_string())?;
     view.text("lock-other-logout", "Log out".to_string())?;
     view.text("lock-other-cancel", "Cancel".to_string())?;
     Ok(())
+}
+
+pub fn apply_typography<V: UiDocumentAccess>(
+    view: &mut V,
+    settings: &LockSettings,
+) -> Result<(), String> {
+    view.font_family(settings.font_family.clone())?;
+    view.ui_font_defaults(f32::from(settings.font_size_offset), settings.font_bold)
 }
 
 /// Shows the power row state: icons (disabled ones at 38% opacity), the confirm
@@ -299,7 +396,12 @@ pub fn apply_power<V: UiDocumentAccess>(
         view.image_rgba8(&format!("lock-power-{index}"), image)?;
     }
     let confirming = power.confirm.is_some();
-    for id in ["lock-confirm", "lock-confirm-text", "lock-confirm-ok", "lock-confirm-cancel"] {
+    for id in [
+        "lock-confirm",
+        "lock-confirm-text",
+        "lock-confirm-ok",
+        "lock-confirm-cancel",
+    ] {
         view.visible(id, confirming)?;
     }
     if let Some(action) = power.confirm {
@@ -323,7 +425,10 @@ fn dimmed(mut image: RuntimeImage) -> RuntimeImage {
 }
 
 /// Replaces the background picture (the reference background or a Ribbons frame).
-pub fn set_background<V: UiDocumentAccess>(view: &mut V, image: RuntimeImage) -> Result<(), String> {
+pub fn set_background<V: UiDocumentAccess>(
+    view: &mut V,
+    image: RuntimeImage,
+) -> Result<(), String> {
     view.image_rgba8(BACKGROUND_ID, image)
 }
 
@@ -379,8 +484,22 @@ pub fn apply_view<V: UiDocumentAccess>(view: &mut V, lock: &LockView) -> Result<
     view.text("lock-avatar-initial", String::new())?;
     view.text("lock-username", lock.username.clone())?;
     view.visible("lock-username", lock.show_username)?;
-    view.background("lock-field", if lock.failed { FIELD_FAILED_GLASS } else { FIELD_GLASS })?;
-    view.border("lock-field", if lock.failed { FIELD_FAILED_RIM } else { FIELD_RIM })?;
+    view.background(
+        "lock-field",
+        if lock.failed {
+            FIELD_FAILED_GLASS
+        } else {
+            FIELD_GLASS
+        },
+    )?;
+    view.border(
+        "lock-field",
+        if lock.failed {
+            FIELD_FAILED_RIM
+        } else {
+            FIELD_RIM
+        },
+    )?;
     view.text("lock-dots", lock.mask.clone())?;
     view.visible("lock-caret", lock.mask.is_empty())?;
     view.text("lock-message", lock.status.to_string())?;
@@ -388,7 +507,11 @@ pub fn apply_view<V: UiDocumentAccess>(view: &mut V, lock: &LockView) -> Result<
 }
 
 /// Sets a node's absolute geometry and, for text, its font size.
-fn place<V: UiDocumentAccess + ?Sized>(view: &mut V, id: &str, placed: Placed) -> Result<(), String> {
+fn place<V: UiDocumentAccess + ?Sized>(
+    view: &mut V,
+    id: &str,
+    placed: Placed,
+) -> Result<(), String> {
     let rect = placed.rect;
     view.position(id, rect.x as f32, rect.y as f32)?;
     view.size(id, rect.w as f32, rect.h as f32)?;
@@ -493,7 +616,11 @@ fn composite_over(base: &mut RgbaImage, top: &RgbaImage, x0: u32, y0: u32) {
             for channel in 0..3 {
                 let sc = f64::from(top.pixels[src + channel]);
                 let dc = f64::from(base.pixels[dst + channel]);
-                let oc = if oa > 0.0 { (sc * sa + dc * da * (1.0 - sa)) / oa } else { 0.0 };
+                let oc = if oa > 0.0 {
+                    (sc * sa + dc * da * (1.0 - sa)) / oa
+                } else {
+                    0.0
+                };
                 base.pixels[dst + channel] = oc.round() as u8;
             }
             base.pixels[dst + 3] = (oa * 255.0).round() as u8;
@@ -502,11 +629,18 @@ fn composite_over(base: &mut RgbaImage, top: &RgbaImage, x0: u32, y0: u32) {
 }
 
 fn runtime_image(source: String, image: RgbaImage) -> RuntimeImage {
-    RuntimeImage { source, width: image.width, height: image.height, pixels: image.pixels }
+    RuntimeImage {
+        source,
+        width: image.width,
+        height: image.height,
+        pixels: image.pixels,
+    }
 }
 
 fn scaled(reference_px: f64, s: f64) -> u32 {
-    (reference_px * s).round().max(f64::from(layout::MIN_FONT_PX)) as u32
+    (reference_px * s)
+        .round()
+        .max(f64::from(layout::MIN_FONT_PX)) as u32
 }
 
 #[cfg(test)]
@@ -531,6 +665,7 @@ mod tests {
         position: HashMap<String, (f32, f32)>,
         size: HashMap<String, (f32, f32)>,
         font: HashMap<String, f32>,
+        font_defaults: Option<(f32, bool)>,
         images: HashMap<String, (u32, u32)>,
         fills: HashMap<String, UiColor>,
         rims: HashMap<String, UiColor>,
@@ -545,7 +680,8 @@ mod tests {
             self.image_rgba8(id, image)
         }
         fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-            self.images.insert(id.to_string(), (image.width, image.height));
+            self.images
+                .insert(id.to_string(), (image.width, image.height));
             Ok(())
         }
         fn visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
@@ -590,6 +726,10 @@ mod tests {
         fn font_weight(&mut self, _: &str, _: u16) -> Result<(), String> {
             Ok(())
         }
+        fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {
+            self.font_defaults = Some((size_offset, bold));
+            Ok(())
+        }
         fn font_family(&mut self, _: String) -> Result<(), String> {
             Ok(())
         }
@@ -623,8 +763,14 @@ mod tests {
     /// A recorder after `apply_document` for a `width` x `height` output with the built-in background.
     fn applied(width: u32, height: u32) -> Recorder {
         let mut document = Recorder::default();
-        apply_document(&mut document, &LockSettings::default(), width, height, background(width, height))
-            .expect("apply document");
+        apply_document(
+            &mut document,
+            &LockSettings::default(),
+            width,
+            height,
+            background(width, height),
+        )
+        .expect("apply document");
         document
     }
 
@@ -645,15 +791,25 @@ mod tests {
 
     #[test]
     fn default_projection_shows_24h_time_date_name_and_no_message() {
-        let recorder = project(&LockSettings::default(), &PasswordBuffer::default(), Status::Idle);
+        let recorder = project(
+            &LockSettings::default(),
+            &PasswordBuffer::default(),
+            Status::Idle,
+        );
         assert_eq!(recorder.text["lock-clock"], "13:07");
         assert_eq!(recorder.text["lock-date"], "Monday, 12 October 2026");
         assert_eq!(recorder.text["lock-username"], "alice");
-        assert_eq!(recorder.text["lock-avatar-initial"], "", "avatar shows no letter");
+        assert_eq!(
+            recorder.text["lock-avatar-initial"], "",
+            "avatar shows no letter"
+        );
         assert_eq!(recorder.text["lock-dots"], "");
         assert_eq!(recorder.text["lock-message"], "");
         assert!(recorder.visible["lock-date"] && recorder.visible["lock-username"]);
-        assert!(recorder.visible["lock-caret"], "caret shows while the field is empty");
+        assert!(
+            recorder.visible["lock-caret"],
+            "caret shows while the field is empty"
+        );
     }
 
     #[test]
@@ -678,7 +834,10 @@ mod tests {
         assert_eq!(recorder.fills["lock-field"].r, 255);
         assert!(recorder.fills["lock-field"].g < 128 && recorder.rims["lock-field"].g < 128);
         assert_eq!(recorder.text["lock-dots"], "\u{2022}\u{2022}\u{2022}");
-        assert!(!recorder.visible["lock-caret"], "caret hides once dots are shown");
+        assert!(
+            !recorder.visible["lock-caret"],
+            "caret hides once dots are shown"
+        );
     }
 
     #[test]
@@ -699,9 +858,15 @@ mod tests {
             assert_eq!(document.position["lock-clock"], expect(layout.clock));
             assert_eq!(document.position["lock-username"], expect(layout.username));
             assert_eq!(document.font["lock-clock"], layout.clock.font_px as f32);
-            assert_eq!(document.font["lock-power-label-3"], layout.power_labels[3].font_px as f32);
+            assert_eq!(
+                document.font["lock-power-label-3"],
+                layout.power_labels[3].font_px as f32
+            );
             let icon = snapped(layout.power_icons[0]);
-            assert_eq!(document.size["lock-power-0"], (icon.rect.w as f32, icon.rect.h as f32));
+            assert_eq!(
+                document.size["lock-power-0"],
+                (icon.rect.w as f32, icon.rect.h as f32)
+            );
             assert_eq!(document.images["lock-bg"], (width, height));
         }
     }
@@ -733,7 +898,9 @@ mod tests {
             "lock-other-cancel",
         ] {
             let marker = format!("id=\"{id}\"");
-            let start = HTML.find(&marker).unwrap_or_else(|| panic!("missing #{id}"));
+            let start = HTML
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing #{id}"));
             let after_tag = start + HTML[start..].find('>').expect("tag end") + 1;
             let text = HTML[after_tag..].split('<').next().unwrap_or_default();
             assert!(!text.is_empty(), "#{id} has no text child in lock.html");
@@ -802,7 +969,10 @@ mod tests {
         let solid = unreadable(LockBackgroundMode::Solid);
         let cleared = background_image(&solid, 64, 36);
         assert_eq!(cleared.pixels, background::reference_navy(64, 36));
-        assert_ne!(builtin.pixels, cleared.pixels, "Clear must not look like Default");
+        assert_ne!(
+            builtin.pixels, cleared.pixels,
+            "Clear must not look like Default"
+        );
     }
 
     /// Settings whose picture path does not exist, with blur and dim off.
@@ -821,7 +991,11 @@ mod tests {
         let mut pixels = Vec::new();
         for _ in 0..height {
             for x in 0..width {
-                let color = if x < width / 2 { [255, 0, 0, 255] } else { [0, 0, 255, 255] };
+                let color = if x < width / 2 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                };
                 pixels.extend_from_slice(&color);
             }
         }
@@ -862,7 +1036,11 @@ mod tests {
             "lock-other-logout",
             "lock-other-cancel",
         ] {
-            assert_eq!(recorder.visible.get(id), Some(&false), "{id} must be hidden");
+            assert_eq!(
+                recorder.visible.get(id),
+                Some(&false),
+                "{id} must be hidden"
+            );
         }
     }
 
@@ -942,8 +1120,12 @@ mod tests {
     }
 
     fn picture(width: u32, height: u32) -> RgbaImage {
-        RgbaImage::from_rgba8(width, height, [200, 30, 30, 255].repeat((width * height) as usize))
-            .expect("valid image")
+        RgbaImage::from_rgba8(
+            width,
+            height,
+            [200, 30, 30, 255].repeat((width * height) as usize),
+        )
+        .expect("valid image")
     }
 
     #[test]
@@ -954,14 +1136,20 @@ mod tests {
         assert_eq!(alpha(10, 10), 255);
         assert_eq!(alpha(0, 0), 0);
         assert_eq!(alpha(19, 19), 0);
-        assert!(circle.pixels.chunks(4).any(|p| p[3] > 0 && p[3] < 255), "edge is anti-aliased");
+        assert!(
+            circle.pixels.chunks(4).any(|p| p[3] > 0 && p[3] < 255),
+            "edge is anti-aliased"
+        );
     }
 
     #[test]
     fn composite_puts_an_opaque_picture_over_the_ring() {
         let mut base = RgbaImage::from_rgba8(4, 4, [0, 0, 0, 0].repeat(16)).expect("base");
         composite_over(&mut base, &picture(2, 2), 1, 1);
-        assert_eq!(&base.pixels[(1 * 4 + 1) * 4..(1 * 4 + 1) * 4 + 4], &[200, 30, 30, 255]);
+        assert_eq!(
+            &base.pixels[(1 * 4 + 1) * 4..(1 * 4 + 1) * 4 + 4],
+            &[200, 30, 30, 255]
+        );
         assert_eq!(base.pixels[3], 0, "outside the picture stays transparent");
     }
 
@@ -980,5 +1168,32 @@ mod tests {
     #[test]
     fn self_test_document_decodes() {
         self_test().expect("compiled lock document decodes");
+    }
+
+    #[test]
+    fn lock_document_applies_global_typography_defaults() {
+        let settings = LockSettings {
+            font_bold: true,
+            font_size_offset: 3,
+            ..LockSettings::default()
+        };
+        let mut document = Recorder::default();
+        apply_document(&mut document, &settings, 1280, 720, background(1280, 720))
+            .expect("apply document");
+        assert_eq!(document.font_defaults, Some((3.0, true)));
+    }
+
+    #[test]
+    fn shared_wallpaper_crop_uses_each_output_region() {
+        let image = RuntimeImage {
+            source: "test".to_string(),
+            width: 2,
+            height: 2,
+            pixels: vec![1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255],
+        };
+        let crop = crop_runtime_image(&image, 1, 0, 1, 2).expect("valid crop");
+        assert_eq!((crop.width, crop.height), (1, 2));
+        assert_eq!(crop.pixels, vec![2, 0, 0, 255, 4, 0, 0, 255]);
+        assert!(crop_runtime_image(&image, 2, 0, 1, 1).is_none());
     }
 }

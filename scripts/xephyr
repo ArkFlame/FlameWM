@@ -105,6 +105,15 @@ SHELL_BIN="${FLAMEWM_XEPHYR_SHELL_BIN:-./.target/release/flamewm-shell}"
 SESSION_BIN="${FLAMEWM_XEPHYR_SESSION_BIN:-./.target/release/flamewm-session}"
 CANARY_BIN="${FLAMEWM_XEPHYR_CANARY_BIN:-./.target/release/flamewm-x11-canary}"
 if [[ "$BUILD" == 1 ]]; then
+  # Fail early when desktop UI and core were merged from different FlameWM passes.
+  # Otherwise Cargo reports E0432/E0599/E0061 deep into a full release build.
+  python3 -I tools/verify_desktop_conversion_contract.py
+  # Catch strict RWR-incompatible Convert wheel CSS before costly Cargo cache cleanup.
+  python3 -I tools/test_desktop_convert_css_contract.py -q
+  # Cargo may reuse pre-Convert desktop-core rlibs after an archive extraction
+  # restores source mtimes older than the previous build. Verify the path crate
+  # and invalidate only its release cache on a source-content change.
+  python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
   echo "[1/5] Building FlameWM WM + desktop + shell + settings + X11 canary"
   cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-x11-canary
 elif [[ "$BUILD" != 0 ]]; then

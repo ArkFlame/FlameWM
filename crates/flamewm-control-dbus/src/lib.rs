@@ -2,7 +2,7 @@
 
 pub mod mutation_queue;
 
-pub use mutation_queue::{MutationDispatcher, drain_queue_inline};
+pub use mutation_queue::{drain_queue_inline, MutationDispatcher};
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -17,11 +17,13 @@ use flamewm_control_core::{
     ControlError, ControlRequest, ControlResponse, Dispatcher, OBJECT_PATH,
 };
 use flamewm_control_wire::{
-    ControlSignal, WireCall, WireReply, WireSignal, WireValue, decode_call, decode_reply,
-    decode_signal, encode_call, encode_reply, encode_signal,
+    decode_call, decode_reply, decode_signal, encode_call, encode_reply, encode_signal, WireCall,
+    WireReply, WireSignal, WireValue,
 };
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
 use flamewm_platform::host::PlatformHost;
+
+pub use flamewm_control_wire::ControlSignal;
 
 pub struct ControlServer {
     pump: BusPump,
@@ -555,7 +557,9 @@ mod tests {
         WireSignal {
             interface: flamewm_control_core::IFACE_SETTINGS.to_owned(),
             member: "SettingsSnapshotChanged".to_owned(),
-            args: vec![WireValue::Dict(flamewm_control_wire::settings_dict(snapshot))],
+            args: vec![WireValue::Dict(flamewm_control_wire::settings_dict(
+                snapshot,
+            ))],
         }
     }
 

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fast and fail-closed Rust workspace check after importing a source archive.
+# Use this instead of bare `cargo check` when old Cargo cache artifacts exist.
+set -Eeuo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+python3 -I tools/ensure_desktop_conversion_cargo.py --profile dev --include-ui --force
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo check --workspace --all-targets

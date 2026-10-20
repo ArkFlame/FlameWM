@@ -25,7 +25,6 @@ const DEFAULT_SURFACE_OPACITY: u8 = 50;
 const DEFAULT_SURFACE_BLUR_PERCENT: u8 = 80;
 const DEFAULT_ACCENT_OPACITY: u8 = 100;
 const DEFAULT_FONT_FAMILY: &str = "IBM Plex Sans";
-const DEFAULT_FONT_SIZE: f32 = 13.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceKind {
@@ -52,12 +51,11 @@ pub fn project(
     };
     let accent = accent_color(snapshot);
     let font_family = text_setting(snapshot, "fontFamily", DEFAULT_FONT_FAMILY);
-    let font_bold = bool_setting(snapshot, "fontBold", false);
-    let font_size = font_size_px(snapshot);
-
     document.font_family(font_family)?;
-    document.font_size(root, font_size)?;
-    document.font_weight(root, if font_bold { 700 } else { 400 })?;
+    document.ui_font_defaults(
+        integer_setting(snapshot, "fontSizeOffset", 0) as f32,
+        bool_setting(snapshot, "fontBold", false),
+    )?;
     project_accent_tokens(document, snapshot)?;
 
     match surface {
@@ -291,11 +289,6 @@ fn accent_tint(snapshot: &SettingsSnapshot, base_alpha: u8) -> UiColor {
 
 fn opacity_alpha(percent: u8) -> u8 {
     ((u16::from(percent) * 255) / 100) as u8
-}
-
-fn font_size_px(snapshot: &SettingsSnapshot) -> f32 {
-    let font_size_offset = integer_setting(snapshot, "fontSizeOffset", 0) as f32;
-    (DEFAULT_FONT_SIZE + font_size_offset).max(6.0)
 }
 
 /// Flame-owned icon theme (`iconTheme`); unset resolves to the product default.
@@ -744,19 +737,22 @@ mod tests {
             text_setting(&saved, "fontFamily", DEFAULT_FONT_FAMILY),
             "DejaVu Sans"
         );
-        assert_eq!(font_size_px(&saved), 16.0);
+        assert_eq!(
+            (integer_setting(&saved, "fontSizeOffset", 0) as f32, bool_setting(&saved, "fontBold", false)),
+            (3.0, false)
+        );
 
         let defaults = SettingsSnapshot::new(1);
         assert_eq!(
             text_setting(&defaults, "fontFamily", DEFAULT_FONT_FAMILY),
             DEFAULT_FONT_FAMILY
         );
-        assert_eq!(font_size_px(&defaults), DEFAULT_FONT_SIZE);
+        assert_eq!(integer_setting(&defaults, "fontSizeOffset", 0), 0);
 
         let mut tiny = SettingsSnapshot::new(3);
         tiny.values
             .insert("fontSizeOffset".to_owned(), SettingValue::Integer(-40));
-        assert_eq!(font_size_px(&tiny), 6.0);
+        assert_eq!(integer_setting(&tiny, "fontSizeOffset", 0), -40);
     }
 
     #[test]

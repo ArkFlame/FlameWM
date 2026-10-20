@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# One-command, fail-closed FlameWM Debian build for the checked-out source tree.
+# Never allow an old .deb to be mistaken for the result of a failed build.
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+cd "$ROOT"
+VERSION="$(./scripts/version)"
+DIST="$ROOT/.target/dist"
+DEB="$DIST/flamewm_${VERSION}_amd64.deb"
+
+fail() { printf 'FLAMEWM-DEB-ERROR: %s\n' "$1" >&2; exit 1; }
+on_error() {
+    local status=$?
+    printf 'FLAMEWM-DEB-ERROR: build/package/verification failed (exit %s, line %s).\n' "$status" "$1" >&2
+    printf 'FLAMEWM-DEB-ERROR: do not install an older .deb; correct the failure and rerun ./scripts/build-deb.\n' >&2
+    exit "$status"
+}
+trap 'on_error "$LINENO"' ERR
+
+# Invalidate prior published files before even checking tools/assets.
+# A preflight failure must not leave an older Architecture:any deb available.
+mkdir -p "$DIST"
+rm -f "$DEB" "$DIST/SHA256SUMS"
+
+command -v cargo >/dev/null 2>&1 || fail 'cargo not found (install the Rust toolchain)'
+command -v python3 >/dev/null 2>&1 || fail 'python3 not found (required for Cargo cache consistency gate)'
+command -v dpkg >/dev/null 2>&1 || fail 'dpkg not found'
+command -v dpkg-deb >/dev/null 2>&1 || fail 'dpkg-deb not found'
+command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum not found'
+[[ "$(dpkg --print-architecture)" == amd64 && "$(uname -m)" == x86_64 ]] \
+    || fail 'this build currently supports Debian amd64 on an x86_64 host'
+[[ -f packaging/source-manifest.txt && -f packaging/debian/control.in ]] \
+    || fail 'packaging sources missing; use the complete FlameWM checkout'
+[[ -d assets/cursors/cursors && -d assets/web/breeze ]] \
+    || fail 'FlameWM assets missing; overlay this source update onto the complete checkout'
+
+# Nothing is published until all checks pass.
+printf 'FLAMEWM-DEB: validating desktop/core API and rebuilding stale Cargo caches (version %s)\n' "$VERSION"
+# An archive can carry new source with 1970 mtimes. Cargo may then reuse an
+# older core rlib even when lib.rs currently exports conversion correctly.
+# A repeat failure must invalidate the *actual* compiled owners before build,
+# regardless of old digest stamps. Scoped clean, never repo-wide cargo clean.
+python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui --force
+printf 'FLAMEWM-DEB: building the current FlameWM source (version %s)\n' "$VERSION"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --release --workspace
+printf 'FLAMEWM-DEB: producing source, Linux, and Debian artifacts\n'
+./scripts/package
+
+[[ -s "$DEB" ]] || fail "package did not create $DEB"
+[[ -s "$DIST/SHA256SUMS" ]] || fail 'package did not create SHA256SUMS'
+actual_arch="$(dpkg-deb --field "$DEB" Architecture)"
+[[ "$actual_arch" == amd64 ]] || fail "invalid .deb Architecture=$actual_arch (expected amd64)"
+(
+    cd "$DIST"
+    sha256sum --check SHA256SUMS
+)
+# Read the full dpkg-deb listing: grep -q may SIGPIPE its producer under pipefail.
+dpkg-deb --contents "$DEB" | grep -F './usr/share/xsessions/flamewm.desktop' >/dev/null \
+    || fail 'X11 SDDM session entry missing from package'
+
+printf '\nFLAMEWM-DEB-READY: %s\n' "$DEB"
+printf 'FLAMEWM-DEB-READY: Architecture=amd64, checksums=verified, X11 session=present\n'
+printf 'To install: sudo apt install "%s"\n' "$DEB"

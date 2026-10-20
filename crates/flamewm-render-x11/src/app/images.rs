@@ -192,14 +192,6 @@ impl X11App {
             return Ok(cached);
         }
         unsafe { self.evict_node_images(key) };
-        let argb = match treatment {
-            ImageTreatment::Original => crate::native::image::scale_and_premultiply(
-                pixels, src_width, src_height, width, height,
-            ),
-            ImageTreatment::SymbolicForeground => {
-                super::symbolic_foreground_argb32(pixels, src_width, src_height, width, height, fg)
-            }
-        };
         if self.xrender.is_some() {
             // True-alpha path: 32-bit TrueColor visual pixmap + XPutImage of
             // ARGB32 words. XCreatePixmap against the (24-bit default) window
@@ -215,6 +207,14 @@ impl X11App {
                     Ok(created) => created,
                     Err(error) => {
                         return Err(format!("image asset {asset_id}: {error}"));
+                    }
+                };
+                let argb = match treatment {
+                    ImageTreatment::Original => crate::native::image::scale_and_premultiply(
+                        pixels, src_width, src_height, width, height,
+                    ),
+                    ImageTreatment::SymbolicForeground => {
+                        super::symbolic_foreground_argb32(pixels, src_width, src_height, width, height, fg)
                     }
                 };
                 if let Err(error) =

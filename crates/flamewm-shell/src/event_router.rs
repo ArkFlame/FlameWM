@@ -173,11 +173,25 @@ impl ShellLoop {
         event: SurfaceEvent,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
+        if let Some(output) = self.surfaces.select_input_output(event.surface) {
+            self.shell.select_panel_output(output);
+        }
         // Presses are queued during the same reactor step, ahead of this release.
         self.drain_raw_press_observations(runtime);
         let action = event.action.action.as_str();
         // never activate on Secondary.
         let button = PointerButton::from_raw_x(event.action.button);
+        if event.action.phase == ActionPhase::Press {
+            if let Some(slot) = slot_of(action, "task.slot.") {
+                self.capture_task_target(slot);
+            } else {
+                self.task_press_target = None;
+            }
+        } else if event.action.phase == ActionPhase::Release
+            && (!event.action.inside || slot_of(action, "task.slot.").is_none())
+        {
+            self.task_press_target = None;
+        }
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown) {
             return Ok(());
         }
@@ -417,6 +431,7 @@ impl ShellLoop {
             && event.action.text.as_deref() == Some("\u{1b}")
         {
             self.task_drag = None;
+            self.task_press_target = None;
             self.set_task_insert_marker(runtime, None);
             return true;
         }
@@ -451,9 +466,16 @@ impl ShellLoop {
                 let count = self.shell.task_slot_count();
                 match drag.release_on_strip(event.action.x, event.action.y, count) {
                     TaskDragRelease::Click => false,
-                    TaskDragRelease::Noop => true,
-                    TaskDragRelease::Reorder { from, to } => {
-                        if let Some(request) = self.shell.task_reorder_request(from, to) {
+                    TaskDragRelease::Noop => {
+                        self.task_press_target = None;
+                        true
+                    }
+                    TaskDragRelease::Reorder { to, .. } => {
+                        let target = self.task_press_target.take().map(|(_, target)| target);
+                        if let Some(request) = target
+                            .as_ref()
+                            .and_then(|target| self.reorder_task_target(target, to))
+                        {
                             self.submit(request);
                         }
                         true
@@ -468,7 +490,7 @@ impl ShellLoop {
     /// (`None`). Only the marker node is written, so the panel repaints once.
     fn set_task_insert_marker(&mut self, runtime: &mut SurfaceRuntime, target: Option<usize>) {
         use flamewm_shell::taskbar::tasks::drag::insertion_marker_left;
-        let panel = self.surfaces.panel();
+        let panel = self.surfaces.selected_panel();
         let result = runtime.with_document(panel, |document| match target {
             Some(index) => {
                 document.position(
@@ -495,19 +517,18 @@ impl ShellLoop {
             return Ok(());
         }
         if let Some(slot) = slot_of(action, "task.slot.") {
-            self.shell.open_task_context_at_slot(
-                slot,
-                Some(
-                    self.surfaces
-                        .root_pointer(runtime, event.action.x, event.action.y),
-                ),
-            );
+            let pointer = Some(self.surfaces.root_pointer(runtime, event.action.x, event.action.y));
+            if let Some((_pressed_slot, target)) = self.task_press_target.take()
+                .filter(|(pressed_slot, _)| *pressed_slot == slot)
+            {
+                self.shell.open_task_context_for_target(&target, pointer);
+            }
             self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
-        if let Some(slot) = slot_of(action, "workspace.") {
-            self.shell.open_workspace_context_at_slot(
-                slot,
+        if let Some(cell) = slot_of(action, "workspace.") {
+            self.shell.open_workspace_context_at_cell(
+                cell,
                 Some(
                     self.surfaces
                         .root_pointer(runtime, event.action.x, event.action.y),

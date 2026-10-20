@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Single-present stage order for first show: project -> measure ->
@@ -62,6 +61,8 @@ impl PresentCycle {
 impl SurfaceController {
     pub fn redraw(&mut self, id: SurfaceId) -> Result<(), String> {
         let _guard = flamewm_profiler::start("render.present");
+        let flight = self.slides.kind(id.get());
+        let dock = self.dock_rect();
         let instance = self.instance_mut(id)?;
         let result = unsafe {
             instance.app.redraw(&instance.document).map_err(|error| {
@@ -70,6 +71,9 @@ impl SurfaceController {
             })
         };
         if result.is_ok() {
+            if let Some(active) = flight.filter(|_| instance.overlay.is_none() && instance.shown) {
+                Self::refresh_moving_mask(instance, dock, active.edge);
+            }
             flamewm_profiler::record_present();
         }
         result
@@ -79,6 +83,8 @@ impl SurfaceController {
         let _guard = flamewm_profiler::start("render.present");
         let ids: Vec<SurfaceId> = self.surfaces.keys().copied().collect();
         for id in ids {
+            let flight = self.slides.kind(id.get());
+            let dock = self.dock_rect();
             let instance = self.instance_mut(id)?;
             // SAFETY: instance owns a live display + app resources.
             let painted = unsafe {
@@ -91,13 +97,18 @@ impl SurfaceController {
                     })?
             };
             if painted {
-                let instance = self.instance_mut(id)?;
-                // SAFETY: display/window live; mask follows repaint.
-                unsafe { instance.app.refresh_shape_mask(&instance.document) };
+                // SAFETY: display/window live; mask follows repaint. Active
+                // native slide owns the clipping region, not the redraw.
+                if let Some(active) =
+                    flight.filter(|_| instance.shown && instance.overlay.is_none())
+                {
+                    Self::refresh_moving_mask(instance, dock, active.edge);
+                } else {
+                    unsafe { instance.app.refresh_shape_mask(&instance.document) };
+                }
                 flamewm_profiler::record_present();
             }
         }
         Ok(())
     }
-
 }

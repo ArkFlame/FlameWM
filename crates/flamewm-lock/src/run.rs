@@ -1,6 +1,6 @@
 //! Interactive lock loop: one override-redirect surface, keyboard and pointer
-//! grabs, PAM and power actions on worker threads, the idle screensaver, and a
-//! 1 s clock tick. Input that wakes the screen is consumed in the same turn.
+//! keyboard grab, PAM and power actions on worker threads, the idle screensaver,
+//! and live control snapshots. Input that wakes the screen is consumed in the same turn.
 use std::cell::RefCell;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
@@ -12,29 +12,33 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use calloop::Interest;
+use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::session::SessionCapabilities;
+use flamewm_api::Rect;
+use flamewm_control_dbus::{ControlSignal, ControlSignalClient};
 use flamewm_reactor::{FdAction, Reactor};
 use flamewm_ui_x11::{
-    ActionPhase, RuntimeImage, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
-    SurfaceRuntime, UiBackendError, run_surface_runtime_with_reactor_access,
+    run_surface_runtime_with_reactor_access, ActionPhase, RuntimeImage, SurfaceConfig,
+    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError,
 };
 
 use crate::document;
 use crate::native_time::local_now;
 use crate::pam::{self, Outcome};
-use crate::power::{self, Effect as PowerEffect, POWER_ORDER, PowerEvent, PowerUi, PowerView};
+use crate::power::{self, Effect as PowerEffect, PowerEvent, PowerUi, PowerView, POWER_ORDER};
 use crate::preview::{self, PreviewInput};
-use crate::ribbons::{FRAME_INTERVAL, RibbonFrames};
+use crate::ribbons::{RibbonFrames, FRAME_INTERVAL};
 use crate::screensaver::{Phase, Screensaver};
 use crate::secret::PasswordBuffer;
 use crate::settings::LockSettings;
 use crate::signals;
 use crate::state::{Effect, Key, LockState, Status};
 use crate::view::LockView;
-use crate::x11::{KeyBatch, PointerState, Session, grab_with_retry};
+use crate::x11::{grab_with_retry, KeyBatch, PointerState, Session};
 
 const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
-const TICK: Duration = Duration::from_secs(1);
+/// Handles root ConfigureNotify promptly while still keeping activity sampling bounded.
+const TICK: Duration = Duration::from_millis(50);
 /// Poll interval of the preview: pointer and keyboard are read by polling.
 const PREVIEW_POLL: Duration = Duration::from_millis(50);
 /// Shown in the status line while Caps Lock is on and no other status applies.
@@ -42,14 +46,53 @@ const CAPS_LOCK_HINT: &str = "Caps Lock is on";
 /// Primary mouse button in X core numbering.
 const BUTTON_PRIMARY: u32 = 1;
 
+fn typography_changed(previous: &LockSettings, next: &LockSettings) -> bool {
+    previous.font_family != next.font_family
+        || previous.font_bold != next.font_bold
+        || previous.font_size_offset != next.font_size_offset
+}
+
+fn background_changed(previous: &LockSettings, next: &LockSettings) -> bool {
+    previous.background_color != next.background_color
+        || previous.background_image != next.background_image
+        || previous.background_mode != next.background_mode
+        || previous.share_wallpaper != next.share_wallpaper
+        || previous.blur_percent != next.blur_percent
+        || previous.dim_percent != next.dim_percent
+}
+
+fn output_rects_need_rebuild(current: &[Rect], next: &[Rect]) -> bool {
+    current != next
+}
+
+fn latest_control_snapshots(
+    signals: impl IntoIterator<Item = ControlSignal>,
+) -> (
+    Option<flamewm_api::settings::SettingsSnapshot>,
+    Option<DisplaySnapshot>,
+) {
+    let mut settings = None;
+    let mut displays = None;
+    for signal in signals {
+        match signal {
+            ControlSignal::SettingsSnapshotChanged { snapshot } => settings = Some(snapshot),
+            ControlSignal::DisplaysSnapshotChanged { snapshot } => displays = Some(snapshot),
+            _ => {}
+        }
+    }
+    (settings, displays)
+}
+
 /// Shows the lock screen until an authentication succeeds. Returns `Err`
 /// before anything is visible when the grabs cannot be taken.
 pub fn run(settings: &LockSettings, username: &str) -> Result<(), String> {
-    let (width, height) = flamewm_ui_x11::root_geometry()?;
-    let template = document::template()?;
     let mut runtime =
         SurfaceRuntime::new().map_err(|error| format!("create UI runtime: {error:?}"))?;
-    lock_on(&mut runtime, settings, username, width, height, template)
+    runtime.watch_root_changes();
+    let (width, height) = runtime.root_geometry();
+    let root = Rect::new(0, 0, width as i32, height as i32);
+    let outputs = crate::session::lock_output_rects(root);
+    lock_on(&mut runtime, settings, username, root, outputs)
 }
 
 /// Shows the lock UI as a settings preview: no keyboard or pointer grab, no PAM,
@@ -68,22 +111,117 @@ pub fn run_screensaver_preview(settings: &LockSettings, username: &str) -> Resul
 
 /// Config of the full-screen overlay surface shared by the lock and its previews.
 fn overlay_config(width: u32, height: u32, title: &str) -> SurfaceConfig {
+    overlay_at(
+        Rect::new(0, 0, width as i32, height as i32),
+        title,
+        SurfaceInputMode::Interactive,
+    )
+}
+
+fn overlay_at(rect: Rect, title: &str, input: SurfaceInputMode) -> SurfaceConfig {
     SurfaceConfig {
-        width,
-        height,
+        width: rect.width.max(1) as u32,
+        height: rect.height.max(1) as u32,
         title: title.to_string(),
         role: SurfaceRole::Overlay,
-        input: SurfaceInputMode::Interactive,
+        input,
         initially_visible: false,
-        x: 0,
-        y: 0,
+        x: rect.x,
+        y: rect.y,
     }
 }
 
 /// Shows and raises `surface`; `what` names it in the error.
-fn show_raised(runtime: &mut SurfaceRuntime, surface: SurfaceHandle, what: &str) -> Result<(), String> {
-    runtime.show(surface).map_err(|error| format!("show {what} surface: {error:?}"))?;
-    runtime.raise(surface).map_err(|error| format!("raise {what} surface: {error:?}"))
+fn show_raised(
+    runtime: &mut SurfaceRuntime,
+    surface: SurfaceHandle,
+    what: &str,
+) -> Result<(), String> {
+    runtime
+        .show(surface)
+        .map_err(|error| format!("show {what} surface: {error:?}"))?;
+    runtime
+        .raise(surface)
+        .map_err(|error| format!("raise {what} surface: {error:?}"))
+}
+
+#[derive(Clone)]
+struct LockSurface {
+    handle: SurfaceHandle,
+    rect: Rect,
+    base_background: RuntimeImage,
+}
+
+fn update_animated_backgrounds(
+    runtime: &mut SurfaceRuntime,
+    surfaces: &[LockSurface],
+    fallback: Option<&LockSurface>,
+    frames: &mut [RibbonFrames],
+    fallback_frames: Option<&mut RibbonFrames>,
+    now: Instant,
+) -> Result<(), String> {
+    for (surface, frame) in surfaces.iter().zip(frames) {
+        let image = frame.frame(now);
+        runtime
+            .with_document(surface.handle, |view| document::set_background(view, image))
+            .map_err(|error| format!("update lock background: {error:?}"))?;
+        runtime
+            .redraw(surface.handle)
+            .map_err(|error| format!("redraw lock surface: {error:?}"))?;
+    }
+    if let (Some(surface), Some(frame)) = (fallback, fallback_frames) {
+        let image = frame.frame(now);
+        runtime
+            .with_document(surface.handle, |view| document::set_background(view, image))
+            .map_err(|error| format!("update fallback lock background: {error:?}"))?;
+        runtime
+            .redraw(surface.handle)
+            .map_err(|error| format!("redraw fallback lock surface: {error:?}"))?;
+    }
+    Ok(())
+}
+
+fn restore_surface_backgrounds(
+    runtime: &mut SurfaceRuntime,
+    surfaces: &[LockSurface],
+    fallback: Option<&LockSurface>,
+) -> Result<(), String> {
+    for surface in surfaces.iter().chain(fallback) {
+        let base = surface.base_background.clone();
+        runtime
+            .with_document(surface.handle, |view| document::set_background(view, base))
+            .map_err(|error| format!("restore lock background: {error:?}"))?;
+    }
+    Ok(())
+}
+
+fn create_lock_surface(
+    runtime: &mut SurfaceRuntime,
+    settings: &LockSettings,
+    root: Rect,
+    rect: Rect,
+    title: &str,
+) -> Result<LockSurface, String> {
+    let template = document::template()?;
+    let width = rect.width.max(1) as u32;
+    let height = rect.height.max(1) as u32;
+    let background = document::background_for_output(settings, root, rect);
+    let handle = runtime
+        .create_surface(
+            template,
+            overlay_at(rect, title, SurfaceInputMode::Interactive),
+        )
+        .map_err(|error| format!("create {title} surface: {error:?}"))?;
+    runtime
+        .with_document(handle, |view| {
+            document::apply_document(view, settings, width, height, background.clone())
+        })
+        .map_err(|error| format!("theme {title} surface: {error:?}"))?;
+    Ok(LockSurface {
+        handle,
+        rect,
+        base_background: background,
+    })
 }
 
 /// The lock projection for a preview, built only for the non-Ribbons preview. Ribbons
@@ -193,32 +331,54 @@ fn lock_on(
     runtime: &mut SurfaceRuntime,
     settings: &LockSettings,
     username: &str,
-    width: u32,
-    height: u32,
-    template: flamewm_ui_x11::UiTemplate,
+    root: Rect,
+    outputs: Vec<Rect>,
 ) -> Result<(), String> {
-    let surface = runtime
-        .create_surface(template, overlay_config(width, height, "FlameWM lock"))
-        .map_err(|error| format!("create lock surface: {error:?}"))?;
+    let outputs = if outputs.is_empty() {
+        vec![root]
+    } else {
+        outputs
+    };
+    // Keep full-root coverage under the output surfaces so stale monitor geometry
+    // after a layout change cannot reveal the desktop.
+    let fallback = Some(create_lock_surface(
+        runtime,
+        settings,
+        root,
+        root,
+        "FlameWM lock coverage",
+    )?);
+    let mut surfaces = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, rect)| {
+            create_lock_surface(
+                runtime,
+                settings,
+                root,
+                *rect,
+                &format!("FlameWM lock {}", index + 1),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if surfaces.is_empty() {
+        surfaces.push(create_lock_surface(
+            runtime,
+            settings,
+            root,
+            root,
+            "FlameWM lock",
+        )?);
+    }
 
     let mut session = Session::open()?;
     if !grab_with_retry(&mut session, GRAB_TIMEOUT) {
-        return Err("cannot grab keyboard and pointer; not locking".to_string());
+        return Err("cannot grab keyboard; not locking".to_string());
     }
     let session = Rc::new(RefCell::new(session));
     let keys = Rc::new(RefCell::new(KeyBatch::default()));
     let clicks = Rc::new(RefCell::new(Vec::<String>::new()));
-
-    let background = document::background_image(settings, width, height);
-    let base_background = background.clone();
-    keep_lock_step("theme lock surface", || {
-        runtime
-            .with_document(surface, |view| {
-                document::apply_document(view, settings, width, height, background)
-            })
-            .map_err(|error| format!("theme lock surface: {error:?}"))
-    });
-
+    let control_signals = Rc::new(RefCell::new(Vec::<ControlSignal>::new()));
     let (outcome_tx, outcome_rx) = mpsc::channel::<Outcome>();
     let (power_tx, power_rx) = mpsc::channel::<PowerEvent>();
     power::fetch_capabilities_on_worker(power_tx.clone());
@@ -226,11 +386,14 @@ fn lock_on(
         UnixStream::pair().map_err(|error| format!("frame pacer socket: {error}"))?;
     let frame_pacer = FramePacer::start(wake_writer)?;
     let mut lock = LockLoop {
-        surface,
+        surfaces,
+        fallback,
+        root,
         settings: settings.clone(),
         session: Rc::clone(&session),
         keys: Rc::clone(&keys),
         clicks: Rc::clone(&clicks),
+        control_signals: Rc::clone(&control_signals),
         state: LockState::default(),
         power: PowerUi::new(SessionCapabilities::default()),
         power_tx,
@@ -241,11 +404,14 @@ fn lock_on(
         background_stale: false,
         next_frame: Instant::now(),
         frame_pacer,
-        base_background,
-        width,
-        height,
+        fallback_frames: None,
         last_tick: Instant::now(),
         last_pointer: None,
+        pending_root_geometry: None,
+        pending_display_snapshot: None,
+        pending_auth_success: false,
+        live_typography_dirty: false,
+        live_background_dirty: false,
         caps_lock: false,
         shown: None,
         ui_shown_wanted: true,
@@ -257,12 +423,12 @@ fn lock_on(
         unlocked: false,
     };
     lock.repaint(runtime);
-    show_raised(runtime, surface, "lock")?;
-    // The lock is already visible under its keyboard grab; a pointer grab that is not yet
-    // granted is retried every tick, so the lock never drops for it.
-    let _ = runtime.grab_pointer(surface);
+    lock.show_surfaces(runtime)?;
+    // Every output surface and the full-root fallback receive ordinary pointer events;
+    // the lock's security boundary is the shared keyboard grab.
 
     let mut reactor = Reactor::new().map_err(|error| format!("create reactor: {error}"))?;
+    watch_control_signals(&mut reactor, control_signals);
     let key_fd = session.borrow().fd();
     reactor
         .register_raw_fd_with_action(key_fd, Interest::READ, move |_, _| {
@@ -283,7 +449,6 @@ fn lock_on(
             FdAction::Continue
         })
         .map_err(|error| format!("watch frame pacer: {error}"))?;
-    // The timer bounds each wait so the clock, PAM and power results refresh once a second.
     reactor
         .register_timer(TICK, true, || {})
         .map_err(|error| format!("register lock tick: {error}"))?;
@@ -311,27 +476,33 @@ fn lock_on(
 }
 
 struct LockLoop {
-    surface: SurfaceHandle,
+    surfaces: Vec<LockSurface>,
+    fallback: Option<LockSurface>,
+    root: Rect,
     settings: LockSettings,
     session: Rc<RefCell<Session>>,
     keys: Rc<RefCell<KeyBatch>>,
     clicks: Rc<RefCell<Vec<String>>>,
+    control_signals: Rc<RefCell<Vec<ControlSignal>>>,
+    pending_display_snapshot: Option<DisplaySnapshot>,
     state: LockState,
     power: PowerUi,
     power_tx: Sender<PowerEvent>,
     power_rx: Receiver<PowerEvent>,
     shown_power: Option<PowerView>,
     saver: Screensaver,
-    frames: Option<RibbonFrames>,
+    frames: Option<Vec<RibbonFrames>>,
     /// Set when the wallpaper restore was refused; the next turn outside Ribbons retries.
     background_stale: bool,
     next_frame: Instant,
     frame_pacer: FramePacer,
-    base_background: RuntimeImage,
-    width: u32,
-    height: u32,
+    fallback_frames: Option<RibbonFrames>,
     last_tick: Instant,
     last_pointer: Option<PointerState>,
+    pending_root_geometry: Option<(u32, u32)>,
+    pending_auth_success: bool,
+    live_typography_dirty: bool,
+    live_background_dirty: bool,
     caps_lock: bool,
     shown: Option<LockView>,
     /// Wanted visibility of the lock widgets; `ui_visibility_dirty` means the document
@@ -370,11 +541,93 @@ fn settle(pending: &mut bool, what: &str, apply: impl FnOnce() -> Result<(), Str
     }
 }
 
+fn watch_control_signals(reactor: &mut Reactor, pending: Rc<RefCell<Vec<ControlSignal>>>) {
+    let client = match ControlSignalClient::connect_session() {
+        Ok(client) => Rc::new(client),
+        Err(error) => {
+            eprintln!("flamewm-lock: live settings/display updates unavailable: {error}");
+            return;
+        }
+    };
+    let watch = client.watch();
+    let interest = match (
+        watch
+            .events
+            .contains(flamewm_api::ports::FdEvents::READABLE),
+        watch
+            .events
+            .contains(flamewm_api::ports::FdEvents::WRITABLE),
+    ) {
+        (true, true) => calloop::Interest::BOTH,
+        (false, true) => calloop::Interest::WRITE,
+        _ => calloop::Interest::READ,
+    };
+    let result = reactor.register_raw_fd_with_action(watch.fd, interest, move |_, _| {
+        let pending = Rc::clone(&pending);
+        if let Err(error) = client.on_ready(|signal| match signal {
+            signal @ ControlSignal::SettingsSnapshotChanged { .. }
+            | signal @ ControlSignal::DisplaysSnapshotChanged { .. } => {
+                pending.borrow_mut().push(signal);
+            }
+            _ => {}
+        }) {
+            eprintln!("flamewm-lock: read settings/display update failed: {error}");
+        }
+        FdAction::Continue
+    });
+    if let Err(error) = result {
+        eprintln!("flamewm-lock: live settings/display watch unavailable: {error}");
+    }
+}
+
 impl LockLoop {
+    fn show_surfaces(&self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        if let Some(fallback) = self.fallback.as_ref() {
+            show_raised(runtime, fallback.handle, "lock coverage")?;
+        }
+        for (index, surface) in self.surfaces.iter().enumerate() {
+            show_raised(
+                runtime,
+                surface.handle,
+                &format!("lock monitor {}", index + 1),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn raise_surfaces(&self, runtime: &SurfaceRuntime) -> Result<(), String> {
+        if let Some(fallback) = self.fallback.as_ref() {
+            runtime
+                .raise(fallback.handle)
+                .map_err(|error| format!("raise lock coverage: {error:?}"))?;
+        }
+        for surface in &self.surfaces {
+            runtime
+                .raise(surface.handle)
+                .map_err(|error| format!("raise lock surface: {error:?}"))?;
+        }
+        Ok(())
+    }
+
     /// One loop turn: wake the screen on input (consuming it), apply keys, clicks,
     /// PAM and power results, animate the screensaver, keep the grabs and stacking,
     /// then repaint only when the projected content changed.
     fn tick(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        if let Some(size) = runtime.take_root_geometry_changed() {
+            self.pending_root_geometry = Some(size);
+        }
+        if let Some((width, height)) = self.pending_root_geometry {
+            if self.refresh_root_geometry(runtime, width, height) {
+                self.pending_root_geometry = None;
+            }
+        }
+        self.apply_control_signals();
+        if self.pending_root_geometry.is_none() {
+            if let Some(snapshot) = self.pending_display_snapshot.take() {
+                self.apply_display_snapshot(runtime, &snapshot);
+            }
+        }
+        self.sync_live_settings(runtime);
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
@@ -419,14 +672,19 @@ impl LockLoop {
         }
         while let Ok(outcome) = self.outcome_rx.try_recv() {
             if self.state.finish(outcome, now) {
-                self.unlocked = true;
+                if self.pending_root_geometry.is_some() {
+                    self.pending_auth_success = true;
+                } else {
+                    self.unlocked = true;
+                }
             }
+        }
+        if self.pending_root_geometry.is_none() && self.pending_auth_success {
+            self.unlocked = true;
         }
         if self.unlocked {
             self.frame_pacer.set_running(false);
-            runtime
-                .destroy(self.surface)
-                .map_err(|error| format!("destroy lock surface: {error:?}"))?;
+            self.destroy_surfaces(runtime)?;
             return Ok(());
         }
         self.settle_display();
@@ -438,16 +696,195 @@ impl LockLoop {
         self.animate(runtime, now);
         // A lost grab is retried every turn; the lock is never dropped by a failed retry.
         self.session.borrow_mut().try_grab();
-        if runtime.is_pointer_grabbed(self.surface) != Ok(true) {
-            let _ = runtime.grab_pointer(self.surface);
-        }
-        let surface = self.surface;
-        keep_lock_step("raise lock surface", || {
-            runtime
-                .raise(surface)
-                .map_err(|error| format!("raise lock surface: {error:?}"))
-        });
+        keep_lock_step("raise lock surfaces", || self.raise_surfaces(runtime));
         self.repaint(runtime);
+        Ok(())
+    }
+
+    fn apply_control_signals(&mut self) {
+        let signals = std::mem::take(&mut *self.control_signals.borrow_mut());
+        let (latest_settings, latest_displays) = latest_control_snapshots(signals);
+        if let Some(snapshot) = latest_settings {
+            self.update_live_settings(crate::session::lock_settings_from_snapshot(&snapshot));
+        }
+        if let Some(snapshot) = latest_displays {
+            self.pending_display_snapshot = Some(snapshot);
+        }
+    }
+
+    fn update_live_settings(&mut self, settings: LockSettings) {
+        // This path is presentation-only; authentication state and PAM channels stay owned by
+        // this lock loop and are never rebuilt for a settings revision.
+        self.live_typography_dirty |= typography_changed(&self.settings, &settings);
+        self.live_background_dirty |= background_changed(&self.settings, &settings);
+        self.settings = settings;
+    }
+
+    fn sync_live_settings(&mut self, runtime: &mut SurfaceRuntime) {
+        if !self.live_typography_dirty && !self.live_background_dirty {
+            return;
+        }
+        let settings = self.settings.clone();
+        let root = self.root;
+        let typography_dirty = self.live_typography_dirty;
+        let background_dirty = self.live_background_dirty;
+        let update_visible_background = self.saver.phase() != Phase::RibbonsActive;
+        let mut typography_ok = true;
+        let mut background_ok = true;
+        for surface in self.surfaces.iter_mut().chain(self.fallback.iter_mut()) {
+            if typography_dirty {
+                let result = runtime
+                    .with_document(surface.handle, |view| {
+                        document::apply_typography(view, &settings)
+                    })
+                    .and_then(|()| runtime.redraw(surface.handle));
+                typography_ok &= result.is_ok();
+            }
+            if background_dirty {
+                let background = document::background_for_output(&settings, root, surface.rect);
+                surface.base_background = background.clone();
+                if update_visible_background {
+                    let result = runtime
+                        .with_document(surface.handle, |view| {
+                            document::set_background(view, background)
+                        })
+                        .and_then(|()| runtime.redraw(surface.handle));
+                    background_ok &= result.is_ok();
+                }
+            }
+        }
+        if typography_ok {
+            self.live_typography_dirty = false;
+        }
+        if background_ok {
+            self.live_background_dirty = false;
+        }
+    }
+
+    fn apply_display_snapshot(&mut self, runtime: &mut SurfaceRuntime, snapshot: &DisplaySnapshot) {
+        let outputs = crate::session::lock_output_rects_from_snapshot(snapshot, self.root);
+        let current = self
+            .surfaces
+            .iter()
+            .map(|surface| surface.rect)
+            .collect::<Vec<_>>();
+        if output_rects_need_rebuild(&current, &outputs)
+            && !self.rebuild_output_surfaces(runtime, outputs)
+        {
+            self.pending_display_snapshot = Some(snapshot.clone());
+        }
+    }
+
+    fn rebuild_output_surfaces(&mut self, runtime: &mut SurfaceRuntime, rects: Vec<Rect>) -> bool {
+        let mut rebuilt = Vec::with_capacity(rects.len());
+        for (index, rect) in rects.iter().enumerate() {
+            match create_lock_surface(
+                runtime,
+                &self.settings,
+                self.root,
+                *rect,
+                &format!("FlameWM lock {}", index + 1),
+            ) {
+                Ok(surface) => rebuilt.push(surface),
+                Err(error) => {
+                    for surface in &rebuilt {
+                        let _ = runtime.destroy(surface.handle);
+                    }
+                    eprintln!("flamewm-lock: monitor surface rebuild failed: {error}");
+                    return false;
+                }
+            }
+        }
+        for (index, surface) in rebuilt.iter().enumerate() {
+            if let Err(error) = show_raised(
+                runtime,
+                surface.handle,
+                &format!("lock monitor {}", index + 1),
+            ) {
+                for surface in &rebuilt {
+                    let _ = runtime.destroy(surface.handle);
+                }
+                eprintln!("flamewm-lock: monitor surface show failed: {error}");
+                return false;
+            }
+        }
+        let old = std::mem::replace(&mut self.surfaces, rebuilt);
+        for surface in old {
+            let _ = runtime.destroy(surface.handle);
+        }
+        self.frames = None;
+        self.fallback_frames = None;
+        self.shown = None;
+        self.shown_power = None;
+        self.ui_visibility_dirty = true;
+        self.repaint(runtime);
+        keep_lock_step("raise refreshed lock surfaces", || {
+            self.raise_surfaces(runtime)
+        });
+        true
+    }
+
+    fn refresh_root_geometry(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        if width == 0 || height == 0 {
+            return false;
+        }
+        let root = Rect::new(0, 0, width as i32, height as i32);
+        if root == self.root {
+            return true;
+        }
+        let Some(fallback) = self.fallback.as_mut() else {
+            return false;
+        };
+        let background = document::background_for_output(&self.settings, root, root);
+        if let Err(error) = runtime.move_resize(fallback.handle, root.x, root.y, width, height) {
+            eprintln!("flamewm-lock: resize root coverage failed; retaining prior lock: {error:?}");
+            return false;
+        }
+        if let Err(error) = runtime.raise(fallback.handle) {
+            eprintln!("flamewm-lock: raise resized root coverage failed: {error:?}");
+            return false;
+        }
+        if let Err(error) = runtime.with_document(fallback.handle, |view| {
+            document::apply_document(view, &self.settings, width, height, background.clone())
+        }) {
+            eprintln!("flamewm-lock: theme resized root coverage failed: {error:?}");
+            return false;
+        }
+        fallback.rect = root;
+        fallback.base_background = background;
+        self.root = root;
+        self.shown = None;
+        self.shown_power = None;
+        self.ui_visibility_dirty = true;
+        self.repaint(runtime);
+
+        // The full-root lock was resized first, so failures during monitor reprojection
+        // keep the desktop covered by the same authentication session.
+        let rects = crate::session::lock_output_rects(root);
+        if !self.rebuild_output_surfaces(runtime, rects) {
+            eprintln!(
+                "flamewm-lock: root resized; prior monitor surfaces retained under root lock"
+            );
+        }
+        true
+    }
+
+    fn destroy_surfaces(&self, runtime: &mut SurfaceRuntime) -> Result<(), String> {
+        for surface in &self.surfaces {
+            runtime
+                .destroy(surface.handle)
+                .map_err(|error| format!("destroy lock surface: {error:?}"))?;
+        }
+        if let Some(fallback) = self.fallback.as_ref() {
+            runtime
+                .destroy(fallback.handle)
+                .map_err(|error| format!("destroy lock coverage surface: {error:?}"))?;
+        }
         Ok(())
     }
 
@@ -460,6 +897,7 @@ impl LockLoop {
         }
         self.frame_pacer.set_running(false);
         self.frames = None;
+        self.fallback_frames = None;
         if before == Phase::RibbonsActive || before == Phase::DisplayOff {
             self.restore_background(runtime);
         }
@@ -484,12 +922,27 @@ impl LockLoop {
         }
         match phase {
             Phase::RibbonsActive => {
-                self.frames = Some(RibbonFrames::new(
-                    self.width,
-                    self.height,
-                    &self.settings.saver,
-                    now,
-                ));
+                self.frames = Some(
+                    self.surfaces
+                        .iter()
+                        .map(|surface| {
+                            RibbonFrames::new(
+                                surface.rect.width.max(1) as u32,
+                                surface.rect.height.max(1) as u32,
+                                &self.settings.saver,
+                                now,
+                            )
+                        })
+                        .collect(),
+                );
+                self.fallback_frames = self.fallback.as_ref().map(|surface| {
+                    RibbonFrames::new(
+                        surface.rect.width.max(1) as u32,
+                        surface.rect.height.max(1) as u32,
+                        &self.settings.saver,
+                        now,
+                    )
+                });
                 self.next_frame = now;
                 self.frame_pacer.set_running(true);
             }
@@ -510,12 +963,23 @@ impl LockLoop {
         if !self.ui_visibility_dirty {
             return;
         }
-        let surface = self.surface;
         let shown = self.ui_shown_wanted;
         settle(&mut self.ui_visibility_dirty, "lock UI visibility", || {
-            runtime
-                .with_document(surface, |view| document::set_lock_ui_shown(view, shown))
-                .map_err(|error| format!("set lock UI shown: {error:?}"))
+            for surface in &self.surfaces {
+                runtime
+                    .with_document(surface.handle, |view| {
+                        document::set_lock_ui_shown(view, shown)
+                    })
+                    .map_err(|error| format!("set lock UI shown: {error:?}"))?;
+            }
+            if let Some(fallback) = self.fallback.as_ref() {
+                runtime
+                    .with_document(fallback.handle, |view| {
+                        document::set_lock_ui_shown(view, shown)
+                    })
+                    .map_err(|error| format!("set fallback lock UI shown: {error:?}"))?;
+            }
+            Ok(())
         });
     }
 
@@ -541,29 +1005,25 @@ impl LockLoop {
         let Some(frames) = self.frames.as_mut() else {
             return;
         };
-        let image = frames.frame(now);
         self.next_frame = now + FRAME_INTERVAL;
-        let surface = self.surface;
         keep_lock_step("animate lock background", || {
-            runtime
-                .with_document(surface, |view| document::set_background(view, image))
-                .map_err(|error| format!("update lock background: {error:?}"))
-                .and_then(|()| {
-                    runtime
-                        .redraw(surface)
-                        .map_err(|error| format!("redraw lock surface: {error:?}"))
-                })
+            update_animated_backgrounds(
+                runtime,
+                &self.surfaces,
+                self.fallback.as_ref(),
+                frames,
+                self.fallback_frames.as_mut(),
+                now,
+            )
         });
     }
 
     fn restore_background(&mut self, runtime: &mut SurfaceRuntime) {
-        let base = self.base_background.clone();
-        let surface = self.surface;
-        settle(&mut self.background_stale, "lock background restore", || {
-            runtime
-                .with_document(surface, |view| document::set_background(view, base))
-                .map_err(|error| format!("restore lock background: {error:?}"))
-        });
+        settle(
+            &mut self.background_stale,
+            "lock background restore",
+            || restore_surface_backgrounds(runtime, &self.surfaces, self.fallback.as_ref()),
+        );
     }
 
     /// Re-applies the wallpaper while a failed restore is pending. Not called during Ribbons.
@@ -644,23 +1104,50 @@ impl LockLoop {
         if !view_changed && !power_changed {
             return;
         }
-        let (width, height) = (self.width, self.height);
-        let surface = self.surface;
         let painted = keep_lock_step("repaint lock surface", || {
-            runtime
-                .with_document(surface, |document_view| {
-                    if view_changed {
-                        document::apply_view(document_view, &view)?;
-                    }
-                    if power_changed {
-                        document::apply_power(document_view, width, height, &power)?;
-                    }
-                    Ok(())
-                })
-                .map_err(|error| format!("update lock surface: {error:?}"))?;
-            runtime
-                .redraw(surface)
-                .map_err(|error| format!("redraw lock surface: {error:?}"))
+            for surface in &self.surfaces {
+                runtime
+                    .with_document(surface.handle, |document_view| {
+                        if view_changed {
+                            document::apply_view(document_view, &view)?;
+                        }
+                        if power_changed {
+                            document::apply_power(
+                                document_view,
+                                surface.rect.width.max(1) as u32,
+                                surface.rect.height.max(1) as u32,
+                                &power,
+                            )?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(|error| format!("update lock surface: {error:?}"))?;
+                runtime
+                    .redraw(surface.handle)
+                    .map_err(|error| format!("redraw lock surface: {error:?}"))?;
+            }
+            if let Some(surface) = self.fallback.as_ref() {
+                runtime
+                    .with_document(surface.handle, |document_view| {
+                        if view_changed {
+                            document::apply_view(document_view, &view)?;
+                        }
+                        if power_changed {
+                            document::apply_power(
+                                document_view,
+                                surface.rect.width.max(1) as u32,
+                                surface.rect.height.max(1) as u32,
+                                &power,
+                            )?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(|error| format!("update fallback lock surface: {error:?}"))?;
+                runtime
+                    .redraw(surface.handle)
+                    .map_err(|error| format!("redraw fallback lock surface: {error:?}"))?;
+            }
+            Ok(())
         });
         if painted {
             self.shown = Some(view);
@@ -720,6 +1207,79 @@ mod tests {
     use flamewm_ui_x11::SurfaceRuntime;
 
     use super::*;
+
+    #[test]
+    fn live_settings_detect_typography_and_wallpaper_changes() {
+        let defaults = LockSettings::default();
+        let bold = LockSettings {
+            font_bold: true,
+            ..defaults.clone()
+        };
+        assert!(typography_changed(&defaults, &bold));
+        assert!(!background_changed(&defaults, &bold));
+        let shared = LockSettings {
+            share_wallpaper: true,
+            ..defaults.clone()
+        };
+        assert!(background_changed(&defaults, &shared));
+        assert!(!typography_changed(&defaults, &shared));
+    }
+
+    #[test]
+    fn control_signal_reducer_keeps_the_latest_typed_snapshots() {
+        let settings = flamewm_api::settings::SettingsSnapshot::new(2);
+        let displays = DisplaySnapshot {
+            generation: 3,
+            outputs: Vec::new(),
+            pending: None,
+        };
+        let (settings, displays) = latest_control_snapshots([
+            ControlSignal::SettingsSnapshotChanged {
+                snapshot: flamewm_api::settings::SettingsSnapshot::new(1),
+            },
+            ControlSignal::SettingsSnapshotChanged {
+                snapshot: settings,
+            },
+            ControlSignal::DisplaysSnapshotChanged {
+                snapshot: displays,
+            },
+        ]);
+        assert_eq!(settings.expect("settings snapshot").revision, 2);
+        assert_eq!(displays.expect("display snapshot").generation, 3);
+    }
+
+    #[test]
+    fn display_rect_changes_rebuild_even_when_root_size_is_unchanged() {
+        let root_before = Rect::new(0, 0, 1920, 1080);
+        let root_after = Rect::new(0, 0, 1920, 1080);
+        let current = [Rect::new(0, 0, 1920, 1080)];
+        let rearranged = [Rect::new(0, 0, 1280, 720), Rect::new(1280, 0, 640, 1080)];
+        assert!(!output_rects_need_rebuild(&current, &current));
+        assert!(output_rects_need_rebuild(&current, &rearranged));
+        assert_eq!(root_before, root_after, "root geometry remains unchanged");
+    }
+
+    #[test]
+    fn live_settings_projection_does_not_replace_authentication_owners() {
+        let body = method_body("fn update_live_settings(");
+        assert!(!body.contains("self.state"));
+        assert!(!body.contains("outcome_tx") && !body.contains("outcome_rx"));
+        assert!(body.contains("live_typography_dirty"));
+    }
+
+    #[test]
+    fn live_output_projection_uses_the_same_canonical_clipping_fallback() {
+        let root = Rect::new(0, 0, 1920, 1080);
+        let empty = DisplaySnapshot {
+            generation: 1,
+            outputs: Vec::new(),
+            pending: None,
+        };
+        assert_eq!(
+            crate::session::lock_output_rects_from_snapshot(&empty, root),
+            vec![root]
+        );
+    }
 
     /// Needs a live X display (`DISPLAY`). Creates and drops the render stack
     /// normally: a regression here is a SIGSEGV at XCloseDisplay.
@@ -809,7 +1369,12 @@ mod tests {
         ] {
             assert!(!body(name).contains("-> Result"), "{name} returns Result");
         }
-        for name in ["fn wake(", "fn enter(", "fn animate(", "fn restore_background("] {
+        for name in [
+            "fn wake(",
+            "fn enter(",
+            "fn animate(",
+            "fn restore_background(",
+        ] {
             assert_eq!(body(name).matches(")?").count(), 0, "{name} propagates");
         }
         assert_eq!(body("fn tick(").matches(")?").count(), 1, "tick propagates");
@@ -833,7 +1398,10 @@ mod tests {
             attempts += 1;
             Err("document unavailable".to_string())
         });
-        assert!(stale, "a refused restore must stay pending, not drop the Ribbons frame silently");
+        assert!(
+            stale,
+            "a refused restore must stay pending, not drop the Ribbons frame silently"
+        );
         settle(&mut stale, "test restore", || {
             attempts += 1;
             Ok(())

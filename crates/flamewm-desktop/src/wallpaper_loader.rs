@@ -6,10 +6,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use flamewm_api::background::WallpaperFit;
+use flamewm_api::Rect;
 use flamewm_integrations_linux::icons::{IconOrigin, Rgba8Raster};
 
 use crate::wallpaper_fit;
 
+use flamewm_image_core::{RgbaImage, wallpaper::BACKGROUND};
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
@@ -70,6 +72,8 @@ struct WallpaperRequest {
     generation: u64,
     path: PathBuf,
     fit: WallpaperFit,
+    monitors: Vec<Rect>,
+    share: bool,
 }
 
 #[derive(Debug)]
@@ -175,11 +179,24 @@ impl WallpaperLoader {
         path: impl Into<PathBuf>,
         fit: WallpaperFit,
     ) -> Result<u64, LoaderClosed> {
+        self.request_layout(path, fit, &[], true)
+    }
+
+    /// Requests either a separately fitted copy on each output or one shared root canvas.
+    pub fn request_layout(
+        &mut self,
+        path: impl Into<PathBuf>,
+        fit: WallpaperFit,
+        monitors: &[Rect],
+        share: bool,
+    ) -> Result<u64, LoaderClosed> {
         self.next_generation = self.next_generation.saturating_add(1);
         let request = WallpaperRequest {
             generation: self.next_generation,
             path: path.into(),
             fit,
+            monitors: monitors.to_vec(),
+            share,
         };
         let mut state = self.control.lock();
         if state.shutdown {
@@ -328,7 +345,14 @@ fn wallpaper_worker(
         let Some(mut request) = request else {
             continue;
         };
-        let result = load_wallpaper(&request.path, request.fit, target, &packaged_root);
+        let result = load_wallpaper(
+            &request.path,
+            request.fit,
+            target,
+            &request.monitors,
+            request.share,
+            &packaged_root,
+        );
         if is_default_wallpaper(&request.path) {
             request.path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
         }
@@ -354,12 +378,14 @@ fn load_wallpaper(
     path: &Path,
     fit: WallpaperFit,
     target: (u32, u32),
+    monitors: &[Rect],
+    share: bool,
     packaged_root: &Path,
 ) -> LoadResult {
     let decoded = if is_default_wallpaper(path) {
-        decode_default(packaged_root, fit, target)
+        decode_default(packaged_root, fit, target, monitors, share)
     } else {
-        decode_custom(path, fit, target)
+        decode_custom(path, fit, target, monitors, share)
     };
     decoded.map_or_else(LoadResult::Failure, LoadResult::Image)
 }
@@ -372,9 +398,11 @@ fn decode_default(
     packaged_root: &Path,
     fit: WallpaperFit,
     target: (u32, u32),
+    monitors: &[Rect],
+    share: bool,
 ) -> Result<Rgba8Raster, String> {
     let default_path = packaged_root.join(DEFAULT_WALLPAPER_PATH);
-    decode_bytes_at(&default_path, fit, target).map_err(|error| {
+    decode_bytes_at(&default_path, fit, target, monitors, share).map_err(|error| {
         format!(
             "packaged default wallpaper {} unavailable: {error}",
             default_path.display()
@@ -382,11 +410,17 @@ fn decode_default(
     })
 }
 
-fn decode_custom(path: &Path, fit: WallpaperFit, target: (u32, u32)) -> Result<Rgba8Raster, String> {
+fn decode_custom(
+    path: &Path,
+    fit: WallpaperFit,
+    target: (u32, u32),
+    monitors: &[Rect],
+    share: bool,
+) -> Result<Rgba8Raster, String> {
     if !is_supported_wallpaper(path) {
         return Err(format!("unsupported wallpaper format: {}", path.display()));
     }
-    decode_bytes_at(path, fit, target)
+    decode_bytes_at(path, fit, target, monitors, share)
 }
 
 fn is_supported_wallpaper(path: &Path) -> bool {
@@ -399,15 +433,16 @@ fn is_supported_wallpaper(path: &Path) -> bool {
     )
 }
 
-/// Decodes at natural size through the shared image core, then composes onto the root-sized
-/// canvas by `fit`. Formats are fenced by `is_supported_wallpaper` before this call.
+/// Decodes at natural size, then composes per output or onto the shared root canvas.
 fn decode_bytes_at(
     path: &Path,
     fit: WallpaperFit,
     target: (u32, u32),
+    monitors: &[Rect],
+    share: bool,
 ) -> Result<Rgba8Raster, String> {
     let natural = flamewm_image_core::wallpaper::decode_file(path)?;
-    let image = wallpaper_fit::compose(&natural, target.0, target.1, fit)
+    let image = compose_decoded(natural, target, monitors, fit, share)
         .ok_or_else(|| format!("wallpaper {} has no composable size", path.display()))?;
     Ok(Rgba8Raster {
         source: path.to_string_lossy().into_owned(),
@@ -417,6 +452,71 @@ fn decode_bytes_at(
         origin: IconOrigin::ExplicitPath,
         fallback_reason: None,
     })
+}
+
+/// A single output occupying the whole root is equivalent to the shared canvas.
+/// Preserve this identity check in one place for both decode and composition.
+fn single_full_root_output(monitors: &[Rect], target: (u32, u32)) -> bool {
+    matches!(monitors, [only]
+        if only.x == 0 && only.y == 0
+        && u32::try_from(only.width).ok() == Some(target.0)
+        && u32::try_from(only.height).ok() == Some(target.1))
+}
+
+/// Consume the decoded pixels directly when no placement or scaling is necessary.
+/// Otherwise, avoid the extra root canvas for the single-full-output case.
+fn compose_decoded(
+    natural: RgbaImage,
+    target: (u32, u32),
+    monitors: &[Rect],
+    fit: WallpaperFit,
+    share: bool,
+) -> Option<RgbaImage> {
+    let full_root = share || monitors.is_empty() || single_full_root_output(monitors, target);
+    if full_root && target.0 != 0 && target.1 != 0
+        && (natural.width, natural.height) == target {
+        return Some(natural);
+    }
+    if full_root {
+        wallpaper_fit::compose(&natural, target.0, target.1, fit)
+    } else {
+        compose_per_monitor(&natural, target, monitors, fit)
+    }
+}
+
+fn compose_per_monitor(
+    natural: &RgbaImage,
+    target: (u32, u32),
+    monitors: &[Rect],
+    fit: WallpaperFit,
+) -> Option<RgbaImage> {
+    let (width, height) = target;
+    flamewm_image_core::check_size_limits(width, height).ok()?;
+    let root = Rect::new(0, 0, i32::try_from(width).ok()?, i32::try_from(height).ok()?);
+    let mut canvas = RgbaImage {
+        width,
+        height,
+        pixels: vec![0; usize::try_from(width.checked_mul(height)?.checked_mul(4)?).ok()?],
+    };
+    for pixel in canvas.pixels.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&BACKGROUND);
+    }
+    let mut composed = false;
+    for monitor in monitors {
+        let Some(rect) = monitor.intersection(root) else {
+            continue;
+        };
+        let image = wallpaper_fit::compose(natural, rect.width as u32, rect.height as u32, fit)?;
+        for row in 0..rect.height as usize {
+            let source = row * rect.width as usize * 4;
+            let destination = ((rect.y as usize + row) * width as usize + rect.x as usize) * 4;
+            let length = rect.width as usize * 4;
+            canvas.pixels[destination..destination + length]
+                .copy_from_slice(&image.pixels[source..source + length]);
+        }
+        composed = true;
+    }
+    composed.then_some(canvas)
 }
 
 #[cfg(test)]
@@ -431,6 +531,86 @@ mod tests {
             source_for_settings("default", "/home/u/a.png", "#232629"),
             WallpaperSource::Image(PathBuf::new())
         );
+    }
+
+    #[test]
+    fn one_full_output_matches_shared_composition_for_all_fits() {
+        let mut pixels = Vec::new();
+        for y in 0..3u8 {
+            for x in 0..5u8 {
+                pixels.extend_from_slice(&[x * 35, y * 65, 17, 100 + x * 10]);
+            }
+        }
+        let natural = RgbaImage { width: 5, height: 3, pixels };
+        let target = (7, 6);
+        let monitors = [Rect::new(0, 0, 7, 6)];
+        for fit in [
+            WallpaperFit::Fill,
+            WallpaperFit::Fit,
+            WallpaperFit::Stretch,
+            WallpaperFit::Center,
+            WallpaperFit::Tile,
+        ] {
+            let shared = wallpaper_fit::compose(&natural, target.0, target.1, fit).expect("shared");
+            let dispatched = compose_decoded(natural.clone(), target, &monitors, fit, false)
+                .expect("dispatched");
+            assert_eq!(dispatched, shared, "{fit:?} must keep the original pixels");
+        }
+        // A monitor that does not cover the root must keep the independent-output path.
+        let inset = [Rect::new(1, 0, 6, 6)];
+        let inset_result = compose_decoded(natural, target, &inset, WallpaperFit::Fill, false)
+            .expect("inset monitor");
+        assert_eq!(&inset_result.pixels[0..4], &BACKGROUND);
+    }
+
+    #[test]
+    fn matching_root_wallpaper_reuses_decoded_buffer_without_copy() {
+        for fit in [
+            WallpaperFit::Fill,
+            WallpaperFit::Fit,
+            WallpaperFit::Stretch,
+            WallpaperFit::Center,
+            WallpaperFit::Tile,
+        ] {
+            for (monitors, share) in [
+                (vec![Rect::new(0, 0, 2, 2)], false),
+                (Vec::new(), false),
+                (vec![Rect::new(1, 0, 2, 2)], true),
+            ] {
+                let image = RgbaImage {
+                    width: 2,
+                    height: 2,
+                    pixels: [42, 71, 90, 255].repeat(4),
+                };
+                let original_ptr = image.pixels.as_ptr();
+                let composed = compose_decoded(image, (2, 2), &monitors, fit, share)
+                    .expect("identity compose");
+                assert_eq!(composed.pixels.as_ptr(), original_ptr, "{fit:?}: move pixels");
+                assert_eq!(composed.pixels.len(), 16);
+            }
+        }
+        let zero = RgbaImage { width: 0, height: 0, pixels: Vec::new() };
+        assert!(compose_decoded(zero, (0, 0), &[], WallpaperFit::Fill, true).is_none());
+    }
+
+    #[test]
+    fn independent_outputs_fit_the_wallpaper_separately_from_shared_canvas() {
+        let mut pixels = Vec::new();
+        for _ in 0..2 {
+            for x in 0..4u8 {
+                pixels.extend_from_slice(&[x * 60, 0, 0, 255]);
+            }
+        }
+        let natural = RgbaImage { width: 4, height: 2, pixels };
+        let monitors = [Rect::new(0, 0, 2, 2), Rect::new(2, 0, 2, 2)];
+        let independent = compose_per_monitor(&natural, (4, 2), &monitors, WallpaperFit::Fill)
+            .expect("monitor canvas");
+        let shared = wallpaper_fit::compose(&natural, 4, 2, WallpaperFit::Fill)
+            .expect("shared canvas");
+        let red_at = |image: &RgbaImage, x: usize| image.pixels[x * 4];
+        assert_eq!(red_at(&independent, 0), 60);
+        assert_eq!(red_at(&independent, 2), 60);
+        assert_eq!(red_at(&shared, 2), 120);
     }
 
     #[test]

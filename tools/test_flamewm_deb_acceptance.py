@@ -42,6 +42,31 @@ class ContentsTests(unittest.TestCase):
         self.assertEqual(deb.find_leaks(["usr/share/flamewm/VERSION"]), [])
 
 
+class ArchitectureTests(unittest.TestCase):
+    def test_rejects_source_any_even_when_file_says_amd64(self):
+        problems = deb.architecture_issues("any", "flamewm_0.1.0_amd64.deb", "amd64")
+        self.assertTrue(problems)
+        self.assertIn("invalid binary", " ".join(problems))
+
+    def test_rejects_mislabeled_binary(self):
+        self.assertTrue(deb.architecture_issues("arm64", "flamewm_0.1.0_amd64.deb", "arm64"))
+
+    def test_rejects_foreign_architecture(self):
+        self.assertTrue(deb.architecture_issues("amd64", "flamewm_0.1.0_amd64.deb", "arm64"))
+
+    def test_accepts_matching_architecture_and_filename(self):
+        self.assertEqual(deb.architecture_issues("amd64", "flamewm_0.1.0_amd64.deb", "amd64"), [])
+
+    def test_control_template_never_advertises_source_only_any(self):
+        control = (Path(__file__).resolve().parents[1] / "packaging/debian/control.in").read_text()
+        self.assertIn("Architecture: @ARCH@", control)
+        self.assertNotIn("Architecture: any", control)
+
+    def test_test_install_does_not_force_architecture(self):
+        args = deb.dpkg_base(Path("/tmp/a"), Path("/tmp/b"))
+        self.assertNotIn("--force-architecture", args)
+
+
 class DependsTests(unittest.TestCase):
     CONTROL_IN = Path(__file__).resolve().parent.parent / "packaging/debian/control.in"
 
@@ -58,6 +83,28 @@ class DependsTests(unittest.TestCase):
     def test_control_in_depends_cover_required(self):
         declared = self._control_depends()
         self.assertEqual([d for d in deb.REQUIRED_DEPENDS if d not in declared], [])
+
+
+class SessionRegistrationTests(unittest.TestCase):
+    SESSION = Path(__file__).resolve().parent.parent / "packaging/flamewm-session.desktop"
+    SCRIPT = Path(__file__).resolve().parent.parent / "scripts/package"
+    MANIFEST = Path(__file__).resolve().parent.parent / "packaging/install-manifest.txt"
+
+    def test_x11_login_entry_is_registered_with_session_binary(self):
+        fields = dict(line.split("=", 1) for line in self.SESSION.read_text().splitlines()
+                      if "=" in line and not line.startswith("#"))
+        # SDDM invokes the companion-aware wrapper; TryExec still checks the native binary.
+        self.assertEqual(fields.get("Exec"), "/usr/libexec/flamewm/flamewm-session-wrapper")
+        self.assertEqual(fields.get("TryExec"), "/usr/bin/flamewm-session")
+        self.assertIn('install -m 0755 "$ROOT/scripts/flamewm-session-wrapper"', self.SCRIPT.read_text())
+        self.assertEqual(fields.get("DesktopNames"), "FlameWM")
+        self.assertIn("usr/share/xsessions/flamewm.desktop", self.MANIFEST.read_text())
+        self.assertIn('"$STAGE/usr/share/xsessions/flamewm.desktop"', self.SCRIPT.read_text())
+
+    def test_no_fake_wayland_login_session_is_advertised(self):
+        root = self.SESSION.parents[1]
+        self.assertFalse((root / "packaging/flamewm-wayland-session.desktop").exists())
+        self.assertNotIn("wayland-sessions", self.MANIFEST.read_text())
 
 
 class PamRuntimeTests(unittest.TestCase):
@@ -104,15 +151,22 @@ class SharedAssetTests(unittest.TestCase):
         self.assertEqual(status["doc_licenses_present"], "PASS")
         self.assertEqual(status["doc_copyright_present"], "PASS")
 
-    def test_missing_icon_theme_fails_only_that_theme(self):
-        status = _by_id(deb.check_shipped_assets(_asset_entries(skip=("candy-icons",))))
-        self.assertEqual(status["icon_theme_candy-icons"], "FAIL")
-        self.assertEqual(status["icon_theme_McMojave-circle"], "PASS")
+    def test_missing_cursor_pack_fails_its_required_check(self):
+        status = _by_id(deb.check_shipped_assets(_asset_entries(skip=("FlameWM-Breeze-Dark",))))
+        self.assertEqual(status["icon_theme_FlameWM-Breeze-Dark"], "FAIL")
+        self.assertEqual(status["no_removed_icon_themes"], "PASS")
+
+    def test_removed_icon_packs_are_rejected(self):
+        for obsolete in ["candy-icons", "McMojave-circle"]:
+            entries = _asset_entries() + deb.parse_contents(
+                f"-rw-r--r-- root/root 10 2026-10-13 06:54 ./usr/share/icons/{obsolete}/index.theme")
+            status = _by_id(deb.check_shipped_assets(entries))
+            self.assertEqual(status["no_removed_icon_themes"], "FAIL")
 
     def test_theme_directory_entry_alone_is_not_files(self):
-        entries = deb.parse_contents("drwxr-xr-x root/root 0 2026-10-13 06:54 ./usr/share/icons/candy-icons/")
+        entries = deb.parse_contents("drwxr-xr-x root/root 0 2026-10-13 06:54 ./usr/share/icons/FlameWM-Breeze-Dark/")
         status = _by_id(deb.check_shipped_assets(entries))
-        self.assertEqual(status["icon_theme_candy-icons"], "FAIL")
+        self.assertEqual(status["icon_theme_FlameWM-Breeze-Dark"], "FAIL")
 
     def test_empty_licenses_dir_fails(self):
         entries = deb.parse_contents("drwxr-xr-x root/root 0 2026-10-13 06:54 ./usr/share/doc/flamewm/LICENSES/")
@@ -125,7 +179,7 @@ class SharedAssetTests(unittest.TestCase):
     def test_check_ids_are_stable(self):
         ids = [c["id"] for c in deb.check_shipped_assets([])]
         self.assertEqual(ids, [f"icon_theme_{t}" for t in deb.ICON_THEMES]
-                         + ["doc_licenses_present", "doc_copyright_present"])
+                         + ["no_removed_icon_themes", "doc_licenses_present", "doc_copyright_present"])
 
 
 class HelperTests(unittest.TestCase):

@@ -276,6 +276,19 @@ mod tests {
     }
 
     #[test]
+    fn floating_panel_round_fill_and_stroke_have_partial_edge_coverage() {
+        let filled = all_runs(280, 44, 15);
+        let stroked: Vec<_> = (0..44).map(|row| stroke_row_runs(280, 44, 15, 1, row)).collect();
+        for rows in [&filled, &stroked] {
+            assert!(rows.iter().flatten().any(|run| run.2 > 0.0 && run.2 < 1.0),
+                "antialiased corners must retain fractional coverage");
+        }
+        assert_eq!(filled[22], vec![(0, 280, 1.0)]);
+        assert!(filled[0].iter().all(|(x, w, _)| x.saturating_add(*w) <= 280));
+        assert!(stroked[22].iter().all(|(_, len, _)| *len <= 2));
+    }
+
+    #[test]
     fn corner_boundary_is_partial_and_bounded() {
         let rows = all_runs(22, 22, 9);
         let mut partial = 0;

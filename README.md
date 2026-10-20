@@ -24,6 +24,7 @@ Version and release history: [`Cargo.toml`](Cargo.toml) (`workspace.package.vers
 - Panel, Start menu, and status popovers rendered by the shell (`crates/flamewm-shell`).
 - Settings application with typed settings transactions across the platform services (`crates/flamewm-settings`, `crates/flamewm-platform`).
 - Lock screen with PAM authentication (`crates/flamewm-lock`, `packaging/pam.d/flamewm-lock`).
+- Native FlameWM Screenshot tool: X11 full/monitor/window/region capture, PNG saving, image/png clipboard, interactive pen/shape/arrow/redaction annotations, and optional ffmpeg screen recording (`crates/flamewm-screenshot`).
 - Volume on-screen display driven by the XF86 audio keys.
 - Weather popup with Open-Meteo forecast and location search. Requires network access; the Open-Meteo free tier is for noncommercial use only; attribution is shown in the popup. Disabled by default.
 
@@ -47,8 +48,37 @@ The defaults below come from `crates/flamewm-platform/src/shortcuts.rs` (`Shortc
 | Switch workspace up / down | `Ctrl+Super+Up` / `Ctrl+Super+Down` |
 | Close window | `Alt+F4` |
 | Lock session | `Super+L` |
+| All screens screenshot | `Print` |
+| Capture and annotate region | `Shift+Print` |
+| Active window screenshot | `Ctrl+Print` |
 | Volume up / down / mute | `XF86AudioRaiseVolume` / `XF86AudioLowerVolume` / `XF86AudioMute` |
 | Minimize / maximize window | unassigned |
+
+## Screenshots and screen recording
+
+Screenshots launch on demand; there is no always-running capture daemon. Use the
+**FlameWM Screenshot** launcher or the default shortcuts above. PNGs are saved
+under the XDG Pictures directory in `Screenshots/` (or `~/Pictures/Screenshots`)
+and copied to CLIPBOARD when invoked from a hotkey. Saving never overwrites an
+existing path. The clipboard owner remains idle and exits automatically when
+another program replaces the clipboard.
+
+```bash
+flamewm-screenshot --region --annotate --copy
+flamewm-screenshot --full --output ~/Pictures/desktop.png
+flamewm-screenshot --screen --no-save --copy
+flamewm-screenshot --window --delay 2 --copy
+flamewm-screenshot --region --record 15 --fps 30
+```
+
+The native annotation toolbar supports `P` freehand, `L` line, `R` rectangle,
+`E` ellipse, `A` arrow, `X` black redaction, `C` cycle color, `U` undo,
+`Enter` save and `Escape` cancel. The editor is an X11 window, not a web view.
+Recording requires `ffmpeg` with X11grab and H.264 encoding; no recording
+process runs while the feature is unused. X11 captures visible screen pixels;
+obscured windows are not independently redirected. Wayland capture is not
+supported. Text annotations, OCR, recording audio, advanced video editing and
+Spectacle/KDE DBus API compatibility are not currently implemented.
 
 ## Configuration locations
 

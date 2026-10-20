@@ -65,19 +65,46 @@ impl DesktopModel {
         default_output: &OutputId,
         grid: GridConfig,
     ) -> FlameResult<bool> {
+        self.rescan_with_grids(
+            desktop_dir,
+            default_output,
+            &BTreeMap::from([(default_output.clone(), grid)]),
+            grid,
+        )
+    }
+
+    pub fn rescan_with_grids(
+        &mut self,
+        desktop_dir: &Path,
+        default_output: &OutputId,
+        grids: &BTreeMap<OutputId, GridConfig>,
+        fallback_grid: GridConfig,
+    ) -> FlameResult<bool> {
         let mut entries = fs::read_dir(desktop_dir)
             .map_err(|error| io_error("read desktop directory", error))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| io_error("read desktop entry", error))?;
+        // The converter publishes atomically; suppress only its private
+        // in-progress files, not user-created dotfiles in general.
+        entries.retain(|entry| !crate::conversion::is_temporary_convert_name(&entry.file_name()));
         entries.sort_by_key(|entry| entry.file_name());
 
         // Stored cells are reserved before any unstored entry is placed, so a
         // new entry never takes the cell of a stored entry that sorts after it.
-        let mut occupied: BTreeSet<Cell> = entries
-            .iter()
-            .filter_map(|entry| self.positions.get(&entry.path()))
-            .map(|position| grid.clamp_cell(position.cell))
-            .collect();
+        let mut reserved = BTreeMap::<OutputId, BTreeSet<Cell>>::new();
+        for entry in &entries {
+            if let Some(position) = self.positions.get(&entry.path()) {
+                let output = migrated_output(&position.output, default_output);
+                if let Some(grid) = grids.get(&output) {
+                    reserved
+                        .entry(output)
+                        .or_default()
+                        .insert(grid.clamp_cell(position.cell));
+                }
+            }
+        }
+        let mut occupied = reserved.clone();
+        let mut assigned = BTreeMap::<OutputId, BTreeSet<Cell>>::new();
         let mut rebuilt = BTreeMap::new();
         for entry in entries {
             let path = entry.path();
@@ -85,17 +112,38 @@ impl DesktopModel {
             let id = path.to_string_lossy().into_owned();
             let kind = classify(&entry)?;
             let position = match self.positions.get(&path).cloned() {
-                Some(position) => position,
+                Some(mut position) => {
+                    position.output = migrated_output(&position.output, default_output);
+                    if let Some(grid) = grids.get(&position.output) {
+                        let wanted = grid.clamp_cell(position.cell);
+                        let output_assigned = assigned.entry(position.output.clone()).or_default();
+                        position.cell = if output_assigned.insert(wanted) {
+                            wanted
+                        } else {
+                            let used = occupied.entry(position.output.clone()).or_default();
+                            let cell = first_free(used, *grid);
+                            used.insert(cell);
+                            output_assigned.insert(cell);
+                            cell
+                        };
+                    }
+                    position
+                }
                 None => {
-                    let cell = first_free(&occupied, grid);
-                    occupied.insert(cell);
+                    let grid = grids.get(default_output).copied().unwrap_or(fallback_grid);
+                    let cells = occupied.entry(default_output.clone()).or_default();
+                    let cell = first_free(cells, grid);
+                    cells.insert(cell);
+                    assigned.entry(default_output.clone()).or_default().insert(cell);
                     StoredPosition {
                         output: default_output.clone(),
                         cell,
                     }
                 }
             };
-            let cell = grid.clamp_cell(position.cell);
+            let cell = grids
+                .get(&position.output)
+                .map_or(position.cell, |grid| grid.clamp_cell(position.cell));
             self.positions.insert(
                 path.clone(),
                 StoredPosition {
@@ -140,6 +188,14 @@ impl DesktopModel {
                 item.cell = position.cell;
             }
         }
+    }
+}
+
+fn migrated_output(output: &OutputId, default_output: &OutputId) -> OutputId {
+    if output.as_str() == "default" {
+        default_output.clone()
+    } else {
+        output.clone()
     }
 }
 
@@ -245,6 +301,51 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         assert_eq!(zed_cell, zed);
         assert_ne!(alpha_cell, zed);
+    }
+
+    #[test]
+    fn per_output_rescan_preserves_offline_identity_and_clamps_on_reconnect() {
+        let root = unique_test_root("flamewm-model-output-layout");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("left-file"), b"").unwrap();
+        fs::write(root.join("right-file"), b"").unwrap();
+        let left = OutputId::new("DP-1");
+        let right = OutputId::new("HDMI-1");
+        let left_grid = GridConfig::compute(flamewm_api::Rect::new(0, 0, 960, 640), 100);
+        let right_grid = GridConfig::compute(flamewm_api::Rect::new(960, 0, 2400, 1440), 100);
+        let mut model = DesktopModel::default();
+        model.set_position(root.join("left-file"), StoredPosition {
+            output: left.clone(), cell: Cell::new(3, 2),
+        });
+        model.set_position(root.join("right-file"), StoredPosition {
+            output: right.clone(), cell: Cell::new(23, 14),
+        });
+        model.rescan_with_grids(&root, &left, &BTreeMap::from([
+            (left.clone(), left_grid), (right.clone(), right_grid),
+        ]), left_grid).unwrap();
+
+        let right_position = model.positions()[&root.join("right-file")].clone();
+        assert_eq!(right_position.output, right);
+        assert_eq!(right_position.cell, Cell::new(23, 14));
+
+        model.rescan_with_grids(&root, &left, &BTreeMap::from([(left.clone(), left_grid)]), left_grid).unwrap();
+        assert_eq!(model.positions()[&root.join("right-file")], right_position);
+        assert_eq!(model.items().find(|item| item.display_name == "right-file").unwrap().output, right);
+
+        model.rescan_with_grids(&root, &left, &BTreeMap::from([
+            (left.clone(), left_grid), (right.clone(), right_grid),
+        ]), left_grid).unwrap();
+        assert_eq!(model.positions()[&root.join("right-file")], right_position);
+
+        let smaller_right = GridConfig::compute(flamewm_api::Rect::new(960, 0, 1920, 1080), 100);
+        model.rescan_with_grids(&root, &left, &BTreeMap::from([
+            (left.clone(), left_grid), (right.clone(), smaller_right),
+        ]), left_grid).unwrap();
+        assert_eq!(model.positions()[&root.join("right-file")], StoredPosition {
+            output: right, cell: Cell::new(19, 10),
+        });
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

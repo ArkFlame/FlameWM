@@ -1,0 +1,18 @@
+[package]
+name = "flamewm-screenshot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "flamewm-screenshot"
+path = "src/main.rs"
+
+[dependencies]
+x11rb = { workspace = true, features = ["randr", "xfixes"] }
+png = "=0.18.1"
+
+[lints]
+workspace = true

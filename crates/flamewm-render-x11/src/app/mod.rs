@@ -136,6 +136,8 @@ pub(crate) struct X11App {
     pub(crate) screen: i32,
     pub(crate) depth: i32,
     pub(crate) window: Window,
+    /// Native window role decides whether a background click should own focus.
+    pub(crate) role: X11WindowRole,
     pub(crate) backbuffer: Pixmap,
     pub(crate) gc: GC,
     pub(crate) colormap: Colormap,
@@ -516,6 +518,7 @@ impl X11App {
             screen,
             depth,
             window,
+            role: config.role,
             backbuffer,
             gc,
             colormap,

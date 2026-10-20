@@ -393,6 +393,7 @@ pub const MOD1_MASK: c_uint = 1 << 3;
 pub const MOD4_MASK: c_uint = 1 << 6;
 
 pub const XK_BACK_SPACE: c_ulong = 0xff08;
+pub const XK_DELETE: c_ulong = 0xffff;
 pub const XK_TAB: c_ulong = 0xff09;
 pub const XK_SPACE: c_ulong = 0x0020;
 pub const XK_RETURN: c_ulong = 0xff0d;

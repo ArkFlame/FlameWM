@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Screenshot
+GenericName=Screenshot Utility
+Comment=Capture, annotate, copy and record the screen
+TryExec=flamewm-screenshot
+Exec=flamewm-screenshot --region --annotate
+Icon=applets-screenshooter
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=Screenshot;Spectacle;Capture;Region;Screen;Annotation;
+Actions=Screen;Window;Region;
+
+[Desktop Action Screen]
+Name=Capture All Screens
+Exec=flamewm-screenshot --full --copy
+
+[Desktop Action Window]
+Name=Capture Active Window
+Exec=flamewm-screenshot --active --copy
+
+[Desktop Action Region]
+Name=Capture and Annotate Region
+Exec=flamewm-screenshot --region --annotate --copy

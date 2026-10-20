@@ -37,6 +37,15 @@ No active crate may include/link/load `.vendor/**`.
 
 It is implemented against `x11rb`; no IceWM executable or compatibility bridge runs underneath it.
 
+Workspace topology has one owner: `flamewm-api::workspace` defines the product two-row layout
+(`WORKSPACE_ROWS = 2`, `workspace_columns(count) = ceil(count / 2)`, row-major cells, no
+wrap-around) and every layer consumes it instead of repeating the arithmetic —
+`flamewm-platform::workspace` facades it, `flamewm-wm-x11` resolves arrow shortcuts with
+`grid_neighbor` and publishes the same grid through `_NET_DESKTOP_GEOMETRY`/`_NET_DESKTOP_VIEWPORT`,
+and `flamewm-shell-core::workspaces` owns only the pager presentation (cell ids, metrics, labels)
+derived from it. The earlier single-row rule that made up/down no-ops is superseded: left/right stay
+inside the current row, up/down switch rows.
+
 ## 3. WebRender authority
 
 WebRender owns only FlameWM-rendered presentation:

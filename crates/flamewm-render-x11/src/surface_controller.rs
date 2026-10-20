@@ -12,7 +12,7 @@ mod backdrop_shape;
 mod dock;
 mod geometry_trace;
 mod present;
-mod raw_press;
+pub(crate) mod raw_press;
 mod slide;
 #[cfg(test)]
 mod tests;
@@ -111,6 +111,15 @@ const ROOT_CHILD_UNMAP_NOTIFY: std::os::raw::c_int = 18;
 const ROOT_CHILD_MAP_NOTIFY: std::os::raw::c_int = 19;
 const ROOT_CHILD_CONFIGURE_NOTIFY: std::os::raw::c_int = 22;
 const ROOT_SUBSTRUCTURE_NOTIFY_MASK: std::ffi::c_long = 1 << 19;
+const ROOT_STRUCTURE_NOTIFY_MASK: std::ffi::c_long = 1 << 17;
+
+fn is_root_geometry_configure(
+    kind: std::os::raw::c_int,
+    event_window: Window,
+    root: Window,
+) -> bool {
+    kind == ROOT_CHILD_CONFIGURE_NOTIFY && event_window == root
+}
 
 pub struct SurfaceController {
     display: *mut Display,
@@ -130,6 +139,8 @@ pub struct SurfaceController {
     external_dock: Option<(i32, i32, u32, u32)>,
     /// A root child was mapped, unmapped, configured or destroyed since the last `take_root_changed`.
     root_changed: bool,
+    /// The root window itself changed dimensions since the last take.
+    root_geometry_changed: Option<(u32, u32)>,
     /// XInput2 raw-press selection that dismisses popups on outside presses.
     press_selection: RawPressSelection,
     /// Set while the quick-popup press observer holds its root selection.
@@ -162,6 +173,7 @@ impl SurfaceController {
                 slides: Timeline::new(),
                 external_dock: None,
                 root_changed: false,
+                root_geometry_changed: None,
                 press_selection: RawPressSelection::new(press_opcode),
                 press_observer_armed: false,
                 raw_press_observations: Vec::new(),
@@ -174,11 +186,30 @@ impl SurfaceController {
     }
 
     pub fn root_geometry(&self) -> (u32, u32) {
-        unsafe {
-            (
-                XDisplayWidth(self.display, self.screen).max(0) as u32,
-                XDisplayHeight(self.display, self.screen).max(0) as u32,
+        let (mut root_return, mut x, mut y) = (0, 0, 0);
+        let (mut width, mut height, mut border, mut depth) = (0, 0, 0, 0);
+        let status = unsafe {
+            crate::xlib_ext::XGetGeometry(
+                self.display,
+                self.root_window(),
+                &mut root_return,
+                &mut x,
+                &mut y,
+                &mut width,
+                &mut height,
+                &mut border,
+                &mut depth,
             )
+        };
+        if status != 0 {
+            (width, height)
+        } else {
+            unsafe {
+                (
+                    XDisplayWidth(self.display, self.screen).max(0) as u32,
+                    XDisplayHeight(self.display, self.screen).max(0) as u32,
+                )
+            }
         }
     }
 
@@ -264,7 +295,10 @@ impl SurfaceController {
         // Visible create: paint retained offscreen first (redraw refreshes
         // shape once), then map (popup map+raise) + present/flush.
         unsafe {
-            instance.app.redraw(&instance.document).map_err(mark_x_error)?;
+            instance
+                .app
+                .redraw(&instance.document)
+                .map_err(mark_x_error)?;
         }
         unsafe {
             XMapWindow(self.display, window);
@@ -283,7 +317,13 @@ impl SurfaceController {
         if let Some(mut instance) = self.surfaces.remove(&id) {
             self.slides.cancel(id.get());
             self.windows.remove(&instance.app.window);
-            drop_popup_grab(self.display, self.root_window(), &mut self.press_selection, id, &mut instance.app);
+            drop_popup_grab(
+                self.display,
+                self.root_window(),
+                &mut self.press_selection,
+                id,
+                &mut instance.app,
+            );
             if x_io_broken() || x_error_seen() || !display_fd_alive(self.display) {
                 // No backend may call into a broken display. Preserve the
                 // complete app until process teardown rather than unloading a
@@ -309,7 +349,13 @@ impl SurfaceController {
             .surfaces
             .get_mut(&id)
             .ok_or_else(|| format!("unknown surface {}", id.0))?;
-        drop_popup_grab(display, root, &mut self.press_selection, id, &mut instance.app);
+        drop_popup_grab(
+            display,
+            root,
+            &mut self.press_selection,
+            id,
+            &mut instance.app,
+        );
         unsafe {
             XUnmapWindow(display, instance.app.window);
             instance.app.present_scene().map_err(mark_x_error)?;
@@ -360,22 +406,36 @@ impl SurfaceController {
         let mut emerging: Option<SlideEdge> = None;
         if let Some(config) = slide.filter(|config| config.transition == PopupTransition::Slide) {
             self.slides.set_speed(config.speed);
-            let opening = SlideKind { edge: config.edge, opening: true };
+            let opening = SlideKind {
+                edge: config.edge,
+                opening: true,
+            };
             if shown {
                 match self.slides.kind(key) {
                     // Double open while opening: already converging on the final frame.
                     Some(active) if active.opening => return Ok(()),
                     // Reverse from the current progress; the window is still mapped.
                     Some(_) => {
-                        self.slides.start_towards(key, opening, now, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0));
+                        self.slides.start_towards(
+                            key,
+                            opening,
+                            now,
+                            SLIDE_OPEN_BASE_MS,
+                            Easing::EaseOutCubic,
+                            (0.0, 1.0),
+                        );
                         return Ok(());
                     }
                     None => {}
                 }
-            } else if self
-                .slides
-                .start_towards(key, opening, now, SLIDE_OPEN_BASE_MS, Easing::EaseOutCubic, (0.0, 1.0))
-                == Start::Started
+            } else if self.slides.start_towards(
+                key,
+                opening,
+                now,
+                SLIDE_OPEN_BASE_MS,
+                Easing::EaseOutCubic,
+                (0.0, 1.0),
+            ) == Start::Started
             {
                 // Place off-edge before mapping so the first visible frame is the start frame.
                 let (x, y) = slide_origin(origin, size, config.edge, 0.0);
@@ -404,9 +464,10 @@ impl SurfaceController {
         match emerging {
             Some(edge) => unsafe {
                 let start = slide_origin(origin, size, edge, 0.0);
-                instance
-                    .app
-                    .refresh_shape_mask_clipped(&instance.document, panel_clip(dock, start, size, edge));
+                instance.app.refresh_shape_mask_clipped(
+                    &instance.document,
+                    panel_clip(dock, start, size, edge),
+                );
             },
             None => unsafe { instance.app.refresh_shape_mask(&instance.document) },
         }
@@ -440,7 +501,13 @@ impl SurfaceController {
             .surfaces
             .get_mut(&id)
             .ok_or_else(|| format!("unknown surface {}", id.0))?;
-        drop_popup_grab(display, root, &mut self.press_selection, id, &mut instance.app);
+        drop_popup_grab(
+            display,
+            root,
+            &mut self.press_selection,
+            id,
+            &mut instance.app,
+        );
         Ok(())
     }
 
@@ -471,19 +538,36 @@ impl SurfaceController {
                 return Ok(());
             }
             self.slides.set_speed(config.speed);
-            let closing = SlideKind { edge: config.edge, opening: false };
-            let window = self.instance_mut(id)?.app.window;
-            // Slide-out starts above application windows; the panel clip hides the sinking part.
-            unsafe { XRaiseWindow(display, window) };
+            let closing = SlideKind {
+                edge: config.edge,
+                opening: false,
+            };
+            // Do not raise a closing popup over the taskbar. Its existing Z-order is
+            // already sufficient, and the bounding shape clips anything under the dock.
             // The first close frame is clipped too, not only frames after the first tick.
             let dock = self.dock_rect();
             let instance = self.instance_mut(id)?;
             let origin = instance.slide_drawn.unwrap_or(instance.origin);
-            let clip = panel_clip(dock, origin, (instance.app.width, instance.app.height), config.edge);
-            unsafe { instance.app.refresh_shape_mask_clipped(&instance.document, clip) };
+            let clip = panel_clip(
+                dock,
+                origin,
+                (instance.app.width, instance.app.height),
+                config.edge,
+            );
+            unsafe {
+                instance
+                    .app
+                    .refresh_shape_mask_clipped(&instance.document, clip)
+            };
             // A new close starts fully shown; a reversed open continues from its progress.
-            if self.slides.start_towards(key, closing, now, SLIDE_CLOSE_BASE_MS, Easing::EaseOutCubic, (1.0, 0.0))
-                == Start::Started
+            if self.slides.start_towards(
+                key,
+                closing,
+                now,
+                SLIDE_OPEN_BASE_MS,
+                Easing::EaseInCubic,
+                (1.0, 0.0),
+            ) == Start::Started
             {
                 unsafe { XFlush(display) };
                 return Ok(());
@@ -623,13 +707,21 @@ impl SurfaceController {
     pub fn watch_root_changes(&self) {
         // SAFETY: the display is live; the root window is the screen's root.
         unsafe {
-            XSelectInput(self.display, XRootWindow(self.display, self.screen), ROOT_SUBSTRUCTURE_NOTIFY_MASK);
+            XSelectInput(
+                self.display,
+                XRootWindow(self.display, self.screen),
+                ROOT_SUBSTRUCTURE_NOTIFY_MASK | ROOT_STRUCTURE_NOTIFY_MASK,
+            );
         }
     }
 
     /// Whether root children changed since the last call, then clears the flag.
     pub fn take_root_changed(&mut self) -> bool {
         std::mem::take(&mut self.root_changed)
+    }
+
+    pub fn take_root_geometry_changed(&mut self) -> Option<(u32, u32)> {
+        std::mem::take(&mut self.root_geometry_changed)
     }
 
     /// Mark damage on one surface without painting (merged max coverage).
@@ -669,7 +761,8 @@ impl SurfaceController {
             let event = unsafe { event.assume_init() };
             let root = unsafe { XRootWindow(self.display, self.screen) };
             if unsafe { event.type_ } == GENERIC_EVENT
-                && Some(unsafe { generic_cookie(&event) }.extension) == self.press_selection.opcode()
+                && Some(unsafe { generic_cookie(&event) }.extension)
+                    == self.press_selection.opcode()
             {
                 // Raw press from the popup selection: observe only, never grabbed or replayed.
                 self.dismiss_on_raw_press(&event, &mut on_action)?;
@@ -680,9 +773,20 @@ impl SurfaceController {
                 // Other root children coming and going change what lies under a pseudo-transparency
                 // bar. Our own surfaces are excluded: a capture unmaps and remaps them itself.
                 let kind = unsafe { event.type_ };
+                if is_root_geometry_configure(kind, unsafe { event.xconfigure.window }, root) {
+                    self.root_geometry_changed = Some((
+                        unsafe { event.xconfigure.width }.max(0) as u32,
+                        unsafe { event.xconfigure.height }.max(0) as u32,
+                    ));
+                }
                 let child = unsafe { event.xmap.window };
-                self.root_changed |= matches!(kind, ROOT_CHILD_MAP_NOTIFY | ROOT_CHILD_UNMAP_NOTIFY | ROOT_CHILD_CONFIGURE_NOTIFY | ROOT_CHILD_DESTROY_NOTIFY)
-                    && !self.windows.contains_key(&child);
+                self.root_changed |= matches!(
+                    kind,
+                    ROOT_CHILD_MAP_NOTIFY
+                        | ROOT_CHILD_UNMAP_NOTIFY
+                        | ROOT_CHILD_CONFIGURE_NOTIFY
+                        | ROOT_CHILD_DESTROY_NOTIFY
+                ) && !self.windows.contains_key(&child);
                 continue;
             }
             let Some(id) = self.windows.get(&unsafe { event.xany.window }).copied() else {
@@ -738,7 +842,10 @@ impl SurfaceController {
 
     /// Native root-space origin of a surface; (0, 0) when the surface is unknown.
     fn origin_of(&self, id: SurfaceId) -> (i32, i32) {
-        self.surfaces.get(&id).map(|instance| instance.origin).unwrap_or((0, 0))
+        self.surfaces
+            .get(&id)
+            .map(|instance| instance.origin)
+            .unwrap_or((0, 0))
     }
 
     fn retained(&self, id: SurfaceId) -> Result<(&X11App, &RuntimeDocument), String> {
@@ -817,9 +924,16 @@ impl SurfaceController {
     }
 
     /// Registers the X connection as a read wakeup source; X readiness only wakes dispatch.
-    fn register_x_wakeup(&self, reactor: &mut Reactor) -> Result<calloop::RegistrationToken, String> {
+    fn register_x_wakeup(
+        &self,
+        reactor: &mut Reactor,
+    ) -> Result<calloop::RegistrationToken, String> {
         reactor
-            .register_fd(ReactorPebble(self.connection_fd()), calloop::Interest::READ, |_, _| {})
+            .register_fd(
+                ReactorPebble(self.connection_fd()),
+                calloop::Interest::READ,
+                |_, _| {},
+            )
             .map_err(|error| error.to_string())
     }
 
@@ -953,7 +1067,10 @@ impl SurfaceController {
         let instance = self.instance_mut(id)?;
         if size_changed {
             unsafe {
-                instance.app.commit_geometry(&instance.document, width, height).map_err(mark_x_error)?
+                instance
+                    .app
+                    .commit_geometry(&instance.document, width, height)
+                    .map_err(mark_x_error)?
             };
         }
         let (w, h) = (instance.app.width, instance.app.height);
@@ -992,19 +1109,42 @@ impl SurfaceController {
     /// Moves every active slide to `now`: one native move per changed pixel, the exact anchored
     /// origin on the last frame, and unmap when a slide-out completes. Content is never
     /// repainted here.
+    /// Reapply the moving popup bounding shape after any retained repaint/Expose.
+    /// Paint refresh may have restored the full base shape; the active flight is the
+    /// authoritative owner of the dock clip until the native window is unmapped.
+    fn refresh_moving_mask(
+        instance: &SurfaceInstance,
+        dock: Option<(i32, i32, u32, u32)>,
+        edge: SlideEdge,
+    ) {
+        let at = instance.slide_drawn.unwrap_or(instance.origin);
+        let size = (instance.app.width, instance.app.height);
+        let clip = panel_clip(dock, at, size, edge);
+        // SAFETY: instance owns the live window; no geometry mutation here.
+        unsafe {
+            instance
+                .app
+                .refresh_shape_mask_clipped(&instance.document, clip)
+        };
+    }
+
     pub(super) fn advance_motion(&mut self, now: Instant) {
         let display = self.display;
         let root = self.root_window();
         let dock = self.dock_rect();
         for (id, instance) in self.surfaces.iter_mut() {
             let key = id.get();
-            let (Some(active), Some(progress)) = (self.slides.kind(key), self.slides.progress(key, now)) else {
+            let (Some(active), Some(progress)) =
+                (self.slides.kind(key), self.slides.progress(key, now))
+            else {
                 continue;
             };
             let finished = self.slides.finished(key, now) == Some(true);
             if let Some((transition, overlay)) = instance.overlay.as_mut() {
                 let landed = finished
-                    || overlay.paint(overlay_paint_progress(*transition, progress)).is_err();
+                    || overlay
+                        .paint(overlay_paint_progress(*transition, progress))
+                        .is_err();
                 if !landed {
                     continue;
                 }
@@ -1020,7 +1160,9 @@ impl SurfaceController {
                     instance.shown = true;
                     if std::mem::take(&mut instance.grab_pending) {
                         // SAFETY: the window was just mapped; display/root are live.
-                        unsafe { grab_popup_presses(display, root, &mut self.press_selection, *id) };
+                        unsafe {
+                            grab_popup_presses(display, root, &mut self.press_selection, *id)
+                        };
                         instance.app.pointer_grabbed = true;
                         unsafe { popup_take_focus(display, &mut instance.app) };
                     }
@@ -1037,27 +1179,40 @@ impl SurfaceController {
             if instance.slide_drawn != Some((x, y)) {
                 unsafe { XMoveResizeWindow(display, window, x, y, size.0, size.1) };
                 instance.slide_drawn = Some((x, y));
-                // Keep the popup on the screen side of the panel edge while it moves.
-                let clip = panel_clip(dock, (x, y), size, active.edge);
-                unsafe { instance.app.refresh_shape_mask_clipped(&instance.document, clip) };
             }
+            // Shape is updated EVEN when the rounded popup did not move a pixel this
+            // frame: a repaint or Expose can reset it to its un-clipped base mask.
+            Self::refresh_moving_mask(instance, dock, active.edge);
             if !finished {
                 continue;
             }
-            // Slide landed: the base rounded mask is exact again.
-            unsafe { instance.app.refresh_shape_mask(&instance.document) };
             self.slides.finish(key);
             if active.opening {
-                // Back on top: the popup sits against the panel, so the raise is invisible.
+                // The full mask is visible only at the anchored, fully opened position.
+                unsafe { instance.app.refresh_shape_mask(&instance.document) };
                 unsafe { XRaiseWindow(display, window) };
             } else {
-                // Slide-out landed: release the grab held since hide() started the close.
-                if landing_releases_grab(active.opening, instance.app.pointer_grabbed) {
-                    drop_popup_grab(display, root, &mut self.press_selection, *id, &mut instance.app);
-                }
+                // Never restore the full shape while still mapped: that exposes a final
+                // un-clipped frame in front of the dock for one X server composite.
+                // Finish the unmap at the server BEFORE restoring a full mask. The
+                // earlier XFlush-only path could expose a final full-size composite
+                // between the mask reset and the next paint/compositor turn.
                 unsafe { XUnmapWindow(display, window) };
+                unsafe { XSync(display, 0) };
                 instance.shown = false;
                 instance.slide_drawn = None;
+                unsafe { instance.app.refresh_shape_mask(&instance.document) };
+                instance.app.clear_surface_backdrop();
+                instance.app.clear_node_backdrops();
+                if landing_releases_grab(active.opening, instance.app.pointer_grabbed) {
+                    drop_popup_grab(
+                        display,
+                        root,
+                        &mut self.press_selection,
+                        *id,
+                        &mut instance.app,
+                    );
+                }
             }
         }
         unsafe { XFlush(display) };
@@ -1138,10 +1293,27 @@ fn drop_popup_grab(
 }
 
 /// Keeps a dock's strut, rounded mask, and root-space origin in step with its window rect.
-fn sync_dock_geometry(display: *mut Display, instance: &mut SurfaceInstance, x: i32, y: i32, w: u32, h: u32) {
+fn sync_dock_geometry(
+    display: *mut Display,
+    instance: &mut SurfaceInstance,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+) {
     let root_w = unsafe { XDisplayWidth(display, instance.app.screen).max(1) as u32 };
     let root_h = unsafe { XDisplayHeight(display, instance.app.screen).max(1) as u32 };
-    crate::app::apply_dock_strut(instance.app.display, instance.app.window, root_w, root_h, instance.dock_edge, x, y, w, h);
+    crate::app::apply_dock_strut(
+        instance.app.display,
+        instance.app.window,
+        root_w,
+        root_h,
+        instance.dock_edge,
+        x,
+        y,
+        w,
+        h,
+    );
     apply_dock_mask(instance, w, h, dock_mask_plan(0, instance.dock_radius));
 }
 
@@ -1154,4 +1326,3 @@ fn display_fd_alive(display: *mut Display) -> bool {
     }
     std::path::Path::new(&format!("/proc/self/fd/{fd}")).exists()
 }
-

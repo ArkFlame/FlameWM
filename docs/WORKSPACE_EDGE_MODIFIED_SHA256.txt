@@ -1,0 +1,10 @@
+68daca900e39c0913596509c4fc64a50ea13202c4ba164986004613796ceb9c7  crates/flamewm-shell-core/src/lib.rs
+af86c9f6b398304e98372073487d30ff1caf30a8618142a4e0db1f714dbc3bc9  crates/flamewm-shell/src/app.rs
+cd211ae473eb50f2275941d96f38128da547cb77139e6871f569c6d481c6c3ab  crates/flamewm-shell/src/async_projection.rs
+987b4582b1298ce22158c6ec7ec59437b754499ac7e00f0e5286a49acbfdd4f1  crates/flamewm-shell/src/projection.rs
+389320b7d4dd52e1cdf3df64838b184a228ea5693cad36f3c990417f03f7b895  crates/flamewm-shell/src/runtime.rs
+487eebea3c7646f7d08ec883a6da2cf99c5217aa8ff954aa11a9996a290a5898  crates/flamewm-wm-x11/src/wm/mod.rs
+904ee02801d202c077fa295c080699c477b3f1327141a72a5ae2c5976c5ab9c4  crates/flamewm-wm-x11/src/wm/pointer.rs
+0c1d56e8c917b785f352f9fb679fca5bd747992f0840cfc8bb3f7794c52a719d  crates/flamewm-wm-x11/src/wm/tests.rs
+7350c9e583ab99659cab4c75bcee010eb8f729d9e9ca8c5ac1e2de7e5c0767f5  crates/flamewm-wm-x11/src/wm/workspace.rs
+6c80731bc1bc433d33218be7dd41defb17aebef260aae3070c2ffa1b2cd44586  docs/WORKSPACE_EDGE_CHANGELOG.md

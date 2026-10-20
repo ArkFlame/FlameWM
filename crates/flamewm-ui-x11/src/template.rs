@@ -66,6 +66,10 @@ pub trait UiDocumentAccess {
     fn foreground_clear(&mut self, id: &str) -> Result<(), String>;
     fn font_size(&mut self, id: &str, size_px: f32) -> Result<(), String>;
     fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String>;
+    /// Sets global UI typography after authored and per-node style declarations.
+    fn ui_font_defaults(&mut self, _size_offset: f32, _bold: bool) -> Result<(), String> {
+        Ok(())
+    }
     fn font_family(&mut self, family: String) -> Result<(), String> {
         let _ = family;
         Err("font family projection is unsupported by this document access".to_string())
@@ -84,6 +88,12 @@ pub trait UiDocumentAccess {
 }
 
 impl UiDocument {
+    /// Whether an ID exists in the decoded retained UI scene (no layout or mutation).
+    #[must_use]
+    pub fn has_node(&self, id: &str) -> bool {
+        self.document.node_by_id(id).is_some()
+    }
+
     /// Layout box `(x, y, width, height)` of a node by id, laid out in a CSS
     /// viewport of `viewport` (the same viewport the render path lays out at).
     /// Read-only: owned by `flamewm_render_core::LayoutEngine`. `None` when the
@@ -168,6 +178,10 @@ impl UiDocument {
 
     pub fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
         self.document.set_font_weight(id, weight)
+    }
+
+    pub fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {
+        self.document.set_ui_font_defaults(size_offset, bold)
     }
 
     pub fn font_family(&mut self, family: String) -> Result<(), String> {
@@ -263,6 +277,10 @@ macro_rules! document_access_methods {
 
         fn font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
             self.document.set_font_weight(id, weight)
+        }
+
+        fn ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {
+            self.document.set_ui_font_defaults(size_offset, bold)
         }
 
         fn font_family(&mut self, family: String) -> Result<(), String> {

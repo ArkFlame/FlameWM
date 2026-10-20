@@ -21,6 +21,7 @@ fn main() {
         "network.html",
         "calendar.html",
         "osd.html",
+        "launch-feedback.html",
         "battery.html",
         "weather.html",
     ];
@@ -33,6 +34,7 @@ fn main() {
         ("flamewm-network.rwr", "network.html"),
         ("flamewm-calendar.rwr", "calendar.html"),
         ("flamewm-osd.rwr", "osd.html"),
+        ("flamewm-launch-feedback.rwr", "launch-feedback.html"),
         ("flamewm-battery.rwr", "battery.html"),
         ("flamewm-weather.rwr", "weather.html"),
     ];

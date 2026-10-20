@@ -6,6 +6,7 @@
 
 mod atomic_file;
 pub mod file_actions;
+pub mod conversion;
 pub mod layout;
 pub mod model;
 pub mod persistence;

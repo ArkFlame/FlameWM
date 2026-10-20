@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Apply Pass 32's package/session hook after merging agents 01..04, idempotently.
+
+Changes only packaging source, never user configuration, wallets or monitor state.
+All file contract assertions run BEFORE any write.
+"""
+from __future__ import annotations
+import argparse
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+
+SOURCE = "tools/flamewm_desktop_services.py"
+WRAPPER = "scripts/flamewm-session-wrapper"
+SESSION = "packaging/flamewm-session.desktop"
+PACKAGE = "scripts/package"
+MANIFEST = "packaging/install-manifest.txt"
+SOURCES = "packaging/source-manifest.txt"
+CONTROL = "packaging/debian/control.in"
+FILES = (SOURCE, WRAPPER, SESSION, PACKAGE, MANIFEST, SOURCES, CONTROL)
+
+
+def replace_once(text: str, original: str, updated: str, filename: str) -> str:
+    if updated in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    if lines.count(original) != 1:
+        raise ValueError(f"{filename}: unexpected baseline/hook: {original[:75]!r}; no files changed")
+    return "".join(updated if line == original else line for line in lines)
+
+
+def planned_changes(root: Path) -> dict[Path, str]:
+    files = {name: root / name for name in FILES}
+    for name, path in files.items():
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"Missing or symlinked required file {name}; no files changed")
+    if (root / "Cargo.toml").is_file() and 'version = "0.1.0"' not in (root / "Cargo.toml").read_text():
+        raise ValueError("Expected FlameWM 0.1.0 baseline; no files changed")
+    original = {name: files[name].read_text(encoding="utf-8") for name in FILES}
+    updated = dict(original)
+    updated[SESSION] = replace_once(
+        updated[SESSION],
+        "Exec=/usr/bin/flamewm-session\n",
+        "Exec=/usr/libexec/flamewm/flamewm-session-wrapper\n",
+        SESSION,
+    )
+    install_block = (
+        'install -d -m 0755 "$STAGE/usr/libexec/flamewm"\n'
+        'install -m 0755 "$ROOT/scripts/flamewm-session-wrapper" '
+        '"$STAGE/usr/libexec/flamewm/flamewm-session-wrapper"\n'
+        'install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" '
+        '"$STAGE/usr/libexec/flamewm/flamewm-desktop-services"\n'
+    )
+    anchor = 'install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"\n'
+    updated[PACKAGE] = replace_once(updated[PACKAGE], anchor, anchor+install_block, PACKAGE)
+    for name, record in (
+        (MANIFEST, f"{WRAPPER}    usr/libexec/flamewm/flamewm-session-wrapper"),
+        (MANIFEST, f"{SOURCE}    usr/libexec/flamewm/flamewm-desktop-services"),
+        (SOURCES, f"@exec {WRAPPER}"),
+        (SOURCES, f"@exec {SOURCE}"),
+        (SOURCES, "@exec scripts/enable-post31-desktop-integration"),
+    ):
+        if record not in updated[name].splitlines():
+            updated[name] = updated[name].rstrip("\n") + "\n" + record + "\n"
+    # Preserve whatever wallet/PAM recommendations Agent 03 produced.
+    line = re.search(r"(?m)^Recommends:[^\n]*$", updated[CONTROL])
+    if not line:
+        raise ValueError("control.in has no Recommends line; no files changed")
+    existing = {p.strip() for p in line.group().split(":",1)[1].split(",")}
+    extra = [p for p in ("dex", "lxqt-policykit", "xfce4-notifyd", "python3", "x11-utils") if p not in existing]
+    if extra:
+        updated[CONTROL] = updated[CONTROL][:line.end()] + ", " + ", ".join(extra) + updated[CONTROL][line.end():]
+    return {files[name]: updated[name] for name in FILES if updated[name] != original[name]}
+
+
+def apply(root: Path, dry_run: bool = False) -> list[str]:
+    changes = planned_changes(root)
+    names = [str(path.relative_to(root)) for path in changes]
+    if dry_run:
+        return names
+    for path, content in changes.items():
+        mode = stat.S_IMODE(path.stat().st_mode)
+        fd, tmp_name = tempfile.mkstemp(prefix=".flamewm-pass32-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                tmp.write(content)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.chmod(tmp_name, mode)
+            os.replace(tmp_name, path)
+        finally:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+    return names
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    try:
+        changed = apply(args.root.resolve(), args.dry_run)
+    except (OSError, ValueError) as error:
+        print(f"FLAMEWM-INTEGRATION-BLOCKED: {error}", file=sys.stderr)
+        return 1
+    print("FLAMEWM-INTEGRATION-" + ("PLAN" if args.dry_run else "READY"))
+    for name in changed:
+        print("  " + name)
+    if not changed:
+        print("  Already applied (no changes)")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

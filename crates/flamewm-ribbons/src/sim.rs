@@ -99,6 +99,8 @@ pub struct Stream {
     theta: f64,
     omega: f64,
     speed: f64,
+    /// Curvature multiplier. 1.0 preserves the deterministic library baseline.
+    bend_factor: f64,
     phase: [f64; 3],
     psi: f64,
     chi: f64,
@@ -129,6 +131,7 @@ impl Stream {
             theta,
             omega,
             speed,
+            bend_factor: 1.0,
             phase,
             psi,
             chi,
@@ -164,9 +167,9 @@ impl Stream {
     /// Heading rate `dtheta/dt`: drift + wobble derivative + edge attraction toward the centre.
     fn ang(&self, theta: f64, pos: [f64; 2], t: f64, dims: (f64, f64)) -> f64 {
         let (w, h) = dims;
-        let mut rate = self.omega;
+        let mut rate = self.omega * self.bend_factor;
         for (k, &(f, a)) in WOBBLE.iter().enumerate() {
-            rate += TAU * f * a * (TAU * f * t + self.phase[k]).cos();
+            rate += self.bend_factor * TAU * f * a * (TAU * f * t + self.phase[k]).cos();
         }
         let theta_c = (h / 2.0 - pos[1]).atan2(w / 2.0 - pos[0]);
         rate += EDGE_GAIN * attraction(pos, dims) * wrap_angle(theta_c - theta).sin();
@@ -223,6 +226,7 @@ pub struct Ribbons {
     height: u32,
     scale: f64,
     speed_factor: f64,
+    bend_factor: f64,
     /// Output rects in viewport-local coordinates; empty when unmasked.
     mask: Vec<Rect>,
     masked: bool,
@@ -276,6 +280,7 @@ impl Ribbons {
             height,
             scale,
             speed_factor: factor,
+            bend_factor: 1.0,
             mask,
             masked,
             colours,
@@ -285,6 +290,16 @@ impl Ribbons {
             acc: 0.0,
             last_t: now,
         };
+        this.reseed(now);
+        this
+    }
+
+    /// Curvier, slower flowing trails for the lock-screen Ribbons presentation.
+    /// Keeps the default deterministic engine and its golden frames unchanged.
+    /// The extra bend applies only to steering, not to edge containment.
+    pub fn new_fluid_style(config: Config, now: f64) -> Self {
+        let mut this = Self::new_with_speed_factor(config, now, 0.92);
+        this.bend_factor = 1.70;
         this.reseed(now);
         this
     }
@@ -300,7 +315,9 @@ impl Ribbons {
             .map(|i| {
                 let mix = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
                 let mut rng = SplitMix64::new(self.config.seed.wrapping_add(mix));
-                Stream::new(&mut rng, dims, self.scale, self.speed_factor, now)
+                let mut stream = Stream::new(&mut rng, dims, self.scale, self.speed_factor, now);
+                stream.bend_factor = self.bend_factor;
+                stream
             })
             .collect();
     }
@@ -495,6 +512,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fluid_lock_preset_bends_without_changing_default_engine() {
+        let mut original = Ribbons::new(cfg(6, 7), 0.0);
+        let mut fluid = Ribbons::new_fluid_style(cfg(6, 7), 0.0);
+        assert_eq!(original.bend_factor, 1.0);
+        assert_eq!(fluid.bend_factor, 1.70);
+        assert_eq!(fluid.speed_factor, 0.92);
+        // Match real 60Hz progression; one giant step would trigger a reset.
+        for i in 1..=120 {
+            let t = i as f64 / 60.0;
+            original.step_to(t);
+            fluid.step_to(t);
+        }
+        assert_ne!(original.streams()[0].position(), fluid.streams()[0].position());
     }
 
     #[test]

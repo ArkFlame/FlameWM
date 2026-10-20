@@ -39,5 +39,5 @@ pub mod taskbar {
 
 pub use runtime::{
     ChangedDomains, ContextMenuKind, ContextMenuState, ProjectionKind, ShellControl, ShellDirty,
-    ShellRuntime, ShellSnapshot, ShellSurfaces,
+    ShellRuntime, ShellSnapshot, ShellSurfaces, TaskSlotTarget,
 };

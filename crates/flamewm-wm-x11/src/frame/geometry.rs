@@ -414,6 +414,49 @@ pub fn plan_initial_map(
     GeometryPlan::of(req, RootRect::new(x, y, frame.w, frame.h))
 }
 
+/// Only the unpositioned first map of a normal top-level window may follow the mouse.
+/// A non-zero pre-map origin without position flags is ambiguous: it may have
+/// come from an application ConfigureWindow, so we conservatively preserve it.
+#[must_use]
+pub fn can_place_near_pointer(
+    adopt: bool,
+    is_normal: bool,
+    is_transient: bool,
+    hints: ClientSizeHints,
+    client_origin: RootPoint,
+) -> bool {
+    !adopt
+        && is_normal
+        && !is_transient
+        && !hints.position_specified
+        && client_origin == RootPoint::new(0, 0)
+}
+
+/// Place a newly created, unpositioned frame near the pointer on its selected
+/// output. The caller supplies that output's work area (after panel struts).
+/// Reuse the canonical initial-map planner for size hints, gravity and clamping.
+/// Oversize windows anchor to the work area's top/left so controls stay reachable.
+#[must_use]
+pub fn plan_initial_map_near_pointer(
+    req: &GeometryRequest<'_>,
+    pointer: RootPoint,
+    selected_work_area: RootRect,
+    req_client_size: (u32, u32),
+) -> GeometryPlan {
+    const OFFSET: i32 = 24;
+    let target_frame_x = pointer.x.saturating_add(OFFSET);
+    let target_frame_y = pointer.y.saturating_add(OFFSET);
+    let origin = RootPoint::new(
+        target_frame_x,
+        target_frame_y.saturating_add(req.frame_extents.titlebar_h),
+    );
+    let localized = GeometryRequest {
+        work_area: selected_work_area,
+        ..*req
+    };
+    plan_initial_map(&localized, origin, req_client_size)
+}
+
 /// Clamp a span of `len` at `start` so it fits inside `[lo, lo + extent)`.
 fn clamp_span(start: i32, len: i32, lo: i32, extent: i32) -> i32 {
     start.clamp(lo, lo.saturating_add(extent.saturating_sub(len).max(0)))
@@ -496,6 +539,124 @@ mod tests {
         assert_eq!(frame, RootRect::new(0, 0, 400, 331));
         let again = plan_adopt(RootPoint::new(1, 32), (400, 300), EXT);
         assert_eq!(again, frame);
+    }
+
+    #[test]
+    fn cursor_placement_respects_output_origin_and_panel_struts() {
+        // Each work area comes from the selected physical output, never the root union.
+        let cases = [
+            (
+                RootPoint::new(150, 170),
+                RootRect::new(0, 36, 1920, 1044),
+                RootRect::new(174, 194, 700, 531),
+            ),
+            (
+                RootPoint::new(2150, 50),
+                RootRect::new(1920, 0, 1280, 984),
+                RootRect::new(2174, 74, 700, 531),
+            ),
+            (
+                RootPoint::new(-1810, 100),
+                RootRect::new(-1920, 0, 1920, 1030),
+                RootRect::new(-1786, 124, 700, 531),
+            ),
+            (
+                RootPoint::new(1700, 100),
+                RootRect::new(56, 0, 2504, 1440),
+                RootRect::new(1724, 124, 700, 531),
+            ),
+            // Bottom/right edge: fit entirely within the same hovered output.
+            (
+                RootPoint::new(3150, 950),
+                RootRect::new(1920, 0, 1280, 984),
+                RootRect::new(2500, 453, 700, 531),
+            ),
+            // Left panel and right panel work areas.
+            (
+                RootPoint::new(20, 70),
+                RootRect::new(64, 0, 1856, 1080),
+                RootRect::new(64, 94, 700, 531),
+            ),
+            (
+                RootPoint::new(1880, 40),
+                RootRect::new(0, 0, 1860, 1080),
+                RootRect::new(1160, 64, 700, 531),
+            ),
+        ];
+        for (pointer, work_area, expected) in cases {
+            let request = GeometryRequest {
+                reason: GeometryReason::InitialMap,
+                ..req(ResizeEdges::none(), (0, 0), free())
+            };
+            assert_eq!(
+                plan_initial_map_near_pointer(&request, pointer, work_area, (700, 500)).frame,
+                expected,
+                "pointer {pointer:?}, work area {work_area:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn oversize_cursor_window_preserves_reachable_titlebar() {
+        let request = GeometryRequest {
+            reason: GeometryReason::InitialMap,
+            ..req(ResizeEdges::none(), (0, 0), free())
+        };
+        let area = RootRect::new(-1920, 48, 900, 580);
+        let plan =
+            plan_initial_map_near_pointer(&request, RootPoint::new(-1100, 620), area, (1400, 900));
+        assert_eq!(plan.frame, RootRect::new(-1920, 48, 1400, 931));
+        assert_eq!(plan.client_size, (1400, 900));
+    }
+
+    #[test]
+    fn initial_cursor_policy_preserves_all_special_client_origins() {
+        let origin = RootPoint::new(0, 0);
+        assert!(can_place_near_pointer(false, true, false, free(), origin));
+        assert!(!can_place_near_pointer(true, true, false, free(), origin));
+        assert!(!can_place_near_pointer(false, false, false, free(), origin));
+        assert!(!can_place_near_pointer(false, true, true, free(), origin));
+        assert!(!can_place_near_pointer(
+            false,
+            true,
+            false,
+            free(),
+            RootPoint::new(-1920, 0)
+        ));
+        assert!(!can_place_near_pointer(
+            false,
+            true,
+            false,
+            free(),
+            RootPoint::new(200, 130)
+        ));
+        assert!(!can_place_near_pointer(
+            false,
+            true,
+            false,
+            ClientSizeHints {
+                position_specified: true,
+                ..free()
+            },
+            origin,
+        ));
+    }
+
+    #[test]
+    fn pointer_placement_keeps_size_hints_and_adoption_unchanged() {
+        let hints = min_max((350, 250), (600, 400));
+        let request = GeometryRequest {
+            reason: GeometryReason::InitialMap,
+            ..req(ResizeEdges::none(), (0, 0), hints)
+        };
+        let plan =
+            plan_initial_map_near_pointer(&request, RootPoint::new(100, 100), WA, (900, 600));
+        assert_eq!(plan.client_size, (600, 400));
+        assert_eq!(plan.frame, RootRect::new(124, 124, 600, 431));
+        assert_eq!(
+            plan_adopt(RootPoint::new(120, 160), (600, 400), EXT),
+            RootRect::new(119, 128, 600, 431)
+        );
     }
 
     #[test]

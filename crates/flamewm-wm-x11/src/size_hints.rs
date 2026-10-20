@@ -5,6 +5,9 @@
 //! helpers only transform already-read cardinals/sizes.
 
 /// ICCCM `WM_NORMAL_HINTS` flag bits (subset used here).
+/// `USPosition` and `PPosition` reserve the client's chosen location on first map.
+pub const HINT_US_POSITION: u32 = 1 << 0;
+pub const HINT_P_POSITION: u32 = 1 << 2;
 pub const HINT_P_MIN_SIZE: u32 = 1 << 4;
 pub const HINT_P_MAX_SIZE: u32 = 1 << 5;
 pub const HINT_P_RESIZE_INC: u32 = 1 << 6;
@@ -22,6 +25,8 @@ pub struct ClientSizeHints {
     pub min_aspect: Option<(u32, u32)>,
     pub max_aspect: Option<(u32, u32)>,
     pub gravity: Option<u32>,
+    /// ICCCM `USPosition` or `PPosition`: do not apply WM automatic placement.
+    pub position_specified: bool,
     /// False iff exactly one size is allowed (min == max, non-degenerate).
     pub resizable: bool,
 }
@@ -36,6 +41,7 @@ impl Default for ClientSizeHints {
             min_aspect: None,
             max_aspect: None,
             gravity: None,
+            position_specified: false,
             resizable: true,
         }
     }
@@ -48,6 +54,7 @@ impl ClientSizeHints {
         let Some(&flags) = values.first() else {
             return out;
         };
+        out.position_specified = flags & (HINT_US_POSITION | HINT_P_POSITION) != 0;
         // XSizeHints layout: flags, pad x4, min x2, max x2, inc x2,
         // aspect x4 (min x/y, max x/y), base x2, gravity.
         if flags & HINT_P_MIN_SIZE != 0 && values.len() >= 7 {
@@ -277,6 +284,23 @@ mod tests {
         assert_eq!(hints, ClientSizeHints::default());
         assert!(hints.resizable);
         assert_eq!(snap_client_size(333, 222, &hints), (333, 222));
+    }
+
+    #[test]
+    fn icccm_user_or_program_placement_is_not_discarded() {
+        for flag in [
+            HINT_US_POSITION,
+            HINT_P_POSITION,
+            HINT_US_POSITION | HINT_P_POSITION,
+        ] {
+            let mut values = blank();
+            flags(&mut values, flag);
+            values[1] = (-1920_i32) as u32;
+            values[2] = 160;
+            assert!(ClientSizeHints::parse(&values).position_specified);
+        }
+        assert!(!ClientSizeHints::parse(&blank()).position_specified);
+        assert!(!ClientSizeHints::parse(&[]).position_specified);
     }
 
     #[test]

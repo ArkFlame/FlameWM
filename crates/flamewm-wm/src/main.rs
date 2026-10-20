@@ -66,10 +66,11 @@ fn apply_session_environment(existing: &BTreeMap<String, String>, appearance: Ap
     let persisted = persisted_cursor_theme().unwrap_or_default();
     let cursor_theme = resolve_cursor_theme(&persisted, &search_path);
     let mut pending = session_overlay(existing, &overlay);
-    if env::var_os("XDG_CURRENT_DESKTOP")
-        .is_some_and(|current| is_kde(&current.to_string_lossy()))
-    {
-        pending.insert("XDG_CURRENT_DESKTOP".to_owned(), "FlameWM".to_owned());
+    // FlameWM owns its session identity even when a login manager inherited
+    // KDE from a previous login. Secondary KDE compatibility is advertised
+    // only in the explicit colon-separated session contract.
+    if let Some(current_desktop) = overlay.get("XDG_CURRENT_DESKTOP") {
+        pending.insert("XDG_CURRENT_DESKTOP".to_owned(), current_desktop.clone());
     }
     pending.insert("XCURSOR_THEME".to_owned(), cursor_theme);
     flamewm_session_core::apply_current_process_env(&pending);
@@ -99,7 +100,8 @@ fn session_overlay(
             continue;
         }
         let absent = inherited.get(key).is_none_or(String::is_empty);
-        if key.starts_with("FLAMEWM_") || key == "XDG_CONFIG_DIRS" || absent {
+        if key.starts_with("FLAMEWM_") || key == "XDG_CONFIG_DIRS"
+            || key == "XDG_CURRENT_DESKTOP" || key == "XDG_SESSION_DESKTOP" || absent {
             pending.insert(key.clone(), value.clone());
         }
     }

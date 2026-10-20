@@ -362,6 +362,23 @@ impl X11App {
         )
     }
 
+    /// Canonical surface shape shared by full presentation and slide clipping.
+    /// A dock corner mask (or border ring) must never disappear while closing.
+    fn base_shape_spans(
+        &self,
+        commands: &[PaintCommand],
+        scale: f32,
+        backdrop_radius: u32,
+    ) -> Vec<(u32, u32, u32)> {
+        if let Some((border, radius)) = self.ring_mask {
+            crate::xshape::ring_mask_spans(self.width, self.height, border, radius)
+        } else if self.dock_corner_radius > 0 {
+            crate::xshape::rounded_mask_spans(self.width, self.height, self.dock_corner_radius)
+        } else {
+            self.mask_spans(commands, scale, backdrop_radius)
+        }
+    }
+
     /// Scale-aware shape refresh: coverage matches the paint path for
     /// rect/radius/stroke/clip in device pixels; text stays skipped.
     /// `backdrop_radius` (device px) rounds the retained-backdrop mask.
@@ -377,17 +394,10 @@ impl X11App {
         // A retained backdrop is composited under translucent fills, so the snapshot must stay
         // visible across the whole rounded shape; coverage would drop the translucent area and
         // show the live desktop (unblurred) instead. Corners outside the radius stay transparent.
-        let spans = if let Some((border, radius)) = self.ring_mask {
-            crate::xshape::ring_mask_spans(self.width, self.height, border, radius)
-        } else if self.dock_corner_radius > 0 {
-            crate::xshape::rounded_mask_spans(self.width, self.height, self.dock_corner_radius)
-        } else {
-            let spans = self.mask_spans(commands, scale, backdrop_radius);
-            if spans.is_empty() {
-                return;
-            }
-            spans
-        };
+        let spans = self.base_shape_spans(commands, scale, backdrop_radius);
+        if spans.is_empty() {
+            return;
+        }
         if let Err(error) = unsafe { bridge.apply_rounded_mask(self.window, &spans) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }
@@ -401,7 +411,7 @@ impl X11App {
             return;
         };
         let backdrop_radius = backdrop_corner_radius_px(document, self.width, self.height);
-        let spans = self.mask_spans(&cached.commands, 1.0, backdrop_radius);
+        let spans = self.base_shape_spans(&cached.commands, 1.0, backdrop_radius);
         if let Err(error) = unsafe { bridge.apply_clipped_mask(self.window, &spans, clip) } {
             eprintln!("FLAMEWM_RENDER_SHAPE_BACKEND degraded reason={error}");
         }

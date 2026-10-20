@@ -274,6 +274,11 @@ impl Dispatcher {
                 ControlResponse::Capabilities(host.capabilities().items().to_vec())
             }
             ControlRequest::GetShellBootstrap => {
+                // The WM can publish its EWMH identity before RandR finishes
+                // exposing a drawable output. Snapshot panels only after the
+                // current display refresh and panel reconciliation.
+                let displays = host.display_snapshot()?;
+                host.resync_panels_for_displays(&displays)?;
                 host.refresh_windows()?;
                 let windows = host.engine().snapshot()?;
                 let windows_revision = windows
@@ -288,7 +293,7 @@ impl Dispatcher {
                     panels: host.panels_snapshot(),
                     applications: host.search_applications(""),
                     session: host.session_capabilities(),
-                    displays: host.display_snapshot()?,
+                    displays,
                     system: host.system_snapshot().clone(),
                 })
             }

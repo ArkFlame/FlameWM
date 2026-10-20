@@ -606,7 +606,7 @@ impl SessionPort for X11Desktop {
     fn session_capabilities(&self) -> SessionCapabilities {
         SessionCapabilities {
             lock: Path::new("/usr/bin/loginctl").exists(),
-            logout: Path::new("/usr/bin/loginctl").exists(),
+            logout: flamewm_x11_desktop::session_logout_supported(),
             suspend: Path::new("/usr/bin/systemctl").exists(),
             reboot: Path::new("/usr/bin/systemctl").exists(),
             shutdown: Path::new("/usr/bin/systemctl").exists(),
@@ -619,7 +619,16 @@ impl SessionPort for X11Desktop {
             SessionAction::ScreensaverPreview => {
                 return flamewm_x11_desktop::start_screensaver_preview()
             }
-            SessionAction::Logout => ("loginctl", &["terminate-session", "self"]),
+            SessionAction::Logout => {
+                if !flamewm_x11_desktop::session_logout_supported() {
+                    return Err(FlameError::new(
+                        ErrorCode::Unavailable,
+                        "logout requires a managed FlameWM session",
+                    ));
+                }
+                flamewm_x11_desktop::request_session_logout();
+                return Ok(());
+            }
             SessionAction::Suspend => ("systemctl", &["suspend"]),
             SessionAction::Reboot => ("systemctl", &["reboot"]),
             SessionAction::Shutdown => ("systemctl", &["poweroff"]),
@@ -791,6 +800,23 @@ impl WorkAreaPort for X11Desktop {
     fn request_recompute(&mut self) {}
 }
 
+// Only a single RandR output may use the drawable root as a fallback.
+// Disabled outputs on multi-monitor hardware must remain geometryless.
+fn single_output_root_geometry(
+    single_output: bool,
+    root_size: Size,
+    modes: &[DisplayMode],
+) -> (Rect, ModeId) {
+    if !single_output || !root_size.is_valid() {
+        return (Rect::default(), ModeId(0));
+    }
+    let mode = modes
+        .iter()
+        .find(|mode| mode.resolution == root_size)
+        .map_or(ModeId(0), |mode| mode.id);
+    (Rect::from_parts(Point::new(0, 0), root_size), mode)
+}
+
 impl DisplayPort for X11Desktop {
     fn display_snapshot(&self) -> FlameResult<DisplaySnapshot> {
         let resources = self
@@ -799,6 +825,16 @@ impl DisplayPort for X11Desktop {
             .map_err(io_error)?
             .reply()
             .map_err(io_error)?;
+        // Stable physical output identity: never infer primary from RandR
+        // resource enumeration order (it can change after hotplug/rotation).
+        let primary_output = self.conn.randr_get_output_primary(self.root)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.output)
+            .unwrap_or(0);
+        // A multi-output server can have connected but disabled CRTCs. Only a
+        // genuinely single RandR output may use Xephyr's CRTC=0 fallback.
+        let single_randr_output = resources.outputs.len() == 1;
         let mut outputs = Vec::new();
         for output in resources.outputs {
             let info = self
@@ -827,7 +863,7 @@ impl DisplayPort for X11Desktop {
                 })
                 .collect::<Vec<_>>();
             let crtc = info.crtc;
-            let (mut geometry, current_mode) = if crtc != 0 {
+            let (geometry, current_mode) = if crtc != 0 {
                 let c = self
                     .conn
                     .randr_get_crtc_info(crtc, resources.config_timestamp)
@@ -845,25 +881,23 @@ impl DisplayPort for X11Desktop {
                 )
             } else {
                 let root_size = self.root_size();
-                // Xephyr exposes its active output with CRTC zero. Prefer the
-                // advertised mode when it matches the valid root geometry.
-                match modes.iter().find(|mode| mode.resolution == root_size) {
-                    Some(mode) if root_size.is_valid() => {
-                        (Rect::from_parts(Point::new(0, 0), root_size), mode.id)
-                    }
-                    _ => (Rect::default(), ModeId(0)),
-                }
+                // A lone Xephyr/legacy output can draw into the root even
+                // when RandR has no matching mode. Keep its real geometry and
+                // use mode 0 only to denote an unavailable mode switch.
+                single_output_root_geometry(single_randr_output, root_size, &modes)
             };
-            let root_size = self.root_size();
-            if !geometry.is_valid() && root_size.is_valid() {
-                geometry = Rect::from_parts(Point::new(0, 0), root_size);
-            }
+            // Do not turn an attached-but-disabled RandR output into an
+            // imaginary root-sized monitor. Its CRTC is zero and its geometry
+            // is invalid; the UI may show it as disabled, but panel/workarea
+            // ownership MUST NOT treat it as another active display. Xephyr's
+            // single-output CRTC=0 compatibility is handled above only when
+            // a reported mode exactly matches the real root resolution.
             outputs.push(OutputSnapshot {
                 id: OutputId::new(String::from_utf8_lossy(&info.name).into_owned()),
                 connector: String::from_utf8_lossy(&info.name).into_owned(),
                 edid_identity: String::new(),
                 connected: true,
-                primary: false,
+                primary: output == primary_output,
                 geometry,
                 current_mode,
                 modes,
@@ -884,6 +918,15 @@ impl DisplayPort for X11Desktop {
                     modes: Vec::new(),
                     shell_scale_percent: 100,
                 });
+            }
+        }
+        // Some nested and legacy X servers do not implement RandR primary.
+        // In that case stabilize fallback by connector, not enumeration order.
+        if !outputs.iter().any(|output| output.primary && output.geometry.is_valid()) {
+            for output in &mut outputs { output.primary = false; }
+            outputs.sort_by(|a, b| a.connector.cmp(&b.connector));
+            if let Some(output) = outputs.iter_mut().find(|output| output.geometry.is_valid()) {
+                output.primary = true;
             }
         }
         Ok(DisplaySnapshot {
@@ -951,7 +994,7 @@ impl DisplayPort for X11Desktop {
 
 #[cfg(test)]
 mod output_derivation_tests {
-    use super::{OutputId, OutputSnapshot, Rect, output_for_window_rect};
+    use super::{DisplayMode, OutputId, OutputSnapshot, Rect, Size, output_for_window_rect};
     use flamewm_api::ModeId;
 
     fn output(name: &str, geometry: Rect, primary: bool) -> OutputSnapshot {
@@ -1006,6 +1049,35 @@ mod output_derivation_tests {
         // No overlap at all: primary output wins.
         let nowhere = Rect::new(5000, 5000, 100, 100);
         assert_eq!(output_for_window_rect(&outputs, nowhere), Some(OutputId::new("A")));
+    }
+
+    #[test]
+    fn lone_xephyr_output_without_mode_keeps_its_root_geometry() {
+        let size = Size::new(1350, 641);
+        assert_eq!(
+            super::single_output_root_geometry(true, size, &[]),
+            (Rect::new(0, 0, 1350, 641), ModeId(0))
+        );
+        assert_eq!(
+            super::single_output_root_geometry(false, size, &[]),
+            (Rect::default(), ModeId(0))
+        );
+        assert_eq!(
+            super::single_output_root_geometry(true, Size::new(0, 0), &[]),
+            (Rect::default(), ModeId(0))
+        );
+    }
+
+    #[test]
+    fn lone_xephyr_output_uses_real_mode_when_advertised() {
+        let mode = DisplayMode {
+            id: ModeId(42), resolution: Size::new(1350, 641),
+            refresh_millihz: 60_000, preferred: true,
+        };
+        assert_eq!(
+            super::single_output_root_geometry(true, Size::new(1350, 641), &[mode]),
+            (Rect::new(0, 0, 1350, 641), ModeId(42))
+        );
     }
 
     #[test]

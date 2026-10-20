@@ -10,8 +10,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         // must not reconfigure native input children, or each Enter =>
         // ConfigureNotify => Enter feedback loop sustains a motion storm.
         // Focus/hover state updates stay; layout stays frozen.
-        let active_session = self.is_session_active(client_id);
-        if active_session {
+        // A pointer warp during an active drag may enter a *different*
+        // window. Do not let focus-follows-mouse steal focus from the window
+        // we are carrying between workspaces. Ignore passive enters until
+        // the pointer interaction completes, regardless of the event client.
+        if self.session_client().is_some() {
             return Ok(());
         }
         // Default is click-to-focus: pointer entry (title bar included) only focuses when the user
@@ -57,6 +60,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
             return Ok(());
         }
+        self.edge_drag = None;
         let source = resolve_frame_event_source(&self.registry, event.event, event.child);
         let Some(client_id) = self.client_for(source) else {
             return Ok(());
@@ -117,10 +121,33 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
     }
 
+    /// Meta (X11 Mod4) + primary button begins the canonical titlebar move
+    /// regardless of client-area coordinates. Other buttons/modifiers replay
+    /// unchanged, preserving Dolphin selection and context menus.
+    fn is_meta_move_press(detail: u8, state: u16) -> bool {
+        detail == BUTTON_PRIMARY && state & 0x0040 != 0
+    }
+
     /// Press inside a managed client (sync passive grab). Focus/raise when needed, then
     /// always release the frozen pointer so the client receives the press.
     pub(super) fn handle_client_press(&mut self, event: ButtonPressEvent) -> Result<(), ReplyError> {
         let client = event.event;
+        if Self::is_meta_move_press(event.detail, u16::from(event.state)) {
+            if let Some(resources) = self.registry.lookup_by_client(client) {
+                self.super_tap.press_other();
+                self.focus(client)?;
+                // The sync passive grab froze this physical click. Consume it
+                // rather than replaying it into Dolphin, then use the exact
+                // same move controller and pointer capture as title dragging.
+                self.conn.allow_events(Allow::ASYNC_POINTER, event.time)?;
+                let pointer = RootPoint::new(i32::from(event.root_x), i32::from(event.root_y));
+                self.reduce_and_execute(client, FrameEvent::Press {
+                    source: resources.title_drag,
+                    pointer,
+                })?;
+                return Ok(());
+            }
+        }
         if let Some(session) = self.sessions.get_mut(&client) {
             session.last_title_click = None;
         }
@@ -198,6 +225,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 time_ms: event.time,
             },
         );
+        self.edge_drag = None;
         if release_from_move {
             self.snap_preview.hide();
         }
@@ -333,6 +361,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             } else if move_active {
                 self.snap_preview.hide();
             }
+            self.evaluate_edge_drag(client_id, pointer, std::time::Instant::now())?;
             return Ok(());
         }
         // Idle hover: track control hover, repaint chrome on change.
@@ -352,6 +381,80 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.paint_chrome(client_id)?;
         }
         Ok(())
+    }
+
+    /// Shared edge policy for live motion and the one-shot dwell deadline.
+    /// The pointer must still be at the edge of an activated titlebar move.
+    pub(super) fn evaluate_edge_drag(
+        &mut self,
+        client_id: Window,
+        pointer: RootPoint,
+        now: std::time::Instant,
+    ) -> Result<(), ReplyError> {
+        let moving = self.sessions.get(&client_id).is_some_and(|state| {
+            matches!(state.session, InteractionSession::Move(m) if m.anchor.is_activated())
+        });
+        let edge = if moving && self.workspace_count > 1 {
+            // Do not arm a zero-duration reactor timer for a row with only
+            // one workspace; such a row has no destination in either direction.
+            drag_edge_at(pointer, self.screen_rect).filter(|side| {
+                drag_edge_target(self.current_workspace, self.workspace_count, *side).is_some()
+            })
+        } else {
+            None
+        };
+        if let Some(side) = edge {
+            let (pending, ready) = drag_edge_ready(self.edge_drag, client_id, side, now);
+            self.edge_drag = pending;
+            if ready && self.mouse_workspace_cooldowns.remaining(side.axis(), now).is_zero() {
+                if let Some(target) = drag_edge_target(self.current_workspace, self.workspace_count, side) {
+                    let frame_height = self.clients.get(&client_id)
+                        .map_or(1, |state| state.placement.current.h);
+                    let destination = drag_edge_destination(pointer, self.screen_rect, side, frame_height);
+                    let previous = self.current_workspace;
+                    self.switch_workspace_dragging(client_id, target, destination, side)?;
+                    if self.current_workspace != previous {
+                        // Start cooldown after the real native transfer has completed.
+                        self.mouse_workspace_cooldowns.record(side.axis(), std::time::Instant::now());
+                    }
+                    self.edge_drag = None;
+                }
+            }
+        } else {
+            self.edge_drag = None;
+        }
+        Ok(())
+    }
+
+    /// The reactor calls this at a pending edge deadline, even when the user
+    /// holds the pointer completely stationary. Verify its current root
+    /// position; never switch solely on an obsolete earlier event.
+    pub(super) fn tick_edge_drag(&mut self) -> Result<(), ReplyError> {
+        let Some(pending) = self.edge_drag else { return Ok(()); };
+        let now = std::time::Instant::now();
+        if now.saturating_duration_since(pending.since)
+            < std::time::Duration::from_millis(u64::from(DRAG_EDGE_DWELL_MS))
+            || !self.mouse_workspace_cooldowns.remaining(pending.side.axis(), now).is_zero()
+        {
+            return Ok(());
+        }
+        let reply = self.conn.query_pointer(self.screen().root)?.reply()?;
+        // A pointer on another X screen does not have root coordinates in
+        // this WM's screen. Cancel the dwell rather than interpreting them
+        // as a side-edge crossing on our root.
+        if !reply.same_screen {
+            self.edge_drag = None;
+            return Ok(());
+        }
+        // A queued ButtonRelease may not have reached this loop yet. A stale
+        // Move session alone is not proof that the mouse button is still down.
+        // Never transfer a window after the physical drag has ended.
+        if !reply.mask.contains(KeyButMask::BUTTON1) {
+            self.edge_drag = None;
+            return Ok(());
+        }
+        let pointer = RootPoint::new(i32::from(reply.root_x), i32::from(reply.root_y));
+        self.evaluate_edge_drag(pending.client, pointer, now)
     }
 
     pub(super) fn session_client(&self) -> Option<Window> {

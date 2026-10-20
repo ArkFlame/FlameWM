@@ -273,12 +273,20 @@ pub fn control_glyph_raster_shared(
         }
     }
     let scheme = control_glyph_scheme(role, material, look);
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
-        .join(role.asset_path());
-    let bytes = std::fs::read(path).ok()?;
-    let mut raster =
-        flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok()?;
+    // WM titlebar controls must resolve from the installed package on a second
+    // machine, not from the builder's CARGO_MANIFEST_DIR. This is the same
+    // canonical runtime data root used by the titlebar wallpaper compositor.
+    let path = crate::frame::titlebar_backdrop::packaged_root().join(role.asset_path());
+    let mut raster = match std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok())
+    {
+        Some(raster) => raster,
+        None => {
+            eprintln!("flamewm: titlebar control asset unavailable ({}); using native vector fallback", path.display());
+            fallback_control_glyph(role, edge, scheme.text)?
+        }
+    };
     if material != ControlMaterial::Rest {
         match look.button.shape {
             // Default: every control gets its hover/pressed disk (red for close, light for min/max,
@@ -302,6 +310,52 @@ pub fn control_glyph_raster_shared(
     Some(raster)
 }
 
+
+/// No native titlebar control is allowed to disappear because an icon theme or
+/// SVG decoder is unavailable on the installed machine. The normal Breeze
+/// asset remains authoritative; this bounded raster is the failure fallback.
+fn fallback_control_glyph(
+    role: ControlRole,
+    edge: u32,
+    rgba: [u8; 4],
+) -> Option<flamewm_image_core::RgbaImage> {
+    if edge < 4 || edge > 128 { return None; }
+    let mut pixels = vec![0_u8; (edge as usize) * (edge as usize) * 4];
+    let put = |x: u32, y: u32, pixels: &mut [u8]| {
+        if x < edge && y < edge {
+            let at = ((y * edge + x) * 4) as usize;
+            pixels[at..at + 4].copy_from_slice(&rgba);
+        }
+    };
+    let low = edge / 4;
+    let high = edge - low - 1;
+    let mid = edge / 2;
+    let stroke = (edge / 12).max(1);
+    for i in low..=high {
+        for k in 0..stroke {
+            match role {
+                ControlRole::Minimize => put(i, mid + k, &mut pixels),
+                ControlRole::Maximize => {
+                    put(i, low + k, &mut pixels);
+                    put(i, high.saturating_sub(k), &mut pixels);
+                    put(low + k, i, &mut pixels);
+                    put(high.saturating_sub(k), i, &mut pixels);
+                }
+                ControlRole::Restore => {
+                    put(i, low + k, &mut pixels);
+                    put(high.saturating_sub(k), i, &mut pixels);
+                    if i > low + stroke { put(i - stroke, high.saturating_sub(k), &mut pixels); }
+                    if i < high - stroke { put(low + stroke + k, i, &mut pixels); }
+                }
+                ControlRole::Close => {
+                    put(i, i.saturating_add(k), &mut pixels);
+                    put(i, low + high - i + k, &mut pixels);
+                }
+            }
+        }
+    }
+    flamewm_image_core::RgbaImage::from_rgba8(edge, edge, pixels)
+}
 /// Backing mask behind a control glyph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FillMask {
@@ -948,6 +1002,15 @@ mod tests {
         .expect("shared close glyph");
         assert_eq!((shared.width, shared.height), (owned.width, owned.height));
         assert_eq!(shared.pixels, owned.pixels);
+    }
+
+    #[test]
+    fn installed_control_fallback_is_visible_for_every_role() {
+        for role in [ControlRole::Minimize, ControlRole::Maximize, ControlRole::Restore, ControlRole::Close] {
+            let raster = fallback_control_glyph(role, 16, [242, 242, 242, 255]).expect("native fallback");
+            assert_eq!((raster.width, raster.height), (16, 16));
+            assert!(raster.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        }
     }
 
     #[test]

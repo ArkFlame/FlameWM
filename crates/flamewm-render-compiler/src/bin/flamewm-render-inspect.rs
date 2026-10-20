@@ -16,7 +16,9 @@ fn main() {
         eprintln!("flamewm-render-inspect: {error}");
         std::process::exit(1);
     });
-    println!("format=RWRB/2");
+    // Report the actual decoded file's version, not a stale hard-coded format.
+    let format_version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    println!("format=RWRB/{format_version}");
     println!("assets={}", document.assets.len());
     println!("fingerprint={:016x}", document.source_fingerprint);
     println!("nodes={}", document.nodes.len());

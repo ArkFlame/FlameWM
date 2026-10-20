@@ -5,6 +5,7 @@ import os
 from pathlib import Path, PurePosixPath
 import sys
 import tarfile
+import tempfile
 
 
 EXCLUDED_DIRS = {".git", ".target", "target", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".agents", ".debug", ".codex", ".aws", ".performance", "theme-sources"}
@@ -61,21 +62,30 @@ def members(root: Path, manifest: Path) -> list[tuple[Path, str]]:
 
 def write_archive(root: Path, manifest: Path, output: Path) -> None:
     root = root.resolve()
-    with output.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
-        with tarfile.open(fileobj=zipped, mode="w|", format=tarfile.PAX_FORMAT) as archive:
-            for source, rel in members(root, manifest):
-                if not source.resolve(strict=False).is_relative_to(root):
-                    raise ValueError(f"path escapes source root: {rel}")
-                info = archive.gettarinfo(str(source), arcname=f"{root.name}/{rel}")
-                info.uid = info.gid = 0
-                info.uname = info.gname = ""
-                info.mtime = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
-                info.pax_headers = {}
-                if info.isfile():
-                    with source.open("rb") as stream:
-                        archive.addfile(info, stream)
-                else:
-                    archive.addfile(info)
+    # Validate the *entire* allowlist before opening an output. A missing
+    # executable registry entry must never leave a misleading partial .tar.gz.
+    entries = members(root, manifest)
+    fd, temporary = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
+    try:
+        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
+            with tarfile.open(fileobj=zipped, mode="w|", format=tarfile.PAX_FORMAT) as archive:
+                for source, rel in entries:
+                    if not source.resolve(strict=False).is_relative_to(root):
+                        raise ValueError(f"path escapes source root: {rel}")
+                    info = archive.gettarinfo(str(source), arcname=f"{root.name}/{rel}")
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ""
+                    info.mtime = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
+                    info.pax_headers = {}
+                    if info.isfile():
+                        with source.open("rb") as stream:
+                            archive.addfile(info, stream)
+                    else:
+                        archive.addfile(info)
+        os.replace(temporary, output)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 if __name__ == "__main__":

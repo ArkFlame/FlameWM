@@ -54,8 +54,15 @@ impl RuntimeDocument {
         }
         let index = self.require_node(id)?;
         let entry = self.geometry_overrides.entry(index).or_default();
+        if entry.left == Some(left) && entry.top == Some(top) {
+            return Ok(());
+        }
         entry.left = Some(left);
         entry.top = Some(top);
+        // The retained layout/paint cache is revision-keyed. Changing only the
+        // override left the old position on screen after the first ghost frame.
+        // Full damage also clears the ghost's previous rectangle on movement.
+        self.touch();
         Ok(())
     }
 
@@ -65,8 +72,14 @@ impl RuntimeDocument {
         }
         let index = self.require_node(id)?;
         let entry = self.geometry_overrides.entry(index).or_default();
+        if entry.width == Some(width) && entry.height == Some(height) {
+            return Ok(());
+        }
         entry.width = Some(width);
         entry.height = Some(height);
+        // Geometry dimensions are part of the cached layout as well. Do not
+        // invalidate on repeated size writes from a pointer-motion projector.
+        self.touch();
         Ok(())
     }
 

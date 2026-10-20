@@ -243,5 +243,4 @@ impl SurfaceController {
             .collect();
         Ok(stack_order_ok(&roles))
     }
-
 }

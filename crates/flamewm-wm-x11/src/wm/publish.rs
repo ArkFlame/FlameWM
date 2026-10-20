@@ -1,4 +1,27 @@
 use super::*;
+use flamewm_api::workspace::{WORKSPACE_ROWS, grid_position, workspace_columns};
+
+/// `_NET_DESKTOP_GEOMETRY`: the whole two-row grid in pixels (columns x WORKSPACE_ROWS cells).
+pub(super) fn desktop_geometry_payload(count: usize, screen: Rect) -> [u32; 2] {
+    [
+        (workspace_columns(count) as u32).saturating_mul(screen.width),
+        (WORKSPACE_ROWS as u32).saturating_mul(screen.height),
+    ]
+}
+
+/// `_NET_DESKTOP_VIEWPORT`: the cell origin of every desktop in index order. An index outside the
+/// grid (only possible for an empty topology) publishes the origin rather than a bogus cell.
+pub(super) fn desktop_viewport_payload(count: usize, screen: Rect) -> Vec<u32> {
+    (0..count)
+        .flat_map(|index| match grid_position(index, count) {
+            Some(cell) => [
+                (cell.column as u32).saturating_mul(screen.width),
+                (cell.row as u32).saturating_mul(screen.height),
+            ],
+            None => [0, 0],
+        })
+        .collect()
+}
 
 impl<'a, C: Connection> Wm<'a, C> {
     fn set_property32(&self, window: Window, property: Atom, ty: AtomEnum, data: &[u32]) -> Result<(), ReplyError> {
@@ -62,12 +85,13 @@ impl<'a, C: Connection> Wm<'a, C> {
         let work = self.work_area();
         self.set_property32(root, self.atoms.net_number_of_desktops, AtomEnum::CARDINAL, &[self.workspace_count as u32])?;
         // _NET_CURRENT_DESKTOP owned by publish_current_workspace only.
-        self.set_property32(root, self.atoms.net_desktop_geometry, AtomEnum::CARDINAL, &[self.screen_rect.width, self.screen_rect.height])?;
-        let mut viewport = Vec::with_capacity(self.workspace_count * 2);
+        // The desktop strip is the product two-row grid: one screen-sized cell per desktop,
+        // laid out in columns x WORKSPACE_ROWS, so external pagers see the same topology.
+        self.set_property32(root, self.atoms.net_desktop_geometry, AtomEnum::CARDINAL, &desktop_geometry_payload(self.workspace_count, self.screen_rect))?;
+        let viewport = desktop_viewport_payload(self.workspace_count, self.screen_rect);
         let mut workareas = Vec::with_capacity(self.workspace_count * 4);
         let names = desktop_names_payload(self.workspace_count);
         for _ in 0..self.workspace_count {
-            viewport.extend_from_slice(&[0, 0]);
             workareas.extend_from_slice(&[work.x as u32, work.y as u32, work.width, work.height]);
         }
         self.set_property32(root, self.atoms.net_desktop_viewport, AtomEnum::CARDINAL, &viewport)?;

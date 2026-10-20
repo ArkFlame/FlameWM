@@ -164,6 +164,14 @@ pub enum TextWrap {
     Wrap,
 }
 
+/// One offset alpha-glyph pass behind the text. The Xft renderer supplies glyph antialiasing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub color: ColorValue,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     pub display: Display,
@@ -192,6 +200,7 @@ pub struct Style {
     pub border_radius: f32,
     pub font_size: f32,
     pub font_weight: u16,
+    pub text_shadow: Option<TextShadow>,
     pub text_wrap: TextWrap,
     pub break_anywhere: bool,
     pub opacity: f32,
@@ -230,6 +239,7 @@ impl Default for Style {
             border_radius: 0.0,
             font_size: 14.0,
             font_weight: 400,
+            text_shadow: None,
             text_wrap: TextWrap::NoWrap,
             break_anywhere: false,
             opacity: 1.0,
@@ -297,8 +307,13 @@ impl RuntimeDocument {
         if !radius.is_finite() || radius < 0.0 {
             return Err("runtime border radius must be finite and non-negative".to_string());
         }
-        self.override_entry(id)?.border_radius = Some(radius);
-        self.touch();
+        // Panel geometry may be projected on every settings/reconcile tick.
+        // Unchanged shape values must not invalidate the retained scene.
+        let entry = self.override_entry(id)?;
+        if entry.border_radius != Some(radius) {
+            entry.border_radius = Some(radius);
+            self.touch();
+        }
         Ok(())
     }
 
@@ -384,6 +399,19 @@ impl RuntimeDocument {
 
     pub fn ui_font_family(&self) -> &str {
         &self.ui_font_family
+    }
+
+    /// Applies the global text size offset and minimum weight to every computed style.
+    pub fn set_ui_font_defaults(&mut self, size_offset: f32, bold: bool) -> Result<(), String> {
+        if !size_offset.is_finite() {
+            return Err("UI font size offset must be finite".to_string());
+        }
+        if self.ui_font_size_offset != size_offset || self.ui_font_bold != bold {
+            self.ui_font_size_offset = size_offset;
+            self.ui_font_bold = bold;
+            self.touch();
+        }
+        Ok(())
     }
 
     pub fn set_ui_scale(&mut self, scale: f32) -> Result<(), String> {

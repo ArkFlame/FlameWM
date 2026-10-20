@@ -100,7 +100,10 @@ def check_conffiles(text):
     return [f"conffiles={text!r} expected={CONFFILES!r}"]
 
 
-ICON_THEMES = ["FlameWM-Breeze-Dark", "McMojave-circle", "McMojave-cursors", "candy-icons"]
+# The bundled Xcursor pack remains mandatory. PlagueSur/Fluent icon packs are
+# installable choices; their upstream archives are not shipped without license evidence.
+ICON_THEMES = ["FlameWM-Breeze-Dark"]
+ALLOWED_ICON_THEMES = frozenset((*ICON_THEMES, "McMojave-cursors", "PlagueSur", "Fluent"))
 LICENSES_PREFIX = "usr/share/doc/flamewm/LICENSES/"
 COPYRIGHT_PATH = "usr/share/doc/flamewm/copyright"
 
@@ -114,6 +117,14 @@ def check_shipped_assets(entries):
         present = any(p.startswith(prefix) and p != prefix.rstrip("/") for p in paths)
         checks.append(check(f"icon_theme_{theme}", "PASS" if present else "FAIL",
                             f"{prefix} has files" if present else f"{prefix} missing or empty"))
+    unexpected = sorted({
+        path.split("/")[3] for path in paths
+        if path.startswith("usr/share/icons/") and len(path.split("/")) > 3
+        and path.split("/")[3] not in ALLOWED_ICON_THEMES
+    })
+    checks.append(check("no_removed_icon_themes", "FAIL" if unexpected else "PASS",
+                        "unexpected installed themes: " + ", ".join(unexpected) if unexpected
+                        else "only selected icon themes and the cursor pack are shipped"))
     licenses = [p for p in paths if p.startswith(LICENSES_PREFIX) and p != LICENSES_PREFIX.rstrip("/")]
     checks.append(check("doc_licenses_present", "PASS" if licenses else "FAIL",
                         f"{len(licenses)} files under {LICENSES_PREFIX}" if licenses
@@ -188,7 +199,32 @@ def check_ldd(path):
 
 def dpkg_base(admindir, root):
     return ["dpkg", f"--root={root}", f"--admindir={admindir}", f"--log={root.parent / 'dpkg.log'}",
-            "--force-not-root", "--force-bad-path", "--force-architecture", "--force-depends", "--no-triggers"]
+            "--force-not-root", "--force-bad-path", "--force-depends", "--no-triggers"]
+
+
+def native_debian_architecture():
+    """Return dpkg's installable host architecture; never return source-only 'any'."""
+    try:
+        result = run(["dpkg", "--print-architecture"], timeout=PROBE_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def architecture_issues(declared, filename, native_arch):
+    """Enforce a real binary architecture, correct suffix and host compatibility."""
+    problems = []
+    if not declared or declared in ("any", "all", "source") or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", declared):
+        problems.append(f"invalid binary Architecture={declared!r}")
+    if declared and not filename.endswith(f"_{declared}.deb"):
+        problems.append(f"filename {filename!r} mismatches Architecture={declared!r}")
+    if not native_arch:
+        problems.append("could not determine host dpkg architecture")
+    elif declared != native_arch:
+        problems.append(f"target {declared!r} cannot be installed on host {native_arch!r}")
+    return problems
 
 
 def dpkg_lifecycle(deb, work):
@@ -273,8 +309,9 @@ def main(argv=None):
         ver_ok = expected_version is not None and fields.get("Version") == expected_version
         checks.append(check("deb_version", "PASS" if ver_ok else ("NOT_RUN" if expected_version is None else "FAIL"),
                             f"Version={fields.get('Version')} workspace={expected_version}"))
-        checks.append(check("deb_architecture", "PASS" if fields.get("Architecture") else "FAIL",
-                            f"Architecture={fields.get('Architecture')}"))
+        issues = architecture_issues(fields.get("Architecture"), deb.name, native_debian_architecture())
+        checks.append(check("deb_architecture", "FAIL" if issues else "PASS",
+                            "; ".join(issues) if issues else f"Architecture={fields['Architecture']}"))
         deps = fields.get("Depends", "")
         missing = [d for d in REQUIRED_DEPENDS if d not in depend_names(deps)]
         checks.append(check("deb_depends", "FAIL" if (not deps or missing) else "PASS",
@@ -338,7 +375,7 @@ def main(argv=None):
     # 5. SHA256SUMS next to the deb.
     sums = deb.parent / "SHA256SUMS"
     if not sums.is_file():
-        checks.append(check("sha256sums", "NOT_RUN", f"{sums} missing"))
+        checks.append(check("sha256sums", "FAIL", f"{sums} missing: packaging did not finish"))
     else:
         table = parse_sha256sums(sums.read_text())
         want = table.get(deb.name)
@@ -350,10 +387,12 @@ def main(argv=None):
                                 f"sha256={got}"))
 
     # 6. dpkg lifecycle under an isolated --root.
-    if extracted.returncode == 0 and fields:
+    arch_valid = next((c["status"] == "PASS" for c in checks if c["id"] == "deb_architecture"), False)
+    if extracted.returncode == 0 and fields and arch_valid:
         checks.extend(dpkg_lifecycle(str(deb), work))
     else:
-        checks.append(check("dpkg_lifecycle", "NOT_RUN", "deb metadata or extraction unavailable"))
+        checks.append(check("dpkg_lifecycle", "NOT_RUN",
+                            "deb architecture invalid, metadata invalid, or extraction unavailable"))
 
     failed = sum(1 for c in checks if c["status"] == "FAIL")
     report["summary"] = {s: sum(1 for c in checks if c["status"] == s)

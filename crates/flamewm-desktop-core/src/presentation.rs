@@ -220,7 +220,7 @@ pub fn sticky_menu_parts() -> Vec<MenuPart> {
     vec![MenuPart::Row; 6]
 }
 
-/// Confirm-menu part shape: shared permanent-delete header + Delete/Cancel.
+/// Confirm-menu part shape: shared modal header + Move to Trash/Cancel.
 #[must_use]
 pub fn confirm_menu_parts() -> Vec<MenuPart> {
     permanent_delete_parts()

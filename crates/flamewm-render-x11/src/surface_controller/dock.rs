@@ -1,4 +1,3 @@
-
 use super::*;
 
 pub(super) struct SurfaceInstance {
@@ -136,7 +135,14 @@ impl SurfaceController {
             .surfaces
             .values()
             .find(|instance| instance.role == SurfaceRole::Dock)
-            .map(|instance| (instance.origin.0, instance.origin.1, instance.app.width, instance.app.height));
+            .map(|instance| {
+                (
+                    instance.origin.0,
+                    instance.origin.1,
+                    instance.app.width,
+                    instance.app.height,
+                )
+            });
         resolve_dock(local, self.external_dock)
     }
 

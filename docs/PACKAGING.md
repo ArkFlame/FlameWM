@@ -15,3 +15,58 @@ archives. Debian metadata comes from `packaging/debian/control.in` and
 `copyright`. Absence of `dpkg-deb` is allowed; missing release binaries or
 package sources are errors. `SHA256SUMS` covers every artifact that was
 emitted.
+
+
+## Debian architecture and failure handling
+
+The binary Debian control `Architecture` is the host's actual `dpkg
+--print-architecture` (currently `amd64` for the supported x86_64
+release), **never** the source-package placeholder `any`. Packaging refuses
+non-x86_64/amd64 hosts rather than mislabeling a foreign-architecture binary.
+The source manifest registers executable scripts explicitly, including
+`scripts/version`. The source archive is built before the `.deb` so a
+manifest failure does not emit a new, apparently installable package.
+
+After `./scripts/package`, run:
+
+```bash
+dpkg-deb -f .target/dist/flamewm_0.1.0_amd64.deb Architecture
+# Expected: amd64
+(cd .target/dist && sha256sum -c SHA256SUMS)
+python3 -I tools/flamewm_deb_acceptance.py --deb .target/dist/flamewm_0.1.0_amd64.deb
+```
+
+Do **not** use `--force-architecture`. Install from the actual `dist` path
+(or copy the `.deb` to an accessible location first). The package carries
+`/usr/share/xsessions/flamewm.desktop` for SDDM's X11 session selector.
+
+## One-command fresh Debian build (recommended)
+
+From the full source checkout (with `assets/`), run:
+
+```bash
+./scripts/build-deb
+```
+
+It rebuilds the current Rust workspace, invokes `./scripts/package`, and
+requires all of the following before reporting `FLAMEWM-DEB-READY`:
+`Architecture: amd64`, a complete `SHA256SUMS`, and an SDDM X11 session file.
+It deletes the old named `.deb` **before compiling** and treats any failure
+as fatal. Do not install a package if `FLAMEWM-DEB-READY` did not appear.
+The source package/`.deb` publisher also cleans incomplete release outputs on
+failure. For users overlaying a source `.tar.gz` on their checkout, this avoids
+relying on the existence of a separately downloaded patch file.
+
+A full Rust toolchain and all FlameWM runtime assets are needed. The smaller
+source handoff archives intentionally omit bulky assets; overlay them onto the
+original checkout without deleting its `assets/` tree.
+
+## Imported source archives and stale Cargo compiled APIs
+
+A source archive extracted on an existing checkout may restore file timestamps older than
+previous compiled artifacts. Bare `cargo check` can then reuse an incompatible desktop-core rlib
+and produce `E0432/E0599/E0061` even when current source exports the Convert API.
+Use `./scripts/check-cargo` for a quick development check and `./scripts/build-deb` for a
+release. Both validate the source contract and forcibly clean only the desktop core + desktop
+Cargo outputs in their own profiles before compiling. `build-deb` cleans the old named `.deb`
+before doing anything and never prints `FLAMEWM-DEB-READY` on failure.

@@ -77,7 +77,6 @@ impl PickerKind {
             Self::Cursor => "cursor",
         }
     }
-
 }
 
 #[derive(Clone, Debug)]
@@ -119,22 +118,37 @@ impl ThemeRegistry {
     }
 }
 
-/// Icon themes shipped with FlameWM. They are always listed, even when discovery
-/// finds no installed copy, so a cleared or stale setting can still be re-chosen.
-pub const BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "candy-icons"];
+/// FlameWM only offers these two icon themes. This is a picker policy, not
+/// a deletion of other icon packs installed by the user or the operating system.
+pub const BUNDLED_ICON_THEMES: [&str; 2] = ["PlagueSur", "Fluent"];
 
-/// Adds every bundled icon theme that discovery did not list, keeping discovered rows first.
+/// Upstream Fluent Yellow directories can use a different id; retain that
+/// filesystem id for icon lookup while presenting the product name as Fluent.
+fn fluent_yellow(item: &ThemeItem) -> bool {
+    let name = item.name.to_ascii_lowercase();
+    let id = item.id.to_ascii_lowercase();
+    id == "fluent" || name == "fluent" ||
+        ((id.contains("fluent") || name.contains("fluent")) &&
+         (id.contains("yellow") || name.contains("yellow")))
+}
+
+/// Filter arbitrary installed icon themes out of the picker without touching
+/// cursor themes. Keep the original id/preview for an installed Fluent Yellow.
 pub fn with_bundled_icon_themes(mut icon: Vec<ThemeItem>) -> Vec<ThemeItem> {
-    for id in BUNDLED_ICON_THEMES {
-        if !icon.iter().any(|item| item.id == id) {
-            icon.push(ThemeItem {
-                id: id.to_owned(),
-                name: id.to_owned(),
-                preview: None,
-            });
-        }
+    let mut chosen = Vec::with_capacity(BUNDLED_ICON_THEMES.len());
+    if let Some(mut plague) = icon.iter().find(|item| item.id == "PlagueSur").cloned() {
+        plague.name = "PlagueSur".to_owned();
+        chosen.push(plague);
+    } else {
+        chosen.push(ThemeItem { id: "PlagueSur".to_owned(), name: "PlagueSur".to_owned(), preview: None });
     }
-    icon
+    if let Some(mut fluent) = icon.drain(..).find(fluent_yellow) {
+        fluent.name = "Fluent".to_owned();
+        chosen.push(fluent);
+    } else {
+        chosen.push(ThemeItem { id: "Fluent".to_owned(), name: "Fluent".to_owned(), preview: None });
+    }
+    chosen
 }
 
 /// Scans the catalog and loads one preview per valid theme. Runs off the UI thread.
@@ -151,9 +165,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
             ThemeKind::Cursor => registry.cursor.push(ThemeItem {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
-                preview: cursor::load_left_ptr_preview(&entry.root)
-                    .ok()
-                    .map(cursor_image),
+                preview: cursor::load_left_ptr_preview(&entry.root).ok().map(cursor_image),
             }),
         }
     }
@@ -309,20 +321,24 @@ mod tests {
     }
 
     #[test]
-    fn bundled_icon_themes_are_listed_in_every_state() {
+    fn icon_picker_lists_only_plaguesur_and_fluent() {
         let ids = |items: &[ThemeItem]| items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
-        // Empty discovery (nothing installed) still lists every bundled theme once.
+        let names = |items: &[ThemeItem]| items.iter().map(|item| item.name.clone()).collect::<Vec<_>>();
         let empty = with_bundled_icon_themes(Vec::new());
-        assert_eq!(ids(&empty), ["PlagueSur", "candy-icons"]);
-        // A stale stored value does not change the list.
+        assert_eq!(ids(&empty), ["PlagueSur", "Fluent"]);
+        let found = with_bundled_icon_themes(vec![
+            item("Papirus", "Papirus"),
+            item("Fluent-Yellow", "Fluent Yellow"),
+            item("PlagueSur", "Custom display name"),
+            item("candy-icons", "Candy"),
+        ]);
+        assert_eq!(ids(&found), ["PlagueSur", "Fluent-Yellow"]);
+        assert_eq!(names(&found), ["PlagueSur", "Fluent"]);
+        assert_eq!(found.len(), 2);
+        let only_cursor = item("Bibata", "Bibata");
         let mut registry = ThemeRegistry::default();
-        registry.icon = with_bundled_icon_themes(Vec::new());
-        assert_eq!(registry.label(PickerKind::Icon, "McMojave-circle"), "McMojave-circle");
-        assert_eq!(ids(&registry.icon), ["PlagueSur", "candy-icons"]);
-        // Discovered rows keep their installed name and are not duplicated.
-        let found = with_bundled_icon_themes(vec![item("PlagueSur", "Installed PlagueSur")]);
-        assert_eq!(ids(&found), ["PlagueSur", "candy-icons"]);
-        assert_eq!(found[0].name, "Installed PlagueSur");
+        registry.cursor.push(only_cursor);
+        assert_eq!(registry.cursor[0].name, "Bibata");
     }
 
     #[test]

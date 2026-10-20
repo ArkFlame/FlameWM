@@ -109,7 +109,7 @@ impl HotkeyCapture {
 }
 
 /// Number of display-mode slots the Displays page exposes.
-pub const DISPLAY_MODE_SLOTS: usize = 8;
+pub const DISPLAY_MODE_SLOTS: usize = 4;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettingsUiState {
@@ -1336,7 +1336,7 @@ mod tests {
 
         // Slots cover the first DISPLAY_MODE_SLOTS modes; the rest are overflow but still reachable.
         let slots: Vec<ModeId> = client.display_mode_slots().iter().map(|m| m.id).collect();
-        assert_eq!(slots, (101..=108).map(ModeId).collect::<Vec<_>>());
+        assert_eq!(slots, (101..=104).map(ModeId).collect::<Vec<_>>());
         assert_eq!(client.display_mode_overflow(), 12 - DISPLAY_MODE_SLOTS);
         assert_eq!(client.display_mode_for_slot(8), None);
         let reachable: Vec<ModeId> = (0..12)

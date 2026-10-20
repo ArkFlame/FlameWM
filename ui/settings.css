@@ -51,29 +51,22 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .slider-thumb { position:absolute; left:0px; top:0px; width:12px; height:12px; border-radius:6px; background:#e6e8ea; }
 .step-button { width:32px; height:32px; display:flex; align-items:center; justify-content:center; border:1px solid #4a5056; border-radius:4px; background:#202326; font-size:16px; }
 .value-pill { min-width:58px; height:32px; padding:0 8px; display:flex; align-items:center; justify-content:center; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
-.value-label { color:var(--quiet); font-size:10px; white-space:nowrap; }
 .status-token { min-height:25px; padding:5px 8px; display:flex; align-items:center; justify-content:center; color:#c5cbd0; border:1px solid #454b50; border-radius:4px; background:#202326; font-size:10px; white-space:nowrap; }
-.display-layout { width:100%; height:auto; padding:10px; display:flex; align-items:flex-end; gap:10px; background:#181a1c; border:1px solid #363b3f; border-radius:6px; }
-.display-output { flex-grow:1; min-width:0; height:128px; padding:7px; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:3px; overflow:hidden; background:#232629; border:2px solid #596068; border-radius:6px; }
-.display-output:hover { border-color:var(--accent); }
-.display-output strong { max-width:100%; overflow:hidden; font-weight:500; }
-.display-output small { max-width:100%; overflow:hidden; color:var(--muted); font-size:10px; }
-.display-output em { width:100%; height:2px; display:block; background:var(--accent); }
+.display-output-selector { width:100%; display:flex; flex-direction:column; gap:7px; }
+.display-output { flex-grow:0; width:100%; height:40px; padding:4px 9px; display:flex; flex-direction:row; align-items:center; justify-content:flex-start; gap:8px; overflow:hidden; background:#232629; border:1px solid #596068; border-radius:6px; }
+.display-output:hover { border-color:var(--accent); background:#2d3033; }
+.display-output-copy { flex-grow:1; min-width:0; display:flex; flex-direction:column; gap:2px; overflow:hidden; }
+.display-output strong { display:block; font-weight:500; font-size:12px; overflow:hidden; white-space:nowrap; }
+.display-output small { color:var(--muted); font-size:10px; white-space:nowrap; overflow:hidden; }
+.display-output em { flex-grow:0; width:3px; height:26px; display:block; background:var(--accent); }
 .display-output .display-state-unselected { background:#596068; }
-.monitor-screen { width:100%; max-width:132px; height:62px; position:relative; background:#050607; border:1px solid #4b5055; border-radius:3px; }
-.wide-screen { max-width:148px; }
-.monitor-window { position:absolute; left:25px; top:10px; width:64px; height:31px; background:#2a2d31; border:1px solid #777c81; }
-.monitor-bar { position:absolute; left:0; bottom:0; width:100%; height:8px; display:flex; align-items:center; padding-left:4px; background:#1b1e20; }
-.monitor-bar div { width:4px; height:4px; background:var(--accent); }
 .display-card .setting-block { min-height:46px; }
 .scale-setting { flex-grow:1; display:flex; align-items:center; justify-content:flex-end; gap:12px; }
-.scale-current { display:flex; align-items:center; gap:6px; }
 .scale-buttons { display:flex; gap:4px; }
 .scale-buttons button { min-width:44px; height:32px; padding:0 4px; font-size:12px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .mode-block { flex-direction:column; align-items:stretch; gap:8px; }
-.mode-grid { width:100%; display:flex; gap:8px; }
-.mode-column { flex-grow:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
-.mode-slot { width:100%; min-width:0; height:28px; padding:0 8px; font-size:11px; display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
+.mode-grid { width:100%; min-width:0; display:flex; flex-direction:column; gap:4px; overflow:hidden; }
+.mode-slot { width:100%; min-width:0; flex-grow:0; height:28px; padding:0 8px; font-size:11px; display:flex; align-items:center; justify-content:center; white-space:nowrap; overflow:hidden; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .hotkey-card { padding:0; }
 .hotkey-row { min-height:48px; padding:7px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid var(--line-soft); }
 .hotkey-copy { flex-grow:1; min-width:0; display:flex; flex-direction:column; gap:3px; }

@@ -199,7 +199,9 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         slide: Option<SlideConfig>,
     ) -> Result<(), UiBackendError> {
-        self.controller.set_slide(surface.0, slide).map_err(Into::into)
+        self.controller
+            .set_slide(surface.0, slide)
+            .map_err(Into::into)
     }
 
     /// Root-sized `(width, height, RGBA8)` wallpaper canvas used instead of a root capture for the
@@ -209,7 +211,9 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         canvas: Option<(u32, u32, Vec<u8>)>,
     ) -> Result<(), UiBackendError> {
-        self.controller.set_popup_wallpaper(surface.0, canvas).map_err(Into::into)
+        self.controller
+            .set_popup_wallpaper(surface.0, canvas)
+            .map_err(Into::into)
     }
 
     /// Opt-in `(opacity, blur)` pseudo-transparency backdrop, captured before each first show.
@@ -218,7 +222,9 @@ impl SurfaceRuntime {
         surface: SurfaceHandle,
         percents: Option<(u8, u8)>,
     ) -> Result<(), UiBackendError> {
-        self.controller.set_popup_backdrop(surface.0, percents).map_err(Into::into)
+        self.controller
+            .set_popup_backdrop(surface.0, percents)
+            .map_err(Into::into)
     }
 
     pub fn raise(&self, surface: SurfaceHandle) -> Result<(), UiBackendError> {
@@ -255,7 +261,11 @@ impl SurfaceRuntime {
             .unwrap_or("unknown");
         let span = trace.map_or_else(
             || GeometryTrace::begin(role_label).for_surface(surface.0.get()),
-            |t| GeometryTrace { txn: t.txn, surface: surface.0.get(), role: role_label },
+            |t| GeometryTrace {
+                txn: t.txn,
+                surface: surface.0.get(),
+                role: role_label,
+            },
         );
         span.ui_request((x, y, width.max(1) as i32, height.max(1) as i32));
         self.controller
@@ -318,12 +328,22 @@ impl SurfaceRuntime {
         &self,
         surface: SurfaceHandle,
     ) -> Result<flamewm_render_x11::backdrop::BackdropCapture, UiBackendError> {
-        self.controller.capture_root_under(surface.0).map_err(Into::into)
+        self.controller
+            .capture_root_under(surface.0)
+            .map_err(Into::into)
     }
 
     /// Subscribes to root child map/unmap/configure changes (see the controller method).
     pub fn watch_root_changes(&self) {
         self.controller.watch_root_changes();
+    }
+
+    pub fn root_geometry(&self) -> (u32, u32) {
+        self.controller.root_geometry()
+    }
+
+    pub fn take_root_geometry_changed(&mut self) -> Option<(u32, u32)> {
+        self.controller.take_root_geometry_changed()
     }
 
     /// Whether root children changed since the last call.
@@ -336,7 +356,9 @@ impl SurfaceRuntime {
         &mut self,
         surface: SurfaceHandle,
     ) -> Result<flamewm_render_x11::backdrop::BackdropCapture, UiBackendError> {
-        self.controller.capture_root_under_unmapped(surface.0).map_err(Into::into)
+        self.controller
+            .capture_root_under_unmapped(surface.0)
+            .map_err(Into::into)
     }
 
     /// Installs or removes the static ARGB backdrop under a surface's translucent fills.
@@ -666,7 +688,8 @@ impl SurfaceRuntime {
         max_device_w: f32,
         max_device_h: f32,
     ) -> Result<(f32, f32), UiBackendError> {
-        let node = self.document_mut(surface)?
+        let node = self
+            .document_mut(surface)?
             .node_by_id(node_id)
             .ok_or_else(|| {
                 UiBackendError::Document(format!("missing semantic node '{node_id}'"))
@@ -746,7 +769,10 @@ fn document_space_extent(document: &RuntimeDocument) -> (f32, f32) {
         flamewm_render_core::Length::Px(value) => value,
         _ => fallback,
     };
-    (px(style.width, 1350.0).max(1.0), px(style.height, 641.0).max(1.0))
+    (
+        px(style.width, 1350.0).max(1.0),
+        px(style.height, 641.0).max(1.0),
+    )
 }
 
 /// Layout at the document-space extent, shared by the node-rect and intrinsic-size queries.
@@ -761,7 +787,9 @@ fn default_layout(document: &RuntimeDocument) -> flamewm_render_core::LayoutResu
 }
 
 fn effective_output_scale(scale: f32) -> f32 {
-    (scale.is_finite() && (0.5..=4.0).contains(&scale)).then_some(scale).unwrap_or(1.0)
+    (scale.is_finite() && (0.5..=4.0).contains(&scale))
+        .then_some(scale)
+        .unwrap_or(1.0)
 }
 
 #[cfg(test)]

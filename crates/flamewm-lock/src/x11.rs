@@ -1,4 +1,4 @@
-//! Xlib keyboard and pointer grabs on the root window, plus key decoding.
+//! Xlib keyboard grab on the root window, plus pointer sampling and key decoding.
 //! Grabs live on the lock screen's own connection, so every key press reaches
 //! this process and never the WM's passive shortcut grabs.
 use std::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
@@ -184,7 +184,9 @@ pub struct PointerState {
 impl PointerState {
     /// Button or pointer activity relative to `previous`: a move or a button change.
     pub fn moved_or_buttons_changed(&self, previous: &Self) -> bool {
-        self.x != previous.x || self.y != previous.y || (self.mask & BUTTON_MASK) != (previous.mask & BUTTON_MASK)
+        self.x != previous.x
+            || self.y != previous.y
+            || (self.mask & BUTTON_MASK) != (previous.mask & BUTTON_MASK)
     }
 
     /// Caps Lock is on when the server reports the Lock modifier.
@@ -201,7 +203,7 @@ pub struct KeyBatch {
     pub presses: usize,
 }
 
-/// An owned connection that holds the keyboard and pointer grabs while alive.
+/// An owned connection that holds the keyboard grab while alive and samples pointer activity.
 pub struct Session {
     display: *mut Display,
     root: c_ulong,
@@ -233,9 +235,8 @@ impl Session {
         unsafe { XConnectionNumber(self.display) }
     }
 
-    /// Takes the keyboard grab on the root window. The pointer grab is taken on the
-    /// lock surface itself (`SurfaceRuntime::grab_pointer`), so presses reach its
-    /// controls. Idempotent; the lock is never dropped by a failed retry.
+    /// Takes the keyboard grab on the root window. Interactive lock surfaces receive
+    /// ordinary pointer events independently. Idempotent; the lock is never dropped by a failed retry.
     pub fn try_grab(&mut self) -> bool {
         // SAFETY: `display` is live; root is a valid window of this display.
         let keyboard = unsafe {
@@ -405,14 +406,20 @@ mod tests {
 
     #[test]
     fn display_off_enables_dpms_then_forces_off() {
-        let mut calls = Recorder { result: true, ..Recorder::default() };
+        let mut calls = Recorder {
+            result: true,
+            ..Recorder::default()
+        };
         assert!(set_power(&mut calls, false));
         assert_eq!(calls.calls, vec!["enable", "force(3)"]);
     }
 
     #[test]
     fn display_on_forces_on_without_enable() {
-        let mut calls = Recorder { result: true, ..Recorder::default() };
+        let mut calls = Recorder {
+            result: true,
+            ..Recorder::default()
+        };
         assert!(set_power(&mut calls, true));
         assert_eq!(calls.calls, vec!["force(0)"]);
     }

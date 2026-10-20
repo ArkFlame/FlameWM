@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 pub mod control;
+mod display_layout;
 pub mod file_chooser;
 pub mod runtime;
 pub mod theme_picker;
@@ -65,9 +66,11 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "weather-auto-location-on",
     "time-auto-zone-on",
     "font-toggle-on",
+    "wallpaper-share-on",
 ];
 /// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
 const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
+    ("shareWallpaper", "wallpaper-share-on", "wallpaper-share-off", false),
     ("taskbarShowWeather", "taskbar-weather-on", "taskbar-weather-off", true),
     ("taskbarShowVolume", "taskbar-volume-on", "taskbar-volume-off", true),
     ("taskbarShowNetwork", "taskbar-network-on", "taskbar-network-off", true),
@@ -269,7 +272,7 @@ struct HotkeyRow {
     node: &'static str,
 }
 
-static HOTKEY_ROWS: [HotkeyRow; 6] = [
+static HOTKEY_ROWS: [HotkeyRow; 9] = [
     HotkeyRow {
         slot: "start",
         action: flamewm_api::shortcuts::ACTION_TOGGLE_START_MENU,
@@ -299,6 +302,24 @@ static HOTKEY_ROWS: [HotkeyRow; 6] = [
         action: flamewm_api::shortcuts::ACTION_WORKSPACE_DOWN,
         label: "Desktop down",
         node: "hotkey-key-down",
+    },
+    HotkeyRow {
+        slot: "shot-full",
+        action: flamewm_api::shortcuts::ACTION_SCREENSHOT_FULL,
+        label: "Capture all screens",
+        node: "hotkey-key-shot-full",
+    },
+    HotkeyRow {
+        slot: "shot-region",
+        action: flamewm_api::shortcuts::ACTION_SCREENSHOT_REGION,
+        label: "Capture and annotate region",
+        node: "hotkey-key-shot-region",
+    },
+    HotkeyRow {
+        slot: "shot-window",
+        action: flamewm_api::shortcuts::ACTION_SCREENSHOT_WINDOW,
+        label: "Capture active window",
+        node: "hotkey-key-shot-window",
     },
     HotkeyRow {
         slot: "lock",
@@ -428,6 +449,7 @@ enum SettingsAction {
     Hotkey(&'static str, HotkeyOperation),
     /// Output row `slot` on the current output page.
     DisplaySelect(usize),
+    DisplayArrange(display_layout::Side),
     /// Mode row `slot` on the current mode page.
     DisplaySlot(usize),
     OutputPage(PageStep),
@@ -498,6 +520,9 @@ pub struct SettingsApplication<T: ControlTransport> {
     appearance_tab: AppearanceTab,
     /// Resolved cursor theme last loaded into this window's live cursor owners.
     applied_cursor_theme: Option<String>,
+    /// Pointer origin for an output card; motion remains local, only release
+    /// causes a native RandR request.
+    monitor_drag: Option<(usize, f32, u64, OutputId)>,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -518,6 +543,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             theme_status: None,
             appearance_tab: AppearanceTab::Theme,
             applied_cursor_theme: None,
+            monitor_drag: None,
         }
     }
 
@@ -555,6 +581,48 @@ impl<T: ControlTransport> SettingsApplication<T> {
     ) -> Result<(), String> {
         if event.action == ANIMATION_SPEED_SLIDER {
             return self.handle_animation_speed_drag(event, document);
+        }
+        if let Some(raw_slot) = event.action.strip_prefix("settings.display.select.") {
+            if let Ok(slot) = raw_slot.parse::<usize>() {
+                if event.phase == UiActionPhase::Press {
+                    self.monitor_drag = self.output_page_slot(slot).and_then(|output| {
+                        self.client.displays().map(|snapshot| {
+                            (slot, event.x, snapshot.generation, output.id.clone())
+                        })
+                    });
+                    return Ok(());
+                }
+                if event.phase == UiActionPhase::Motion {
+                    if let Some((pressed_slot, origin_x, _, _)) = &self.monitor_drag {
+                        if *pressed_slot == slot && (event.x - origin_x).abs() >= 40.0 {
+                            // Only visual feedback while dragging, never native RandR state.
+                            let accent = self.accent()?;
+                            document.border(&format!("display-output-{slot}"), accent)?;
+                        }
+                    }
+                    return Ok(());
+                }
+                if event.phase == UiActionPhase::Release {
+                    let origin = self.monitor_drag.take();
+                    if let Some((pressed_slot, initial_x, generation, pressed_id)) = origin
+                        .filter(|(pressed_slot, _, _, _)| *pressed_slot == slot)
+                    {
+                        let distance = event.x - initial_x;
+                        if distance.abs() >= 40.0 {
+                            let current_generation = self.client.displays().map_or(0, |s| s.generation);
+                            if generation != current_generation ||
+                                self.output_page_slot(slot).is_none_or(|o| o.id != pressed_id) {
+                                return Err("display topology changed during monitor drag".into());
+                            }
+                            self.client.select_output(&pressed_id);
+                            let side = if distance < 0.0 { display_layout::Side::Left }
+                                else { display_layout::Side::Right };
+                            self.arrange_display(side)?;
+                            return self.settle(document);
+                        }
+                    }
+                }
+            }
         }
         if event.phase != UiActionPhase::Release || !event.inside {
             return Ok(());
@@ -595,6 +663,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
         event: &UiKeyEvent,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        // Escape cancels an in-progress monitor gesture without ever applying RandR.
+        if event.phase == UiKeyPhase::Release && event.key == "Escape"
+            && self.monitor_drag.take().is_some() {
+            return self.settle(document);
+        }
         if event.phase == UiKeyPhase::Release && self.hotkey_armed {
             if let Some(binding) = bare_super_binding(event) {
                 self.finish_hotkey_capture(binding)?;
@@ -709,10 +782,28 @@ impl<T: ControlTransport> SettingsApplication<T> {
         self.client.displays().map_or(0, |snapshot| snapshot.outputs.len())
     }
 
-    /// Output row `slot` of the current output page, i.e. absolute `page * 4 + slot`.
+    /// Stable visual left-to-right ordering derived from actual RandR geometry,
+    /// not X server enumeration order. Output IDs remain the native authority.
+    fn ordered_output_indices(&self) -> Vec<usize> {
+        let Some(snapshot) = self.client.displays() else { return vec![]; };
+        let mut indices: Vec<_> = (0..snapshot.outputs.len()).collect();
+        indices.sort_by_key(|&i| {
+            let o = &snapshot.outputs[i];
+            (!o.geometry.is_valid(), if o.geometry.is_valid() { o.geometry.x } else { i32::MAX },
+             if o.geometry.is_valid() { o.geometry.y } else { i32::MAX }, i)
+        });
+        indices
+    }
+
+    fn output_page_index(&self, slot: usize) -> Option<usize> {
+        let absolute = self.pages.output_page.checked_mul(OUTPUT_PAGE_SLOTS)?.checked_add(slot)?;
+        self.ordered_output_indices().get(absolute).copied()
+    }
+
+    /// Output row `slot` in visual left-to-right order; page/slot and the
+    /// selection/drag input path MUST use this same mapping.
     fn output_page_slot(&self, slot: usize) -> Option<&flamewm_api::display::OutputSnapshot> {
-        let index = self.pages.output_page * OUTPUT_PAGE_SLOTS + slot;
-        self.client.displays()?.outputs.get(index)
+        self.client.displays()?.outputs.get(self.output_page_index(slot)?)
     }
 
     fn execute(&mut self, action: SettingsAction) -> Result<(), String> {
@@ -866,6 +957,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::TaskbarSizeCycle => self.set_taskbar_size(1)?,
             SettingsAction::FontFamilyCycle => self.cycle_font_family()?,
             SettingsAction::Hotkey(action, operation) => self.handle_hotkey(action, operation)?,
+            SettingsAction::DisplayArrange(side) => self.arrange_display(side)?,
             SettingsAction::DisplaySelect(slot) => {
                 let generation = self.client.displays().map_or(0, |snapshot| snapshot.generation);
                 let index = page_slot_index(
@@ -878,9 +970,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     "display output",
                 )?;
                 let output_id = self
-                    .client
-                    .displays()
-                    .and_then(|snapshot| snapshot.outputs.get(index))
+                    .ordered_output_indices().get(index).and_then(|&physical| {
+                        self.client.displays().and_then(|snapshot| snapshot.outputs.get(physical))
+                    })
                     .map(|output| output.id.clone())
                     .ok_or_else(|| format!("no display output at index {index}"))?;
                 if !self.client.select_output(&output_id) {
@@ -1123,6 +1215,40 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     picker.error = Some(message);
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn arrange_display(&mut self, side: display_layout::Side) -> Result<(), String> {
+        let output = self.client.ui().selected_output.as_ref()
+            .ok_or_else(|| "select an active monitor before arranging".to_owned())?.clone();
+        // Validate against a *fresh* WM snapshot instead of a stale Settings
+        // projection. The external RandR adapter never saves optimistic state.
+        self.client.refresh_displays().map_err(control_error)?;
+        let snapshot = self.client.displays()
+            .ok_or_else(|| "display state unavailable".to_owned())?;
+        let Some(layout) = display_layout::plan(snapshot, &output, side)? else {
+            return Ok(());
+        };
+        display_layout::apply(&layout)?;
+        // Readback must confirm every output's geometry, mode, scale and primary.
+        // No success or persistence solely from xrandr's exit status.
+        self.client.refresh_displays().map_err(control_error)?;
+        let observed = self.client.displays()
+            .ok_or_else(|| "display readback unavailable".to_owned())?;
+        if let Err(error) = display_layout::verify(&layout, observed) {
+            let rollback = display_layout::rollback_if_safe(&layout, observed);
+            // Best-effort recovery must never be misreported as an accepted
+            // commit, even if the rollback command itself exited successfully.
+            let _ = self.client.refresh_displays();
+            return Err(match rollback {
+                Ok(()) => format!("{error}; previous monitor positions requested"),
+                Err(reason) => format!("{error}; rollback unavailable: {reason}"),
+            });
+        }
+        self.pages.generation = Some(observed.generation);
+        if let Err(error) = display_layout::persist_verified(&layout) {
+            return Err(format!("monitor layout applied but not saved: {error}"));
         }
         Ok(())
     }
@@ -1405,25 +1531,21 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 continue;
             };
             document.visible(&id, true)?;
-            document.text(
-                &format!("display-output-name-{slot}"),
-                output.connector.clone(),
-            )?;
-            let resolution = output
-                .modes
-                .iter()
+            let shown = output.connected && output.geometry.is_valid();
+            document.text(&format!("display-output-name-{slot}"),
+                format!("{} · {}", self.pages.output_page * OUTPUT_PAGE_SLOTS + slot + 1, output.connector))?;
+            let resolution = output.modes.iter()
                 .find(|mode| mode.id == output.current_mode)
                 .map_or(output.geometry.size(), |mode| mode.resolution);
-            document.text(
-                &format!("display-output-size-{slot}"),
-                format!(
-                    "{} x {}  |  {}%",
-                    resolution.width, resolution.height, output.shell_scale_percent
-                ),
-            )?;
+            document.text(&format!("display-output-size-{slot}"),
+                if shown { format!("{} × {}", resolution.width, resolution.height) }
+                else { "Disconnected".to_owned() })?;
             let selected = self.client.ui().selected_output.as_ref() == Some(&output.id);
             document.visible(&format!("display-output-selected-{slot}"), selected)?;
             document.visible(&format!("display-output-unselected-{slot}"), !selected)?;
+            document.border(&id, if selected { self.accent()? } else {
+                UiColor { r: 89, g: 96, b: 104, a: 255 }
+            })?;
         }
         project_pager(
             document,
@@ -1446,17 +1568,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "display-selected-resolution",
                 format!("{} x {}", resolution.width, resolution.height),
             )?;
-            document.text(
-                "display-selected-scale",
-                format!("{}%", output.shell_scale_percent),
-            )?;
+            let accent = self.accent()?;
+            for scale in [100_u16, 125, 150, 175, 200] {
+                let id = format!("display-scale-{scale}");
+                if scale == output.shell_scale_percent {
+                    // `accent_color` is intentionally translucent for fills; the selected
+                    // outline needs an opaque stroke to remain clearly identifiable.
+                    document.border(&id, UiColor { a: 255, ..accent })?;
+                } else {
+                    document.border(&id, UiColor { r: 74, g: 80, b: 86, a: 255 })?;
+                }
+            }
         } else {
             for id in [
                 "display-selected-title",
                 "display-selected-resolution",
-                "display-selected-scale",
             ] {
                 document.text(id, "\u{200b}".to_owned())?;
+            }
+            for scale in [100_u16, 125, 150, 175, 200] {
+                document.border(
+                    &format!("display-scale-{scale}"),
+                    UiColor { r: 74, g: 80, b: 86, a: 255 },
+                )?;
             }
         }
         self.sync_display_modes(document)?;
@@ -1498,6 +1632,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(SettingValue::Text(family)) = self.setting_value("fontFamily") {
             document.font_family(family.clone())?;
         }
+        document.ui_font_defaults(
+            self.integer_setting("fontSizeOffset").unwrap_or(0) as f32,
+            self.bool_setting("fontBold"),
+        )?;
         self.sync_value_text(document)?;
         self.sync_weather(document)?;
         self.sync_time_zone(document)?;
@@ -1813,11 +1951,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         )?;
         let note = if total == 0 {
             "This output reports no selectable modes".to_owned()
-        } else if pages > 1 {
-            format!("{total} modes across {pages} pages")
         } else {
             "\u{200b}".to_owned()
         };
+        document.visible("display-mode-overflow", total == 0)?;
         document.text("display-mode-overflow", note)?;
         let pending = self.client.ui().pending_display_transaction.is_some();
         document.visible("display-confirm", pending)?;
@@ -2079,7 +2216,7 @@ struct ColorPicker {
 const ANIMATION_STYLE_ROWS: [(&str, &[&str]); 5] = [
     ("startAnimation", &["none", "slide", "fade", "magic-lamp"]),
     ("minimizeAnimation", &["none", "fade", "magic-lamp"]),
-    ("maximizeAnimation", &["none", "fade", "magic-lamp"]),
+    ("maximizeAnimation", &["none", "fade", "scale"]),
     ("windowOpenAnimation", &["none", "scale", "fade"]),
     ("windowCloseAnimation", &["none", "fade"]),
 ];
@@ -2350,6 +2487,7 @@ impl<D: UiDocumentAccess + ?Sized> UiDocumentAccess for NodeFailures<'_, D> {
         foreground_clear(id: &str);
         font_size(id: &str, size_px: f32);
         font_weight(id: &str, weight: u16);
+        ui_font_defaults(size_offset: f32, bold: bool);
         font_family(family: String);
         color_variable(name: &str, color: UiColor);
         overflow(id: &str, x: flamewm_ui_x11::Overflow, y: flamewm_ui_x11::Overflow);
@@ -2532,13 +2670,14 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 24] = [
+const TOGGLE_KEYS: [&str; 25] = [
     "stickyNotesEnabled", "fontBold", "animationsEnabled", "startAnimationEnabled",
     "windowOpenAnimationEnabled", "minimizeAnimationEnabled", "maximizeAnimationEnabled", "lockShowDate",
     "lockShowUsername", "lockOnSuspend", "taskbarShowSeconds", "taskbarShowDate",
     "taskbarShowWeather", "taskbarShowVolume", "taskbarShowNetwork", "taskbarShowBattery",
     "taskbarBatteryOnlyWhenRelevant", "taskbarShowClock", "taskbarShowWorkspaces", "weatherEnabled",
     "autoLocationEnabled", "autoTimeZoneEnabled", "snapPreviewEnabled", "focusFollowsMouse",
+    "shareWallpaper",
 ];
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
@@ -2620,6 +2759,8 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(direction) = action.strip_prefix("settings.font-size.").and_then(step) {
         return Ok(SettingsAction::FontSize(direction));
     }
+    if action == "settings.display.arrange.left" { return Ok(SettingsAction::DisplayArrange(display_layout::Side::Left)); }
+    if action == "settings.display.arrange.right" { return Ok(SettingsAction::DisplayArrange(display_layout::Side::Right)); }
     if let Some(slot) = action.strip_prefix("settings.display.select.") {
         return slot
             .parse::<usize>()
@@ -3235,12 +3376,14 @@ mod display_pager_fixture_tests {
             .expect("select fifth output");
         assert_eq!(app.client.ui().selected_output, Some(OutputId::new("DP-4")));
 
-        // Eight mode rows per page: the second page's slot three is mode index 11.
-        assert_eq!(DISPLAY_MODE_SLOTS, 8);
+        // Four vertical mode rows per page avoid the overflowing right column.
+        assert_eq!(DISPLAY_MODE_SLOTS, 4);
         assert_eq!(app.client.display_mode_count(), 12);
-        assert_eq!(page_count(app.client.display_mode_count(), DISPLAY_MODE_SLOTS), 2);
+        assert_eq!(page_count(app.client.display_mode_count(), DISPLAY_MODE_SLOTS), 3);
         app.execute(SettingsAction::ModePage(PageStep::Next))
             .expect("next mode page");
+        app.execute(SettingsAction::ModePage(PageStep::Next))
+            .expect("last mode page");
         let fifth_output_current_mode = ModeId(411);
         let fifth_output_mode_11 = ModeId(412);
         let selected_output = app
@@ -3282,7 +3425,7 @@ mod display_pager_fixture_tests {
         assert_eq!(app.client.ui().pending_display_transaction, Some(flamewm_api::TransactionId(7)));
 
         // End-of-list pager state is derived from the data and cannot advance past its last page.
-        assert_eq!(step_page(app.pages.mode_page, PageStep::Next, 2), app.pages.mode_page);
+        assert_eq!(step_page(app.pages.mode_page, PageStep::Next, 3), app.pages.mode_page);
         assert_eq!(page_label(app.pages.mode_page, DISPLAY_MODE_SLOTS, 12), "9-12 of 12");
 
         // A cursor stamped against the prior generation rejects the same slot before any request.

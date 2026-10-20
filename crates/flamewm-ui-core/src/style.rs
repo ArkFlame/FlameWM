@@ -196,7 +196,7 @@ impl Default for ShellMetrics {
             workspace_row_gap: 1,
             workspace_pad_x: 3,
             workspace_pad_y: 4,
-            workspace_rows: 2,
+            workspace_rows: flamewm_api::workspace::WORKSPACE_ROWS as u8,
             tray_button_width: 30,
             tray_icon_size: 18,
             clock_min_width: 70,

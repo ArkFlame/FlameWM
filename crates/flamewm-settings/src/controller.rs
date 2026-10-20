@@ -607,7 +607,8 @@ mod tests {
     #[test]
     fn hotkey_row_markup_ids_parse_to_their_capture_action() {
         use flamewm_api::shortcuts::{
-            ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WORKSPACE_DOWN,
+            ACTION_SESSION_LOCK, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
+            ACTION_SCREENSHOT_WINDOW, ACTION_TOGGLE_START_MENU, ACTION_WORKSPACE_DOWN,
             ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
         };
         let html = include_str!("../../../ui/settings.html");
@@ -618,6 +619,9 @@ mod tests {
             ("up", ACTION_WORKSPACE_UP),
             ("down", ACTION_WORKSPACE_DOWN),
             ("lock", ACTION_SESSION_LOCK),
+            ("shot-full", ACTION_SCREENSHOT_FULL),
+            ("shot-region", ACTION_SCREENSHOT_REGION),
+            ("shot-window", ACTION_SCREENSHOT_WINDOW),
         ];
         for (slot, binding) in rows {
             // The row's key button is the one that carries the capture id.
@@ -2288,7 +2292,7 @@ mod tests {
         }
     }
 
-    /// Twelve modes with ids 0..12 on the selected output: page 0 holds 0..8, page 1 holds 8..12.
+    /// Twelve modes with ids 0..12 on the selected output, paged four at a time.
     fn twelve_mode_display_snapshot() -> DisplaySnapshot {
         let mut snapshot = display_snapshot();
         let output = &mut snapshot.outputs[0];
@@ -2332,7 +2336,7 @@ mod tests {
     }
 
     #[test]
-    fn display_mode_page_one_slot_three_begins_absolute_mode_eleven() {
+    fn display_mode_page_two_slot_three_begins_absolute_mode_seven() {
         let (requests, mut transport) = recording_transport();
         transport.responses.extend([
             Ok(ControlResponse::Displays(twelve_mode_display_snapshot())),
@@ -2343,11 +2347,11 @@ mod tests {
         application
             .handle_action(&release("settings.display.modes.next"), &mut document)
             .expect("mode page 2");
-        assert_eq!(document.texts["display-mode-page-label"], "9-12 of 12");
+        assert_eq!(document.texts["display-mode-page-label"], "5-8 of 12");
         application
             .handle_action(&release("settings.display.slot.3"), &mut document)
-            .expect("page 1 slot 3 begins");
-        assert_eq!(begun_modes(&requests), vec![ModeId(11)]);
+            .expect("page 2 slot 3 begins");
+        assert_eq!(begun_modes(&requests), vec![ModeId(7)]);
     }
 
     #[test]
@@ -2391,15 +2395,15 @@ mod tests {
         application
             .handle_action(&release("settings.display.modes.next"), &mut document)
             .expect("mode page 2");
-        // Page 1 slot 7 is absolute index 15, past the 12 modes.
+        // The four-slot page never exposes a right-column/future slot.
         let past_end = application
-            .handle_action(&release("settings.display.slot.7"), &mut document)
-            .expect_err("index 15 has no mode");
+            .handle_action(&release("settings.display.slot.4"), &mut document)
+            .expect_err("slot 4 is outside the page");
         assert!(
-            past_end.contains("index 15"),
+            past_end.contains("outside the page"),
             "legible range error: {past_end}"
         );
-        // Slot 9 is outside the 8-slot page.
+        // Arbitrary higher slots stay rejected as well.
         let outside = application
             .handle_action(&release("settings.display.slot.9"), &mut document)
             .expect_err("slot 9 is outside the page");
@@ -2424,7 +2428,7 @@ mod tests {
         application
             .handle_action(&release("settings.display.modes.prev"), &mut document)
             .expect("prev on first page is a no-op");
-        assert_eq!(document.texts["display-mode-page-label"], "1-8 of 12");
+        assert_eq!(document.texts["display-mode-page-label"], "1-4 of 12");
         assert_eq!(document.visible.get("display-mode-prev-off"), Some(&true));
         for _ in 0..2 {
             application

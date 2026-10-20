@@ -1,4 +1,41 @@
+## Pass 26 — Test compilation, rounded taskbar paint, desktop text shadows
+- Fix the exact E0425/E0433 errors: import `desktop_takes_focus_on_press` and `X11WindowRole` into the X11 event-loop test module.
+- Synchronize floating taskbar rounded paint with the native XShape radius (correct physical/logical scaling); classic taskbar remains square. Avoid invalidating unchanged border radii.
+- Add typed CSS `text-shadow` support, Xft-rendered shadow paint for desktop labels, and compiled RWR format v6 with backwards decoding of v2–v5.
+- Correct `flamewm-render-inspect` to report the file version instead of hard-coded RWRB/2.
+- Add focused Rust regressions and offline source-contract tests. Native Rust/Xephyr build not run in this environment.
+
+## Pass 25 — Desktop Convert Cargo cache recovery
+- Fail-closed release build invalidates stale desktop core/UI artifacts, and new `scripts/check-cargo` does the same for dev checks.
+- Expanded conversion API guard and fresh-mtime overlay archive to prevent returning E0432/E0599/E0061 after an import.
+
 # Changelog
+
+## Pass 23 — Installed-system production defects (2026-10-19)
+
+- Repair installed titlebar-control SVG resolution through the canonical package root and add a visible native fallback.
+- Reproject weather to every taskbar, not only the primary panel.
+- Preserve physical RandR primary output across monitor enumeration changes (with deterministic fallback).
+- Display desktop launcher Name metadata, including locale values, independently from launchability.
+- Register Super+E / Ctrl+Alt+E and Super+T / Ctrl+Alt+T through canonical X11 shortcut grabs.
+- Add a read-only installed-system diagnostic for KDE Wallet service visibility, MIME defaults, and monitor topology.
+- Full draggable monitor arrangement, live drag-ghost visibility, and KDE Wallet/MIME provider integration still require native work. See docs/FLAMEWM_PASS23_INSTALLED_PRODUCTION_STABILITY.md.
+
+
+## Pass 22 — Debian release recovery (2026-10-19)
+
+- One-command `./scripts/build-deb` now prevents stale `Architecture: any` .deb installation and verifies checksums and SDDM session.
+- Source archive validated before Debian staging; incomplete package outputs cleaned on failure.
+- Added regression coverage for successful native-metadata fixture builds and failed Cargo builds with stale artifacts.
+
+
+## 0.1.0 — Pass 18 (source iteration, native verification pending)
+
+- Desktop drag hides the stationary originals and shows a 50% opacity retained ghost until release.
+- Desktop receives focused Delete key events; selected entries use Move to Trash confirmation.
+- Convert wheel uses live Surfaces color/opacity/blur and a hover-only accent sector mask, no petal art.
+- Ten external browser-only design concepts; Quiet radial (#04) integrated into native UI.
+
 
 ## 0.1.0
 

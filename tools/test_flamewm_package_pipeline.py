@@ -1,0 +1,181 @@
+"""Native packaging regression: reject Architecture:any and stale incomplete releases.
+
+Uses tiny executable stubs rather than compiling Rust; verifies the packaging
+and dpkg metadata pipeline, never claims a native application runtime test.
+"""
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+BINARIES = ("flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
+            "flamewm-screenshot", "flamewm-render-x11", "flamewm-render-compile", "flamewm-render-inspect", "flamewm-lock")
+
+
+@unittest.skipUnless(shutil.which("dpkg-deb") and shutil.which("dpkg") and shutil.which("tar") and
+                     subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True).stdout.strip() == "amd64",
+                     "native amd64 dpkg-deb and GNU tar required")
+class DebianReleasePipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="flamewm-package-pipeline-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "flamewm-sample"
+        self.root.mkdir()
+        for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
+                     "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop", "packaging/pam.d/flamewm-lock",
+                     "packaging/install-manifest.txt", "packaging/debian/control.in",
+                     "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package",
+                     "scripts/package-source-archive", "scripts/flamewm-session-wrapper",
+                     "tools/flamewm_desktop_services.py"):
+            src = ROOT / file
+            dest = self.root / file
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        for doc in ("INSTALL.md", "PACKAGING.md"):
+            dest = self.root / "docs" / doc
+            dest.parent.mkdir(exist_ok=True)
+            dest.write_text("Packaging fixture\n", encoding="utf-8")
+        directory = self.root / "LICENSES"
+        directory.mkdir()
+        (directory / "sample.txt").write_text("License fixture\n", encoding="utf-8")
+        cursor = self.root / "assets/cursors"
+        (cursor / "cursors").mkdir(parents=True)
+        (cursor / "cursors/left_ptr").write_bytes(b"fixture")
+        (cursor / "index.theme").write_text("[Icon Theme]\nName=Breeze Dark\n", encoding="utf-8")
+        (self.root / "assets/web/breeze").mkdir(parents=True)
+        (self.root / "assets/web/breeze/application-menu.svg").write_text("<svg/>")
+        release = self.root / ".target/release"
+        release.mkdir(parents=True)
+        for binary in BINARIES:
+            stub = release / binary
+            stub.write_text("#!/bin/sh\necho FlameWM fixture\n", encoding="utf-8")
+            stub.chmod(0o755)
+        self.manifest = self.root / "packaging/source-manifest.txt"
+        self.manifest.write_text("scripts/\ntools/\nassets/\n@exec scripts/version\n@exec scripts/build-deb\n@exec scripts/check-cargo\n@exec scripts/package\n@exec scripts/package-source-archive\n@exec scripts/flamewm-session-wrapper\n@exec tools/flamewm_desktop_services.py\n", encoding="utf-8")
+
+        tools = self.root / 'tools'
+        tools.mkdir(exist_ok=True)
+        (tools / 'ensure_desktop_conversion_cargo.py').write_text("#!/usr/bin/env python3\nimport os, sys\nwith open(os.environ['FLAMEWM_FAKE_EVENTS'], 'a') as f:\n    f.write('GATE ' + ' '.join(sys.argv[1:]) + '\\n')\nif os.environ.get('FLAMEWM_FAKE_GATE_FAIL') == '1':\n    print('FLAMEWM-CONVERT-CARGO: BLOCKED mock gate failure', file=sys.stderr)\n    sys.exit(23)\n", encoding='utf-8')
+        self.events = self.root / 'events.txt'
+
+    def package(self):
+        return subprocess.run([str(self.root / "scripts/package")], cwd=self.root,
+                              capture_output=True, text=True, timeout=60)
+
+    def build_deb(self, cargo_exit=0, gate_failure=False):
+        fakebin = self.root / "fakebin"
+        fakebin.mkdir(exist_ok=True)
+        cargo = fakebin / "cargo"
+        cargo.write_text(f"#!/bin/sh\nprintf 'CARGO %s\\n' \"$*\" >> \"$FLAMEWM_FAKE_EVENTS\"\nexit {cargo_exit}\n", encoding="utf-8")
+        cargo.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = str(fakebin) + os.pathsep + env.get("PATH", "")
+        env['FLAMEWM_FAKE_EVENTS'] = str(self.events)
+        if gate_failure:
+            env['FLAMEWM_FAKE_GATE_FAIL'] = '1'
+        return subprocess.run([str(self.root / "scripts/build-deb")], cwd=self.root,
+                              capture_output=True, text=True, timeout=90, env=env)
+
+    def test_build_deb_is_fresh_and_installable(self):
+        result = self.build_deb()
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("FLAMEWM-DEB-READY", result.stdout)
+        events = self.events.read_text().splitlines()
+        self.assertEqual(events[0], 'GATE --profile release --include-ui --force')
+        self.assertTrue(events[1].startswith('CARGO build --release --workspace'), events)
+        deb = self.root / ".target/dist/flamewm_0.1.0_amd64.deb"
+        self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(deb), "Architecture"], text=True).strip(), "amd64")
+        self.assertTrue((deb.parent / "SHA256SUMS").exists())
+        contents = subprocess.check_output(["dpkg-deb", "--contents", str(deb)], text=True)
+        self.assertIn("usr/share/applications/flamewm-screenshot.desktop", contents)
+        self.assertIn("usr/bin/flamewm-screenshot", contents)
+        self.assertIn("usr/share/xdg-desktop-portal/flamewm-portals.conf", contents)
+        self.assertIn("usr/libexec/flamewm/flamewm-session-wrapper", contents)
+        self.assertIn("usr/libexec/flamewm/flamewm-desktop-services", contents)
+
+    def test_build_failure_removes_old_deb_and_checksum(self):
+        dist = self.root / ".target/dist"
+        dist.mkdir(parents=True)
+        old = dist / "flamewm_0.1.0_amd64.deb"
+        old.write_bytes(b"old Architecture:any payload")
+        (dist / "SHA256SUMS").write_text("stale", encoding="utf-8")
+        result = self.build_deb(cargo_exit=17)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("FLAMEWM-DEB-READY", result.stdout)
+        self.assertFalse(old.exists())
+        self.assertFalse((dist / "SHA256SUMS").exists())
+
+    def test_missing_assets_preflight_removes_old_deb(self):
+        dist = self.root / ".target/dist"
+        dist.mkdir(parents=True)
+        old = dist / "flamewm_0.1.0_amd64.deb"
+        old.write_bytes(b"old invalid payload")
+        (dist / "SHA256SUMS").write_text("stale", encoding="utf-8")
+        shutil.rmtree(self.root / "assets/web/breeze")
+        result = self.build_deb()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("assets missing", result.stderr)
+        self.assertFalse(old.exists())
+        self.assertFalse((dist / "SHA256SUMS").exists())
+
+    def test_incomplete_core_gate_blocks_build_before_cargo_and_old_deb_is_gone(self):
+        dist = self.root / '.target/dist'
+        dist.mkdir(parents=True, exist_ok=True)
+        old = dist / 'flamewm_0.1.0_amd64.deb'
+        old.write_bytes(b'stale')
+        (dist / 'SHA256SUMS').write_text('old')
+        result = self.build_deb(gate_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FLAMEWM-CONVERT-CARGO: BLOCKED', result.stderr)
+        self.assertNotIn('FLAMEWM-DEB-READY', result.stdout)
+        self.assertFalse(old.exists())
+        self.assertFalse((dist / 'SHA256SUMS').exists())
+        self.assertEqual(self.events.read_text().splitlines(),
+                         ['GATE --profile release --include-ui --force'])
+
+    def test_dev_check_invalidate_before_cargo_check(self):
+        self.build_deb()  # creates fake Cargo executable
+        self.events.unlink()
+        env = os.environ.copy()
+        env['PATH'] = str(self.root / 'fakebin') + os.pathsep + env.get('PATH', '')
+        env['FLAMEWM_FAKE_EVENTS'] = str(self.events)
+        checked = subprocess.run([str(self.root / 'scripts/check-cargo')], cwd=self.root,
+                                 env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(self.events.read_text().splitlines(), [
+            'GATE --profile dev --include-ui --force',
+            'CARGO check --workspace --all-targets',
+        ])
+
+    def test_release_is_real_amd64_and_sha256_complete(self):
+        result = self.package()
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        dist = self.root / ".target/dist"
+        deb = dist / "flamewm_0.1.0_amd64.deb"
+        self.assertTrue(deb.is_file())
+        fields = subprocess.check_output(["dpkg-deb", "-f", str(deb), "Architecture"], text=True).strip()
+        self.assertEqual(fields, "amd64")
+        self.assertTrue((dist / "SHA256SUMS").exists())
+        checked = subprocess.run(["sha256sum", "-c", "SHA256SUMS"], cwd=dist,
+                                 capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        self.assertTrue((dist / "flamewm-0.1.0-source.tar.gz").exists())
+        entry = subprocess.check_output(["dpkg-deb", "--contents", str(deb)], text=True)
+        self.assertIn("./usr/share/xsessions/flamewm.desktop", entry)
+
+    def test_unregistered_version_refuses_to_publish_deb(self):
+        self.manifest.write_text(self.manifest.read_text().replace("@exec scripts/version\n", ""))
+        result = self.package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("executable is not registered: scripts/version", result.stderr)
+        self.assertFalse((self.root / ".target/dist/flamewm_0.1.0_amd64.deb").exists())
+        self.assertFalse((self.root / ".target/dist/SHA256SUMS").exists())
+        self.assertFalse((self.root / ".target/dist/flamewm-0.1.0-source.tar.gz").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -86,6 +86,7 @@ pub(crate) struct ShellLoop {
     pub(crate) start_category: StartCategory,
     pub(crate) start_query: String,
     pub(crate) task_drag: Option<flamewm_shell::taskbar::tasks::drag::TaskDrag>,
+    pub(crate) task_press_target: Option<(usize, flamewm_shell::runtime::TaskSlotTarget)>,
     pub(crate) start_open: bool,
     /// Start error line for a failed launch; cleared on success or reopen.
     pub(crate) start_error: Option<String>,
@@ -140,6 +141,7 @@ pub(crate) struct ShellLoop {
     /// Set when the icon theme changed: open Start re-projects, and the next
     /// Start open re-requests its icons under the new theme.
     pub(crate) start_icons_stale: bool,
+    pointer_position: Option<(i32, i32)>,
 }
 
 impl ShellLoop {
@@ -161,6 +163,7 @@ impl ShellLoop {
             start_category: StartCategory::All,
             start_query: String::new(),
             task_drag: None,
+            task_press_target: None,
             start_open: false,
             start_error: None,
             active_start_launch: None,
@@ -195,6 +198,7 @@ impl ShellLoop {
             time_zone_changed: false,
             zone_settle_at: None,
             start_icons_stale: false,
+            pointer_position: None,
         }
     }
 
@@ -373,6 +377,51 @@ impl ShellLoop {
         end_start_session_fields(&mut self.start_open, &mut self.start_query);
     }
 
+    pub(crate) fn needs_output_pointer(&self) -> bool {
+        self.shell.has_pending_controls()
+    }
+
+    pub(crate) fn set_output_pointer(&mut self, pointer: Option<(i32, i32)>) {
+        self.pointer_position = pointer;
+    }
+
+    fn select_control_output(&mut self, requested: Option<flamewm_api::OutputId>) {
+        let panels = self.surfaces.panel_outputs();
+        let has_panel = |output: &flamewm_api::OutputId| {
+            panels.iter().any(|(_, panel_output)| panel_output == output)
+        };
+        let snapshot = self.shell.snapshot();
+        let connected = |output: &flamewm_api::OutputId| {
+            snapshot.displays.outputs.iter().any(|candidate| {
+                candidate.connected && &candidate.id == output
+            })
+        };
+        let output = requested
+            .filter(|output| has_panel(output) && connected(output))
+            .or_else(|| {
+                let (x, y) = self.pointer_position?;
+                flamewm_shell::runtime::output_at_root_point(
+                    &snapshot.displays.outputs,
+                    flamewm_api::Point { x, y },
+                ).filter(|output| has_panel(output))
+            })
+            .or_else(|| {
+                snapshot.windows.iter().find(|window| window.focused)
+                    .map(|window| window.output.clone())
+                    .filter(|output| has_panel(output) && connected(output))
+            })
+            .or_else(|| {
+                snapshot.displays.outputs.iter().find(|candidate| {
+                    candidate.connected && candidate.primary && has_panel(&candidate.id)
+                }).map(|candidate| candidate.id.clone())
+            })
+            .or_else(|| panels.first().map(|(_, output)| output.clone()));
+        if let Some(output) = output {
+            self.shell.select_panel_output(output.clone());
+            self.surfaces.select_panel_output(&output);
+        }
+    }
+
     pub(crate) fn apply_controls(
         &mut self,
         runtime: &mut SurfaceRuntime,
@@ -380,7 +429,8 @@ impl ShellLoop {
         let controls: Vec<_> = self.shell.drain_controls().collect();
         for control in controls {
             match control {
-                ShellControl::ToggleStart => {
+                ShellControl::ToggleStart { output } => {
+                    self.select_control_output(output);
                     // C07: start open owns one total around the open path.
                     // F10: read current context generation; refuse when
                     // edge/geometry is inconsistent.
@@ -423,7 +473,8 @@ impl ShellLoop {
                 ShellControl::CloseStart | ShellControl::ClosePopovers => {
                     self.close_transients(runtime)?;
                 }
-                ShellControl::SelectStartCategory(category) => {
+                ShellControl::SelectStartCategory { category, output } => {
+                    self.select_control_output(output);
                     self.start_category = category;
                     self.start_open = true;
                     // F10: read current context generation; refuse when
@@ -450,7 +501,8 @@ impl ShellLoop {
                         Err(error) => return Err(UiBackendError::Renderer(error)),
                     }
                 }
-                ShellControl::OpenPopover(name) => {
+                ShellControl::OpenPopover { name, output } => {
+                    self.select_control_output(output);
                     // J07: media stays in-process; audio/network/clock/battery
                     // forward to the supervisor, then return immediately.
                     if matches!(
@@ -486,6 +538,7 @@ impl ShellLoop {
                     });
                 }
                 ShellControl::OpenContextMenu(state) => {
+                    self.select_control_output(state.output.clone());
                     // C04: task/shell context menus invalidate the helper
                     // anchor. F10: refuse when edge/geometry is inconsistent.
                     if self.refuse_popup_on_inconsistent_geometry().is_some() {
@@ -767,7 +820,7 @@ impl ShellLoop {
         let panel_edge = self.surfaces.panel_edge();
         // Retained panel rect: the helper clips slide transit frames against the dock.
         let dock = runtime
-            .surface_device_rect(self.surfaces.panel())
+            .surface_device_rect(self.surfaces.selected_panel())
             .ok()
             .map(|r| flamewm_api::Rect::new(r.x as i32, r.y as i32, r.width as i32, r.height as i32));
         if kind == QuickControlKind::Weather {
@@ -803,13 +856,7 @@ impl ShellLoop {
     /// when no retained layout exists yet (same sole-fallback contract as
     /// the in-process popup path).
     pub(crate) fn pending_anchor_fallback(&self) -> flamewm_api::Rect {
-        self.shell
-            .snapshot()
-            .panels
-            .panels
-            .first()
-            .map(|panel| panel.geometry)
-            .unwrap_or(flamewm_api::Rect::new(0, 0, 1, 1))
+        self.surfaces.selected_panel_rect()
     }
 
     pub(crate) fn project_start(
@@ -847,27 +894,44 @@ impl ShellLoop {
     /// Publishes each pager cell's window-relative rect on the panel X
     /// window (`FLAMEWM_PAGER_CELLS`), read from the panel's retained layout
     /// so the canary never hard-codes screen offsets. Nonfatal on failure.
+    ///
+    /// Entries are in workspace-index order (`index 0..count` -> its cell node),
+    /// not cell order, so consumers that address the array by workspace index
+    /// keep working; each entry stays 4 CARDINAL values (x, y, width, height).
     pub(crate) fn publish_pager_cells(&self, runtime: &mut SurfaceRuntime) {
-        let panel = self.surfaces.panel();
-        let Ok(origin) = runtime.surface_device_rect(panel) else {
-            eprintln!("flamewm-shell: pager cells skipped (stage=panel-origin)");
-            return;
-        };
-        let mut cells: Vec<[u64; 4]> =
-            Vec::with_capacity(flamewm_shell_core::workspaces::PAGE_SIZE);
-        for index in 0..flamewm_shell_core::workspaces::PAGE_SIZE {
-            let id = format!("workspace-{}", index + 1);
-            let Some(rect) = runtime.node_device_rect_by_id(panel, &id) else {
-                eprintln!("flamewm-shell: pager cells skipped (stage=layout, node={id})");
-                return;
+        let count = self
+            .shell
+            .snapshot()
+            .workspaces
+            .as_ref()
+            .map_or(0, |workspaces| workspaces.count);
+        for panel in self.surfaces.panel_handles() {
+            let Ok(origin) = runtime.surface_device_rect(panel) else {
+                eprintln!("flamewm-shell: pager cells skipped (stage=panel-origin)");
+                continue;
             };
-            cells.push(pager_cell_window_rect(
-                (rect.x, rect.y, rect.width, rect.height),
-                (origin.x, origin.y),
-            ));
-        }
-        if let Err(error) = runtime.set_pager_cells(panel, &cells) {
-            eprintln!("flamewm-shell: pager cells publish failed (stage=x11-property): {error:?}");
+            let mut cells: Vec<[u64; 4]> = Vec::with_capacity(count);
+            let mut complete = true;
+            for index in 0..count {
+                let Some(cell) = flamewm_shell_core::workspaces::pager_cell(index, count) else {
+                    continue;
+                };
+                let id = format!("workspace-{cell}");
+                let Some(rect) = runtime.node_device_rect_by_id(panel, &id) else {
+                    eprintln!("flamewm-shell: pager cells skipped (stage=layout, node={id})");
+                    complete = false;
+                    break;
+                };
+                cells.push(pager_cell_window_rect(
+                    (rect.x, rect.y, rect.width, rect.height),
+                    (origin.x, origin.y),
+                ));
+            }
+            if complete {
+                if let Err(error) = runtime.set_pager_cells(panel, &cells) {
+                    eprintln!("flamewm-shell: pager cells publish failed (stage=x11-property): {error:?}");
+                }
+            }
         }
     }
 
@@ -1070,13 +1134,29 @@ impl ShellLoop {
         _runtime: &mut SurfaceRuntime,
         slot: usize,
     ) -> Result<(), UiBackendError> {
-        let Some(requests) = self.shell.task_click_requests_for_slot(slot) else {
+        let target = self.task_press_target.take()
+            .filter(|(pressed_slot, _)| *pressed_slot == slot)
+            .map(|(_, target)| target);
+        let Some(target) = target else { return Ok(()); };
+        let Some(requests) = self.shell.task_click_requests_for_target(&target) else {
             return Ok(());
         };
         for request in requests {
             self.submit(request);
         }
         Ok(())
+    }
+
+    pub(crate) fn capture_task_target(&mut self, slot: usize) {
+        self.task_press_target = self.shell.task_target_for_slot(slot).map(|target| (slot, target));
+    }
+
+    pub(crate) fn reorder_task_target(
+        &mut self,
+        target: &flamewm_shell::runtime::TaskSlotTarget,
+        to: usize,
+    ) -> Option<ControlRequest> {
+        self.shell.task_reorder_request_for_target(target, to)
     }
 
     /// Signal-driven dynamic refresh (§6): reconcile snapshot domains flagged
@@ -1089,7 +1169,7 @@ impl ShellLoop {
         // flag, so check generation/revision/geometry drift even when no
         // changed domain fired. Sync happens BEFORE next open/projection.
         // The drift check borrows the snapshot; clone only on the resync path.
-        let resynced = if self.panel_geometry_drifted(self.shell.snapshot()) {
+        let resynced = if self.panel_geometry_drifted(runtime, self.shell.snapshot()) {
             let snapshot = self.shell.snapshot().clone();
             self.resync_panel_geometry(runtime, &snapshot)
         } else {
@@ -1097,6 +1177,14 @@ impl ShellLoop {
         };
         if !changed.any() && !resynced {
             return;
+        }
+        // Context menus belong to their opening workspace. A workspace change
+        // invalidates the menu before any panel or popup projection can paint
+        // stale rows on the destination workspace.
+        if changed.workspaces && self.context_menu.is_some() {
+            if let Err(error) = self.close_transients(runtime) {
+                eprintln!("flamewm-shell: workspace context-menu dismissal failed: {error:?}");
+            }
         }
         // Domain projectors retain their own semantic defaults. Reapply the
         // already-authoritative settings payload after them so a later task
@@ -1220,26 +1308,30 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         snapshot: &ShellSnapshot,
     ) {
-        let slots: Vec<Option<u64>> = flamewm_shell_core::task_visual_states_on_output(
-            &snapshot.panels,
-            &snapshot.windows,
-            &snapshot.applications,
-            snapshot.panels.panels.first().map(|panel| &panel.output),
-        )
-        .iter()
-        .map(|state| state.window.map(|window| window.id))
-        .collect();
-        let panels: Vec<_> = self
-            .surfaces
-            .panel_outputs()
-            .into_iter()
-            .map(|(handle, _)| handle)
+        let panels = self.surfaces.panel_outputs();
+        let workspace = snapshot.workspaces.as_ref().map(|workspaces| workspaces.active_index);
+        let output_slots: Vec<_> = panels
+            .iter()
+            .map(|(_, output)| {
+                let slots = flamewm_shell_core::task_visual_states_on_output_and_workspace(
+                    &snapshot.panels,
+                    &snapshot.windows,
+                    &snapshot.applications,
+                    Some(output),
+                    workspace,
+                )
+                .iter()
+                .map(|state| state.window)
+                .collect();
+                (output.clone(), slots)
+            })
             .collect();
-        let desired = icon_geometry::desired_slot_geometry(&slots, |index| {
+        let desired = icon_geometry::desired_output_slot_geometry(&output_slots, |output, index| {
             let node = format!("task-slot-{}", index + 1);
             panels
                 .iter()
-                .find_map(|&panel| runtime.node_device_rect_by_id(panel, &node))
+                .find(|(_, panel_output)| panel_output == output)
+                .and_then(|(panel, _)| runtime.node_device_rect_by_id(*panel, &node))
                 .map(|rect| (rect.x, rect.y, rect.width, rect.height))
         });
         let mut sink = RuntimeIconGeometrySink { runtime };
@@ -1251,16 +1343,12 @@ impl ShellLoop {
     /// move_resize the panel native surface when geometry changed,
     /// then reproject the panel. Returns true when a resync happened.
     /// Pure drift check against a borrowed snapshot; no clone, no mutation.
-    fn panel_geometry_drifted(&self, snapshot: &ShellSnapshot) -> bool {
+    fn panel_geometry_drifted(&self, runtime: &SurfaceRuntime, snapshot: &ShellSnapshot) -> bool {
         let (display_generation, panels_revision) = self.surfaces.placement_generation();
         snapshot.displays.generation != display_generation
             || snapshot.panels.revision != panels_revision
-            || snapshot
-                .panels
-                .panels
-                .first()
-                .is_some_and(|panel| panel.geometry != self.surfaces.panel_geometry())
-            || self.surfaces.output_scale_drifted(snapshot)
+            || self.surfaces.panel_topology_drifted(snapshot)
+            || self.surfaces.panel_native_geometry_drifted(runtime)
     }
 
     pub(crate) fn resync_panel_geometry(
@@ -1268,7 +1356,7 @@ impl ShellLoop {
         runtime: &mut SurfaceRuntime,
         snapshot: &ShellSnapshot,
     ) -> bool {
-        if !self.panel_geometry_drifted(snapshot) {
+        if !self.panel_geometry_drifted(runtime, snapshot) {
             return false;
         }
         // Close popup/quick helper first so no open surface keeps a
@@ -1279,7 +1367,7 @@ impl ShellLoop {
         self.context_menu = None;
         // Sync BEFORE next open/projection; refusal keeps old context.
         match self.surfaces.sync_panel_context(runtime, snapshot) {
-            Ok(true) => self.apply_taskbar_frame(runtime),
+            Ok(true) => (),
             Ok(false) => {
                 eprintln!("flamewm-shell: panel context sync refused (missing output/panel)");
                 return false;
@@ -1295,7 +1383,10 @@ impl ShellLoop {
         if let Err(error) = self.surfaces.move_panel_to_synced(runtime) {
             eprintln!("flamewm-shell: panel move_resize failed (nonfatal): {error}");
         }
+        // The XShape mask must use the resized native panel's new dimensions.
+        self.apply_taskbar_frame(runtime);
         self.apply_taskbar_backdrop(runtime);
+        self.settings_projection_pending = true;
         let loader = &mut self.icon_loader;
         let icon_cache = &mut self.task_icon_cache;
         let changed = flamewm_shell::runtime::ChangedDomains {
@@ -1398,11 +1489,12 @@ impl ShellLoop {
         if self.task_icon_prime_armed {
             self.ensure_loader();
             let snapshot = self.shell.snapshot();
-            let task_state_count = flamewm_shell_core::task_visual_states_on_output(
+            let task_state_count = flamewm_shell_core::task_visual_states_on_output_and_workspace(
                 &snapshot.panels,
                 &snapshot.windows,
                 &snapshot.applications,
                 snapshot.panels.panels.first().map(|panel| &panel.output),
+                snapshot.workspaces.as_ref().map(|workspaces| workspaces.active_index),
             )
             .len();
             let loader_present = self.icon_loader.is_some();
@@ -1560,7 +1652,7 @@ impl ShellLoop {
         // Magic Lamp folds into the panel's Start button; without its layout the show stays immediate.
         let start_button = runtime
             .node_device_rect_by_id(
-                self.surfaces.panel(),
+                self.surfaces.selected_panel(),
                 flamewm_shell::popup_role::PopupRole::Start.source_node_id(),
             )
             .filter(|rect| rect.width > 0.0 && rect.height > 0.0)
@@ -1598,43 +1690,21 @@ impl ShellLoop {
             return;
         };
         let (opacity, blur) = crate::settings_projection::taskbar_backdrop_percents(settings);
-        let text = |key: &str| {
-            settings
-                .values
-                .get(key)
-                .map(|value| format!("{value:?}"))
-                .unwrap_or_default()
-        };
         let wallpaper_path = text_setting(settings, "wallpaper");
         let fit_name = text_setting(settings, "wallpaperFit");
-        let key = match runtime.surface_device_rect(self.surfaces.panel()) {
-            Ok(rect) => flamewm_shell::surface_backdrop::CaptureKey {
-                wallpaper: text("wallpaper"),
-                fit: text("wallpaperFit"),
-                rect: (
-                    rect.x as i32,
-                    rect.y as i32,
-                    rect.width as u32,
-                    rect.height as u32,
-                ),
-            },
-            Err(error) => {
-                eprintln!("flamewm-shell: taskbar backdrop rect unavailable (nonfatal): {error:?}");
-                return;
-            }
-        };
-        let rect = key.rect;
-        let wallpaper = || {
-            let (width, height) = flamewm_ui_x11::backdrop::root_geometry().ok()?;
+        let root = flamewm_ui_x11::backdrop::root_geometry().ok();
+        let packaged_root = crate::packaged_root();
+        let wallpaper = |rect| {
+            let (width, height) = root?;
             flamewm_shell::surface_backdrop::wallpaper_source(
                 &wallpaper_path,
                 flamewm_image_core::wallpaper::parse(&fit_name),
-                (width, height),
-                rect,
-                &crate::packaged_root(),
+                (width, height), rect, &packaged_root,
             )
         };
-        if let Err(error) = self.surfaces.refresh_panel_backdrop(runtime, key, wallpaper) {
+        if let Err(error) = self.surfaces.refresh_panel_backdrops(
+            runtime, &wallpaper_path, &fit_name, wallpaper,
+        ) {
             eprintln!("flamewm-shell: taskbar backdrop capture failed (nonfatal): {error}");
         }
         if let Err(error) = self.surfaces.apply_panel_backdrop(runtime, opacity, blur) {
@@ -1692,15 +1762,23 @@ impl ShellLoop {
         let feed = self.weather.feed();
         let units = feed.settings.units;
         let shown = crate::settings_projection::taskbar_items(self.settings_cache.as_ref()).weather;
-        let projected = runtime.with_document(self.surfaces.panel(), |document| {
-            projection::project_weather_tray(document, &feed.state, units, shown)
-        });
-        // Pending clears only after a successful tray write; failures stay loud and retry.
-        if let Err(error) = &projected {
-            eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
+        // All native monitor panels own independent retained documents. A weather
+        // tick must update every panel, not just the primary surface (a stale
+        // second monitor otherwise keeps the previous condition/temperature).
+        let mut tray_ok = true;
+        for panel in self.surfaces.panel_handles() {
+            let projected = runtime.with_document(panel, |document| {
+                projection::project_weather_tray(document, &feed.state, units, shown)
+            });
+            if let Err(error) = &projected {
+                eprintln!("flamewm-shell: weather tray projection failed: {error:?}");
+                tray_ok = false;
+            }
+            if let Err(error) = runtime.redraw(panel) {
+                eprintln!("flamewm-shell: weather tray redraw failed: {error:?}");
+                tray_ok = false;
+            }
         }
-        let tray_ok = projected.is_ok();
-        let _ = runtime.redraw(self.surfaces.panel());
         self.push_weather_feed();
         if !tray_ok {
             self.weather_feed_pending = true;
@@ -1728,13 +1806,17 @@ impl ShellLoop {
             return Ok(());
         };
         let snapshot = snapshot.clone();
-        runtime.with_document(self.surfaces.panel(), |document| {
-            crate::settings_projection::project(
-                document,
-                &snapshot,
-                crate::settings_projection::SurfaceKind::Panel,
-            )
-        })?;
+        // Every monitor has an independent native panel document. Project the same
+        // surfaceOpacity/surfaceColor settings into all of them.
+        for panel in self.surfaces.panel_handles() {
+            runtime.with_document(panel, |document| {
+                crate::settings_projection::project(
+                    document,
+                    &snapshot,
+                    crate::settings_projection::SurfaceKind::Panel,
+                )
+            })?;
+        }
         for (surface, kind) in [
             (
                 self.surfaces.start,
@@ -1784,7 +1866,9 @@ impl ShellLoop {
         self.apply_start_backdrop(runtime);
         self.apply_start_slide(runtime);
         self.apply_taskbar_backdrop(runtime);
-        let _ = runtime.redraw(self.surfaces.panel());
+        for panel in self.surfaces.panel_handles() {
+            let _ = runtime.redraw(panel);
+        }
         if self.surfaces.is_start_group_open() {
             let _ = runtime.redraw(self.surfaces.start);
         }
@@ -2124,6 +2208,7 @@ mod tests {
         let mut context_menu = Some(flamewm_shell::ContextMenuState {
             kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
             revision: 1,
+            output: None,
             anchor: None,
         });
 
@@ -2139,6 +2224,7 @@ mod tests {
         let mut context_menu = Some(flamewm_shell::ContextMenuState {
             kind: flamewm_shell::ContextMenuKind::Workspace { index: 0 },
             revision: 1,
+            output: None,
             anchor: None,
         });
         assert!(super::take_context_menu_for_popup(&mut context_menu));

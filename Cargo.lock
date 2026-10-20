@@ -195,6 +195,7 @@ name = "flamewm-applications"
 version = "0.1.0"
 dependencies = [
  "flamewm-api",
+ "x11rb",
 ]
 
 [[package]]
@@ -371,6 +372,14 @@ name = "flamewm-ribbons"
 version = "0.1.0"
 
 [[package]]
+name = "flamewm-screenshot"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "x11rb",
+]
+
+[[package]]
 name = "flamewm-session-core"
 version = "0.1.0"
 dependencies = [
@@ -410,6 +419,7 @@ dependencies = [
  "calloop",
  "chrono",
  "flamewm-api",
+ "flamewm-applications",
  "flamewm-control-core",
  "flamewm-control-dbus",
  "flamewm-control-wire",
@@ -465,6 +475,7 @@ dependencies = [
  "flamewm-skin",
  "flamewm-ui",
  "flamewm-ui-core",
+ "x11rb",
 ]
 
 [[package]]
@@ -528,6 +539,7 @@ version = "0.1.0"
 dependencies = [
  "flamewm-api",
  "flamewm-applications",
+ "rustix",
  "x11rb",
 ]
 

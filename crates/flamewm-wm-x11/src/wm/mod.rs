@@ -113,12 +113,17 @@ impl<'a, C: Connection> Wm<'a, C> {
 }
 
 use flamewm_api::shortcuts::{
-    ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
+    ACTION_SESSION_LOCK, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
+    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
     ACTION_WORKSPACE_UP,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
-use flamewm_platform::shortcuts::{ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP};
+use flamewm_platform::shortcuts::{
+    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER,
+    ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
+    ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
+};
 use flamewm_platform::system::MediaAudioKey;
 use flamewm_window_core::{
     SnapTarget, snap_geometry as core_snap_geometry, snap_target_in_output as core_snap_target_in_output,
@@ -178,8 +183,6 @@ fn log_unhandled_shortcut_once(action: &str) {
     }
 }
 
-/// Neighbour workspace index for a relative step without wrap-around.
-/// Returns `None` when the step would leave `[0, count)`.
 /// Focus revert target when the focused client is destroyed or unmapped. `NONE` would make the X
 /// server discard key events and skip passive root grabs, silently killing every WM shortcut.
 const FOCUS_REVERT_TO: InputFocus = InputFocus::POINTER_ROOT;
@@ -191,18 +194,239 @@ pub(crate) fn key_diag_enabled() -> bool {
     *ENABLED.get_or_init(|| env::var("FLAMEWM_KEY_DIAG").is_ok_and(|value| value == "1"))
 }
 
-fn next_workspace(current: usize, count: usize, delta: isize) -> Option<usize> {
-    let target = current.checked_add_signed(delta)?;
-    (target < count).then_some(target)
+/// Workspace a navigation shortcut must activate in the product two-row grid, or `None` when the
+/// action is not a workspace shortcut or the grid has no neighbour in that direction. Left/right
+/// stay inside the current row and up/down switch rows; a missing neighbour is a deliberate no-op,
+/// never a wrap. The grid itself is owned by `flamewm_api::workspace`.
+fn workspace_shortcut_target(current: usize, count: usize, action: &str) -> Option<usize> {
+    flamewm_api::shortcuts::workspace_direction(action)
+        .and_then(|direction| flamewm_api::workspace::grid_neighbor(current, count, direction))
 }
 
-/// Maps a workspace shortcut action to its step through the desktop list.
-fn workspace_action_delta(action: &str) -> Option<isize> {
-    match action {
-        ACTION_WORKSPACE_LEFT | ACTION_WORKSPACE_UP => Some(-1),
-        ACTION_WORKSPACE_RIGHT | ACTION_WORKSPACE_DOWN => Some(1),
-        _ => None,
+/// An intentional titlebar drag must dwell at the outer root edge before
+/// traversing workspaces. Internal monitor boundaries never count.
+const DRAG_EDGE_DWELL_MS: u32 = 220;
+// Preserve proximity to the opposite boundary without immediately retriggering.
+const DRAG_EDGE_INSET_PX: i32 = 24;
+// Mouse-only workspace transitions: Left/Right share one 500ms cooldown;
+// Top/Bottom share a separate cooldown. Keyboard and pager actions are exempt.
+const MOUSE_WORKSPACE_COOLDOWN_MS: u64 = 500;
+const DRAG_EDGE_HIT_PX: i32 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DragEdge { Left, Right, Top, Bottom }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MouseWorkspaceAxis { Horizontal, Vertical }
+
+impl DragEdge {
+    fn axis(self) -> MouseWorkspaceAxis {
+        match self {
+            Self::Left | Self::Right => MouseWorkspaceAxis::Horizontal,
+            Self::Top | Self::Bottom => MouseWorkspaceAxis::Vertical,
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct MouseWorkspaceCooldowns {
+    horizontal: Option<std::time::Instant>,
+    vertical: Option<std::time::Instant>,
+}
+
+impl MouseWorkspaceCooldowns {
+    fn remaining(self, axis: MouseWorkspaceAxis, now: std::time::Instant) -> std::time::Duration {
+        let timestamp = match axis {
+            MouseWorkspaceAxis::Horizontal => self.horizontal,
+            MouseWorkspaceAxis::Vertical => self.vertical,
+        };
+        timestamp.map_or(std::time::Duration::ZERO, |last| {
+            std::time::Duration::from_millis(MOUSE_WORKSPACE_COOLDOWN_MS)
+                .saturating_sub(now.saturating_duration_since(last))
+        })
+    }
+
+    fn record(&mut self, axis: MouseWorkspaceAxis, now: std::time::Instant) {
+        match axis {
+            MouseWorkspaceAxis::Horizontal => self.horizontal = Some(now),
+            MouseWorkspaceAxis::Vertical => self.vertical = Some(now),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EdgeDragPending {
+    client: Window,
+    side: DragEdge,
+    since: std::time::Instant,
+}
+
+/// This policy sees only pointer moves from an already-activated Move session;
+/// normal pointer motion, resize and titlebar clicks never call it.
+fn drag_edge_at(pointer: RootPoint, root: Rect) -> Option<DragEdge> {
+    // Only the outer root boundaries are eligible, never a monitor seam.
+    // At a corner choose the closest edge (horizontal wins an exact tie),
+    // avoiding two competing dwell timers for the same move session.
+    let x = pointer.x;
+    let y = pointer.y;
+    let right = root.right().saturating_sub(1);
+    let bottom = root.bottom().saturating_sub(1);
+    if x < root.x || x > right || y < root.y || y > bottom {
+        return None;
+    }
+    let mut candidate: Option<(i32, DragEdge)> = None;
+    if root.width >= (DRAG_EDGE_INSET_PX * 3) as u32 {
+        if x <= root.x.saturating_add(DRAG_EDGE_HIT_PX) {
+            candidate = Some((x.saturating_sub(root.x), DragEdge::Left));
+        } else if x >= right.saturating_sub(DRAG_EDGE_HIT_PX) {
+            candidate = Some((right.saturating_sub(x), DragEdge::Right));
+        }
+    }
+    if root.height >= (DRAG_EDGE_INSET_PX * 3) as u32 {
+        let vertical = if y <= root.y.saturating_add(DRAG_EDGE_HIT_PX) {
+            Some((y.saturating_sub(root.y), DragEdge::Top))
+        } else if y >= bottom.saturating_sub(DRAG_EDGE_HIT_PX) {
+            Some((bottom.saturating_sub(y), DragEdge::Bottom))
+        } else {
+            None
+        };
+        if let Some(vertical) = vertical {
+            if candidate.is_none_or(|(distance, _)| vertical.0 < distance) {
+                candidate = Some(vertical);
+            }
+        }
+    }
+    candidate.map(|(_, side)| side)
+}
+
+fn drag_edge_target(current: usize, count: usize, side: DragEdge) -> Option<usize> {
+    // Horizontal mouse traversal wraps ONLY inside the current row; vertical
+    // traversal wraps ONLY between the same column in the two-row grid.
+    let position = flamewm_api::workspace::grid_position(current, count)?;
+    let columns = flamewm_api::workspace::workspace_columns(count);
+    let row_start = position.row.checked_mul(columns)?;
+    let row_end = row_start.checked_add(columns)?.min(count);
+    let target = match side {
+        DragEdge::Left if current == row_start => row_end - 1,
+        DragEdge::Left => current - 1,
+        DragEdge::Right if current + 1 == row_end => row_start,
+        DragEdge::Right => current + 1,
+        DragEdge::Top | DragEdge::Bottom => {
+            let opposite_row = (position.row + 1) % flamewm_api::workspace::WORKSPACE_ROWS;
+            return flamewm_api::workspace::grid_index(opposite_row, position.column, count)
+                .filter(|target| *target != current);
+        }
+    };
+    (target != current).then_some(target)
+}
+
+fn drag_edge_destination(pointer: RootPoint, root: Rect, side: DragEdge, frame_height: i32) -> RootPoint {
+    let inset_x = DRAG_EDGE_INSET_PX.min(root.width.saturating_sub(1) as i32 / 3);
+    let inset_y = DRAG_EDGE_INSET_PX.min(root.height.saturating_sub(1) as i32 / 3);
+    let x = match side {
+        DragEdge::Left => root.right().saturating_sub(1).saturating_sub(inset_x),
+        DragEdge::Right => root.x.saturating_add(inset_x),
+        DragEdge::Top | DragEdge::Bottom => pointer.x.clamp(root.x, root.right().saturating_sub(1)),
+    };
+    let y = match side {
+        DragEdge::Top => {
+            // Warping a tall dragged window to the bottom 24 px would place
+            // its titlebar off the active frame: keep at least half the frame
+            // visible while retaining the cursor on the titlebar grip.
+            let visible = (frame_height.max(1) / 2).max(32);
+            root.bottom().saturating_sub(1).saturating_sub(
+                inset_y.max(visible.saturating_sub(16)),
+            ).clamp(root.y.saturating_add(inset_y), root.bottom().saturating_sub(1).saturating_sub(inset_y))
+        }
+        DragEdge::Bottom => root.y.saturating_add(inset_y),
+        DragEdge::Left | DragEdge::Right => pointer.y.clamp(root.y, root.bottom().saturating_sub(1)),
+    };
+    RootPoint::new(x, y)
+}
+
+fn drag_edge_ready(
+    previous: Option<EdgeDragPending>,
+    client: Window,
+    side: DragEdge,
+    now: std::time::Instant,
+) -> (Option<EdgeDragPending>, bool) {
+    if let Some(pending) = previous {
+        if pending.client == client && pending.side == side {
+            return (
+                Some(pending),
+                now.saturating_duration_since(pending.since)
+                    >= std::time::Duration::from_millis(u64::from(DRAG_EDGE_DWELL_MS)),
+            );
+        }
+    }
+    (Some(EdgeDragPending { client, side, since: now }), false)
+}
+
+/// Arms exactly one reactor deadline while a titlebar move is held at an edge.
+/// No busy polling: the ordinary X11 reactor blocks until this deadline or an
+/// input event. A still pointer can therefore complete the dwell without a
+/// second MotionNotify.
+fn drag_edge_wait(
+    pending: Option<EdgeDragPending>,
+    cooldowns: MouseWorkspaceCooldowns,
+    now: std::time::Instant,
+    wait: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    let Some(pending) = pending else { return wait; };
+    let dwell_remaining = std::time::Duration::from_millis(u64::from(DRAG_EDGE_DWELL_MS))
+        .saturating_sub(now.saturating_duration_since(pending.since));
+    // Wake once BOTH dwell and cooldown have expired (no zero-timeout loop).
+    let remaining = dwell_remaining.max(cooldowns.remaining(pending.side.axis(), now));
+    Some(wait.map_or(remaining, |other| other.min(remaining)))
+}
+
+/// Keep the grabbed titlebar and most of the frame visible on the arrival
+/// side. Reusing the original pointer-to-frame offset can leave nearly the
+/// entire frame offscreen after the pointer wraps; the controller will rebase
+/// the grip at the new edge instead.
+fn drag_entry_frame_x(pointer: RootPoint, width: i32, side: DragEdge) -> i32 {
+    let width = width.max(1);
+    let grip = (width / 2).clamp(1, DRAG_EDGE_INSET_PX - 8);
+    match side {
+        DragEdge::Right => pointer.x.saturating_sub(grip),
+        DragEdge::Left => pointer.x.saturating_sub(width.saturating_sub(grip)),
+        DragEdge::Top | DragEdge::Bottom => unreachable!("vertical transfers preserve x"),
+    }
+}
+
+/// Vertical crossings keep the cursor in the titlebar after the warp. The
+/// destination frame stays under the pointer rather than abandoning the grab.
+fn drag_entry_frame_y(pointer: RootPoint, side: DragEdge) -> i32 {
+    match side {
+        DragEdge::Top | DragEdge::Bottom => pointer.y.saturating_sub(16),
+        DragEdge::Left | DragEdge::Right => unreachable!("horizontal transfers preserve y"),
+    }
+}
+
+/// Separate renderer work from the atomic X11 server-grab phase. The move
+/// reducer owns geometry; only its X11-native position/notify effects may run
+/// while other X clients are paused. In particular, PaintChrome uses another
+/// connection and must run after UngrabServer has been flushed.
+fn defer_drag_arrival_paint(
+    mut commit: interaction::PointerCommit,
+) -> Option<(interaction::PointerCommit, bool)> {
+    if commit.grab.is_some()
+        || commit.ungrab
+        || !commit.effects.iter().all(|effect| {
+            matches!(
+                effect,
+                FrameEffect::MoveFrameRoot { .. }
+                    | FrameEffect::NotifyClientRoot { .. }
+                    | FrameEffect::PaintChrome
+                    | FrameEffect::Noop
+            )
+        })
+    {
+        return None;
+    }
+    let paint = commit.effects.iter().any(|effect| matches!(effect, FrameEffect::PaintChrome));
+    commit.effects.retain(|effect| !matches!(effect, FrameEffect::PaintChrome));
+    Some((commit, paint))
 }
 
 const WM_STATE_WITHDRAWN: u32 = 0;
@@ -988,6 +1212,7 @@ where
         // Batch boundary: a bare-Super tap completes only after its autorepeat
         // partner (same timestamp) had the chance to cancel it.
         wm.commit_super_tap();
+        wm.tick_edge_drag()?;
         // Drain once per reactor turn: semantic owners marked facets above;
         // the hook flushes them to snapshots/signals exactly once.
         let changes = wm.take_changes();
@@ -995,14 +1220,22 @@ where
         let wait = hook(&mut wm, &conn, screen_num, changes)?;
         drain_pumped_events(&mut wm, &mut pump, conn.as_ref())?;
         wm.commit_super_tap();
+        wm.tick_edge_drag()?;
         // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
         let wait = wm.transition_wait(wait);
+        let wait = drag_edge_wait(wm.edge_drag, wm.mouse_workspace_cooldowns, std::time::Instant::now(), wait);
         emit_resize_summary();
         emit_move_summary();
         // Flush once per reactor turn.
         conn.flush()?;
         // Blocking wait: woken by X, provider, audio, or profiler sources.
         reactor.borrow_mut().dispatch(wait)?;
+        // The control reply is sent by the reactor callback before it returns.
+        // Exit successfully on the following turn so the session supervisor
+        // can stop and reap its managed dependents.
+        if flamewm_x11_desktop::take_session_logout_request() {
+            return Ok(());
+        }
         wm.drain_catalog_icon_results();
     }
 }
@@ -1170,6 +1403,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     super_tap: SuperTap,
     pointer_ingress_probe: PointerIngressProbe,
     resize_probe: Option<ResizeProbe>,
+    edge_drag: Option<EdgeDragPending>,
+    mouse_workspace_cooldowns: MouseWorkspaceCooldowns,
 }
 
 fn icon_completion_matches(
@@ -1329,6 +1564,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             super_tap: SuperTap::default(),
             pointer_ingress_probe: PointerIngressProbe::default(),
             resize_probe: None,
+            edge_drag: None,
+            mouse_workspace_cooldowns: MouseWorkspaceCooldowns::default(),
         })
     }
 
@@ -1909,11 +2146,7 @@ fn rect_overlap_area(a: Rect, b: Rect) -> u64 {
 /// assets live under `<workspace>/assets`). Pure path probe for resolver
 /// construction; no icon decode happens here.
 pub(crate) fn flamewm_workspace_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+    crate::frame::titlebar_backdrop::packaged_root()
 }
 
 /// True when a `_NET_CURRENT_DESKTOP` value differs from the WM's own current
@@ -1938,11 +2171,18 @@ fn workspace_metadata_is_external(
     count.map_or(true, |value| value as usize != own_count) || names != own_names
 }
 
+/// Mapping a frame is necessary only when workspace membership changes its
+/// actual visibility. In particular, a minimized frame remains unmapped when
+/// moved, and a hidden frame must not accumulate unmatched ignore_unmap counts.
+fn frame_visibility_delta(before: bool, after: bool) -> Option<bool> {
+    (before != after).then_some(after)
+}
+
 /// Windows need re-publishing only when a client's visibility flipped across a
 /// workspace switch or the focused window changed; a plain workspace change
 /// emits workspace state only.
-fn workspace_switch_touches_windows(visibility: &[(bool, bool)], focus_changed: bool) -> bool {
-    focus_changed || visibility.iter().any(|(old, new)| old != new)
+fn workspace_switch_touches_windows(visibility_changed: bool, focus_changed: bool) -> bool {
+    visibility_changed || focus_changed
 }
 
 #[cfg(test)]
