@@ -19,7 +19,11 @@ const fn make_crc32() -> [u32; 256] {
         let mut c = i as u32;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         table[i] = c;
@@ -35,7 +39,11 @@ const fn make_crc64() -> [u64; 256] {
         let mut c = i as u64;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0xC96C_5795_D787_0F42 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xC96C_5795_D787_0F42 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         table[i] = c;
@@ -186,7 +194,13 @@ struct Dict {
 
 impl Dict {
     fn new(cap: usize) -> Self {
-        Self { buf: Vec::new(), cap, pos: 0, avail: 0, total: 0 }
+        Self {
+            buf: Vec::new(),
+            cap,
+            pos: 0,
+            avail: 0,
+            total: 0,
+        }
     }
 
     fn reset(&mut self) {
@@ -202,7 +216,11 @@ impl Dict {
         } else {
             self.buf[self.pos] = b;
         }
-        self.pos = if self.pos + 1 == self.cap { 0 } else { self.pos + 1 };
+        self.pos = if self.pos + 1 == self.cap {
+            0
+        } else {
+            self.pos + 1
+        };
         self.avail = (self.avail + 1).min(self.cap);
         self.total = self.total.wrapping_add(1);
     }
@@ -233,12 +251,20 @@ impl<'a> Rc<'a> {
         if code == u32::MAX {
             return Err(corrupt("bad LZMA range coder init"));
         }
-        Ok(Self { data, pos: 5, range: u32::MAX, code })
+        Ok(Self {
+            data,
+            pos: 5,
+            range: u32::MAX,
+            code,
+        })
     }
 
     fn normalize(&mut self) -> io::Result<()> {
         if self.range < (1 << 24) {
-            let b = *self.data.get(self.pos).ok_or_else(|| corrupt("truncated LZMA chunk"))?;
+            let b = *self
+                .data
+                .get(self.pos)
+                .ok_or_else(|| corrupt("truncated LZMA chunk"))?;
             self.pos += 1;
             self.range <<= 8;
             self.code = (self.code << 8) | u32::from(b);
@@ -391,14 +417,22 @@ impl Lzma {
         if slot < 14 {
             dist += rc.reverse_bittree(&mut self.pos_special, (dist - slot) as usize, direct)?;
         } else {
-            dist = dist.checked_add(rc.direct(direct - 4)? << 4).ok_or_else(|| corrupt("distance overflow"))?;
+            dist = dist
+                .checked_add(rc.direct(direct - 4)? << 4)
+                .ok_or_else(|| corrupt("distance overflow"))?;
             dist += rc.reverse_bittree(&mut self.align, 0, 4)?;
         }
         Ok(dist)
     }
 
     /// Decode symbols until exactly `want` bytes have been appended to `out`.
-    fn decode(&mut self, rc: &mut Rc<'_>, dict: &mut Dict, out: &mut Vec<u8>, want: usize) -> io::Result<()> {
+    fn decode(
+        &mut self,
+        rc: &mut Rc<'_>,
+        dict: &mut Dict,
+        out: &mut Vec<u8>,
+        want: usize,
+    ) -> io::Result<()> {
         let start = out.len();
         let end = start + want;
         let pb_mask = (1usize << self.pb) - 1;
@@ -408,12 +442,16 @@ impl Lzma {
             let st = self.state;
             if rc.bit(&mut self.is_match[(st << 4) + pos_state])? == 0 {
                 let prev = dict.back(0).unwrap_or(0);
-                let lit_state = (((dict.total as usize) & lp_mask) << self.lc) + (usize::from(prev) >> (8 - self.lc));
+                let lit_state = (((dict.total as usize) & lp_mask) << self.lc)
+                    + (usize::from(prev) >> (8 - self.lc));
                 let base = 0x300 * lit_state;
                 let probs = &mut self.literal[base..base + 0x300];
                 let mut sym = 1usize;
                 if st >= 7 {
-                    let mut match_byte = usize::from(dict.back(self.reps[0] as usize).ok_or_else(|| corrupt("bad literal match"))?);
+                    let mut match_byte = usize::from(
+                        dict.back(self.reps[0] as usize)
+                            .ok_or_else(|| corrupt("bad literal match"))?,
+                    );
                     while sym < 0x100 {
                         let match_bit = (match_byte >> 7) & 1;
                         match_byte <<= 1;
@@ -449,7 +487,9 @@ impl Lzma {
                 if rc.bit(&mut self.is_rep_g0[st])? == 0 {
                     if rc.bit(&mut self.is_rep0_long[(st << 4) + pos_state])? == 0 {
                         self.state = if st < 7 { 9 } else { 11 };
-                        let byte = dict.back(self.reps[0] as usize).ok_or_else(|| corrupt("bad short rep"))?;
+                        let byte = dict
+                            .back(self.reps[0] as usize)
+                            .ok_or_else(|| corrupt("bad short rep"))?;
                         out.push(byte);
                         dict.put(byte);
                         continue;
@@ -479,7 +519,9 @@ impl Lzma {
             }
             let dist = self.reps[0] as usize;
             for _ in 0..n {
-                let byte = dict.back(dist).ok_or_else(|| corrupt("LZMA distance out of range"))?;
+                let byte = dict
+                    .back(dist)
+                    .ok_or_else(|| corrupt("LZMA distance out of range"))?;
                 out.push(byte);
                 dict.put(byte);
             }
@@ -524,7 +566,11 @@ pub(crate) struct XzReader<R: Read> {
 impl<R: Read> XzReader<R> {
     pub(crate) fn new(inner: R) -> Self {
         Self {
-            input: Input { inner, pos: 0, crc: 0 },
+            input: Input {
+                inner,
+                pos: 0,
+                crc: 0,
+            },
             phase: Phase::StreamHeader,
             stream_flags: [0; 2],
             check: Check::None,
@@ -587,13 +633,20 @@ impl<R: Read> XzReader<R> {
         h[0] = size_byte;
         self.input.fill(&mut h[1..])?;
         let body = &h[..header_size - 4];
-        let stored = u32::from_le_bytes([h[header_size - 4], h[header_size - 3], h[header_size - 2], h[header_size - 1]]);
+        let stored = u32::from_le_bytes([
+            h[header_size - 4],
+            h[header_size - 3],
+            h[header_size - 2],
+            h[header_size - 1],
+        ]);
         if crc32_update(0, body) != stored {
             return Err(corrupt("block header CRC mismatch"));
         }
         let mut at = 1;
         let mut next = || -> io::Result<u8> {
-            let b = *body.get(at).ok_or_else(|| corrupt("truncated block header"))?;
+            let b = *body
+                .get(at)
+                .ok_or_else(|| corrupt("truncated block header"))?;
             at += 1;
             Ok(b)
         };
@@ -604,8 +657,16 @@ impl<R: Read> XzReader<R> {
         if flags & 0x03 != 0 {
             return Err(unsupported("multi-filter chains"));
         }
-        let declared_compressed = if flags & 0x40 != 0 { Some(decode_varint(&mut next)?) } else { None };
-        let declared_uncompressed = if flags & 0x80 != 0 { Some(decode_varint(&mut next)?) } else { None };
+        let declared_compressed = if flags & 0x40 != 0 {
+            Some(decode_varint(&mut next)?)
+        } else {
+            None
+        };
+        let declared_uncompressed = if flags & 0x80 != 0 {
+            Some(decode_varint(&mut next)?)
+        } else {
+            None
+        };
         if decode_varint(&mut next)? != LZMA2_ID {
             return Err(unsupported("non-LZMA2 filter"));
         }
@@ -621,7 +682,11 @@ impl<R: Read> XzReader<R> {
             data_start: self.input.pos,
             declared_compressed,
             declared_uncompressed,
-            digest: Digest { check: self.check, crc32: 0, crc64: 0 },
+            digest: Digest {
+                check: self.check,
+                crc32: 0,
+                crc64: 0,
+            },
             out_len: 0,
             dict: Dict::new(dict),
             lzma: None,
@@ -636,7 +701,10 @@ impl<R: Read> XzReader<R> {
         let size = usize::from(self.input.be16()?) + 1;
         let mut data = vec![0u8; size];
         self.input.fill(&mut data)?;
-        let blk = self.block.as_mut().ok_or_else(|| corrupt("chunk outside block"))?;
+        let blk = self
+            .block
+            .as_mut()
+            .ok_or_else(|| corrupt("chunk outside block"))?;
         if control == 0x01 {
             blk.dict.reset();
             blk.need_dict_reset = false;
@@ -654,11 +722,18 @@ impl<R: Read> XzReader<R> {
         let reset = (control >> 5) & 0x03;
         let unpacked = (usize::from(control & 0x1F) << 16) + usize::from(self.input.be16()?) + 1;
         let packed = usize::from(self.input.be16()?) + 1;
-        let props = if reset >= 2 { Some(self.input.byte()?) } else { None };
+        let props = if reset >= 2 {
+            Some(self.input.byte()?)
+        } else {
+            None
+        };
         let mut data = vec![0u8; packed];
         self.input.fill(&mut data)?;
 
-        let blk = self.block.as_mut().ok_or_else(|| corrupt("chunk outside block"))?;
+        let blk = self
+            .block
+            .as_mut()
+            .ok_or_else(|| corrupt("chunk outside block"))?;
         if reset == 3 {
             blk.dict.reset();
             blk.need_dict_reset = false;
@@ -669,7 +744,11 @@ impl<R: Read> XzReader<R> {
             if prop >= 9 * 5 * 5 {
                 return Err(corrupt("invalid LZMA properties"));
             }
-            let (lc, lp, pb) = (u32::from(prop) % 9, (u32::from(prop) / 9) % 5, u32::from(prop) / 45);
+            let (lc, lp, pb) = (
+                u32::from(prop) % 9,
+                (u32::from(prop) / 9) % 5,
+                u32::from(prop) / 45,
+            );
             if lc + lp > 4 || pb > 4 {
                 return Err(corrupt("unsupported LZMA properties"));
             }
@@ -682,14 +761,20 @@ impl<R: Read> XzReader<R> {
                 *lzma = Lzma::new(lzma.lc, lzma.lp, lzma.pb);
             }
         }
-        let lzma = blk.lzma.as_mut().ok_or_else(|| corrupt("missing LZMA properties"))?;
+        let lzma = blk
+            .lzma
+            .as_mut()
+            .ok_or_else(|| corrupt("missing LZMA properties"))?;
         let mut rc = Rc::new(&data)?;
         lzma.decode(&mut rc, &mut blk.dict, &mut self.pending, unpacked)?;
         rc.finish()
     }
 
     fn finish_block(&mut self) -> io::Result<()> {
-        let blk = self.block.take().ok_or_else(|| corrupt("block end without block"))?;
+        let blk = self
+            .block
+            .take()
+            .ok_or_else(|| corrupt("block end without block"))?;
         let compressed = self.input.pos - blk.data_start;
         let pad = ((4 - compressed % 4) % 4) as usize;
         let mut zeros = [0u8; 3];
@@ -703,13 +788,16 @@ impl<R: Read> XzReader<R> {
         if !blk.digest.matches(&stored[..n]) {
             return Err(corrupt("block check mismatch"));
         }
-        if blk.declared_compressed.is_some_and(|c| c != compressed) || blk.declared_uncompressed.is_some_and(|u| u != blk.out_len) {
+        if blk.declared_compressed.is_some_and(|c| c != compressed)
+            || blk.declared_uncompressed.is_some_and(|u| u != blk.out_len)
+        {
             return Err(corrupt("block size mismatch"));
         }
         if self.records.len() >= MAX_BLOCKS {
             return Err(unsupported("too many blocks"));
         }
-        self.records.push((blk.header_size + compressed + n as u64, blk.out_len));
+        self.records
+            .push((blk.header_size + compressed + n as u64, blk.out_len));
         self.phase = Phase::BlockOrIndex;
         Ok(())
     }
@@ -743,10 +831,15 @@ impl<R: Read> XzReader<R> {
 
         let mut footer = [0u8; 12];
         self.input.fill(&mut footer)?;
-        if crc32_update(0, &footer[4..10]) != u32::from_le_bytes([footer[0], footer[1], footer[2], footer[3]]) {
+        if crc32_update(0, &footer[4..10])
+            != u32::from_le_bytes([footer[0], footer[1], footer[2], footer[3]])
+        {
             return Err(corrupt("footer CRC mismatch"));
         }
-        let backward = (u64::from(u32::from_le_bytes([footer[4], footer[5], footer[6], footer[7]])) + 1) * 4;
+        let backward = (u64::from(u32::from_le_bytes([
+            footer[4], footer[5], footer[6], footer[7],
+        ])) + 1)
+            * 4;
         if backward != index_size {
             return Err(corrupt("backward size mismatch"));
         }
@@ -755,7 +848,9 @@ impl<R: Read> XzReader<R> {
         }
         let mut extra = [0u8; 1];
         if self.input.inner.read(&mut extra)? != 0 {
-            return Err(corrupt("trailing data after stream (multi-stream and padding are rejected)"));
+            return Err(corrupt(
+                "trailing data after stream (multi-stream and padding are rejected)",
+            ));
         }
         self.phase = Phase::Done;
         Ok(())
@@ -839,7 +934,10 @@ mod tests {
     }
 
     fn text(lines: usize) -> Vec<u8> {
-        (0..lines).map(|i| format!("line {i} flamewm theme data\n")).collect::<String>().into_bytes()
+        (0..lines)
+            .map(|i| format!("line {i} flamewm theme data\n"))
+            .collect::<String>()
+            .into_bytes()
     }
 
     fn mixed() -> Vec<u8> {
@@ -869,7 +967,11 @@ mod tests {
                 at += 1;
             }
         }
-        assert_eq!((enc[at], enc[at + 1]), (0x21, 1), "unexpected block header layout");
+        assert_eq!(
+            (enc[at], enc[at + 1]),
+            (0x21, 1),
+            "unexpected block header layout"
+        );
         at + 2
     }
 
@@ -888,7 +990,9 @@ mod tests {
             &["--block-size=65536"],
         ];
         for args in variants {
-            let Some(enc) = encode_or_skip(&input, args) else { return };
+            let Some(enc) = encode_or_skip(&input, args) else {
+                return;
+            };
             let got = decode(&enc).unwrap_or_else(|e| panic!("{args:?}: {e}"));
             assert!(got == input, "{args:?}: output mismatch");
         }
@@ -896,21 +1000,31 @@ mod tests {
 
     #[test]
     fn empty_stream_decodes_to_nothing() {
-        let Some(enc) = encode_or_skip(b"", &[]) else { return };
+        let Some(enc) = encode_or_skip(b"", &[]) else {
+            return;
+        };
         assert!(decode(&enc).unwrap().is_empty());
     }
 
     #[test]
     fn every_truncated_prefix_is_an_error() {
-        let Some(enc) = encode_or_skip(&text(60), &[]) else { return };
+        let Some(enc) = encode_or_skip(&text(60), &[]) else {
+            return;
+        };
         for n in 0..enc.len() {
-            assert!(decode(&enc[..n]).is_err(), "prefix {n} of {} decoded", enc.len());
+            assert!(
+                decode(&enc[..n]).is_err(),
+                "prefix {n} of {} decoded",
+                enc.len()
+            );
         }
     }
 
     #[test]
     fn every_single_bit_flip_is_an_error_not_a_panic() {
-        let Some(enc) = encode_or_skip(&text(20), &[]) else { return };
+        let Some(enc) = encode_or_skip(&text(20), &[]) else {
+            return;
+        };
         for i in 0..enc.len() {
             for bit in 0..8 {
                 let mut bad = enc.clone();
@@ -934,16 +1048,24 @@ mod tests {
     #[test]
     fn oversized_dictionary_is_rejected_and_cap_boundary_is_accepted() {
         let input = text(40);
-        let Some(enc) = encode_or_skip(&input, &[]) else { return };
+        let Some(enc) = encode_or_skip(&input, &[]) else {
+            return;
+        };
         let at = dict_prop_offset(&enc);
 
         let mut far_over = enc.clone();
         patch_block_header(&mut far_over, at, 40);
-        assert_eq!(decode(&far_over).unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(
+            decode(&far_over).unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
 
         let mut over_cap = enc.clone();
         patch_block_header(&mut over_cap, at, 29);
-        assert_eq!(decode(&over_cap).unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(
+            decode(&over_cap).unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
 
         let mut at_cap = enc.clone();
         patch_block_header(&mut at_cap, at, 28);
@@ -952,13 +1074,20 @@ mod tests {
 
     #[test]
     fn sha256_check_is_unsupported() {
-        let Some(enc) = encode_or_skip(&text(10), &["--check=sha256"]) else { return };
-        assert_eq!(decode(&enc).unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+        let Some(enc) = encode_or_skip(&text(10), &["--check=sha256"]) else {
+            return;
+        };
+        assert_eq!(
+            decode(&enc).unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
     }
 
     #[test]
     fn multi_stream_and_stream_padding_are_rejected() {
-        let Some(enc) = encode_or_skip(&text(10), &[]) else { return };
+        let Some(enc) = encode_or_skip(&text(10), &[]) else {
+            return;
+        };
         let mut two = enc.clone();
         two.extend_from_slice(&enc);
         assert!(decode(&two).is_err());
@@ -971,10 +1100,19 @@ mod tests {
     fn bomb_output_is_bounded_by_caller_take() {
         const LIMIT: u64 = 1024 * 1024;
         let zeros = vec![0u8; 32 * 1024 * 1024];
-        let Some(enc) = encode_or_skip(&zeros, &[]) else { return };
-        assert!(enc.len() < 64 * 1024, "fixture should be a high-ratio bomb, got {}", enc.len());
+        let Some(enc) = encode_or_skip(&zeros, &[]) else {
+            return;
+        };
+        assert!(
+            enc.len() < 64 * 1024,
+            "fixture should be a high-ratio bomb, got {}",
+            enc.len()
+        );
         let mut out = Vec::new();
-        XzReader::new(&enc[..]).take(LIMIT + 1).read_to_end(&mut out).unwrap();
+        XzReader::new(&enc[..])
+            .take(LIMIT + 1)
+            .read_to_end(&mut out)
+            .unwrap();
         assert_eq!(out.len() as u64, LIMIT + 1);
     }
 }

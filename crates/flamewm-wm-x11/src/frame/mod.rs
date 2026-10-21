@@ -1,6 +1,7 @@
 pub mod chrome;
 pub mod controller;
 pub mod coords;
+mod drag_backdrop;
 pub mod geometry;
 pub mod geometry_shape;
 pub mod input;
@@ -9,4 +10,3 @@ pub mod model;
 pub mod resources;
 pub mod session;
 pub mod titlebar_backdrop;
-mod drag_backdrop;

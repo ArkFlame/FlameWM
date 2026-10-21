@@ -1,13 +1,13 @@
 use x11rb::protocol::xproto::Window;
 
 use crate::chrome::IconImage;
-use flamewm_integrations_linux::icons::IconKey;
 use crate::classifier::WindowKind;
 use crate::decoration::policy::Decoration;
 use crate::frame::coords::RootRect;
 use crate::frame::model::{FrameControl, PlacementMode, PlacementState};
 use crate::geometry::Rect;
 use crate::size_hints::ClientSizeHints;
+use flamewm_integrations_linux::icons::IconKey;
 
 #[derive(Debug, Clone)]
 pub struct ManagedClient {

@@ -32,7 +32,8 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let callback = "on_reactor(document)?";
     let retained_gate = "redraw_if_dirty(document)?";
     let queue_gate = "XEventsQueued";
-    let t18 = ordered(source, callback, retained_gate) && ordered(source, retained_gate, queue_gate);
+    let t18 =
+        ordered(source, callback, retained_gate) && ordered(source, retained_gate, queue_gate);
     let t19 = source.matches(retained_gate).count() == 1
         && !source.contains("self.redraw(")
         && RENDER_SOURCE.contains("if self.pending_damage.is_empty() && !stale")

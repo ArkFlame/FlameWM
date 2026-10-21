@@ -3,8 +3,8 @@
 
 mod archive;
 pub mod cursor;
-mod xz;
 pub mod import;
+mod xz;
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 
 use crate::icon_theme::{IconThemeIndex, inheritance_chain, parse_ini_value, search_roots};
 
-const O_NOFOLLOW: i32 = if cfg!(target_arch = "aarch64") { 0o100_000 } else { 0o400_000 };
+const O_NOFOLLOW: i32 = if cfg!(target_arch = "aarch64") {
+    0o100_000
+} else {
+    0o400_000
+};
 const O_NONBLOCK: i32 = 0o4_000;
 
 /// Read a regular file without following a final symlink. The cap applies to
@@ -26,7 +30,10 @@ pub(crate) fn read_regular_capped(path: &Path, limit: u64) -> io::Result<Option<
         .custom_flags(O_NOFOLLOW | O_NONBLOCK)
         .open(path)?;
     if !file.metadata()?.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
     }
     let mut buf = Vec::new();
     file.take(limit.saturating_add(1)).read_to_end(&mut buf)?;
@@ -81,9 +88,16 @@ impl ThemeCatalog {
                 let readable = text.is_ok();
                 let text = text.unwrap_or_default();
                 let parsed = IconThemeIndex::parse(&id, &text);
-                let name = parse_ini_value(&text, "Icon Theme", "Name").unwrap_or_else(|| id.clone());
+                let name =
+                    parse_ini_value(&text, "Icon Theme", "Name").unwrap_or_else(|| id.clone());
                 let mut push = |kind: ThemeKind, name: String, valid: bool| {
-                    entries.push(ThemeEntry { id: id.clone(), name, kind, root: dir.clone(), valid });
+                    entries.push(ThemeEntry {
+                        id: id.clone(),
+                        name,
+                        kind,
+                        root: dir.clone(),
+                        valid,
+                    });
                 };
                 if !parsed.directories.is_empty() && seen.insert((ThemeKind::Icon, id.clone())) {
                     let valid = readable && parsed.directories.iter().any(|d| dir.join(d).is_dir());

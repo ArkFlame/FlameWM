@@ -73,7 +73,10 @@ fn diagnostic(observed: bool, detail: impl Into<String>) -> (bool, String) {
 /// after the XTEST button release.
 pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let Some(work_area) = super::interaction_regressions::root_work_area(canary) else {
-        return diagnostic(false, "observed=false work area unavailable path=real-pointer");
+        return diagnostic(
+            false,
+            "observed=false work area unavailable path=real-pointer",
+        );
     };
     let Some(target) = resolve_target(canary, args) else {
         return diagnostic(false, "observed=false no target path=real-pointer");
@@ -81,21 +84,39 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let reset_floating =
         super::interaction_regressions::establish_known_floating(canary, &target, work_area);
     let Some(before) = canary.by_id(target.id) else {
-        return diagnostic(false, format!("observed=false target {} gone path=real-pointer", target.id));
+        return diagnostic(
+            false,
+            format!("observed=false target {} gone path=real-pointer", target.id),
+        );
     };
     let Some(_surface) = input_surface(canary, &before) else {
-        return diagnostic(false, format!(
-            "observed=false target {} frame not ready path=real-pointer",
-            target.id
-        ));
+        return diagnostic(
+            false,
+            format!(
+                "observed=false target {} frame not ready path=real-pointer",
+                target.id
+            ),
+        );
     };
     // Refresh after reset_floating: baseline and input point must describe the
     // same current frame immediately before any real pointer action.
     let Some(before) = canary.by_id(target.id) else {
-        return diagnostic(false, format!("observed=false target {} gone after reset path=real-pointer", target.id));
+        return diagnostic(
+            false,
+            format!(
+                "observed=false target {} gone after reset path=real-pointer",
+                target.id
+            ),
+        );
     };
     let Some(baseline) = input_surface(canary, &before) else {
-        return diagnostic(false, format!("observed=false target {} frame not ready after reset path=real-pointer", target.id));
+        return diagnostic(
+            false,
+            format!(
+                "observed=false target {} frame not ready after reset path=real-pointer",
+                target.id
+            ),
+        );
     };
     // Mirror the canonical frame layout: the title-drag child is the
     // titlebar band below the 6px top strip and left of the 114px controls.
@@ -112,16 +133,23 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     );
     let to = (from.0.saturating_add(64), from.1.saturating_add(48));
     if !xtest_motion(canary, from.0, from.1) {
-        return diagnostic(false, format!(
-            "observed=false id={} warp failed path=real-pointer",
-            target.id
-        ));
+        return diagnostic(
+            false,
+            format!(
+                "observed=false id={} warp failed path=real-pointer",
+                target.id
+            ),
+        );
     }
     let dragged = xtest_drag_path(canary, from, to, 1, 8);
     // The path helper returns only after it has sent the release. Drain events
     // already queued at that boundary, then observe geometry without generating
     // further input so a replayed motion cannot masquerade as the drag result.
-    while canary.conn.poll_for_event().is_ok_and(|event| event.is_some()) {}
+    while canary
+        .conn
+        .poll_for_event()
+        .is_ok_and(|event| event.is_some())
+    {}
     let work_left = i64::from(work_area.0);
     let work_top = i64::from(work_area.1);
     let work_right = work_left + i64::from(work_area.2);
@@ -130,15 +158,14 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let max_x = work_right - i64::from(baseline.width);
     let min_y = work_top;
     let max_y = work_bottom - i64::from(baseline.height);
-    if work_area.2 <= 0
-        || work_area.3 <= 0
-        || max_x < min_x
-        || max_y < min_y
-    {
-        return diagnostic(false, format!(
-            "observed=false invalid work area or oversized frame work_area={work_area:?} frame={}x{} path=real-pointer",
-            baseline.width, baseline.height
-        ));
+    if work_area.2 <= 0 || work_area.3 <= 0 || max_x < min_x || max_y < min_y {
+        return diagnostic(
+            false,
+            format!(
+                "observed=false invalid work area or oversized frame work_area={work_area:?} frame={}x{} path=real-pointer",
+                baseline.width, baseline.height
+            ),
+        );
     }
     let requested_x = i64::from(baseline.x) + 64;
     let requested_y = i64::from(baseline.y) + 48;
@@ -151,31 +178,33 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let settled = if fixture_clamped {
         false
     } else {
-        super::interaction_regressions::wait_until(
-            2_000,
-            || {
-                while canary.conn.poll_for_event().is_ok_and(|event| event.is_some()) {}
-                let position = canary
-                    .by_id(target.id)
-                    .and_then(|after| input_surface(canary, &after))
-                    .map(|frame| (frame.x, frame.y, frame.width, frame.height));
-                let expected = position.is_some_and(|frame| {
-                    i64::from(frame.0) == expected_x
-                        && i64::from(frame.1) == expected_y
-                        && frame.2 == baseline.width
+        super::interaction_regressions::wait_until(2_000, || {
+            while canary
+                .conn
+                .poll_for_event()
+                .is_ok_and(|event| event.is_some())
+            {}
+            let position = canary
+                .by_id(target.id)
+                .and_then(|after| input_surface(canary, &after))
+                .map(|frame| (frame.x, frame.y, frame.width, frame.height));
+            let expected = position.is_some_and(|frame| {
+                i64::from(frame.0) == expected_x
+                    && i64::from(frame.1) == expected_y
+                    && frame.2 == baseline.width
+                    && frame.3 == baseline.height
+            });
+            if expected {
+                post_release_settled_position = position;
+            }
+            expected
+                && position.is_some_and(|frame| {
+                    frame.2 == baseline.width
                         && frame.3 == baseline.height
-                });
-                if expected {
-                    post_release_settled_position = position;
-                }
-                expected && position.is_some_and(|frame| {
-                        frame.2 == baseline.width
-                            && frame.3 == baseline.height
-                            && i64::from(frame.0) - i64::from(baseline.x) == expected_dx
-                            && i64::from(frame.1) - i64::from(baseline.y) == expected_dy
-                    })
-            },
-        )
+                        && i64::from(frame.0) - i64::from(baseline.x) == expected_dx
+                        && i64::from(frame.1) - i64::from(baseline.y) == expected_dy
+                })
+        })
     };
     let accepted_final = canary
         .by_id(target.id)
@@ -185,8 +214,13 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let mut stable = post_release_settled_position.is_some() && settled;
     for _ in 0..10 {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        while canary.conn.poll_for_event().is_ok_and(|event| event.is_some()) {}
-        let sample = canary.by_id(target.id)
+        while canary
+            .conn
+            .poll_for_event()
+            .is_ok_and(|event| event.is_some())
+        {}
+        let sample = canary
+            .by_id(target.id)
             .and_then(|after| input_surface(canary, &after))
             .map(|frame| (frame.x, frame.y, frame.width, frame.height));
         stable &= sample == post_release_settled_position
@@ -203,10 +237,15 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Some(w) => {
             let after_frame = input_surface(canary, &w);
             let (dx, dy) = match after_frame.as_ref() {
-                Some(after) => (i32::from(after.x) - i32::from(baseline.x), i32::from(after.y) - i32::from(baseline.y)),
+                Some(after) => (
+                    i32::from(after.x) - i32::from(baseline.x),
+                    i32::from(after.y) - i32::from(baseline.y),
+                ),
                 _ => (0, 0),
             };
-            let dimensions_unchanged = after_frame.as_ref().is_some_and(|after| after.width == baseline.width && after.height == baseline.height);
+            let dimensions_unchanged = after_frame.as_ref().is_some_and(|after| {
+                after.width == baseline.width && after.height == baseline.height
+            });
             let movement_matches = i64::from(dx) - expected_dx <= 4
                 && expected_dx - i64::from(dx) <= 4
                 && i64::from(dy) - expected_dy <= 4
@@ -217,19 +256,27 @@ pub fn run_t06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                 && !fixture_clamped
                 && movement_matches
                 && dimensions_unchanged
-                && post_release_settled_position.is_some_and(|position| position.0 == after_frame.as_ref().map_or(0, |f| f.x) && position.1 == after_frame.as_ref().map_or(0, |f| f.y))
-                && stable && post_release_settled_position == stable_after_release;
+                && post_release_settled_position.is_some_and(|position| {
+                    position.0 == after_frame.as_ref().map_or(0, |f| f.x)
+                        && position.1 == after_frame.as_ref().map_or(0, |f| f.y)
+                })
+                && stable
+                && post_release_settled_position == stable_after_release;
             (
                 moved,
                 format!(
                     "id={} frame_before={}x{}+{}+{} frame_after={}x{}+{}+{} dx={dx} dy={dy} expected_clipped_delta={}x{} fixture_clamped={fixture_clamped} dimensions_unchanged={dimensions_unchanged} reset_floating={reset_floating} dragged={dragged} settled={settled} post_release_settled_position={post_release_settled_position:?} accepted_final={accepted_final:?} stable_after_release={stable_after_release:?} stable={stable} path=real-pointer",
                     target.id,
-                    baseline.width, baseline.height, baseline.x, baseline.y,
+                    baseline.width,
+                    baseline.height,
+                    baseline.x,
+                    baseline.y,
                     after_frame.as_ref().map_or(0, |frame| frame.width),
                     after_frame.as_ref().map_or(0, |frame| frame.height),
                     after_frame.as_ref().map_or(0, |frame| frame.x),
                     after_frame.as_ref().map_or(0, |frame| frame.y),
-                    expected_dx, expected_dy,
+                    expected_dx,
+                    expected_dy,
                 ),
             )
         }
@@ -248,10 +295,16 @@ pub fn run_t07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         return (false, "no target path=real-pointer".to_owned());
     };
     let Some(before) = canary.by_id(target.id) else {
-        return (false, format!("target {} gone path=real-pointer", target.id));
+        return (
+            false,
+            format!("target {} gone path=real-pointer", target.id),
+        );
     };
     let Some(surface) = input_surface(canary, &before) else {
-        return (false, format!("target {} frame not ready path=real-pointer", target.id));
+        return (
+            false,
+            format!("target {} frame not ready path=real-pointer", target.id),
+        );
     };
     // 8 edge/corner grips in root coordinates.
     let x0 = surface.x;

@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
+use crate::network_manager::{item_bool, item_string, one_string, unsupported, unwrap_variant};
 use dbus::arg::messageitem::MessageItem;
 use dbus::{Message, MessageType};
 use flamewm_api::system::{MediaSnapshot, PlaybackState, SystemAction};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, BusWatch, MessageDisposition};
 use flamewm_integrations_core::mpris::{MediaIntent, MprisController, PlayerInfo};
-use crate::network_manager::{item_bool, item_string, one_string, unsupported, unwrap_variant};
 
 pub const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
 pub const MPRIS_ROOT: &str = "/org/mpris/MediaPlayer2";
@@ -499,7 +499,9 @@ fn parse_message(
 
 fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, FlameError> {
     if items.len() != 3 {
-        return Err(FlameError::invalid("MPRIS owner event has invalid arguments"));
+        return Err(FlameError::invalid(
+            "MPRIS owner event has invalid arguments",
+        ));
     }
     Ok(Incoming::OwnerChanged {
         name: item_string(&items[0], "owner event name")?,
@@ -513,7 +515,9 @@ fn parse_properties_changed(
     owner: String,
 ) -> Result<Incoming, FlameError> {
     if items.len() < 2 {
-        return Err(FlameError::invalid("MPRIS property event has invalid arguments"));
+        return Err(FlameError::invalid(
+            "MPRIS property event has invalid arguments",
+        ));
     }
     let interface = item_string(&items[0], "MPRIS property interface")?;
     let changed = parse_property_changes(Some(&items[1]), interface.as_str())?;
@@ -657,7 +661,10 @@ mod tests {
             (interface, dict)
         };
         let replies = [
-            reply(MPRIS_ROOT_INTERFACE, ("Identity", MessageItem::Str(bus.to_owned()))),
+            reply(
+                MPRIS_ROOT_INTERFACE,
+                ("Identity", MessageItem::Str(bus.to_owned())),
+            ),
             reply(
                 MPRIS_PLAYER_INTERFACE,
                 ("PlaybackStatus", MessageItem::Str(playback.to_owned())),
@@ -688,7 +695,12 @@ mod tests {
         // Real session bus is required for the pump; no message is sent by this test.
         let mut provider = MprisProvider::connect().expect("session bus for MPRIS pump");
         stage_player(&mut provider, 1, "org.mpris.MediaPlayer2.paused", "Paused");
-        stage_player(&mut provider, 2, "org.mpris.MediaPlayer2.playing", "Playing");
+        stage_player(
+            &mut provider,
+            2,
+            "org.mpris.MediaPlayer2.playing",
+            "Playing",
+        );
 
         // Aggregate sequence: provider.on_ready() then provider.reconcile().
         provider.on_ready().expect("on_ready");
@@ -696,7 +708,10 @@ mod tests {
             provider.reconcile(),
             "selection change produced inside on_ready must be reported"
         );
-        assert!(!provider.reconcile(), "change must be reported exactly once");
+        assert!(
+            !provider.reconcile(),
+            "change must be reported exactly once"
+        );
 
         let snapshot = provider.snapshot();
         assert_eq!(
@@ -704,10 +719,7 @@ mod tests {
             flamewm_api::system::ServiceAvailability::Available
         );
         assert_eq!(snapshot.playback, PlaybackState::Playing);
-        assert_eq!(
-            snapshot.active_bus_name,
-            "org.mpris.MediaPlayer2.playing"
-        );
+        assert_eq!(snapshot.active_bus_name, "org.mpris.MediaPlayer2.playing");
         assert_ne!(snapshot.generation, 0);
     }
 

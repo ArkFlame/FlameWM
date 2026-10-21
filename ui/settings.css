@@ -28,6 +28,7 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .settings-button:active { background:#262a2d; border-color:var(--accent); }
 .select-box { min-width:156px; height:32px; padding:0 12px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .select-box:active { background:#111315; }
+.selected-theme-preview { width:24px; height:24px; margin-right:8px; }
 .segment-control { display:flex; justify-content:flex-end; align-items:center; gap:4px; min-width:0; }
 .segment { width:84px; height:32px; padding:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .segment:hover { border-color:var(--accent); }
@@ -62,6 +63,11 @@ button { padding:0; border-width:0; border-color:transparent; background:transpa
 .display-output .display-state-unselected { background:#596068; }
 .display-card .setting-block { min-height:46px; }
 .scale-setting { flex-grow:1; display:flex; align-items:center; justify-content:flex-end; gap:12px; }
+#display-scale-track { cursor:ew-resize; height:32px; }
+#display-scale-fill { top:10px; }
+#display-scale-thumb { top:10px; }
+
+#display-scale-value { min-width:52px; }
 .scale-buttons { display:flex; gap:4px; }
 .scale-buttons button { min-width:44px; height:32px; padding:0 4px; font-size:12px; display:flex; align-items:center; justify-content:center; white-space:nowrap; border:1px solid #4a5056; border-radius:4px; background:var(--control); }
 .mode-block { flex-direction:column; align-items:stretch; gap:8px; }

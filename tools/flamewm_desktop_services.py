@@ -27,7 +27,7 @@ POLKIT_CANDIDATES = (
     "/usr/libexec/polkit-gnome-authentication-agent-1",
     "/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1",
 )
-NOTIFIER_CANDIDATES = ("xfce4-notifyd", "dunst", "lxqt-notificationd")
+NOTIFIER_CANDIDATES = ("dunst", "xfce4-notifyd", "lxqt-notificationd")
 CLIPBOARD_CANDIDATES = ("xfce4-clipman", "qlipper", "copyq")
 BLUETOOTH_CANDIDATES = ("blueman-applet",)
 NOTIFIER_SERVICE_NAMES = (
@@ -54,6 +54,7 @@ def flamewm_autostart_environment(env: dict[str, str]) -> dict[str, str]:
     No user settings are written and the KDE desktop identity is untouched.
     """
     result = dict(env)
+    result["XDG_MENU_PREFIX"] = "flamewm-"
     config_home = Path(env.get("XDG_CONFIG_HOME") or Path(env.get("HOME", str(Path.home()))) / ".config")
     owned = config_home / "flamewm/session-compat"
     config, data = owned / "config", owned / "data"
@@ -132,6 +133,38 @@ def notification_owned() -> bool:
     )
 
 
+def activate_notification_service() -> bool:
+    """Try the XDG D-Bus owner once, not just a possibly stale .service file.
+
+    A KDE/other provider that successfully owns the well-known name wins.
+    A missing/broken activator must not suppress FlameWM's fallback forever.
+    """
+    busctl = shutil.which("busctl")
+    if busctl is None:
+        return False
+    try:
+        result = subprocess.run(
+            [busctl, "--user", "call", "org.freedesktop.DBus", "/org/freedesktop/DBus",
+             "org.freedesktop.DBus", "StartServiceByName", "su", "org.freedesktop.Notifications", "0"],
+            capture_output=True, text=True, timeout=4, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    # D-Bus only reports activation success; verify the actual owner.
+    return result.returncode == 0 and notification_owned()
+
+
+def notification_fallback_argv(candidate: str, env: dict[str, str]) -> list[str]:
+    """Keep the bundled bottom-right appearance scoped to a FlameWM-started dunst."""
+    if Path(candidate).name == "dunst":
+        package_config = Path("/usr/share/flamewm/dunstrc")
+        source_config = Path(__file__).resolve().parents[1] / "packaging/notifications/dunstrc"
+        config = package_config if package_config.is_file() else source_config
+        if config.is_file():
+            return [candidate, "--config", str(config)]
+    return [candidate]
+
+
 def choose_programs(
     env: dict[str, str],
     find: Callable[[str], str | None] = shutil.which,
@@ -163,7 +196,7 @@ def choose_programs(
         if not process_active(notifier_names):
             for candidate in NOTIFIER_CANDIDATES:
                 if path := executable(candidate, find):
-                    notifier = [path]
+                    notifier = notification_fallback_argv(path, env)
                     break
     optional: dict[str, list[str] | None] = {"clipboard": None, "bluetooth": None}
     # Clipboard history can retain secrets; never enable persistent capture by default.
@@ -253,7 +286,20 @@ def run_services(env: dict[str, str], stop: threading.Event) -> int:
         if not stop.is_set():
             # Recheck after dex: its generic XDG entries may have launched the
             # user's preferred polkit or notification provider already.
-            plan = choose_programs(env)
+            # A .service file does not prove a working notification provider.
+            # Prefer an already running owner, explicitly activate an installed
+            # provider once, then use dunst as the FlameWM session fallback.
+            owned = notification_owned()
+            # Prefer a packaged, FlameWM-styled dunst for this session unless
+            # the user already has a running notification server. Otherwise
+            # explicitly probe an existing D-Bus activator before fallback.
+            active = owned or (
+                executable("dunst") is None
+                and notification_activatable(session_service_roots(env))
+                and activate_notification_service()
+            )
+            plan = choose_programs(env, notifier_available=lambda: active,
+                                   notifier_owned=lambda: active or notification_owned())
             for role in ("polkit", "notifications", "clipboard", "bluetooth"):
                 argv = plan[role]
                 if argv and not stop.is_set():

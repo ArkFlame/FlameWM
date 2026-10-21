@@ -104,9 +104,9 @@ impl<E: EnginePorts> PlatformHost<E> {
     fn seed_persisted_panel_edges(&mut self) {
         for (output, edge) in &self.settings.current().panel_edges {
             let revision = self.panels.revision();
-            if let Err(error) = self
-                .panels
-                .set_edge(&OutputId::new(output.clone()), *edge, revision)
+            if let Err(error) =
+                self.panels
+                    .set_edge(&OutputId::new(output.clone()), *edge, revision)
             {
                 eprintln!("flamewm: persisted panel edge for {output} not applied: {error}");
             }
@@ -172,7 +172,8 @@ impl<E: EnginePorts> PlatformHost<E> {
                 .map(|output| (output, 100)),
         );
         for (output, scale) in targets {
-            let Some(generation) = self.displays.cached().map(|snapshot| snapshot.generation) else {
+            let Some(generation) = self.displays.cached().map(|snapshot| snapshot.generation)
+            else {
                 return;
             };
             match self
@@ -192,7 +193,9 @@ impl<E: EnginePorts> PlatformHost<E> {
 
     /// Generation of the cached display snapshot; 0 before the first display refresh.
     fn cached_generation(&self) -> u64 {
-        self.displays.cached().map_or(0, |snapshot| snapshot.generation)
+        self.displays
+            .cached()
+            .map_or(0, |snapshot| snapshot.generation)
     }
 
     pub fn stop(&mut self) {
@@ -243,7 +246,8 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 
     pub fn activate_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
-        self.workspaces.activate(&mut self.engine, index, expected_revision)
+        self.workspaces
+            .activate(&mut self.engine, index, expected_revision)
     }
 
     pub fn insert_workspace_after(
@@ -251,11 +255,13 @@ impl<E: EnginePorts> PlatformHost<E> {
         index: usize,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.workspaces.insert_after(&mut self.engine, index, expected_revision)
+        self.workspaces
+            .insert_after(&mut self.engine, index, expected_revision)
     }
 
     pub fn remove_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
-        self.workspaces.remove(&mut self.engine, index, expected_revision)
+        self.workspaces
+            .remove(&mut self.engine, index, expected_revision)
     }
 
     pub fn showing_desktop(&self) -> FlameResult<bool> {
@@ -273,18 +279,21 @@ impl<E: EnginePorts> PlatformHost<E> {
         window: WindowRef,
         span: FullscreenMonitorSpan,
     ) -> FlameResult<()> {
-        self.windows.set_fullscreen_monitors(&mut self.engine, window, span)
+        self.windows
+            .set_fullscreen_monitors(&mut self.engine, window, span)
     }
 
     pub fn begin_interactive_move_resize(
         &mut self,
         request: InteractiveMoveResize,
     ) -> FlameResult<()> {
-        self.windows.begin_interactive_move_resize(&mut self.engine, request)
+        self.windows
+            .begin_interactive_move_resize(&mut self.engine, request)
     }
 
     pub fn cancel_interactive_move_resize(&mut self, window: WindowRef) -> FlameResult<()> {
-        self.windows.cancel_interactive_move_resize(&mut self.engine, window)
+        self.windows
+            .cancel_interactive_move_resize(&mut self.engine, window)
     }
 
     pub fn display_snapshot(&mut self) -> FlameResult<DisplaySnapshot> {
@@ -313,7 +322,8 @@ impl<E: EnginePorts> PlatformHost<E> {
         expected_generation: u64,
         now_ms: u64,
     ) -> FlameResult<TransactionId> {
-        self.displays.begin_mode(&mut self.engine, output, mode, expected_generation, now_ms)
+        self.displays
+            .begin_mode(&mut self.engine, output, mode, expected_generation, now_ms)
     }
 
     pub fn keep_display_mode(
@@ -490,7 +500,11 @@ impl<E: EnginePorts> PlatformHost<E> {
     }
 
     /// Suspends every shortcut grab for a Settings capture lease. See `ShortcutService::begin_capture`.
-    pub fn begin_hotkey_capture(&mut self, action: &str, expected_revision: u64) -> FlameResult<u64> {
+    pub fn begin_hotkey_capture(
+        &mut self,
+        action: &str,
+        expected_revision: u64,
+    ) -> FlameResult<u64> {
         self.shortcuts
             .begin_capture(&mut self.engine, action, expected_revision)
     }
@@ -552,7 +566,8 @@ impl<E: EnginePorts> PlatformHost<E> {
         logical_size: u16,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.panels.set_size(output, logical_size, expected_revision)
+        self.panels
+            .set_size(output, logical_size, expected_revision)
     }
 
     pub fn pin_app(&mut self, app: DesktopAppId, expected_revision: u64) -> FlameResult<bool> {
@@ -666,7 +681,7 @@ fn validate_requested_scales(transaction: &SettingsTransaction) -> FlameResult<(
             if !supported {
                 return Err(FlameError::new(
                     ErrorCode::InvalidArgument,
-                    "shell scale must be 100/125/150/175/200",
+                    "shell scale must be 100..=200 in 5% steps",
                 ));
             }
         }
@@ -734,7 +749,11 @@ mod tests {
         fn workspace_snapshot(&self) -> FlameResult<WorkspaceSnapshot> {
             Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
         }
-        fn activate_workspace(&mut self, _index: usize, _expected_revision: u64) -> FlameResult<()> {
+        fn activate_workspace(
+            &mut self,
+            _index: usize,
+            _expected_revision: u64,
+        ) -> FlameResult<()> {
             Err(FlameError::new(ErrorCode::Unsupported, "fake workspace"))
         }
         fn move_window_to_workspace(
@@ -774,7 +793,10 @@ mod tests {
     }
 
     impl ShortcutPort for FakeEngine {
-        fn prepare_shortcuts(&mut self, _desired: &BTreeMap<String, KeyBinding>) -> FlameResult<()> {
+        fn prepare_shortcuts(
+            &mut self,
+            _desired: &BTreeMap<String, KeyBinding>,
+        ) -> FlameResult<()> {
             Ok(())
         }
         fn commit_shortcuts(&mut self) -> FlameResult<()> {
@@ -893,8 +915,11 @@ mod tests {
         use crate::panel::logical_to_physical;
 
         let path = fixture_path("startup-panel-scale");
-        std::fs::write(&path, "scale.default=125\ntaskbarHeight=72\ntaskbarStyle=classic\n")
-            .expect("write settings fixture");
+        std::fs::write(
+            &path,
+            "scale.default=125\ntaskbarHeight=72\ntaskbarStyle=classic\n",
+        )
+        .expect("write settings fixture");
         let mut display = fake_display(100);
         display.outputs[0].geometry = Rect {
             x: 0,
@@ -1021,6 +1046,25 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_five_percent_scales_survive_restart() {
+        for scale in [105_u16, 135, 195, 200] {
+            let path = fixture_path(&format!("scale-restart-{scale}"));
+            let mut host = host_at(&path, 100);
+            host.start().expect("start");
+            let generation = display_generation(&mut host);
+            assert!(
+                host.set_shell_scale(&OutputId::new("default"), scale, generation)
+                    .expect("scale")
+            );
+            drop(host);
+            let mut next = host_at(&path, 100);
+            next.start().expect("restart");
+            assert_eq!(cached_scale(&next), Some(scale));
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    #[test]
     fn failed_shell_scale_persistence_restores_display_scale() {
         // The settings parent becomes a regular file after start, so persistence cannot create it.
         let dir = fixture_path("scale-rollback-dir");
@@ -1041,12 +1085,16 @@ mod tests {
     }
 
     fn fixture_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("flamewm-host-{name}-{}.conf", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("flamewm-host-{name}-{}.conf", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
 
-    fn host_with_display(path: &std::path::Path, display: DisplaySnapshot) -> PlatformHost<FakeEngine> {
+    fn host_with_display(
+        path: &std::path::Path,
+        display: DisplaySnapshot,
+    ) -> PlatformHost<FakeEngine> {
         PlatformHost::new(
             FakeEngine {
                 display,
@@ -1067,8 +1115,12 @@ mod tests {
     }
 
     fn cached_scale(host: &PlatformHost<FakeEngine>) -> Option<u16> {
-        host.cached_display_snapshot()
-            .and_then(|snapshot| snapshot.outputs.first().map(|output| output.shell_scale_percent))
+        host.cached_display_snapshot().and_then(|snapshot| {
+            snapshot
+                .outputs
+                .first()
+                .map(|output| output.shell_scale_percent)
+        })
     }
 
     /// Starts a host on `path` and grabs its effective shortcut set, as a WM restart would.
@@ -1098,7 +1150,10 @@ mod tests {
         drop(host);
 
         let persisted = std::fs::read_to_string(&path).expect("edge is persisted");
-        assert!(persisted.contains("panel.edge.default=top\n"), "{persisted}");
+        assert!(
+            persisted.contains("panel.edge.default=top\n"),
+            "{persisted}"
+        );
         let mut restarted = host_at(&path, 100);
         restarted.start().expect("restart starts");
         assert_eq!(restarted.panels_snapshot().panels[0].edge, PanelEdge::Top);
@@ -1112,15 +1167,24 @@ mod tests {
         let mut host = host_at(&path, 100);
         host.start().expect("host starts");
         host.set_panel_edge(
-            &OutputId::new("default"), PanelEdge::Top, host.panels_snapshot().revision,
-        ).expect("persist panel edge");
+            &OutputId::new("default"),
+            PanelEdge::Top,
+            host.panels_snapshot().revision,
+        )
+        .expect("persist panel edge");
         let original = host.cached_display_snapshot().expect("displays cached");
         let mut disconnected = original.clone();
         disconnected.outputs[0].connected = false;
         disconnected.outputs[0].geometry = Rect::default();
-        assert!(host.resync_panels_for_displays(&disconnected).expect("detach"));
+        assert!(
+            host.resync_panels_for_displays(&disconnected)
+                .expect("detach")
+        );
         assert!(host.panels_snapshot().panels.is_empty());
-        assert!(host.resync_panels_for_displays(&original).expect("reattach"));
+        assert!(
+            host.resync_panels_for_displays(&original)
+                .expect("reattach")
+        );
         let panels = host.panels_snapshot();
         let panel = &panels.panels[0];
         assert_eq!(panel.edge, PanelEdge::Top);
@@ -1139,7 +1203,10 @@ mod tests {
         host.clear_shortcut(ACTION_TOGGLE_START_MENU, revision + 1)
             .expect("repeated clear applies");
         let persisted = std::fs::read_to_string(&path).expect("clear is persisted");
-        assert!(persisted.contains("hotkey.ToggleStartMenu=\n"), "{persisted}");
+        assert!(
+            persisted.contains("hotkey.ToggleStartMenu=\n"),
+            "{persisted}"
+        );
 
         let reloaded = started_hotkey_host(&path);
         assert_eq!(
@@ -1160,7 +1227,10 @@ mod tests {
         host.set_shortcut(ACTION_WINDOW_CLOSE, "Super+F8", revision)
             .expect("set applies");
         let persisted = std::fs::read_to_string(&path).expect("set is persisted");
-        assert!(persisted.contains("hotkey.WindowClose=Super+F8\n"), "{persisted}");
+        assert!(
+            persisted.contains("hotkey.WindowClose=Super+F8\n"),
+            "{persisted}"
+        );
 
         let reloaded = started_hotkey_host(&path);
         assert_eq!(

@@ -23,14 +23,14 @@ use super::native::xresource::{
     X11ResourceAllocator, refresh_backbuffer_gauge, refresh_image_gauge,
 };
 use super::xft::XftBackend;
-use crate::external_drawable::match_argb32_visual;
 use super::xlib::*;
 use super::xrender::XRenderBackend;
 use super::xshape::XShapeBridge;
 use super::*;
+use crate::external_drawable::match_argb32_visual;
+use crate::surface_controller::{RawPressSelection, xi_raw_press_opcode};
 use cursor::cursor_shape;
 use cursor_theme::{SurfaceCursor, share_surface_cursor};
-use crate::surface_controller::{RawPressSelection, xi_raw_press_opcode};
 
 mod color;
 mod cursor;
@@ -38,7 +38,7 @@ mod cursor_theme;
 mod events;
 mod geometry;
 mod images;
-pub(crate) use images::create_zeroed_ximage;
+pub(crate) use images::upload_argb32_image;
 mod input;
 mod layout_helpers;
 mod primitives;
@@ -322,7 +322,12 @@ impl X11App {
         unsafe {
             XStoreName(display, window, title.as_ptr());
         }
-        set_window_identity(display, window, config.title.as_str(), config.identity.as_ref());
+        set_window_identity(
+            display,
+            window,
+            config.title.as_str(),
+            config.identity.as_ref(),
+        );
         set_window_role(display, window, config.role);
         if config.role == X11WindowRole::Dock {
             let (root_w, root_h) = display_extent(display, screen);
@@ -499,7 +504,8 @@ impl X11App {
         unsafe {
             XFlush(display);
         }
-        let picture = u64::from(alpha_mode == SurfaceAlphaMode::CompositedArgb32 && xrender.is_some());
+        let picture =
+            u64::from(alpha_mode == SurfaceAlphaMode::CompositedArgb32 && xrender.is_some());
         let mut surface = NativeSurfaceTarget::create_plan(
             window,
             visual as u64,
@@ -730,8 +736,24 @@ pub(crate) fn apply_dock_strut(
     match reserved {
         Some(reserved) => unsafe {
             let (p12, p4) = (reserved.partial12(), reserved.strut4());
-            replace_property(display, window, partial, XA_CARDINAL, 32, p12.as_ptr() as *const u8, 12);
-            replace_property(display, window, strut, XA_CARDINAL, 32, p4.as_ptr() as *const u8, 4);
+            replace_property(
+                display,
+                window,
+                partial,
+                XA_CARDINAL,
+                32,
+                p12.as_ptr() as *const u8,
+                12,
+            );
+            replace_property(
+                display,
+                window,
+                strut,
+                XA_CARDINAL,
+                32,
+                p4.as_ptr() as *const u8,
+                4,
+            );
         },
         None => unsafe {
             XDeleteProperty(display, window, partial);
@@ -754,7 +776,17 @@ pub(crate) fn apply_pager_cells(display: *mut Display, window: Window, cells: &[
     }
     let flat: Vec<u64> = cells.iter().flat_map(|cell| cell.iter().copied()).collect();
     let data = flat.as_ptr() as *const u8;
-    unsafe { replace_property(display, window, property, XA_CARDINAL, 32, data, flat.len() as c_int) };
+    unsafe {
+        replace_property(
+            display,
+            window,
+            property,
+            XA_CARDINAL,
+            32,
+            data,
+            flat.len() as c_int,
+        )
+    };
 }
 
 /// Writes (`Some`) or deletes (`None`) `_NET_WM_ICON_GEOMETRY` on a client
@@ -772,9 +804,19 @@ pub(crate) fn apply_window_icon_geometry(
     }
     match rect {
         Some(values) => unsafe {
-            replace_property(display, window, property, XA_CARDINAL, 32, values.as_ptr() as *const u8, values.len() as c_int)
+            replace_property(
+                display,
+                window,
+                property,
+                XA_CARDINAL,
+                32,
+                values.as_ptr() as *const u8,
+                values.len() as c_int,
+            )
         },
-        None => unsafe { XDeleteProperty(display, window, property); },
+        None => unsafe {
+            XDeleteProperty(display, window, property);
+        },
     }
 }
 
@@ -795,13 +837,33 @@ fn set_window_identity(
             bytes.push(0);
             bytes.extend_from_slice(identity.class.as_bytes());
             bytes.push(0);
-            unsafe { replace_property(display, window, wm_class, XA_STRING, 8, bytes.as_ptr(), bytes.len() as c_int) };
+            unsafe {
+                replace_property(
+                    display,
+                    window,
+                    wm_class,
+                    XA_STRING,
+                    8,
+                    bytes.as_ptr(),
+                    bytes.len() as c_int,
+                )
+            };
         }
     }
     let net_wm_name = intern_atom(display, "_NET_WM_NAME");
     let utf8_string = intern_atom(display, "UTF8_STRING");
     if net_wm_name != 0 && utf8_string != 0 {
-        unsafe { replace_property(display, window, net_wm_name, utf8_string, 8, title.as_ptr(), title.len() as c_int) };
+        unsafe {
+            replace_property(
+                display,
+                window,
+                net_wm_name,
+                utf8_string,
+                8,
+                title.as_ptr(),
+                title.len() as c_int,
+            )
+        };
     }
 }
 
@@ -817,7 +879,17 @@ fn set_window_role(display: *mut Display, window: Window, role: X11WindowRole) {
     let property = intern_atom(display, "_NET_WM_WINDOW_TYPE");
     let role_atom = intern_atom(display, role_name);
     if property != 0 && role_atom != 0 {
-        unsafe { replace_property(display, window, property, XA_ATOM, 32, &role_atom as *const Atom as *const u8, 1) };
+        unsafe {
+            replace_property(
+                display,
+                window,
+                property,
+                XA_ATOM,
+                32,
+                &role_atom as *const Atom as *const u8,
+                1,
+            )
+        };
     }
 }
 

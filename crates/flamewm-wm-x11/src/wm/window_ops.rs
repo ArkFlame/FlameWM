@@ -11,7 +11,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.focus_with_stacking(client, false)
     }
 
-    pub(super) fn focus_with_stacking(&mut self, client: Window, raise: bool) -> Result<(), ReplyError> {
+    pub(super) fn focus_with_stacking(
+        &mut self,
+        client: Window,
+        raise: bool,
+    ) -> Result<(), ReplyError> {
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
         };
@@ -38,12 +42,22 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn send_protocol(&self, client: Window, protocol: Atom) -> Result<(), ReplyError> {
-        let event = ClientMessageEvent::new(32, client, self.atoms.wm_protocols, [protocol, CURRENT_TIME, 0, 0, 0]);
-        self.conn.send_event(false, client, EventMask::NO_EVENT, event)?;
+        let event = ClientMessageEvent::new(
+            32,
+            client,
+            self.atoms.wm_protocols,
+            [protocol, CURRENT_TIME, 0, 0, 0],
+        );
+        self.conn
+            .send_event(false, client, EventMask::NO_EVENT, event)?;
         Ok(())
     }
 
-    pub(super) fn supports_protocol(&self, client: Window, protocol: Atom) -> Result<bool, ReplyError> {
+    pub(super) fn supports_protocol(
+        &self,
+        client: Window,
+        protocol: Atom,
+    ) -> Result<bool, ReplyError> {
         let reply = self
             .conn
             .get_property(
@@ -76,7 +90,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         if !renderer.borrow().warp_argb_usable() {
             return;
         }
-        if self.animator.start(client, Effect::Close, std::time::Instant::now()) != Begin::Started {
+        if self
+            .animator
+            .start(client, Effect::Close, std::time::Instant::now())
+            != Begin::Started
+        {
             return;
         }
         if self.open_overlay(client, Effect::Close).is_err() {
@@ -108,7 +126,11 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Applies the minimize end state. `hidden` means the frame was already unmapped
     /// when the transition began, so no second unmap (and no second ignore count) occurs.
-    pub(super) fn commit_minimize(&mut self, client: Window, hidden: bool) -> Result<(), ReplyError> {
+    pub(super) fn commit_minimize(
+        &mut self,
+        client: Window,
+        hidden: bool,
+    ) -> Result<(), ReplyError> {
         let frame = {
             let Some(state) = self.clients.get_mut(&client) else {
                 return Ok(());
@@ -137,10 +159,12 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     pub(super) fn restore_minimized(&mut self, client: Window) -> Result<(), ReplyError> {
         trace_restore("restore.trace.wm.restore_minimized", || {
-            format!("window={client} known={} minimized={:?} animator_running={:?}",
-                    self.clients.contains_key(&client),
-                    self.clients.get(&client).map(|state| state.minimized),
-                    self.animator.running(client))
+            format!(
+                "window={client} known={} minimized={:?} animator_running={:?}",
+                self.clients.contains_key(&client),
+                self.clients.get(&client).map(|state| state.minimized),
+                self.animator.running(client)
+            )
         });
         let Some(state) = self.clients.get(&client) else {
             return Ok(());
@@ -209,7 +233,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn set_fullscreen(&mut self, client: Window, enable: bool) -> Result<(), ReplyError> {
+    pub(super) fn set_fullscreen(
+        &mut self,
+        client: Window,
+        enable: bool,
+    ) -> Result<(), ReplyError> {
         let fullscreen = self
             .clients
             .get(&client)
@@ -302,11 +330,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         {
             let _guard = flamewm_profiler::start("wm.resize.client_configure");
-            let (x, y, width, height) =
-                lifecycle::client_configure(
-                    crate::client::rect_to_root(outer),
-                    self.extents_for(client),
-                );
+            let (x, y, width, height) = lifecycle::client_configure(
+                crate::client::rect_to_root(outer),
+                self.extents_for(client),
+            );
             self.conn.configure_window(
                 client,
                 &ConfigureWindowAux::new()

@@ -13,6 +13,7 @@ flamewm-applications = { path = "../flamewm-applications" }
 flamewm-control-core = { path = "../flamewm-control-core" }
 flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-control-wire = { path = "../flamewm-control-wire" }
+flamewm-desktop-core = { path = "../flamewm-desktop-core" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-platform = { path = "../flamewm-platform" }

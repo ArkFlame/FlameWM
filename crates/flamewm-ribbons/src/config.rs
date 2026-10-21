@@ -69,10 +69,18 @@ pub(crate) fn union_bounds(rects: &[Rect]) -> Rect {
             h: DEFAULT_VIEWPORT.1,
         };
     }
-    let (x0, y0, x1, y1) = rects.iter().fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |(a, b, c, d), r| {
-        let (x, y) = (r.x as i64, r.y as i64);
-        (a.min(x), b.min(y), c.max(x + r.w as i64), d.max(y + r.h as i64))
-    });
+    let (x0, y0, x1, y1) = rects.iter().fold(
+        (i64::MAX, i64::MAX, i64::MIN, i64::MIN),
+        |(a, b, c, d), r| {
+            let (x, y) = (r.x as i64, r.y as i64);
+            (
+                a.min(x),
+                b.min(y),
+                c.max(x + r.w as i64),
+                d.max(y + r.h as i64),
+            )
+        },
+    );
     Rect {
         x: x0 as i32,
         y: y0 as i32,
@@ -116,12 +124,27 @@ mod tests {
     #[test]
     fn union_bounds_spans_all_rects() {
         let rects = [
-            Rect { x: 0, y: 0, w: 1920, h: 1080 },
-            Rect { x: 1920, y: -200, w: 1280, h: 1024 },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+            Rect {
+                x: 1920,
+                y: -200,
+                w: 1280,
+                h: 1024,
+            },
         ];
         assert_eq!(
             union_bounds(&rects),
-            Rect { x: 0, y: -200, w: 3200, h: 1280 }
+            Rect {
+                x: 0,
+                y: -200,
+                w: 3200,
+                h: 1280
+            }
         );
         assert_eq!(union_bounds(&[]).w, 1280);
     }

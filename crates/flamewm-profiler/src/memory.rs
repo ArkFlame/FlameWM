@@ -111,7 +111,9 @@ pub fn parse_smaps_text(text: &str) -> SmapsSummary {
     let mut out = SmapsSummary::default();
     for line in text.lines() {
         let line = line.trim_start();
-        let Some((key, rest)) = line.split_once(':') else { continue };
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
         let mut parts = rest.trim().split_whitespace();
         let value: u64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
         match key {

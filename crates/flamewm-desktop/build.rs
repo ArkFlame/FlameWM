@@ -15,7 +15,10 @@ fn main() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
-    println!("cargo:rerun-if-changed={}", manifest.join("ui_contract.rs").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest.join("ui_contract.rs").display()
+    );
     let html_path = manifest.join("../../ui/desktop/index.html");
     let css_path = manifest.join("../../ui/desktop/desktop.css");
     let menu_css_path = manifest.join("../../ui/shared/menu.css");
@@ -46,7 +49,7 @@ fn main() {
 <img id=\"desktop-glyph-{index}-symlink\" class=\"desktop-glyph\" src=\"assets/breeze/folder.svg\">\
 <img id=\"desktop-glyph-{index}-trash\" class=\"desktop-glyph\" src=\"assets/breeze/user-trash.svg\">\
 <img id=\"desktop-glyph-{index}-directory\" class=\"desktop-glyph\" src=\"assets/breeze/folder.svg\">\
-<div class=\"desktop-label\"><div id=\"desktop-label-{index}-line-1\" class=\"desktop-label-line\">&#8203;</div><div id=\"desktop-label-{index}-line-2\" class=\"desktop-label-line\">&#8203;</div></div>\
+<div id=\"desktop-label-{index}\" class=\"desktop-label\"><div id=\"desktop-label-{index}-line-1\" class=\"desktop-label-line\">&#8203;</div><div id=\"desktop-label-{index}-line-2\" class=\"desktop-label-line\">&#8203;</div></div>\
 </button>"
             )
         })
@@ -67,7 +70,11 @@ fn main() {
     // themes. Always bundle them with the desktop RWR so the same UI is shown
     // with PlagueSur, Fluent and a minimal installed asset directory.
     let menu_icons = root.join("ui/desktop/icons");
-    for icon in ["flamewm-convert.svg", "flamewm-add-workspace.svg", "flamewm-new-folder.svg"] {
+    for icon in [
+        "flamewm-convert.svg",
+        "flamewm-add-workspace.svg",
+        "flamewm-new-folder.svg",
+    ] {
         let source = menu_icons.join(icon);
         println!("cargo:rerun-if-changed={}", source.display());
         fs::copy(source, staged_assets.join("breeze").join(icon))
@@ -96,14 +103,19 @@ fn main() {
     // This is the exact serialization boundary that the runtime reads via
     // include_bytes!(OUT_DIR/flamewm-desktop.rwr). HTML text is not proof.
     let decoded = decode(&bytes).expect("decode encoded desktop RWR");
-    let decoded_ids = decoded.nodes.iter().map(|node| node.id.as_str()).collect::<Vec<_>>();
+    let decoded_ids = decoded
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<Vec<_>>();
     validate_compiled_desktop_nodes(&decoded_ids);
     fs::write(out.join("flamewm-desktop.rwr"), bytes).expect("write validated desktop UI");
 }
 
 fn validate_compiled_desktop_nodes(ids: &[&str]) {
-    ui_contract::require_desktop_nodes(|id| ids.contains(&id))
-        .unwrap_or_else(|error| panic!("{error}; verify ui/desktop/index.html and rebuild flamewm-desktop"));
+    ui_contract::require_desktop_nodes(|id| ids.contains(&id)).unwrap_or_else(|error| {
+        panic!("{error}; verify ui/desktop/index.html and rebuild flamewm-desktop")
+    });
     for required in ui_contract::REQUIRED_DESKTOP_IDS {
         assert_eq!(
             ids.iter().filter(|id| *id == required).count(),
@@ -162,12 +174,20 @@ fn validate_text_targets(output: &CompileOutput) {
 /// Dynamic button labels/hub text must be a single text child; otherwise
 /// RuntimeDocument::set_text fails at the first right-click during startup.
 fn assert_dynamic_text_target(output: &CompileOutput, id: &str) {
-    let node = output.document.nodes.iter().find(|node| node.id == id)
+    let node = output
+        .document
+        .nodes
+        .iter()
+        .find(|node| node.id == id)
         .unwrap_or_else(|| panic!("desktop UI is missing dynamic text target '{id}'"));
-    let first = node.first_child.expect("dynamic text target requires one text child");
+    let first = node
+        .first_child
+        .expect("dynamic text target requires one text child");
     let child = &output.document.nodes[first as usize];
-    assert!(child.next_sibling.is_none() && child.first_child.is_none(),
-        "dynamic text target '{id}' must contain one text child");
+    assert!(
+        child.next_sibling.is_none() && child.first_child.is_none(),
+        "dynamic text target '{id}' must contain one text child"
+    );
 }
 
 fn rerun_tree(dir: &Path) {

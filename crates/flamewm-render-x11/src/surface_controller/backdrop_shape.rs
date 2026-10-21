@@ -56,56 +56,97 @@ impl SurfaceController {
         Ok(())
     }
 
-    /// Sets (or clears with `None`) the root-sized `(width, height, RGBA8)` wallpaper canvas the
-    /// popup's next first-show backdrop is cropped from, instead of a root capture (which would
-    /// blur whatever windows or the taskbar sit under the popup).
-    pub fn set_popup_wallpaper(
+    /// Sets (or clears with `None`) the region-sized wallpaper source for the popup's next show.
+    /// The crop is consumed on first show, avoiding retention of root-sized pixels.
+    pub fn set_popup_wallpaper_region(
         &mut self,
         id: SurfaceId,
-        canvas: Option<(u32, u32, Vec<u8>)>,
+        region: Option<((i32, i32, u32, u32), Vec<u8>)>,
     ) -> Result<(), String> {
-        self.instance_mut(id)?.popup_wallpaper = canvas;
+        self.instance_mut(id)?.popup_wallpaper = None;
+        if let Some((rect, pixels)) = region.as_ref() {
+            if pixels.len() != Self::popup_wallpaper_byte_len(*rect)? {
+                return Err("popup wallpaper region has an invalid pixel length".to_owned());
+            }
+        }
+        self.instance_mut(id)?.popup_wallpaper = region;
         Ok(())
     }
 
-    /// Popup-sized backdrop source: the wallpaper crop under the popup when set, else the root capture.
+    fn popup_wallpaper_byte_len(rect: (i32, i32, u32, u32)) -> Result<usize, String> {
+        (rect.2 as usize)
+            .checked_mul(rect.3 as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "popup wallpaper region size overflow".to_owned())
+    }
+
+    /// Validates a one-shot wallpaper region against the current popup rect and byte count.
+    pub(super) fn popup_wallpaper_capture(
+        rect: flamewm_render_core::Rect,
+        region: Option<((i32, i32, u32, u32), Vec<u8>)>,
+    ) -> Result<Option<crate::backdrop::BackdropCapture>, String> {
+        let Some((expected, pixels)) = region else {
+            return Ok(None);
+        };
+        let actual = (
+            rect.x as i32,
+            rect.y as i32,
+            rect.width as u32,
+            rect.height as u32,
+        );
+        if actual != expected {
+            return Err("popup wallpaper region does not match the final popup rect".to_owned());
+        }
+        let expected_len = Self::popup_wallpaper_byte_len(actual)?;
+        if pixels.len() != expected_len {
+            return Err("popup wallpaper region has an invalid pixel length".to_owned());
+        }
+        Ok(Some(crate::backdrop::BackdropCapture {
+            width: actual.2,
+            height: actual.3,
+            pixels,
+        }))
+    }
+
+    pub(super) fn take_popup_wallpaper(
+        region: &mut Option<((i32, i32, u32, u32), Vec<u8>)>,
+    ) -> Option<((i32, i32, u32, u32), Vec<u8>)> {
+        region.take()
+    }
+
+    pub(super) fn clear_popup_wallpaper(region: &mut Option<((i32, i32, u32, u32), Vec<u8>)>) {
+        *region = None;
+    }
+
+    /// Popup-sized backdrop source: the one-shot wallpaper region when set, else the root capture.
     fn popup_backdrop_source(
         &self,
         id: SurfaceId,
+        region: Option<((i32, i32, u32, u32), Vec<u8>)>,
     ) -> Result<crate::backdrop::BackdropCapture, String> {
-        let Some((canvas_w, canvas_h, pixels)) = self.instance_ref(id)?.popup_wallpaper.as_ref()
-        else {
-            return self.capture_root_under(id);
-        };
         let rect = self.surface_device_rect(id)?;
-        let (x, y) = (rect.x as u32, rect.y as u32);
-        let (w, h) = (rect.width as u32, rect.height as u32);
-        if x.checked_add(w).is_none_or(|end| end > *canvas_w)
-            || y.checked_add(h).is_none_or(|end| end > *canvas_h)
-        {
-            return Err("popup rect lies outside the wallpaper canvas".to_owned());
+        if let Some(capture) = Self::popup_wallpaper_capture(rect, region)? {
+            return Ok(capture);
+        } else {
+            return self.capture_root_under(id);
         }
-        let stride = *canvas_w as usize * 4;
-        let mut cropped = Vec::with_capacity(w as usize * h as usize * 4);
-        for row in y..y + h {
-            let start = row as usize * stride + x as usize * 4;
-            cropped.extend_from_slice(&pixels[start..start + w as usize * 4]);
-        }
-        Ok(crate::backdrop::BackdropCapture {
-            width: w,
-            height: h,
-            pixels: cropped,
-        })
     }
 
     /// Captures the root under an unmapped popup, blurs it, and installs it beneath the translucent
     /// fills. A blank or uniform capture (root not painted yet) installs nothing: solid colour.
     pub(super) fn install_popup_backdrop(&mut self, id: SurfaceId) -> Result<(), String> {
-        let Some((opacity, blur)) = self.instance_mut(id)?.popup_backdrop else {
+        let (backdrop, region) = {
+            let instance = self.instance_mut(id)?;
+            (
+                instance.popup_backdrop,
+                Self::take_popup_wallpaper(&mut instance.popup_wallpaper),
+            )
+        };
+        let Some((opacity, blur)) = backdrop else {
             return Ok(());
         };
         let snapshot = if opacity < 100 {
-            self.popup_backdrop_source(id)
+            self.popup_backdrop_source(id, region)
                 .ok()
                 .filter(|capture| crate::backdrop::capture_is_ready(&capture.pixels))
         } else {

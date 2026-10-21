@@ -64,7 +64,6 @@ impl ApplicationService {
         self.find_by_id(id)?;
         port.launch(id, options)
     }
-
 }
 
 fn contains(text: &str, needle: &str) -> bool {

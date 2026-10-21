@@ -23,7 +23,9 @@ impl PopupState {
     }
 
     pub fn close(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), UiBackendError> {
-        let Some(surface) = self.open.take() else { return Ok(()); };
+        let Some(surface) = self.open.take() else {
+            return Ok(());
+        };
         runtime.hide(surface)
     }
 

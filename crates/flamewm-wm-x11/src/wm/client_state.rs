@@ -50,13 +50,14 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     pub(super) fn set_frame_extents(&mut self, client: Window) -> Result<(), ReplyError> {
-        let mode = self.clients.get(&client).map_or(PlacementMode::Floating, |state| state.placement.mode);
+        let mode = self
+            .clients
+            .get(&client)
+            .map_or(PlacementMode::Floating, |state| state.placement.mode);
         let extents = match self.clients.get(&client).map(|state| state.decoration) {
-            None | Some(Decoration::Server) => frame_extents_for_mode(
-                mode,
-                self.config.frame_border,
-                self.config.titlebar_height,
-            ),
+            None | Some(Decoration::Server) => {
+                frame_extents_for_mode(mode, self.config.frame_border, self.config.titlebar_height)
+            }
             Some(Decoration::ClientSide | Decoration::None) => [0; 4],
         };
         if !frame_extents_needs_publish(&self.frame_extents_published, client, extents) {
@@ -129,10 +130,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         floating: bool,
     ) -> Result<(), ReplyError> {
         use x11rb::protocol::shape::{SK as ShapeSk, SO as ShapeOp};
-        let rects = crate::frame::geometry_shape::bounding_rectangles(
+        let rects = crate::frame::geometry_shape::bounding_rectangles_with_titlebar(
             outer,
             floating,
             self.decoration_tokens.style,
+            self.config.titlebar_height,
         );
         self.conn.shape_rectangles(
             ShapeOp::SET,
@@ -159,7 +161,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
     }
 
-    pub(super) fn read_net_wm_icon(&self, client: Window) -> Result<Option<chrome::IconImage>, &'static str> {
+    pub(super) fn read_net_wm_icon(
+        &self,
+        client: Window,
+    ) -> Result<Option<chrome::IconImage>, &'static str> {
         let reply = self
             .conn
             .get_property(
@@ -217,7 +222,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 .reply()?
                 .value;
         }
-        Ok(String::from_utf8_lossy(&value).trim_matches('\0').to_owned())
+        Ok(String::from_utf8_lossy(&value)
+            .trim_matches('\0')
+            .to_owned())
     }
 
     pub(super) fn read_transient_for(&self, client: Window) -> Result<Option<Window>, ReplyError> {

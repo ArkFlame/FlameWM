@@ -37,10 +37,7 @@ unsafe extern "C" {
 
 /// Current local time, or `None` if the clock or C library cannot convert it.
 pub fn local_now() -> Option<LocalTime> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     let time = c_long::try_from(seconds).ok()?;
     let mut out = MaybeUninit::<Tm>::uninit();
     // SAFETY: `time` and `out` are valid for the duration of the call; on a

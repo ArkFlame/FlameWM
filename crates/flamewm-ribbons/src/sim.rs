@@ -118,7 +118,11 @@ impl Stream {
         let (w, h) = dims;
         let speed = 145.0 * speed_factor * scale * (0.75 + 0.50 * rng.unit());
         let magnitude = 0.16 + 0.30 * rng.unit();
-        let omega = if rng.unit() < 0.5 { -magnitude } else { magnitude };
+        let omega = if rng.unit() < 0.5 {
+            -magnitude
+        } else {
+            magnitude
+        };
         let phase = [TAU * rng.unit(), TAU * rng.unit(), TAU * rng.unit()];
         let psi = TAU * rng.unit();
         let chi = TAU * rng.unit();
@@ -266,7 +270,11 @@ impl Ribbons {
                 ..*r
             })
             .collect();
-        let local_bounds = Rect { x: 0, y: 0, ..bounds };
+        let local_bounds = Rect {
+            x: 0,
+            y: 0,
+            ..bounds
+        };
         let masked = !mask.is_empty() && !mask.contains(&local_bounds);
         let width = bounds.w;
         let height = bounds.h;
@@ -478,7 +486,11 @@ mod tests {
         let r = Ribbons::new(cfg(12, 5), 0.0);
         let base = 145.0 * RIBBON_DEFAULT_SPEED_FACTOR * r.scale();
         for s in r.streams() {
-            assert!(s.speed() >= base * 0.75 && s.speed() <= base * 1.25, "speed {}", s.speed());
+            assert!(
+                s.speed() >= base * 0.75 && s.speed() <= base * 1.25,
+                "speed {}",
+                s.speed()
+            );
         }
     }
 
@@ -508,7 +520,10 @@ mod tests {
                     let [x, y] = s.position();
                     let out_x = (-x).max(x - w).max(0.0);
                     let out_y = (-y).max(y - h).max(0.0);
-                    assert!(out_x.hypot(out_y) <= limit, "seed {seed} strayed {out_x},{out_y}");
+                    assert!(
+                        out_x.hypot(out_y) <= limit,
+                        "seed {seed} strayed {out_x},{out_y}"
+                    );
                 }
             }
         }
@@ -527,12 +542,16 @@ mod tests {
             original.step_to(t);
             fluid.step_to(t);
         }
-        assert_ne!(original.streams()[0].position(), fluid.streams()[0].position());
+        assert_ne!(
+            original.streams()[0].position(),
+            fluid.streams()[0].position()
+        );
     }
 
     #[test]
     fn speed_factor_is_sanitised_before_use() {
-        let speed = |factor: f64| Ribbons::new_with_speed_factor(cfg(4, 1), 0.0, factor).speed_factor;
+        let speed =
+            |factor: f64| Ribbons::new_with_speed_factor(cfg(4, 1), 0.0, factor).speed_factor;
         assert_eq!(speed(f64::NAN), RIBBON_DEFAULT_SPEED_FACTOR);
         assert_eq!(speed(f64::INFINITY), RIBBON_DEFAULT_SPEED_FACTOR);
         assert_eq!(speed(f64::NEG_INFINITY), RIBBON_DEFAULT_SPEED_FACTOR);
@@ -545,7 +564,12 @@ mod tests {
     fn history_ring_is_bounded_and_lifetime_pruned() {
         let mut hist = History::new();
         for k in 0..1000 {
-            hist.push(Sample { pos: [0.0, 0.0], z: 0.5, beta: 0.0, t: k as f64 / 60.0 });
+            hist.push(Sample {
+                pos: [0.0, 0.0],
+                z: 0.5,
+                beta: 0.0,
+                t: k as f64 / 60.0,
+            });
         }
         assert!(hist.len() <= HISTORY_CAPACITY);
         assert_eq!(hist.capacity(), HISTORY_CAPACITY);
@@ -595,7 +619,10 @@ mod tests {
         assert_eq!(r.steps, 4, "a 1 s frame runs only the 4-step cap");
         let before = r.steps;
         r.step_to(1.0 + 1.0 / 60.0);
-        assert!((1..=2).contains(&(r.steps - before)), "1/60 s is about two fixed steps");
+        assert!(
+            (1..=2).contains(&(r.steps - before)),
+            "1/60 s is about two fixed steps"
+        );
     }
 
     #[test]

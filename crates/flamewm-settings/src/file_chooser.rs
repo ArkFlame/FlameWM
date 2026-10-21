@@ -3,8 +3,8 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use flamewm_integrations_linux::PortalFileChooser;
@@ -32,12 +32,12 @@ impl WallpaperChooserWake {
             .map_err(|error| format!("failed to configure wallpaper completion wake: {error}"))?;
         let slot = COMPLETION_WAKE.get_or_init(|| Mutex::new(None));
         let id = NEXT_WAKE_ID.fetch_add(1, Ordering::Relaxed);
-        *slot.lock().map_err(|_| "wallpaper wake lock poisoned".to_owned())? = Some(
-            RegisteredWake {
-                id,
-                writer: Arc::new(Mutex::new(writer)),
-            },
-        );
+        *slot
+            .lock()
+            .map_err(|_| "wallpaper wake lock poisoned".to_owned())? = Some(RegisteredWake {
+            id,
+            writer: Arc::new(Mutex::new(writer)),
+        });
         Ok(Self { reader, id })
     }
 
@@ -55,7 +55,10 @@ impl WallpaperChooserWake {
 impl Drop for WallpaperChooserWake {
     fn drop(&mut self) {
         if let Some(mut slot) = COMPLETION_WAKE.get().and_then(|slot| slot.lock().ok()) {
-            if slot.as_ref().is_some_and(|registered| registered.id == self.id) {
+            if slot
+                .as_ref()
+                .is_some_and(|registered| registered.id == self.id)
+            {
                 slot.take();
             }
         }
@@ -104,15 +107,12 @@ impl WallpaperChooserWorker {
 /// Wakes the Settings runtime after any background operation publishes a result.
 /// The runtime registers this shared source with the reactor before accepting UI input.
 pub(crate) fn notify_background_completion() {
-    if let Some(writer) = COMPLETION_WAKE
-        .get()
-        .and_then(|slot| {
-            slot.lock()
-                .ok()?
-                .as_ref()
-                .map(|registered| Arc::clone(&registered.writer))
-        })
-    {
+    if let Some(writer) = COMPLETION_WAKE.get().and_then(|slot| {
+        slot.lock()
+            .ok()?
+            .as_ref()
+            .map(|registered| Arc::clone(&registered.writer))
+    }) {
         if let Ok(mut writer) = writer.lock() {
             let _ = writer.write_all(&[1]);
         }

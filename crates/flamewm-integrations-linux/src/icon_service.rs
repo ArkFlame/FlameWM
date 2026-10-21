@@ -1148,10 +1148,8 @@ mod tests {
 
     /// Fresh watch root plus a generation-3 index whose epoch mtime forces a rebuild check.
     fn stale_watch_index(tag: &str) -> (std::path::PathBuf, IconLookupIndex) {
-        let root = std::env::temp_dir().join(format!(
-            "flamewm-service-{tag}-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-service-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("watch root");
         let mut stale = IconLookupIndex::new(
@@ -1167,13 +1165,19 @@ mod tests {
     }
 
     /// Polls the rebuild slot until a finished index arrives or the deadline passes.
-    fn poll_theme_index<R: IconResolve>(service: &IconService<R>, what: &str) -> Arc<IconLookupIndex> {
+    fn poll_theme_index<R: IconResolve>(
+        service: &IconService<R>,
+        what: &str,
+    ) -> Arc<IconLookupIndex> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             if let Some(index) = service.poll_theme_rebuild() {
                 return index;
             }
-            assert!(std::time::Instant::now() < deadline, "{what} must arrive within deadline");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} must arrive within deadline"
+            );
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
@@ -1200,10 +1204,16 @@ mod tests {
         service.install_theme_index(Arc::new(IconLookupIndex::build(&[], &[], 5)));
 
         let chain = vec!["flame-no-such-theme".to_owned(), "hicolor".to_owned()];
-        assert!(service.request_theme_change(chain.clone()), "theme build must queue");
+        assert!(
+            service.request_theme_change(chain.clone()),
+            "theme build must queue"
+        );
         let built = poll_theme_index(&service, "requested theme index");
         wait_until_idle(&service);
-        assert_eq!(built.theme_names, chain, "built index uses the requested chain");
+        assert_eq!(
+            built.theme_names, chain,
+            "built index uses the requested chain"
+        );
         assert_eq!(built.generation, 6, "built generation is installed + 1");
         assert_eq!(service.install_theme_index(built), 6);
     }
@@ -1223,10 +1233,18 @@ mod tests {
         assert!(service.request_theme_rebuild(), "check must queue");
         wait_until_idle(&service);
         let mut byte = [0_u8; 1];
-        let woke = reader.read(&mut byte).expect("wake pipe readable after publish");
+        let woke = reader
+            .read(&mut byte)
+            .expect("wake pipe readable after publish");
         let _ = std::fs::remove_dir_all(&root);
-        assert_eq!(woke, 1, "a published theme rebuild must write the reactor wake fd");
-        assert!(service.poll_theme_rebuild().is_some(), "result is held for polling");
+        assert_eq!(
+            woke, 1,
+            "a published theme rebuild must write the reactor wake fd"
+        );
+        assert!(
+            service.poll_theme_rebuild().is_some(),
+            "result is held for polling"
+        );
     }
 
     #[test]
@@ -1293,9 +1311,7 @@ mod tests {
     fn result_cache_eviction_honours_byte_and_entry_limits() {
         use std::time::Instant;
 
-        let service = IconService::new(1, 8, || {
-            FakeResolver(Arc::new(AtomicUsize::new(0)))
-        });
+        let service = IconService::new(1, 8, || FakeResolver(Arc::new(AtomicUsize::new(0))));
         let finish_raster = |name: String, pixels: usize| IconResult {
             key: key(&name),
             result: Ok(Rgba8Raster {

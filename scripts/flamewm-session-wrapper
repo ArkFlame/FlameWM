@@ -3,6 +3,7 @@
 set -uo pipefail
 # Keep Plasma/KDE isolation: set FlameWM identity only when SDDM did not.
 if [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then export XDG_CURRENT_DESKTOP=FlameWM; fi
+export XDG_MENU_PREFIX=flamewm-
 SESSION="${FLAMEWM_SESSION_BINARY:-/usr/bin/flamewm-session}"
 BRIDGE="${FLAMEWM_SERVICES_BINARY:-/usr/libexec/flamewm/flamewm-desktop-services}"
 bridge_pid=""

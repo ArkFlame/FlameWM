@@ -347,7 +347,12 @@ impl Canary {
         self.send_checked(window, EventMask::BUTTON_PRESS, ev)
     }
 
-    fn send_checked<T: Into<[u8; 32]>>(&self, dest: Window, mask: EventMask, ev: T) -> Result<(), String> {
+    fn send_checked<T: Into<[u8; 32]>>(
+        &self,
+        dest: Window,
+        mask: EventMask,
+        ev: T,
+    ) -> Result<(), String> {
         self.conn
             .send_event(false, dest, mask, ev)
             .map_err(|e| e.to_string())?
@@ -486,7 +491,9 @@ pub(crate) fn has(args: &[String], flag: &str) -> bool {
 }
 
 fn viewable_count(hits: &[WinInfo]) -> usize {
-    hits.iter().filter(|w| w.map_state == u8::from(MapState::VIEWABLE)).count()
+    hits.iter()
+        .filter(|w| w.map_state == u8::from(MapState::VIEWABLE))
+        .count()
 }
 
 fn emit_results(scenario: &str, results: &[(String, bool, String)], json: bool) -> bool {
@@ -1224,10 +1231,7 @@ fn cmd_profile_window(canary: &Canary, args: &[String]) {
 }
 
 /// Runs `probe` against the first "flame" window; a missing window is a failure.
-fn probe_flame(
-    canary: &Canary,
-    probe: impl FnOnce(&WinInfo) -> (bool, String),
-) -> (bool, String) {
+fn probe_flame(canary: &Canary, probe: impl FnOnce(&WinInfo) -> (bool, String)) -> (bool, String) {
     match canary.find("flame").into_iter().next() {
         Some(w) => probe(&w),
         None => (false, "no target".to_owned()),

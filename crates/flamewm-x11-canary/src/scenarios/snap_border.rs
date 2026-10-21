@@ -178,7 +178,10 @@ pub(super) fn send_root_message(
 
 /// Wait for a void request's reply-less check (`cookie.check()`), stringifying errors.
 fn checked(cookie: Result<VoidCookie<'_, RustConnection>, ConnectionError>) -> Result<(), String> {
-    cookie.map_err(|e| e.to_string())?.check().map_err(|e| e.to_string())
+    cookie
+        .map_err(|e| e.to_string())?
+        .check()
+        .map_err(|e| e.to_string())
 }
 
 /// Create and map a top-level client, optionally with fixed WM_NORMAL_HINTS
@@ -244,8 +247,16 @@ fn wait_managed(canary: &crate::Canary, client: u32) -> Option<Frame> {
 }
 
 /// Wait for the frame to reach the exact `expected` outer rectangle (2 s budget).
-fn settle_outer(canary: &crate::Canary, client: u32, expected: (i32, i32, u32, u32)) -> Option<Frame> {
-    settle(2_000, || frame_of(canary, client), |f| f.outer() == expected)
+fn settle_outer(
+    canary: &crate::Canary,
+    client: u32,
+    expected: (i32, i32, u32, u32),
+) -> Option<Frame> {
+    settle(
+        2_000,
+        || frame_of(canary, client),
+        |f| f.outer() == expected,
+    )
 }
 
 /// `_NET_FRAME_EXTENTS` with no left, right or top border (snapped and maximized).
@@ -359,7 +370,10 @@ pub fn run_s2(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     let dragged_in = drag(canary, title_point(floating), (0, 0), 0, 400);
     let snapped = settle_outer(canary, client, expected);
     let snapped_bw = snapped.map(|f| f.bw);
-    let (cx, cy) = (area.0 + area.2 as i32 / 2 + 40, area.1 + area.3 as i32 / 2 + 40);
+    let (cx, cy) = (
+        area.0 + area.2 as i32 / 2 + 40,
+        area.1 + area.3 as i32 / 2 + 40,
+    );
     let dragged_out =
         snapped.is_some_and(|s| drag(canary, title_point(s), (cx as i16, cy as i16), 0, 400));
     let restored = settle(2_000, || frame_of(canary, client), |f| f.bw == 1);
@@ -409,7 +423,14 @@ pub fn run_s3(canary: &crate::Canary, _args: &[String]) -> (bool, String) {
     let restored_snap = settle(2_000, || frame_extents(canary, client), |e| *e == floating);
     let snap_restored = restored_snap == Some(floating);
 
-    let set_max = |action| send_root_message(canary, client, "_NET_WM_STATE", maximize_msg(canary, action));
+    let set_max = |action| {
+        send_root_message(
+            canary,
+            client,
+            "_NET_WM_STATE",
+            maximize_msg(canary, action),
+        )
+    };
     let maximized_sent = set_max(1);
     let maximized = settle(2_000, || frame_extents(canary, client), no_edge_extents);
     let maximized_ok = maximized_sent && maximized.as_ref().is_some_and(no_edge_extents);

@@ -7,7 +7,7 @@
 //! box-downscaled copy (4x) and upscales bilinearly. Trade-off: high-radius output loses fine detail that a
 //! full-resolution blur would keep, which is acceptable for frosted glass.
 
-use crate::{MAX_DIMENSION, RgbaImage};
+use crate::RgbaImage;
 
 /// Largest accepted blur radius in pixels.
 pub const MAX_BLUR_RADIUS: f32 = 64.0;
@@ -25,7 +25,6 @@ const SHRINK_SLACK: usize = 4096;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlurError {
     ZeroDimension,
-    DimensionTooLarge { width: u32, height: u32 },
     BufferLength { expected: usize, actual: usize },
     InvalidRadius,
     RadiusTooLarge,
@@ -143,8 +142,8 @@ pub fn frosted_backdrop_with(
     } else {
         0
     };
-    let cw = crop.width.clamp(1, MAX_DIMENSION) as usize;
-    let ch = crop.height.clamp(1, MAX_DIMENSION) as usize;
+    let cw = crop.width.max(1) as usize;
+    let ch = crop.height.max(1) as usize;
     let (pw, ph) = (cw + 2 * pad, ch + 2 * pad);
     let src_w = src.width as usize;
     let max_x = i64::from(src.width) - 1;
@@ -188,10 +187,13 @@ fn validate(len: usize, width: u32, height: u32, radius_px: f32) -> Result<(), B
     if width == 0 || height == 0 {
         return Err(BlurError::ZeroDimension);
     }
-    if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        return Err(BlurError::DimensionTooLarge { width, height });
-    }
-    let expected = width as usize * height as usize * 4;
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(BlurError::BufferLength {
+            expected: usize::MAX,
+            actual: len,
+        })?;
     if len != expected {
         return Err(BlurError::BufferLength {
             expected,
@@ -727,14 +729,8 @@ mod tests {
             gaussian_blur_rgba(&mut empty, 0, 4, 4.0),
             Err(BlurError::ZeroDimension)
         );
-        let mut wide = vec![0u8; 4];
-        assert_eq!(
-            gaussian_blur_rgba(&mut wide, MAX_DIMENSION + 1, 1, 4.0),
-            Err(BlurError::DimensionTooLarge {
-                width: MAX_DIMENSION + 1,
-                height: 1
-            })
-        );
+        let mut wide = vec![0u8; 4097 * 4];
+        assert_eq!(gaussian_blur_rgba(&mut wide, 4097, 1, 4.0), Ok(()));
         let mut px = vec![0u8; 4];
         assert_eq!(
             gaussian_blur_rgba(&mut px, 1, 1, f32::NAN),
@@ -855,8 +851,8 @@ mod tests {
             } else {
                 0
             };
-            let cw = crop.width.clamp(1, crate::MAX_DIMENSION) as usize;
-            let ch = crop.height.clamp(1, crate::MAX_DIMENSION) as usize;
+            let cw = crop.width.max(1) as usize;
+            let ch = crop.height.max(1) as usize;
             let pw = cw + 2 * pad;
             let ph = ch + 2 * pad;
             let src_w = src.width as usize;

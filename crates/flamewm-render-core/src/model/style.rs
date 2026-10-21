@@ -124,7 +124,6 @@ impl PointerButton {
             other => Self::Other(other),
         }
     }
-
 }
 
 /// Overflow behavior per axis.
@@ -164,11 +163,12 @@ pub enum TextWrap {
     Wrap,
 }
 
-/// One offset alpha-glyph pass behind the text. The Xft renderer supplies glyph antialiasing.
+/// Bounded Gaussian alpha-mask shadow. Zero blur preserves the legacy offset glyph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextShadow {
     pub offset_x: f32,
     pub offset_y: f32,
+    pub blur_radius: f32,
     pub color: ColorValue,
 }
 

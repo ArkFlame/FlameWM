@@ -154,8 +154,11 @@ pub fn capture_drawable_rect(
     }
     let width_px = head.width as u32;
     let height_px = head.height as u32;
-    let (red_mask, green_mask, blue_mask) =
-        channel_masks(head.red_mask as u64, head.green_mask as u64, head.blue_mask as u64);
+    let (red_mask, green_mask, blue_mask) = channel_masks(
+        head.red_mask as u64,
+        head.green_mask as u64,
+        head.blue_mask as u64,
+    );
     let byte_order = head.byte_order as u32;
     let bits_per_pixel = head.bits_per_pixel as u32;
     let bytes_per_line = head.bytes_per_line as usize;
@@ -256,12 +259,13 @@ pub fn blurred_argb_words(
 ) -> Vec<u32> {
     let radius = blur_radius_px(opacity_percent, blur_percent);
     if radius > 0.0 {
-        if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut rgba, width, height, radius) {
+        if let Err(error) =
+            flamewm_image_core::blur::gaussian_blur_rgba(&mut rgba, width, height, radius)
+        {
             eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
         }
     }
-    rgba
-        .chunks_exact(4)
+    rgba.chunks_exact(4)
         .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
         .collect()
 }
@@ -295,7 +299,13 @@ mod tests {
 
     #[test]
     fn unblurred_words_are_opaque_argb_in_rgb_order() {
-        let words = blurred_argb_words(2, 1, vec![0x11, 0x22, 0x33, 0x00, 0x11, 0x22, 0x33, 0x00], 100, 80);
+        let words = blurred_argb_words(
+            2,
+            1,
+            vec![0x11, 0x22, 0x33, 0x00, 0x11, 0x22, 0x33, 0x00],
+            100,
+            80,
+        );
         assert_eq!(words, vec![0xff11_2233, 0xff11_2233]);
     }
 
@@ -311,11 +321,14 @@ mod tests {
         fn reference(width: u32, height: u32, rgba: &[u8], radius: f32) -> Vec<u32> {
             let mut pixels = rgba.to_vec();
             if radius > 0.0 {
-                flamewm_image_core::blur::gaussian_blur_rgba(&mut pixels, width, height, radius).unwrap();
+                flamewm_image_core::blur::gaussian_blur_rgba(&mut pixels, width, height, radius)
+                    .unwrap();
             }
             pixels
                 .chunks_exact(4)
-                .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
+                .map(|p| {
+                    0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2])
+                })
                 .collect()
         }
         let mut seed: u32 = 0x1234_5678;
@@ -330,7 +343,10 @@ mod tests {
                 let radius = blur_radius_px(opacity, blur);
                 let expected = reference(width, height, &rgba, radius);
                 let actual = blurred_argb_words(width, height, rgba.clone(), opacity, blur);
-                assert_eq!(actual, expected, "{width}x{height} opacity={opacity} blur={blur}");
+                assert_eq!(
+                    actual, expected,
+                    "{width}x{height} opacity={opacity} blur={blur}"
+                );
             }
         }
     }
@@ -339,7 +355,10 @@ mod tests {
     fn pixmap_zero_masks_fall_back_to_truecolor_layout() {
         assert_eq!(channel_masks(0, 0, 0), (0xff_0000, 0xff_00, 0xff));
         // A window image keeps the masks its visual reports, even in BGR order.
-        assert_eq!(channel_masks(0xff, 0xff00, 0xff_0000), (0xff, 0xff00, 0xff_0000));
+        assert_eq!(
+            channel_masks(0xff, 0xff00, 0xff_0000),
+            (0xff, 0xff00, 0xff_0000)
+        );
     }
 
     #[test]

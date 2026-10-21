@@ -13,7 +13,7 @@ use flamewm_render_core::ImageTreatment;
 static MASK_LOG_ONCE: Once = Once::new();
 
 const MAX_IMAGE_CACHE_ENTRIES: usize = 64;
-const MAX_IMAGE_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMAGE_CACHE_BYTES: usize = 48 * 1024 * 1024;
 
 fn log_degraded_mask_once(asset_id: u16) {
     MASK_LOG_ONCE.call_once(|| {
@@ -34,7 +34,18 @@ pub(crate) unsafe fn create_zeroed_ximage(
     height: u32,
 ) -> Result<(*mut XImage, usize), String> {
     let ximage = unsafe {
-        XCreateImage(display, visual, depth, ZPIXMAP, 0, ptr::null_mut(), width, height, 32, 0)
+        XCreateImage(
+            display,
+            visual,
+            depth,
+            ZPIXMAP,
+            0,
+            ptr::null_mut(),
+            width,
+            height,
+            32,
+            0,
+        )
     };
     if ximage.is_null() {
         return Err(format!("XCreateImage failed for {what}"));
@@ -59,6 +70,82 @@ pub(crate) unsafe fn create_zeroed_ximage(
     unsafe { ptr::write_bytes(data as *mut u8, 0, total) };
     head.data = data as *mut _;
     Ok((ximage, total))
+}
+
+fn copy_argb32_rows(
+    source: &[u32],
+    width: usize,
+    height: usize,
+    stride: usize,
+    destination: &mut [u32],
+) -> Result<(), String> {
+    let expected = width
+        .checked_mul(height)
+        .ok_or_else(|| "ARGB32 upload size overflow".to_string())?;
+    if source.len() != expected {
+        return Err(format!(
+            "ARGB32 upload has {} words; expected {expected}",
+            source.len()
+        ));
+    }
+    let required = stride
+        .checked_mul(height)
+        .ok_or_else(|| "ARGB32 image stride overflow".to_string())?;
+    if stride < width || destination.len() < required {
+        return Err("ARGB32 image stride is smaller than its pixel rows".to_string());
+    }
+    for y in 0..height {
+        let dst = y * stride;
+        let src = y * width;
+        destination[dst..dst + width].copy_from_slice(&source[src..src + width]);
+    }
+    Ok(())
+}
+
+/// Uploads ARGB32 words into a pixmap using a temporary pixmap-bound GC.
+///
+/// # Safety
+/// `display` must be live, `pixmap` must accept `visual` at depth 32, and the
+/// caller must own the pixmap for the duration of this call.
+pub(crate) unsafe fn upload_argb32_image(
+    display: *mut Display,
+    pixmap: Pixmap,
+    visual: *mut Visual,
+    argb: &[u32],
+    width: u32,
+    height: u32,
+    what: &str,
+) -> Result<(), String> {
+    if visual.is_null() {
+        return Err(format!("{what}: ARGB32 visual is NULL"));
+    }
+    let (ximage, total) =
+        unsafe { create_zeroed_ximage(display, visual, 32, what, width, height)? };
+    let head = unsafe { &*(ximage as *const XImageHead) };
+    let bytes_per_line = head.bytes_per_line as usize;
+    if bytes_per_line % std::mem::size_of::<u32>() != 0 {
+        unsafe { XDestroyImage(ximage) };
+        return Err(format!("{what}: XImage row stride is not word-aligned"));
+    }
+    let stride = bytes_per_line / std::mem::size_of::<u32>();
+    let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
+    if let Err(error) = copy_argb32_rows(argb, width as usize, height as usize, stride, raw) {
+        unsafe { XDestroyImage(ximage) };
+        return Err(format!("{what}: {error}"));
+    }
+    let pixmap_gc = unsafe { XCreateGC(display, pixmap, 0, ptr::null_mut()) };
+    if pixmap_gc.is_null() {
+        unsafe { XDestroyImage(ximage) };
+        return Err(format!("XCreateGC failed for {what}"));
+    }
+    unsafe {
+        XPutImage(
+            display, pixmap, pixmap_gc, ximage, 0, 0, 0, 0, width, height,
+        );
+        XFreeGC(display, pixmap_gc);
+        XDestroyImage(ximage);
+    }
+    Ok(())
 }
 
 pub(crate) fn image_cache_key(
@@ -94,7 +181,7 @@ impl X11App {
         refresh_image_gauge(total as u64);
     }
 
-    fn alloc_pixmap(
+    pub(super) fn alloc_pixmap(
         &mut self,
         drawable: Drawable,
         width: u32,
@@ -115,7 +202,7 @@ impl X11App {
         }
     }
 
-    fn free_pixmap_tracked(&mut self, pixmap: Pixmap, bytes: usize) {
+    pub(super) fn free_pixmap_tracked(&mut self, pixmap: Pixmap, bytes: usize) {
         unsafe { self.allocator.free_pixmap(self.display, pixmap, bytes) };
     }
 
@@ -213,9 +300,9 @@ impl X11App {
                     ImageTreatment::Original => crate::native::image::scale_and_premultiply(
                         pixels, src_width, src_height, width, height,
                     ),
-                    ImageTreatment::SymbolicForeground => {
-                        super::symbolic_foreground_argb32(pixels, src_width, src_height, width, height, fg)
-                    }
+                    ImageTreatment::SymbolicForeground => super::symbolic_foreground_argb32(
+                        pixels, src_width, src_height, width, height, fg,
+                    ),
                 };
                 if let Err(error) =
                     unsafe { self.upload_argb32_words(pixmap, vinfo.visual, &argb, width, height) }
@@ -286,43 +373,17 @@ impl X11App {
         if visual.is_null() {
             return Err("ARGB32 visual is NULL".to_string());
         }
-        let (ximage, total) = unsafe {
-            create_zeroed_ximage(self.display, visual, 32, "ARGB32 upload", width, height)?
-        };
-        let head = unsafe { &*(ximage as *const XImageHead) };
-        let bpl_words = head.bytes_per_line as usize / 4;
-        let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
-        for y in 0..height as usize {
-            let dst_off = y * bpl_words;
-            let src_off = y * width as usize;
-            raw[dst_off..dst_off + width as usize]
-                .copy_from_slice(&argb[src_off..src_off + width as usize]);
-        }
         unsafe {
-            // The app GC is bound to the (24-bit default) window drawable and
-            // cannot target a depth-32 pixmap (BadMatch). Use a transient GC
-            // created against the pixmap itself.
-            let pixmap_gc = XCreateGC(self.display, pixmap, 0, ptr::null_mut());
-            if pixmap_gc.is_null() {
-                XDestroyImage(ximage);
-                return Err("XCreateGC failed for ARGB32 upload".to_string());
-            }
-            XPutImage(
+            upload_argb32_image(
                 self.display,
                 pixmap,
-                pixmap_gc,
-                ximage,
-                0,
-                0,
-                0,
-                0,
+                visual,
+                argb,
                 width,
                 height,
-            );
-            XFreeGC(self.display, pixmap_gc);
-        };
-        unsafe { XDestroyImage(ximage) };
-        Ok(())
+                "ARGB32 upload",
+            )
+        }
     }
 
     unsafe fn upload_opaque_fallback(
@@ -339,7 +400,14 @@ impl X11App {
             return Err("XDefaultVisual returned NULL".to_string());
         }
         let (ximage, _) = unsafe {
-            create_zeroed_ximage(self.display, visual, self.depth as u32, "image fallback", width, height)?
+            create_zeroed_ximage(
+                self.display,
+                visual,
+                self.depth as u32,
+                "image fallback",
+                width,
+                height,
+            )?
         };
         let head = unsafe { &*(ximage as *const XImageHead) };
         for y in 0..height {
@@ -456,6 +524,58 @@ impl X11App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_budget_admits_one_4k_rgba_surface_and_stays_bounded() {
+        let four_k_rgba = 3840usize * 2160 * 4;
+        assert!(four_k_rgba <= MAX_IMAGE_CACHE_BYTES);
+        assert!(MAX_IMAGE_CACHE_BYTES <= 64 * 1024 * 1024);
+        assert!(four_k_rgba * 2 > MAX_IMAGE_CACHE_BYTES);
+    }
+
+    #[test]
+    fn argb32_row_copy_respects_ximage_stride() {
+        let source = [0x1122_3344, 0x5566_7788, 0x99aa_bbcc, 0xddee_ff00];
+        let mut destination = [0xdead_beef; 6];
+
+        copy_argb32_rows(&source, 2, 2, 3, &mut destination).unwrap();
+
+        assert_eq!(
+            destination,
+            [
+                0x1122_3344,
+                0x5566_7788,
+                0xdead_beef,
+                0x99aa_bbcc,
+                0xddee_ff00,
+                0xdead_beef
+            ]
+        );
+    }
+
+    #[test]
+    fn argb32_row_copy_rejects_short_source_and_stride() {
+        assert!(copy_argb32_rows(&[1, 2, 3], 2, 2, 2, &mut [0; 4]).is_err());
+        assert!(copy_argb32_rows(&[1, 2, 3, 4], 2, 2, 1, &mut [0; 2]).is_err());
+    }
+
+    #[test]
+    fn argb32_uploader_keeps_caller_error_context() {
+        let error = unsafe {
+            upload_argb32_image(
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+                &[],
+                1,
+                1,
+                "external ARGB32 upload",
+            )
+        }
+        .unwrap_err();
+
+        assert_eq!(error, "external ARGB32 upload: ARGB32 visual is NULL");
+    }
 
     #[test]
     fn per_node_overrides_never_collide_on_asset_alone() {

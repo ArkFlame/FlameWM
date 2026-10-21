@@ -302,8 +302,14 @@ pub(crate) fn create_note(state: &mut DesktopState, anchor: Point) {
 pub(crate) fn apply_menu_action(action: &str, state: &mut DesktopState) -> Result<(), String> {
     match action {
         "sticky.menu.delete" => {
-            let note_id = selected_menu_id(state)
-                .or_else(|| state.sticky.store.notes().first().map(|note| note.id.clone()));
+            let note_id = selected_menu_id(state).or_else(|| {
+                state
+                    .sticky
+                    .store
+                    .notes()
+                    .first()
+                    .map(|note| note.id.clone())
+            });
             if let Some(note_id) = note_id {
                 state.sticky.store.remove(&note_id);
                 if state
@@ -562,8 +568,7 @@ mod tests {
     use flamewm_desktop_core::sticky::StickyNoteStore;
 
     use super::{
-        PERSIST_DEBOUNCE, PERSIST_RETRY_CAP, StickyState, is_note_body_action,
-        sticky_drag_exceeded,
+        PERSIST_DEBOUNCE, PERSIST_RETRY_CAP, StickyState, is_note_body_action, sticky_drag_exceeded,
     };
 
     fn state() -> StickyState {

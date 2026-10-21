@@ -245,7 +245,7 @@ impl HttpGet for CurlFetcher {
 }
 
 pub(crate) mod json {
-    use super::{MAX_JSON_DEPTH, WeatherError};
+    use super::{WeatherError, MAX_JSON_DEPTH};
 
     #[derive(Debug, Clone, PartialEq)]
     pub enum Json {
@@ -598,11 +598,8 @@ mod tests {
     #[test]
     fn urls_are_built_and_query_is_encoded() {
         let url = forecast_url(&berlin());
-        assert!(
-            url.starts_with(
-                "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41"
-            )
-        );
+        assert!(url
+            .starts_with("https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41"));
         assert!(url.contains("forecast_days=7"));
         assert_eq!(
             search_url("São Paulo"),

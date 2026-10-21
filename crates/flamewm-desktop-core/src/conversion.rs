@@ -3,10 +3,10 @@
 //! File creation is atomic in the source directory and NEVER overwrites files.
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,9 +23,11 @@ struct ConversionSlot;
 
 impl ConversionSlot {
     fn acquire() -> Result<Self, String> {
-        ACTIVE_CONVERSIONS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-            (active < MAX_CONCURRENT_CONVERSIONS).then_some(active + 1)
-        }).map_err(|_| "image conversion is busy; try again shortly".to_owned())?;
+        ACTIVE_CONVERSIONS
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_CONCURRENT_CONVERSIONS).then_some(active + 1)
+            })
+            .map_err(|_| "image conversion is busy; try again shortly".to_owned())?;
         Ok(Self)
     }
 }
@@ -43,9 +45,10 @@ fn available_converter() -> Option<PathBuf> {
     for program in ["magick", "convert"] {
         for directory in std::env::split_paths(&paths) {
             let candidate = directory.join(program);
-            if candidate.metadata().is_ok_and(|meta| {
-                meta.is_file() && (meta.permissions().mode() & 0o111 != 0)
-            }) {
+            if candidate
+                .metadata()
+                .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111 != 0))
+            {
                 return Some(candidate);
             }
         }
@@ -53,13 +56,14 @@ fn available_converter() -> Option<PathBuf> {
     None
 }
 
-
 fn available_program(program: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&paths) {
         let candidate = directory.join(program);
-        if candidate.metadata().is_ok_and(|metadata| metadata.is_file()
-            && metadata.permissions().mode() & 0o111 != 0) {
+        if candidate
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        {
             return Some(candidate);
         }
     }
@@ -70,8 +74,13 @@ fn wait_for_converter(command: Command) -> Result<ExitStatus, String> {
     wait_for_converter_with_timeout(command, CONVERSION_TIMEOUT)
 }
 
-fn wait_for_converter_with_timeout(mut command: Command, timeout: Duration) -> Result<ExitStatus, String> {
-    let mut child = command.spawn().map_err(|err| format!("run ImageMagick: {err}"))?;
+fn wait_for_converter_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("run ImageMagick: {err}"))?;
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -94,10 +103,13 @@ fn wait_for_converter_with_timeout(mut command: Command, timeout: Duration) -> R
 /// Temporary converter files are never desktop icons; only the final atomic
 /// rename produces a visible entry.
 pub fn is_temporary_convert_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str().is_some_and(|text| text.starts_with(".flamewm-convert-"))
+    name.to_str()
+        .is_some_and(|text| text.starts_with(".flamewm-convert-"))
 }
 
-pub const FORMAT_CHOICES: [&str; 13] = ["png", "webp", "jpg", "gif", "bmp", "tiff", "ico", "avif", "heic", "pdf", "txt", "md", "docx"];
+pub const FORMAT_CHOICES: [&str; 13] = [
+    "png", "webp", "jpg", "gif", "bmp", "tiff", "ico", "avif", "heic", "pdf", "txt", "md", "docx",
+];
 const SOURCE_EXTENSIONS: &[&str] = &[
     "png", "webp", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "ico", "avif", "heic", "heif",
 ];
@@ -105,19 +117,34 @@ const SOURCE_EXTENSIONS: &[&str] = &[
 pub fn image_source(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
-        .is_some_and(|value| SOURCE_EXTENSIONS.iter().any(|known| value.eq_ignore_ascii_case(known)))
+        .is_some_and(|value| {
+            SOURCE_EXTENSIONS
+                .iter()
+                .any(|known| value.eq_ignore_ascii_case(known))
+        })
 }
 
 pub fn offered_formats(path: &Path) -> Vec<&'static str> {
     if image_source(path) {
-        return FORMAT_CHOICES[..9].iter().copied().filter(|choice| {
-            !path.extension().and_then(|s| s.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case(choice)
-                    || (*choice == "jpg" && ext.eq_ignore_ascii_case("jpeg"))
-                    || (*choice == "tiff" && ext.eq_ignore_ascii_case("tif")))
-        }).collect();
+        return FORMAT_CHOICES[..9]
+            .iter()
+            .copied()
+            .filter(|choice| {
+                !path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|ext| {
+                        ext.eq_ignore_ascii_case(choice)
+                            || (*choice == "jpg" && ext.eq_ignore_ascii_case("jpeg"))
+                            || (*choice == "tiff" && ext.eq_ignore_ascii_case("tif"))
+                    })
+            })
+            .collect();
     }
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
         .to_ascii_lowercase();
     let has_pandoc = available_program("pandoc").is_some();
     let has_pdftotext = available_program("pdftotext").is_some();
@@ -126,7 +153,9 @@ pub fn offered_formats(path: &Path) -> Vec<&'static str> {
         "md" | "markdown" if has_pandoc => vec!["txt", "pdf", "docx"],
         "txt" => {
             let mut choices = vec!["md"];
-            if has_pandoc { choices.push("pdf"); }
+            if has_pandoc {
+                choices.push("pdf");
+            }
             choices
         }
         "docx" if has_pandoc => vec!["txt", "md", "pdf"],
@@ -149,7 +178,10 @@ fn source_argument(source: &Path, format: &str) -> OsString {
 
 fn destination(source: &Path, format: &str, attempt: u32) -> Result<PathBuf, String> {
     let parent = source.parent().ok_or("source has no parent directory")?;
-    let stem = source.file_stem().ok_or("source has no file stem")?.to_string_lossy();
+    let stem = source
+        .file_stem()
+        .ok_or("source has no file stem")?
+        .to_string_lossy();
     let name = if attempt == 0 {
         format!("{stem}.{format}")
     } else {
@@ -167,7 +199,9 @@ pub fn predicted_destination(source: &Path, format: &str) -> Result<PathBuf, Str
     }
     for attempt in 0..1000 {
         let target = destination(source, format, attempt)?;
-        if fs::symlink_metadata(&target).is_err() { return Ok(target); }
+        if fs::symlink_metadata(&target).is_err() {
+            return Ok(target);
+        }
     }
     Err("no available converted filename".to_owned())
 }
@@ -177,15 +211,20 @@ pub fn predicted_destination(source: &Path, format: &str) -> Result<PathBuf, Str
 /// Existing destination names (including symlinks) are never replaced.
 pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
     if !offered_formats(source).contains(&format) {
-        return Err(format!("unsupported conversion: {} -> {format}", source.display()));
+        return Err(format!(
+            "unsupported conversion: {} -> {format}",
+            source.display()
+        ));
     }
-    if !fs::symlink_metadata(source).map_err(|e| format!("source metadata: {e}"))?
-        .file_type().is_file()
+    if !fs::symlink_metadata(source)
+        .map_err(|e| format!("source metadata: {e}"))?
+        .file_type()
+        .is_file()
     {
         return Err("conversion requires a regular file, not a symlink or directory".into());
     }
-    let executable = available_converter()
-        .ok_or("ImageMagick missing: install the 'imagemagick' package")?;
+    let executable =
+        available_converter().ok_or("ImageMagick missing: install the 'imagemagick' package")?;
     let _slot = ConversionSlot::acquire()?;
     let directory = source.parent().ok_or("source has no parent directory")?;
     let mut reserved = None;
@@ -194,7 +233,10 @@ pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
         let name = format!(".flamewm-convert-{}-{seq}.{format}", std::process::id());
         let temp = directory.join(name);
         match OpenOptions::new().write(true).create_new(true).open(&temp) {
-            Ok(_) => { reserved = Some(temp); break; }
+            Ok(_) => {
+                reserved = Some(temp);
+                break;
+            }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(format!("create temporary conversion file: {err}")),
         }
@@ -202,8 +244,9 @@ pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
     let temp = reserved.ok_or("no unique temporary conversion path")?;
     let result = (|| {
         let mut cmd = Command::new(executable);
-        cmd.args(["-limit", "memory", "256MiB", "-limit", "map", "512MiB",
-            "-limit", "disk", "1GiB"]);
+        cmd.args([
+            "-limit", "memory", "256MiB", "-limit", "map", "512MiB", "-limit", "disk", "1GiB",
+        ]);
         cmd.arg(source_argument(source, format));
         if format == "jpg" || format == "bmp" {
             cmd.args(["-background", "white", "-alpha", "remove", "-alpha", "off"]);
@@ -218,23 +261,33 @@ pub fn convert_image(source: &Path, format: &str) -> Result<PathBuf, String> {
         if !status.success() {
             return Err(format!("ImageMagick {format} conversion failed: {status}"));
         }
-        if fs::metadata(&temp).map_err(|err| format!("conversion output: {err}"))?.len() == 0 {
+        if fs::metadata(&temp)
+            .map_err(|err| format!("conversion output: {err}"))?
+            .len()
+            == 0
+        {
             return Err("converter produced an empty image".into());
         }
         for attempt in 0..1000 {
             let dest = destination(source, format, attempt)?;
-            if fs::symlink_metadata(&dest).is_ok() { continue; }
+            if fs::symlink_metadata(&dest).is_ok() {
+                continue;
+            }
             match rename_entry_no_replace(&temp, &dest) {
                 Ok(()) => return Ok(dest),
                 Err(err) => {
-                    if fs::symlink_metadata(&dest).is_ok() { continue; }
+                    if fs::symlink_metadata(&dest).is_ok() {
+                        continue;
+                    }
                     return Err(format!("publish conversion: {err:?}"));
                 }
             }
         }
         Err("too many files with this converted name".into())
     })();
-    if result.is_err() { let _ = fs::remove_file(&temp); }
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
     result
 }
 
@@ -246,28 +299,49 @@ pub fn convert_file(source: &Path, format: &str) -> Result<PathBuf, String> {
         return convert_image(source, format);
     }
     if !offered_formats(source).contains(&format) {
-        return Err(format!("unsupported document conversion: {} -> {format}", source.display()));
+        return Err(format!(
+            "unsupported document conversion: {} -> {format}",
+            source.display()
+        ));
     }
-    if !fs::symlink_metadata(source).map_err(|e| format!("source metadata: {e}"))?
-        .file_type().is_file() {
+    if !fs::symlink_metadata(source)
+        .map_err(|e| format!("source metadata: {e}"))?
+        .file_type()
+        .is_file()
+    {
         return Err("conversion source must be a regular file".to_owned());
     }
     let _slot = ConversionSlot::acquire()?;
-    let source_ext = source.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase();
-    let provider = if source_ext == "pdf" { "pdftotext" } else { "pandoc" };
+    let source_ext = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let provider = if source_ext == "pdf" {
+        "pdftotext"
+    } else {
+        "pandoc"
+    };
     let executable = if source_ext == "txt" && format == "md" {
         None
     } else {
-        Some(available_program(provider).ok_or_else(||
-            format!("missing converter {provider}; install pandoc / poppler-utils"))?)
+        Some(available_program(provider).ok_or_else(|| {
+            format!("missing converter {provider}; install pandoc / poppler-utils")
+        })?)
     };
     let directory = source.parent().ok_or("conversion source has no parent")?;
     let mut reserved = None;
     for _ in 0..64 {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let temp = directory.join(format!(".flamewm-convert-{}-{sequence}.{format}", std::process::id()));
+        let temp = directory.join(format!(
+            ".flamewm-convert-{}-{sequence}.{format}",
+            std::process::id()
+        ));
         match OpenOptions::new().create_new(true).write(true).open(&temp) {
-            Ok(_) => { reserved = Some(temp); break; }
+            Ok(_) => {
+                reserved = Some(temp);
+                break;
+            }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(format!("create conversion temporary output: {err}")),
         }
@@ -277,32 +351,51 @@ pub fn convert_file(source: &Path, format: &str) -> Result<PathBuf, String> {
         if source_ext == "txt" && format == "md" {
             fs::copy(source, &temp).map_err(|error| format!("copy text to Markdown: {error}"))?;
         } else {
-            let mut command = Command::new(executable.as_ref().ok_or("missing converter executable")?);
+            let mut command =
+                Command::new(executable.as_ref().ok_or("missing converter executable")?);
             if source_ext == "pdf" {
                 // pdftotext writes UTF-8 text directly to its final argument.
                 command.arg("-enc").arg("UTF-8").arg(source).arg(&temp);
             } else {
-                let input = if source_ext == "docx" { "docx" } else { "markdown" };
+                let input = if source_ext == "docx" {
+                    "docx"
+                } else {
+                    "markdown"
+                };
                 command.arg("--from").arg(input).arg("--output").arg(&temp);
                 if format != "pdf" {
-                    let output = match format { "txt" => "plain", "md" => "markdown", "docx" => "docx", _ => format };
+                    let output = match format {
+                        "txt" => "plain",
+                        "md" => "markdown",
+                        "docx" => "docx",
+                        _ => format,
+                    };
                     command.arg("--to").arg(output);
                 }
                 command.arg(source);
             }
             let status = wait_for_converter(command)?;
             if !status.success() {
-                return Err(format!("{provider} {format} conversion failed ({status}); check document dependencies"));
+                return Err(format!(
+                    "{provider} {format} conversion failed ({status}); check document dependencies"
+                ));
             }
         }
         // Empty text is valid for an empty source; PDF/DOCX cannot be empty.
-        if format != "txt" && format != "md" && fs::metadata(&temp)
-            .map_err(|err| format!("conversion output: {err}"))?.len() == 0 {
+        if format != "txt"
+            && format != "md"
+            && fs::metadata(&temp)
+                .map_err(|err| format!("conversion output: {err}"))?
+                .len()
+                == 0
+        {
             return Err("converter returned an empty document".to_owned());
         }
         for attempt in 0..1000 {
             let dest = destination(source, format, attempt)?;
-            if fs::symlink_metadata(&dest).is_ok() { continue; }
+            if fs::symlink_metadata(&dest).is_ok() {
+                continue;
+            }
             match rename_entry_no_replace(&temp, &dest) {
                 Ok(()) => return Ok(dest),
                 Err(err) if fs::symlink_metadata(&dest).is_ok() => continue,
@@ -311,7 +404,9 @@ pub fn convert_file(source: &Path, format: &str) -> Result<PathBuf, String> {
         }
         Err("too many files with this converted name".to_owned())
     })();
-    if result.is_err() { let _ = fs::remove_file(&temp); }
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
     result
 }
 
@@ -326,29 +421,57 @@ mod tests {
         assert!(offered_formats(Path::new("folder")).is_empty());
         assert!(!offered_formats(Path::new("readme.txt")).contains(&"webp"));
         assert!(!offered_formats(Path::new("photo.JPEG")).contains(&"jpg"));
-        assert!(is_temporary_convert_name(std::ffi::OsStr::new(".flamewm-convert-123-42.webp")));
-        assert!(!is_temporary_convert_name(std::ffi::OsStr::new(".hidden-photo.webp")));
+        assert!(is_temporary_convert_name(std::ffi::OsStr::new(
+            ".flamewm-convert-123-42.webp"
+        )));
+        assert!(!is_temporary_convert_name(std::ffi::OsStr::new(
+            ".hidden-photo.webp"
+        )));
     }
     #[test]
     fn output_names_remain_beside_source_without_overwriting_original() {
         let source = Path::new("/home/user/Desktop/photo.png");
-        assert_eq!(destination(source, "webp", 0).unwrap(), Path::new("/home/user/Desktop/photo.webp"));
-        assert_eq!(destination(source, "webp", 1).unwrap(), Path::new("/home/user/Desktop/photo (converted 2).webp"));
+        assert_eq!(
+            destination(source, "webp", 0).unwrap(),
+            Path::new("/home/user/Desktop/photo.webp")
+        );
+        assert_eq!(
+            destination(source, "webp", 1).unwrap(),
+            Path::new("/home/user/Desktop/photo (converted 2).webp")
+        );
     }
     #[test]
     fn multiframe_sources_select_first_frame_for_single_image_destinations() {
         let source = Path::new("/home/user/Desktop/animated picture.gif");
-        assert_eq!(source_argument(source, "jpg"), OsString::from("/home/user/Desktop/animated picture.gif[0]"));
-        assert_eq!(source_argument(source, "png"), OsString::from("/home/user/Desktop/animated picture.gif[0]"));
-        assert_eq!(source_argument(source, "avif"), OsString::from("/home/user/Desktop/animated picture.gif[0]"));
-        assert_eq!(source_argument(source, "webp"), source.as_os_str().to_os_string());
-        assert_eq!(source_argument(source, "gif"), source.as_os_str().to_os_string());
+        assert_eq!(
+            source_argument(source, "jpg"),
+            OsString::from("/home/user/Desktop/animated picture.gif[0]")
+        );
+        assert_eq!(
+            source_argument(source, "png"),
+            OsString::from("/home/user/Desktop/animated picture.gif[0]")
+        );
+        assert_eq!(
+            source_argument(source, "avif"),
+            OsString::from("/home/user/Desktop/animated picture.gif[0]")
+        );
+        assert_eq!(
+            source_argument(source, "webp"),
+            source.as_os_str().to_os_string()
+        );
+        assert_eq!(
+            source_argument(source, "gif"),
+            source.as_os_str().to_os_string()
+        );
     }
     #[test]
     fn concurrent_conversion_budget_is_released_even_on_early_failure() {
         let first = ConversionSlot::acquire().expect("first slot");
         let second = ConversionSlot::acquire().expect("second slot");
-        assert!(ConversionSlot::acquire().is_err(), "third conversion must not start");
+        assert!(
+            ConversionSlot::acquire().is_err(),
+            "third conversion must not start"
+        );
         drop(first);
         let replacement = ConversionSlot::acquire().expect("released slot reused");
         drop(second);

@@ -1,7 +1,10 @@
 use super::*;
 
 impl<'a, C: Connection> Wm<'a, C> {
-    pub(super) fn handle_configure_notify(&mut self, event: ConfigureNotifyEvent) -> Result<(), ReplyError> {
+    pub(super) fn handle_configure_notify(
+        &mut self,
+        event: ConfigureNotifyEvent,
+    ) -> Result<(), ReplyError> {
         // Observation-only: classify and compare through configure policy;
         // never commit geometry from a ConfigureNotify.
         let synthetic = event.response_type & 0x80 != 0;
@@ -127,7 +130,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn handle_configure_request(&mut self, event: ConfigureRequestEvent) -> Result<(), ReplyError> {
+    pub(super) fn handle_configure_request(
+        &mut self,
+        event: ConfigureRequestEvent,
+    ) -> Result<(), ReplyError> {
         let _guard = flamewm_profiler::start("wm.configure.request.total");
         let Some(client_id) = self.client_for(event.window) else {
             let override_redirect = self

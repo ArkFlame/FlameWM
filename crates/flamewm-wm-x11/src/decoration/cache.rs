@@ -45,8 +45,18 @@ impl DecorationCache {
         Some(raster)
     }
 
-    pub fn insert_icon_raster(&mut self, key: String, raster: flamewm_integrations_linux::icons::Rgba8Raster) {
-        lru_insert(&mut self.icon_rasters, &mut self.icon_raster_order, ICON_RASTER_CACHE_CAPACITY, key, raster);
+    pub fn insert_icon_raster(
+        &mut self,
+        key: String,
+        raster: flamewm_integrations_linux::icons::Rgba8Raster,
+    ) {
+        lru_insert(
+            &mut self.icon_rasters,
+            &mut self.icon_raster_order,
+            ICON_RASTER_CACHE_CAPACITY,
+            key,
+            raster,
+        );
     }
 
     #[must_use]
@@ -58,7 +68,13 @@ impl DecorationCache {
     }
 
     pub fn insert_title_measure(&mut self, title: String, size_bits: u32, width: i32) {
-        lru_insert(&mut self.title_measures, &mut self.title_measure_order, TITLE_MEASURE_CACHE_CAPACITY, (title, size_bits), width);
+        lru_insert(
+            &mut self.title_measures,
+            &mut self.title_measure_order,
+            TITLE_MEASURE_CACHE_CAPACITY,
+            (title, size_bits),
+            width,
+        );
     }
 
     /// Native pixmap bytes for the live-target image cache (w*h*4 per

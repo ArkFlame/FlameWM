@@ -6,7 +6,9 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 use crate::animation::{self, Animator, Begin, CaptureCache, Effect, OpenGate, Settings, Tick};
 use crate::frame::geometry::keep_on_outputs;
-use flamewm_render_x11::{CapturedImage, PanelEdge, TransitionDirection, TransitionStyle, WarpOverlay, WarpRect};
+use flamewm_render_x11::{
+    CapturedImage, PanelEdge, TransitionDirection, TransitionStyle, WarpOverlay, WarpRect,
+};
 
 /// Frame cadence while a transition is in flight (60 Hz).
 const TRANSITION_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
@@ -90,12 +92,16 @@ fn warp_rect(rect: animation::Rect) -> WarpRect {
 
 /// Emits a `restore.trace.*` event whose message is prefixed with wall-clock `t_ms=`.
 fn trace_restore(id: &'static str, detail: impl FnOnce() -> String) {
-    flamewm_debug::emit(flamewm_debug::DebugEventId(id), std::time::Duration::ZERO, || {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis());
-        format!("t_ms={ms} {}", detail())
-    });
+    flamewm_debug::emit(
+        flamewm_debug::DebugEventId(id),
+        std::time::Duration::ZERO,
+        || {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis());
+            format!("t_ms={ms} {}", detail())
+        },
+    );
 }
 
 impl<'a, C: Connection> Wm<'a, C> {
@@ -113,20 +119,20 @@ impl<'a, C: Connection> Wm<'a, C> {
 }
 
 use flamewm_api::shortcuts::{
-    ACTION_SESSION_LOCK, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
-    ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
+    ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
+    ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
     ACTION_WORKSPACE_UP,
 };
 use flamewm_platform::services::workspaces::{count_store_path, load_persisted_count};
 use flamewm_platform::shortcuts::{
-    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER,
-    ACTION_OPEN_TERMINAL_CTRL_ALT, ACTION_OPEN_TERMINAL_SUPER,
-    ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
+    ACTION_OPEN_FILES_CTRL_ALT, ACTION_OPEN_FILES_SUPER, ACTION_OPEN_TERMINAL_CTRL_ALT,
+    ACTION_OPEN_TERMINAL_SUPER, ACTION_VOLUME_DOWN, ACTION_VOLUME_MUTE, ACTION_VOLUME_UP,
 };
 use flamewm_platform::system::MediaAudioKey;
 use flamewm_window_core::{
-    SnapTarget, snap_geometry as core_snap_geometry, snap_target_in_output as core_snap_target_in_output,
+    SnapTarget, snap_geometry as core_snap_geometry,
+    snap_target_in_output as core_snap_target_in_output,
 };
 use x11rb::connection::Connection;
 use x11rb::errors::{ReplyError, ReplyOrIdError};
@@ -143,18 +149,18 @@ use crate::atoms::{AnyError, Atoms};
 use crate::chrome;
 use crate::classifier::{WindowKind, classify};
 use crate::client::ManagedClient;
-use crate::event_pump::WmEventPump;
 use crate::decoration::policy::{
-    decoration_policy, gtk_frame_extents, motif_decorations_field, Decoration, DecorationHints,
+    Decoration, DecorationHints, decoration_policy, gtk_frame_extents, motif_decorations_field,
 };
+use crate::event_pump::WmEventPump;
 use crate::frame::controller::{ControllerState, FrameEffect, FrameEvent};
 use crate::frame::coords::{RootPoint, RootRect};
 use crate::frame::geometry::{
     FrameExtents, GeometryReason, GeometryRequest, frame_to_client_root, plan_client_configure,
 };
 use crate::frame::model::{
-    frame_border_for_mode,
     FrameControl, FrameRegion, PlacementMode, PlacementSnapshot, PlacementState, ResizeEdges,
+    frame_border_for_mode,
 };
 use crate::frame::resources::{
     FrameRegistry, FrameResources, INPUT_CHILD_EVENT_MASK, cursor_for_region,
@@ -214,10 +220,18 @@ const MOUSE_WORKSPACE_COOLDOWN_MS: u64 = 500;
 const DRAG_EDGE_HIT_PX: i32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DragEdge { Left, Right, Top, Bottom }
+enum DragEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MouseWorkspaceAxis { Horizontal, Vertical }
+enum MouseWorkspaceAxis {
+    Horizontal,
+    Vertical,
+}
 
 impl DragEdge {
     fn axis(self) -> MouseWorkspaceAxis {
@@ -320,7 +334,12 @@ fn drag_edge_target(current: usize, count: usize, side: DragEdge) -> Option<usiz
     (target != current).then_some(target)
 }
 
-fn drag_edge_destination(pointer: RootPoint, root: Rect, side: DragEdge, frame_height: i32) -> RootPoint {
+fn drag_edge_destination(
+    pointer: RootPoint,
+    root: Rect,
+    side: DragEdge,
+    frame_height: i32,
+) -> RootPoint {
     let inset_x = DRAG_EDGE_INSET_PX.min(root.width.saturating_sub(1) as i32 / 3);
     let inset_y = DRAG_EDGE_INSET_PX.min(root.height.saturating_sub(1) as i32 / 3);
     let x = match side {
@@ -334,12 +353,18 @@ fn drag_edge_destination(pointer: RootPoint, root: Rect, side: DragEdge, frame_h
             // its titlebar off the active frame: keep at least half the frame
             // visible while retaining the cursor on the titlebar grip.
             let visible = (frame_height.max(1) / 2).max(32);
-            root.bottom().saturating_sub(1).saturating_sub(
-                inset_y.max(visible.saturating_sub(16)),
-            ).clamp(root.y.saturating_add(inset_y), root.bottom().saturating_sub(1).saturating_sub(inset_y))
+            root.bottom()
+                .saturating_sub(1)
+                .saturating_sub(inset_y.max(visible.saturating_sub(16)))
+                .clamp(
+                    root.y.saturating_add(inset_y),
+                    root.bottom().saturating_sub(1).saturating_sub(inset_y),
+                )
         }
         DragEdge::Bottom => root.y.saturating_add(inset_y),
-        DragEdge::Left | DragEdge::Right => pointer.y.clamp(root.y, root.bottom().saturating_sub(1)),
+        DragEdge::Left | DragEdge::Right => {
+            pointer.y.clamp(root.y, root.bottom().saturating_sub(1))
+        }
     };
     RootPoint::new(x, y)
 }
@@ -359,7 +384,14 @@ fn drag_edge_ready(
             );
         }
     }
-    (Some(EdgeDragPending { client, side, since: now }), false)
+    (
+        Some(EdgeDragPending {
+            client,
+            side,
+            since: now,
+        }),
+        false,
+    )
 }
 
 /// Arms exactly one reactor deadline while a titlebar move is held at an edge.
@@ -372,7 +404,9 @@ fn drag_edge_wait(
     now: std::time::Instant,
     wait: Option<std::time::Duration>,
 ) -> Option<std::time::Duration> {
-    let Some(pending) = pending else { return wait; };
+    let Some(pending) = pending else {
+        return wait;
+    };
     let dwell_remaining = std::time::Duration::from_millis(u64::from(DRAG_EDGE_DWELL_MS))
         .saturating_sub(now.saturating_duration_since(pending.since));
     // Wake once BOTH dwell and cooldown have expired (no zero-timeout loop).
@@ -424,16 +458,19 @@ fn defer_drag_arrival_paint(
     {
         return None;
     }
-    let paint = commit.effects.iter().any(|effect| matches!(effect, FrameEffect::PaintChrome));
-    commit.effects.retain(|effect| !matches!(effect, FrameEffect::PaintChrome));
+    let paint = commit
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, FrameEffect::PaintChrome));
+    commit
+        .effects
+        .retain(|effect| !matches!(effect, FrameEffect::PaintChrome));
     Some((commit, paint))
 }
 
 const WM_STATE_WITHDRAWN: u32 = 0;
 const WM_STATE_NORMAL: u32 = 1;
 const WM_STATE_ICONIC: u32 = 3;
-
-
 
 /// Accumulated invalidation for one reactor turn. Semantic owners mark the
 /// affected facets; the reactor flush drains them once per turn.
@@ -547,7 +584,12 @@ mod workspace_count_tests {
         std::fs::write(dir.join("workspaces.conf"), "workspaces.count=6\n").expect("write");
         let config = WmConfig::default().with_persisted_workspaces(&settings);
         assert_eq!(config.workspaces, 6);
-        assert_eq!(WmConfig::default().resolve_workspaces(true, Some(6)).workspaces, 4);
+        assert_eq!(
+            WmConfig::default()
+                .resolve_workspaces(true, Some(6))
+                .workspaces,
+            4
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -631,7 +673,11 @@ impl ResizeCounterSet {
     }
 
     fn snapshot(&self) -> (u64, u64, u64) {
-        (self.received.load(), self.coalesced.load(), self.committed.load())
+        (
+            self.received.load(),
+            self.coalesced.load(),
+            self.committed.load(),
+        )
     }
 
     fn max_batch(&self) -> usize {
@@ -1100,19 +1146,45 @@ fn emit_resize_probe(
 }
 
 fn join_effects(effects: &[FrameEffect]) -> String {
-    effects.iter().map(|effect| format!("{effect:?}")).collect::<Vec<_>>().join(",")
+    effects
+        .iter()
+        .map(|effect| format!("{effect:?}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn emit_frame_dispatch(detail: impl FnOnce() -> String) {
-    flamewm_debug::emit(flamewm_debug::WM_FRAME_EVENT_DISPATCH, std::time::Duration::ZERO, detail);
+    flamewm_debug::emit(
+        flamewm_debug::WM_FRAME_EVENT_DISPATCH,
+        std::time::Duration::ZERO,
+        detail,
+    );
 }
 
 fn pointer_ingress(event: &Event) -> Option<PointerIngress> {
-    let ingress = |kind, event, child, root_x, root_y| PointerIngress { kind, event, child, root_x, root_y };
+    let ingress = |kind, event, child, root_x, root_y| PointerIngress {
+        kind,
+        event,
+        child,
+        root_x,
+        root_y,
+    };
     match event {
         Event::ButtonPress(e) => Some(ingress("ButtonPress", e.event, e.child, e.root_x, e.root_y)),
-        Event::ButtonRelease(e) => Some(ingress("ButtonRelease", e.event, e.child, e.root_x, e.root_y)),
-        Event::MotionNotify(e) => Some(ingress("MotionNotify", e.event, e.child, e.root_x, e.root_y)),
+        Event::ButtonRelease(e) => Some(ingress(
+            "ButtonRelease",
+            e.event,
+            e.child,
+            e.root_x,
+            e.root_y,
+        )),
+        Event::MotionNotify(e) => Some(ingress(
+            "MotionNotify",
+            e.event,
+            e.child,
+            e.root_x,
+            e.root_y,
+        )),
         _ => None,
     }
 }
@@ -1139,7 +1211,10 @@ fn workspace_counters() -> &'static WorkspaceCounterSet {
 
 /// Wait timeout for the reactor: `None` (block until an event) when no display
 /// transaction is pending, otherwise the time left until its revert deadline.
-pub(crate) fn next_wait_timeout(now_ms: u64, deadline_ms: Option<u64>) -> Option<std::time::Duration> {
+pub(crate) fn next_wait_timeout(
+    now_ms: u64,
+    deadline_ms: Option<u64>,
+) -> Option<std::time::Duration> {
     deadline_ms.map(|deadline| std::time::Duration::from_millis(deadline.saturating_sub(now_ms)))
 }
 
@@ -1176,7 +1251,12 @@ pub(crate) fn run_with_hook<F>(
     mut hook: F,
 ) -> Result<(), AnyError>
 where
-    F: FnMut(&mut Wm<'_, RustConnection>, &Rc<RustConnection>, usize, WmChangeSet) -> Result<Option<std::time::Duration>, AnyError>,
+    F: FnMut(
+        &mut Wm<'_, RustConnection>,
+        &Rc<RustConnection>,
+        usize,
+        WmChangeSet,
+    ) -> Result<Option<std::time::Duration>, AnyError>,
 {
     use std::os::fd::AsRawFd;
     let (conn, screen_num) = x11rb::connect(None)?;
@@ -1223,7 +1303,12 @@ where
         wm.tick_edge_drag()?;
         // After the drain: an effect begun by a drained event (e.g. try_start_open) must cap the wait.
         let wait = wm.transition_wait(wait);
-        let wait = drag_edge_wait(wm.edge_drag, wm.mouse_workspace_cooldowns, std::time::Instant::now(), wait);
+        let wait = drag_edge_wait(
+            wm.edge_drag,
+            wm.mouse_workspace_cooldowns,
+            std::time::Instant::now(),
+            wait,
+        );
         emit_resize_summary();
         emit_move_summary();
         // Flush once per reactor turn.
@@ -1340,7 +1425,9 @@ fn become_wm<C: Connection>(conn: &C, screen: &Screen) -> Result<(), ReplyError>
     let result = conn.change_window_attributes(screen.root, &attrs)?.check();
     conn.randr_select_input(
         screen.root,
-        randr::NotifyMask::SCREEN_CHANGE | randr::NotifyMask::OUTPUT_CHANGE | randr::NotifyMask::CRTC_CHANGE,
+        randr::NotifyMask::SCREEN_CHANGE
+            | randr::NotifyMask::OUTPUT_CHANGE
+            | randr::NotifyMask::CRTC_CHANGE,
     )?
     .check()?;
     if let Err(ReplyError::X11Error(ref error)) = result {
@@ -1442,22 +1529,27 @@ impl OutputWorkArea {
             bool,
         ),
     ) -> Self {
-        Self { output, geometry: from_core_rect(geometry), work_area: from_core_rect(work_area), primary }
+        Self {
+            output,
+            geometry: from_core_rect(geometry),
+            work_area: from_core_rect(work_area),
+            primary,
+        }
     }
 }
 
-mod manage;
+mod client_state;
 mod configure_handlers;
 mod effects;
-mod paint;
-mod publish;
 mod events;
-mod pointer;
-mod window_ops;
-mod transition;
+mod manage;
 mod overlay;
+mod paint;
+mod pointer;
+mod publish;
+mod transition;
+mod window_ops;
 mod workspace;
-mod client_state;
 
 #[cfg(test)]
 const WM_SOURCE: &str = concat!(
@@ -1509,14 +1601,15 @@ impl<'a, C: Connection> Wm<'a, C> {
         // Root gets the theme cursor at start; the renderer records it, so a live
         // cursor-theme reload re-defines it with the frames.
         if let Some(renderer) = renderer.as_ref() {
-            let _ = renderer
-                .borrow_mut()
-                .define_cursor(u64::from(screen.root), flamewm_render_core::CursorKind::Default);
+            let _ = renderer.borrow_mut().define_cursor(
+                u64::from(screen.root),
+                flamewm_render_core::CursorKind::Default,
+            );
         }
         let animator = Animator::new(
-            renderer
-                .as_ref()
-                .is_some_and(|r| r.borrow().is_available() && r.borrow().supports_picture_transform()),
+            renderer.as_ref().is_some_and(|r| {
+                r.borrow().is_available() && r.borrow().supports_picture_transform()
+            }),
             Settings::DEFAULT,
         );
         Ok(Self {
@@ -1579,14 +1672,22 @@ impl<'a, C: Connection> Wm<'a, C> {
             let requesters = self.icon_requests.remove(&result.key).unwrap_or_default();
             let Ok(raster) = result.result else { continue };
             for (client_id, token) in requesters {
-                let Some(client) = self.clients.get_mut(&client_id) else { continue };
+                let Some(client) = self.clients.get_mut(&client_id) else {
+                    continue;
+                };
                 if !icon_completion_matches(
-                    client.icon_request_token, client.catalog_icon_key.as_ref(), token, &result.key,
+                    client.icon_request_token,
+                    client.catalog_icon_key.as_ref(),
+                    token,
+                    &result.key,
                 ) {
                     continue;
                 }
                 client.icon = crate::decoration::cache::catalog_icon_image(&raster);
-                client.icon_fallback = client.icon.is_none().then(|| "catalog-raster-invalid".to_owned());
+                client.icon_fallback = client
+                    .icon
+                    .is_none()
+                    .then(|| "catalog-raster-invalid".to_owned());
                 self.mark_windows();
                 let _ = self.paint_chrome(client_id);
             }
@@ -1604,7 +1705,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             match self.icon_service.borrow().submit(job) {
                 Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
                 Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
-                Err(flamewm_integrations_linux::icon_service::IconSubmitError::HighQueueFull(job)) => {
+                Err(flamewm_integrations_linux::icon_service::IconSubmitError::HighQueueFull(
+                    job,
+                )) => {
                     retain_deferred_icon_job(&mut self.deferred_icon_jobs, client_id, token, job);
                 }
                 Err(flamewm_integrations_linux::icon_service::IconSubmitError::Stopped(_)) => {}
@@ -1613,21 +1716,38 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn request_catalog_icon(&mut self, client_id: Window) {
-        use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconSubmit, IconSubmitError};
-        use flamewm_integrations_linux::icons::{IconKey, IconLookupPurpose, IconRequest, IconSize};
+        use flamewm_integrations_linux::icon_service::{
+            IconJob, IconPriority, IconSubmit, IconSubmitError,
+        };
+        use flamewm_integrations_linux::icons::{
+            IconKey, IconLookupPurpose, IconRequest, IconSize,
+        };
 
         let Some((instance, class, token)) = self.clients.get(&client_id).map(|client| {
-            (client.wm_instance.clone(), client.wm_class.clone(), client.icon_request_token)
-        }) else { return };
-        let identity = flamewm_applications::WindowApplicationIdentity::new(&instance, &class, String::new());
-        let Some(icon_name) = self.catalog.find_by_window_identity(&identity).map(|app| app.icon().to_owned()) else {
+            (
+                client.wm_instance.clone(),
+                client.wm_class.clone(),
+                client.icon_request_token,
+            )
+        }) else {
+            return;
+        };
+        let identity =
+            flamewm_applications::WindowApplicationIdentity::new(&instance, &class, String::new());
+        let Some(icon_name) = self
+            .catalog
+            .find_by_window_identity(&identity)
+            .map(|app| app.icon().to_owned())
+        else {
             if let Some(client) = self.clients.get_mut(&client_id) {
                 client.icon_fallback = Some("catalog-icon-not-found".to_owned());
             }
             return;
         };
-        if icon_name.trim().is_empty() { return; }
-        let edge = u32::from(crate::chrome::icon_slot_for(crate::chrome::TITLEBAR_HEIGHT));
+        if icon_name.trim().is_empty() {
+            return;
+        }
+        let edge = u32::from(crate::chrome::icon_slot_for(self.config.titlebar_height));
         let service = self.icon_service.borrow();
         let key = IconKey::new(
             IconLookupPurpose::Application,
@@ -1640,7 +1760,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             client.catalog_icon_key = Some(key.clone());
             client.icon_fallback = Some("catalog-icon-pending".to_owned());
         }
-        let job = IconJob { key: key.clone(), priority: IconPriority::High };
+        let job = IconJob {
+            key: key.clone(),
+            priority: IconPriority::High,
+        };
         if let Some(Ok(raster)) = service.cached(&key) {
             if let Some(client) = self.clients.get_mut(&client_id).filter(|client| {
                 client.icon_request_token == token && client.catalog_icon_key.as_ref() == Some(&key)
@@ -1651,7 +1774,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             return;
         }
         drop(service);
-        self.icon_requests.entry(key).or_default().push((client_id, token));
+        self.icon_requests
+            .entry(key)
+            .or_default()
+            .push((client_id, token));
         match self.icon_service.borrow().submit(job) {
             Ok(IconSubmit::Enqueued | IconSubmit::Coalesced) => {}
             Ok(IconSubmit::DroppedLow) => unreachable!("catalog icons are HIGH priority"),
@@ -1677,11 +1803,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 emit_frame_dispatch(|| {
                     format!(
                         "probe=pointer_ingress stage=pre_handle_event boundary=first raw={} event={} child={} root=({}, {}) session_client={session_client:?} pump_received={received}",
-                        pointer.kind,
-                        pointer.event,
-                        pointer.child,
-                        pointer.root_x,
-                        pointer.root_y
+                        pointer.kind, pointer.event, pointer.child, pointer.root_x, pointer.root_y
                     )
                 });
             }
@@ -1743,15 +1865,23 @@ impl<'a, C: Connection> Wm<'a, C> {
     fn work_area(&self) -> Rect {
         let (height, width) = (self.screen_rect.height, self.screen_rect.width);
         // (extent, start, end, limit) per edge: left, top, right, bottom.
-        let edges = [(0, 4, 5, height), (1, 6, 7, height), (2, 8, 9, width), (3, 10, 11, width)];
-        let mut strut = self.dock_struts.values().fold([0_u32; 4], |mut strut, dock| {
-            for (edge, (extent, start, end, limit)) in edges.into_iter().enumerate() {
-                if dock[extent] > 0 && dock[end] >= dock[start] && dock[start] < limit {
-                    strut[edge] = strut[edge].max(dock[extent]);
+        let edges = [
+            (0, 4, 5, height),
+            (1, 6, 7, height),
+            (2, 8, 9, width),
+            (3, 10, 11, width),
+        ];
+        let mut strut = self
+            .dock_struts
+            .values()
+            .fold([0_u32; 4], |mut strut, dock| {
+                for (edge, (extent, start, end, limit)) in edges.into_iter().enumerate() {
+                    if dock[extent] > 0 && dock[end] >= dock[start] && dock[start] < limit {
+                        strut[edge] = strut[edge].max(dock[extent]);
+                    }
                 }
-            }
-            strut
-        });
+                strut
+            });
         if strut == [0; 4] {
             strut[3] = u32::from(self.config.panel_reserve);
         }
@@ -1778,9 +1908,17 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     pub(crate) fn set_output_work_areas(
         &mut self,
-        areas: Vec<(flamewm_api::OutputId, flamewm_api::Rect, flamewm_api::Rect, bool)>,
+        areas: Vec<(
+            flamewm_api::OutputId,
+            flamewm_api::Rect,
+            flamewm_api::Rect,
+            bool,
+        )>,
     ) -> Result<(), ReplyError> {
-        let next = areas.into_iter().map(OutputWorkArea::from_host).collect::<Vec<_>>();
+        let next = areas
+            .into_iter()
+            .map(OutputWorkArea::from_host)
+            .collect::<Vec<_>>();
         if self.output_work_areas != next {
             self.finish_all_transitions()?;
             self.output_work_areas = next;
@@ -1790,7 +1928,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn output_for_rect(&self, rect: Rect) -> Option<&OutputWorkArea> {
-        select_output_for_rect(&self.output_work_areas, rect).map(|index| &self.output_work_areas[index])
+        select_output_for_rect(&self.output_work_areas, rect)
+            .map(|index| &self.output_work_areas[index])
     }
 
     fn work_area_for_rect(&self, rect: Rect) -> Rect {
@@ -1798,16 +1937,23 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn output_for_point(&self, x: i32, y: i32, fallback: Rect) -> Option<&OutputWorkArea> {
-        self.output_work_areas.iter().find(|output| {
-            x >= output.geometry.x && x < output.geometry.right()
-                && y >= output.geometry.y && y < output.geometry.bottom()
-        }).or_else(|| self.output_for_rect(fallback))
+        self.output_work_areas
+            .iter()
+            .find(|output| {
+                x >= output.geometry.x
+                    && x < output.geometry.right()
+                    && y >= output.geometry.y
+                    && y < output.geometry.bottom()
+            })
+            .or_else(|| self.output_for_rect(fallback))
     }
 
     /// Output geometry and its work area at a root point; falls back to the primary work area.
     fn snap_zones_at(&self, root_x: i16, root_y: i16, fallback: Rect) -> (Rect, Rect) {
         self.output_for_point(i32::from(root_x), i32::from(root_y), fallback)
-            .map_or((self.work_area(), self.work_area()), |o| (o.geometry, o.work_area))
+            .map_or((self.work_area(), self.work_area()), |o| {
+                (o.geometry, o.work_area)
+            })
     }
 
     /// Snap target for a root point. Far edges use the physical output so bottom/right
@@ -1974,10 +2120,16 @@ impl<'a, C: Connection> Wm<'a, C> {
         let res = self.registry.lookup_by_client(client)?;
         let session = self.session_of(client);
         let children = res.children();
-        let regions = children.map(|xid| self.registry.lookup_by_xid(xid).map(|target| target.region));
-        let outputs = self.output_work_areas.iter().map(|output| RootRect::from_legacy(output.geometry));
+        let regions =
+            children.map(|xid| self.registry.lookup_by_xid(xid).map(|target| target.region));
+        let outputs = self
+            .output_work_areas
+            .iter()
+            .map(|output| RootRect::from_legacy(output.geometry));
         let (region_map, outputs) = {
-            let geometry = self.controller_geometry.fetch(client, children, regions, outputs);
+            let geometry = self
+                .controller_geometry
+                .fetch(client, children, regions, outputs);
             (geometry.region_map.clone(), geometry.outputs.clone())
         };
         let screen_rect = RootRect::new(
@@ -1997,7 +2149,12 @@ impl<'a, C: Connection> Wm<'a, C> {
                 state.placement,
                 {
                     let work = self.work_area_for_rect(state.outer);
-                    RootRect::new(work.x, work.y, work.width.max(1) as i32, work.height.max(1) as i32)
+                    RootRect::new(
+                        work.x,
+                        work.y,
+                        work.width.max(1) as i32,
+                        work.height.max(1) as i32,
+                    )
                 },
                 screen_rect,
                 state.hints,
@@ -2015,7 +2172,10 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Output geometries in root coordinates: the bound for drags (windows may overflow the work area).
     fn output_root_rects(&self) -> Vec<RootRect> {
-        self.output_work_areas.iter().map(|output| RootRect::from_legacy(output.geometry)).collect()
+        self.output_work_areas
+            .iter()
+            .map(|output| RootRect::from_legacy(output.geometry))
+            .collect()
     }
 
     fn store_controller(&mut self, client: Window, controller: &ControllerState) {
@@ -2049,7 +2209,12 @@ fn work_area_for_rect_in(outputs: &[OutputWorkArea], global: Rect, rect: Rect) -
 /// Target frame rect for a managed client after the output layout changes.
 /// Floating windows keep a quarter visible on the outputs (may overflow the work area);
 /// Snapped and Maximized keep work-area semantics.
-fn rehome_outer(mode: PlacementMode, outer: Rect, outputs: &[OutputWorkArea], global: Rect) -> Rect {
+fn rehome_outer(
+    mode: PlacementMode,
+    outer: Rect,
+    outputs: &[OutputWorkArea],
+    global: Rect,
+) -> Rect {
     match mode {
         PlacementMode::Fullscreen => outer,
         PlacementMode::Maximized => work_area_for_rect_in(outputs, global, outer),
@@ -2057,8 +2222,15 @@ fn rehome_outer(mode: PlacementMode, outer: Rect, outputs: &[OutputWorkArea], gl
             outer.clamp_inside(work_area_for_rect_in(outputs, global, outer))
         }
         PlacementMode::Floating => {
-            let rects: Vec<RootRect> = outputs.iter().map(|output| RootRect::from_legacy(output.geometry)).collect();
-            from_root_rect(keep_on_outputs(RootRect::from_legacy(outer), &rects, RootRect::from_legacy(global)))
+            let rects: Vec<RootRect> = outputs
+                .iter()
+                .map(|output| RootRect::from_legacy(output.geometry))
+                .collect();
+            from_root_rect(keep_on_outputs(
+                RootRect::from_legacy(outer),
+                &rects,
+                RootRect::from_legacy(global),
+            ))
         }
     }
 }
@@ -2069,15 +2241,23 @@ fn from_root_rect(rect: RootRect) -> Rect {
 
 /// Stacking for a dock: directly above `frame`, the normal window just raised to the top.
 fn dock_above_frame_aux(frame: Window) -> ConfigureWindowAux {
-    ConfigureWindowAux::new().sibling(frame).stack_mode(StackMode::ABOVE)
+    ConfigureWindowAux::new()
+        .sibling(frame)
+        .stack_mode(StackMode::ABOVE)
 }
 
 fn select_output_for_rect(outputs: &[OutputWorkArea], rect: Rect) -> Option<usize> {
-    let center_x = rect.x.saturating_add(i32::try_from(rect.width / 2).unwrap_or(i32::MAX));
-    let center_y = rect.y.saturating_add(i32::try_from(rect.height / 2).unwrap_or(i32::MAX));
+    let center_x = rect
+        .x
+        .saturating_add(i32::try_from(rect.width / 2).unwrap_or(i32::MAX));
+    let center_y = rect
+        .y
+        .saturating_add(i32::try_from(rect.height / 2).unwrap_or(i32::MAX));
     if let Some(index) = outputs.iter().position(|output| {
-        center_x >= output.geometry.x && center_x < output.geometry.right()
-            && center_y >= output.geometry.y && center_y < output.geometry.bottom()
+        center_x >= output.geometry.x
+            && center_x < output.geometry.right()
+            && center_y >= output.geometry.y
+            && center_y < output.geometry.bottom()
     }) {
         return Some(index);
     }
@@ -2139,7 +2319,9 @@ fn from_core_rect(rect: flamewm_api::Rect) -> Rect {
 fn rect_overlap_area(a: Rect, b: Rect) -> u64 {
     let width = a.right().min(b.right()).saturating_sub(a.x.max(b.x));
     let height = a.bottom().min(b.bottom()).saturating_sub(a.y.max(b.y));
-    u64::try_from(width).unwrap_or(0).saturating_mul(u64::try_from(height).unwrap_or(0))
+    u64::try_from(width)
+        .unwrap_or(0)
+        .saturating_mul(u64::try_from(height).unwrap_or(0))
 }
 
 /// Workspace root for the canonical indexed `IconResolver` (packaged icon
@@ -2157,7 +2339,9 @@ fn desktop_change_is_external(published: Option<u32>, own_current: usize) -> boo
 
 /// Payload of `_NET_DESKTOP_NAMES` for `count` workspaces: NUL-terminated names.
 fn desktop_names_payload(count: usize) -> Vec<u8> {
-    (1..=count).flat_map(|index| format!("Workspace {index}\0").into_bytes()).collect()
+    (1..=count)
+        .flat_map(|index| format!("Workspace {index}\0").into_bytes())
+        .collect()
 }
 
 /// True when `_NET_NUMBER_OF_DESKTOPS` or `_NET_DESKTOP_NAMES` differ from what
@@ -2309,8 +2493,14 @@ mod transition_fix_tests {
             mode: PlacementMode::Floating,
             rect: floating,
         };
-        assert_eq!(unmaximize_target(&maximized(Some(snap), floating)), Some(floating));
-        assert_eq!(unmaximize_target(&maximized(None, floating)), Some(floating));
+        assert_eq!(
+            unmaximize_target(&maximized(Some(snap), floating)),
+            Some(floating)
+        );
+        assert_eq!(
+            unmaximize_target(&maximized(None, floating)),
+            Some(floating)
+        );
     }
 
     #[test]
@@ -2323,14 +2513,20 @@ mod transition_fix_tests {
             mode: PlacementMode::Fullscreen,
             rect: floating,
         };
-        assert_eq!(unmaximize_target(&maximized(Some(fullscreen_snap), floating)), None);
+        assert_eq!(
+            unmaximize_target(&maximized(Some(fullscreen_snap), floating)),
+            None
+        );
     }
 
     #[test]
     fn expected_unmap_is_consumed_exactly_once() {
         let mut ignore = 1u8;
         assert!(consume_expected_unmap(&mut ignore));
-        assert!(!consume_expected_unmap(&mut ignore), "no count left for a real unmap");
+        assert!(
+            !consume_expected_unmap(&mut ignore),
+            "no count left for a real unmap"
+        );
     }
 
     /// Models the frame's UnmapNotify stream. Minimize hides the frame and counts one expected
@@ -2340,11 +2536,17 @@ mod transition_fix_tests {
     fn restore_does_not_leave_an_ignore_count_that_swallows_a_later_unmap() {
         // minimize: WM unmaps the frame and expects exactly one UnmapNotify.
         let mut ignore_unmap = 1u8;
-        assert!(consume_expected_unmap(&mut ignore_unmap), "minimize unmap is ours");
+        assert!(
+            consume_expected_unmap(&mut ignore_unmap),
+            "minimize unmap is ours"
+        );
         // restore: WM maps the frame; mapping produces no UnmapNotify, so no count is added.
         assert_eq!(ignore_unmap, 0);
         // later: the client withdraws its own window; this unmap must not be swallowed.
-        assert!(!consume_expected_unmap(&mut ignore_unmap), "client unmap is handled");
+        assert!(
+            !consume_expected_unmap(&mut ignore_unmap),
+            "client unmap is handled"
+        );
     }
 }
 
@@ -2402,11 +2604,16 @@ mod frame_extents_publish_tests {
     /// Mirrors `set_frame_extents`: a publish is sent only when the value differs.
     fn publish_all(values: &[[u32; 4]]) -> usize {
         let mut published = HashMap::new();
-        values.iter().filter(|&&extents| {
-            let needs = frame_extents_needs_publish(&published, 7, extents);
-            if needs { published.insert(7, extents); }
-            needs
-        }).count()
+        values
+            .iter()
+            .filter(|&&extents| {
+                let needs = frame_extents_needs_publish(&published, 7, extents);
+                if needs {
+                    published.insert(7, extents);
+                }
+                needs
+            })
+            .count()
     }
 
     #[test]
@@ -2433,15 +2640,31 @@ mod frame_extents_publish_tests {
         let (border, titlebar) = (1, 31);
         let floating = [1, 1, 32, 1];
         let snapped = [0, 0, 31, 0];
-        assert_eq!(frame_extents_for_mode(PlacementMode::Floating, border, titlebar), floating);
         assert_eq!(
-            frame_extents_for_mode(PlacementMode::Snapped(crate::frame::model::SnapTarget::Left), border, titlebar),
+            frame_extents_for_mode(PlacementMode::Floating, border, titlebar),
+            floating
+        );
+        assert_eq!(
+            frame_extents_for_mode(
+                PlacementMode::Snapped(crate::frame::model::SnapTarget::Left),
+                border,
+                titlebar
+            ),
             snapped
         );
-        assert_eq!(frame_extents_for_mode(PlacementMode::Maximized, border, titlebar), snapped);
-        assert_eq!(frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar), snapped);
+        assert_eq!(
+            frame_extents_for_mode(PlacementMode::Maximized, border, titlebar),
+            snapped
+        );
+        assert_eq!(
+            frame_extents_for_mode(PlacementMode::Fullscreen, border, titlebar),
+            snapped
+        );
         // Unsnap returns to the floating border and titlebar extents.
-        assert_eq!(frame_extents_for_mode(PlacementMode::Floating, border, titlebar), floating);
+        assert_eq!(
+            frame_extents_for_mode(PlacementMode::Floating, border, titlebar),
+            floating
+        );
     }
 
     /// Client interior per mode: the published EWMH side/bottom extents equal
@@ -2450,7 +2673,12 @@ mod frame_extents_publish_tests {
     /// into the client for snapped/maximized/fullscreen frames.
     #[test]
     fn client_interior_matches_effective_border_per_mode() {
-        let outer = crate::frame::coords::RootRect { x: 10, y: 20, w: 800, h: 600 };
+        let outer = crate::frame::coords::RootRect {
+            x: 10,
+            y: 20,
+            w: 800,
+            h: 600,
+        };
         let titlebar: u16 = 31;
         let configured: u16 = 1;
         let modes = [
@@ -2465,12 +2693,23 @@ mod frame_extents_publish_tests {
             assert_eq!(left, u32::from(border), "{mode:?} left extent");
             assert_eq!(right, u32::from(border), "{mode:?} right extent");
             assert_eq!(bottom, u32::from(border), "{mode:?} bottom extent");
-            assert_eq!(top, u32::from(titlebar) + u32::from(border), "{mode:?} top extent");
+            assert_eq!(
+                top,
+                u32::from(titlebar) + u32::from(border),
+                "{mode:?} top extent"
+            );
             let ext = FrameExtents::new(i32::from(titlebar), i32::from(border));
             let (x, y, w, h) = lifecycle::client_configure(outer, ext);
             assert_eq!((x, y), (0, i32::from(titlebar)), "{mode:?} client origin");
-            assert_eq!(w, outer.w as u32, "{mode:?} client width equals frame width");
-            assert_eq!(h, (outer.h - i32::from(titlebar)) as u32, "{mode:?} client height");
+            assert_eq!(
+                w, outer.w as u32,
+                "{mode:?} client width equals frame width"
+            );
+            assert_eq!(
+                h,
+                (outer.h - i32::from(titlebar)) as u32,
+                "{mode:?} client height"
+            );
         }
         // Client-drawn side insets must never appear for borderless modes.
         let snapped = FrameExtents::new(i32::from(titlebar), 0);
@@ -2496,6 +2735,9 @@ mod frame_extents_publish_tests {
         let publish = arm
             .find("self.set_frame_extents(client)?;")
             .expect("arm publishes frame extents");
-        assert!(publish > commit, "extents must publish after the rect is committed");
+        assert!(
+            publish > commit,
+            "extents must publish after the rect is committed"
+        );
     }
 }

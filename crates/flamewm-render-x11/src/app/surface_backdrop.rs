@@ -16,7 +16,8 @@ use super::X11App;
 /// The message is built only when tracing is enabled, so disabled tracing allocates nothing.
 fn trace_paint(message: impl FnOnce() -> String) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_DEBUG_BACKDROP").is_some_and(|v| v == "1")) {
+    if *ENABLED.get_or_init(|| std::env::var_os("FLAMEWM_DEBUG_BACKDROP").is_some_and(|v| v == "1"))
+    {
         eprintln!("debug backdrop paint {}", message());
     }
 }
@@ -67,8 +68,9 @@ impl X11App {
         height: u32,
     ) -> Result<Pixmap, String> {
         let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
-        let matched =
-            unsafe { XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo) };
+        let matched = unsafe {
+            XMatchVisualInfo(self.display, self.screen, 32, TRUE_COLOR_CLASS, &mut vinfo)
+        };
         if matched == 0 || vinfo.visual.is_null() {
             return Err("backdrop: no 32-bit TrueColor visual".to_string());
         }
@@ -77,9 +79,9 @@ impl X11App {
         if pixmap == 0 {
             return Err("backdrop: XCreatePixmap failed".to_string());
         }
-        if let Err(error) = unsafe {
-            self.upload_argb32_words(pixmap, vinfo.visual, argb, width, height)
-        } {
+        if let Err(error) =
+            unsafe { self.upload_argb32_words(pixmap, vinfo.visual, argb, width, height) }
+        {
             unsafe { XFreePixmap(self.display, pixmap) };
             return Err(error);
         }
@@ -154,7 +156,12 @@ impl NodeBackdropCache {
     }
 
     /// Stores `pixmap` for `node`; returns the replaced pixmap for the caller to free.
-    pub(crate) fn store(&mut self, node: u32, key: NodeBackdropKey, pixmap: Pixmap) -> Option<Pixmap> {
+    pub(crate) fn store(
+        &mut self,
+        node: u32,
+        key: NodeBackdropKey,
+        pixmap: Pixmap,
+    ) -> Option<Pixmap> {
         self.used.insert(node);
         self.entries.insert(node, (key, pixmap)).map(|(_, old)| old)
     }
@@ -199,7 +206,12 @@ pub(crate) fn node_backdrop_clip(
     if right <= left || bottom <= top {
         return None;
     }
-    Some((left as i32, top as i32, (right - left) as u32, (bottom - top) as u32))
+    Some((
+        left as i32,
+        top as i32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    ))
 }
 
 /// Whether pixel `(px, py)` (device px) lies inside the node's rounded rect `node`.
@@ -235,7 +247,11 @@ pub(crate) fn node_backdrop_words(
     for (index, word) in words.iter_mut().enumerate() {
         let px = cx + (index as u32 % width) as i32;
         let py = cy + (index as u32 / width) as i32;
-        *word = if inside_rounded(px, py, node, radius) { *word | 0xff00_0000 } else { 0 };
+        *word = if inside_rounded(px, py, node, radius) {
+            *word | 0xff00_0000
+        } else {
+            0
+        };
     }
     Some(words)
 }
@@ -272,11 +288,9 @@ impl X11App {
         let pixmap = match self.node_backdrops.hit(node, key) {
             Some(pixmap) => pixmap,
             None => {
-                let Ok(capture) = crate::backdrop::capture_drawable_rect(
-                    self.display,
-                    self.backbuffer,
-                    clip,
-                ) else {
+                let Ok(capture) =
+                    crate::backdrop::capture_drawable_rect(self.display, self.backbuffer, clip)
+                else {
                     return Ok(());
                 };
                 let Some(words) =
@@ -334,8 +348,14 @@ mod tests {
 
     #[test]
     fn clip_crops_rect_to_scene_and_drops_offscreen() {
-        assert_eq!(node_backdrop_clip((-5, -3, 20, 10), (100, 100)), Some((0, 0, 15, 7)));
-        assert_eq!(node_backdrop_clip((95, 90, 20, 20), (100, 100)), Some((95, 90, 5, 10)));
+        assert_eq!(
+            node_backdrop_clip((-5, -3, 20, 10), (100, 100)),
+            Some((0, 0, 15, 7))
+        );
+        assert_eq!(
+            node_backdrop_clip((95, 90, 20, 20), (100, 100)),
+            Some((95, 90, 5, 10))
+        );
         assert_eq!(node_backdrop_clip((100, 0, 5, 5), (100, 100)), None);
         assert_eq!(node_backdrop_clip((0, 0, 0, 5), (100, 100)), None);
     }
@@ -343,23 +363,32 @@ mod tests {
     #[test]
     fn rounded_corners_stay_transparent_and_interior_opaque() {
         let rgba = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
-        let words = node_backdrop_words(rgba, (0, 0, 12, 12), (0, 0, 12, 12), 6, 50)
-            .expect("blur on");
+        let words =
+            node_backdrop_words(rgba, (0, 0, 12, 12), (0, 0, 12, 12), 6, 50).expect("blur on");
         // Premultiplied ARGB: a masked corner must be zero in every channel, not only alpha.
         for corner in [0, 11, 11 * 12, 11 * 12 + 11] {
-            assert_eq!(words[corner], 0x0000_0000, "corner {corner} fully transparent");
+            assert_eq!(
+                words[corner], 0x0000_0000,
+                "corner {corner} fully transparent"
+            );
         }
         assert_eq!(words[6 * 12 + 6] >> 24, 0xff, "centre kept");
         for word in &words {
             let alpha = word >> 24;
             for shift in [0, 8, 16] {
-                assert!(((word >> shift) & 0xff) <= alpha, "premultiplied: {word:#010x}");
+                assert!(
+                    ((word >> shift) & 0xff) <= alpha,
+                    "premultiplied: {word:#010x}"
+                );
             }
         }
         let square = [0x40, 0x80, 0xc0, 255].repeat(12 * 12);
-        let words = node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50)
-            .expect("blur on");
-        assert!(words.iter().all(|word| word >> 24 == 0xff), "radius 0 is full rect");
+        let words =
+            node_backdrop_words(square, (0, 0, 12, 12), (0, 0, 12, 12), 0, 50).expect("blur on");
+        assert!(
+            words.iter().all(|word| word >> 24 == 0xff),
+            "radius 0 is full rect"
+        );
     }
 
     #[test]
@@ -369,7 +398,11 @@ mod tests {
         assert_eq!(cache.hit(3, key(80, 1)), Some(7));
         assert_eq!(cache.hit(3, key(80, 2)), None, "revision change misses");
         assert_eq!(cache.hit(3, key(40, 1)), None, "blur change misses");
-        assert_eq!(cache.store(3, key(40, 1), 8), Some(7), "replaced pixmap returned");
+        assert_eq!(
+            cache.store(3, key(40, 1), 8),
+            Some(7),
+            "replaced pixmap returned"
+        );
     }
 
     #[test]
@@ -378,7 +411,11 @@ mod tests {
         let mut resized = key(80, 1);
         resized.clip = (30, 30);
         assert_eq!(cache.store(3, key(80, 1), 7), None);
-        assert_eq!(cache.hit(3, resized), None, "scene resize with same rect misses");
+        assert_eq!(
+            cache.hit(3, resized),
+            None,
+            "scene resize with same rect misses"
+        );
     }
 
     #[test]

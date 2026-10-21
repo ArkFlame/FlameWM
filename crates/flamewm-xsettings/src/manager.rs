@@ -62,10 +62,15 @@ pub trait ManagerPort {
     /// Obtain a real server timestamp by generating a property change on `window`.
     fn acquire_timestamp(&mut self, window: u32) -> FlameResult<u32>;
     /// Take ownership of `selection` for `window` at `timestamp`.
-    fn set_selection_owner(&mut self, selection: &str, window: u32, timestamp: u32)
-    -> FlameResult<()>;
+    fn set_selection_owner(
+        &mut self,
+        selection: &str,
+        window: u32,
+        timestamp: u32,
+    ) -> FlameResult<()>;
     /// Send the XSettings `MANAGER` client message to the root window.
-    fn announce_manager(&mut self, timestamp: u32, selection: &str, window: u32) -> FlameResult<()>;
+    fn announce_manager(&mut self, timestamp: u32, selection: &str, window: u32)
+    -> FlameResult<()>;
     /// Replace the `_XSETTINGS_SETTINGS` property on the manager window.
     fn write_settings(&mut self, window: u32, blob: &[u8]) -> FlameResult<()>;
     /// Return the next pending `SelectionClear` on the manager connection, or
@@ -360,8 +365,8 @@ mod tests {
 
     #[test]
     fn publish_writes_only_on_change_and_bumps_serial() {
-        let mut manager = acquire_manager(FakePort::free(), XSETTINGS_SELECTION, &settings())
-            .expect("claim");
+        let mut manager =
+            acquire_manager(FakePort::free(), XSETTINGS_SELECTION, &settings()).expect("claim");
         assert!(!manager.publish(&settings()).expect("no-op"));
         assert_eq!(manager.port().calls.len(), 3);
         let changed = BTreeMap::from([("Xft/Antialias".to_owned(), XSettingsValue::Integer(0))]);
@@ -419,7 +424,10 @@ mod tests {
     #[test]
     fn unrelated_selection_clear_is_ignored() {
         let mut manager = claimed();
-        manager.port.pending_clears.push(clear(WINDOW, "_NET_WM_S0"));
+        manager
+            .port
+            .pending_clears
+            .push(clear(WINDOW, "_NET_WM_S0"));
         manager
             .port
             .pending_clears
@@ -440,7 +448,11 @@ mod tests {
     fn republish_identical_input_writes_nothing() {
         let mut manager = claimed();
         let calls_before = manager.port().calls.len();
-        assert!(!manager.republish(&XSettingsInput::default()).expect("republish"));
+        assert!(
+            !manager
+                .republish(&XSettingsInput::default())
+                .expect("republish")
+        );
         assert_eq!(manager.port().calls.len(), calls_before);
         assert_eq!(manager.state().serial, 1);
     }

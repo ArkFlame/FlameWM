@@ -4,7 +4,7 @@
 //! via the `with_icon`/`render` path. No icon I/O during paint.
 
 use crate::chrome::IconImage;
-use crate::frame::chrome::{ChromeScene, plan_scene, render, with_icon};
+use crate::frame::chrome::{ChromeScene, plan_scene_with_titlebar, render, with_icon};
 use crate::frame::model::FrameControl;
 use flamewm_skin::recipes::decoration::ChromeTokens;
 
@@ -21,6 +21,7 @@ pub struct ChromeIdentity {
 pub struct ChromeState {
     pub frame_w: u32,
     pub frame_h: u32,
+    pub titlebar_height: u16,
     pub active: bool,
     pub hover: Option<FrameControl>,
     pub pressed: Option<FrameControl>,
@@ -69,9 +70,10 @@ impl ChromeRuntime {
             self.dirty = true;
         }
         if self.dirty || self.scene.is_none() {
-            let planned = plan_scene(
+            let planned = plan_scene_with_titlebar(
                 state.frame_w.max(1),
                 state.frame_h.max(1),
+                state.titlebar_height,
                 &identity.title,
                 state.active,
                 state.hover,
@@ -120,6 +122,7 @@ mod tests {
         ChromeState {
             frame_w: 320,
             frame_h: 240,
+            titlebar_height: 31,
             active: true,
             hover: None,
             pressed: None,
@@ -136,6 +139,19 @@ mod tests {
             height: 2,
             argb: vec![0xff11_2233, 0xff44_5566, 0x8077_8899, 0x0000_0000],
         }
+    }
+
+    #[test]
+    fn titlebar_metrics_change_invalidates_existing_frame_scene() {
+        let mut runtime = ChromeRuntime::new();
+        let first = runtime.scene_for(&identity(), state(), None).clone();
+        let mut scaled = state();
+        scaled.titlebar_height = 62;
+        let next = runtime.scene_for(&identity(), scaled, None);
+        assert_ne!(first, *next);
+        assert_eq!(next.titlebar_height, 62);
+        assert_eq!(next.radius, 24);
+        assert!(next.title_size_px > first.title_size_px);
     }
 
     #[test]

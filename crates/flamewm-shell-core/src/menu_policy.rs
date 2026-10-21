@@ -11,13 +11,13 @@ use flamewm_ui_core::context_menu::{self, MIN_ROW_WIDTH, MenuMetrics, MenuPart};
 /// Stable context-menu row ids. Rows are keyed by id, never by label.
 pub const TASK_ROW_ACTIVATE: &str = "activate";
 pub const TASK_ROW_CLOSE: &str = "close";
+pub const TASK_ROW_PIN: &str = "pin";
 pub const TASK_ROW_UNPIN: &str = "unpin";
 pub const WORKSPACE_ROW_ACTIVATE: &str = "activate";
 pub const WORKSPACE_ROW_INSERT_AFTER: &str = "insert-after";
 pub const WORKSPACE_ROW_REMOVE: &str = "remove";
 
-/// Task context-menu policy (V4): pinned entries expose Unpin only;
-/// running non-pinned entries expose Activate + Close.
+/// Pinned entries expose Unpin; running entries expose Activate, Close and Pin.
 #[must_use]
 pub fn task_menu_for_entry(
     snapshot: &PanelsSnapshot,
@@ -42,6 +42,7 @@ pub fn task_menu_for_entry(
     vec![
         action(TASK_ROW_ACTIVATE, "Activate"),
         action(TASK_ROW_CLOSE, "Close"),
+        action(TASK_ROW_PIN, "Pin to Taskbar"),
     ]
 }
 

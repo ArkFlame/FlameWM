@@ -125,7 +125,10 @@ fn outputs_bounds(outputs: &[RootRect], fallback: RootRect) -> RootRect {
         return fallback;
     };
     let (mut x0, mut y0) = (first.x, first.y);
-    let (mut x1, mut y1) = (first.x.saturating_add(first.w), first.y.saturating_add(first.h));
+    let (mut x1, mut y1) = (
+        first.x.saturating_add(first.w),
+        first.y.saturating_add(first.h),
+    );
     for o in rest {
         x0 = x0.min(o.x);
         y0 = y0.min(o.y);
@@ -137,17 +140,33 @@ fn outputs_bounds(outputs: &[RootRect], fallback: RootRect) -> RootRect {
 
 /// True when `r` keeps a quarter of its width and height visible on the single output `o`.
 fn visible_on(r: RootRect, o: RootRect) -> bool {
-    let vw = r.x.saturating_add(r.w).min(o.x.saturating_add(o.w)).saturating_sub(r.x.max(o.x));
-    let vh = r.y.saturating_add(r.h).min(o.y.saturating_add(o.h)).saturating_sub(r.y.max(o.y));
+    let vw =
+        r.x.saturating_add(r.w)
+            .min(o.x.saturating_add(o.w))
+            .saturating_sub(r.x.max(o.x));
+    let vh =
+        r.y.saturating_add(r.h)
+            .min(o.y.saturating_add(o.h))
+            .saturating_sub(r.y.max(o.y));
     vw >= min_visible(r.w) && vh >= min_visible(r.h)
 }
 
 /// Squared gap distance between `r` and `o` (0 when they touch or overlap).
 fn gap_sq(r: RootRect, o: RootRect) -> i64 {
-    let (r_right, o_right) = (i64::from(r.x) + i64::from(r.w), i64::from(o.x) + i64::from(o.w));
-    let (r_bottom, o_bottom) = (i64::from(r.y) + i64::from(r.h), i64::from(o.y) + i64::from(o.h));
-    let dx = (i64::from(o.x) - r_right).max(i64::from(r.x) - o_right).max(0);
-    let dy = (i64::from(o.y) - r_bottom).max(i64::from(r.y) - o_bottom).max(0);
+    let (r_right, o_right) = (
+        i64::from(r.x) + i64::from(r.w),
+        i64::from(o.x) + i64::from(o.w),
+    );
+    let (r_bottom, o_bottom) = (
+        i64::from(r.y) + i64::from(r.h),
+        i64::from(o.y) + i64::from(o.h),
+    );
+    let dx = (i64::from(o.x) - r_right)
+        .max(i64::from(r.x) - o_right)
+        .max(0);
+    let dy = (i64::from(o.y) - r_bottom)
+        .max(i64::from(r.y) - o_bottom)
+        .max(0);
     dx * dx + dy * dy
 }
 
@@ -276,10 +295,26 @@ pub fn plan_resize(req: &GeometryRequest<'_>) -> GeometryPlan {
     let outer_h = cch.saturating_add(dh.max(0) as u32).max(1) as i32;
 
     // Reconstruct the dragged edge from the fixed edge + constrained size.
-    let x = if req.edges.left { fixed_right.saturating_sub(outer_w) } else { fixed_left };
-    let y = if req.edges.top { fixed_bottom.saturating_sub(outer_h) } else { fixed_top };
-    let w = if req.edges.left || req.edges.right { outer_w } else { s.w };
-    let h = if req.edges.top || req.edges.bottom { outer_h } else { s.h };
+    let x = if req.edges.left {
+        fixed_right.saturating_sub(outer_w)
+    } else {
+        fixed_left
+    };
+    let y = if req.edges.top {
+        fixed_bottom.saturating_sub(outer_h)
+    } else {
+        fixed_top
+    };
+    let w = if req.edges.left || req.edges.right {
+        outer_w
+    } else {
+        s.w
+    };
+    let h = if req.edges.top || req.edges.bottom {
+        outer_h
+    } else {
+        s.h
+    };
     GeometryPlan::of(req, RootRect::new(x, y, w.max(1), h.max(1)))
 }
 
@@ -364,8 +399,14 @@ pub fn plan_client_configure(
     req_client_origin: RootPoint,
     req_client_size: Option<(u32, u32)>,
 ) -> GeometryPlan {
-    if matches!(req.start.mode, PlacementMode::Maximized | PlacementMode::Fullscreen) {
-        return GeometryPlan { noop: true, ..GeometryPlan::of(req, req.start.rect) };
+    if matches!(
+        req.start.mode,
+        PlacementMode::Maximized | PlacementMode::Fullscreen
+    ) {
+        return GeometryPlan {
+            noop: true,
+            ..GeometryPlan::of(req, req.start.rect)
+        };
     }
     let gravity = WinGravity::of(&req.hints);
     let prev_root = frame_to_client_root(req.start.rect, req.frame_extents);
@@ -495,7 +536,11 @@ mod tests {
     const START: RootRect = RootRect::new(100, 100, 400, 300);
     const OUTS: &[RootRect] = &[WA];
 
-    fn req(edges: ResizeEdges, delta: (i32, i32), hints: ClientSizeHints) -> GeometryRequest<'static> {
+    fn req(
+        edges: ResizeEdges,
+        delta: (i32, i32),
+        hints: ClientSizeHints,
+    ) -> GeometryRequest<'static> {
         GeometryRequest {
             reason: GeometryReason::InteractiveResize,
             start: PlacementSnapshot {
@@ -796,9 +841,15 @@ mod tests {
         let b = RootRect::new(1000, 0, 800, 600);
         // 100 px window fully inside the 200 px gap: no output keeps 1/4 visible.
         // Nearest is A (touching at x = 800): moved to x = 775 so 25 px stay on A.
-        assert_eq!(keep_on_outputs(RootRect::new(800, 10, 100, 100), &[a, b], WA), RootRect::new(775, 10, 100, 100));
+        assert_eq!(
+            keep_on_outputs(RootRect::new(800, 10, 100, 100), &[a, b], WA),
+            RootRect::new(775, 10, 100, 100)
+        );
         // A window straddling both outputs with 1/4 on one of them is left alone.
-        assert_eq!(keep_on_outputs(RootRect::new(600, 10, 400, 300), &[a, b], WA), RootRect::new(600, 10, 400, 300));
+        assert_eq!(
+            keep_on_outputs(RootRect::new(600, 10, 400, 300), &[a, b], WA),
+            RootRect::new(600, 10, 400, 300)
+        );
     }
 
     #[test]
@@ -993,7 +1044,11 @@ mod tests {
     }
 
     /// Position-only request for a frame origin `(x, y)` on a 400x300 START window.
-    fn configure_at(outs: &'static [RootRect], frame_xy: (i32, i32), size: Option<(u32, u32)>) -> RootRect {
+    fn configure_at(
+        outs: &'static [RootRect],
+        frame_xy: (i32, i32),
+        size: Option<(u32, u32)>,
+    ) -> RootRect {
         let r = GeometryRequest {
             reason: GeometryReason::ClientConfigure,
             outputs: outs,
@@ -1007,28 +1062,55 @@ mod tests {
     fn client_configure_far_offscreen_position_is_kept_visible() {
         // START 400x300 frame on WA 1920x1080, one output: 1/4 of each axis stays visible.
         const ONE: &[RootRect] = &[WA];
-        assert_eq!(configure_at(ONE, (-10000, 100), None), RootRect::new(-300, 100, 400, 300));
-        assert_eq!(configure_at(ONE, (10000, 100), None), RootRect::new(1820, 100, 400, 300));
-        assert_eq!(configure_at(ONE, (100, -10000), None), RootRect::new(100, -225, 400, 300));
-        assert_eq!(configure_at(ONE, (100, 10000), None), RootRect::new(100, 1005, 400, 300));
+        assert_eq!(
+            configure_at(ONE, (-10000, 100), None),
+            RootRect::new(-300, 100, 400, 300)
+        );
+        assert_eq!(
+            configure_at(ONE, (10000, 100), None),
+            RootRect::new(1820, 100, 400, 300)
+        );
+        assert_eq!(
+            configure_at(ONE, (100, -10000), None),
+            RootRect::new(100, -225, 400, 300)
+        );
+        assert_eq!(
+            configure_at(ONE, (100, 10000), None),
+            RootRect::new(100, 1005, 400, 300)
+        );
     }
 
     #[test]
     fn client_configure_clamps_on_second_output_with_negative_origin() {
-        const TWO: &[RootRect] = &[RootRect::new(-1920, 0, 1920, 1080), RootRect::new(0, 0, 1920, 1080)];
+        const TWO: &[RootRect] = &[
+            RootRect::new(-1920, 0, 1920, 1080),
+            RootRect::new(0, 0, 1920, 1080),
+        ];
         // Far left lands at the left edge of the negative-origin output, not the work area.
-        assert_eq!(configure_at(TWO, (-10000, 100), None), RootRect::new(-2220, 100, 400, 300));
-        assert_eq!(configure_at(TWO, (10000, 100), None), RootRect::new(1820, 100, 400, 300));
+        assert_eq!(
+            configure_at(TWO, (-10000, 100), None),
+            RootRect::new(-2220, 100, 400, 300)
+        );
+        assert_eq!(
+            configure_at(TWO, (10000, 100), None),
+            RootRect::new(1820, 100, 400, 300)
+        );
     }
 
     #[test]
     fn client_configure_in_gap_moves_to_nearest_output() {
-        const GAP: &[RootRect] = &[RootRect::new(0, 0, 800, 600), RootRect::new(1000, 0, 800, 600)];
+        const GAP: &[RootRect] = &[
+            RootRect::new(0, 0, 800, 600),
+            RootRect::new(1000, 0, 800, 600),
+        ];
         // 100x100 frame fully inside the 200px gap (x 800..1000): nearest output A moves it to x 775.
         let (ox, oy) = EXT.client_offset();
         let r = GeometryRequest {
             reason: GeometryReason::ClientConfigure,
-            start: PlacementSnapshot { mode: PlacementMode::Floating, rect: RootRect::new(0, 0, 100, 100) },
+            start: PlacementSnapshot {
+                mode: PlacementMode::Floating,
+                rect: RootRect::new(0, 0, 100, 100),
+            },
             outputs: GAP,
             ..req(ResizeEdges::none(), (0, 0), free())
         };
@@ -1041,7 +1123,10 @@ mod tests {
         const ONE: &[RootRect] = &[WA];
         let r = GeometryRequest {
             reason: GeometryReason::ClientConfigure,
-            start: PlacementSnapshot { mode: PlacementMode::Floating, rect: RootRect::new(0, 0, 3000, 2000) },
+            start: PlacementSnapshot {
+                mode: PlacementMode::Floating,
+                rect: RootRect::new(0, 0, 3000, 2000),
+            },
             outputs: ONE,
             ..req(ResizeEdges::none(), (0, 0), free())
         };
@@ -1052,8 +1137,14 @@ mod tests {
     #[test]
     fn client_configure_within_rule_is_unchanged() {
         const ONE: &[RootRect] = &[WA];
-        assert_eq!(configure_at(ONE, (300, 300), None), RootRect::new(300, 300, 400, 300));
-        assert_eq!(configure_at(ONE, (-300, 100), None), RootRect::new(-300, 100, 400, 300));
+        assert_eq!(
+            configure_at(ONE, (300, 300), None),
+            RootRect::new(300, 300, 400, 300)
+        );
+        assert_eq!(
+            configure_at(ONE, (-300, 100), None),
+            RootRect::new(-300, 100, 400, 300)
+        );
     }
 
     #[test]
@@ -1072,7 +1163,10 @@ mod tests {
     #[test]
     fn user_move_is_unchanged_by_configure_clamp() {
         // Same far-left target through the user drag path keeps the identical rect.
-        assert_eq!(move_by((-10000, 0)), configure_at(&[WA], (-10000, 100), None));
+        assert_eq!(
+            move_by((-10000, 0)),
+            configure_at(&[WA], (-10000, 100), None)
+        );
     }
 
     #[test]

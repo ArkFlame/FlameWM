@@ -41,7 +41,11 @@ pub(crate) enum IdleDecision {
 
 /// Pure idle policy. `lock_requested` latches one lock per idle episode; it
 /// is cleared (`Rearm`) only once input drops idle time below the threshold.
-pub(crate) fn idle_decision(timeout_minutes: u16, idle_ms: u64, lock_requested: bool) -> IdleDecision {
+pub(crate) fn idle_decision(
+    timeout_minutes: u16,
+    idle_ms: u64,
+    lock_requested: bool,
+) -> IdleDecision {
     let threshold_ms = u64::from(timeout_minutes) * 60_000;
     if timeout_minutes == 0 || idle_ms < threshold_ms {
         if lock_requested {
@@ -59,12 +63,17 @@ pub(crate) fn idle_decision(timeout_minutes: u16, idle_ms: u64, lock_requested: 
 /// Pure deadline policy: delay until the next idle check. Armed for the time
 /// remaining until the threshold, clamped to `[MIN_IDLE_RECHECK, MAX_IDLE_RECHECK]`.
 /// A latched request or a disabled timeout uses the max re-check.
-pub(crate) fn next_check_delay(timeout_minutes: u16, idle_ms: u64, lock_requested: bool) -> Duration {
+pub(crate) fn next_check_delay(
+    timeout_minutes: u16,
+    idle_ms: u64,
+    lock_requested: bool,
+) -> Duration {
     if timeout_minutes == 0 || lock_requested {
         return MAX_IDLE_RECHECK;
     }
     let threshold_ms = u64::from(timeout_minutes) * 60_000;
-    Duration::from_millis(threshold_ms.saturating_sub(idle_ms)).clamp(MIN_IDLE_RECHECK, MAX_IDLE_RECHECK)
+    Duration::from_millis(threshold_ms.saturating_sub(idle_ms))
+        .clamp(MIN_IDLE_RECHECK, MAX_IDLE_RECHECK)
 }
 
 fn query_idle_ms(conn: &RustConnection, root: Window) -> Result<u64, Box<dyn std::error::Error>> {
@@ -92,7 +101,12 @@ impl IdleLock {
     /// Called once per reactor turn. Keeps a one-shot timer armed only while the
     /// timeout is set. When it fires, runs an idle check and arms the next one
     /// at the computed deadline.
-    pub(crate) fn turn(&mut self, reactor: &Rc<RefCell<Reactor>>, conn: &RustConnection, root: Window) {
+    pub(crate) fn turn(
+        &mut self,
+        reactor: &Rc<RefCell<Reactor>>,
+        conn: &RustConnection,
+        root: Window,
+    ) {
         let timeout = live_lock_timeout();
         if timeout == 0 {
             self.stop_timer(reactor);
@@ -176,8 +190,14 @@ mod tests {
 
     #[test]
     fn threshold_boundary_is_inclusive() {
-        assert_eq!(idle_decision(1, MINUTE_MS - 1, false), IdleDecision::Nothing);
-        assert_eq!(idle_decision(1, MINUTE_MS, false), IdleDecision::RequestLock);
+        assert_eq!(
+            idle_decision(1, MINUTE_MS - 1, false),
+            IdleDecision::Nothing
+        );
+        assert_eq!(
+            idle_decision(1, MINUTE_MS, false),
+            IdleDecision::RequestLock
+        );
     }
 
     #[test]
@@ -191,7 +211,10 @@ mod tests {
     fn rearm_then_idle_again_requests_once_more() {
         assert_eq!(idle_decision(1, 0, true), IdleDecision::Rearm);
         assert_eq!(idle_decision(1, 0, false), IdleDecision::Nothing);
-        assert_eq!(idle_decision(1, MINUTE_MS, false), IdleDecision::RequestLock);
+        assert_eq!(
+            idle_decision(1, MINUTE_MS, false),
+            IdleDecision::RequestLock
+        );
     }
 
     #[test]
@@ -219,15 +242,27 @@ mod tests {
     #[test]
     fn deadline_never_exceeds_max_recheck_for_large_timeouts() {
         assert_eq!(next_check_delay(u16::MAX, 0, false), MAX_IDLE_RECHECK);
-        assert_eq!(next_check_delay(u16::MAX, u64::MAX, false), MIN_IDLE_RECHECK);
+        assert_eq!(
+            next_check_delay(u16::MAX, u64::MAX, false),
+            MIN_IDLE_RECHECK
+        );
     }
 
     #[test]
     fn u16_max_timeout_does_not_overflow() {
         let threshold = u64::from(u16::MAX) * MINUTE_MS;
-        assert_eq!(idle_decision(u16::MAX, threshold - 1, false), IdleDecision::Nothing);
-        assert_eq!(idle_decision(u16::MAX, threshold, false), IdleDecision::RequestLock);
-        assert_eq!(idle_decision(u16::MAX, u64::from(u32::MAX), true), IdleDecision::Nothing);
+        assert_eq!(
+            idle_decision(u16::MAX, threshold - 1, false),
+            IdleDecision::Nothing
+        );
+        assert_eq!(
+            idle_decision(u16::MAX, threshold, false),
+            IdleDecision::RequestLock
+        );
+        assert_eq!(
+            idle_decision(u16::MAX, u64::from(u32::MAX), true),
+            IdleDecision::Nothing
+        );
         assert_eq!(idle_decision(u16::MAX, 0, true), IdleDecision::Rearm);
     }
 }

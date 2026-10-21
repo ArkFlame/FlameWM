@@ -14,6 +14,18 @@ use x11rb::protocol::xproto::Rectangle;
 
 use crate::geometry::Rect;
 
+/// Resolve decoration radius from the same titlebar metric used by the
+/// managed frame/client extents. Source policy stays in flamewm-skin.
+#[must_use]
+pub fn scaled_corner_radius(floating: bool, style: DecorationStyle, titlebar_h: u16) -> u16 {
+    const LOGICAL_TITLEBAR: u32 = flamewm_skin::recipes::window_chrome::WINDOW_CHROME
+        .metrics
+        .titlebar as u32;
+    let logical_radius = u32::from(corner_radius(floating, style));
+    let value = (logical_radius * u32::from(titlebar_h) + LOGICAL_TITLEBAR / 2) / LOGICAL_TITLEBAR;
+    value.min(u32::from(u16::MAX)) as u16
+}
+
 /// Canonical row spans (y, x_start, x_end_exclusive) for a rounded rect:
 /// float rounded mask, single full-width rows when rectangular.
 #[must_use]
@@ -39,9 +51,26 @@ pub fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32
 /// (skin radius), otherwise the canonical rounded row spans.
 #[must_use]
 pub fn bounding_rectangles(outer: Rect, floating: bool, style: DecorationStyle) -> Vec<Rectangle> {
+    bounding_rectangles_with_titlebar(
+        outer,
+        floating,
+        style,
+        flamewm_skin::recipes::window_chrome::WINDOW_CHROME
+            .metrics
+            .titlebar,
+    )
+}
+
+#[must_use]
+pub fn bounding_rectangles_with_titlebar(
+    outer: Rect,
+    floating: bool,
+    style: DecorationStyle,
+    titlebar_h: u16,
+) -> Vec<Rectangle> {
     let width = outer.width.min(u32::from(u16::MAX));
     let height = outer.height.min(u32::from(u16::MAX));
-    let radius = corner_radius(floating, style);
+    let radius = scaled_corner_radius(floating, style, titlebar_h);
     if radius == 0 {
         return vec![Rectangle {
             x: 0,
@@ -72,6 +101,37 @@ mod tests {
                 && y >= i32::from(r.y)
                 && y < i32::from(r.y) + i32::from(r.height)
         })
+    }
+
+    #[test]
+    fn corner_radius_matches_physical_titlebar_scale() {
+        for (height, expected) in [(31, 12), (42, 16), (62, 24)] {
+            assert_eq!(
+                scaled_corner_radius(true, DecorationStyle::Rounded, height),
+                expected
+            );
+            assert_eq!(
+                scaled_corner_radius(true, DecorationStyle::Squared, height),
+                0
+            );
+            assert_eq!(
+                scaled_corner_radius(false, DecorationStyle::Rounded, height),
+                0
+            );
+            let rects = bounding_rectangles_with_titlebar(
+                Rect {
+                    x: -400,
+                    y: 200,
+                    width: 500,
+                    height: 300,
+                },
+                true,
+                DecorationStyle::Rounded,
+                height,
+            );
+            assert!(!rects.is_empty());
+            assert!(!covers(&rects, 499, 0));
+        }
     }
 
     #[test]

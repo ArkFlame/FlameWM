@@ -8,16 +8,16 @@ pub use startup_protocol::{StartupX11Event, StartupX11Observer};
 mod popup;
 mod reconcile;
 mod surface_runtime;
+mod template;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
-mod template;
 
 pub use event_source::{
     pump_events, run_surface_runtime_with_reactor, run_surface_runtime_with_reactor_access,
 };
 pub use flamewm_render_x11::{
     DockEdge, GeometryTrace, RawPress, RawPressWatch, WindowGeometry, WindowGeometrySlot,
-    X11WindowIdentity, apply_cursor_theme,
+    X11WindowIdentity, apply_cursor_shadow, apply_cursor_theme,
 };
 pub use input::{
     SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw,

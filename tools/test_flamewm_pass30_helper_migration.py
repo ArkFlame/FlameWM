@@ -42,6 +42,7 @@ class Pass30CargoLayout(unittest.TestCase):
             package = dst / 'crates/flamewm-wm'
             (package / 'src/bin').mkdir(parents=True)
             (dst / 'scripts').mkdir()
+            shutil.copyfile(ROOT / 'Cargo.toml', dst / 'Cargo.toml')
             for src, rel in (
                 (PKG / 'Cargo.toml', 'Cargo.toml'),
                 (PKG / 'src/bin/flamewm-session.rs', 'src/bin/flamewm-session.rs'),
@@ -50,6 +51,18 @@ class Pass30CargoLayout(unittest.TestCase):
                 target = package / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(src, target)
+            (package / 'src/main.rs').write_text('fn main() {}\n')
+            for name in (
+                'flamewm-api', 'flamewm-control-core', 'flamewm-control-dbus',
+                'flamewm-dbus-reactor', 'flamewm-session-core', 'flamewm-wm-x11',
+                'flamewm-xsettings',
+            ):
+                dependency = dst / 'crates' / name
+                (dependency / 'src').mkdir(parents=True)
+                (dependency / 'Cargo.toml').write_text(
+                    f'[package]\nname = "{name}"\nversion = "0.1.1"\nedition = "2024"\n'
+                )
+                (dependency / 'src/lib.rs').write_text('')
             shutil.copyfile(ROOT / 'scripts/apply-pass30-cargo-layout',
                             dst / 'scripts/apply-pass30-cargo-layout')
             stale = package / 'src/bin/desktop_compat.rs'

@@ -185,8 +185,7 @@ impl<K: Copy> Timeline<K> {
     /// Current progress in `[0, 1]`, or `None` when `id` is not active.
     #[must_use]
     pub fn progress(&self, id: TransitionId, now: Instant) -> Option<f32> {
-        self.index_of(id)
-            .map(|i| self.transitions[i].1.value(now))
+        self.index_of(id).map(|i| self.transitions[i].1.value(now))
     }
 
     /// Kind of the active transition `id`, or `None` when it is not active.
@@ -225,10 +224,7 @@ impl<K: Copy> Timeline<K> {
     /// Time until the earliest active transition completes, or `None` when empty.
     #[must_use]
     pub fn next_deadline(&self, now: Instant) -> Option<Duration> {
-        self.transitions
-            .iter()
-            .map(|(_, t)| t.remaining(now))
-            .min()
+        self.transitions.iter().map(|(_, t)| t.remaining(now)).min()
     }
 
     /// Number of active transitions.
@@ -421,7 +417,10 @@ mod tests {
             tl.start_towards(7, Kind::Close, mid, 120, Easing::EaseOutCubic, (1.0, 0.0)),
             Start::Started
         );
-        assert!((tl.progress(7, mid).unwrap() - before).abs() < 1e-6, "no jump");
+        assert!(
+            (tl.progress(7, mid).unwrap() - before).abs() < 1e-6,
+            "no jump"
+        );
         assert_eq!(tl.kind(7), Some(Kind::Close));
         assert_eq!(tl.progress(7, mid + Duration::from_millis(120)), Some(0.0));
     }

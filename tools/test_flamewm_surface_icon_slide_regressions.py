@@ -68,7 +68,11 @@ class ReverseSlideReliability(unittest.TestCase):
         branch = code.split('// Never restore the full shape while still mapped:',1)[1]
         branch = branch.split('if landing_releases_grab',1)[0]
         self.assertLess(branch.index('XUnmapWindow(display, window)'), branch.index('refresh_shape_mask(&instance.document)'))
-        self.assertIn('SLIDE_OPEN_BASE_MS, Easing::EaseInCubic, (1.0, 0.0)', code)
+        slide = src('crates/flamewm-render-x11/src/surface_controller/slide.rs')
+        tests = src('crates/flamewm-render-x11/src/surface_controller/tests.rs')
+        self.assertIn('SLIDE_OPEN_BASE_MS', slide)
+        self.assertIn('Easing::EaseInCubic,', tests)
+        self.assertIn('(1.0, 0.0)', tests)
         self.assertNotIn('Slide-out starts above application windows', code)
 
     def test_mirror_easing_is_registered(self):

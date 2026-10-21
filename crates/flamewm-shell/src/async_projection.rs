@@ -109,7 +109,11 @@ impl IconCache {
             let Some((oldest, stamp)) = self.order.pop_front() else {
                 break;
             };
-            if self.entries.get(&oldest).is_some_and(|entry| entry.stamp == stamp) {
+            if self
+                .entries
+                .get(&oldest)
+                .is_some_and(|entry| entry.stamp == stamp)
+            {
                 self.remove(&oldest);
             }
         }
@@ -181,7 +185,10 @@ fn task_states(view: PanelView<'_>) -> Vec<flamewm_shell_core::TaskVisualState> 
         &snapshot.windows,
         &snapshot.applications,
         view.panel.map(|panel| &panel.output),
-        snapshot.workspaces.as_ref().map(|workspaces| workspaces.active_index),
+        snapshot
+            .workspaces
+            .as_ref()
+            .map(|workspaces| workspaces.active_index),
     )
 }
 
@@ -647,8 +654,6 @@ pub fn project_panel_for_changed(
     }
     project_panel_scoped(document, view, loader, icon_cache, &scope)
 }
-
-
 /// WindowsChanged -> task slots only. Resolves task visual states (cheap
 /// in-memory join, no fetch) and projects labels/icon/visibility/background
 /// for the 8 task slots. Pager, tray, and geometry nodes are untouched, so
@@ -678,6 +683,12 @@ pub fn project_task_slots_async(
         write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
         line_id.clear();
         write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
+        crate::projection::project_task_progress(
+            document,
+            index,
+            states.get(index).map(|state| &state.id),
+            view.task_progress,
+        )?;
         if let Some(state) = states.get(index) {
             let label = snapshot
                 .applications
@@ -733,37 +744,7 @@ pub fn project_status_tray_async(
     snapshot: &ShellSnapshot,
     items: TaskbarItems,
 ) -> Result<(), String> {
-    let status = crate::taskbar::status::project(&snapshot.system).views;
-    document.visible(
-        "tray-media",
-        status.media.visible
-            && matches!(
-                snapshot.system.media.playback,
-                flamewm_api::system::PlaybackState::Playing
-                    | flamewm_api::system::PlaybackState::Paused
-            ),
-    )?;
-    document.visible(
-        "tray-play-icon",
-        matches!(
-            status.media.play_pause_icon,
-            Some(flamewm_ui_core::IconRole::MediaPlay)
-        ),
-    )?;
-    document.visible(
-        "tray-pause-icon",
-        matches!(
-            status.media.play_pause_icon,
-            Some(flamewm_ui_core::IconRole::MediaPause)
-        ),
-    )?;
-    document.visible("tray-volume", status.audio.visible && items.volume)?;
-    document.visible("tray-volume-icon", !status.audio.muted)?;
-    document.visible("tray-volume-muted-icon", status.audio.muted)?;
-    document.visible("tray-network", status.network.visible && items.network)?;
-    crate::projection::project_battery_tray(document, &snapshot.system.power, items)?;
-    document.visible("clock-button", items.clock)?;
-    Ok(())
+    crate::projection::project_status_tray(document, &snapshot.system, items)
 }
 
 /// PanelsChanged -> geometry/layout ownership counts only (slot/pager
@@ -883,14 +864,14 @@ pub fn project_start_unified(
 #[macro_export]
 macro_rules! noop_document_overflow {
     () => {
-                fn overflow(
-                    &mut self,
-                    _: &str,
-                    _: flamewm_ui_x11::Overflow,
-                    _: flamewm_ui_x11::Overflow,
-                ) -> Result<(), String> {
-                    Ok(())
-                }
+        fn overflow(
+            &mut self,
+            _: &str,
+            _: flamewm_ui_x11::Overflow,
+            _: flamewm_ui_x11::Overflow,
+        ) -> Result<(), String> {
+            Ok(())
+        }
     };
 }
 
@@ -905,6 +886,7 @@ pub(crate) mod tests {
         pub(crate) images: Vec<String>,
         pub(crate) visible: HashMap<String, bool>,
         pub(crate) fills: HashMap<String, UiColor>,
+        pub(crate) sizes: HashMap<String, (f32, f32)>,
     }
 
     impl UiDocumentAccess for FakeDoc {
@@ -930,7 +912,8 @@ pub(crate) mod tests {
         fn position(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
             Ok(())
         }
-        fn size(&mut self, _: &str, _: f32, _: f32) -> Result<(), String> {
+        fn size(&mut self, id: &str, width: f32, height: f32) -> Result<(), String> {
+            self.sizes.insert(id.to_owned(), (width, height));
             Ok(())
         }
         fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
@@ -980,10 +963,26 @@ pub(crate) mod tests {
         doc
     }
 
+    fn tray_visibility(document: &FakeDoc) -> HashMap<String, bool> {
+        document
+            .visible
+            .iter()
+            .filter(|(id, _)| id.starts_with("tray-") || id.as_str() == "clock-button")
+            .map(|(id, &visible)| (id.clone(), visible))
+            .collect()
+    }
+
     fn project_start_doc(model: &StartModel, category: StartCategory, query: &str) -> FakeDoc {
         let mut doc = FakeDoc::default();
-        project_start_unified(&mut doc, model, category, query, &SessionCapabilities::default(), None)
-            .expect("projects");
+        project_start_unified(
+            &mut doc,
+            model,
+            category,
+            query,
+            &SessionCapabilities::default(),
+            None,
+        )
+        .expect("projects");
         doc
     }
 
@@ -1098,8 +1097,8 @@ pub(crate) mod tests {
         .expect("stale check ok");
         assert!(!completed, "epoch bump stales the late completion");
         assert!(doc.images.is_empty());
-        let repainted = apply_cached_binding(&mut doc, IconTarget::TaskSlot(1))
-            .expect("cached repaint ok");
+        let repainted =
+            apply_cached_binding(&mut doc, IconTarget::TaskSlot(1)).expect("cached repaint ok");
         assert!(repainted, "cached raster for the bound key must repaint");
         assert_eq!(doc.images, vec!["task-slot-2-icon".to_owned()]);
     }
@@ -1121,7 +1120,10 @@ pub(crate) mod tests {
             desktop_icon_for_wm_class(std::slice::from_ref(&app), "mini.xterm").as_deref(),
             Some("utilities-terminal")
         );
-        assert_eq!(desktop_icon_for_wm_class(std::slice::from_ref(&app), "gimp"), None);
+        assert_eq!(
+            desktop_icon_for_wm_class(std::slice::from_ref(&app), "gimp"),
+            None
+        );
     }
 
     #[test]
@@ -1138,7 +1140,9 @@ pub(crate) mod tests {
 
     #[test]
     fn task_slots_list_only_windows_on_the_shown_panel_output() {
-        use flamewm_api::panels::{PanelEdge, PanelSnapshot, PanelsSnapshot, TaskEntry, TaskEntryKind};
+        use flamewm_api::panels::{
+            PanelEdge, PanelSnapshot, PanelsSnapshot, TaskEntry, TaskEntryKind,
+        };
         use flamewm_api::window::{WindowSnapshot, WindowState};
         use flamewm_api::{DesktopAppId, OutputId, Rect, TaskEntryId, WindowRef, WorkspaceRef};
         let window_on = |id: u64, output: &str| WindowSnapshot {
@@ -1150,7 +1154,10 @@ pub(crate) mod tests {
             state: WindowState::Normal,
             sticky: false,
             focused: false,
-            workspace: WorkspaceRef { index: 0, revision: 1 },
+            workspace: WorkspaceRef {
+                index: 0,
+                revision: 1,
+            },
             output: OutputId::new(output),
             state_generation: 1,
         };
@@ -1178,19 +1185,37 @@ pub(crate) mod tests {
         };
         snapshot.windows = vec![window_on(1, "A"), window_on(2, "B")];
         let mut doc = FakeDoc::default();
-        project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("projects");
+        project_task_slots_async(
+            &mut doc,
+            PanelView::first(&snapshot),
+            None,
+            &mut TaskIconCache::default(),
+        )
+        .expect("projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&false));
         // Window 1 moved A->B; window 2 is already on B. Panel A lists neither.
         snapshot.windows[0].output = OutputId::new("B");
         let mut doc = FakeDoc::default();
-        project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("panel A projects");
+        project_task_slots_async(
+            &mut doc,
+            PanelView::first(&snapshot),
+            None,
+            &mut TaskIconCache::default(),
+        )
+        .expect("panel A projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&false));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&false));
         // Panel B lists both.
         snapshot.panels.panels[0].output = OutputId::new("B");
         let mut doc = FakeDoc::default();
-        project_task_slots_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("panel B projects");
+        project_task_slots_async(
+            &mut doc,
+            PanelView::first(&snapshot),
+            None,
+            &mut TaskIconCache::default(),
+        )
+        .expect("panel B projects");
         assert_eq!(doc.visible.get("task-slot-1"), Some(&true));
         assert_eq!(doc.visible.get("task-slot-2"), Some(&true));
 
@@ -1205,20 +1230,35 @@ pub(crate) mod tests {
         snapshot.windows[1].workspace.index = 1;
         snapshot.windows[1].state = WindowState::Minimized;
         snapshot.workspaces = Some(flamewm_api::workspace::WorkspaceSnapshot {
-            revision: 1, count: 2, active_index: 0, last_index: None, names: vec![],
+            revision: 1,
+            count: 2,
+            active_index: 0,
+            last_index: None,
+            names: vec![],
         });
         let changed = crate::runtime::ChangedDomains {
-            workspaces: true, ..Default::default()
+            workspaces: true,
+            ..Default::default()
         };
         let first = project_changed(PanelView::first(&snapshot), changed);
         assert_eq!(first.visible.get("task-slot-1"), Some(&true));
         assert_eq!(first.visible.get("task-slot-2"), Some(&false));
-        assert_eq!(first.texts.get("task-slot-1-label").map(String::as_str), Some("first-app"));
-        snapshot.workspaces.as_mut().expect("workspace snapshot").active_index = 1;
+        assert_eq!(
+            first.texts.get("task-slot-1-label").map(String::as_str),
+            Some("first-app")
+        );
+        snapshot
+            .workspaces
+            .as_mut()
+            .expect("workspace snapshot")
+            .active_index = 1;
         let second = project_changed(PanelView::first(&snapshot), changed);
         assert_eq!(second.visible.get("task-slot-1"), Some(&true));
         assert_eq!(second.visible.get("task-slot-2"), Some(&false));
-        assert_eq!(second.texts.get("task-slot-1-label").map(String::as_str), Some("second-app"));
+        assert_eq!(
+            second.texts.get("task-slot-1-label").map(String::as_str),
+            Some("second-app")
+        );
     }
 
     #[test]
@@ -1367,6 +1407,119 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn status_tray_matches_sync_full_and_async_system_projection() {
+        use flamewm_api::system::{PlaybackState, ServiceAvailability};
+        let _guard = icon_test_lock().lock();
+        let mut snapshot = ShellSnapshot::default();
+        snapshot.system.media.availability = ServiceAvailability::Available;
+        snapshot.system.audio.availability = ServiceAvailability::Available;
+        snapshot.system.network.availability = ServiceAvailability::Available;
+
+        for (
+            playback,
+            muted,
+            network_available,
+            volume_item,
+            network_item,
+            clock_item,
+            media,
+            play,
+            pause,
+        ) in [
+            (
+                PlaybackState::Playing,
+                false,
+                true,
+                true,
+                true,
+                true,
+                true,
+                false,
+                true,
+            ),
+            (
+                PlaybackState::Paused,
+                true,
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                false,
+            ),
+            (
+                PlaybackState::Stopped,
+                false,
+                false,
+                true,
+                true,
+                true,
+                false,
+                false,
+                false,
+            ),
+        ] {
+            snapshot.system.media.playback = playback;
+            snapshot.system.audio.muted = muted;
+            snapshot.system.network.availability = if network_available {
+                ServiceAvailability::Available
+            } else {
+                ServiceAvailability::Unavailable
+            };
+            let items = TaskbarItems {
+                volume: volume_item,
+                network: network_item,
+                clock: clock_item,
+                ..TaskbarItems::default()
+            };
+
+            let mut sync = FakeDoc::default();
+            let mut resolver = flamewm_integrations_linux::icons::IconResolver::new(
+                std::path::PathBuf::new(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            );
+            crate::projection::project_panel(
+                &mut sync,
+                PanelView::first(&snapshot).with_items(items),
+                &mut resolver,
+            )
+            .expect("sync panel projects");
+
+            let changed = crate::runtime::ChangedDomains {
+                system: true,
+                ..Default::default()
+            };
+            let scoped = project_changed(PanelView::first(&snapshot).with_items(items), changed);
+            let mut full = FakeDoc::default();
+            project_panel_async(
+                &mut full,
+                PanelView::first(&snapshot).with_items(items),
+                None,
+                &mut TaskIconCache::default(),
+            )
+            .expect("async full panel projects");
+
+            let sync_tray = tray_visibility(&sync);
+            assert_eq!(tray_visibility(&scoped), sync_tray, "scoped: {playback:?}");
+            assert_eq!(tray_visibility(&full), sync_tray, "full: {playback:?}");
+            assert_eq!(sync_tray.get("tray-media"), Some(&media));
+            assert_eq!(sync_tray.get("tray-play-icon"), Some(&play));
+            assert_eq!(sync_tray.get("tray-pause-icon"), Some(&pause));
+            assert_eq!(sync_tray.get("tray-volume"), Some(&volume_item));
+            assert_eq!(sync_tray.get("tray-volume-icon"), Some(&!muted));
+            assert_eq!(sync_tray.get("tray-volume-muted-icon"), Some(&muted));
+            assert_eq!(
+                sync_tray.get("tray-network"),
+                Some(&(network_available && network_item))
+            );
+            assert_eq!(sync_tray.get("clock-button"), Some(&clock_item));
+        }
+    }
+
+    #[test]
     fn panels_scope_projects_geometry_only() {
         let _guard = icon_test_lock().lock();
         use crate::runtime::ChangedDomains;
@@ -1425,7 +1578,10 @@ pub(crate) mod tests {
             battery_only_when_relevant: true,
             ..TaskbarItems::default()
         };
-        let doc = project_changed(PanelView::first(&snapshot).with_items(relevant_only), changed);
+        let doc = project_changed(
+            PanelView::first(&snapshot).with_items(relevant_only),
+            changed,
+        );
         assert_eq!(doc.visible.get("tray-battery"), Some(&false));
 
         // Charging shows the charging glyph, at 80% too.
@@ -1465,7 +1621,13 @@ pub(crate) mod tests {
             &mut TaskIconCache::default(),
         )
         .expect("projects");
-        for id in ["tray-volume", "tray-network", "tray-battery", "clock-button", "workspace-pager"] {
+        for id in [
+            "tray-volume",
+            "tray-network",
+            "tray-battery",
+            "clock-button",
+            "workspace-pager",
+        ] {
             assert_eq!(doc.visible.get(id), Some(&false), "{id}");
         }
     }
@@ -1493,8 +1655,14 @@ pub(crate) mod tests {
             html.find(&format!("id=\"{id}\""))
                 .unwrap_or_else(|| panic!("{id} missing"))
         };
-        let order = ["tray-weather", "tray-volume", "tray-network", "tray-battery", "clock-button"]
-            .map(at);
+        let order = [
+            "tray-weather",
+            "tray-volume",
+            "tray-network",
+            "tray-battery",
+            "clock-button",
+        ]
+        .map(at);
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
         assert!(at("tray-media") < at("tray-weather"));
         assert!(at("workspace-pager") < at("tray-media"));
@@ -1613,7 +1781,13 @@ pub(crate) mod tests {
         let _guard = icon_test_lock().lock();
         let snapshot = ShellSnapshot::default();
         let mut doc = FakeDoc::default();
-        project_panel_async(&mut doc, PanelView::first(&snapshot), None, &mut TaskIconCache::default()).expect("projects");
+        project_panel_async(
+            &mut doc,
+            PanelView::first(&snapshot),
+            None,
+            &mut TaskIconCache::default(),
+        )
+        .expect("projects");
         // No loader/cache: rows apply the Flame fallback synchronously, so
         // images are present but no worker request could be queued.
         assert!(doc.images.is_empty(), "no task states, no icon nodes");
@@ -1778,5 +1952,23 @@ pub(crate) mod tests {
             ids.insert(format!("start-app-slot-{}", index + 1));
         }
         assert_eq!(ids.len(), 8);
+    }
+
+    #[test]
+    fn task_progress_is_slot_identity_bound_scaled_and_cleared() {
+        let id = flamewm_api::TaskEntryId::new("win:7:1");
+        let entry = flamewm_api::panels::TaskProgressEntry {
+            task_id: id.clone(),
+            progress: flamewm_api::panels::TaskProgress::new(50).unwrap(),
+        };
+        let mut doc = FakeDoc::default();
+        crate::projection::project_task_progress(&mut doc, 0, Some(&id), &[entry]).unwrap();
+        assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&true));
+        assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(14.0, 2.0)));
+
+        crate::projection::project_task_progress(&mut doc, 0, None, &[]).unwrap();
+        assert_eq!(doc.visible.get("task-slot-1-progress"), Some(&false));
+        assert_eq!(doc.sizes.get("task-slot-1-progress"), Some(&(0.0, 2.0)));
+        assert_eq!(doc.visible.get("task-slot-2-progress"), None);
     }
 }

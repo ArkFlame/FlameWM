@@ -1,8 +1,0 @@
-Weather data: Open-Meteo.com
-
-Weather forecast and geocoding data are provided by Open-Meteo.com under the
-Creative Commons Attribution 4.0 International (CC BY 4.0) license:
-https://open-meteo.com/en/license
-
-The free Open-Meteo API is for non-commercial use only. Attribution to
-Open-Meteo.com is shown in the FlameWM weather popup.

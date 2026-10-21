@@ -43,6 +43,7 @@ fi
 # J01 private nested D-Bus: outer invocation re-execs the harness under a
 # private session bus so the nested WM never touches the host bus.
 # Default ON; FLAMEWM_XEPHYR_PRIVATE_DBUS=0 opts out (debugging only).
+export XDG_MENU_PREFIX=flamewm-
 if [[ "${FLAMEWM_XEPHYR_PRIVATE_DBUS_INNER:-}" != "1" ]]; then
   if [[ "${FLAMEWM_XEPHYR_PRIVATE_DBUS:-1}" == "0" ]]; then
     export FLAMEWM_XEPHYR_PRIVATE_DBUS_INNER=1
@@ -207,7 +208,7 @@ run_debug_retention
   echo "profile=$([ "${FLAMEWM_PROFILE:-1}" = 1 ] && echo 1 || echo 0)"
   echo "profile_interval=${FLAMEWM_PROFILE_INTERVAL:-10}"
   echo "profile_top=${FLAMEWM_PROFILE_TOP:-8}"
-  echo "xcursor_theme=${FLAMEWM_CURSOR_THEME:-FlameWM-Breeze-Dark}"
+  echo "xcursor_theme=${FLAMEWM_CURSOR_THEME:-auto (McMojave/Oxygen/Breeze)}"
   echo "xcursor_size=${FLAMEWM_CURSOR_SIZE:-24}"
   echo "xcursor_path=${FLAMEWM_CURSOR_PATH:-$ROOT/.target/stage-icons}"
   echo "command=$0 $*"
@@ -413,25 +414,97 @@ require_alive(){
 # Wayland compositor; identify the session as an X11 FlameWM session.
 # J11 production appearance/session consumer: same env the flamewm launcher
 # applies — FlameWM identity (never KDE), XCURSOR_* cursor theme (bundled
-# FlameWM-Breeze-Dark authority), and the guarded Breeze toolkit theme
+# McMojave -> Oxygen -> emergency Breeze fallback), and the guarded toolkit theme
 # (explicit user values pass through; harness never selects toolkit styles).
 session_appearance_env(){
-  : "${FLAMEWM_CURSOR_THEME:=FlameWM-Breeze-Dark}"
   : "${FLAMEWM_CURSOR_SIZE:=24}"
-  # Search root is the parent of the bundled theme dir (<root>/icons);
-  # dev staging symlink under .target must exist before launch.
   : "${FLAMEWM_CURSOR_PATH:=$ROOT/.target/stage-icons}"
-  # Fresh checkouts have no staged tree: create the dev staging link to the bundled theme source inside
-  # .target only. Existing entries (dir, file, or link) are never replaced.
-  if [[ "$FLAMEWM_CURSOR_PATH" == "$ROOT/.target/stage-icons" && "$FLAMEWM_CURSOR_THEME" == "FlameWM-Breeze-Dark" \
-        && -d "$ROOT/assets/cursors" && ! -e "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" \
-        && ! -L "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" ]]; then
+  # Stage only assets actually present in this checkout. Never touch user or
+  # system theme directories; a preexisting dev-stage entry is also preserved.
+  if [[ "$FLAMEWM_CURSOR_PATH" == "$ROOT/.target/stage-icons" ]]; then
     mkdir -p "$FLAMEWM_CURSOR_PATH"
-    ln -s "$ROOT/assets/cursors" "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME"
+    if [[ -d "$ROOT/assets/cursors/cursors" \
+          && ! -e "$FLAMEWM_CURSOR_PATH/FlameWM-Breeze-Dark" \
+          && ! -L "$FLAMEWM_CURSOR_PATH/FlameWM-Breeze-Dark" ]]; then
+      ln -s "$ROOT/assets/cursors" "$FLAMEWM_CURSOR_PATH/FlameWM-Breeze-Dark"
+    fi
+    for source in "$ROOT"/assets/themes/cursors/*; do
+      [[ -d "$source/cursors" && -f "$source/index.theme" && -f "$source/cursors/left_ptr" ]] || continue
+      theme="${source##*/}"
+      case "${theme,,}" in
+        mcmojave|mcmojave[-_]*|oxygen|oxygen[-_]*|oxy|oxy[-_]*) ;;
+        *) continue ;;
+      esac
+      if [[ ! -e "$FLAMEWM_CURSOR_PATH/$theme" && ! -L "$FLAMEWM_CURSOR_PATH/$theme" ]]; then
+        ln -s "$source" "$FLAMEWM_CURSOR_PATH/$theme"
+      fi
+    done
   fi
-  if [[ ! -d "$FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" ]]; then
-    echo "FLAMEWM_XEPHYR_FAIL: cursor theme missing: $FLAMEWM_CURSOR_PATH/$FLAMEWM_CURSOR_THEME" >&2
-    echo "  expected dev staging symlink: $ROOT/.target/stage-icons -> <staged usr/share/icons>" >&2
+  # Resolve against the same Xcursor roots as native clients. An explicit
+  # installed theme, even a third-party saved choice, must not be discarded.
+  local cursor_root candidate theme
+  local -a cursor_roots=() candidates=()
+  IFS=: read -r -a cursor_roots <<<"$FLAMEWM_CURSOR_PATH:${XCURSOR_LIBRARY_PATH:-/usr/share/icons:/usr/share/pixmaps}:${XDG_DATA_HOME:-${HOME:-/nonexistent}/.local/share}/icons:${HOME:-/nonexistent}/.icons"
+  cursor_is_installed(){
+    local root
+    [[ -n "$1" && "$1" != *'/'* && "$1" != *'\'* && "$1" != '.' && "$1" != '..' ]] || return 1
+    for root in "${cursor_roots[@]}"; do
+      [[ -d "$root/$1/cursors" ]] && return 0
+    done
+    return 1
+  }
+  cursor_pointer_exists(){
+    local root
+    for root in "${cursor_roots[@]}"; do
+      [[ -f "$root/$1/cursors/left_ptr" ]] && return 0
+    done
+    return 1
+  }
+  local selected="${FLAMEWM_CURSOR_THEME:-}"
+  # Follow the same persisted preference the WM reads when no explicit env
+  # override exists; the nested process env must not preselect another theme.
+  if [[ -z "$selected" ]]; then
+    local config_dir="${FLAMEWM_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/flamewm}"
+    local settings_file="$config_dir/settings.toml" line
+    if [[ -f "$settings_file" ]]; then
+      while IFS= read -r line; do
+        case "$line" in
+          cursorTheme=*) selected="${line#cursorTheme=}" ;;
+        esac
+      done < "$settings_file"
+    fi
+  fi
+  if [[ -z "$selected" ]]; then
+    selected="${XCURSOR_THEME:-}"
+  fi
+  if ! cursor_is_installed "$selected"; then
+    selected=''
+    if cursor_is_installed McMojave-cursors && cursor_pointer_exists McMojave-cursors; then
+      selected=McMojave-cursors
+    else
+      # Deterministic variant order if the canonical id is not installed.
+      for cursor_root in "${cursor_roots[@]}"; do
+        for candidate in "$cursor_root"/*; do
+          [[ -d "$candidate/cursors" && -f "$candidate/cursors/left_ptr" ]] || continue
+          theme="${candidate##*/}"
+          case "${theme,,}" in
+            mcmojave|mcmojave[-_]*) candidates+=("0:$theme") ;;
+            oxygen|oxygen[-_]*|oxy|oxy[-_]*) candidates+=("1:$theme") ;;
+          esac
+        done
+      done
+      if ((${#candidates[@]})); then
+        selected="$(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -f | sed -n '1p')"
+        selected="${selected#*:}"
+      fi
+    fi
+    if [[ -z "$selected" ]]; then
+      selected=FlameWM-Breeze-Dark
+    fi
+  fi
+  FLAMEWM_CURSOR_THEME="$selected"
+  if ! cursor_is_installed "$FLAMEWM_CURSOR_THEME"; then
+    echo "FLAMEWM_XEPHYR_FAIL: no usable cursor theme (McMojave, Oxygen or bundled Breeze) in configured roots" >&2
     return 1
   fi
   # Empty unless the user set it: an empty value is no override, so the WM resolves
@@ -445,7 +518,7 @@ session_appearance_env(){
   esac
   export XCURSOR_THEME="${FLAMEWM_CURSOR_THEME}"
   export XCURSOR_SIZE="${FLAMEWM_CURSOR_SIZE}"
-  export XCURSOR_PATH="${FLAMEWM_CURSOR_PATH}${XCURSOR_LIBRARY_PATH:+:$XCURSOR_LIBRARY_PATH}"
+  export XCURSOR_PATH="$(IFS=:; echo "${cursor_roots[*]}")"
   export XCURSOR_THEME_CORE="${XCURSOR_THEME_CORE:-1}"
   if [[ "${XDG_CURRENT_DESKTOP:-}" == [Kk][Dd][Ee] ]] || [[ -z "${XDG_CURRENT_DESKTOP:-}" ]]; then
     export XDG_CURRENT_DESKTOP=FlameWM
@@ -469,7 +542,7 @@ nested_env(){
 }
 
 echo "[2/5] Starting Xephyr $nested ($SCREEN)"
-Xephyr "$nested" -screen "$SCREEN" -dpi 96 -ac -br -noreset -nolisten tcp >"$xephyr_log" 2>&1 &
+Xephyr "$nested" -screen "$SCREEN" -dpi 96 -ac -br -noreset -nolisten tcp -extension GLX >"$xephyr_log" 2>&1 &
 xephyr_pid=$!
 for _ in $(seq 1 100); do
   kill -0 "$xephyr_pid" 2>/dev/null || fail "Xephyr exited during startup"

@@ -14,12 +14,15 @@ assets/                                  usr/share/flamewm/assets/
 assets/cursors/index.theme               usr/share/icons/FlameWM-Breeze-Dark/index.theme
 assets/cursors/cursors                   usr/share/icons/FlameWM-Breeze-Dark/cursors
 # Optional icon payloads (when legitimately supplied): only PlagueSur and Fluent.
+# Optional McMojave cursor payload when present; Oxygen uses installed host themes.
 assets/themes/cursors/McMojave-cursors   usr/share/icons/McMojave-cursors/
 assets/themes/icons/PlagueSur            usr/share/icons/PlagueSur/
 assets/themes/icons/Fluent               usr/share/icons/Fluent/
 packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
 packaging/flamewm-screenshot.desktop      usr/share/applications/flamewm-screenshot.desktop
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
+packaging/menus/flamewm-applications.menu  etc/xdg/menus/flamewm-applications.menu
+packaging/notifications/dunstrc          usr/share/flamewm/dunstrc
 LICENSE                                  usr/share/doc/flamewm/LICENSE
 README.md                                usr/share/doc/flamewm/README.md
 LICENSES/                                usr/share/doc/flamewm/LICENSES/

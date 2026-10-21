@@ -7,7 +7,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use super::explicit_shell::{viewable, wait_for};
-use super::{real_click, real_escape, InputPath};
+use super::{InputPath, real_click, real_escape};
 use crate::Canary;
 
 const PATH: &str = "path=real-pointer";
@@ -16,7 +16,6 @@ const AUDIO_POPUP: &str = "FlameWM audio";
 const NETWORK_POPUP: &str = "FlameWM network";
 const PANEL: &str = "FlameWM panel";
 const CYCLES: usize = 10;
-
 
 /// Toggle one opener CYCLES times. Returns (opens_ok, closes_ok, stays_closed_ok, detail).
 fn toggle(canary: &Canary, point: (i16, i16), popup: &str) -> (usize, usize, usize, String) {

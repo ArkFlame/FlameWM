@@ -397,7 +397,10 @@ mod tests {
         let menu = include_str!("../../../ui/shared/menu.css");
         let css = format!("{desktop}\n{menu}");
         for literal in ["ef4048", "EF4048", "239, 64, 72", "239,64,72"] {
-            assert!(!css.contains(literal), "desktop.css/menu.css hard-code accent {literal}");
+            assert!(
+                !css.contains(literal),
+                "desktop.css/menu.css hard-code accent {literal}"
+            );
         }
         for token in [
             "var(--desktop-hover)",

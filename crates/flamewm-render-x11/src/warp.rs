@@ -107,7 +107,11 @@ pub unsafe fn upload_warp_source(
 /// # Safety
 ///
 /// `display` must be the live display `source` was uploaded on; `source` is consumed.
-pub unsafe fn free_warp_source(display: *mut Display, api: &XRenderTransformApi, source: WarpSource) {
+pub unsafe fn free_warp_source(
+    display: *mut Display,
+    api: &XRenderTransformApi,
+    source: WarpSource,
+) {
     // SAFETY: both ids were created by `upload_warp_source` on `display` and are released once.
     unsafe {
         api.free_picture(display, source.picture);
@@ -134,10 +138,12 @@ pub unsafe fn paint_warped(
     dest: c_ulong,
 ) -> Result<(), String> {
     let (w, h) = (f64::from(source.width), f64::from(source.height));
-    if bands
-        .iter()
-        .any(|b| b.src.0 < 0.0 || b.src.1 < 0.0 || b.src.0 + b.src.2 > w + 1e-6 || b.src.1 + b.src.3 > h + 1e-6)
-    {
+    if bands.iter().any(|b| {
+        b.src.0 < 0.0
+            || b.src.1 < 0.0
+            || b.src.0 + b.src.2 > w + 1e-6
+            || b.src.1 + b.src.3 > h + 1e-6
+    }) {
         return Err("paint_warped: band source outside capture size".to_string());
     }
     if display.is_null() {
@@ -205,17 +211,39 @@ mod tests {
         let b = band((0.0, 10.0, 3840.0, 6.0), (3000.0, 2000.0, 48.0, 6.0));
         let (_, m) = band_transform(&b, origin).unwrap();
         assert!(m[0][0] > 50.0 && m[0][0] < 100.0);
-        assert!(m[0][2].abs() < 32768.0, "offset {} overflows XFixed", m[0][2]);
+        assert!(
+            m[0][2].abs() < 32768.0,
+            "offset {} overflows XFixed",
+            m[0][2]
+        );
         // The absolute-origin form would be ~3000 * 80 = 240000 and does not fit XFixed 16.16.
         assert!(3000.0 * m[0][0] > 32768.0);
     }
 
     #[test]
     fn zero_area_band_is_skipped() {
-        assert!(band_transform(&band((0.0, 0.0, 10.0, 1.0), (5.0, 5.0, 0.0, 1.0)), (0.0, 0.0)).is_none());
-        assert!(band_transform(&band((0.0, 0.0, 10.0, 1.0), (5.0, 5.0, 3.0, 0.0)), (0.0, 0.0)).is_none());
+        assert!(
+            band_transform(
+                &band((0.0, 0.0, 10.0, 1.0), (5.0, 5.0, 0.0, 1.0)),
+                (0.0, 0.0)
+            )
+            .is_none()
+        );
+        assert!(
+            band_transform(
+                &band((0.0, 0.0, 10.0, 1.0), (5.0, 5.0, 3.0, 0.0)),
+                (0.0, 0.0)
+            )
+            .is_none()
+        );
         // A sub-pixel band whose edges round to the same row is skipped too.
-        assert!(band_transform(&band((0.0, 0.0, 10.0, 1.0), (5.0, 5.1, 3.0, 0.3)), (0.0, 0.0)).is_none());
+        assert!(
+            band_transform(
+                &band((0.0, 0.0, 10.0, 1.0), (5.0, 5.1, 3.0, 0.3)),
+                (0.0, 0.0)
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -224,7 +252,11 @@ mod tests {
         let b = band((0.0, 6.0, 800.0, 6.0), (300.0, 156.0, 790.0, 5.6));
         let (ra, _) = band_transform(&a, (300.0, 100.0)).unwrap();
         let (rb, _) = band_transform(&b, (300.0, 100.0)).unwrap();
-        assert_eq!(ra.1 + ra.3 as i32, rb.1, "bands must tile with no gap or overlap");
+        assert_eq!(
+            ra.1 + ra.3 as i32,
+            rb.1,
+            "bands must tile with no gap or overlap"
+        );
     }
 
     #[test]
@@ -240,7 +272,8 @@ mod tests {
         };
         let bands = [band((0.0, 0.0, 400.0, 6.0), (0.0, 0.0, 400.0, 6.0))];
         // SAFETY: the size check fails before any Xlib call uses the null display.
-        let result = unsafe { paint_warped(std::ptr::null_mut(), &api, &source, &bands, (0.0, 0.0), 0) };
+        let result =
+            unsafe { paint_warped(std::ptr::null_mut(), &api, &source, &bands, (0.0, 0.0), 0) };
         assert!(result.unwrap_err().contains("size"));
     }
 

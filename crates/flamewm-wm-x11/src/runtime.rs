@@ -210,13 +210,13 @@ fn run_session(
         &control_error,
         &settings_observer,
     ) {
-            Ok(registration) => registration,
-            Err(error) => {
-                drop(pulse);
-                integrations.borrow_mut().stop();
-                return Err(error);
-            }
-        };
+        Ok(registration) => registration,
+        Err(error) => {
+            drop(pulse);
+            integrations.borrow_mut().stop();
+            return Err(error);
+        }
+    };
     // Profiler report timer on the reactor; interval from
     // `FLAMEWM_PROFILE_INTERVAL` (floored at 10s, default 60s), never
     // hardcoded here. No timer thread. Not registered when profiling is off.
@@ -258,13 +258,20 @@ fn run_session(
         ),
     ));
     let Some(icon_fd) = icon_service.borrow().wake_fd() else {
-        return Err(Box::new(io::Error::new(io::ErrorKind::Other, "IconService wake FD unavailable")));
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::Other,
+            "IconService wake FD unavailable",
+        )));
     };
     let icon_service_for_wake = Rc::clone(&icon_service);
-    let _icon_registration = reactor.borrow_mut().register_raw_fd_with_action(icon_fd, Interest::READ, move |_, _| {
-        icon_service_for_wake.borrow_mut().wake_drain();
-        FdAction::Continue
-    })?;
+    let _icon_registration = reactor.borrow_mut().register_raw_fd_with_action(
+        icon_fd,
+        Interest::READ,
+        move |_, _| {
+            icon_service_for_wake.borrow_mut().wake_drain();
+            FdAction::Continue
+        },
+    )?;
     // Settings owner wake: SelectionClear on the manager connection is observed
     // without waiting for the next publish. A failed registration leaves the WM
     // running without live XSettings wake, like a refused claim.
@@ -291,207 +298,216 @@ fn run_session(
     let settings_observer_for_hook = Rc::clone(&settings_observer);
     let idle_lock_for_hook = Rc::new(RefCell::new(idle::IdleLock::new()));
 
-    let result = run_with_hook(config, &catalog, &reactor, Rc::clone(&icon_service), move |wm, conn, screen, changes| {
-        if let Some(error) = control_error_for_hook.borrow_mut().take() {
-            return Err(error);
-        }
-        wm.apply_decoration_tokens(crate::chrome::live_chrome_tokens())?;
-        wm.apply_transition_settings(crate::animation::live_settings())?;
-        let root = conn.setup().roots[screen].root;
-        idle_lock_for_hook
-            .borrow_mut()
-            .turn(&reactor_for_hook, conn.as_ref(), root);
-        refresh_control(
-            &reactor_for_hook,
-            &mut control_registration,
-            &control_for_hook,
-            &host_for_hook,
-            &control_now_ms_for_hook,
-            &control_error_for_hook,
-            &settings_observer_for_hook,
-        )?;
-        let mut host_guard = host_for_hook.borrow_mut();
-        // Scoped per-turn span: the whole-process `wm.loop` guard above has
-        // been removed so loop-turn CPU is attributed per turn, not once
-        // across the full process lifetime.
-        let _turn_guard = flamewm_profiler::start("wm.loop");
-        if host_guard.is_none() {
-            let mut new_host = PlatformHost::new(
-                X11Desktop::from_connection(
-                    conn.clone(),
-                    screen,
-                    std::sync::Arc::clone(&catalog_for_hook),
-                )?,
-                settings_path.clone(),
-            );
-            let _ = new_host.replace_applications(catalog_for_hook.all());
-            let integrations = Rc::clone(&integrations_for_hook);
-            let battery_open = Rc::clone(&battery_menu_open_for_clone);
-            let pulse = Rc::clone(&pulse_for_hook);
-            new_host.set_system_action_handler(Box::new(move |action, snapshot| {
-                match action {
-                    SystemAction::BatteryMenuOpened => battery_open.set(true),
-                    SystemAction::BatteryMenuClosed => battery_open.set(false),
-                    _ => {}
-                }
-                match action {
-                SystemAction::SetVolume(action) => pulse.set_volume(action),
-                SystemAction::SetMute(action) => pulse.set_mute(action),
-                SystemAction::SetWifiEnabled(_)
-                | SystemAction::ConnectKnown { .. }
-                | SystemAction::ConnectWifi { .. }
-                | SystemAction::SubmitNetworkSecret { .. }
-                | SystemAction::CancelNetworkSecret { .. }
-                | SystemAction::Disconnect
-                | SystemAction::Scan
-                | SystemAction::Play { .. }
-                | SystemAction::Pause { .. }
-                | SystemAction::PlayPause { .. }
-                | SystemAction::Next { .. }
-                | SystemAction::Previous { .. }
-                | SystemAction::BatteryMenuOpened
-                | SystemAction::BatteryMenuClosed => integrations.borrow_mut().perform_action(
-                    action,
-                    &snapshot.network,
-                    &snapshot.media,
-                ),
+    let result = run_with_hook(
+        config,
+        &catalog,
+        &reactor,
+        Rc::clone(&icon_service),
+        move |wm, conn, screen, changes| {
+            if let Some(error) = control_error_for_hook.borrow_mut().take() {
+                return Err(error);
             }
-        }));
-            *host_guard = Some(new_host);
-        }
-        let host = host_guard.as_mut().expect("host initialized");
-        if !host_started {
-            let _host_guard = flamewm_profiler::start("wm.startup.host");
-            host.start()?;
-            match host.commit_startup_shortcuts() {
-                Ok(()) => {
-                    let snapshot = host.shortcut_snapshot();
-                    log_committed_startup_shortcuts(host.engine(), &snapshot.bindings);
-                }
-                Err(error) => {
-                    eprintln!("flamewm: startup shortcuts were not grabbed: {error}");
-                }
+            wm.apply_decoration_tokens(crate::chrome::live_chrome_tokens())?;
+            wm.apply_transition_settings(crate::animation::live_settings())?;
+            let root = conn.setup().roots[screen].root;
+            idle_lock_for_hook
+                .borrow_mut()
+                .turn(&reactor_for_hook, conn.as_ref(), root);
+            refresh_control(
+                &reactor_for_hook,
+                &mut control_registration,
+                &control_for_hook,
+                &host_for_hook,
+                &control_now_ms_for_hook,
+                &control_error_for_hook,
+                &settings_observer_for_hook,
+            )?;
+            let mut host_guard = host_for_hook.borrow_mut();
+            // Scoped per-turn span: the whole-process `wm.loop` guard above has
+            // been removed so loop-turn CPU is attributed per turn, not once
+            // across the full process lifetime.
+            let _turn_guard = flamewm_profiler::start("wm.loop");
+            if host_guard.is_none() {
+                let mut new_host = PlatformHost::new(
+                    X11Desktop::from_connection(
+                        conn.clone(),
+                        screen,
+                        std::sync::Arc::clone(&catalog_for_hook),
+                    )?,
+                    settings_path.clone(),
+                );
+                let _ = new_host.replace_applications(catalog_for_hook.all());
+                let integrations = Rc::clone(&integrations_for_hook);
+                let battery_open = Rc::clone(&battery_menu_open_for_clone);
+                let pulse = Rc::clone(&pulse_for_hook);
+                new_host.set_system_action_handler(Box::new(move |action, snapshot| {
+                    match action {
+                        SystemAction::BatteryMenuOpened => battery_open.set(true),
+                        SystemAction::BatteryMenuClosed => battery_open.set(false),
+                        _ => {}
+                    }
+                    match action {
+                        SystemAction::SetVolume(action) => pulse.set_volume(action),
+                        SystemAction::SetMute(action) => pulse.set_mute(action),
+                        SystemAction::SetWifiEnabled(_)
+                        | SystemAction::ConnectKnown { .. }
+                        | SystemAction::ConnectWifi { .. }
+                        | SystemAction::SubmitNetworkSecret { .. }
+                        | SystemAction::CancelNetworkSecret { .. }
+                        | SystemAction::Disconnect
+                        | SystemAction::Scan
+                        | SystemAction::Play { .. }
+                        | SystemAction::Pause { .. }
+                        | SystemAction::PlayPause { .. }
+                        | SystemAction::Next { .. }
+                        | SystemAction::Previous { .. }
+                        | SystemAction::BatteryMenuOpened
+                        | SystemAction::BatteryMenuClosed => integrations
+                            .borrow_mut()
+                            .perform_action(action, &snapshot.network, &snapshot.media),
+                    }
+                }));
+                *host_guard = Some(new_host);
             }
-            publish_settings_snapshot(&settings_observer_for_hook, &host.settings_snapshot());
-            host_started = true;
-        }
-        // ProviderDirty audio domain: drain only snapshots the audio fd delivered.
-        {
-            let mut audio_updates = audio_updates_for_hook.borrow_mut();
-            for snapshot in audio_updates.drain(..) {
-                if host.system_mut().update_audio(snapshot) {
-                    emit_system_signals(host, control_for_hook.as_ref())?;
-                }
-            }
-        }
-        if let Some(error) = provider_error_for_hook.borrow_mut().take() {
-            return Err(error.into());
-        }
-        // ProviderDirty network/media domains: reconcile event-coalesced state
-        // without polling; snapshots only refresh on reported change.
-        {
-            let mut integrations = integrations_for_hook.borrow_mut();
-            let reconciled = integrations.reconcile()?;
-            // Network replies (access points, profiles) land after reconcile
-            // queues its requests, so the network snapshot is compared on every
-            // turn; `update_network` dedupes, so unchanged state emits nothing.
-            let network = integrations.network_snapshot();
-            if host.system_mut().update_network(network) {
-                emit_system_signals(host, control_for_hook.as_ref())?;
-            }
-            let power = integrations.power_snapshot();
-            if host.system_mut().update_power(power) {
-                emit_system_signals(host, control_for_hook.as_ref())?;
-            }
-            if reconciled {
-                let media = integrations.media_snapshot();
-                if host.system_mut().update_media(media) {
-                    emit_system_signals(host, control_for_hook.as_ref())?;
-                }
-            }
-        }
-        refresh_provider(
-            &reactor_for_hook,
-            &mut network_registration,
-            &integrations_for_hook,
-            &provider_error_for_hook,
-        )?;
-        refresh_provider(
-            &reactor_for_hook,
-            &mut mpris_registration,
-            &integrations_for_hook,
-            &provider_error_for_hook,
-        )?;
-        refresh_provider(
-            &reactor_for_hook,
-            &mut power_registration,
-            &integrations_for_hook,
-            &provider_error_for_hook,
-        )?;
-        // Battery-menu CPU sampling: deadline armed only while the menu is open (zero idle wakeups).
-        let (changed, next_cpu_due) = tick_power_cpu(
-            battery_menu_open_for_hook.get(),
-            power_cpu_due_for_hook.get(),
-            Instant::now(),
-            || integrations_for_hook.borrow_mut().sample_power_cpu(),
-        );
-        power_cpu_due_for_hook.set(next_cpu_due);
-        reactor_for_hook.borrow().wake_deadline().set(next_cpu_due);
-        if changed && host.system_mut().update_power(integrations_for_hook.borrow().power_snapshot()) {
-            emit_system_signals(host, control_for_hook.as_ref())?;
-        }
-        let now_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-        control_now_ms_for_hook.set(now_ms);
-        // Capture the old state BEFORE processing RandR events. Previously the
-        // "before" snapshot was taken after refresh, so monitor rearrangements
-        // compared equal and emitted neither the display nor panel update.
-        let display_before = host.cached_display_snapshot();
-        let panels_before = host.panels_snapshot();
-        // RandR hotplug/mode notifications mark the topology dirty.
-        if wm.take_display_topology_dirty() {
-            match host.display_snapshot() {
-                Ok(displays) => {
-                    if let Err(error) = host.resync_panels_for_displays(&displays) {
-                        eprintln!("flamewm: panel resync after display change failed: {error}");
+            let host = host_guard.as_mut().expect("host initialized");
+            if !host_started {
+                let _host_guard = flamewm_profiler::start("wm.startup.host");
+                host.start()?;
+                match host.commit_startup_shortcuts() {
+                    Ok(()) => {
+                        let snapshot = host.shortcut_snapshot();
+                        log_committed_startup_shortcuts(host.engine(), &snapshot.bindings);
+                    }
+                    Err(error) => {
+                        eprintln!("flamewm: startup shortcuts were not grabbed: {error}");
                     }
                 }
-                Err(error) => eprintln!("flamewm: display topology refresh failed: {error}"),
+                publish_settings_snapshot(&settings_observer_for_hook, &host.settings_snapshot());
+                host_started = true;
             }
-        }
-        // The transaction is retired before any native call, so a failed or disconnected-output
-        // revert is reported once here and never retried; it must not abort the WM loop.
-        if let Err(error) = host.tick_display_transactions(now_ms) {
-            eprintln!("flamewm: display mode transaction: {error}");
-        }
-        let display_after = host.cached_display_snapshot();
-        if display_after != display_before {
-            if let Some(snapshot) = display_after {
-                // A timeout-driven mode revert can change geometry without an
-                // already-consumed RandR dirty event. Reconcile panels before
-                // publishing either snapshot and before recomputing WM struts.
-                if let Err(error) = host.resync_panels_for_displays(&snapshot) {
-                    eprintln!("flamewm: panel resync after mode transaction failed: {error}");
+            // ProviderDirty audio domain: drain only snapshots the audio fd delivered.
+            {
+                let mut audio_updates = audio_updates_for_hook.borrow_mut();
+                for snapshot in audio_updates.drain(..) {
+                    if host.system_mut().update_audio(snapshot) {
+                        emit_system_signals(host, control_for_hook.as_ref())?;
+                    }
                 }
-                control_for_hook.emit_signal(&ControlSignal::DisplaysSnapshotChanged { snapshot })?;
             }
-        }
-        // The panel service is changed by resync_panels_for_displays(), not
-        // by WmChangeSet. Emit its authoritative snapshot explicitly, including
-        // when the only change was an XRandR output-coordinate swap.
-        let panels_after = host.panels_snapshot();
-        if panels_after != panels_before {
-            control_for_hook.emit_signal(&ControlSignal::PanelsSnapshotChanged {
-                snapshot: panels_after,
-            })?;
-        }
-        flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
-        let areas = host.output_work_areas();
-        let wait = crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
-        drop(host_guard);
-        wm.set_output_work_areas(areas)?;
-        // Wake the reactor at the pending display revert deadline; None when nothing is pending.
-        Ok(wait)
-    });
+            if let Some(error) = provider_error_for_hook.borrow_mut().take() {
+                return Err(error.into());
+            }
+            // ProviderDirty network/media domains: reconcile event-coalesced state
+            // without polling; snapshots only refresh on reported change.
+            {
+                let mut integrations = integrations_for_hook.borrow_mut();
+                let reconciled = integrations.reconcile()?;
+                // Network replies (access points, profiles) land after reconcile
+                // queues its requests, so the network snapshot is compared on every
+                // turn; `update_network` dedupes, so unchanged state emits nothing.
+                let network = integrations.network_snapshot();
+                if host.system_mut().update_network(network) {
+                    emit_system_signals(host, control_for_hook.as_ref())?;
+                }
+                let power = integrations.power_snapshot();
+                if host.system_mut().update_power(power) {
+                    emit_system_signals(host, control_for_hook.as_ref())?;
+                }
+                if reconciled {
+                    let media = integrations.media_snapshot();
+                    if host.system_mut().update_media(media) {
+                        emit_system_signals(host, control_for_hook.as_ref())?;
+                    }
+                }
+            }
+            refresh_provider(
+                &reactor_for_hook,
+                &mut network_registration,
+                &integrations_for_hook,
+                &provider_error_for_hook,
+            )?;
+            refresh_provider(
+                &reactor_for_hook,
+                &mut mpris_registration,
+                &integrations_for_hook,
+                &provider_error_for_hook,
+            )?;
+            refresh_provider(
+                &reactor_for_hook,
+                &mut power_registration,
+                &integrations_for_hook,
+                &provider_error_for_hook,
+            )?;
+            // Battery-menu CPU sampling: deadline armed only while the menu is open (zero idle wakeups).
+            let (changed, next_cpu_due) = tick_power_cpu(
+                battery_menu_open_for_hook.get(),
+                power_cpu_due_for_hook.get(),
+                Instant::now(),
+                || integrations_for_hook.borrow_mut().sample_power_cpu(),
+            );
+            power_cpu_due_for_hook.set(next_cpu_due);
+            reactor_for_hook.borrow().wake_deadline().set(next_cpu_due);
+            if changed
+                && host
+                    .system_mut()
+                    .update_power(integrations_for_hook.borrow().power_snapshot())
+            {
+                emit_system_signals(host, control_for_hook.as_ref())?;
+            }
+            let now_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+            control_now_ms_for_hook.set(now_ms);
+            // Capture the old state BEFORE processing RandR events. Previously the
+            // "before" snapshot was taken after refresh, so monitor rearrangements
+            // compared equal and emitted neither the display nor panel update.
+            let display_before = host.cached_display_snapshot();
+            let panels_before = host.panels_snapshot();
+            // RandR hotplug/mode notifications mark the topology dirty.
+            if wm.take_display_topology_dirty() {
+                match host.display_snapshot() {
+                    Ok(displays) => {
+                        if let Err(error) = host.resync_panels_for_displays(&displays) {
+                            eprintln!("flamewm: panel resync after display change failed: {error}");
+                        }
+                    }
+                    Err(error) => eprintln!("flamewm: display topology refresh failed: {error}"),
+                }
+            }
+            // The transaction is retired before any native call, so a failed or disconnected-output
+            // revert is reported once here and never retried; it must not abort the WM loop.
+            if let Err(error) = host.tick_display_transactions(now_ms) {
+                eprintln!("flamewm: display mode transaction: {error}");
+            }
+            let display_after = host.cached_display_snapshot();
+            if display_after != display_before {
+                if let Some(snapshot) = display_after {
+                    // A timeout-driven mode revert can change geometry without an
+                    // already-consumed RandR dirty event. Reconcile panels before
+                    // publishing either snapshot and before recomputing WM struts.
+                    if let Err(error) = host.resync_panels_for_displays(&snapshot) {
+                        eprintln!("flamewm: panel resync after mode transaction failed: {error}");
+                    }
+                    control_for_hook
+                        .emit_signal(&ControlSignal::DisplaysSnapshotChanged { snapshot })?;
+                }
+            }
+            // The panel service is changed by resync_panels_for_displays(), not
+            // by WmChangeSet. Emit its authoritative snapshot explicitly, including
+            // when the only change was an XRandR output-coordinate swap.
+            let panels_after = host.panels_snapshot();
+            if panels_after != panels_before {
+                control_for_hook.emit_signal(&ControlSignal::PanelsSnapshotChanged {
+                    snapshot: panels_after,
+                })?;
+            }
+            flush_wm_changes(host, control_for_hook.as_ref(), changes)?;
+            let areas = host.output_work_areas();
+            let wait = crate::wm::next_wait_timeout(now_ms, host.display_transaction_deadline_ms());
+            drop(host_guard);
+            wm.set_output_work_areas(areas)?;
+            // Wake the reactor at the pending display revert deadline; None when nothing is pending.
+            Ok(wait)
+        },
+    );
     drop(icon_service);
     drop(pulse);
     integrations.borrow_mut().stop();
@@ -865,14 +881,20 @@ fn settings_path() -> (PathBuf, &'static str) {
         return (PathBuf::from(path), "FLAMEWM_SETTINGS_PATH");
     }
     if let Some(dir) = env::var_os("FLAMEWM_CONFIG_DIR").filter(|value| !value.is_empty()) {
-        return (PathBuf::from(dir).join("settings.toml"), "FLAMEWM_CONFIG_DIR");
+        return (
+            PathBuf::from(dir).join("settings.toml"),
+            "FLAMEWM_CONFIG_DIR",
+        );
     }
     let config_home = env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(|| PathBuf::from("/root/.config"));
-    (config_home.join("flamewm").join("settings.toml"), "xdg-default")
+    (
+        config_home.join("flamewm").join("settings.toml"),
+        "xdg-default",
+    )
 }
 
 #[cfg(test)]
@@ -888,9 +910,10 @@ mod settings_observer_tests {
         });
         let observer: SharedSettingsObserver = Rc::new(RefCell::new(Some(boxed)));
         let mut snapshot = SettingsSnapshot::new(7);
-        snapshot
-            .values
-            .insert("appearance".to_owned(), SettingValue::Text("light".to_owned()));
+        snapshot.values.insert(
+            "appearance".to_owned(),
+            SettingValue::Text("light".to_owned()),
+        );
         publish_settings_snapshot(&observer, &snapshot);
         assert_eq!(seen.borrow().as_slice(), std::slice::from_ref(&snapshot));
     }
@@ -1335,7 +1358,10 @@ mod power_cpu_sampling_tests {
         let t0 = Instant::now();
         let due = t0 + POWER_CPU_SAMPLE_INTERVAL;
         let half = t0 + POWER_CPU_SAMPLE_INTERVAL / 2;
-        assert_eq!(advance_power_cpu_sampling(true, Some(due), half), (false, Some(due)));
+        assert_eq!(
+            advance_power_cpu_sampling(true, Some(due), half),
+            (false, Some(due))
+        );
         assert_eq!(
             advance_power_cpu_sampling(true, Some(due), due),
             (true, Some(due + POWER_CPU_SAMPLE_INTERVAL))

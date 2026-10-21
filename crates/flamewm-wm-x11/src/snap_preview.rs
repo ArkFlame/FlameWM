@@ -219,8 +219,14 @@ mod tests {
     #[test]
     fn snap_preview_css_default_is_neutral_not_red() {
         let css = include_str!("../ui/snap-preview.css").to_ascii_lowercase();
-        assert!(!css.contains("ef4048"), "snap preview CSS still hard-codes the red accent");
-        assert!(css.contains("#7f878e"), "snap preview CSS default must be the neutral accent");
+        assert!(
+            !css.contains("ef4048"),
+            "snap preview CSS still hard-codes the red accent"
+        );
+        assert!(
+            css.contains("#7f878e"),
+            "snap preview CSS default must be the neutral accent"
+        );
     }
 
     #[test]
@@ -232,7 +238,10 @@ mod tests {
         );
         crate::live_settings::sync(&snapshot);
         let border = border_color();
-        assert_eq!((border.r, border.g, border.b, border.a), (0x12, 0x34, 0x56, 0xff));
+        assert_eq!(
+            (border.r, border.g, border.b, border.a),
+            (0x12, 0x34, 0x56, 0xff)
+        );
         crate::live_settings::sync(&flamewm_api::settings::SettingsSnapshot::new(1));
     }
 

@@ -23,16 +23,18 @@ use crate::backdrop::capture_drawable_rect;
 use crate::external_drawable::match_argb32_visual;
 use crate::lamp::{self, LampBand, PanelEdge};
 use crate::warp::{self, WarpRect, WarpSource};
-use crate::xcomposite::{CapturedImage, check_capture_size, rgba_to_argb_owned, upload_argb_pixmap};
-use crate::xshape::{XShapeBridge, rounded_mask_spans};
+use crate::xcomposite::{
+    CapturedImage, check_capture_size, rgba_to_argb_owned, upload_argb_pixmap,
+};
 use crate::xlib::{
-    CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display, INPUT_OUTPUT_CLASS,
-    Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreateWindow,
-    XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight, XDisplayWidth,
-    XCreatePixmap, XFlush, XFreeColormap, XFreePixmap, XMapWindow, XRaiseWindow, XRootWindow,
-    XSetWindowAttributes, XSync, ALLOC_NONE, XInternAtom,
+    ALLOC_NONE, CW_BACK_PIXEL, CW_COLORMAP, CW_OVERRIDE_REDIRECT, Colormap, Display,
+    INPUT_OUTPUT_CLASS, Pixmap, TRANSPARENT_CLEAR_PIXEL, Window, XCreateColormap, XCreatePixmap,
+    XCreateWindow, XDefaultDepth, XDefaultScreen, XDefaultVisual, XDestroyWindow, XDisplayHeight,
+    XDisplayWidth, XFlush, XFreeColormap, XFreePixmap, XInternAtom, XMapWindow, XRaiseWindow,
+    XRootWindow, XSetWindowAttributes, XSync,
 };
 use crate::xrender_transform::{PICT_STANDARD_RGB_24, XRenderTransformApi};
+use crate::xshape::{XShapeBridge, rounded_mask_spans};
 
 /// `CWBorderPixel` value bit (not exported by `xlib`).
 const CW_BORDER_PIXEL: c_ulong = 1 << 3;
@@ -296,7 +298,15 @@ impl WarpOverlay {
         target: WarpRect,
     ) -> Result<Self, String> {
         let edge = lamp::edge_for(source, target, screen_rect(display));
-        Self::begin_styled(display, capture, source, target, edge, TransitionStyle::MagicLamp, TransitionDirection::In)
+        Self::begin_styled(
+            display,
+            capture,
+            source,
+            target,
+            edge,
+            TransitionStyle::MagicLamp,
+            TransitionDirection::In,
+        )
     }
 
     /// Opens a transition of `style` between `source` and `target` (root rects). `direction`
@@ -316,7 +326,16 @@ impl WarpOverlay {
             return Err("overlay: capture size does not match source rect".to_string());
         }
         let (bx, by, bw, bh) = union_bounds(source, target);
-        let mut overlay = Self::empty(display, api, capture, (bw, bh), (bx, by), source, target, edge);
+        let mut overlay = Self::empty(
+            display,
+            api,
+            capture,
+            (bw, bh),
+            (bx, by),
+            source,
+            target,
+            edge,
+        );
         overlay.create_surface(bx, by, bw, bh)?;
         match style {
             TransitionStyle::MagicLamp => {}
@@ -333,7 +352,10 @@ impl WarpOverlay {
     /// is recorded in `self` once it exists, so Drop releases it when a later step fails.
     fn create_surface(&mut self, bx: i32, by: i32, bw: u32, bh: u32) -> Result<(), String> {
         let display = self.display;
-        match warp_surface_for(argb_visual_available(display), compositing_manager_running(display)) {
+        match warp_surface_for(
+            argb_visual_available(display),
+            compositing_manager_running(display),
+        ) {
             WarpSurface::Argb => {
                 // SAFETY: `display` is live per the caller contract.
                 let (window, colormap) = unsafe { create_argb_window(display, bx, by, bw, bh)? };
@@ -346,24 +368,35 @@ impl WarpOverlay {
             }
             WarpSurface::OpaqueBackdrop => {
                 // SAFETY: `display` is live; the snapshot picture is owned by `self`.
-                self.backdrop = Some(unsafe { capture_backdrop(display, &self.api, bx, by, bw, bh)? });
+                self.backdrop =
+                    Some(unsafe { capture_backdrop(display, &self.api, bx, by, bw, bh)? });
                 // SAFETY: `display` is live; the window is recorded for Drop.
                 let window = unsafe { create_default_window(display, bx, by, bw, bh)? };
                 self.window = window;
                 // SAFETY: `window` is live and owned by `self`.
                 self.picture = unsafe {
-                    self.api.create_standard_picture(display, window, PICT_STANDARD_RGB_24)
+                    self.api
+                        .create_standard_picture(display, window, PICT_STANDARD_RGB_24)
                 }?;
                 // SAFETY: `display` and `window` are live; the pixmap is recorded for Drop once created.
                 let pixmap = unsafe {
-                    XCreatePixmap(display, window, bw, bh, XDefaultDepth(display, XDefaultScreen(display)) as u32)
+                    XCreatePixmap(
+                        display,
+                        window,
+                        bw,
+                        bh,
+                        XDefaultDepth(display, XDefaultScreen(display)) as u32,
+                    )
                 };
                 if pixmap == 0 {
                     return Err("overlay: offscreen pixmap returned 0".to_string());
                 }
                 self.offscreen = Some(Backdrop { pixmap, picture: 0 });
                 // SAFETY: `pixmap` is live and owned by `self`.
-                let picture = unsafe { self.api.create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24) }?;
+                let picture = unsafe {
+                    self.api
+                        .create_standard_picture(display, pixmap, PICT_STANDARD_RGB_24)
+                }?;
                 if let Some(off) = self.offscreen.as_mut() {
                     off.picture = picture;
                 }
@@ -393,15 +426,34 @@ impl WarpOverlay {
     /// Opens a window-open scale-and-fade on an ARGB window at root position `(x, y)`.
     /// The window is exactly the capture's size. Errors without an ARGB visual, so the effect
     /// is never drawn as a fade on an opaque surface.
-    pub fn begin_fade(display: *mut Display, capture: CapturedImage, x: i32, y: i32) -> Result<Self, String> {
+    pub fn begin_fade(
+        display: *mut Display,
+        capture: CapturedImage,
+        x: i32,
+        y: i32,
+    ) -> Result<Self, String> {
         let api = load_checked_api(display)?;
         if !argb_visual_available(display) {
             return Err("overlay: fade needs a 32-bit ARGB visual".to_string());
         }
         check_capture_size(capture.width, capture.height)?;
         let (w, h) = (capture.width, capture.height);
-        let full = WarpRect { x: 0.0, y: 0.0, width: f64::from(w), height: f64::from(h) };
-        let mut overlay = Self::empty(display, api, capture, (w, h), (x, y), full, full, PanelEdge::Bottom);
+        let full = WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: f64::from(w),
+            height: f64::from(h),
+        };
+        let mut overlay = Self::empty(
+            display,
+            api,
+            capture,
+            (w, h),
+            (x, y),
+            full,
+            full,
+            PanelEdge::Bottom,
+        );
         overlay.fade = true;
         // SAFETY: `display` is live per the caller contract; resources are recorded as created.
         let (window, colormap) = unsafe { create_argb_window(display, x, y, w, h)? };
@@ -436,9 +488,7 @@ impl WarpOverlay {
     fn apply_content_mask(&self, spans: &[(u32, u32, u32)]) {
         if let Some(shape) = self.shape.as_ref() {
             let _ = unsafe {
-                shape.apply_clipped_mask(
-                    self.window, spans, (0, 0, self.size.0, self.size.1),
-                )
+                shape.apply_clipped_mask(self.window, spans, (0, 0, self.size.0, self.size.1))
             };
         }
     }
@@ -458,7 +508,9 @@ impl WarpOverlay {
             if yy >= 0 && yy < i64::from(self.size.1) {
                 let left = xx.max(0).min(i64::from(self.size.0)) as u32;
                 let right = ex.max(0).min(i64::from(self.size.0)) as u32;
-                if left < right { spans.push((yy as u32, left, right)); }
+                if left < right {
+                    spans.push((yy as u32, left, right));
+                }
             }
         }
         spans
@@ -471,34 +523,55 @@ impl WarpOverlay {
         let mut rows = vec![None::<(u32, u32)>; self.size.1 as usize];
         let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
         for band in bands {
-            let Some(((x, y, w, h), _)) = warp::band_transform(band, origin) else { continue };
+            let Some(((x, y, w, h), _)) = warp::band_transform(band, origin) else {
+                continue;
+            };
             let left = x.max(0).min(self.size.0 as i32) as u32;
-            let right = (i64::from(x) + i64::from(w)).max(0).min(i64::from(self.size.0)) as u32;
-            if right <= left { continue; }
+            let right = (i64::from(x) + i64::from(w))
+                .max(0)
+                .min(i64::from(self.size.0)) as u32;
+            if right <= left {
+                continue;
+            }
             for yy in y.max(0)..(i64::from(y) + i64::from(h)).min(i64::from(self.size.1)) as i32 {
                 let row = &mut rows[yy as usize];
-                *row = Some(row.map_or((left, right), |(a,b)| (a.min(left), b.max(right))));
+                *row = Some(row.map_or((left, right), |(a, b)| (a.min(left), b.max(right))));
             }
         }
         let top = rows.iter().position(Option::is_some);
         let bottom = rows.iter().rposition(Option::is_some);
-        let (Some(top), Some(bottom)) = (top, bottom) else { return Vec::new() };
-        let min_x = rows.iter().flatten().map(|(start, _)| *start).min().unwrap_or(0);
-        let max_x = rows.iter().flatten().map(|(_, end)| *end).max().unwrap_or(0);
+        let (Some(top), Some(bottom)) = (top, bottom) else {
+            return Vec::new();
+        };
+        let min_x = rows
+            .iter()
+            .flatten()
+            .map(|(start, _)| *start)
+            .min()
+            .unwrap_or(0);
+        let max_x = rows
+            .iter()
+            .flatten()
+            .map(|(_, end)| *end)
+            .max()
+            .unwrap_or(0);
         let width = max_x.saturating_sub(min_x);
         let height = (bottom - top + 1) as u32;
         let ratio = (f64::from(width) / f64::from(self.capture.width.max(1)))
             .min(f64::from(height) / f64::from(self.capture.height.max(1)));
         let radius = (f64::from(self.corner_radius) * ratio).round() as u32;
         let corners = rounded_mask_spans(width, height, radius);
-        rows.into_iter().enumerate().filter_map(|(y, row)| {
-            let (left, right) = row?;
-            let local_row = y.checked_sub(top)?;
-            let (_, clip_start, clip_end) = *corners.get(local_row)?;
-            let a = left.max(min_x + clip_start);
-            let b = right.min(min_x + clip_end);
-            (b > a).then_some((y as u32, a, b))
-        }).collect()
+        rows.into_iter()
+            .enumerate()
+            .filter_map(|(y, row)| {
+                let (left, right) = row?;
+                let local_row = y.checked_sub(top)?;
+                let (_, clip_start, clip_end) = *corners.get(local_row)?;
+                let a = left.max(min_x + clip_start);
+                let b = right.min(min_x + clip_end);
+                (b > a).then_some((y as u32, a, b))
+            })
+            .collect()
     }
 
     /// Draws the effect at `progress` and maps the window on first call.
@@ -521,7 +594,7 @@ impl WarpOverlay {
                 // an empty initial bounding region, an unpainted full rectangle
                 // can flash before the compositor processes the initial paint.
                 if let Some(shape) = self.shape.as_ref() {
-                    let _ = shape.apply_clipped_mask(self.window, &[], (0,0,0,0));
+                    let _ = shape.apply_clipped_mask(self.window, &[], (0, 0, 0, 0));
                 }
                 XMapWindow(self.display, self.window);
                 self.mapped = true;
@@ -546,7 +619,13 @@ impl WarpOverlay {
             PanelEdge::Bottom | PanelEdge::Top => self.window_root.height,
             PanelEdge::Left | PanelEdge::Right => self.window_root.width,
         };
-        let bands = lamp::lamp_bands(self.window_root, self.icon_root, self.edge, progress, extent)?;
+        let bands = lamp::lamp_bands(
+            self.window_root,
+            self.icon_root,
+            self.edge,
+            progress,
+            extent,
+        )?;
         self.paint_bands(&bands)?;
         self.apply_content_mask(&self.mask_for_bands(&bands));
         Ok(())
@@ -563,7 +642,12 @@ impl WarpOverlay {
             return Err("overlay: stretch rect has no area".to_string());
         }
         let band = LampBand {
-            src: (0.0, 0.0, f64::from(self.capture.width), f64::from(self.capture.height)),
+            src: (
+                0.0,
+                0.0,
+                f64::from(self.capture.width),
+                f64::from(self.capture.height),
+            ),
             dst: (rect.x, rect.y, rect.width, rect.height),
         };
         self.paint_bands(&[band])?;
@@ -580,14 +664,18 @@ impl WarpOverlay {
     fn paint_bands(&mut self, bands: &[LampBand]) -> Result<(), String> {
         let (w, h) = self.size;
         let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
-        let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
+        let dest = self
+            .offscreen
+            .as_ref()
+            .map_or(self.picture, |off| off.picture);
         // SAFETY: `dest` and the fill picture are live until Drop; the snapshot covers the whole
         // window, so every pixel is opaque before the bands are drawn.
         unsafe { self.begin_frame(dest) };
         if self.warp_source.is_none() {
             // SAFETY: `display` is live until Drop; the capture never changes after `begin`, so
             // one upload serves every frame of this warp.
-            self.warp_source = Some(unsafe { warp::upload_warp_source(self.display, &self.api, &self.capture) }?);
+            self.warp_source =
+                Some(unsafe { warp::upload_warp_source(self.display, &self.api, &self.capture) }?);
         }
         let Some(source) = self.warp_source.as_ref() else {
             return Err("overlay: warp source missing after upload".to_string());
@@ -596,7 +684,10 @@ impl WarpOverlay {
         unsafe { warp::paint_warped(self.display, &self.api, source, bands, origin, dest) }?;
         if dest != self.picture {
             // SAFETY: both pictures are live on `display`; one copy shows the finished frame.
-            unsafe { self.api.composite_src(self.display, dest, self.picture, (0, 0, w, h)) };
+            unsafe {
+                self.api
+                    .composite_src(self.display, dest, self.picture, (0, 0, w, h))
+            };
         }
         Ok(())
     }
@@ -607,10 +698,16 @@ impl WarpOverlay {
     ///
     /// `dest` and the fill picture must be live on `self.display` until Drop.
     unsafe fn begin_frame(&self, dest: c_ulong) {
-        let fill = self.backdrop.as_ref().map_or(self.clear, |backdrop| backdrop.picture);
+        let fill = self
+            .backdrop
+            .as_ref()
+            .map_or(self.clear, |backdrop| backdrop.picture);
         let (w, h) = self.size;
         // SAFETY: forwarded contract; `fill` and `dest` are live pictures on `self.display`.
-        unsafe { self.api.composite_src(self.display, fill, dest, (0, 0, w, h)) };
+        unsafe {
+            self.api
+                .composite_src(self.display, fill, dest, (0, 0, w, h))
+        };
     }
 
     /// Composites the fade source OVER `dest` at `rect` through a solid mask of `alpha` (0..=1).
@@ -641,16 +738,29 @@ impl WarpOverlay {
         let (w, h) = (f64::from(self.size.0), f64::from(self.size.1));
         let (cx, cy) = (w / 2.0, h / 2.0);
         // Destination of the scaled capture, centred in the window.
-        let rect = enclose(cx - cx * scale, cy - cy * scale, cx + cx * scale, cy + cy * scale);
+        let rect = enclose(
+            cx - cx * scale,
+            cy - cy * scale,
+            cx + cx * scale,
+            cy + cy * scale,
+        );
         // Destination-to-source map: scale about the centre (inverse of the zoom).
         let inv = 1.0 / scale;
-        let matrix = [[inv, 0.0, cx * (1.0 - inv)], [0.0, inv, cy * (1.0 - inv)], [0.0, 0.0, 1.0]];
+        let matrix = [
+            [inv, 0.0, cx * (1.0 - inv)],
+            [0.0, inv, cy * (1.0 - inv)],
+            [0.0, 0.0, 1.0],
+        ];
         let (window_w, window_h) = self.size;
         let display = self.display;
         // SAFETY: all pictures are live on `display` until Drop; the mask is freed below.
         unsafe {
-            self.api
-                .composite_src(display, self.fade_clear, self.picture, (0, 0, window_w, window_h));
+            self.api.composite_src(
+                display,
+                self.fade_clear,
+                self.picture,
+                (0, 0, window_w, window_h),
+            );
             if alpha > 0.0 {
                 self.api.set_transform(display, self.fade_source, matrix)?;
                 self.composite_alpha(display, self.picture, rect, alpha)?;
@@ -660,8 +770,10 @@ impl WarpOverlay {
             Vec::new()
         } else {
             self.mask_for_rect(WarpRect {
-                x: f64::from(rect.0), y: f64::from(rect.1),
-                width: f64::from(rect.2), height: f64::from(rect.3),
+                x: f64::from(rect.0),
+                y: f64::from(rect.1),
+                width: f64::from(rect.2),
+                height: f64::from(rect.3),
             })
         });
         Ok(())
@@ -675,7 +787,11 @@ impl WarpOverlay {
             return Err("overlay: crossfade direction missing".to_string());
         };
         let origin = (f64::from(self.origin.0), f64::from(self.origin.1));
-        let local = |r: WarpRect| WarpRect { x: r.x - origin.0, y: r.y - origin.1, ..r };
+        let local = |r: WarpRect| WarpRect {
+            x: r.x - origin.0,
+            y: r.y - origin.1,
+            ..r
+        };
         let (from, to) = (local(self.window_root), local(self.icon_root));
         let moving = from != to;
         let eased = ease_out_quad(progress);
@@ -687,10 +803,17 @@ impl WarpOverlay {
         // Destination pixels to capture pixels: the capture spans the window's source size.
         let scale_x = f64::from(self.capture.width) / rect.width;
         let scale_y = f64::from(self.capture.height) / rect.height;
-        let matrix = [[scale_x, 0.0, -rect.x * scale_x], [0.0, scale_y, -rect.y * scale_y], [0.0, 0.0, 1.0]];
+        let matrix = [
+            [scale_x, 0.0, -rect.x * scale_x],
+            [0.0, scale_y, -rect.y * scale_y],
+            [0.0, 0.0, 1.0],
+        ];
         let dst_rect = enclose(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
         let (w, h) = self.size;
-        let dest = self.offscreen.as_ref().map_or(self.picture, |off| off.picture);
+        let dest = self
+            .offscreen
+            .as_ref()
+            .map_or(self.picture, |off| off.picture);
         let display = self.display;
         // SAFETY: all pictures are live on `display` until Drop; the mask is freed below.
         unsafe {
@@ -701,7 +824,8 @@ impl WarpOverlay {
             }
             if dest != self.picture {
                 // One copy shows the finished frame, never the intermediate backdrop.
-                self.api.composite_src(display, dest, self.picture, (0, 0, w, h));
+                self.api
+                    .composite_src(display, dest, self.picture, (0, 0, w, h));
             }
         }
         self.apply_content_mask(&if alpha <= 0.0 {
@@ -751,7 +875,11 @@ impl Drop for WarpOverlay {
                 free(b.picture);
                 XFreePixmap(self.display, b.pixmap);
             };
-            self.backdrop.take().into_iter().chain(self.offscreen.take()).for_each(release);
+            self.backdrop
+                .take()
+                .into_iter()
+                .chain(self.offscreen.take())
+                .for_each(release);
             if self.window != 0 {
                 XDestroyWindow(self.display, self.window);
             }
@@ -768,14 +896,27 @@ impl Drop for WarpOverlay {
 /// Root screen rect of `display`'s default screen; zero size for a null display.
 fn screen_rect(display: *mut Display) -> WarpRect {
     if display.is_null() {
-        return WarpRect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+        return WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
     }
     // SAFETY: live display per the caller contract; default screen queries have no other preconditions.
     let (w, h) = unsafe {
         let screen = XDefaultScreen(display);
-        (XDisplayWidth(display, screen), XDisplayHeight(display, screen))
+        (
+            XDisplayWidth(display, screen),
+            XDisplayHeight(display, screen),
+        )
     };
-    WarpRect { x: 0.0, y: 0.0, width: f64::from(w), height: f64::from(h) }
+    WarpRect {
+        x: 0.0,
+        y: 0.0,
+        width: f64::from(w),
+        height: f64::from(h),
+    }
 }
 
 /// Checks the display and the XRender transform capability before any X resource exists.
@@ -814,7 +955,10 @@ unsafe fn capture_backdrop(
             XDisplayHeight(display, screen),
         )
     };
-    let (x_end, y_end) = (i64::from(x) + i64::from(width), i64::from(y) + i64::from(height));
+    let (x_end, y_end) = (
+        i64::from(x) + i64::from(width),
+        i64::from(y) + i64::from(height),
+    );
     if x < 0 || y < 0 || x_end > i64::from(screen_w) || y_end > i64::from(screen_h) {
         return Err("overlay: backdrop rect leaves the screen".to_string());
     }
@@ -847,7 +991,8 @@ unsafe fn create_argb_window(
 ) -> Result<(Window, Colormap), String> {
     // SAFETY: live display; screen index is valid for the default screen.
     let screen = unsafe { XDefaultScreen(display) };
-    let visual = match_argb32_visual(display, screen).ok_or("overlay: no 32-bit TrueColor visual")?;
+    let visual =
+        match_argb32_visual(display, screen).ok_or("overlay: no 32-bit TrueColor visual")?;
     // SAFETY: live display; root and visual come from the same screen.
     let root = unsafe { XRootWindow(display, screen) };
     let colormap = unsafe { XCreateColormap(display, root, visual, ALLOC_NONE) };
@@ -941,11 +1086,21 @@ unsafe fn create_default_window(
 mod tests {
     use super::*;
 
-    const SOURCE: WarpRect = WarpRect { x: 100.0, y: 50.0, width: 400.0, height: 300.0 };
+    const SOURCE: WarpRect = WarpRect {
+        x: 100.0,
+        y: 50.0,
+        width: 400.0,
+        height: 300.0,
+    };
 
     #[test]
     fn bounds_cover_source_and_target_with_integer_edges() {
-        let target = WarpRect { x: 20.5, y: 600.2, width: 60.0, height: 40.0 };
+        let target = WarpRect {
+            x: 20.5,
+            y: 600.2,
+            width: 60.0,
+            height: 40.0,
+        };
         let (x, y, w, h) = union_bounds(SOURCE, target);
         assert_eq!((x, y), (20, 50));
         assert_eq!((w, h), (480, 591));
@@ -955,9 +1110,17 @@ mod tests {
 
     #[test]
     fn begin_paths_fail_closed_without_display() {
-        let capture = CapturedImage { width: 400, height: 300, argb: vec![0; 400 * 300 * 4] };
+        let capture = CapturedImage {
+            width: 400,
+            height: 300,
+            argb: vec![0; 400 * 300 * 4],
+        };
         assert!(WarpOverlay::begin(std::ptr::null_mut(), capture, SOURCE, SOURCE).is_err());
-        let capture = CapturedImage { width: 40, height: 30, argb: vec![0; 40 * 30 * 4] };
+        let capture = CapturedImage {
+            width: 40,
+            height: 30,
+            argb: vec![0; 40 * 30 * 4],
+        };
         assert!(WarpOverlay::begin_fade(std::ptr::null_mut(), capture, 0, 0).is_err());
     }
 
@@ -988,7 +1151,10 @@ mod tests {
         let mut last = (0.0, 0.0);
         for step in 0..=10 {
             let frame = fade_frame(f64::from(step) / 10.0);
-            assert!(frame.0 >= last.0 && frame.1 >= last.1, "monotone at step {step}");
+            assert!(
+                frame.0 >= last.0 && frame.1 >= last.1,
+                "monotone at step {step}"
+            );
             last = frame;
         }
         assert_eq!(fade_frame(-3.0), fade_frame(0.0));
@@ -1014,17 +1180,29 @@ mod tests {
         let (mut last_in, mut last_out) = (-1.0, 2.0);
         for step in 0..=20 {
             let t = f64::from(step) / 20.0;
-            let (a_in, a_out) = (fade_alpha(t, TransitionDirection::In), fade_alpha(t, TransitionDirection::Out));
-            assert!(a_in >= last_in && a_out <= last_out, "monotone at step {step}");
+            let (a_in, a_out) = (
+                fade_alpha(t, TransitionDirection::In),
+                fade_alpha(t, TransitionDirection::Out),
+            );
+            assert!(
+                a_in >= last_in && a_out <= last_out,
+                "monotone at step {step}"
+            );
             assert!((0.0..=1.0).contains(&a_in) && (0.0..=1.0).contains(&a_out));
-            assert!((a_in + a_out - 1.0).abs() < 1e-12, "Out is the mirror of In");
+            assert!(
+                (a_in + a_out - 1.0).abs() < 1e-12,
+                "Out is the mirror of In"
+            );
             (last_in, last_out) = (a_in, a_out);
         }
     }
 
     #[test]
     fn rect_move_never_fades_below_minimum_alpha() {
-        assert_eq!(crossfade_alpha(0.0, TransitionDirection::Out, true), MOVE_MIN_ALPHA);
+        assert_eq!(
+            crossfade_alpha(0.0, TransitionDirection::Out, true),
+            MOVE_MIN_ALPHA
+        );
         assert_eq!(crossfade_alpha(1.0, TransitionDirection::In, true), 1.0);
         // Without a rect move the plain fade applies.
         assert_eq!(crossfade_alpha(1.0, TransitionDirection::Out, false), 0.0);
@@ -1032,8 +1210,18 @@ mod tests {
 
     #[test]
     fn lerp_rect_hits_both_rects_at_the_ends() {
-        let a = WarpRect { x: 10.0, y: 20.0, width: 100.0, height: 50.0 };
-        let b = WarpRect { x: 0.0, y: 0.0, width: 400.0, height: 300.0 };
+        let a = WarpRect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let b = WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 300.0,
+        };
         assert_eq!(lerp_rect(a, b, 0.0), a);
         assert_eq!(lerp_rect(a, b, 1.0), b);
         assert_eq!(lerp_rect(a, a, 0.5), a);
@@ -1041,9 +1229,17 @@ mod tests {
 
     #[test]
     fn styled_begin_fails_closed_without_display_for_each_style() {
-        for style in [TransitionStyle::MagicLamp, TransitionStyle::Fade, TransitionStyle::Stretch] {
+        for style in [
+            TransitionStyle::MagicLamp,
+            TransitionStyle::Fade,
+            TransitionStyle::Stretch,
+        ] {
             for direction in [TransitionDirection::In, TransitionDirection::Out] {
-                let capture = CapturedImage { width: 400, height: 300, argb: vec![0; 400 * 300 * 4] };
+                let capture = CapturedImage {
+                    width: 400,
+                    height: 300,
+                    argb: vec![0; 400 * 300 * 4],
+                };
                 let result = WarpOverlay::begin_styled(
                     std::ptr::null_mut(),
                     capture,
@@ -1060,8 +1256,18 @@ mod tests {
 
     #[test]
     fn stretch_frame_hits_source_and_target_exactly() {
-        let a = WarpRect { x: 0.0, y: 489.0, width: 1278.0, height: 300.0 };
-        let b = WarpRect { x: 0.0, y: 0.0, width: 1278.0, height: 1024.0 };
+        let a = WarpRect {
+            x: 0.0,
+            y: 489.0,
+            width: 1278.0,
+            height: 300.0,
+        };
+        let b = WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1278.0,
+            height: 1024.0,
+        };
         assert_eq!(stretch_frame(a, b, 0.0), a);
         assert_eq!(stretch_frame(a, b, 1.0), b);
         assert_eq!(stretch_frame(a, b, 9.0), b);
@@ -1071,25 +1277,56 @@ mod tests {
 
     #[test]
     fn stretch_frame_is_monotone_between_the_rects() {
-        let a = WarpRect { x: 200.0, y: 300.0, width: 100.0, height: 80.0 };
-        let b = WarpRect { x: 0.0, y: 0.0, width: 1278.0, height: 1024.0 };
+        let a = WarpRect {
+            x: 200.0,
+            y: 300.0,
+            width: 100.0,
+            height: 80.0,
+        };
+        let b = WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1278.0,
+            height: 1024.0,
+        };
         let mut last = a;
         for step in 1..=20 {
             let r = stretch_frame(a, b, f64::from(step) / 20.0);
-            assert!(r.x <= last.x + 1e-9 && r.y <= last.y + 1e-9, "origin moves toward target at {step}");
-            assert!(r.width >= last.width - 1e-9 && r.height >= last.height - 1e-9, "size grows at {step}");
+            assert!(
+                r.x <= last.x + 1e-9 && r.y <= last.y + 1e-9,
+                "origin moves toward target at {step}"
+            );
+            assert!(
+                r.width >= last.width - 1e-9 && r.height >= last.height - 1e-9,
+                "size grows at {step}"
+            );
             last = r;
         }
     }
 
     #[test]
     fn stretch_frame_has_no_nan_for_degenerate_rects() {
-        let zero = WarpRect { x: 5.0, y: 5.0, width: 0.0, height: 0.0 };
-        let wide = WarpRect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let zero = WarpRect {
+            x: 5.0,
+            y: 5.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        let wide = WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
         for (a, b) in [(zero, wide), (wide, zero), (zero, zero)] {
             for step in 0..=10 {
                 let r = stretch_frame(a, b, f64::from(step) / 10.0);
-                assert!(r.x.is_finite() && r.y.is_finite() && r.width.is_finite() && r.height.is_finite());
+                assert!(
+                    r.x.is_finite()
+                        && r.y.is_finite()
+                        && r.width.is_finite()
+                        && r.height.is_finite()
+                );
             }
         }
     }

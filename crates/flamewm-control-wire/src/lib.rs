@@ -412,13 +412,9 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
         ControlRequest::Ping => nullary_call(IFACE_ROOT, "Ping"),
         ControlRequest::GetVersion => nullary_call(IFACE_ROOT, "GetVersion"),
         ControlRequest::GetCapabilities => nullary_call(IFACE_ROOT, "GetCapabilities"),
-        ControlRequest::GetShellBootstrap => {
-            nullary_call(IFACE_ROOT, "GetShellBootstrap")
-        }
+        ControlRequest::GetShellBootstrap => nullary_call(IFACE_ROOT, "GetShellBootstrap"),
         ControlRequest::GetWindows => nullary_call(IFACE_WINDOWS, "GetWindows"),
-        ControlRequest::GetApplications => {
-            nullary_call(IFACE_APPLICATIONS, "GetApplications")
-        }
+        ControlRequest::GetApplications => nullary_call(IFACE_APPLICATIONS, "GetApplications"),
         ControlRequest::LaunchApplication { app, options } => WireCall::new(
             IFACE_APPLICATIONS,
             "LaunchApplication",
@@ -588,9 +584,7 @@ pub fn encode_call(request: &ControlRequest) -> Result<WireCall, ControlError> {
                 WireValue::U64(*expected_revision),
             ],
         ),
-        ControlRequest::GetSessionCapabilities => {
-            nullary_call(IFACE_SESSION, "GetCapabilities")
-        }
+        ControlRequest::GetSessionCapabilities => nullary_call(IFACE_SESSION, "GetCapabilities"),
         ControlRequest::GetSystem => nullary_call(IFACE_SYSTEM, "GetSnapshot"),
         ControlRequest::SystemAction {
             action,
@@ -747,9 +741,11 @@ pub fn decode_reply(call: &WireCall, reply: &WireReply) -> Result<ControlRespons
                 .map(application_snapshot)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
-        (IFACE_SETTINGS, "GetSnapshot" | "Apply" | "ResetSection") => Ok(ControlResponse::Settings(
-            settings_snapshot(required_dict(single_reply(reply)?, "snapshot")?)?,
-        )),
+        (IFACE_SETTINGS, "GetSnapshot" | "Apply" | "ResetSection") => {
+            Ok(ControlResponse::Settings(settings_snapshot(
+                required_dict(single_reply(reply)?, "snapshot")?,
+            )?))
+        }
         (IFACE_WORKSPACES, "GetSnapshot") => Ok(ControlResponse::Workspaces(workspace_snapshot(
             required_dict(single_reply(reply)?, "snapshot")?,
         )?)),
@@ -1000,7 +996,12 @@ fn shortcut_snapshot(dict: &WireDict) -> Result<ShortcutSnapshot, ControlError> 
     let bindings = dict
         .iter()
         .filter(|(key, _)| key.as_str() != "revision")
-        .map(|(key, value)| Ok((key.clone(), KeyBinding::assigned(required_string(value, key)?))))
+        .map(|(key, value)| {
+            Ok((
+                key.clone(),
+                KeyBinding::assigned(required_string(value, key)?),
+            ))
+        })
         .collect::<Result<BTreeMap<_, _>, ControlError>>()?;
     Ok(ShortcutSnapshot { revision, bindings })
 }
@@ -3117,7 +3118,10 @@ mod tests {
 
     #[test]
     fn battery_menu_actions_round_trip_through_wire_mapping() {
-        for action in [SystemAction::BatteryMenuOpened, SystemAction::BatteryMenuClosed] {
+        for action in [
+            SystemAction::BatteryMenuOpened,
+            SystemAction::BatteryMenuClosed,
+        ] {
             let request = ControlRequest::SystemAction {
                 action,
                 expected_revision: 4,

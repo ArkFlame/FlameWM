@@ -161,20 +161,28 @@ fn spans_to_rects(spans: &[(u32, u32, u32)]) -> Vec<XRectangle> {
     // curved corners retain their exact independently covered rows.
     let mut rects: Vec<XRectangle> = Vec::new();
     for &(y, start, end) in spans {
-        if end <= start { continue; }
+        if end <= start {
+            continue;
+        }
         let x = start.min(i16::MAX as u32) as i16;
         let yy = y.min(i16::MAX as u32) as i16;
         let width = end.saturating_sub(start).min(u16::MAX as u32) as u16;
         if let Some(last) = rects.last_mut() {
-            if last.x == x && last.width == width &&
-                i32::from(last.y) + i32::from(last.height) == i32::from(yy) &&
-                last.height < u16::MAX
+            if last.x == x
+                && last.width == width
+                && i32::from(last.y) + i32::from(last.height) == i32::from(yy)
+                && last.height < u16::MAX
             {
                 last.height += 1;
                 continue;
             }
         }
-        rects.push(XRectangle { x, y: yy, width, height: 1 });
+        rects.push(XRectangle {
+            x,
+            y: yy,
+            width,
+            height: 1,
+        });
     }
     rects
 }
@@ -247,13 +255,19 @@ mod tests {
         let spans = rounded_mask_spans(100, 80, 12);
         let rects = spans_to_rects(&spans);
         assert!(rects.len() < spans.len() / 2);
-        let covered = |x: u32, y: u32| rects.iter().any(|r| {
-            x >= r.x as u32 && x < r.x as u32 + r.width as u32 &&
-            y >= r.y as u32 && y < r.y as u32 + r.height as u32
-        });
+        let covered = |x: u32, y: u32| {
+            rects.iter().any(|r| {
+                x >= r.x as u32
+                    && x < r.x as u32 + r.width as u32
+                    && y >= r.y as u32
+                    && y < r.y as u32 + r.height as u32
+            })
+        };
         for y in 0..80 {
             for x in 0..100 {
-                let original = spans.iter().any(|&(row, start, end)| row == y && x >= start && x < end);
+                let original = spans
+                    .iter()
+                    .any(|&(row, start, end)| row == y && x >= start && x < end);
                 assert_eq!(covered(x, y), original, "{x},{y}");
             }
         }
@@ -267,11 +281,7 @@ mod tests {
         assert_eq!(spans[2], (2, 0, 2));
         assert_eq!(spans[3], (2, 8, 10));
         assert_eq!(spans.last(), Some(&(9, 0, 10)));
-        let covered = |x: u32, y: u32| {
-            spans
-                .iter()
-                .any(|&(row, s, e)| row == y && x >= s && x < e)
-        };
+        let covered = |x: u32, y: u32| spans.iter().any(|&(row, s, e)| row == y && x >= s && x < e);
         assert!(!covered(5, 5), "interior must be absent");
         assert!(covered(0, 5) && covered(1, 5) && covered(8, 5) && covered(9, 5));
         assert!(!covered(2, 5) && !covered(7, 5));
@@ -298,11 +308,7 @@ mod tests {
         // border columns that remain inside the outer shape.
         assert_eq!(spans[0], (0, 2, 6));
         assert_eq!(spans.last(), Some(&(7, 2, 6)));
-        let covered = |x: u32, y: u32| {
-            spans
-                .iter()
-                .any(|&(row, s, e)| row == y && x >= s && x < e)
-        };
+        let covered = |x: u32, y: u32| spans.iter().any(|&(row, s, e)| row == y && x >= s && x < e);
         assert!(!covered(0, 0), "rounded outer corner pixel must be absent");
         assert!(!covered(4, 4), "interior must be absent");
         assert!(covered(0, 4) && covered(7, 4) && covered(4, 0) && covered(4, 7));
@@ -344,9 +350,15 @@ mod tests {
     fn clip_keeps_rows_inside_the_clip_rect() {
         let spans = rounded_mask_spans(8, 8, 4);
         // Keep rows 0..3 only: rows 0 and 1 and 2 survive with their own spans.
-        assert_eq!(clip_spans(&spans, (0, 0, 8, 3)), vec![(0, 2, 6), (1, 0, 8), (2, 0, 8)]);
+        assert_eq!(
+            clip_spans(&spans, (0, 0, 8, 3)),
+            vec![(0, 2, 6), (1, 0, 8), (2, 0, 8)]
+        );
         // Keep the lower half-plane: rows 5..8, columns 2..8 of the cut shape.
-        assert_eq!(clip_spans(&spans, (2, 5, 8, 8)), vec![(5, 2, 8), (6, 2, 8), (7, 2, 6)]);
+        assert_eq!(
+            clip_spans(&spans, (2, 5, 8, 8)),
+            vec![(5, 2, 8), (6, 2, 8), (7, 2, 6)]
+        );
     }
 
     #[test]

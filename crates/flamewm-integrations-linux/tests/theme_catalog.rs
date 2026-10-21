@@ -70,10 +70,7 @@ fn discover_finds_icon_and_cursor_themes_and_prefers_user_root() {
         "[Icon Theme]\nName=Alpha User\nDirectories=16x16/apps\n[16x16/apps]\nSize=16\n",
     );
     fs::create_dir_all(xdg.join("icons/Alpha/16x16/apps")).unwrap();
-    write_index(
-        &xdg.join("icons/Beta"),
-        "[Icon Theme]\nName=Beta\n",
-    );
+    write_index(&xdg.join("icons/Beta"), "[Icon Theme]\nName=Beta\n");
     fs::create_dir_all(xdg.join("icons/Beta/cursors")).unwrap();
     fs::write(xdg.join("icons/Beta/cursors/left_ptr"), b"x").unwrap();
     fs::create_dir_all(xdg.join("icons/NoIndex")).unwrap();
@@ -103,10 +100,15 @@ fn discover_finds_icon_and_cursor_themes_and_prefers_user_root() {
         .expect("beta cursor");
     assert!(beta_cursor.valid);
     assert!(
-        !ours.iter().any(|e| e.id == "Beta" && e.kind == ThemeKind::Icon),
+        !ours
+            .iter()
+            .any(|e| e.id == "Beta" && e.kind == ThemeKind::Icon),
         "Beta has no Directories= so it is not an icon theme"
     );
-    assert!(!ours.iter().any(|e| e.id == "NoIndex"), "no index.theme, no entry");
+    assert!(
+        !ours.iter().any(|e| e.id == "NoIndex"),
+        "no index.theme, no entry"
+    );
     assert_eq!(
         ours.iter().filter(|e| e.id == "Alpha").count(),
         1,

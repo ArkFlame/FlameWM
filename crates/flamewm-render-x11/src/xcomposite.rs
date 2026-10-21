@@ -88,7 +88,6 @@ impl XCompositeApi {
         }
         Ok((major, minor))
     }
-
 }
 
 /// Rejects empty and oversize captures before any allocation.
@@ -97,7 +96,9 @@ pub fn check_capture_size(width: u32, height: u32) -> Result<(), String> {
         return Err("capture: empty size".to_string());
     }
     if u64::from(width) * u64::from(height) > MAX_CAPTURE_PIXELS {
-        return Err(format!("capture: {width}x{height} exceeds {MAX_CAPTURE_PIXELS} pixels"));
+        return Err(format!(
+            "capture: {width}x{height} exceeds {MAX_CAPTURE_PIXELS} pixels"
+        ));
     }
     Ok(())
 }
@@ -142,7 +143,8 @@ pub fn rgba_to_argb_owned(
 
 fn window_size(display: *mut Display, window: Window) -> Result<(u32, u32), String> {
     let (mut root, mut x, mut y) = (0, 0 as c_int, 0 as c_int);
-    let (mut width, mut height, mut border, mut depth) = (0 as c_uint, 0 as c_uint, 0 as c_uint, 0 as c_uint);
+    let (mut width, mut height, mut border, mut depth) =
+        (0 as c_uint, 0 as c_uint, 0 as c_uint, 0 as c_uint);
     // SAFETY: live display and valid out-pointers for the duration of the call.
     let status = unsafe {
         XGetGeometry(
@@ -187,7 +189,14 @@ pub fn capture_window(display: *mut Display, window: Window) -> Result<CapturedI
 
 /// Visible part of a `w x h` window whose origin is at root `(ox, oy)` on an `sw x sh` screen,
 /// as window-local `(x, y, width, height)`; `None` when nothing is on screen.
-fn visible_subrect(ox: i32, oy: i32, w: u32, h: u32, sw: i32, sh: i32) -> Option<(i32, i32, u32, u32)> {
+fn visible_subrect(
+    ox: i32,
+    oy: i32,
+    w: u32,
+    h: u32,
+    sw: i32,
+    sh: i32,
+) -> Option<(i32, i32, u32, u32)> {
     let x0 = (-ox).max(0);
     let y0 = (-oy).max(0);
     let x1 = (sw - ox).min(w as i32);
@@ -195,18 +204,29 @@ fn visible_subrect(ox: i32, oy: i32, w: u32, h: u32, sw: i32, sh: i32) -> Option
     (x1 > x0 && y1 > y0).then(|| (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
-fn capture_clipped(display: *mut Display, window: Window, width: u32, height: u32) -> Option<CapturedImage> {
+fn capture_clipped(
+    display: *mut Display,
+    window: Window,
+    width: u32,
+    height: u32,
+) -> Option<CapturedImage> {
     use crate::xlib::{XDisplayHeight, XDisplayWidth};
     use crate::xlib_ext::XTranslateCoordinates;
     let screen = unsafe { XDefaultScreen(display) };
     let root = unsafe { XRootWindow(display, screen) };
     let (mut ox, mut oy, mut child) = (0 as c_int, 0 as c_int, 0 as Window);
     // SAFETY: display/window/root are live; the out-pointers are valid locals.
-    let ok = unsafe { XTranslateCoordinates(display, window, root, 0, 0, &mut ox, &mut oy, &mut child) };
+    let ok =
+        unsafe { XTranslateCoordinates(display, window, root, 0, 0, &mut ox, &mut oy, &mut child) };
     if ok == 0 {
         return None;
     }
-    let (sw, sh) = unsafe { (XDisplayWidth(display, screen), XDisplayHeight(display, screen)) };
+    let (sw, sh) = unsafe {
+        (
+            XDisplayWidth(display, screen),
+            XDisplayHeight(display, screen),
+        )
+    };
     let (vx, vy, vw, vh) = visible_subrect(ox, oy, width, height, sw, sh)?;
     let BackdropCapture {
         width: cw,
@@ -321,8 +341,23 @@ pub(crate) unsafe fn upload_pixmap_depth(
         let start = y as usize * row_bytes;
         let bytes = rows as usize * row_bytes;
         unsafe {
-            std::ptr::copy_nonoverlapping(capture.argb[start..start + bytes].as_ptr(), data.cast(), bytes);
-            XPutImage(display, pixmap, gc, image, 0, 0, 0, y as c_int, capture.width, rows);
+            std::ptr::copy_nonoverlapping(
+                capture.argb[start..start + bytes].as_ptr(),
+                data.cast(),
+                bytes,
+            );
+            XPutImage(
+                display,
+                pixmap,
+                gc,
+                image,
+                0,
+                0,
+                0,
+                y as c_int,
+                capture.width,
+                rows,
+            );
         }
         y += rows;
     }
@@ -391,7 +426,9 @@ mod tests {
     #[test]
     fn embed_subrect_full_frame_fast_path_matches_copy() {
         let (width, height) = (5u32, 3u32);
-        let frame: Vec<u8> = (0..(width * height * 4)).map(|i| (i * 7 % 251) as u8).collect();
+        let frame: Vec<u8> = (0..(width * height * 4))
+            .map(|i| (i * 7 % 251) as u8)
+            .collect();
         // Slow path oracle: the zeroed-frame copy, applied to a full-frame capture.
         let mut slow = vec![0u8; frame.len()];
         for row in 0..height as usize {
@@ -488,13 +525,21 @@ mod tests {
         assert!(capture_window(std::ptr::null_mut(), 0).is_err());
     }
 
-
     #[test]
     fn visible_subrect_clips_to_the_screen_and_rejects_offscreen() {
         // Maximized 1280x756 frame interior at root (1,1) on a 1280x800 screen: one column short.
-        assert_eq!(visible_subrect(1, 1, 1280, 756, 1280, 800), Some((0, 0, 1279, 756)));
-        assert_eq!(visible_subrect(-4, -2, 100, 50, 1280, 800), Some((4, 2, 96, 48)));
-        assert_eq!(visible_subrect(0, 0, 10, 10, 1280, 800), Some((0, 0, 10, 10)));
+        assert_eq!(
+            visible_subrect(1, 1, 1280, 756, 1280, 800),
+            Some((0, 0, 1279, 756))
+        );
+        assert_eq!(
+            visible_subrect(-4, -2, 100, 50, 1280, 800),
+            Some((4, 2, 96, 48))
+        );
+        assert_eq!(
+            visible_subrect(0, 0, 10, 10, 1280, 800),
+            Some((0, 0, 10, 10))
+        );
         assert_eq!(visible_subrect(1280, 0, 10, 10, 1280, 800), None);
     }
 

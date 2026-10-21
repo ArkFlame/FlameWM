@@ -3,17 +3,19 @@
 //! Each owner keeps its own connection, root, atom table, property readers and
 //! `pending_mode` state; the owner passes those in as parameters.
 
-use flamewm_api::display::DisplaySnapshot;
+use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
 use flamewm_api::input::PointerPosition;
-use flamewm_api::wm_features::FeatureAction;
+use flamewm_api::wm_features::{FeatureAction, WindowFeatureSnapshot};
+use flamewm_api::workspace::WorkspaceSnapshot;
 use flamewm_api::{
-    ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, TransactionId,
+    ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, Size, TransactionId,
 };
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
 use x11rb::protocol::xproto::{
-    self, Atom, ClientMessageData, ClientMessageEvent, ConnectionExt, EventMask, Window,
+    self, Atom, ClientMessageData, ClientMessageEvent, ConfigureWindowAux, ConnectionExt,
+    EventMask, Window,
 };
 use x11rb::rust_connection::RustConnection;
 
@@ -35,6 +37,91 @@ fn io_error<E: std::fmt::Display>(error: E) -> FlameError {
 
 fn signed(value: u32) -> i32 {
     value as i32
+}
+
+pub fn window_geometry_aux(geometry: Rect) -> FlameResult<ConfigureWindowAux> {
+    if !geometry.is_valid() {
+        return Err(FlameError::invalid("window geometry is invalid"));
+    }
+    Ok(ConfigureWindowAux::new()
+        .x(geometry.x)
+        .y(geometry.y)
+        .width(
+            u32::try_from(geometry.width)
+                .map_err(|_| FlameError::invalid("window width is invalid"))?,
+        )
+        .height(
+            u32::try_from(geometry.height)
+                .map_err(|_| FlameError::invalid("window height is invalid"))?,
+        ))
+}
+
+pub fn feature_snapshot(states: &[u32], atom: impl Fn(&str) -> Atom) -> WindowFeatureSnapshot {
+    let has = |name| states.contains(&atom(name));
+    WindowFeatureSnapshot {
+        sticky: has("_NET_WM_STATE_STICKY"),
+        modal: has("_NET_WM_STATE_MODAL"),
+        shaded: has("_NET_WM_STATE_SHADED"),
+        skip_taskbar: has("_NET_WM_STATE_SKIP_TASKBAR"),
+        skip_pager: has("_NET_WM_STATE_SKIP_PAGER"),
+        above: has("_NET_WM_STATE_ABOVE"),
+        below: has("_NET_WM_STATE_BELOW"),
+        demands_attention: has("_NET_WM_STATE_DEMANDS_ATTENTION"),
+    }
+}
+
+pub fn workspace_snapshot(
+    count: usize,
+    active_index: usize,
+    name_bytes: &[u8],
+    revision: u64,
+) -> WorkspaceSnapshot {
+    let count = count.max(1);
+    let names = name_bytes
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .collect();
+    WorkspaceSnapshot {
+        revision,
+        count,
+        active_index: active_index.min(count - 1),
+        last_index: None,
+        names,
+    }
+}
+
+pub fn base_work_areas(work_area: Rect, outputs: &[OutputSnapshot]) -> Vec<(OutputId, Rect)> {
+    outputs
+        .iter()
+        .filter_map(|output| {
+            output
+                .geometry
+                .intersection(work_area)
+                .map(|area| (output.id.clone(), area))
+        })
+        .collect()
+}
+
+pub fn display_modes(
+    output_modes: &[randr::Mode],
+    resource_modes: &[randr::ModeInfo],
+) -> Vec<DisplayMode> {
+    output_modes
+        .iter()
+        .filter_map(|id| resource_modes.iter().find(|mode| mode.id == *id))
+        .map(|mode| DisplayMode {
+            id: ModeId(u64::from(mode.id)),
+            resolution: Size::new(i32::from(mode.width), i32::from(mode.height)),
+            refresh_millihz: if mode.htotal == 0 || mode.vtotal == 0 {
+                0
+            } else {
+                ((mode.dot_clock as u64 * 1000) / u64::from(mode.htotal) / u64::from(mode.vtotal))
+                    as i32
+            },
+            preferred: output_modes.first() == Some(&mode.id),
+        })
+        .collect()
 }
 
 pub fn client_message(
@@ -83,7 +170,10 @@ pub fn send_state(
 /// `property32` reads a root-window property as 32-bit words for the owner's connection.
 pub fn root_work_area(property32: impl Fn(&str) -> FlameResult<Vec<u32>>) -> FlameResult<Rect> {
     let invalid = || FlameError::unavailable("root _NET_WORKAREA is invalid");
-    let desktop = property32("_NET_CURRENT_DESKTOP")?.first().copied().unwrap_or(0) as usize;
+    let desktop = property32("_NET_CURRENT_DESKTOP")?
+        .first()
+        .copied()
+        .unwrap_or(0) as usize;
     let values = property32("_NET_WORKAREA")?;
     let start = desktop.checked_mul(4).ok_or_else(invalid)?;
     if values.len() < start.saturating_add(4) {
@@ -202,4 +292,124 @@ pub fn apply_mode(
         return Ok(transaction);
     }
     Err(FlameError::not_found("RandR output not found"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(id: &str, geometry: Rect) -> OutputSnapshot {
+        OutputSnapshot {
+            id: OutputId::new(id),
+            connector: id.to_owned(),
+            edid_identity: String::new(),
+            connected: true,
+            primary: false,
+            geometry,
+            current_mode: ModeId(0),
+            modes: Vec::new(),
+            shell_scale_percent: 100,
+        }
+    }
+
+    #[test]
+    fn shared_window_geometry_conversion_validates_before_x_request() {
+        let aux = window_geometry_aux(Rect::new(-4, 9, 640, 480)).unwrap();
+        assert_eq!(aux.x, Some(-4));
+        assert_eq!(aux.y, Some(9));
+        assert_eq!(aux.width, Some(640));
+        assert_eq!(aux.height, Some(480));
+        assert!(window_geometry_aux(Rect::new(0, 0, 0, 10)).is_err());
+        assert!(window_geometry_aux(Rect::new(0, 0, -1, 10)).is_err());
+    }
+
+    #[test]
+    fn shared_feature_projection_maps_each_ewmh_atom_independently() {
+        let names = [
+            "_NET_WM_STATE_STICKY",
+            "_NET_WM_STATE_SHADED",
+            "_NET_WM_STATE_SKIP_PAGER",
+            "_NET_WM_STATE_ABOVE",
+            "_NET_WM_STATE_DEMANDS_ATTENTION",
+        ];
+        let atoms = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (*name, i as Atom + 10))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let states = [10, 11, 12, 13, 14];
+        let snapshot = feature_snapshot(&states, |name| atoms.get(name).copied().unwrap_or(0));
+        assert!(snapshot.sticky);
+        assert!(!snapshot.modal);
+        assert!(snapshot.shaded);
+        assert!(!snapshot.skip_taskbar);
+        assert!(snapshot.skip_pager);
+        assert!(snapshot.above);
+        assert!(!snapshot.below);
+        assert!(snapshot.demands_attention);
+        assert_eq!(
+            feature_snapshot(&[], |_| 0),
+            WindowFeatureSnapshot::default()
+        );
+    }
+
+    #[test]
+    fn workspace_projection_clamps_topology_and_preserves_revision() {
+        let snapshot = workspace_snapshot(0, 7, b"one\0\0two\xff\0", 42);
+        assert_eq!(snapshot.revision, 42);
+        assert_eq!(snapshot.count, 1);
+        assert_eq!(snapshot.active_index, 0);
+        assert_eq!(snapshot.names, vec!["one".to_owned(), "two�".to_owned()]);
+        let snapshot = workspace_snapshot(4, 8, b"", 9);
+        assert_eq!(snapshot.active_index, 3);
+        assert!(snapshot.names.is_empty());
+    }
+
+    #[test]
+    fn work_area_projection_keeps_order_and_only_intersections() {
+        let outputs = [
+            output("left", Rect::new(-100, 0, 100, 100)),
+            output("right", Rect::new(0, 0, 100, 100)),
+            output("disabled", Rect::default()),
+        ];
+        assert_eq!(
+            base_work_areas(Rect::new(-50, 20, 100, 50), &outputs),
+            vec![
+                (OutputId::new("left"), Rect::new(-50, 20, 50, 50)),
+                (OutputId::new("right"), Rect::new(0, 20, 50, 50)),
+            ]
+        );
+    }
+
+    #[test]
+    fn randr_mode_projection_preserves_server_order_refresh_and_preference() {
+        let modes = [
+            randr::ModeInfo {
+                id: 7,
+                width: 1920,
+                height: 1080,
+                dot_clock: 148_500_000,
+                htotal: 2200,
+                vtotal: 1125,
+                ..Default::default()
+            },
+            randr::ModeInfo {
+                id: 8,
+                width: 800,
+                height: 600,
+                dot_clock: 40_000_000,
+                htotal: 0,
+                vtotal: 628,
+                ..Default::default()
+            },
+        ];
+        let projected = display_modes(&[8, 7, 99], &modes);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].id, ModeId(8));
+        assert_eq!(projected[0].refresh_millihz, 0);
+        assert!(projected[0].preferred);
+        assert_eq!(projected[1].id, ModeId(7));
+        assert_eq!(projected[1].refresh_millihz, 60_000);
+        assert!(!projected[1].preferred);
+    }
 }

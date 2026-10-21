@@ -16,7 +16,7 @@ mod size_hints;
 pub(crate) mod snap_preview;
 mod wm;
 
-pub use flamewm_render_x11::apply_cursor_theme;
+pub use flamewm_render_x11::{apply_cursor_shadow, apply_cursor_theme};
 pub use runtime::{
     SettingsObserver, SettingsWake, persisted_appearance, persisted_cursor_theme, run,
     run_with_settings_observer,
@@ -24,12 +24,12 @@ pub use runtime::{
 pub use wm::WmConfig;
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
@@ -45,8 +45,8 @@ use flamewm_api::{
     TransactionId, WindowRef, WorkspaceRef,
 };
 use flamewm_applications::{ApplicationCatalog, WindowApplicationIdentity};
-use flamewm_x11_desktop::shortcuts::{ShortcutGrabs, XGrabBackend, read_keyboard_table};
 use flamewm_x11_desktop::shared::{self, PendingMode};
+use flamewm_x11_desktop::shortcuts::{ShortcutGrabs, XGrabBackend, read_keyboard_table};
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
@@ -246,7 +246,10 @@ impl X11Desktop {
     }
     fn root_size(&self) -> Size {
         let root = &self.conn.setup().roots[self.screen];
-        Size::new(i32::from(root.width_in_pixels), i32::from(root.height_in_pixels))
+        Size::new(
+            i32::from(root.width_in_pixels),
+            i32::from(root.height_in_pixels),
+        )
     }
 }
 
@@ -298,20 +301,35 @@ fn output_for_window_rect(outputs: &[OutputSnapshot], rect: Rect) -> Option<Outp
         rect.x.saturating_add(rect.width / 2),
         rect.y.saturating_add(rect.height / 2),
     );
-    if let Some(output) = outputs.iter().find(|output| output.geometry.contains(centre)) {
+    if let Some(output) = outputs
+        .iter()
+        .find(|output| output.geometry.contains(centre))
+    {
         return Some(output.id.clone());
     }
     let mut best: Option<(&OutputSnapshot, u64)> = None;
     for output in outputs {
-        let width = rect.right().min(output.geometry.right()).saturating_sub(rect.x.max(output.geometry.x));
-        let height = rect.bottom().min(output.geometry.bottom()).saturating_sub(rect.y.max(output.geometry.y));
-        let area = u64::try_from(width).unwrap_or(0).saturating_mul(u64::try_from(height).unwrap_or(0));
+        let width = rect
+            .right()
+            .min(output.geometry.right())
+            .saturating_sub(rect.x.max(output.geometry.x));
+        let height = rect
+            .bottom()
+            .min(output.geometry.bottom())
+            .saturating_sub(rect.y.max(output.geometry.y));
+        let area = u64::try_from(width)
+            .unwrap_or(0)
+            .saturating_mul(u64::try_from(height).unwrap_or(0));
         if area > 0 && best.map_or(true, |(_, score)| area > score) {
             best = Some((output, area));
         }
     }
-    best.map(|(output, _)| output.id.clone())
-        .or_else(|| outputs.iter().find(|output| output.primary).map(|output| output.id.clone()))
+    best.map(|(output, _)| output.id.clone()).or_else(|| {
+        outputs
+            .iter()
+            .find(|output| output.primary)
+            .map(|output| output.id.clone())
+    })
 }
 
 impl WindowPort for X11Desktop {
@@ -405,7 +423,10 @@ impl WindowPort for X11Desktop {
     fn maximize(&mut self, w: WindowRef) -> FlameResult<()> {
         let window = self.check_window(w)?;
         self.bump_generation(window);
-        for name in ["_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ"] {
+        for name in [
+            "_NET_WM_STATE_MAXIMIZED_VERT",
+            "_NET_WM_STATE_MAXIMIZED_HORZ",
+        ] {
             self.send_state(window, self.atom(name), FeatureAction::Add)?;
         }
         Ok(())
@@ -429,26 +450,11 @@ impl WindowPort for X11Desktop {
         self.client_message(window, "_NET_CLOSE_WINDOW", [CURRENT_TIME, 2, 0, 0, 0])
     }
     fn set_outer_geometry(&mut self, w: WindowRef, geometry: Rect) -> FlameResult<()> {
-        if !geometry.is_valid() {
-            return Err(FlameError::invalid("window geometry is invalid"));
-        }
+        let geometry = shared::window_geometry_aux(geometry)?;
         let window = self.check_window(w)?;
         self.bump_generation(window);
         self.conn
-            .configure_window(
-                window,
-                &xproto::ConfigureWindowAux::new()
-                    .x(geometry.x)
-                    .y(geometry.y)
-                    .width(
-                        u32::try_from(geometry.width)
-                            .map_err(|_| FlameError::invalid("window width is invalid"))?,
-                    )
-                    .height(
-                        u32::try_from(geometry.height)
-                            .map_err(|_| FlameError::invalid("window height is invalid"))?,
-                    ),
-            )
+            .configure_window(window, &geometry)
             .map_err(io_error)?
             .check()
             .map_err(io_error)?;
@@ -462,17 +468,7 @@ impl WindowPort for X11Desktop {
     }
     fn feature_snapshot(&self, w: WindowRef) -> FlameResult<WindowFeatureSnapshot> {
         let states = self.property32(self.check_window(w)?, "_NET_WM_STATE")?;
-        let has = |n: &str| states.contains(&self.atom(n));
-        Ok(WindowFeatureSnapshot {
-            sticky: has("_NET_WM_STATE_STICKY"),
-            modal: has("_NET_WM_STATE_MODAL"),
-            shaded: has("_NET_WM_STATE_SHADED"),
-            skip_taskbar: has("_NET_WM_STATE_SKIP_TASKBAR"),
-            skip_pager: has("_NET_WM_STATE_SKIP_PAGER"),
-            above: has("_NET_WM_STATE_ABOVE"),
-            below: has("_NET_WM_STATE_BELOW"),
-            demands_attention: has("_NET_WM_STATE_DEMANDS_ATTENTION"),
-        })
+        Ok(shared::feature_snapshot(&states, |name| self.atom(name)))
     }
     fn apply_window_feature(
         &mut self,
@@ -509,18 +505,12 @@ impl WorkspacePort for X11Desktop {
             .copied()
             .unwrap_or(0) as usize;
         let bytes = self.property_bytes(self.root, "_NET_DESKTOP_NAMES")?;
-        let names = bytes
-            .split(|b| *b == 0)
-            .filter(|v| !v.is_empty())
-            .map(|v| String::from_utf8_lossy(v).into_owned())
-            .collect();
-        Ok(WorkspaceSnapshot {
-            revision: workspace_generation(),
-            count: count.max(1),
-            active_index: active_index.min(count.max(1) - 1),
-            last_index: None,
-            names,
-        })
+        Ok(shared::workspace_snapshot(
+            count,
+            active_index,
+            &bytes,
+            workspace_generation(),
+        ))
     }
     fn activate_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
         // Only the desktop count is needed here; reading the full snapshot
@@ -617,7 +607,7 @@ impl SessionPort for X11Desktop {
             SessionAction::Lock => return flamewm_x11_desktop::start_lock_screen(),
             SessionAction::LockPreview => return flamewm_x11_desktop::start_lock_preview(),
             SessionAction::ScreensaverPreview => {
-                return flamewm_x11_desktop::start_screensaver_preview()
+                return flamewm_x11_desktop::start_screensaver_preview();
             }
             SessionAction::Logout => {
                 if !flamewm_x11_desktop::session_logout_supported() {
@@ -662,8 +652,8 @@ pub(crate) fn shortcut_action_for_key(keycode: u8, state: u16) -> Option<String>
         .map(str::to_owned);
     if wm::key_diag_enabled() {
         // Same masking as ShortcutGrabs::action_for_key: NumLock/CapsLock ignored.
-        let lock_bits = flamewm_x11_desktop::shortcuts::MOD_LOCK
-            | flamewm_x11_desktop::shortcuts::MOD_NUM_LOCK;
+        let lock_bits =
+            flamewm_x11_desktop::shortcuts::MOD_LOCK | flamewm_x11_desktop::shortcuts::MOD_NUM_LOCK;
         eprintln!(
             "flamewm: shortcut lookup keycode={} masked_state={:04x} grab_matched={} action={}",
             keycode,
@@ -704,7 +694,10 @@ pub(crate) fn log_committed_startup_shortcuts(
     let table = match read_keyboard_table(&*port.conn) {
         Ok(table) => table,
         Err(error) => {
-            eprintln!("flamewm: shortcut commit diag: keyboard table unreadable: {}", error.message);
+            eprintln!(
+                "flamewm: shortcut commit diag: keyboard table unreadable: {}",
+                error.message
+            );
             return;
         }
     };
@@ -780,17 +773,8 @@ impl TrayPort for X11Desktop {
 impl WorkAreaPort for X11Desktop {
     fn base_work_areas(&self) -> FlameResult<Vec<(OutputId, Rect)>> {
         let work_area = self.root_work_area()?;
-        Ok(self
-            .display_snapshot()?
-            .outputs
-            .into_iter()
-            .filter_map(|output| {
-                output
-                    .geometry
-                    .intersection(work_area)
-                    .map(|area| (output.id, area))
-            })
-            .collect())
+        let outputs = self.display_snapshot()?;
+        Ok(shared::base_work_areas(work_area, &outputs.outputs))
     }
     fn apply_flame_reservations(&mut self, _reservations: &[(OutputId, Rect)]) -> FlameResult<()> {
         Err(unsupported(
@@ -827,7 +811,9 @@ impl DisplayPort for X11Desktop {
             .map_err(io_error)?;
         // Stable physical output identity: never infer primary from RandR
         // resource enumeration order (it can change after hotplug/rotation).
-        let primary_output = self.conn.randr_get_output_primary(self.root)
+        let primary_output = self
+            .conn
+            .randr_get_output_primary(self.root)
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .map(|reply| reply.output)
@@ -846,22 +832,7 @@ impl DisplayPort for X11Desktop {
             if u8::from(info.connection) != u8::from(randr::Connection::CONNECTED) {
                 continue;
             }
-            let modes = info
-                .modes
-                .iter()
-                .filter_map(|id| resources.modes.iter().find(|m| m.id == *id))
-                .map(|m| DisplayMode {
-                    id: ModeId(u64::from(m.id)),
-                    resolution: Size::new(i32::from(m.width), i32::from(m.height)),
-                    refresh_millihz: if m.htotal == 0 || m.vtotal == 0 {
-                        0
-                    } else {
-                        ((m.dot_clock as u64 * 1000) / u64::from(m.htotal) / u64::from(m.vtotal))
-                            as i32
-                    },
-                    preferred: info.modes.first() == Some(&m.id),
-                })
-                .collect::<Vec<_>>();
+            let modes = shared::display_modes(&info.modes, &resources.modes);
             let crtc = info.crtc;
             let (geometry, current_mode) = if crtc != 0 {
                 let c = self
@@ -922,8 +893,13 @@ impl DisplayPort for X11Desktop {
         }
         // Some nested and legacy X servers do not implement RandR primary.
         // In that case stabilize fallback by connector, not enumeration order.
-        if !outputs.iter().any(|output| output.primary && output.geometry.is_valid()) {
-            for output in &mut outputs { output.primary = false; }
+        if !outputs
+            .iter()
+            .any(|output| output.primary && output.geometry.is_valid())
+        {
+            for output in &mut outputs {
+                output.primary = false;
+            }
             outputs.sort_by(|a, b| a.connector.cmp(&b.connector));
             if let Some(output) = outputs.iter_mut().find(|output| output.geometry.is_valid()) {
                 output.primary = true;
@@ -1022,10 +998,16 @@ mod output_derivation_tests {
     fn centre_containment_picks_the_output_under_the_window_centre() {
         let outputs = two_outputs();
         let on_b = Rect::new(1100, 100, 200, 200);
-        assert_eq!(output_for_window_rect(&outputs, on_b), Some(OutputId::new("B")));
+        assert_eq!(
+            output_for_window_rect(&outputs, on_b),
+            Some(OutputId::new("B"))
+        );
         // Straddling the seam: centre at x=1000 belongs to B.
         let seam = Rect::new(900, 100, 200, 200);
-        assert_eq!(output_for_window_rect(&outputs, seam), Some(OutputId::new("B")));
+        assert_eq!(
+            output_for_window_rect(&outputs, seam),
+            Some(OutputId::new("B"))
+        );
     }
 
     #[test]
@@ -1035,9 +1017,15 @@ mod output_derivation_tests {
             output("A", Rect::new(0, 0, 1920, 1080), true),
         ];
         let window = Rect::new(-1800, 100, 400, 300);
-        assert_eq!(output_for_window_rect(&outputs, window), Some(OutputId::new("LEFT")));
+        assert_eq!(
+            output_for_window_rect(&outputs, window),
+            Some(OutputId::new("LEFT"))
+        );
         let spanning = Rect::new(-100, 100, 400, 300);
-        assert_eq!(output_for_window_rect(&outputs, spanning), Some(OutputId::new("A")));
+        assert_eq!(
+            output_for_window_rect(&outputs, spanning),
+            Some(OutputId::new("A"))
+        );
     }
 
     #[test]
@@ -1045,10 +1033,16 @@ mod output_derivation_tests {
         let outputs = two_outputs();
         // Centre (2100, 800) is off both outputs; overlap with B is 100x100.
         let mostly_b = Rect::new(1900, 700, 400, 200);
-        assert_eq!(output_for_window_rect(&outputs, mostly_b), Some(OutputId::new("B")));
+        assert_eq!(
+            output_for_window_rect(&outputs, mostly_b),
+            Some(OutputId::new("B"))
+        );
         // No overlap at all: primary output wins.
         let nowhere = Rect::new(5000, 5000, 100, 100);
-        assert_eq!(output_for_window_rect(&outputs, nowhere), Some(OutputId::new("A")));
+        assert_eq!(
+            output_for_window_rect(&outputs, nowhere),
+            Some(OutputId::new("A"))
+        );
     }
 
     #[test]
@@ -1071,8 +1065,10 @@ mod output_derivation_tests {
     #[test]
     fn lone_xephyr_output_uses_real_mode_when_advertised() {
         let mode = DisplayMode {
-            id: ModeId(42), resolution: Size::new(1350, 641),
-            refresh_millihz: 60_000, preferred: true,
+            id: ModeId(42),
+            resolution: Size::new(1350, 641),
+            refresh_millihz: 60_000,
+            preferred: true,
         };
         assert_eq!(
             super::single_output_root_geometry(true, Size::new(1350, 641), &[mode]),

@@ -354,7 +354,9 @@ mod css_contract_tests {
         let mut rest = css;
         while let Some(start) = rest.find("/*") {
             plain.push_str(&rest[..start]);
-            rest = rest[start..].find("*/").map_or("", |end| &rest[start + end + 2..]);
+            rest = rest[start..]
+                .find("*/")
+                .map_or("", |end| &rest[start + end + 2..]);
         }
         plain.push_str(rest);
         let blocks = plain.matches('{').count();
@@ -377,7 +379,10 @@ mod css_contract_tests {
         let css = MENU_CSS;
         assert_eq!(px(css, ".context-menu", "min-width"), MENU_MIN_WIDTH);
         assert_eq!(px(css, ".context-menu", "padding"), MENU_PADDING);
-        assert_eq!(px(css, ".context-menu", "border-radius"), shape_radius(true));
+        assert_eq!(
+            px(css, ".context-menu", "border-radius"),
+            shape_radius(true)
+        );
         assert_eq!(px(css, ".menu-row", "min-width"), MIN_ROW_WIDTH);
         assert_eq!(px(css, ".menu-row", "height"), ROW_HEIGHT);
         assert_eq!(px(css, ".menu-row", "padding-left"), ROW_PADDING_LEFT);
@@ -397,7 +402,12 @@ mod css_contract_tests {
 
     #[test]
     fn menu_rules_are_owned_only_by_shared_sheet() {
-        for owned in [".context-menu", ".menu-row", ".menu-header", ".menu-separator"] {
+        for owned in [
+            ".context-menu",
+            ".menu-row",
+            ".menu-header",
+            ".menu-separator",
+        ] {
             for (name, css) in [("flamewm.css", SHELL_CSS), ("desktop.css", DESKTOP_CSS)] {
                 assert!(
                     !selectors(css).iter().any(|item| item == owned),

@@ -81,7 +81,9 @@ impl TaskReorderSession {
 }
 
 fn same_order(original: &[TaskEntryId], panels: &PanelsSnapshot) -> bool {
-    original.iter().eq(panels.tasks.iter().map(|entry| &entry.id))
+    original
+        .iter()
+        .eq(panels.tasks.iter().map(|entry| &entry.id))
 }
 
 #[must_use]

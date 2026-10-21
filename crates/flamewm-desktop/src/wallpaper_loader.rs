@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
-use flamewm_api::background::WallpaperFit;
 use flamewm_api::Rect;
+use flamewm_api::background::WallpaperFit;
 use flamewm_integrations_linux::icons::{IconOrigin, Rgba8Raster};
 
 use crate::wallpaper_fit;
 
-use flamewm_image_core::{RgbaImage, wallpaper::BACKGROUND};
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
+use flamewm_image_core::{RgbaImage, wallpaper::BACKGROUND};
 
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -473,8 +473,7 @@ fn compose_decoded(
     share: bool,
 ) -> Option<RgbaImage> {
     let full_root = share || monitors.is_empty() || single_full_root_output(monitors, target);
-    if full_root && target.0 != 0 && target.1 != 0
-        && (natural.width, natural.height) == target {
+    if full_root && target.0 != 0 && target.1 != 0 && (natural.width, natural.height) == target {
         return Some(natural);
     }
     if full_root {
@@ -492,7 +491,12 @@ fn compose_per_monitor(
 ) -> Option<RgbaImage> {
     let (width, height) = target;
     flamewm_image_core::check_size_limits(width, height).ok()?;
-    let root = Rect::new(0, 0, i32::try_from(width).ok()?, i32::try_from(height).ok()?);
+    let root = Rect::new(
+        0,
+        0,
+        i32::try_from(width).ok()?,
+        i32::try_from(height).ok()?,
+    );
     let mut canvas = RgbaImage {
         width,
         height,
@@ -541,7 +545,11 @@ mod tests {
                 pixels.extend_from_slice(&[x * 35, y * 65, 17, 100 + x * 10]);
             }
         }
-        let natural = RgbaImage { width: 5, height: 3, pixels };
+        let natural = RgbaImage {
+            width: 5,
+            height: 3,
+            pixels,
+        };
         let target = (7, 6);
         let monitors = [Rect::new(0, 0, 7, 6)];
         for fit in [
@@ -585,11 +593,19 @@ mod tests {
                 let original_ptr = image.pixels.as_ptr();
                 let composed = compose_decoded(image, (2, 2), &monitors, fit, share)
                     .expect("identity compose");
-                assert_eq!(composed.pixels.as_ptr(), original_ptr, "{fit:?}: move pixels");
+                assert_eq!(
+                    composed.pixels.as_ptr(),
+                    original_ptr,
+                    "{fit:?}: move pixels"
+                );
                 assert_eq!(composed.pixels.len(), 16);
             }
         }
-        let zero = RgbaImage { width: 0, height: 0, pixels: Vec::new() };
+        let zero = RgbaImage {
+            width: 0,
+            height: 0,
+            pixels: Vec::new(),
+        };
         assert!(compose_decoded(zero, (0, 0), &[], WallpaperFit::Fill, true).is_none());
     }
 
@@ -601,12 +617,16 @@ mod tests {
                 pixels.extend_from_slice(&[x * 60, 0, 0, 255]);
             }
         }
-        let natural = RgbaImage { width: 4, height: 2, pixels };
+        let natural = RgbaImage {
+            width: 4,
+            height: 2,
+            pixels,
+        };
         let monitors = [Rect::new(0, 0, 2, 2), Rect::new(2, 0, 2, 2)];
         let independent = compose_per_monitor(&natural, (4, 2), &monitors, WallpaperFit::Fill)
             .expect("monitor canvas");
-        let shared = wallpaper_fit::compose(&natural, 4, 2, WallpaperFit::Fill)
-            .expect("shared canvas");
+        let shared =
+            wallpaper_fit::compose(&natural, 4, 2, WallpaperFit::Fill).expect("shared canvas");
         let red_at = |image: &RgbaImage, x: usize| image.pixels[x * 4];
         assert_eq!(red_at(&independent, 0), 60);
         assert_eq!(red_at(&independent, 2), 60);

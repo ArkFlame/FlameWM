@@ -120,7 +120,6 @@ pub(crate) fn native_configures(
     }
 }
 
-
 pub(crate) fn wait_until<F>(timeout_ms: u64, mut ready: F) -> bool
 where
     F: FnMut() -> bool,
@@ -181,9 +180,9 @@ enum X03ProbeError {
 impl X03ProbeError {
     fn detail(&self) -> &str {
         match self {
-            Self::IdentityChange(detail) | Self::RouteMismatch(detail) | Self::XtestFailed(detail) => {
-                detail
-            }
+            Self::IdentityChange(detail)
+            | Self::RouteMismatch(detail)
+            | Self::XtestFailed(detail) => detail,
         }
     }
 }
@@ -192,20 +191,18 @@ fn x03_identity(
     canary: &crate::Canary,
     pinned: PinnedX03,
 ) -> Result<(crate::WinInfo, crate::WinInfo), X03ProbeError> {
-    let client = child_of(canary, pinned.client, pinned.frame)
-        .ok_or_else(|| {
-            X03ProbeError::IdentityChange(format!(
-                "client={} frame={} client_missing_or_reparented",
-                pinned.client, pinned.frame
-            ))
-        })?;
-    let frame = child_of(canary, pinned.frame, canary.root)
-        .ok_or_else(|| {
-            X03ProbeError::IdentityChange(format!(
-                "client={} frame={} frame_missing_or_reparented",
-                pinned.client, pinned.frame
-            ))
-        })?;
+    let client = child_of(canary, pinned.client, pinned.frame).ok_or_else(|| {
+        X03ProbeError::IdentityChange(format!(
+            "client={} frame={} client_missing_or_reparented",
+            pinned.client, pinned.frame
+        ))
+    })?;
+    let frame = child_of(canary, pinned.frame, canary.root).ok_or_else(|| {
+        X03ProbeError::IdentityChange(format!(
+            "client={} frame={} frame_missing_or_reparented",
+            pinned.client, pinned.frame
+        ))
+    })?;
     Ok((client, frame))
 }
 
@@ -661,7 +658,10 @@ fn run_x02(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let selected = prepare_native_measurement(canary, &before);
     let maximized_once = reset && maximize_with_xtest(canary, &before);
     let Some(current) = super::window_interaction::resolve_target(canary, args) else {
-        return fail(format!("scenario=X02 id={} target_lost_after_maximize", target.id));
+        return fail(format!(
+            "scenario=X02 id={} target_lost_after_maximize",
+            target.id
+        ));
     };
     let Some(max_surface) = input_surface(canary, &current) else {
         return fail(format!("scenario=X02 id={} max_frame_not_ready", target.id));
@@ -778,8 +778,7 @@ fn run_x03(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     }
     let position_changed =
         after_surface.x != initial_surface.x || after_surface.y != initial_surface.y;
-    let size_restored =
-        after.width == floating.width && after.height == floating.height;
+    let size_restored = after.width == floating.width && after.height == floating.height;
     let native = native_configures(canary, &after, 250);
     let pass = selected_before
         && selected_after
@@ -908,9 +907,7 @@ fn begin_top_hold(canary: &crate::Canary, args: &[String]) -> Result<TopHoldSetu
         return Err(format!("id={} activation_motion_failed", client.id));
     }
     let activated_floating = child_of(canary, client.id, frame.id)
-        .zip(
-            child_of(canary, frame.id, canary.root),
-        )
+        .zip(child_of(canary, frame.id, canary.root))
         .is_some_and(|(current_client, current_frame)| {
             !maximized(canary, client.id)
                 && current_client.width == client.width
@@ -947,13 +944,11 @@ fn observe_top_hold(canary: &crate::Canary, setup: &TopHoldSetup) -> TopHoldObse
         if xtest_motion(canary, point.0, point.1) {
             motion_count += 1;
         }
-        let Some(client) = child_of(canary, setup.client.id, setup.frame.id)
-        else {
+        let Some(client) = child_of(canary, setup.client.id, setup.frame.id) else {
             identity_stable = false;
             continue;
         };
-        let Some(frame) = child_of(canary, setup.frame.id, canary.root)
-        else {
+        let Some(frame) = child_of(canary, setup.frame.id, canary.root) else {
             identity_stable = false;
             continue;
         };
@@ -1000,7 +995,12 @@ fn release_top_hold_without_snap(canary: &crate::Canary, setup: &TopHoldSetup) -
 }
 
 fn top_hold_stable(setup: &TopHoldSetup, hold: &TopHoldObservation) -> bool {
-    let route_ok = route_on(hold.native_route, hold.capture_route, setup.client.id, setup.frame.id);
+    let route_ok = route_on(
+        hold.native_route,
+        hold.capture_route,
+        setup.client.id,
+        setup.frame.id,
+    );
     setup.activated_floating
         && hold.motion_count >= TOP_HOLD_MOTIONS
         && hold.identity_stable
@@ -1021,7 +1021,12 @@ fn run_x04(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     };
     let hold = observe_top_hold(canary, &setup);
     let ewmh_state_unchanged = hold.state_stable;
-    let route_ok = route_on(hold.native_route, hold.capture_route, setup.client.id, setup.frame.id);
+    let route_ok = route_on(
+        hold.native_route,
+        hold.capture_route,
+        setup.client.id,
+        setup.frame.id,
+    );
     let counters_available = unsupported_assertions().is_empty();
     // Compute this verdict before cleanup release.  X04 must prove that the
     // held gesture itself did not release or commit a maximize.
@@ -1078,7 +1083,12 @@ fn run_x05(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         Err(error) => return (false, format!("scenario=X05 {error}")),
     };
     let hold = observe_top_hold(canary, &setup);
-    let route_ok = route_on(hold.native_route, hold.capture_route, setup.client.id, setup.frame.id);
+    let route_ok = route_on(
+        hold.native_route,
+        hold.capture_route,
+        setup.client.id,
+        setup.frame.id,
+    );
     let hold_floating = top_hold_stable(&setup, &hold);
     // This is the only release in X05.  It is intentionally after the full
     // top-zone hold observation so the release is the commit under test.
@@ -1358,8 +1368,7 @@ fn run_x06(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         let client_id = target.id;
         let frame_id = target.parent;
         let reset_floating = establish_known_floating(canary, &target, work_area);
-        let Some(before) = child_of(canary, client_id, frame_id)
-        else {
+        let Some(before) = child_of(canary, client_id, frame_id) else {
             all_pass = false;
             details.push(format!(
                 "scenario=X06 target={target_kind:?} client={client_id} frame={frame_id} target_gone_after_reset"
@@ -1533,8 +1542,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let client_id = target.id;
     let frame_id = target.parent;
     let reset_floating = establish_known_floating(canary, &target, work_area);
-    let Some(initial_client) = child_of(canary, client_id, frame_id)
-    else {
+    let Some(initial_client) = child_of(canary, client_id, frame_id) else {
         return fail(format!(
             "scenario=X07 client={} frame={} target_gone_after_reset",
             client_id, frame_id
@@ -1557,8 +1565,7 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
             frame_matches_probe_target(&frame, ProbeSnapTarget::LeftHalf, work_area)
         })
     });
-    let Some(snapped_client) = child_of(canary, client_id, frame_id)
-    else {
+    let Some(snapped_client) = child_of(canary, client_id, frame_id) else {
         return fail(format!(
             "scenario=X07 client={} frame={} snap_dragged={} snap_committed={} snapped_client_missing",
             client_id, frame_id, snap_dragged, snap_committed
@@ -1635,8 +1642,8 @@ fn run_x07(canary: &crate::Canary, args: &[String]) -> (bool, String) {
                 && !frame_matches_any_probe_snap(&frame, work_area)
         });
     let activation_native = native_configures(canary, &snapped_client, 250);
-    let Some(activated_frame) = child_of(canary, client_id, frame_id)
-        .and_then(|client| input_surface(canary, &client))
+    let Some(activated_frame) =
+        child_of(canary, client_id, frame_id).and_then(|client| input_surface(canary, &client))
     else {
         let _ = xtest_button_release(canary, away.0, away.1, 1);
         return fail(format!(
@@ -1967,9 +1974,7 @@ mod settle_tests {
 
     #[test]
     fn settled_returns_final_value_not_first_stale_read() {
-        let mut reads = [(441, 6)]
-            .into_iter()
-            .chain(std::iter::repeat((497, 48)));
+        let mut reads = [(441, 6)].into_iter().chain(std::iter::repeat((497, 48)));
         assert_eq!(settled(1000, || reads.next().unwrap()), (497, 48));
     }
 }

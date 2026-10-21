@@ -108,8 +108,15 @@ mod tests {
     fn ribbons_start_after_idle_minutes_not_before() {
         let mut saver = Screensaver::new(config(SaverMode::Ribbons, 2, 0));
         assert_eq!(saver.tick(minute()), None);
-        assert_eq!(saver.tick(Duration::from_secs(59)), None, "119 s is still under two minutes");
-        assert_eq!(saver.tick(Duration::from_secs(1)), Some(Phase::RibbonsActive));
+        assert_eq!(
+            saver.tick(Duration::from_secs(59)),
+            None,
+            "119 s is still under two minutes"
+        );
+        assert_eq!(
+            saver.tick(Duration::from_secs(1)),
+            Some(Phase::RibbonsActive)
+        );
         assert_eq!(saver.phase(), Phase::RibbonsActive);
     }
 
@@ -119,7 +126,11 @@ mod tests {
         assert_eq!(saver.tick(minute()), Some(Phase::RibbonsActive));
         assert_eq!(saver.tick(minute() * 2), None);
         assert_eq!(saver.tick(minute()), Some(Phase::DisplayOff));
-        assert_eq!(saver.tick(minute() * 10), None, "DisplayOff is terminal until input");
+        assert_eq!(
+            saver.tick(minute() * 10),
+            None,
+            "DisplayOff is terminal until input"
+        );
     }
 
     #[test]

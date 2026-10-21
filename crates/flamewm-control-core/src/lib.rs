@@ -379,10 +379,9 @@ impl Dispatcher {
             ControlRequest::BeginHotkeyCapture {
                 action,
                 expected_revision,
-            } => ControlResponse::CaptureLease(host.begin_hotkey_capture(
-                &action,
-                expected_revision,
-            )?),
+            } => ControlResponse::CaptureLease(
+                host.begin_hotkey_capture(&action, expected_revision)?,
+            ),
             ControlRequest::EndHotkeyCapture { lease } => unit(host.end_hotkey_capture(lease))?,
             ControlRequest::GetPanels => ControlResponse::Panels(host.panels_snapshot()),
             ControlRequest::SetPanelEdge {

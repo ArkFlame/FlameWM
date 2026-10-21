@@ -158,9 +158,13 @@ impl DragSnapshot {
                 });
             }
             for ly in 0..layer.h {
-                let Some(dy) = index_in(i64::from(layer.y) + i64::from(ly), height) else { continue };
+                let Some(dy) = index_in(i64::from(layer.y) + i64::from(ly), height) else {
+                    continue;
+                };
                 for lx in 0..layer.w {
-                    let Some(dx) = index_in(i64::from(layer.x) + i64::from(lx), width) else { continue };
+                    let Some(dx) = index_in(i64::from(layer.x) + i64::from(lx), width) else {
+                        continue;
+                    };
                     let s = (ly as usize * layer.w as usize + lx as usize) * 4;
                     let d = (dy * width as usize + dx) * 4;
                     composite_pixel(&mut pixels[d..d + 4], &layer.rgba[s..s + 4]);
@@ -218,15 +222,33 @@ mod tests {
         let red = px(RED);
         let green = px(GREEN);
         let layers = [
-            Layer { x: 0, y: 0, w: 1, h: 1, rgba: &red },
-            Layer { x: 0, y: 0, w: 1, h: 1, rgba: &green },
+            Layer {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                rgba: &red,
+            },
+            Layer {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                rgba: &green,
+            },
         ];
         let snap = DragSnapshot::build((0, 0), 1, 1, base.clone(), &layers).unwrap();
         assert_eq!(snap.crop(0, 0, 1, 1), GREEN.to_vec());
 
         // Half-coverage premultiplied white over opaque black gives mid grey, not white.
         let half = [128, 128, 128, 128];
-        let layers = [Layer { x: 0, y: 0, w: 1, h: 1, rgba: &half }];
+        let layers = [Layer {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+            rgba: &half,
+        }];
         let snap = DragSnapshot::build((0, 0), 1, 1, base, &layers).unwrap();
         assert_eq!(snap.crop(0, 0, 1, 1), vec![128, 128, 128, 255]);
     }
@@ -262,7 +284,10 @@ mod tests {
     fn crop_clamped_replicates_root_edges() {
         let base = [px(RED), px(GREEN), px(BLACK), px(RED)].concat();
         let snap = DragSnapshot::build((0, 0), 2, 2, base, &[]).unwrap();
-        assert_eq!(snap.crop_clamped(-2, -2, 2, 2), [px(RED), px(RED), px(RED), px(RED)].concat());
+        assert_eq!(
+            snap.crop_clamped(-2, -2, 2, 2),
+            [px(RED), px(RED), px(RED), px(RED)].concat()
+        );
         assert_eq!(snap.crop_clamped(1, 1, 2, 1), [px(RED), px(RED)].concat());
     }
 
@@ -288,7 +313,14 @@ mod tests {
 
     fn gradient_snapshot(origin: (i32, i32), w: u32, h: u32) -> DragSnapshot {
         let base: Vec<u8> = (0..w * h)
-            .flat_map(|i| [(i * 37 % 256) as u8, (i * 91 % 256) as u8, (i * 13 % 256) as u8, 255])
+            .flat_map(|i| {
+                [
+                    (i * 37 % 256) as u8,
+                    (i * 91 % 256) as u8,
+                    (i * 13 % 256) as u8,
+                    255,
+                ]
+            })
             .collect();
         DragSnapshot::build(origin, w, h, base, &[]).unwrap()
     }
@@ -304,10 +336,23 @@ mod tests {
         ];
         let mut buf = Vec::new();
         for snap in &snaps {
-            for &(x, y) in &[(-20, -20), (-3, -2), (-1, 0), (0, 0), (2, 1), (4, 3), (99, 39), (200, 200)] {
+            for &(x, y) in &[
+                (-20, -20),
+                (-3, -2),
+                (-1, 0),
+                (0, 0),
+                (2, 1),
+                (4, 3),
+                (99, 39),
+                (200, 200),
+            ] {
                 for &(w, h) in &[(0, 0), (0, 5), (5, 0), (1, 1), (3, 2), (8, 7)] {
                     let expected = reference_crop_clamped(snap, x, y, w, h);
-                    assert_eq!(snap.crop_clamped(x, y, w, h), expected, "crop_clamped ({x},{y},{w},{h})");
+                    assert_eq!(
+                        snap.crop_clamped(x, y, w, h),
+                        expected,
+                        "crop_clamped ({x},{y},{w},{h})"
+                    );
                     snap.crop_clamped_into(x, y, w, h, &mut buf);
                     assert_eq!(buf, expected, "crop_clamped_into ({x},{y},{w},{h})");
                 }
@@ -349,6 +394,12 @@ mod tests {
     #[test]
     fn build_rejects_wrong_base_length() {
         let err = DragSnapshot::build((0, 0), 2, 2, vec![0u8; 4], &[]).unwrap_err();
-        assert_eq!(err, SnapshotError::BadLength { expected: 16, actual: 4 });
+        assert_eq!(
+            err,
+            SnapshotError::BadLength {
+                expected: 16,
+                actual: 4
+            }
+        );
     }
 }

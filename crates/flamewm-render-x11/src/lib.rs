@@ -1,3 +1,7 @@
+mod lamp;
+mod overlay;
+mod warp;
+mod xcomposite;
 mod xft;
 mod xinput;
 mod xlib;
@@ -6,10 +10,6 @@ mod xrender;
 mod xrender_aa;
 mod xrender_transform;
 mod xshape;
-mod overlay;
-mod lamp;
-mod warp;
-mod xcomposite;
 
 pub use lamp::PanelEdge;
 pub use overlay::{TransitionDirection, TransitionStyle, WarpOverlay, fade_alpha};
@@ -32,12 +32,15 @@ mod external_decoration;
 mod external_drawable;
 mod ffi;
 mod native;
+pub use native::xresource::{ResourceLedger, process_pixmap_ledger};
 mod runtime;
 mod surface_controller;
 
 use app::X11App;
 pub use config::*;
-pub use external_decoration::{ExternalDecorationRenderer, apply_cursor_theme};
+pub use external_decoration::{
+    ExternalDecorationRenderer, apply_cursor_shadow, apply_cursor_theme,
+};
 pub use external_drawable::{
     ExternalDrawableSession, ExternalDrawableTarget, NativeDrawableRenderer,
     external_font_pattern_order, external_pixmap_byte_estimate, external_release_order,

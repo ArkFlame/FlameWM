@@ -204,15 +204,15 @@ impl SurfaceRuntime {
             .map_err(Into::into)
     }
 
-    /// Root-sized `(width, height, RGBA8)` wallpaper canvas used instead of a root capture for the
-    /// popup's next first-show backdrop; `None` restores the root capture.
-    pub fn set_popup_wallpaper(
+    /// Popup-sized RGBA8 wallpaper crop for one first-show backdrop; `None` uses root capture.
+    pub fn set_popup_wallpaper_region(
         &mut self,
         surface: SurfaceHandle,
-        canvas: Option<(u32, u32, Vec<u8>)>,
+        rect: (i32, i32, u32, u32),
+        pixels: Option<Vec<u8>>,
     ) -> Result<(), UiBackendError> {
         self.controller
-            .set_popup_wallpaper(surface.0, canvas)
+            .set_popup_wallpaper_region(surface.0, pixels.map(|pixels| (rect, pixels)))
             .map_err(Into::into)
     }
 
@@ -562,6 +562,14 @@ impl SurfaceRuntime {
         self.controller
             .surface_device_rect(surface.0)
             .map_err(UiBackendError::Renderer)
+    }
+
+    /// Current document scale used to translate surface-local action points to device pixels.
+    pub fn surface_ui_scale(&mut self, surface: SurfaceHandle) -> Result<f32, UiBackendError> {
+        self.controller
+            .document_mut(surface.0)
+            .map(|document| document.ui_scale())
+            .map_err(UiBackendError::Document)
     }
 
     /// Retained-live node rect in root space (native origin + scaled box).

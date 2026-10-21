@@ -321,12 +321,13 @@ mod tests {
     }
 
     fn execute_inline(queue: &ControlMutationQueue, mutation: ControlMutation) {
-        queue.push_result(ControlMutationResult {
-            id: mutation.id,
-            lane: mutation.lane,
-            outcome: Ok(ControlResponse::Unit),
-        })
-        .expect("write mutation wake byte");
+        queue
+            .push_result(ControlMutationResult {
+                id: mutation.id,
+                lane: mutation.lane,
+                outcome: Ok(ControlResponse::Unit),
+            })
+            .expect("write mutation wake byte");
     }
 
     #[test]
@@ -407,9 +408,7 @@ mod tests {
         let pending = queue.take_pending().expect("pending");
         execute_inline(&queue, pending);
         assert!(
-            queue
-                .wake_ready_probe()
-                .expect("read and re-arm wake byte"),
+            queue.wake_ready_probe().expect("read and re-arm wake byte"),
             "wake fd must fire without sleep"
         );
         let result = queue.try_recv_result().expect("drain");

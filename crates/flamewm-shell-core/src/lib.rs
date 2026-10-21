@@ -3,6 +3,7 @@
 pub mod clock;
 pub mod menu_policy;
 pub mod popup;
+pub mod popup_session;
 pub mod quickswitch;
 pub mod start_menu;
 pub mod status;
@@ -838,7 +839,10 @@ mod tests {
                 state,
                 sticky: false,
                 focused: false,
-                workspace: flamewm_api::WorkspaceRef { index: 0, revision: 1 },
+                workspace: flamewm_api::WorkspaceRef {
+                    index: 0,
+                    revision: 1,
+                },
                 output: OutputId::new(output),
                 state_generation: 1,
             }
@@ -865,7 +869,12 @@ mod tests {
         }
 
         fn panels(tasks: Vec<TaskEntry>) -> PanelsSnapshot {
-            PanelsSnapshot { revision: 1, panels: Vec::new(), tasks, pinned_apps: Vec::new() }
+            PanelsSnapshot {
+                revision: 1,
+                panels: Vec::new(),
+                tasks,
+                pinned_apps: Vec::new(),
+            }
         }
 
         fn ids(states: &[TaskVisualState]) -> Vec<TaskEntryId> {
@@ -877,11 +886,17 @@ mod tests {
             let (a, b) = (OutputId::new("A"), OutputId::new("B"));
             let tasks = panels(vec![running(1)]);
             let on_a = [window(1, "A", WindowState::Normal)];
-            assert_eq!(ids(&task_visual_states_on_output(&tasks, &on_a, &[], Some(&a))).len(), 1);
+            assert_eq!(
+                ids(&task_visual_states_on_output(&tasks, &on_a, &[], Some(&a))).len(),
+                1
+            );
             assert!(task_visual_states_on_output(&tasks, &on_a, &[], Some(&b)).is_empty());
             let on_b = [window(1, "B", WindowState::Normal)];
             assert!(task_visual_states_on_output(&tasks, &on_b, &[], Some(&a)).is_empty());
-            assert_eq!(ids(&task_visual_states_on_output(&tasks, &on_b, &[], Some(&b))).len(), 1);
+            assert_eq!(
+                ids(&task_visual_states_on_output(&tasks, &on_b, &[], Some(&b))).len(),
+                1
+            );
         }
 
         #[test]
@@ -892,13 +907,18 @@ mod tests {
             let on_a = task_visual_states_on_output(&tasks, &windows, &[], Some(&a));
             assert_eq!(on_a.len(), 1);
             assert!(on_a[0].minimized);
-            assert!(task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")))
-                .is_empty());
+            assert!(
+                task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")))
+                    .is_empty()
+            );
         }
 
         #[test]
         fn pinned_entry_without_window_lists_on_every_panel() {
-            let tasks = panels(vec![pinned("term", None), pinned("ghost", Some(WindowRef::new(9, 1)))]);
+            let tasks = panels(vec![
+                pinned("term", None),
+                pinned("ghost", Some(WindowRef::new(9, 1))),
+            ]);
             let windows = [window(1, "A", WindowState::Normal)];
             for output in ["A", "B"] {
                 let output = OutputId::new(output);
@@ -912,7 +932,10 @@ mod tests {
         #[test]
         fn same_app_windows_on_two_outputs_split_between_panels() {
             let tasks = panels(vec![running(1), running(2)]);
-            let windows = [window(1, "A", WindowState::Normal), window(2, "B", WindowState::Normal)];
+            let windows = [
+                window(1, "A", WindowState::Normal),
+                window(2, "B", WindowState::Normal),
+            ];
             let a = task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("A")));
             let b = task_visual_states_on_output(&tasks, &windows, &[], Some(&OutputId::new("B")));
             assert_eq!(ids(&a), vec![TaskEntryId::window(WindowRef::new(1, 1))]);
@@ -933,12 +956,34 @@ mod tests {
             let windows = [one, two, sticky];
             let visible = |index| {
                 ids(&task_visual_states_on_output_and_workspace(
-                    &tasks, &windows, &[], Some(&output), Some(index),
+                    &tasks,
+                    &windows,
+                    &[],
+                    Some(&output),
+                    Some(index),
                 ))
             };
-            assert_eq!(visible(0), vec![TaskEntryId::window(WindowRef::new(1, 1)), TaskEntryId::window(WindowRef::new(3, 1))]);
-            assert_eq!(visible(1), vec![TaskEntryId::window(WindowRef::new(2, 1)), TaskEntryId::window(WindowRef::new(3, 1))]);
-            let second = task_visual_states_on_output_and_workspace(&tasks, &windows, &[], Some(&output), Some(1));
+            assert_eq!(
+                visible(0),
+                vec![
+                    TaskEntryId::window(WindowRef::new(1, 1)),
+                    TaskEntryId::window(WindowRef::new(3, 1))
+                ]
+            );
+            assert_eq!(
+                visible(1),
+                vec![
+                    TaskEntryId::window(WindowRef::new(2, 1)),
+                    TaskEntryId::window(WindowRef::new(3, 1))
+                ]
+            );
+            let second = task_visual_states_on_output_and_workspace(
+                &tasks,
+                &windows,
+                &[],
+                Some(&output),
+                Some(1),
+            );
             assert!(second[0].minimized);
         }
 
@@ -949,7 +994,11 @@ mod tests {
             remote.workspace.index = 1;
             let current = window(2, "A", WindowState::Normal);
             let states = task_visual_states_on_output_and_workspace(
-                &tasks, &[remote, current], &[], Some(&OutputId::new("A")), Some(0),
+                &tasks,
+                &[remote, current],
+                &[],
+                Some(&OutputId::new("A")),
+                Some(0),
             );
             assert_eq!(states.len(), 2);
             assert!(states[0].window.is_none());
@@ -961,7 +1010,10 @@ mod tests {
         fn single_output_filter_matches_unfiltered_states() {
             let a = OutputId::new("A");
             let tasks = panels(vec![pinned("term", None), running(1), running(2)]);
-            let windows = [window(1, "A", WindowState::Normal), window(2, "A", WindowState::Minimized)];
+            let windows = [
+                window(1, "A", WindowState::Normal),
+                window(2, "A", WindowState::Minimized),
+            ];
             assert_eq!(
                 task_visual_states(&tasks, &windows, &[]),
                 task_visual_states_on_output(&tasks, &windows, &[], Some(&a)),

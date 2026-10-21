@@ -67,7 +67,13 @@ pub fn tray_visible(power: &PowerSnapshot, enabled: bool, only_when_relevant: bo
 #[must_use]
 pub fn rate_text(rate_mw: Option<u32>) -> String {
     rate_mw
-        .map(|milliwatts| format!("Battery {}.{} W", milliwatts / 1000, (milliwatts % 1000) / 100))
+        .map(|milliwatts| {
+            format!(
+                "Battery {}.{} W",
+                milliwatts / 1000,
+                (milliwatts % 1000) / 100
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -143,20 +149,31 @@ mod tests {
                 PowerState::Empty,
                 PowerState::Unknown,
             ] {
-                assert!(tray_visible(&power(state, percent), true, false), "{state:?} {percent}");
+                assert!(
+                    tray_visible(&power(state, percent), true, false),
+                    "{state:?} {percent}"
+                );
             }
         }
     }
 
     #[test]
     fn only_when_relevant_hides_unknown_state() {
-        assert!(tray_visible(&power(PowerState::Discharging, 40), true, true));
+        assert!(tray_visible(
+            &power(PowerState::Discharging, 40),
+            true,
+            true
+        ));
         assert!(!tray_visible(&power(PowerState::Unknown, 40), true, true));
     }
 
     #[test]
     fn tray_hidden_when_setting_off_battery_missing_or_service_unavailable() {
-        assert!(!tray_visible(&power(PowerState::Discharging, 40), false, false));
+        assert!(!tray_visible(
+            &power(PowerState::Discharging, 40),
+            false,
+            false
+        ));
         let mut absent = power(PowerState::Discharging, 40);
         absent.present = false;
         assert!(!tray_visible(&absent, true, false));
@@ -198,7 +215,10 @@ mod tests {
             let node = format!("id=\"tray-battery-{}\"", glyph.id_suffix());
             assert!(panel.contains(&node), "panel.html lacks {node}");
             let charging_node = format!("id=\"tray-battery-{}-charging\"", glyph.id_suffix());
-            assert!(panel.contains(&charging_node), "panel.html lacks {charging_node}");
+            assert!(
+                panel.contains(&charging_node),
+                "panel.html lacks {charging_node}"
+            );
             let stem = glyph.asset_stem(false);
             let bytes = std::fs::read(format!("{assets}{stem}.svg"))
                 .unwrap_or_else(|error| panic!("{stem}.svg missing: {error}"));

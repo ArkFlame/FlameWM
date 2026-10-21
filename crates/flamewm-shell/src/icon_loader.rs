@@ -37,9 +37,24 @@ fn resolve_icon_raster(
     let accept = |raster: &Rgb8Raster| !is_brand_fallback(raster);
     icon_name_candidates(name)
         .iter()
-        .find_map(|candidate| resolver.prepare_name(candidate.as_str(), size).ok().filter(accept))
-        .or_else(|| resolver.prepare_name(GENERIC_APP_ICON, size).ok().filter(accept))
-        .or_else(|| resolver.prepare_generic_application(size).ok().filter(accept))
+        .find_map(|candidate| {
+            resolver
+                .prepare_name(candidate.as_str(), size)
+                .ok()
+                .filter(accept)
+        })
+        .or_else(|| {
+            resolver
+                .prepare_name(GENERIC_APP_ICON, size)
+                .ok()
+                .filter(accept)
+        })
+        .or_else(|| {
+            resolver
+                .prepare_generic_application(size)
+                .ok()
+                .filter(accept)
+        })
 }
 
 /// Lookup names for one task or Start name, most specific first: the raw
@@ -399,16 +414,16 @@ mod tests {
             icon_name_candidates("mini.xterm"),
             vec!["mini.xterm".to_owned(), "xterm".to_owned()]
         );
-        assert_eq!(icon_name_candidates("XTerm"), vec!["XTerm".to_owned(), "xterm".to_owned()]);
+        assert_eq!(
+            icon_name_candidates("XTerm"),
+            vec!["XTerm".to_owned(), "xterm".to_owned()]
+        );
         assert_eq!(icon_name_candidates("  "), Vec::<String>::new());
     }
 
     #[test]
     fn wm_class_segment_resolves_to_installed_theme_icon() {
-        let themes = std::env::temp_dir().join(format!(
-            "flamewm-wmclass-{}",
-            std::process::id()
-        ));
+        let themes = std::env::temp_dir().join(format!("flamewm-wmclass-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&themes);
         let icons = themes.join("icons/breeze/16x16/apps");
         std::fs::create_dir_all(&icons).expect("theme dir");
@@ -420,19 +435,26 @@ mod tests {
         let mut bytes = b"P6\n1 1\n255\n".to_vec();
         bytes.extend_from_slice(&[10, 200, 10]);
         std::fs::write(icons.join("xterm.ppm"), bytes).expect("xterm icon");
-        let mut resolver = IconResolver::new(workspace_root(), vec!["Breeze".to_owned()], vec![themes.clone()], 0);
+        let mut resolver = IconResolver::new(
+            workspace_root(),
+            vec!["Breeze".to_owned()],
+            vec![themes.clone()],
+            0,
+        );
         let raster = resolve_icon_raster(&mut resolver, "mini.xterm", IconSize::new(16, 16))
             .expect("WM_CLASS segment must resolve");
         let _ = std::fs::remove_dir_all(&themes);
-        assert!(raster.source.ends_with("xterm.ppm"), "got {}", raster.source);
+        assert!(
+            raster.source.ends_with("xterm.ppm"),
+            "got {}",
+            raster.source
+        );
     }
 
     #[test]
     fn task_icon_miss_with_empty_theme_still_yields_bundled_glyph() {
-        let themes = std::env::temp_dir().join(format!(
-            "flamewm-empty-theme-{}",
-            std::process::id()
-        ));
+        let themes =
+            std::env::temp_dir().join(format!("flamewm-empty-theme-{}", std::process::id()));
         std::fs::create_dir_all(&themes).expect("empty theme dir");
         let mut resolver = IconResolver::new(workspace_root(), Vec::new(), vec![themes], 0);
         let size = IconSize::new(25, 25);
@@ -711,7 +733,10 @@ mod tests {
         loader.theme = "ThemeA".to_owned();
         let generation = loader.generation();
         assert!(!loader.set_theme("ThemeA"));
-        assert!(rx.try_recv().is_err(), "unchanged theme must not reach worker");
+        assert!(
+            rx.try_recv().is_err(),
+            "unchanged theme must not reach worker"
+        );
         assert_eq!(loader.generation(), generation);
 
         loader.request(IconTarget::StartSlot(0), "old", 20, 20);
@@ -725,7 +750,10 @@ mod tests {
             panic!("expected theme message");
         };
         assert_eq!(name, "ThemeB");
-        assert!(rx.try_recv().is_err(), "exactly one theme message per switch");
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one theme message per switch"
+        );
     }
 
     #[test]

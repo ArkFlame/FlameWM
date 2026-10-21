@@ -101,17 +101,26 @@ mod tests {
 
     #[test]
     fn missing_accent_keeps_neutral_default() {
-        assert_eq!(accent_from_snapshot(&SettingsSnapshot::new(1)), (0x7f, 0x87, 0x8e));
+        assert_eq!(
+            accent_from_snapshot(&SettingsSnapshot::new(1)),
+            (0x7f, 0x87, 0x8e)
+        );
     }
 
     #[test]
     fn accent_accepts_hash_and_bare_hex() {
         assert_eq!(
-            accent_from_snapshot(&snapshot(&[("accent", SettingValue::Text("#ef4048".into()))])),
+            accent_from_snapshot(&snapshot(&[(
+                "accent",
+                SettingValue::Text("#ef4048".into())
+            )])),
             (0xef, 0x40, 0x48)
         );
         assert_eq!(
-            accent_from_snapshot(&snapshot(&[("accent", SettingValue::Text("123456".into()))])),
+            accent_from_snapshot(&snapshot(&[(
+                "accent",
+                SettingValue::Text("123456".into())
+            )])),
             (0x12, 0x34, 0x56)
         );
     }
@@ -119,7 +128,10 @@ mod tests {
     #[test]
     fn invalid_accent_falls_back_to_neutral_default() {
         assert_eq!(
-            accent_from_snapshot(&snapshot(&[("accent", SettingValue::Text("#GG0000".into()))])),
+            accent_from_snapshot(&snapshot(&[(
+                "accent",
+                SettingValue::Text("#GG0000".into())
+            )])),
             (0x7f, 0x87, 0x8e)
         );
     }

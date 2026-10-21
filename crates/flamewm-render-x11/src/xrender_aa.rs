@@ -143,7 +143,12 @@ fn fill_row_runs(width: u32, height: u32, radius: u32, row: u32) -> Vec<Run> {
     }
     push_run(&mut runs, full, width.saturating_sub(full * 2), 1.0);
     for col in (lo..full).rev() {
-        push_run(&mut runs, width - 1 - col, 1, left_alpha(height, radius, row, col));
+        push_run(
+            &mut runs,
+            width - 1 - col,
+            1,
+            left_alpha(height, radius, row, col),
+        );
     }
     runs
 }
@@ -207,7 +212,8 @@ pub(crate) unsafe fn fill_rounded_rect(
     if width == 0 || height == 0 || color.a == 0 {
         return Ok(());
     }
-    let radius = crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
+    let radius =
+        crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
     if radius <= 1 {
         // SAFETY: validated inputs above.
         return unsafe { fill_box(backend, x, y, width, height, color) };
@@ -255,7 +261,8 @@ pub(crate) unsafe fn stroke_rounded_rect(
     }
     let thickness = stroke_width.round().clamp(1.0, 8.0) as u32;
     let thickness = thickness.min(width / 2).min(height / 2).max(1);
-    let radius = crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
+    let radius =
+        crate::native::rounded::clamp_radius(width, height, radius.round().max(0.0) as u32);
 
     for row in 0..height {
         let runs = stroke_row_runs(width, height, radius, thickness, row);
@@ -278,13 +285,21 @@ mod tests {
     #[test]
     fn floating_panel_round_fill_and_stroke_have_partial_edge_coverage() {
         let filled = all_runs(280, 44, 15);
-        let stroked: Vec<_> = (0..44).map(|row| stroke_row_runs(280, 44, 15, 1, row)).collect();
+        let stroked: Vec<_> = (0..44)
+            .map(|row| stroke_row_runs(280, 44, 15, 1, row))
+            .collect();
         for rows in [&filled, &stroked] {
-            assert!(rows.iter().flatten().any(|run| run.2 > 0.0 && run.2 < 1.0),
-                "antialiased corners must retain fractional coverage");
+            assert!(
+                rows.iter().flatten().any(|run| run.2 > 0.0 && run.2 < 1.0),
+                "antialiased corners must retain fractional coverage"
+            );
         }
         assert_eq!(filled[22], vec![(0, 280, 1.0)]);
-        assert!(filled[0].iter().all(|(x, w, _)| x.saturating_add(*w) <= 280));
+        assert!(
+            filled[0]
+                .iter()
+                .all(|(x, w, _)| x.saturating_add(*w) <= 280)
+        );
         assert!(stroked[22].iter().all(|(_, len, _)| *len <= 2));
     }
 
@@ -346,9 +361,10 @@ mod tests {
         assert_eq!(fill_row_runs(22, 22, 1, 0), vec![(0, 22, 1.0)]);
         // A corner row keeps a fully covered interior run.
         let top = fill_row_runs(22, 22, 9, 0);
-        assert!(top
-            .iter()
-            .any(|&(start, len, c)| c == 1.0 && start <= 11 && start + len >= 11));
+        assert!(
+            top.iter()
+                .any(|&(start, len, c)| c == 1.0 && start <= 11 && start + len >= 11)
+        );
     }
 
     #[test]

@@ -101,39 +101,38 @@ fn scale_bilinear(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]
     }
 }
 
-/// Per destination index: first covered source index and normalised coverage
-/// weights for the consecutive source indices starting there.
-fn area_taps(src_len: usize, dst_len: usize) -> Vec<(usize, Vec<f32>)> {
+/// First covered source index and normalised coverage weights for one destination index.
+pub(crate) fn area_tap(src_len: usize, dst_len: usize, destination: usize) -> (usize, Vec<f32>) {
     let ratio = src_len as f64 / dst_len as f64;
-    (0..dst_len)
-        .map(|destination| {
-            let start = destination as f64 * ratio;
-            let end = (destination + 1) as f64 * ratio;
-            let first = start.floor() as usize;
-            let last = (end.ceil() as usize).min(src_len);
-            let mut weights: Vec<f32> = (first..last)
-                .map(|index| {
-                    let lo = start.max(index as f64);
-                    let hi = end.min((index + 1) as f64);
-                    (hi - lo).max(0.0) as f32
-                })
-                .collect();
-            let total: f32 = weights.iter().sum();
-            if total > 0.0 {
-                for weight in &mut weights {
-                    *weight /= total;
-                }
-            }
-            (first, weights)
+    let start = destination as f64 * ratio;
+    let end = (destination + 1) as f64 * ratio;
+    let first = start.floor() as usize;
+    let last = (end.ceil() as usize).min(src_len);
+    let mut weights: Vec<f32> = (first..last)
+        .map(|index| {
+            let lo = start.max(index as f64);
+            let hi = end.min((index + 1) as f64);
+            (hi - lo).max(0.0) as f32
         })
-        .collect()
+        .collect();
+    let total: f32 = weights.iter().sum();
+    if total > 0.0 {
+        for weight in &mut weights {
+            *weight /= total;
+        }
+    }
+    (first, weights)
 }
 
 fn scale_area(source: &RgbaImage, width: u32, height: u32, output: &mut [u8]) {
     let target_w = width as usize;
     let src_w = source.width as usize;
-    let x_taps = area_taps(src_w, target_w);
-    let y_taps = area_taps(source.height as usize, height as usize);
+    let x_taps: Vec<_> = (0..target_w)
+        .map(|destination| area_tap(src_w, target_w, destination))
+        .collect();
+    let y_taps: Vec<_> = (0..height as usize)
+        .map(|destination| area_tap(source.height as usize, height as usize, destination))
+        .collect();
     for (y, (first_row, row_weights)) in y_taps.iter().enumerate() {
         for (x, (first_col, col_weights)) in x_taps.iter().enumerate() {
             let mut acc = [0f32; 4];
@@ -208,7 +207,12 @@ mod tests {
     fn area_uniform_colour_stays_constant() {
         let source = RgbaImage::from_rgba8(5, 3, [7, 99, 201, 180].repeat(15)).unwrap();
         let scaled = scale_rgba(&source, 2, 1, ScaleFilter::Area).unwrap();
-        assert!(scaled.pixels.chunks_exact(4).all(|p| p == [7, 99, 201, 180]));
+        assert!(
+            scaled
+                .pixels
+                .chunks_exact(4)
+                .all(|p| p == [7, 99, 201, 180])
+        );
     }
 
     #[test]
@@ -216,23 +220,62 @@ mod tests {
         // A 2x2 box average of a checkerboard is 127.5 per block; nearest or
         // point sampling would instead return pure 0 or 255 and fail this.
         let scaled = scale_rgba(&checker_4x4(), 2, 2, ScaleFilter::Area).unwrap();
-        let source_sum: u32 = checker_4x4().pixels.chunks_exact(4).map(|p| u32::from(p[0])).sum();
-        let output_sum: u32 = scaled.pixels.chunks_exact(4).map(|p| u32::from(p[0]) * 4).sum();
+        let source_sum: u32 = checker_4x4()
+            .pixels
+            .chunks_exact(4)
+            .map(|p| u32::from(p[0]))
+            .sum();
+        let output_sum: u32 = scaled
+            .pixels
+            .chunks_exact(4)
+            .map(|p| u32::from(p[0]) * 4)
+            .sum();
         assert!(source_sum.abs_diff(output_sum) <= 4 * 4);
-        assert!(scaled.pixels.chunks_exact(4).all(|p| (127..=128).contains(&p[0])));
+        assert!(
+            scaled
+                .pixels
+                .chunks_exact(4)
+                .all(|p| (127..=128).contains(&p[0]))
+        );
     }
 
     #[test]
     fn area_does_not_overshoot_source_range() {
-        let source = RgbaImage::from_rgba8(
-            3,
-            1,
-            vec![40, 0, 0, 255, 200, 0, 0, 255, 120, 0, 0, 255],
-        )
-        .unwrap();
+        let source =
+            RgbaImage::from_rgba8(3, 1, vec![40, 0, 0, 255, 200, 0, 0, 255, 120, 0, 0, 255])
+                .unwrap();
         let scaled = scale_rgba(&source, 1, 1, ScaleFilter::Area).unwrap();
         assert!((40..=200).contains(&scaled.pixels[0]));
         assert_eq!(scaled.pixels[0], 120);
+    }
+
+    #[test]
+    fn area_tap_weights_cover_downscale_and_upscale_edges() {
+        assert_eq!(area_tap(5, 2, 0), (0, vec![0.4, 0.4, 0.2]));
+        assert_eq!(area_tap(5, 2, 1), (2, vec![0.2, 0.4, 0.4]));
+        assert_eq!(area_tap(3, 5, 0), (0, vec![1.0]));
+        let (first, weights) = area_tap(3, 5, 1);
+        assert_eq!(first, 0);
+        assert_eq!(weights.len(), 2);
+        assert!((weights[0] - 2.0 / 3.0).abs() < f32::EPSILON);
+        assert!((weights[1] - 1.0 / 3.0).abs() < f32::EPSILON);
+        assert_eq!(area_tap(3, 5, 4), (2, vec![1.0]));
+    }
+
+    #[test]
+    fn area_downscale_keeps_frozen_odd_ratio_pixels() {
+        let source = RgbaImage::from_rgba8(
+            5,
+            1,
+            vec![
+                0, 40, 0, 255, 10, 30, 10, 255, 20, 20, 20, 255, 30, 10, 30, 255, 40, 0, 40, 255,
+            ],
+        )
+        .unwrap();
+
+        let scaled = scale_rgba(&source, 2, 1, ScaleFilter::Area).unwrap();
+
+        assert_eq!(scaled.pixels, vec![8, 32, 8, 255, 32, 8, 32, 255]);
     }
 
     #[test]
@@ -246,7 +289,12 @@ mod tests {
     #[test]
     #[ignore = "timing bench: run with --release --ignored --nocapture"]
     fn bench_area_vs_bilinear_256_to_64() {
-        let source = RgbaImage::from_rgba8(256, 256, (0..256 * 256 * 4).map(|i| (i % 251) as u8).collect()).unwrap();
+        let source = RgbaImage::from_rgba8(
+            256,
+            256,
+            (0..256 * 256 * 4).map(|i| (i % 251) as u8).collect(),
+        )
+        .unwrap();
         for filter in [ScaleFilter::Bilinear, ScaleFilter::Area] {
             let started = std::time::Instant::now();
             for _ in 0..200 {

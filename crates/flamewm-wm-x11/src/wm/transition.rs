@@ -4,7 +4,11 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Starts `effect` with an overlay unless it is disabled or unavailable. Returns `true`
     /// when a flight owns the end state (the caller must not apply it now). A rapid repeat
     /// or an opposite minimize/restore is absorbed; any other running flight finishes first.
-    pub(super) fn begin_transition(&mut self, client: Window, effect: Effect) -> Result<bool, ReplyError> {
+    pub(super) fn begin_transition(
+        &mut self,
+        client: Window,
+        effect: Effect,
+    ) -> Result<bool, ReplyError> {
         let now = std::time::Instant::now();
         if let Some(current) = self.animator.running(client) {
             if current == effect {
@@ -33,7 +37,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         let hidden = match self.open_overlay(client, effect) {
             Ok(hidden) => hidden,
             Err(error) => {
-                log_once(&TRANSITION_SKIP_LOG, &format!("transition skipped: {error}"));
+                log_once(
+                    &TRANSITION_SKIP_LOG,
+                    &format!("transition skipped: {error}"),
+                );
                 self.animator.cancel(client);
                 return Ok(false);
             }
@@ -87,7 +94,11 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Releases the overlay and applies `effect`'s end state exactly once.
-    pub(super) fn finish_transition(&mut self, client: Window, effect: Effect) -> Result<(), ReplyError> {
+    pub(super) fn finish_transition(
+        &mut self,
+        client: Window,
+        effect: Effect,
+    ) -> Result<(), ReplyError> {
         crate::frame::titlebar_backdrop::release_backdrop_canvas();
         let flight = self.overlays.remove(&client);
         let hidden = flight.as_ref().is_some_and(|flight| flight.frame_hidden);
@@ -136,7 +147,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     pub(super) fn linger_overlay(&mut self, client: Window, flight: Option<TransitionOverlay>) {
         if let Some(flight) = flight {
             flight.overlay.raise();
-            self.linger.hold(client, flight.overlay, std::time::Instant::now());
+            self.linger
+                .hold(client, flight.overlay, std::time::Instant::now());
             self.watch_damage(client);
         }
     }
@@ -154,7 +166,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .is_some();
-        if version_ok && damage::create(&self.conn, id, client, damage::ReportLevel::NON_EMPTY).is_ok() {
+        if version_ok
+            && damage::create(&self.conn, id, client, damage::ReportLevel::NON_EMPTY).is_ok()
+        {
             self.damage_watch.insert(client, id);
         }
     }
@@ -191,7 +205,10 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Applies the settings sync point's animation values; disabling ends running flights.
-    pub(crate) fn apply_transition_settings(&mut self, settings: Settings) -> Result<(), ReplyError> {
+    pub(crate) fn apply_transition_settings(
+        &mut self,
+        settings: Settings,
+    ) -> Result<(), ReplyError> {
         if let Some(line) = self.animator.take_capability_log() {
             eprintln!("flamewm: {line}");
         }
@@ -202,7 +219,10 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     /// Caps the loop's wait at one frame while a flight runs, so frames are painted on time.
-    pub(crate) fn transition_wait(&self, wait: Option<std::time::Duration>) -> Option<std::time::Duration> {
+    pub(crate) fn transition_wait(
+        &self,
+        wait: Option<std::time::Duration>,
+    ) -> Option<std::time::Duration> {
         if self.animator.is_active() || !self.linger.is_empty() {
             Some(wait.map_or(TRANSITION_FRAME, |wait| wait.min(TRANSITION_FRAME)))
         } else {

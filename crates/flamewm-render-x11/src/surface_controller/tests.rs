@@ -214,26 +214,30 @@ mod tests {
         assert_eq!((scaled.event.x, scaled.event.y), (100.0, 15.0));
         assert_eq!(scaled.event.button, 3);
 
-        assert!(raw_press_outside_event(
-            SurfaceId(3),
-            XI_RAW_BUTTON_PRESS,
-            1,
-            (150, 80),
-            popup,
-            1.0,
-            0
-        )
-        .is_none());
-        assert!(raw_press_outside_event(
-            SurfaceId(3),
-            XI_RAW_BUTTON_PRESS,
-            1,
-            (299, 149),
-            popup,
-            1.0,
-            0
-        )
-        .is_none());
+        assert!(
+            raw_press_outside_event(
+                SurfaceId(3),
+                XI_RAW_BUTTON_PRESS,
+                1,
+                (150, 80),
+                popup,
+                1.0,
+                0
+            )
+            .is_none()
+        );
+        assert!(
+            raw_press_outside_event(
+                SurfaceId(3),
+                XI_RAW_BUTTON_PRESS,
+                1,
+                (299, 149),
+                popup,
+                1.0,
+                0
+            )
+            .is_none()
+        );
         assert!(
             raw_press_outside_event(SurfaceId(3), 16, 1, (300, 80), popup, 1.0, 0).is_none(),
             "release is not a press"
@@ -443,6 +447,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn popup_wallpaper_region_is_exactly_the_final_rect_and_size() {
+        let rect = Rect {
+            x: 35.0,
+            y: 18.0,
+            width: 2.0,
+            height: 2.0,
+        };
+        let pixels = vec![0x5a; 16];
+        let capture = SurfaceController::popup_wallpaper_capture(
+            rect,
+            Some(((35, 18, 2, 2), pixels.clone())),
+        )
+        .expect("valid region")
+        .expect("wallpaper source");
+        assert_eq!((capture.width, capture.height), (2, 2));
+        assert_eq!(capture.pixels, pixels);
+
+        assert!(
+            SurfaceController::popup_wallpaper_capture(rect, Some(((34, 18, 2, 2), vec![0; 16])))
+                .is_err()
+        );
+        assert!(
+            SurfaceController::popup_wallpaper_capture(rect, Some(((35, 18, 2, 2), vec![0; 15])))
+                .is_err()
+        );
+        assert!(
+            SurfaceController::popup_wallpaper_capture(rect, None)
+                .expect("missing wallpaper uses root fallback")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn popup_wallpaper_source_is_released_after_each_install_transfer() {
+        let rect = (35, 18, 2, 2);
+        let mut retained = None;
+        for _ in 0..100 {
+            retained = Some((rect, vec![0x5a; 16]));
+            let source = SurfaceController::take_popup_wallpaper(&mut retained)
+                .expect("prepared popup crop");
+            assert_eq!(source.1.len(), 16);
+            assert!(
+                retained.is_none(),
+                "installed source must not remain retained"
+            );
+            retained = Some((rect, vec![0x5a; 16]));
+            SurfaceController::clear_popup_wallpaper(&mut retained);
+            assert!(retained.is_none(), "closed popup must not retain its crop");
+        }
+        assert!(
+            retained.is_none(),
+            "post-close retained crop baseline is zero"
+        );
     }
 
     #[test]

@@ -6,9 +6,9 @@ use crate::layout;
 
 /// Vertical gradient stops as (position, rgb).
 const GRADIENT: [(f64, [f64; 3]); 3] = [
-    (0.0, [28.0, 40.0, 90.0]),   // #1C285A
-    (0.67, [32.0, 44.0, 96.0]),  // #202C60
-    (1.0, [51.0, 66.0, 114.0]),  // #334272
+    (0.0, [28.0, 40.0, 90.0]),  // #1C285A
+    (0.67, [32.0, 44.0, 96.0]), // #202C60
+    (1.0, [51.0, 66.0, 114.0]), // #334272
 ];
 
 /// Soft radial blob. `centre` and `radius_ref` are in relative/reference units.
@@ -23,9 +23,27 @@ pub struct Blob {
 
 /// Blobs composited over the gradient, centre positions relative to the output size.
 pub const BLOBS: [Blob; 3] = [
-    Blob { cx: 0.15, cy: 0.55, rgb: [16.0, 23.0, 56.0], opacity: 0.27, radius_ref: 32.0 },
-    Blob { cx: 0.75, cy: 0.23, rgb: [24.0, 24.0, 58.0], opacity: 0.30, radius_ref: 24.0 },
-    Blob { cx: 0.82, cy: 0.86, rgb: [104.0, 117.0, 161.0], opacity: 0.13, radius_ref: 18.0 },
+    Blob {
+        cx: 0.15,
+        cy: 0.55,
+        rgb: [16.0, 23.0, 56.0],
+        opacity: 0.27,
+        radius_ref: 32.0,
+    },
+    Blob {
+        cx: 0.75,
+        cy: 0.23,
+        rgb: [24.0, 24.0, 58.0],
+        opacity: 0.30,
+        radius_ref: 24.0,
+    },
+    Blob {
+        cx: 0.82,
+        cy: 0.86,
+        rgb: [104.0, 117.0, 161.0],
+        opacity: 0.13,
+        radius_ref: 18.0,
+    },
 ];
 
 fn gradient_at(t: f64) -> [f64; 3] {
@@ -54,8 +72,12 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
         .map(|b| {
             let r = (b.radius_ref * s).max(1.0);
             let (px, py) = (b.cx * wf, b.cy * hf);
-            let cols = (0..wu).map(|x| ((x as f64 + 0.5 - px) / r).powi(2)).collect();
-            let rows = (0..hu).map(|y| ((y as f64 + 0.5 - py) / r).powi(2)).collect();
+            let cols = (0..wu)
+                .map(|x| ((x as f64 + 0.5 - px) / r).powi(2))
+                .collect();
+            let rows = (0..hu)
+                .map(|y| ((y as f64 + 0.5 - py) / r).powi(2))
+                .collect();
             (cols, rows, b.opacity)
         })
         .collect();
@@ -65,7 +87,11 @@ pub fn reference_navy(w: u32, h: u32) -> Vec<u8> {
     }
     let mut out = vec![0u8; wu * hu * 4];
     for (y, out_row) in out.chunks_exact_mut(wu * 4).enumerate() {
-        let t = if hu > 1 { y as f64 / (hu - 1) as f64 } else { 0.0 };
+        let t = if hu > 1 {
+            y as f64 / (hu - 1) as f64
+        } else {
+            0.0
+        };
         let row = gradient_at(t);
         for (x, px) in out_row.chunks_exact_mut(4).enumerate() {
             let mut c = row;
@@ -91,10 +117,18 @@ const BLUR_RADIUS_1080P: f32 = 24.0;
 /// Blurs and darkens an opaque RGBA8 background in place, once, at build time.
 /// `blur_percent` 0..=100 scales a 24 px radius at 1080p; `dim_percent` 0..=80 multiplies
 /// RGB by `1 - dim/100`. 0/0 leaves the pixels untouched, bit for bit.
-pub fn post_process(pixels: &mut [u8], w: u32, h: u32, blur_percent: u8, dim_percent: u8) -> Result<(), String> {
+pub fn post_process(
+    pixels: &mut [u8],
+    w: u32,
+    h: u32,
+    blur_percent: u8,
+    dim_percent: u8,
+) -> Result<(), String> {
     if blur_percent > 0 && w > 0 && h > 0 {
-        let radius = f32::from(blur_percent.min(100)) / 100.0 * BLUR_RADIUS_1080P * h as f32 / 1080.0;
-        gaussian_blur_rgba(pixels, w, h, radius).map_err(|error| format!("background blur: {error:?}"))?;
+        let radius =
+            f32::from(blur_percent.min(100)) / 100.0 * BLUR_RADIUS_1080P * h as f32 / 1080.0;
+        gaussian_blur_rgba(pixels, w, h, radius)
+            .map_err(|error| format!("background blur: {error:?}"))?;
     }
     if dim_percent > 0 {
         let keep = 1.0 - f64::from(dim_percent.min(80)) / 100.0;
@@ -204,14 +238,22 @@ mod tests {
             .map(|b| {
                 let r = (b.radius_ref * s).max(1.0);
                 let (px, py) = (b.cx * wf, b.cy * hf);
-                let cols = (0..wu).map(|x| ((x as f64 + 0.5 - px) / r).powi(2)).collect();
-                let rows = (0..hu).map(|y| ((y as f64 + 0.5 - py) / r).powi(2)).collect();
+                let cols = (0..wu)
+                    .map(|x| ((x as f64 + 0.5 - px) / r).powi(2))
+                    .collect();
+                let rows = (0..hu)
+                    .map(|y| ((y as f64 + 0.5 - py) / r).powi(2))
+                    .collect();
                 (cols, rows, b.opacity)
             })
             .collect();
         let mut out = Vec::with_capacity(wu * hu * 4);
         for y in 0..hu {
-            let t = if hu > 1 { y as f64 / (hu - 1) as f64 } else { 0.0 };
+            let t = if hu > 1 {
+                y as f64 / (hu - 1) as f64
+            } else {
+                0.0
+            };
             let row = gradient_at(t);
             for x in 0..wu {
                 let mut c = row;
@@ -242,18 +284,38 @@ mod tests {
 
     #[test]
     fn rewritten_fills_match_old_algorithm_byte_for_byte() {
-        let sizes = [(0, 0), (0, 5), (5, 0), (1, 1), (1, 40), (3, 2), (64, 36), (320, 180), (333, 211)];
+        let sizes = [
+            (0, 0),
+            (0, 5),
+            (5, 0),
+            (1, 1),
+            (1, 40),
+            (3, 2),
+            (64, 36),
+            (320, 180),
+            (333, 211),
+        ];
         for (w, h) in sizes {
-            assert_eq!(reference_navy(w, h), old_reference_navy(w, h), "reference_navy {w}x{h}");
-            assert_eq!(flat(w, h, [10, 20, 30]), old_flat(w, h, [10, 20, 30]), "flat {w}x{h}");
+            assert_eq!(
+                reference_navy(w, h),
+                old_reference_navy(w, h),
+                "reference_navy {w}x{h}"
+            );
+            assert_eq!(
+                flat(w, h, [10, 20, 30]),
+                old_flat(w, h, [10, 20, 30]),
+                "flat {w}x{h}"
+            );
         }
     }
 
     fn checker(w: u32, h: u32) -> Vec<u8> {
-        (0..w * h).flat_map(|i| {
-            let v = if (i % w + i / w) % 2 == 0 { 40 } else { 220 };
-            [v, v, v, 255]
-        }).collect()
+        (0..w * h)
+            .flat_map(|i| {
+                let v = if (i % w + i / w) % 2 == 0 { 40 } else { 220 };
+                [v, v, v, 255]
+            })
+            .collect()
     }
 
     fn high_frequency(buf: &[u8], w: u32) -> f64 {
@@ -310,6 +372,9 @@ mod tests {
         let start = Instant::now();
         let buf = reference_navy(1920, 1080);
         let elapsed = start.elapsed();
-        println!("reference_navy 1920x1080: {elapsed:?} ({} bytes)", buf.len());
+        println!(
+            "reference_navy 1920x1080: {elapsed:?} ({} bytes)",
+            buf.len()
+        );
     }
 }

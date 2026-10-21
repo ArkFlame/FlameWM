@@ -141,7 +141,11 @@ mod tests {
     }
 
     fn alpha_coverage(image: &RgbaImage) -> u32 {
-        image.pixels.chunks_exact(4).filter(|pixel| pixel[3] > 8).count() as u32
+        image
+            .pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[3] > 8)
+            .count() as u32
     }
 
     fn mean_rgb(image: &RgbaImage) -> (f32, f32, f32, u32) {

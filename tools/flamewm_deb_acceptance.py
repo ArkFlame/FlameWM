@@ -37,7 +37,10 @@ BINARIES = [
     "flamewm-lock",
 ]
 REQUIRED_DEPENDS = ["libx11-6", "libxi6", "libxft2", "libfontconfig1", "libdbus-1-3", "libpulse0",
-                    "libpam0g", "libpam-runtime"]
+                    "libpam0g", "libpam-runtime", "python3"]
+FORBIDDEN_RECOMMENDS = {"ffmpeg", "imagemagick", "poppler-utils", "pandoc", "x11-xserver-utils",
+                        "xdg-desktop-portal-kde", "dbus-user-session", "kwallet6", "libpam-kwallet5",
+                        "dex", "lxqt-policykit", "xfce4-notifyd", "x11-utils"}
 CONFFILES = "/etc/pam.d/flamewm-lock\n"
 LEAK_MARKERS = ["build-root", "/run/media", "/home/", "/SDD/"]
 PAM_PATH = "etc/pam.d/flamewm-lock"

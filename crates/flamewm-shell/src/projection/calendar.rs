@@ -181,20 +181,30 @@ mod calendar_tests {
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
         assert_eq!(TODAY_NEUTRAL.r, TODAY_NEUTRAL.g);
         assert_eq!(TODAY_NEUTRAL.g, TODAY_NEUTRAL.b);
-        assert!(TODAY_NEUTRAL.a < 255, "today fill is translucent, not solid");
+        assert!(
+            TODAY_NEUTRAL.a < 255,
+            "today fill is translucent, not solid"
+        );
     }
 
     #[test]
     fn no_flame_red_in_any_calendar_view() {
         let today = (2026, 10, 13);
-        for view in ["calendar.view.days", "calendar.view.months", "calendar.view.years"] {
+        for view in [
+            "calendar.view.days",
+            "calendar.view.months",
+            "calendar.view.years",
+        ] {
             let mut state = crate::calendar::CalendarState::for_today(today);
             state.apply(view, today);
             let mut document = RecordingUiDoc::default();
             project_calendar(&mut document, &state, today).expect("projection succeeds");
             let colors = all_colors(&document);
             assert!(!colors.is_empty(), "{view} projects colors");
-            assert!(!colors.contains(&FLAME_RED), "{view} must not project Flame red");
+            assert!(
+                !colors.contains(&FLAME_RED),
+                "{view} must not project Flame red"
+            );
             assert!(
                 colors.iter().all(|c| !(c.r > 200 && c.g < 100)),
                 "{view} must not project any red-dominant color"
@@ -219,9 +229,17 @@ mod calendar_tests {
         state.apply("calendar.view.months", today);
         state.month = 3;
         let document = project(&state, today);
-        assert_only_today_filled(&document, (1..=12u8).map(|m| format!("calendar-pick-month-{m}")));
-        assert_eq!(document.backgrounds.get("calendar-pick-month-10"), Some(&TODAY_NEUTRAL));
-        assert!(document.cleared.contains(&"calendar-pick-month-3".to_owned()));
+        assert_only_today_filled(
+            &document,
+            (1..=12u8).map(|m| format!("calendar-pick-month-{m}")),
+        );
+        assert_eq!(
+            document.backgrounds.get("calendar-pick-month-10"),
+            Some(&TODAY_NEUTRAL)
+        );
+        assert!(document
+            .cleared
+            .contains(&"calendar-pick-month-3".to_owned()));
     }
 
     #[test]
@@ -231,10 +249,15 @@ mod calendar_tests {
         state.apply("calendar.view.years", today);
         state.year = 2027;
         let document = project(&state, today);
-        assert_only_today_filled(&document, (1..=12).map(|s| format!("calendar-pick-year-{s}")));
+        assert_only_today_filled(
+            &document,
+            (1..=12).map(|s| format!("calendar-pick-year-{s}")),
+        );
         let slot = today.0 - crate::calendar::year_page_start(today.0) + 1;
         assert_eq!(
-            document.backgrounds.get(&format!("calendar-pick-year-{slot}")),
+            document
+                .backgrounds
+                .get(&format!("calendar-pick-year-{slot}")),
             Some(&TODAY_NEUTRAL),
         );
     }
@@ -252,8 +275,15 @@ mod calendar_tests {
             .expect("selected date is in grid");
         let document = project(&state, today);
         let cell = format!("calendar-day-{}", index + 1);
-        assert_eq!(document.backgrounds.get(&cell), None, "selected cell has no fill");
-        assert!(document.cleared.contains(&cell), "selected cell paint is cleared");
+        assert_eq!(
+            document.backgrounds.get(&cell),
+            None,
+            "selected cell has no fill"
+        );
+        assert!(
+            document.cleared.contains(&cell),
+            "selected cell paint is cleared"
+        );
     }
 
     #[test]
@@ -268,10 +298,18 @@ mod calendar_tests {
             state.apply(view, today);
             let mut document = RecordingUiDoc::default();
             project_calendar(&mut document, &state, today).expect("projection succeeds");
-            assert_eq!(document.backgrounds.get(active), Some(&ACTIVE_TAB_FILL), "{view}");
-            for tab in ["calendar-tab-days", "calendar-tab-months", "calendar-tab-years"]
-                .into_iter()
-                .filter(|tab| *tab != active)
+            assert_eq!(
+                document.backgrounds.get(active),
+                Some(&ACTIVE_TAB_FILL),
+                "{view}"
+            );
+            for tab in [
+                "calendar-tab-days",
+                "calendar-tab-months",
+                "calendar-tab-years",
+            ]
+            .into_iter()
+            .filter(|tab| *tab != active)
             {
                 assert_eq!(document.backgrounds.get(tab), None, "{tab} inactive");
             }
@@ -313,7 +351,11 @@ mod calendar_tests {
         let marker = format!("calendar-day-{}-marker", today_index + 1);
         let tile = format!("calendar-day-{}", today_index + 1);
         assert_eq!(document.backgrounds.get(&marker), Some(&TODAY_NEUTRAL));
-        assert_eq!(document.backgrounds.get(&tile), None, "selected cell has no fill");
+        assert_eq!(
+            document.backgrounds.get(&tile),
+            None,
+            "selected cell has no fill"
+        );
         let red_markers = document
             .backgrounds
             .iter()
@@ -340,7 +382,10 @@ mod calendar_tests {
                 );
             }
         }
-        assert!(!document.cleared.contains(&marker), "today marker keeps its fill");
+        assert!(
+            !document.cleared.contains(&marker),
+            "today marker keeps its fill"
+        );
     }
 
     #[test]
@@ -352,14 +397,21 @@ mod calendar_tests {
         project_calendar(&mut document, &second, (2026, 9, 8)).expect("second projection succeeds");
         // Sep 1 2026 is a Tuesday: Sep 7 is cell 8 in the Monday-first grid.
         assert!(
-            document.cleared.iter().any(|id| id == "calendar-day-8-marker"),
+            document
+                .cleared
+                .iter()
+                .any(|id| id == "calendar-day-8-marker"),
             "previous marker is cleared on reprojection",
         );
         assert_eq!(
             document.backgrounds.get("calendar-day-9-marker"),
             Some(&TODAY_NEUTRAL),
         );
-        assert_eq!(document.backgrounds.get("calendar-day-9"), None, "selected cell has no fill");
+        assert_eq!(
+            document.backgrounds.get("calendar-day-9"),
+            None,
+            "selected cell has no fill"
+        );
         assert!(document.cleared.iter().any(|id| id == "calendar-day-9"));
     }
 

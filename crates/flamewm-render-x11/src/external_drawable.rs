@@ -15,7 +15,7 @@ use super::xft::{XftBackend, xft_measure_estimate};
 use super::xlib::*;
 use super::xrender::XRenderBackend;
 use super::xshape::{XShapeBridge, rounded_mask_spans};
-use crate::app::create_zeroed_ximage;
+use crate::app::upload_argb32_image;
 
 /// Persistent RGBA native cache key: content identity plus raster size and
 /// palette. `content_hash` is FNV-1a over the source RGBA8 bytes; `palette`
@@ -323,7 +323,9 @@ impl ExternalDrawableTarget {
     /// Drop every cached pixmap (freed when a session is bound), clear the
     /// LRU, and zero the gauge.
     fn free_all_images(&mut self) {
-        let display = self.session_view().map_or(ptr::null_mut(), |view| view.display);
+        let display = self
+            .session_view()
+            .map_or(ptr::null_mut(), |view| view.display);
         let cache = std::mem::take(&mut self.image_cache);
         for (_, cached) in cache {
             self.free_image(display, cached);
@@ -487,7 +489,17 @@ impl ExternalDrawableTarget {
                     }
                 };
                 let words = argb();
-                if let Err(error) = upload_argb32(view_display, fresh, visual, &words, w, h) {
+                if let Err(error) = unsafe {
+                    upload_argb32_image(
+                        view_display,
+                        fresh,
+                        visual,
+                        &words,
+                        w,
+                        h,
+                        "external ARGB32 upload",
+                    )
+                } {
                     unsafe { self.allocator.free_pixmap(view_display, fresh, bytes) };
                     return Err(error);
                 }
@@ -765,42 +777,6 @@ pub(crate) fn match_argb32_visual(display: *mut Display, screen: i32) -> Option<
     let mut vinfo: XVisualInfo = unsafe { std::mem::zeroed() };
     let matched = unsafe { XMatchVisualInfo(display, screen, 32, TRUE_COLOR_CLASS, &mut vinfo) };
     (matched != 0 && !vinfo.visual.is_null()).then_some(vinfo.visual)
-}
-
-fn upload_argb32(
-    display: *mut Display,
-    pixmap: Pixmap,
-    visual: *mut Visual,
-    argb: &[u32],
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    use std::os::raw::c_void;
-    let (ximage, total) = unsafe {
-        create_zeroed_ximage(display, visual, 32, "external ARGB32 upload", width, height)?
-    };
-    let head = unsafe { &*(ximage as *const XImageHead) };
-    let bpl_words = head.bytes_per_line as usize / 4;
-    let raw = unsafe { std::slice::from_raw_parts_mut(head.data as *mut u32, total / 4) };
-    for y in 0..height as usize {
-        let dst_off = y * bpl_words;
-        let src_off = y * width as usize;
-        raw[dst_off..dst_off + width as usize]
-            .copy_from_slice(&argb[src_off..src_off + width as usize]);
-    }
-    unsafe {
-        let pixmap_gc = XCreateGC(display, pixmap, 0, ptr::null_mut() as *mut c_void);
-        if pixmap_gc.is_null() {
-            XDestroyImage(ximage);
-            return Err("XCreateGC failed for external ARGB32 upload".to_string());
-        }
-        XPutImage(
-            display, pixmap, pixmap_gc, ximage, 0, 0, 0, 0, width, height,
-        );
-        XFreeGC(display, pixmap_gc);
-    };
-    unsafe { XDestroyImage(ximage) };
-    Ok(())
 }
 
 /// Rounded-corner row-inset formula shared with the XRender fill path and

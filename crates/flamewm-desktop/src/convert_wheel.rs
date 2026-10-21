@@ -14,7 +14,9 @@ const HALF_ARC: f32 = PI / 8.0 - 0.045;
 /// Returns the clockwise sector from 12 o'clock. The hub and transparent
 /// exterior have no selection, and all eight slices share one predicate.
 pub fn sector_at(x: f32, y: f32) -> Option<usize> {
-    if !x.is_finite() || !y.is_finite() { return None; }
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
     let dx = x - CENTER;
     let dy = y - CENTER;
     let radius_sq = dx * dx + dy * dy;

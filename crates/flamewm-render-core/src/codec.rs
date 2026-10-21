@@ -100,7 +100,11 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
     // existing PPM build artifacts keep decoding. Unknown versions are
     // rejected explicitly; no silent reinterpretation of pixel bytes.
     let bytes_per_pixel: u32 = match version {
-        FORMAT_VERSION | FORMAT_VERSION_TEXT_WRAP_LEGACY | FORMAT_VERSION_TREATMENT_LEGACY | FORMAT_VERSION_RGBA8_LEGACY => 4,
+        FORMAT_VERSION
+        | FORMAT_VERSION_SHADOW_LEGACY
+        | FORMAT_VERSION_TEXT_WRAP_LEGACY
+        | FORMAT_VERSION_TREATMENT_LEGACY
+        | FORMAT_VERSION_RGBA8_LEGACY => 4,
         FORMAT_VERSION_RGB8_LEGACY => 3,
         other => {
             return Err(format!(
@@ -340,6 +344,7 @@ impl Writer {
                 self.f32(shadow.offset_x);
                 self.f32(shadow.offset_y);
                 self.color_value(shadow.color);
+                self.f32(shadow.blur_radius);
             }
             None => self.u8(0),
         }
@@ -494,8 +499,7 @@ impl<'a> Reader<'a> {
             } else {
                 self.tag()?
             },
-            image_treatment: if version == FORMAT_VERSION
-                || version == FORMAT_VERSION_TEXT_WRAP_LEGACY
+            image_treatment: if version >= FORMAT_VERSION_TEXT_WRAP_LEGACY
                 || version == FORMAT_VERSION_TREATMENT_LEGACY
             {
                 self.tag()?
@@ -516,13 +520,18 @@ impl<'a> Reader<'a> {
             } else {
                 false
             },
-            text_shadow: if version == FORMAT_VERSION {
+            text_shadow: if version >= FORMAT_VERSION_SHADOW_LEGACY {
                 match self.u8()? {
                     0 => None,
                     1 => Some(TextShadow {
                         offset_x: self.f32()?,
                         offset_y: self.f32()?,
                         color: self.color_value()?,
+                        blur_radius: if version >= FORMAT_VERSION {
+                            self.f32()?
+                        } else {
+                            0.0
+                        },
                     }),
                     v => return Err(format!("invalid text shadow flag {v}")),
                 }
@@ -700,7 +709,7 @@ mod tests {
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_RGBA8_LEGACY.to_le_bytes());
         // v6 adds one shadow-presence byte in addition to the v5
         // treatment+wrap+break fields. Strip four bytes for v3.
-        assert_eq!(FORMAT_VERSION, 6);
+        assert_eq!(FORMAT_VERSION, 7);
         let tail = bytes.len() - 6;
         bytes.drain(tail..tail + 4);
         let decoded = decode(&bytes).unwrap();
@@ -718,7 +727,7 @@ mod tests {
     fn v4_style_decodes_with_wrap_defaults() {
         let document = roundtrip_node(ImageTreatment::SymbolicForeground);
         let mut bytes = encode(&document).unwrap();
-        assert_eq!(FORMAT_VERSION, 6);
+        assert_eq!(FORMAT_VERSION, 7);
         bytes[4..6].copy_from_slice(&FORMAT_VERSION_TREATMENT_LEGACY.to_le_bytes());
         // Strip v5 wrap+break and v6 shadow flag after treatment.
         let tail = bytes.len() - 5;
@@ -738,9 +747,39 @@ mod tests {
         document.nodes[0].style.text_shadow = Some(TextShadow {
             offset_x: -1.0,
             offset_y: 2.0,
-            color: ColorValue::Literal(Color { r: 0, g: 0, b: 0, a: 180 }),
+            blur_radius: 2.0,
+            color: ColorValue::Literal(Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 180,
+            }),
         });
         assert_eq!(decode(&encode(&document).unwrap()).unwrap(), document);
+    }
+
+    #[test]
+    fn v6_shadow_decodes_with_zero_blur() {
+        let mut doc = roundtrip_node(ImageTreatment::Original);
+        doc.nodes[0].style.text_shadow = Some(TextShadow {
+            offset_x: 1.0,
+            offset_y: -2.0,
+            blur_radius: 3.0,
+            color: ColorValue::Literal(Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 200,
+            }),
+        });
+        let mut bytes = encode(&doc).unwrap();
+        bytes[4..6].copy_from_slice(&FORMAT_VERSION_SHADOW_LEGACY.to_le_bytes());
+        // Last four style bytes are the newly appended blur radius for this one-node fixture.
+        let at = bytes.len() - 6;
+        bytes.drain(at..at + 4);
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded.nodes[0].style.text_shadow.unwrap().blur_radius, 0.0);
+        assert_eq!(decoded.nodes[0].style.text_shadow.unwrap().offset_y, -2.0);
     }
 
     #[test]
@@ -759,7 +798,7 @@ mod tests {
     fn v2_style_decodes_with_original_treatment_and_overflow_defaults() {
         let document = roundtrip_node(ImageTreatment::Original);
         let mut bytes = encode(&document).unwrap();
-        assert_eq!(FORMAT_VERSION, 6);
+        assert_eq!(FORMAT_VERSION, 7);
         // Convert to v2: strip treatment, wrap, break, shadow, and two
         // overflow bytes from the single-node style.
         let style_tail = bytes.len() - 8;

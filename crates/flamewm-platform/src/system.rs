@@ -193,7 +193,10 @@ impl SystemService {
             MediaAudioKey::VolumeUp | MediaAudioKey::VolumeDown => {
                 SystemAction::SetVolume(AudioVolumeAction {
                     target,
-                    percent: stepped_volume(endpoint.volume_percent, key == MediaAudioKey::VolumeUp),
+                    percent: stepped_volume(
+                        endpoint.volume_percent,
+                        key == MediaAudioKey::VolumeUp,
+                    ),
                     generation,
                     server_generation,
                 })
@@ -209,7 +212,11 @@ impl SystemService {
     }
 
     /// Stores `update` into the field picked by `slot`; bumps the revision and returns true only on change.
-    fn apply<T: PartialEq>(&mut self, slot: impl FnOnce(&mut SystemSnapshot) -> &mut T, update: T) -> bool {
+    fn apply<T: PartialEq>(
+        &mut self,
+        slot: impl FnOnce(&mut SystemSnapshot) -> &mut T,
+        update: T,
+    ) -> bool {
         let field = slot(&mut self.snapshot);
         if *field == update {
             return false;
@@ -267,7 +274,9 @@ mod tests {
         });
         assert!(bypasses_revision_fence(&volume));
         assert!(bypasses_revision_fence(&mute));
-        assert!(!bypasses_revision_fence(&SystemAction::SetWifiEnabled(true)));
+        assert!(!bypasses_revision_fence(&SystemAction::SetWifiEnabled(
+            true
+        )));
     }
 
     #[test]
@@ -373,7 +382,9 @@ mod media_key_tests {
         }
     }
 
-    fn service_with(endpoints: Vec<AudioEndpointSnapshot>) -> (SystemService, Rc<RefCell<Vec<SystemAction>>>) {
+    fn service_with(
+        endpoints: Vec<AudioEndpointSnapshot>,
+    ) -> (SystemService, Rc<RefCell<Vec<SystemAction>>>) {
         let mut service = SystemService::default();
         let update = AudioSnapshot {
             availability: ServiceAvailability::Available,
@@ -404,12 +415,18 @@ mod media_key_tests {
 
     #[test]
     fn volume_up_dispatches_set_volume_with_generation_fence_on_default_sink() {
-        let (mut service, seen) = service_with(vec![sink(1, false, 10, false), sink(2, true, 40, false)]);
-        service.media_audio_key(MediaAudioKey::VolumeUp).expect("dispatch");
+        let (mut service, seen) =
+            service_with(vec![sink(1, false, 10, false), sink(2, true, 40, false)]);
+        service
+            .media_audio_key(MediaAudioKey::VolumeUp)
+            .expect("dispatch");
         assert_eq!(
             seen.borrow().as_slice(),
             [SystemAction::SetVolume(AudioVolumeAction {
-                target: AudioTarget::Endpoint { id: 2, kind: AudioEndpointKind::Sink },
+                target: AudioTarget::Endpoint {
+                    id: 2,
+                    kind: AudioEndpointKind::Sink
+                },
                 percent: 45,
                 generation: 4,
                 server_generation: 9,
@@ -420,28 +437,44 @@ mod media_key_tests {
     #[test]
     fn volume_down_at_zero_dispatches_zero_not_underflow() {
         let (mut service, seen) = service_with(vec![sink(2, true, 0, false)]);
-        service.media_audio_key(MediaAudioKey::VolumeDown).expect("dispatch");
+        service
+            .media_audio_key(MediaAudioKey::VolumeDown)
+            .expect("dispatch");
         assert!(matches!(
             seen.borrow().as_slice(),
-            [SystemAction::SetVolume(AudioVolumeAction { percent: 0, .. })]
+            [SystemAction::SetVolume(AudioVolumeAction {
+                percent: 0,
+                ..
+            })]
         ));
     }
 
     #[test]
     fn mute_key_toggles_the_current_default_sink_state() {
         let (mut service, seen) = service_with(vec![sink(2, true, 40, true)]);
-        service.media_audio_key(MediaAudioKey::VolumeMute).expect("dispatch");
+        service
+            .media_audio_key(MediaAudioKey::VolumeMute)
+            .expect("dispatch");
         assert!(matches!(
             seen.borrow().as_slice(),
-            [SystemAction::SetMute(AudioMuteAction { muted: false, generation: 4, server_generation: 9, .. })]
+            [SystemAction::SetMute(AudioMuteAction {
+                muted: false,
+                generation: 4,
+                server_generation: 9,
+                ..
+            })]
         ));
     }
 
     #[test]
     fn no_default_sink_is_a_noop_without_handler_call() {
         let (mut service, seen) = service_with(vec![sink(1, false, 40, false)]);
-        service.media_audio_key(MediaAudioKey::VolumeUp).expect("no-op");
-        service.media_audio_key(MediaAudioKey::VolumeMute).expect("no-op");
+        service
+            .media_audio_key(MediaAudioKey::VolumeUp)
+            .expect("no-op");
+        service
+            .media_audio_key(MediaAudioKey::VolumeMute)
+            .expect("no-op");
         assert!(seen.borrow().is_empty());
     }
 }

@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 pub mod control;
@@ -20,9 +20,9 @@ mod projection;
 mod ui_contract;
 
 use flamewm_api::panels::PanelEdge;
+use flamewm_api::session::SessionAction;
 use flamewm_api::settings::SettingValue;
 use flamewm_api::{ModeId, OutputId};
-use flamewm_api::session::SessionAction;
 use flamewm_control_core::{ControlError, ControlRequest};
 use flamewm_integrations_linux::media_store::{MediaKind, MediaStore, import_for_setting};
 use flamewm_settings_core::{ControlTransport, DISPLAY_MODE_SLOTS, SettingsClient, SettingsPage};
@@ -67,25 +67,82 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "time-auto-zone-on",
     "font-toggle-on",
     "wallpaper-share-on",
+    "cursor-shadow-on",
 ];
 /// Boolean ON/OFF twins: (setting key, ON id, OFF id, default when the key is absent).
 const SETTING_TWINS: &[(&str, &str, &str, bool)] = &[
-    ("shareWallpaper", "wallpaper-share-on", "wallpaper-share-off", false),
-    ("taskbarShowWeather", "taskbar-weather-on", "taskbar-weather-off", true),
-    ("taskbarShowVolume", "taskbar-volume-on", "taskbar-volume-off", true),
-    ("taskbarShowNetwork", "taskbar-network-on", "taskbar-network-off", true),
-    ("taskbarShowBattery", "taskbar-battery-on", "taskbar-battery-off", true),
+    (
+        "shareWallpaper",
+        "wallpaper-share-on",
+        "wallpaper-share-off",
+        false,
+    ),
+    (
+        "cursorShadow",
+        "cursor-shadow-on",
+        "cursor-shadow-off",
+        true,
+    ),
+    (
+        "taskbarShowWeather",
+        "taskbar-weather-on",
+        "taskbar-weather-off",
+        true,
+    ),
+    (
+        "taskbarShowVolume",
+        "taskbar-volume-on",
+        "taskbar-volume-off",
+        true,
+    ),
+    (
+        "taskbarShowNetwork",
+        "taskbar-network-on",
+        "taskbar-network-off",
+        true,
+    ),
+    (
+        "taskbarShowBattery",
+        "taskbar-battery-on",
+        "taskbar-battery-off",
+        true,
+    ),
     (
         "taskbarBatteryOnlyWhenRelevant",
         "taskbar-battery-relevant-on",
         "taskbar-battery-relevant-off",
         false,
     ),
-    ("taskbarShowClock", "taskbar-clock-on", "taskbar-clock-off", true),
-    ("taskbarShowWorkspaces", "taskbar-workspaces-on", "taskbar-workspaces-off", true),
-    ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", true),
-    ("autoLocationEnabled", "weather-auto-location-on", "weather-auto-location-off", false),
-    ("autoTimeZoneEnabled", "time-auto-zone-on", "time-auto-zone-off", false),
+    (
+        "taskbarShowClock",
+        "taskbar-clock-on",
+        "taskbar-clock-off",
+        true,
+    ),
+    (
+        "taskbarShowWorkspaces",
+        "taskbar-workspaces-on",
+        "taskbar-workspaces-off",
+        true,
+    ),
+    (
+        "weatherEnabled",
+        "weather-enabled-on",
+        "weather-enabled-off",
+        true,
+    ),
+    (
+        "autoLocationEnabled",
+        "weather-auto-location-on",
+        "weather-auto-location-off",
+        false,
+    ),
+    (
+        "autoTimeZoneEnabled",
+        "time-auto-zone-on",
+        "time-auto-zone-off",
+        false,
+    ),
 ];
 /// Inline status line for failed requests. Optional in the compiled markup.
 const ERROR_NODE: &str = "settings-error";
@@ -99,7 +156,11 @@ const OUTPUT_PAGE_SLOTS: usize = 4;
 /// The D-Bus wire adapter replaces this value with the reactor's monotonic clock.
 fn monotonic_now_ms() -> u64 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
-    ORIGIN.get_or_init(Instant::now).elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+    ORIGIN
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 /// Page-step direction for the output and mode pagers.
@@ -208,7 +269,9 @@ fn page_slot_index(
         ));
     }
     if slot >= page_size {
-        return Err(format!("{what} slot {slot} is outside the page of {page_size}"));
+        return Err(format!(
+            "{what} slot {slot} is outside the page of {page_size}"
+        ));
     }
     let index = page
         .checked_mul(page_size)
@@ -414,7 +477,9 @@ enum SettingsAction {
     /// Row `slot` on the open picker's current page.
     ThemePickerSelect(theme_picker::PickerKind, usize),
     /// Opens the portal chooser for one archive, or one folder when `folder` is set.
-    ThemeInstallChoose { folder: bool },
+    ThemeInstallChoose {
+        folder: bool,
+    },
     WallpaperChoose,
     /// Shows the bundled wallpaper; the saved custom path is kept.
     WallpaperDefault,
@@ -441,6 +506,7 @@ enum SettingsAction {
     Toggle(&'static str),
     SelectionOpacity(i8),
     SnapOpacity(i8),
+    DesktopEntrySize(i8),
     FontSize(i8),
     TaskbarEdgeCycle,
     TaskbarEdge(PanelEdge),
@@ -484,6 +550,8 @@ enum SettingsAction {
     },
     /// Drag-only slider; the value arrives as event text, see `handle_animation_speed_drag`.
     AnimationSpeedSlider,
+    /// Drag-only selected output scale slider; only Release changes runtime scale.
+    DisplayScaleSlider,
     /// Advances a text setting through `values`, wrapping.
     TextCycle {
         key: &'static str,
@@ -523,6 +591,10 @@ pub struct SettingsApplication<T: ControlTransport> {
     /// Pointer origin for an output card; motion remains local, only release
     /// causes a native RandR request.
     monitor_drag: Option<(usize, f32, u64, OutputId)>,
+    /// Non-authoritative drag preview, bound to the original output and generation.
+    scale_drag: Option<(OutputId, u64, u16)>,
+    /// Arrow keys affect scale only after the slider is focused by pointer.
+    scale_slider_focused: bool,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -544,6 +616,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             appearance_tab: AppearanceTab::Theme,
             applied_cursor_theme: None,
             monitor_drag: None,
+            scale_drag: None,
+            scale_slider_focused: false,
         }
     }
 
@@ -579,6 +653,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         event: &UiActionEvent,
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
+        if event.action == DISPLAY_SCALE_SLIDER {
+            return self.handle_display_scale_drag(event, document);
+        }
         if event.action == ANIMATION_SPEED_SLIDER {
             return self.handle_animation_speed_drag(event, document);
         }
@@ -586,9 +663,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             if let Ok(slot) = raw_slot.parse::<usize>() {
                 if event.phase == UiActionPhase::Press {
                     self.monitor_drag = self.output_page_slot(slot).and_then(|output| {
-                        self.client.displays().map(|snapshot| {
-                            (slot, event.x, snapshot.generation, output.id.clone())
-                        })
+                        self.client
+                            .displays()
+                            .map(|snapshot| (slot, event.x, snapshot.generation, output.id.clone()))
                     });
                     return Ok(());
                 }
@@ -604,25 +681,35 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
                 if event.phase == UiActionPhase::Release {
                     let origin = self.monitor_drag.take();
-                    if let Some((pressed_slot, initial_x, generation, pressed_id)) = origin
-                        .filter(|(pressed_slot, _, _, _)| *pressed_slot == slot)
+                    if let Some((_pressed_slot, initial_x, generation, pressed_id)) =
+                        origin.filter(|(pressed_slot, _, _, _)| *pressed_slot == slot)
                     {
                         let distance = event.x - initial_x;
                         if distance.abs() >= 40.0 {
-                            let current_generation = self.client.displays().map_or(0, |s| s.generation);
-                            if generation != current_generation ||
-                                self.output_page_slot(slot).is_none_or(|o| o.id != pressed_id) {
+                            let current_generation =
+                                self.client.displays().map_or(0, |s| s.generation);
+                            if generation != current_generation
+                                || self
+                                    .output_page_slot(slot)
+                                    .is_none_or(|o| o.id != pressed_id)
+                            {
                                 return Err("display topology changed during monitor drag".into());
                             }
                             self.client.select_output(&pressed_id);
-                            let side = if distance < 0.0 { display_layout::Side::Left }
-                                else { display_layout::Side::Right };
+                            let side = if distance < 0.0 {
+                                display_layout::Side::Left
+                            } else {
+                                display_layout::Side::Right
+                            };
                             self.arrange_display(side)?;
                             return self.settle(document);
                         }
                     }
                 }
             }
+        }
+        if event.phase == UiActionPhase::Press {
+            self.scale_slider_focused = false;
         }
         if event.phase != UiActionPhase::Release || !event.inside {
             return Ok(());
@@ -634,6 +721,67 @@ impl<T: ControlTransport> SettingsApplication<T> {
         let action = parse_action(event.action.as_str())?;
         self.execute(action)?;
         self.settle(document)
+    }
+
+    /// Drag preview is display-local and never persists until the pointer releases,
+    /// including release outside the original slider bounds.
+    fn handle_display_scale_drag(
+        &mut self,
+        event: &UiActionEvent,
+        document: &mut impl UiDocumentAccess,
+    ) -> Result<(), String> {
+        if event.button != 1 {
+            return Ok(());
+        }
+        match event.phase {
+            UiActionPhase::Press => {
+                let (id, generation, value) = self.scale_selection()?;
+                self.scale_drag = Some((id, generation, value));
+                self.scale_slider_focused = true;
+            }
+            UiActionPhase::Motion | UiActionPhase::Release => {
+                let Some((id, generation, _)) = self.scale_drag.as_ref().cloned() else {
+                    return Ok(());
+                };
+                let Some(text) = event.text.as_deref() else {
+                    if event.phase == UiActionPhase::Release {
+                        self.scale_drag = None;
+                    }
+                    return Ok(());
+                };
+                let percent = display_scale_from_slider(text)?;
+                if event.phase == UiActionPhase::Release {
+                    self.scale_drag = None;
+                    let (current_id, current_generation, current_scale) = self.scale_selection()?;
+                    if current_id != id || current_generation != generation {
+                        return Err("display topology changed during scale adjustment".into());
+                    }
+                    if percent != current_scale {
+                        self.client
+                            .set_shell_scale(percent)
+                            .map_err(control_error)?;
+                    }
+                    return self.settle(document);
+                }
+                self.scale_drag = Some((id, generation, percent));
+                self.sync_display_scale(document, Some(percent))?;
+            }
+            UiActionPhase::Hover => {}
+        }
+        Ok(())
+    }
+
+    fn scale_selection(&self) -> Result<(OutputId, u64, u16), String> {
+        let snapshot = self
+            .client
+            .displays()
+            .ok_or("display snapshot unavailable")?;
+        let output = self.selected_display().ok_or("no selected display")?;
+        Ok((
+            output.id.clone(),
+            snapshot.generation,
+            output.shell_scale_percent,
+        ))
     }
 
     /// The native range drag reports the pointer as `text` (0..=100) on every
@@ -664,9 +812,33 @@ impl<T: ControlTransport> SettingsApplication<T> {
         document: &mut impl UiDocumentAccess,
     ) -> Result<(), String> {
         // Escape cancels an in-progress monitor gesture without ever applying RandR.
-        if event.phase == UiKeyPhase::Release && event.key == "Escape"
-            && self.monitor_drag.take().is_some() {
+        if event.phase == UiKeyPhase::Release
+            && event.key == "Escape"
+            && self.monitor_drag.take().is_some()
+        {
             return self.settle(document);
+        }
+        if event.phase == UiKeyPhase::Release && !self.hotkey_armed && self.scale_slider_focused {
+            if event.key == "Escape" {
+                self.scale_slider_focused = false;
+                self.scale_drag = None;
+                return self.settle(document);
+            }
+            let delta = match event.key.as_str() {
+                "Left" | "Down" => -5,
+                "Right" | "Up" => 5,
+                "Home" => -100,
+                "End" => 100,
+                _ => 0,
+            };
+            if delta != 0 && event.modifiers.is_empty() {
+                let (_, _, current) = self.scale_selection()?;
+                let target = (i32::from(current) + delta).clamp(100, 200) as u16;
+                if current != target {
+                    self.client.set_shell_scale(target).map_err(control_error)?;
+                }
+                return self.settle(document);
+            }
         }
         if event.phase == UiKeyPhase::Release && self.hotkey_armed {
             if let Some(binding) = bare_super_binding(event) {
@@ -699,13 +871,16 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let mut wallpaper_changed = false;
             match result {
                 Ok(Some(path)) => {
-                    let applied = match import_for_setting(self.chooser_target.media_kind(), &path) {
+                    let applied = match import_for_setting(self.chooser_target.media_kind(), &path)
+                    {
                         Ok(managed) => match self.chooser_target {
                             ChooserTarget::Wallpaper => self
                                 .client
                                 .set_wallpaper(managed)
                                 .map_err(control_error)
-                                .and_then(|()| self.apply_text("wallpaperMode", "custom".to_owned())),
+                                .and_then(|()| {
+                                    self.apply_text("wallpaperMode", "custom".to_owned())
+                                }),
                             ChooserTarget::LockBackground => self
                                 .apply_text("lockBackgroundImage", managed)
                                 .and_then(|()| {
@@ -740,13 +915,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Reloads this window's cursor owners when the resolved `cursorTheme` changed. A failed
     /// reload keeps the previous theme (rollback) and is retried at the next settings snapshot.
     fn sync_cursor_theme(&mut self) {
+        let shadow_enabled = !matches!(
+            self.setting_value("cursorShadow"),
+            Some(SettingValue::Boolean(false))
+        );
+        for error in flamewm_ui_x11::apply_cursor_shadow(shadow_enabled) {
+            eprintln!("settings: cursor shadow reload failed: {error}");
+        }
         let Ok(requested) = self.text_setting("cursorTheme") else {
             return;
         };
         let search_path = std::env::var("XCURSOR_PATH").unwrap_or_default();
-        let Some(theme) =
-            cursor_theme_reload(self.applied_cursor_theme.as_deref(), &requested, &search_path)
-        else {
+        let Some(theme) = flamewm_session_core::cursor_theme_reload(
+            self.applied_cursor_theme.as_deref(),
+            &requested,
+            &search_path,
+        ) else {
             return;
         };
         let errors = flamewm_ui_x11::apply_cursor_theme(&theme);
@@ -768,7 +952,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     /// Clamps both page cursors to the authoritative snapshots and stamps them with the
     /// current display generation. Runs after every successful refresh or action.
     fn reconcile_pages(&mut self) {
-        let generation = self.client.displays().map_or(0, |snapshot| snapshot.generation);
+        let generation = self
+            .client
+            .displays()
+            .map_or(0, |snapshot| snapshot.generation);
         let output_pages = page_count(self.output_count(), OUTPUT_PAGE_SLOTS);
         let mode_pages = page_count(self.client.display_mode_count(), DISPLAY_MODE_SLOTS);
         self.pages = DisplayPages {
@@ -779,31 +966,54 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn output_count(&self) -> usize {
-        self.client.displays().map_or(0, |snapshot| snapshot.outputs.len())
+        self.client
+            .displays()
+            .map_or(0, |snapshot| snapshot.outputs.len())
     }
 
     /// Stable visual left-to-right ordering derived from actual RandR geometry,
     /// not X server enumeration order. Output IDs remain the native authority.
     fn ordered_output_indices(&self) -> Vec<usize> {
-        let Some(snapshot) = self.client.displays() else { return vec![]; };
+        let Some(snapshot) = self.client.displays() else {
+            return vec![];
+        };
         let mut indices: Vec<_> = (0..snapshot.outputs.len()).collect();
         indices.sort_by_key(|&i| {
             let o = &snapshot.outputs[i];
-            (!o.geometry.is_valid(), if o.geometry.is_valid() { o.geometry.x } else { i32::MAX },
-             if o.geometry.is_valid() { o.geometry.y } else { i32::MAX }, i)
+            (
+                !o.geometry.is_valid(),
+                if o.geometry.is_valid() {
+                    o.geometry.x
+                } else {
+                    i32::MAX
+                },
+                if o.geometry.is_valid() {
+                    o.geometry.y
+                } else {
+                    i32::MAX
+                },
+                i,
+            )
         });
         indices
     }
 
     fn output_page_index(&self, slot: usize) -> Option<usize> {
-        let absolute = self.pages.output_page.checked_mul(OUTPUT_PAGE_SLOTS)?.checked_add(slot)?;
+        let absolute = self
+            .pages
+            .output_page
+            .checked_mul(OUTPUT_PAGE_SLOTS)?
+            .checked_add(slot)?;
         self.ordered_output_indices().get(absolute).copied()
     }
 
     /// Output row `slot` in visual left-to-right order; page/slot and the
     /// selection/drag input path MUST use this same mapping.
     fn output_page_slot(&self, slot: usize) -> Option<&flamewm_api::display::OutputSnapshot> {
-        self.client.displays()?.outputs.get(self.output_page_index(slot)?)
+        self.client
+            .displays()?
+            .outputs
+            .get(self.output_page_index(slot)?)
     }
 
     fn execute(&mut self, action: SettingsAction) -> Result<(), String> {
@@ -817,7 +1027,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             self.hotkey_armed = false;
         }
         if let Some(picker) = self.color_picker.as_mut() {
-            if !matches!(action, SettingsAction::ColorPickerFocus | SettingsAction::NativeKeyEvent) {
+            if !matches!(
+                action,
+                SettingsAction::ColorPickerFocus | SettingsAction::NativeKeyEvent
+            ) {
                 picker.focused = false;
             }
         }
@@ -846,7 +1059,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
             }
             SettingsAction::ColorPickerApply => self.apply_picker_buffer()?,
-            SettingsAction::Page(page) => self.client.set_page(page),
+            SettingsAction::Page(page) => {
+                self.scale_slider_focused = false;
+                self.scale_drag = None;
+                self.client.set_page(page);
+            }
             SettingsAction::AccentSwatch(accent) => {
                 self.apply_text("accent", accent.to_owned())?;
             }
@@ -928,19 +1145,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::SnapOpacity(direction) => {
                 self.step_percent("WindowSnapPreviewFillOpacity", direction, 60)?;
             }
+            SettingsAction::DesktopEntrySize(direction) => {
+                self.step_integer(
+                    "DesktopEntryScalePercent",
+                    i64::from(direction) * 10,
+                    50,
+                    200,
+                )?;
+            }
             SettingsAction::FontSize(direction) => {
                 self.step_integer("fontSizeOffset", i64::from(direction), -2, 4)?;
             }
             SettingsAction::ColorSwatch { key, value } => self.apply_text(key, value.to_owned())?,
-            SettingsAction::PercentStep(key, direction) => self.step_percent(key, direction, 100)?,
-        SettingsAction::IntegerStep {
-            key,
-            delta,
-            minimum,
-            maximum,
-        } => self.step_integer(key, delta, minimum, maximum)?,
+            SettingsAction::PercentStep(key, direction) => {
+                self.step_percent(key, direction, 100)?
+            }
+            SettingsAction::IntegerStep {
+                key,
+                delta,
+                minimum,
+                maximum,
+            } => self.step_integer(key, delta, minimum, maximum)?,
             // Value is applied from the drag text in `handle_animation_speed_drag`.
-            SettingsAction::AnimationSpeedSlider => {}
+            SettingsAction::AnimationSpeedSlider | SettingsAction::DisplayScaleSlider => {}
             SettingsAction::TextCycle { key, values } => {
                 let current = self.text_setting(key)?;
                 self.apply_text(key, cycle_text(values, &current).to_owned())?;
@@ -959,7 +1186,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             SettingsAction::Hotkey(action, operation) => self.handle_hotkey(action, operation)?,
             SettingsAction::DisplayArrange(side) => self.arrange_display(side)?,
             SettingsAction::DisplaySelect(slot) => {
-                let generation = self.client.displays().map_or(0, |snapshot| snapshot.generation);
+                let generation = self
+                    .client
+                    .displays()
+                    .map_or(0, |snapshot| snapshot.generation);
                 let index = page_slot_index(
                     self.pages.generation.unwrap_or(generation),
                     generation,
@@ -970,19 +1200,30 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     "display output",
                 )?;
                 let output_id = self
-                    .ordered_output_indices().get(index).and_then(|&physical| {
-                        self.client.displays().and_then(|snapshot| snapshot.outputs.get(physical))
+                    .ordered_output_indices()
+                    .get(index)
+                    .and_then(|&physical| {
+                        self.client
+                            .displays()
+                            .and_then(|snapshot| snapshot.outputs.get(physical))
                     })
                     .map(|output| output.id.clone())
                     .ok_or_else(|| format!("no display output at index {index}"))?;
                 if !self.client.select_output(&output_id) {
-                    return Err(format!("display output {index} is not an authoritative output"));
+                    return Err(format!(
+                        "display output {index} is not an authoritative output"
+                    ));
                 }
                 // Modes belong to the selected output, so its mode list starts on page 1.
                 self.pages.mode_page = 0;
+                self.scale_slider_focused = false;
+                self.scale_drag = None;
             }
             SettingsAction::DisplaySlot(slot) => {
-                let generation = self.client.displays().map_or(0, |snapshot| snapshot.generation);
+                let generation = self
+                    .client
+                    .displays()
+                    .map_or(0, |snapshot| snapshot.generation);
                 let index = page_slot_index(
                     self.pages.generation.unwrap_or(generation),
                     generation,
@@ -992,10 +1233,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     self.client.display_mode_count(),
                     "display mode",
                 )?;
-                let mode = self
-                    .client
-                    .display_mode_for_index(index)
-                    .ok_or_else(|| format!("display mode at index {index} has no authoritative mode"))?;
+                let mode = self.client.display_mode_for_index(index).ok_or_else(|| {
+                    format!("display mode at index {index} has no authoritative mode")
+                })?;
                 self.begin_display_mode(mode)?;
             }
             SettingsAction::OutputPage(step) => {
@@ -1012,7 +1252,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     .set_shell_scale(percent)
                     .map_err(control_error)?;
             }
-            SettingsAction::DisplayKeep => self.client.keep_display_mode(monotonic_now_ms()).map_err(control_error)?,
+            SettingsAction::DisplayKeep => self
+                .client
+                .keep_display_mode(monotonic_now_ms())
+                .map_err(control_error)?,
             SettingsAction::DisplayRevert => {
                 self.client.revert_display_mode().map_err(control_error)?;
             }
@@ -1049,7 +1292,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 self.theme_scan = None;
                 self.themes = registry;
                 if let Some((kind, page)) = self.theme_picker {
-                    let pages = page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
+                    let pages =
+                        page_count(self.themes.items(kind).len(), theme_picker::PICKER_SLOTS);
                     self.theme_picker = Some((kind, page.min(pages.saturating_sub(1))));
                 }
                 changed = true;
@@ -1106,7 +1350,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn sync_theme_pickers(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        for kind in [theme_picker::PickerKind::Icon, theme_picker::PickerKind::Cursor] {
+        for kind in [
+            theme_picker::PickerKind::Icon,
+            theme_picker::PickerKind::Cursor,
+        ] {
             let open = self
                 .theme_picker
                 .filter(|(open, _)| *open == kind)
@@ -1178,15 +1425,18 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
                 '\n' | '\r' => self.apply_picker_buffer()?,
                 '\u{8}' => {
-                    if let Some(picker) = self.color_picker.as_mut().filter(|picker| picker.focused) {
+                    if let Some(picker) = self.color_picker.as_mut().filter(|picker| picker.focused)
+                    {
                         picker.buffer.pop();
                         picker.error = None;
                     }
                 }
                 ch if ch == '#' || ch.is_ascii_hexdigit() => {
-                    if let Some(picker) = self.color_picker.as_mut().filter(|picker| {
-                        picker.focused && picker.buffer.len() < PICKER_BUFFER_MAX
-                    }) {
+                    if let Some(picker) = self
+                        .color_picker
+                        .as_mut()
+                        .filter(|picker| picker.focused && picker.buffer.len() < PICKER_BUFFER_MAX)
+                    {
                         picker.buffer.push(ch);
                         picker.error = None;
                     }
@@ -1220,12 +1470,19 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn arrange_display(&mut self, side: display_layout::Side) -> Result<(), String> {
-        let output = self.client.ui().selected_output.as_ref()
-            .ok_or_else(|| "select an active monitor before arranging".to_owned())?.clone();
+        let output = self
+            .client
+            .ui()
+            .selected_output
+            .as_ref()
+            .ok_or_else(|| "select an active monitor before arranging".to_owned())?
+            .clone();
         // Validate against a *fresh* WM snapshot instead of a stale Settings
         // projection. The external RandR adapter never saves optimistic state.
         self.client.refresh_displays().map_err(control_error)?;
-        let snapshot = self.client.displays()
+        let snapshot = self
+            .client
+            .displays()
             .ok_or_else(|| "display state unavailable".to_owned())?;
         let Some(layout) = display_layout::plan(snapshot, &output, side)? else {
             return Ok(());
@@ -1234,7 +1491,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
         // Readback must confirm every output's geometry, mode, scale and primary.
         // No success or persistence solely from xrandr's exit status.
         self.client.refresh_displays().map_err(control_error)?;
-        let observed = self.client.displays()
+        let observed = self
+            .client
+            .displays()
             .ok_or_else(|| "display readback unavailable".to_owned())?;
         if let Err(error) = display_layout::verify(&layout, observed) {
             let rollback = display_layout::rollback_if_safe(&layout, observed);
@@ -1261,16 +1520,24 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .map_err(control_error)
     }
 
-    fn handle_hotkey(&mut self, action: &'static str, operation: HotkeyOperation) -> Result<(), String> {
+    fn handle_hotkey(
+        &mut self,
+        action: &'static str,
+        operation: HotkeyOperation,
+    ) -> Result<(), String> {
         match operation {
             HotkeyOperation::Capture => {
                 self.hotkey_armed = false;
-                self.client.begin_hotkey_capture(action).map_err(control_error)?;
+                self.client
+                    .begin_hotkey_capture(action)
+                    .map_err(control_error)?;
                 self.hotkey_armed = true;
                 Ok(())
             }
             HotkeyOperation::Clear => {
-                self.client.begin_hotkey_capture(action).map_err(control_error)?;
+                self.client
+                    .begin_hotkey_capture(action)
+                    .map_err(control_error)?;
                 self.client.capture_hotkey("Escape");
                 self.client.commit_hotkey_capture().map_err(control_error)
             }
@@ -1350,9 +1617,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             .spawn(move || {
                 let outcome = match Command::new("xdg-open").arg(uri).status() {
                     Ok(status) if status.success() => Ok(()),
-                    Ok(status) => {
-                        Err(format!("could not open {uri}: xdg-open exited with {status}"))
-                    }
+                    Ok(status) => Err(format!(
+                        "could not open {uri}: xdg-open exited with {status}"
+                    )),
                     Err(error) => Err(format!("could not open {uri}: {error}")),
                 };
                 file_chooser::publish_background_completion(&sender, outcome);
@@ -1450,26 +1717,36 @@ impl<T: ControlTransport> SettingsApplication<T> {
     }
 
     fn setting_value(&self, key: &str) -> Option<&SettingValue> {
-        self.client.settings().and_then(|snapshot| snapshot.values.get(key))
+        self.client
+            .settings()
+            .and_then(|snapshot| snapshot.values.get(key))
     }
 
     fn percent_setting(&self, key: &str) -> Result<u8, String> {
         match self.setting_value(key) {
             Some(SettingValue::Percent(value)) => Ok(*value),
-            _ => Err(format!("setting '{key}' has no authoritative percent value")),
+            _ => Err(format!(
+                "setting '{key}' has no authoritative percent value"
+            )),
         }
     }
 
     fn integer_setting(&self, key: &str) -> Result<i64, String> {
         match self.setting_value(key) {
             Some(SettingValue::Integer(value)) => Ok(*value),
-            _ => Err(format!("setting '{key}' has no authoritative integer value")),
+            _ => Err(format!(
+                "setting '{key}' has no authoritative integer value"
+            )),
         }
     }
 
     /// The configured accent, falling back to `DEFAULT_ACCENT` when the setting is absent.
     fn accent(&self) -> Result<UiColor, String> {
-        accent_color(&self.text_setting("accent").unwrap_or(DEFAULT_ACCENT.to_owned()))
+        accent_color(
+            &self
+                .text_setting("accent")
+                .unwrap_or(DEFAULT_ACCENT.to_owned()),
+        )
     }
 
     fn text_setting(&self, key: &str) -> Result<String, String> {
@@ -1486,7 +1763,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Writes every node; a failed node write is recorded and the rest still apply.
     fn sync(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let mut nodes = NodeFailures { inner: document, failures: Vec::new() };
+        let mut nodes = NodeFailures {
+            inner: document,
+            failures: Vec::new(),
+        };
         let result = self.sync_nodes(&mut nodes);
         match (result, nodes.into_result()) {
             (Ok(()), recorded) => recorded,
@@ -1532,27 +1812,54 @@ impl<T: ControlTransport> SettingsApplication<T> {
             };
             document.visible(&id, true)?;
             let shown = output.connected && output.geometry.is_valid();
-            document.text(&format!("display-output-name-{slot}"),
-                format!("{} · {}", self.pages.output_page * OUTPUT_PAGE_SLOTS + slot + 1, output.connector))?;
-            let resolution = output.modes.iter()
+            document.text(
+                &format!("display-output-name-{slot}"),
+                format!(
+                    "{} · {}",
+                    self.pages.output_page * OUTPUT_PAGE_SLOTS + slot + 1,
+                    output.connector
+                ),
+            )?;
+            let resolution = output
+                .modes
+                .iter()
                 .find(|mode| mode.id == output.current_mode)
                 .map_or(output.geometry.size(), |mode| mode.resolution);
-            document.text(&format!("display-output-size-{slot}"),
-                if shown { format!("{} × {}", resolution.width, resolution.height) }
-                else { "Disconnected".to_owned() })?;
+            document.text(
+                &format!("display-output-size-{slot}"),
+                if shown {
+                    format!("{} × {}", resolution.width, resolution.height)
+                } else {
+                    "Disconnected".to_owned()
+                },
+            )?;
             let selected = self.client.ui().selected_output.as_ref() == Some(&output.id);
             document.visible(&format!("display-output-selected-{slot}"), selected)?;
             document.visible(&format!("display-output-unselected-{slot}"), !selected)?;
-            document.border(&id, if selected { self.accent()? } else {
-                UiColor { r: 89, g: 96, b: 104, a: 255 }
-            })?;
+            document.border(
+                &id,
+                if selected {
+                    self.accent()?
+                } else {
+                    UiColor {
+                        r: 89,
+                        g: 96,
+                        b: 104,
+                        a: 255,
+                    }
+                },
+            )?;
         }
         project_pager(
             document,
             &OUTPUT_PAGER,
             self.pages.output_page,
             page_count(self.output_count(), OUTPUT_PAGE_SLOTS),
-            page_label(self.pages.output_page, OUTPUT_PAGE_SLOTS, self.output_count()),
+            page_label(
+                self.pages.output_page,
+                OUTPUT_PAGE_SLOTS,
+                self.output_count(),
+            ),
         )?;
         if let Some(output) = self.selected_display() {
             document.text(
@@ -1568,30 +1875,24 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 "display-selected-resolution",
                 format!("{} x {}", resolution.width, resolution.height),
             )?;
-            let accent = self.accent()?;
-            for scale in [100_u16, 125, 150, 175, 200] {
-                let id = format!("display-scale-{scale}");
-                if scale == output.shell_scale_percent {
-                    // `accent_color` is intentionally translucent for fills; the selected
-                    // outline needs an opaque stroke to remain clearly identifiable.
-                    document.border(&id, UiColor { a: 255, ..accent })?;
-                } else {
-                    document.border(&id, UiColor { r: 74, g: 80, b: 86, a: 255 })?;
-                }
-            }
+            self.sync_display_scale(
+                document,
+                self.scale_drag
+                    .as_ref()
+                    .and_then(|(id, generation, preview)| {
+                        (self
+                            .client
+                            .displays()
+                            .is_some_and(|snap| snap.generation == *generation)
+                            && id == &output.id)
+                            .then_some(*preview)
+                    }),
+            )?;
         } else {
-            for id in [
-                "display-selected-title",
-                "display-selected-resolution",
-            ] {
+            for id in ["display-selected-title", "display-selected-resolution"] {
                 document.text(id, "\u{200b}".to_owned())?;
             }
-            for scale in [100_u16, 125, 150, 175, 200] {
-                document.border(
-                    &format!("display-scale-{scale}"),
-                    UiColor { r: 74, g: 80, b: 86, a: 255 },
-                )?;
-            }
+            self.sync_display_scale(document, None)?;
         }
         self.sync_display_modes(document)?;
         for (key, on_id, off_id) in [
@@ -1603,13 +1904,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ("fontBold", "font-toggle-on", "font-toggle-off"),
             ("animationsEnabled", "anim-global-on", "anim-global-off"),
             ("startAnimationEnabled", "anim-start-on", "anim-start-off"),
-            ("windowOpenAnimationEnabled", "anim-window-on", "anim-window-off"),
-            ("minimizeAnimationEnabled", "anim-minimize-on", "anim-minimize-off"),
-            ("maximizeAnimationEnabled", "anim-maximize-on", "anim-maximize-off"),
+            (
+                "windowOpenAnimationEnabled",
+                "anim-window-on",
+                "anim-window-off",
+            ),
+            (
+                "minimizeAnimationEnabled",
+                "anim-minimize-on",
+                "anim-minimize-off",
+            ),
+            (
+                "maximizeAnimationEnabled",
+                "anim-maximize-on",
+                "anim-maximize-off",
+            ),
             ("lockShowDate", "lock-date-on", "lock-date-off"),
             ("lockShowUsername", "lock-username-on", "lock-username-off"),
             ("lockOnSuspend", "lock-suspend-on", "lock-suspend-off"),
-            ("taskbarShowSeconds", "taskbar-seconds-on", "taskbar-seconds-off"),
+            (
+                "taskbarShowSeconds",
+                "taskbar-seconds-on",
+                "taskbar-seconds-off",
+            ),
             ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
@@ -1644,8 +1961,22 @@ impl<T: ControlTransport> SettingsApplication<T> {
             optional_text(document, "theme-install-status", status.clone());
         }
         self.sync_appearance(document)?;
-        self.sync_option_setting(document, "decoration", &[("rounded", "decoration-rounded"), ("squared", "decoration-squared")])?;
-        self.sync_option_setting(document, "titlebarButtonStyle", &[("circle", "titlebar-button-style-circle"), ("square", "titlebar-button-style-square")])?;
+        self.sync_option_setting(
+            document,
+            "decoration",
+            &[
+                ("rounded", "decoration-rounded"),
+                ("squared", "decoration-squared"),
+            ],
+        )?;
+        self.sync_option_setting(
+            document,
+            "titlebarButtonStyle",
+            &[
+                ("circle", "titlebar-button-style-circle"),
+                ("square", "titlebar-button-style-square"),
+            ],
+        )?;
         self.sync_animation_styles(document)?;
         self.sync_lock_screen(document)?;
         self.sync_segment_rows(document)?;
@@ -1673,6 +2004,28 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
     }
 
+    fn sync_display_scale(
+        &self,
+        document: &mut impl UiDocumentAccess,
+        preview: Option<u16>,
+    ) -> Result<(), String> {
+        let value = preview
+            .or_else(|| {
+                self.selected_display()
+                    .map(|output| output.shell_scale_percent)
+            })
+            .unwrap_or(100);
+        document.text("display-scale-value", format!("{value}%"))?;
+        let ratio = f32::from(value.saturating_sub(100)) / 100.0;
+        let thumb = ratio * ANIMATION_SPEED_TRACK_TRAVEL as f32;
+        document.size(
+            "display-scale-fill",
+            thumb + ANIMATION_SPEED_THUMB as f32,
+            12.0,
+        )?;
+        document.position("display-scale-thumb", thumb, 10.0)
+    }
+
     fn sync_appearance(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         self.sync_color_rows(document)?;
         self.sync_color_picker(document)?;
@@ -1685,7 +2038,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
         }
         if let Ok(speed) = self.integer_setting("animationSpeed") {
-            document.text("animation-speed-value", format!("{:.2}x", speed as f64 / 100.0))?;
+            document.text(
+                "animation-speed-value",
+                format!("{:.2}x", speed as f64 / 100.0),
+            )?;
             let ratio = (speed - ANIMATION_SPEED_MIN) as f64
                 / (ANIMATION_SPEED_MAX - ANIMATION_SPEED_MIN) as f64;
             let fill = ratio * ANIMATION_SPEED_TRACK_TRAVEL;
@@ -1723,7 +2079,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 continue;
             }
             for (index, preset) in SURFACE_PRESETS.iter().enumerate() {
-                document.background(&format!("color-{target}-preset-{index}"), solid_color(preset)?)?;
+                document.background(
+                    &format!("color-{target}-preset-{index}"),
+                    solid_color(preset)?,
+                )?;
                 document.visible(
                     &format!("color-{target}-selected-{index}"),
                     preset.eq_ignore_ascii_case(&value),
@@ -1766,7 +2125,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         optional_text(
             document,
             "color-picker-error",
-            picker.error.clone().unwrap_or_else(|| "\u{200b}".to_owned()),
+            picker
+                .error
+                .clone()
+                .unwrap_or_else(|| "\u{200b}".to_owned()),
         );
         Ok(())
     }
@@ -1801,7 +2163,12 @@ impl<T: ControlTransport> SettingsApplication<T> {
         }
         let accent = self.accent()?;
         let clock = self.text_setting("lockClockFormat").ok();
-        highlight_options(document, clock.as_deref(), &[("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")], accent)?;
+        highlight_options(
+            document,
+            clock.as_deref(),
+            &[("24h", "lock-clock-24h"), ("12h", "lock-clock-12h")],
+            accent,
+        )?;
         let timeout = self.integer_setting("lockTimeoutMinutes").ok();
         for minutes in LOCK_TIMEOUT_CHOICES {
             let id = format!("lock-timeout-{minutes}");
@@ -1818,7 +2185,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         highlight_options(
             document,
             style.as_deref(),
-            &[("classic", "taskbar-style-classic"), ("floating", "taskbar-style-floating")],
+            &[
+                ("classic", "taskbar-style-classic"),
+                ("floating", "taskbar-style-floating"),
+            ],
             accent,
         )?;
         let floating = style.as_deref() == Some("floating");
@@ -1835,29 +2205,36 @@ impl<T: ControlTransport> SettingsApplication<T> {
         highlight_options(
             document,
             appearance.as_deref(),
-            &[("dark", "appearance-apps-dark"), ("light", "appearance-apps-light")],
+            &[
+                ("dark", "appearance-apps-dark"),
+                ("light", "appearance-apps-light"),
+            ],
             accent,
         )?;
         let size = self.integer_setting("cursorSize").ok();
         for value in CURSOR_SIZE_CHOICES {
-            highlight_segment(document, &format!("cursor-size-{value}"), size == Some(value), accent)?;
+            highlight_segment(
+                document,
+                &format!("cursor-size-{value}"),
+                size == Some(value),
+                accent,
+            )?;
         }
         let mode = self.text_setting("screensaverMode").ok();
         highlight_options(
             document,
             mode.as_deref(),
-            &[("ribbons", "screensaver-mode-ribbons"), ("none", "screensaver-mode-none")],
+            &[
+                ("ribbons", "screensaver-mode-ribbons"),
+                ("none", "screensaver-mode-none"),
+            ],
             accent,
         )?;
         Ok(())
     }
 
     fn sync_error(&self, document: &mut impl UiDocumentAccess) {
-        optional_text(
-            document,
-            ERROR_NODE,
-            self.error.clone().unwrap_or_default(),
-        );
+        optional_text(document, ERROR_NODE, self.error.clone().unwrap_or_default());
     }
 
     /// Names the output the Taskbar page configures and lists the outputs it can switch to.
@@ -1889,7 +2266,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             &TASKBAR_OUTPUT_PAGER,
             self.pages.output_page,
             page_count(self.output_count(), OUTPUT_PAGE_SLOTS),
-            page_label(self.pages.output_page, OUTPUT_PAGE_SLOTS, self.output_count()),
+            page_label(
+                self.pages.output_page,
+                OUTPUT_PAGE_SLOTS,
+                self.output_count(),
+            ),
         );
     }
 
@@ -1912,7 +2293,8 @@ impl<T: ControlTransport> SettingsApplication<T> {
             let Some(snapshot) = self.client.shortcuts() else {
                 continue;
             };
-            let Some(flamewm_api::shortcuts::KeyBinding(binding)) = snapshot.bindings.get(row.action)
+            let Some(flamewm_api::shortcuts::KeyBinding(binding)) =
+                snapshot.bindings.get(row.action)
             else {
                 continue;
             };
@@ -1963,12 +2345,25 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     /// Highlights the saved units and shows the saved weather city (or the unset hint).
     fn sync_weather(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
-        let units = self.text_setting("weatherUnits").unwrap_or_else(|_| "celsius".to_owned());
+        let units = self
+            .text_setting("weatherUnits")
+            .unwrap_or_else(|_| "celsius".to_owned());
         let accent = self.accent()?;
-        highlight_options(document, Some(&units), &[("celsius", "weather-units-celsius"), ("fahrenheit", "weather-units-fahrenheit")], accent)?;
+        highlight_options(
+            document,
+            Some(&units),
+            &[
+                ("celsius", "weather-units-celsius"),
+                ("fahrenheit", "weather-units-fahrenheit"),
+            ],
+            accent,
+        )?;
         let location = self.text_setting("weatherLocation").unwrap_or_default();
         let automatic = self.bool_setting("autoLocationEnabled");
-        document.text("weather-location-value", weather_location_text(&location, automatic))
+        document.text(
+            "weather-location-value",
+            weather_location_text(&location, automatic),
+        )
     }
 
     fn sync_time_zone(&self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
@@ -1981,7 +2376,10 @@ impl<T: ControlTransport> SettingsApplication<T> {
         } else {
             "not detected".to_owned()
         };
-        document.text("time-zone-value", format!("Current time zone: {zone} - detected city: {city}"))
+        document.text(
+            "time-zone-value",
+            format!("Current time zone: {zone} - detected city: {city}"),
+        )
     }
 
     /// Writes the authoritative value text into every value pill and select
@@ -2005,9 +2403,29 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = percent("WindowSnapPreviewFillOpacity") {
             document.text("snap-opacity-value", format!("{value}%"))?;
         }
-        for kind in [theme_picker::PickerKind::Icon, theme_picker::PickerKind::Cursor] {
+        if let Some(value) = integer("DesktopEntryScalePercent") {
+            document.text("desktop-entry-size-value", format!("{value}%"))?;
+        }
+        for kind in [
+            theme_picker::PickerKind::Icon,
+            theme_picker::PickerKind::Cursor,
+        ] {
             if let Some(value) = text(kind.setting_key()) {
-                document.text(kind.select_box(), self.themes.label(kind, &value))?;
+                document.text(
+                    if kind == theme_picker::PickerKind::Icon {
+                        "icon-theme-selected-name"
+                    } else {
+                        kind.select_box()
+                    },
+                    self.themes.label(kind, &value),
+                )?;
+                if kind == theme_picker::PickerKind::Icon {
+                    let preview = self.themes.selected_preview(kind, &value);
+                    document.visible("icon-theme-selected-preview", preview.is_some())?;
+                    if let Some(image) = preview {
+                        document.image_rgba8("icon-theme-selected-preview", image.clone())?;
+                    }
+                }
             }
         }
         if let Some(value) = percent("surfaceOpacity") {
@@ -2030,10 +2448,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             document.text("wallpaper-fit-value", wallpaper_fit_label(&value))?;
         }
         if let Some(value) = integer("taskbarHeight") {
-            document.text(
-                "taskbar-size-value",
-                format!("{value} px (all outputs)"),
-            )?;
+            document.text("taskbar-size-value", format!("{value} px (all outputs)"))?;
         }
         if let Some(value) = text("fontFamily") {
             document.text("font-family-value", value)?;
@@ -2041,11 +2456,17 @@ impl<T: ControlTransport> SettingsApplication<T> {
         if let Some(value) = integer("fontSizeOffset") {
             document.text("font-size-value", font_size_label(value))?;
         }
-        let selected_edge = self.selected_display().and_then(|output| {
-            self.client
-                .panels()
-                .and_then(|snapshot| snapshot.panels.iter().find(|panel| panel.output == output.id))
-        }).map(|panel| panel.edge);
+        let selected_edge = self
+            .selected_display()
+            .and_then(|output| {
+                self.client.panels().and_then(|snapshot| {
+                    snapshot
+                        .panels
+                        .iter()
+                        .find(|panel| panel.output == output.id)
+                })
+            })
+            .map(|panel| panel.edge);
         if let Some(edge) = selected_edge {
             document.text("taskbar-edge-value", panel_edge_label(edge).to_owned())?;
         }
@@ -2107,6 +2528,20 @@ fn is_modifier_key(key: &str) -> bool {
 }
 
 const ANIMATION_SPEED_SLIDER: &str = "slider.animation-speed";
+const DISPLAY_SCALE_SLIDER: &str = "slider.display-scale";
+
+fn display_scale_from_slider(text: &str) -> Result<u16, String> {
+    let fraction: f64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid display scale slider value '{text}'"))?;
+    if !fraction.is_finite() {
+        return Err("display scale slider requires a finite number".to_owned());
+    }
+    let ticks = (fraction.clamp(0.0, 100.0) / 5.0).round() as u16;
+    Ok(100 + ticks * 5)
+}
+
 const ANIMATION_SPEED_MIN: i64 = 25;
 const ANIMATION_SPEED_MAX: i64 = 200;
 const ANIMATION_SPEED_STEP: f64 = 5.0;
@@ -2179,14 +2614,62 @@ struct IntegerStepper {
 }
 
 const INTEGER_STEPPERS: [IntegerStepper; 8] = [
-    IntegerStepper { slug: "taskbar-floating-margin", key: "taskbarFloatingMargin", step: 1, minimum: 0, maximum: 32 },
-    IntegerStepper { slug: "taskbar-floating-radius", key: "taskbarFloatingRadius", step: 1, minimum: 0, maximum: 24 },
-    IntegerStepper { slug: "screensaver-after-lock", key: "screensaverAfterLockMinutes", step: 1, minimum: 0, maximum: 60 },
-    IntegerStepper { slug: "screensaver-ribbons", key: "screensaverNumRibbons", step: 1, minimum: 1, maximum: 12 },
-    IntegerStepper { slug: "screensaver-ribbon-width", key: "screensaverRibbonWidthTenths", step: 5, minimum: 20, maximum: 280 },
-    IntegerStepper { slug: "screensaver-display-off", key: "screensaverDisplayOffMinutes", step: 5, minimum: 0, maximum: 240 },
-    IntegerStepper { slug: "lock-bg-blur", key: "lockBackgroundBlurPercent", step: 5, minimum: 0, maximum: 100 },
-    IntegerStepper { slug: "lock-bg-dim", key: "lockBackgroundDimPercent", step: 5, minimum: 0, maximum: 80 },
+    IntegerStepper {
+        slug: "taskbar-floating-margin",
+        key: "taskbarFloatingMargin",
+        step: 1,
+        minimum: 0,
+        maximum: 32,
+    },
+    IntegerStepper {
+        slug: "taskbar-floating-radius",
+        key: "taskbarFloatingRadius",
+        step: 1,
+        minimum: 0,
+        maximum: 24,
+    },
+    IntegerStepper {
+        slug: "screensaver-after-lock",
+        key: "screensaverAfterLockMinutes",
+        step: 1,
+        minimum: 0,
+        maximum: 60,
+    },
+    IntegerStepper {
+        slug: "screensaver-ribbons",
+        key: "screensaverNumRibbons",
+        step: 1,
+        minimum: 1,
+        maximum: 12,
+    },
+    IntegerStepper {
+        slug: "screensaver-ribbon-width",
+        key: "screensaverRibbonWidthTenths",
+        step: 5,
+        minimum: 20,
+        maximum: 280,
+    },
+    IntegerStepper {
+        slug: "screensaver-display-off",
+        key: "screensaverDisplayOffMinutes",
+        step: 5,
+        minimum: 0,
+        maximum: 240,
+    },
+    IntegerStepper {
+        slug: "lock-bg-blur",
+        key: "lockBackgroundBlurPercent",
+        step: 5,
+        minimum: 0,
+        maximum: 100,
+    },
+    IntegerStepper {
+        slug: "lock-bg-dim",
+        key: "lockBackgroundDimPercent",
+        step: 5,
+        minimum: 0,
+        maximum: 80,
+    },
 ];
 
 /// Preset circles offered beside each surface color row; `preset.<index>` selects one.
@@ -2301,7 +2784,9 @@ fn parse_color_picker(rest: &str) -> Result<SettingsAction, String> {
         .and_then(|(hue, shade)| Some((hue.parse::<usize>().ok()?, shade.parse::<usize>().ok()?)))
         .filter(|(hue, shade)| *hue < PICKER_HUES && *shade < PICKER_SHADES)
         .ok_or_else(|| format!("unknown picker cell '{cell}'"))?;
-    Ok(SettingsAction::ColorPickerPick(picker_grid_color(hue, shade)))
+    Ok(SettingsAction::ColorPickerPick(picker_grid_color(
+        hue, shade,
+    )))
 }
 
 fn color_target_key(target: &str) -> Result<&'static str, String> {
@@ -2356,7 +2841,10 @@ fn cycle_value(values: &[i64], current: i64, direction: i8) -> i64 {
     if len == 0 {
         return current;
     }
-    let index = values.iter().position(|value| *value == current).unwrap_or(0);
+    let index = values
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0);
     let next = if direction < 0 {
         (index + len - 1) % len
     } else {
@@ -2432,7 +2920,10 @@ fn accent_for_swatch(name: &str) -> Option<&'static str> {
 
 /// An opaque swatch colour for a `#RRGGBB` value.
 fn solid_color(value: &str) -> Result<UiColor, String> {
-    Ok(UiColor { a: 255, ..accent_color(value)? })
+    Ok(UiColor {
+        a: 255,
+        ..accent_color(value)?
+    })
 }
 
 /// Generates `UiDocumentAccess` methods that forward one write to `inner` and record its failure.
@@ -2599,7 +3090,9 @@ fn decode_weather_location(encoded: &str) -> Option<(String, String)> {
         .all(|value| value.is_some_and(|value| value.parse::<f64>().is_ok()));
     let country = parts.next().unwrap_or_default();
     match parts.next() {
-        Some(name) if coordinates_ok && !name.is_empty() => Some((country.to_owned(), name.to_owned())),
+        Some(name) if coordinates_ok && !name.is_empty() => {
+            Some((country.to_owned(), name.to_owned()))
+        }
         _ => None,
     }
 }
@@ -2635,7 +3128,11 @@ fn pick_time_zone(automatic: bool, cached: &str, system: &str) -> String {
 fn system_time_zone() -> String {
     std::fs::read_link("/etc/localtime")
         .ok()
-        .and_then(|path| path.to_str().and_then(|path| path.strip_prefix("/usr/share/zoneinfo/")).map(str::to_owned))
+        .and_then(|path| {
+            path.to_str()
+                .and_then(|path| path.strip_prefix("/usr/share/zoneinfo/"))
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
@@ -2645,12 +3142,18 @@ mod time_zone_label_tests {
 
     #[test]
     fn cached_auto_zone_is_ignored_when_automatic_switch_is_off() {
-        assert_eq!(pick_time_zone(false, "Asia/Tokyo", "Europe/Paris"), "Europe/Paris");
+        assert_eq!(
+            pick_time_zone(false, "Asia/Tokyo", "Europe/Paris"),
+            "Europe/Paris"
+        );
     }
 
     #[test]
     fn cached_auto_zone_is_shown_when_automatic_switch_is_on() {
-        assert_eq!(pick_time_zone(true, "Asia/Tokyo", "Europe/Paris"), "Asia/Tokyo");
+        assert_eq!(
+            pick_time_zone(true, "Asia/Tokyo", "Europe/Paris"),
+            "Asia/Tokyo"
+        );
         assert_eq!(pick_time_zone(true, "", "Europe/Paris"), "Europe/Paris");
     }
 }
@@ -2670,14 +3173,33 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 25] = [
-    "stickyNotesEnabled", "fontBold", "animationsEnabled", "startAnimationEnabled",
-    "windowOpenAnimationEnabled", "minimizeAnimationEnabled", "maximizeAnimationEnabled", "lockShowDate",
-    "lockShowUsername", "lockOnSuspend", "taskbarShowSeconds", "taskbarShowDate",
-    "taskbarShowWeather", "taskbarShowVolume", "taskbarShowNetwork", "taskbarShowBattery",
-    "taskbarBatteryOnlyWhenRelevant", "taskbarShowClock", "taskbarShowWorkspaces", "weatherEnabled",
-    "autoLocationEnabled", "autoTimeZoneEnabled", "snapPreviewEnabled", "focusFollowsMouse",
+const TOGGLE_KEYS: [&str; 26] = [
+    "stickyNotesEnabled",
+    "fontBold",
+    "animationsEnabled",
+    "startAnimationEnabled",
+    "windowOpenAnimationEnabled",
+    "minimizeAnimationEnabled",
+    "maximizeAnimationEnabled",
+    "lockShowDate",
+    "lockShowUsername",
+    "lockOnSuspend",
+    "taskbarShowSeconds",
+    "taskbarShowDate",
+    "taskbarShowWeather",
+    "taskbarShowVolume",
+    "taskbarShowNetwork",
+    "taskbarShowBattery",
+    "taskbarBatteryOnlyWhenRelevant",
+    "taskbarShowClock",
+    "taskbarShowWorkspaces",
+    "weatherEnabled",
+    "autoLocationEnabled",
+    "autoTimeZoneEnabled",
+    "snapPreviewEnabled",
+    "focusFollowsMouse",
     "shareWallpaper",
+    "cursorShadow",
 ];
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
@@ -2685,7 +3207,10 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if action.starts_with("keyboard.") {
         return Ok(SettingsAction::NativeKeyEvent);
     }
-    if let Some(tab) = action.strip_prefix("settings.page.").and_then(AppearanceTab::parse) {
+    if let Some(tab) = action
+        .strip_prefix("settings.page.")
+        .and_then(AppearanceTab::parse)
+    {
         return Ok(SettingsAction::AppearanceTab(tab));
     }
     if let Some(page) = action.strip_prefix("settings.page.").and_then(page) {
@@ -2721,7 +3246,10 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(direction) = action.strip_prefix("settings.surface-blur.").and_then(step) {
         return Ok(SettingsAction::PercentStep("surfaceBlurPercent", direction));
     }
-    if let Some(direction) = action.strip_prefix("settings.surface-opacity.").and_then(step) {
+    if let Some(direction) = action
+        .strip_prefix("settings.surface-opacity.")
+        .and_then(step)
+    {
         return Ok(SettingsAction::PercentStep("surfaceOpacity", direction));
     }
     if let Some((slug, direction)) = action
@@ -2733,7 +3261,8 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             .iter()
             .find(|row| row.slug == slug)
             .ok_or_else(|| format!("unknown stepper '{slug}'"))?;
-        let direction = step(direction).ok_or_else(|| format!("unknown step '{direction}' for {slug}"))?;
+        let direction =
+            step(direction).ok_or_else(|| format!("unknown step '{direction}' for {slug}"))?;
         return Ok(SettingsAction::IntegerStep {
             key: row.key,
             delta: i64::from(direction) * row.step,
@@ -2741,11 +3270,17 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
             maximum: row.maximum,
         });
     }
-    if let Some(direction) = action.strip_prefix("settings.accent-opacity.").and_then(step) {
+    if let Some(direction) = action
+        .strip_prefix("settings.accent-opacity.")
+        .and_then(step)
+    {
         return Ok(SettingsAction::PercentStep("accentOpacity", direction));
     }
     if action == ANIMATION_SPEED_SLIDER {
         return Ok(SettingsAction::AnimationSpeedSlider);
+    }
+    if action == DISPLAY_SCALE_SLIDER {
+        return Ok(SettingsAction::DisplayScaleSlider);
     }
     if let Some(direction) = action
         .strip_prefix("settings.selection-opacity.")
@@ -2756,11 +3291,21 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(direction) = action.strip_prefix("settings.snap-opacity.").and_then(step) {
         return Ok(SettingsAction::SnapOpacity(direction));
     }
+    if let Some(direction) = action
+        .strip_prefix("settings.desktop-entry-size.")
+        .and_then(step)
+    {
+        return Ok(SettingsAction::DesktopEntrySize(direction));
+    }
     if let Some(direction) = action.strip_prefix("settings.font-size.").and_then(step) {
         return Ok(SettingsAction::FontSize(direction));
     }
-    if action == "settings.display.arrange.left" { return Ok(SettingsAction::DisplayArrange(display_layout::Side::Left)); }
-    if action == "settings.display.arrange.right" { return Ok(SettingsAction::DisplayArrange(display_layout::Side::Right)); }
+    if action == "settings.display.arrange.left" {
+        return Ok(SettingsAction::DisplayArrange(display_layout::Side::Left));
+    }
+    if action == "settings.display.arrange.right" {
+        return Ok(SettingsAction::DisplayArrange(display_layout::Side::Right));
+    }
     if let Some(slot) = action.strip_prefix("settings.display.select.") {
         return slot
             .parse::<usize>()
@@ -2804,12 +3349,18 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
     if let Some(rest) = action.strip_prefix("settings.theme.") {
         return parse_theme_action(rest);
     }
-    if let Some((key, value)) = action.strip_prefix("settings.").and_then(|rest| rest.split_once('.')) {
+    if let Some((key, value)) = action
+        .strip_prefix("settings.")
+        .and_then(|rest| rest.split_once('.'))
+    {
         if let Some((row, values)) = ANIMATION_STYLE_ROWS.iter().find(|(row, _)| *row == key) {
             return values
                 .iter()
                 .find(|allowed| **allowed == value)
-                .map(|allowed| SettingsAction::TextSelect { key: row, value: allowed })
+                .map(|allowed| SettingsAction::TextSelect {
+                    key: row,
+                    value: allowed,
+                })
                 .ok_or_else(|| format!("unknown animation style '{value}' for {key}"));
         }
     }
@@ -2817,7 +3368,12 @@ fn parse_action(action: &str) -> Result<SettingsAction, String> {
         return integer_choice_action("cursorSize", &CURSOR_SIZE_CHOICES, size, "cursor size");
     }
     if let Some(minutes) = action.strip_prefix("settings.lock.timeout.") {
-        return integer_choice_action("lockTimeoutMinutes", &LOCK_TIMEOUT_CHOICES, minutes, "lock timeout");
+        return integer_choice_action(
+            "lockTimeoutMinutes",
+            &LOCK_TIMEOUT_CHOICES,
+            minutes,
+            "lock timeout",
+        );
     }
     match action {
         "settings.lock.clock.24h" => Ok(SettingsAction::TextSelect {
@@ -2956,12 +3512,20 @@ pub fn font_size_label(offset: i64) -> String {
 
 /// Profile picture label: the managed file name, or `Default` for the built-in ring icon.
 fn avatar_label(path: &str) -> String {
-    if path.is_empty() { "Default".to_owned() } else { file_name_label(path) }
+    if path.is_empty() {
+        "Default".to_owned()
+    } else {
+        file_name_label(path)
+    }
 }
 
 /// Start icon label: the managed file name, or `Built-in icon` for the default logo.
 fn start_icon_label(path: &str) -> String {
-    if path.is_empty() { "Built-in icon".to_owned() } else { file_name_label(path) }
+    if path.is_empty() {
+        "Built-in icon".to_owned()
+    } else {
+        file_name_label(path)
+    }
 }
 
 fn file_name_label(path: &str) -> String {
@@ -2972,27 +3536,28 @@ fn file_name_label(path: &str) -> String {
         .to_owned()
 }
 
-/// The resolved cursor theme to load, or `None` when `applied` already shows it.
-fn cursor_theme_reload(applied: Option<&str>, requested: &str, search_path: &str) -> Option<String> {
-    let resolved = flamewm_session_core::resolve_cursor_theme(requested, search_path);
-    (applied != Some(resolved.as_str())).then_some(resolved)
-}
-
 #[cfg(test)]
 mod cursor_reload_tests {
-    use super::cursor_theme_reload;
+    use flamewm_session_core::cursor_theme_reload;
 
     #[test]
     fn cursor_reload_only_when_resolved_theme_changes() {
-        let root = std::env::temp_dir().join(format!("flamewm-settings-cursor-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-settings-cursor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("Custom").join("cursors")).expect("theme");
         let search = root.display().to_string();
         let first = cursor_theme_reload(None, "Custom", &search);
         assert_eq!(first.as_deref(), Some("Custom"));
-        assert_eq!(cursor_theme_reload(first.as_deref(), "Custom", &search), None);
+        assert_eq!(
+            cursor_theme_reload(first.as_deref(), "Custom", &search),
+            None
+        );
         let fallback = flamewm_session_core::resolve_cursor_theme("Missing", &search);
-        assert_eq!(cursor_theme_reload(Some(&fallback), "Missing", &search), None);
+        assert_eq!(
+            cursor_theme_reload(Some(&fallback), "Missing", &search),
+            None
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
@@ -3035,15 +3600,27 @@ mod value_text_tests {
     #[test]
     fn avatar_chooser_targets_avatar_media_and_setting() {
         assert_eq!(ChooserTarget::Avatar.media_kind(), MediaKind::Avatar);
-        assert_eq!(ChooserTarget::LockBackground.media_kind(), MediaKind::LockWallpaper);
-        assert_eq!(ChooserTarget::Wallpaper.media_kind(), MediaKind::DesktopWallpaper);
+        assert_eq!(
+            ChooserTarget::LockBackground.media_kind(),
+            MediaKind::LockWallpaper
+        );
+        assert_eq!(
+            ChooserTarget::Wallpaper.media_kind(),
+            MediaKind::DesktopWallpaper
+        );
         assert_eq!(ChooserTarget::StartIcon.media_kind(), MediaKind::StartIcon);
     }
 
     #[test]
     fn avatar_actions_parse_to_choose_and_clear() {
-        assert!(matches!(parse_action("settings.avatar.choose"), Ok(SettingsAction::AvatarChoose)));
-        assert!(matches!(parse_action("settings.avatar.clear"), Ok(SettingsAction::AvatarClear)));
+        assert!(matches!(
+            parse_action("settings.avatar.choose"),
+            Ok(SettingsAction::AvatarChoose)
+        ));
+        assert!(matches!(
+            parse_action("settings.avatar.clear"),
+            Ok(SettingsAction::AvatarClear)
+        ));
         assert!(parse_action("settings.avatar.reset").is_err());
     }
 
@@ -3059,12 +3636,33 @@ mod value_text_tests {
     #[test]
     fn theme_picker_actions_parse_to_typed_targets() {
         use theme_picker::PickerKind;
-        assert_action!("settings.theme.icon.open", Ok(SettingsAction::ThemePickerOpen(PickerKind::Icon)));
-        assert_action!("settings.theme.cursor.next", Ok(SettingsAction::ThemePickerPage(PickerKind::Cursor, PageStep::Next)));
-        assert_action!("settings.theme.icon.select.5", Ok(SettingsAction::ThemePickerSelect(PickerKind::Icon, 5)));
-        assert!(matches!(parse_action("settings.theme.close"), Ok(SettingsAction::ThemePickerClose)));
-        assert_action!("settings.theme.install", Ok(SettingsAction::ThemeInstallChoose { folder: false }));
-        assert_action!("settings.theme.install-folder", Ok(SettingsAction::ThemeInstallChoose { folder: true }));
+        assert_action!(
+            "settings.theme.icon.open",
+            Ok(SettingsAction::ThemePickerOpen(PickerKind::Icon))
+        );
+        assert_action!(
+            "settings.theme.cursor.next",
+            Ok(SettingsAction::ThemePickerPage(
+                PickerKind::Cursor,
+                PageStep::Next
+            ))
+        );
+        assert_action!(
+            "settings.theme.icon.select.5",
+            Ok(SettingsAction::ThemePickerSelect(PickerKind::Icon, 5))
+        );
+        assert!(matches!(
+            parse_action("settings.theme.close"),
+            Ok(SettingsAction::ThemePickerClose)
+        ));
+        assert_action!(
+            "settings.theme.install",
+            Ok(SettingsAction::ThemeInstallChoose { folder: false })
+        );
+        assert_action!(
+            "settings.theme.install-folder",
+            Ok(SettingsAction::ThemeInstallChoose { folder: true })
+        );
     }
 
     #[test]
@@ -3084,8 +3682,8 @@ mod value_text_tests {
     fn selecting_a_theme_writes_its_stable_id_and_closes_the_picker() {
         use flamewm_api::settings::{SettingValue, SettingsChange, SettingsSnapshot};
         use flamewm_control_core::{ControlRequest, ControlResponse};
-        use theme_picker::{PickerKind, ThemeItem, ThemeRegistry};
         use test_transport::ScriptedTransport;
+        use theme_picker::{PickerKind, ThemeItem, ThemeRegistry};
 
         let item = |n: usize| ThemeItem {
             id: format!("theme-{n}"),
@@ -3104,13 +3702,21 @@ mod value_text_tests {
         };
 
         // Selecting without an open picker is rejected before any request.
-        assert!(app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 0)).is_err());
+        assert!(
+            app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 0))
+                .is_err()
+        );
         assert!(requests.borrow().is_empty());
 
-        app.execute(SettingsAction::ThemePickerOpen(PickerKind::Icon)).expect("open");
-        app.execute(SettingsAction::ThemePickerPage(PickerKind::Icon, PageStep::Next))
-            .expect("page");
-        app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 1)).expect("select");
+        app.execute(SettingsAction::ThemePickerOpen(PickerKind::Icon))
+            .expect("open");
+        app.execute(SettingsAction::ThemePickerPage(
+            PickerKind::Icon,
+            PageStep::Next,
+        ))
+        .expect("page");
+        app.execute(SettingsAction::ThemePickerSelect(PickerKind::Icon, 1))
+            .expect("select");
 
         let requests = requests.borrow();
         let transaction = match requests.last() {
@@ -3145,13 +3751,25 @@ mod value_text_tests {
 
     #[test]
     fn color_swatches_and_coarse_steps_parse_to_fixed_typed_targets() {
-        assert_action!("settings.color.surface.preset.0", Ok(SettingsAction::ColorSwatch { key: "surfaceColor", value: "#191B1D" }));
+        assert_action!(
+            "settings.color.surface.preset.0",
+            Ok(SettingsAction::ColorSwatch {
+                key: "surfaceColor",
+                value: "#191B1D"
+            })
+        );
         assert!(
             parse_action("settings.color.surface.preset.6").is_err(),
             "only six surface presets exist"
         );
         assert!(parse_action("settings.color.taskbar.preset.0").is_err());
-        assert_action!("settings.color.lockbackground.preset.5", Ok(SettingsAction::ColorSwatch { key: "lockBackgroundColor", value: "#9B59B6" }));
+        assert_action!(
+            "settings.color.lockbackground.preset.5",
+            Ok(SettingsAction::ColorSwatch {
+                key: "lockBackgroundColor",
+                value: "#9B59B6"
+            })
+        );
         assert!(
             parse_action("settings.picker.open.titlebar").is_err(),
             "titlebar has no colour target"
@@ -3170,23 +3788,68 @@ mod value_text_tests {
         ] {
             assert!(parse_action(action).is_err(), "{action} must be rejected");
         }
-        assert_eq!(animation_style_node("startAnimation", "magic-lamp"), "start-style-magic-lamp");
-        assert_eq!(animation_style_node("windowOpenAnimation", "scale"), "window-open-style-scale");
-        assert_eq!(animation_style_node("windowCloseAnimation", "fade"), "window-close-style-fade");
+        assert_eq!(
+            animation_style_node("startAnimation", "magic-lamp"),
+            "start-style-magic-lamp"
+        );
+        assert_eq!(
+            animation_style_node("windowOpenAnimation", "scale"),
+            "window-open-style-scale"
+        );
+        assert_eq!(
+            animation_style_node("windowCloseAnimation", "fade"),
+            "window-close-style-fade"
+        );
     }
 
     #[test]
     fn appearance_actions_parse_to_their_exact_typed_targets() {
         assert!(parse_action("settings.start-menu-opacity.up").is_err());
-        assert_action!("settings.accent-opacity.down", Ok(SettingsAction::PercentStep("accentOpacity", -1)));
-        assert_action!("settings.toggle.maximizeAnimationEnabled", Ok(SettingsAction::Toggle("maximizeAnimationEnabled")));
-        assert_action!("settings.titlebar.button-style.square", Ok(SettingsAction::TextSelect { key: "titlebarButtonStyle", value: "square" }));
+        assert_action!(
+            "settings.accent-opacity.down",
+            Ok(SettingsAction::PercentStep("accentOpacity", -1))
+        );
+        assert_action!(
+            "settings.toggle.maximizeAnimationEnabled",
+            Ok(SettingsAction::Toggle("maximizeAnimationEnabled"))
+        );
+        assert_action!(
+            "settings.titlebar.button-style.square",
+            Ok(SettingsAction::TextSelect {
+                key: "titlebarButtonStyle",
+                value: "square"
+            })
+        );
         assert!(parse_action("settings.titlebar.minimize.style").is_err());
         assert!(parse_action("settings.titlebar.button-style.cycle").is_err());
-        assert_action!("settings.decoration.rounded", Ok(SettingsAction::TextSelect { key: "decoration", value: "rounded" }));
-        assert_action!("settings.decoration.squared", Ok(SettingsAction::TextSelect { key: "decoration", value: "squared" }));
-        assert_action!("settings.appearance.apps.dark", Ok(SettingsAction::TextSelect { key: "appearance", value: "dark" }));
-        assert_action!("settings.appearance.apps.light", Ok(SettingsAction::TextSelect { key: "appearance", value: "light" }));
+        assert_action!(
+            "settings.decoration.rounded",
+            Ok(SettingsAction::TextSelect {
+                key: "decoration",
+                value: "rounded"
+            })
+        );
+        assert_action!(
+            "settings.decoration.squared",
+            Ok(SettingsAction::TextSelect {
+                key: "decoration",
+                value: "squared"
+            })
+        );
+        assert_action!(
+            "settings.appearance.apps.dark",
+            Ok(SettingsAction::TextSelect {
+                key: "appearance",
+                value: "dark"
+            })
+        );
+        assert_action!(
+            "settings.appearance.apps.light",
+            Ok(SettingsAction::TextSelect {
+                key: "appearance",
+                value: "light"
+            })
+        );
         assert!(parse_action("settings.appearance.apps.system").is_err());
         assert_eq!(
             flamewm_api::settings::AppearanceMode::default().as_str(),
@@ -3199,17 +3862,32 @@ mod value_text_tests {
 
     #[test]
     fn screensaver_preview_action_is_distinct_from_lock_preview() {
-        assert_action!("settings.screensaver.preview", Ok(SettingsAction::ScreensaverPreview));
+        assert_action!(
+            "settings.screensaver.preview",
+            Ok(SettingsAction::ScreensaverPreview)
+        );
         assert_action!("settings.lock.preview", Ok(SettingsAction::LockPreview));
     }
 
     #[test]
     fn accent_reset_and_start_icon_actions_parse_to_their_typed_targets() {
         assert!(parse_action("settings.accent.reset").is_err());
-        assert_action!("settings.start-icon.clear", Ok(SettingsAction::StartIconClear));
-        assert_action!("settings.start-icon.choose", Ok(SettingsAction::StartIconChoose));
-        assert_action!("settings.page.surfaces", Ok(SettingsAction::AppearanceTab(AppearanceTab::Surfaces)));
-        assert_action!("settings.page.desktop", Ok(SettingsAction::Page(SettingsPage::Desktop)));
+        assert_action!(
+            "settings.start-icon.clear",
+            Ok(SettingsAction::StartIconClear)
+        );
+        assert_action!(
+            "settings.start-icon.choose",
+            Ok(SettingsAction::StartIconChoose)
+        );
+        assert_action!(
+            "settings.page.surfaces",
+            Ok(SettingsAction::AppearanceTab(AppearanceTab::Surfaces))
+        );
+        assert_action!(
+            "settings.page.desktop",
+            Ok(SettingsAction::Page(SettingsPage::Desktop))
+        );
     }
 
     #[test]
@@ -3234,28 +3912,120 @@ mod value_text_tests {
 
     #[test]
     fn lock_background_steppers_parse_to_their_exact_typed_targets() {
-        assert_action!("settings.lock-bg-blur.up", Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: 5, minimum: 0, maximum: 100 }));
-        assert_action!("settings.lock-bg-blur.down", Ok(SettingsAction::IntegerStep { key: "lockBackgroundBlurPercent", delta: -5, minimum: 0, maximum: 100 }));
-        assert_action!("settings.lock-bg-dim.up", Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: 5, minimum: 0, maximum: 80 }));
-        assert_action!("settings.lock-bg-dim.down", Ok(SettingsAction::IntegerStep { key: "lockBackgroundDimPercent", delta: -5, minimum: 0, maximum: 80 }));
+        assert_action!(
+            "settings.lock-bg-blur.up",
+            Ok(SettingsAction::IntegerStep {
+                key: "lockBackgroundBlurPercent",
+                delta: 5,
+                minimum: 0,
+                maximum: 100
+            })
+        );
+        assert_action!(
+            "settings.lock-bg-blur.down",
+            Ok(SettingsAction::IntegerStep {
+                key: "lockBackgroundBlurPercent",
+                delta: -5,
+                minimum: 0,
+                maximum: 100
+            })
+        );
+        assert_action!(
+            "settings.lock-bg-dim.up",
+            Ok(SettingsAction::IntegerStep {
+                key: "lockBackgroundDimPercent",
+                delta: 5,
+                minimum: 0,
+                maximum: 80
+            })
+        );
+        assert_action!(
+            "settings.lock-bg-dim.down",
+            Ok(SettingsAction::IntegerStep {
+                key: "lockBackgroundDimPercent",
+                delta: -5,
+                minimum: 0,
+                maximum: 80
+            })
+        );
         assert!(parse_action("settings.lock-bg-dim.sideways").is_err());
     }
 
     #[test]
     fn taskbar_and_screensaver_actions_parse_to_their_exact_typed_targets() {
-        assert_action!("settings.surface-blur.up", Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1)));
-        assert_action!("settings.surface-opacity.down", Ok(SettingsAction::PercentStep("surfaceOpacity", -1)));
+        assert_action!(
+            "settings.surface-blur.up",
+            Ok(SettingsAction::PercentStep("surfaceBlurPercent", 1))
+        );
+        assert_action!(
+            "settings.surface-opacity.down",
+            Ok(SettingsAction::PercentStep("surfaceOpacity", -1))
+        );
         assert!(parse_action("settings.taskbar-blur.up").is_err());
         assert!(parse_action("settings.taskbar-opacity.up").is_err());
         assert!(parse_action("settings.start-menu-blur.down").is_err());
-        assert_action!("settings.taskbar-floating-margin.up", Ok(SettingsAction::IntegerStep { key: "taskbarFloatingMargin", delta: 1, minimum: 0, maximum: 32 }));
-        assert_action!("settings.screensaver-ribbon-width.down", Ok(SettingsAction::IntegerStep { key: "screensaverRibbonWidthTenths", delta: -5, minimum: 20, maximum: 280 }));
-        assert_action!("settings.screensaver-display-off.up", Ok(SettingsAction::IntegerStep { key: "screensaverDisplayOffMinutes", delta: 5, minimum: 0, maximum: 240 }));
-        assert_action!("settings.cursor.size.48", Ok(SettingsAction::IntegerSelect { key: "cursorSize", value: 48 }));
-        assert_action!("settings.taskbar.style.floating", Ok(SettingsAction::TextSelect { key: "taskbarStyle", value: "floating" }));
-        assert_action!("settings.taskbar.clock.12h", Ok(SettingsAction::TextSelect { key: "taskbarClockFormat", value: "12h" }));
-        assert_action!("settings.screensaver.mode.none", Ok(SettingsAction::TextSelect { key: "screensaverMode", value: "none" }));
-        assert_action!("settings.wallpaper.fit", Ok(SettingsAction::TextCycle { key: "wallpaperFit", .. }));
+        assert_action!(
+            "settings.taskbar-floating-margin.up",
+            Ok(SettingsAction::IntegerStep {
+                key: "taskbarFloatingMargin",
+                delta: 1,
+                minimum: 0,
+                maximum: 32
+            })
+        );
+        assert_action!(
+            "settings.screensaver-ribbon-width.down",
+            Ok(SettingsAction::IntegerStep {
+                key: "screensaverRibbonWidthTenths",
+                delta: -5,
+                minimum: 20,
+                maximum: 280
+            })
+        );
+        assert_action!(
+            "settings.screensaver-display-off.up",
+            Ok(SettingsAction::IntegerStep {
+                key: "screensaverDisplayOffMinutes",
+                delta: 5,
+                minimum: 0,
+                maximum: 240
+            })
+        );
+        assert_action!(
+            "settings.cursor.size.48",
+            Ok(SettingsAction::IntegerSelect {
+                key: "cursorSize",
+                value: 48
+            })
+        );
+        assert_action!(
+            "settings.taskbar.style.floating",
+            Ok(SettingsAction::TextSelect {
+                key: "taskbarStyle",
+                value: "floating"
+            })
+        );
+        assert_action!(
+            "settings.taskbar.clock.12h",
+            Ok(SettingsAction::TextSelect {
+                key: "taskbarClockFormat",
+                value: "12h"
+            })
+        );
+        assert_action!(
+            "settings.screensaver.mode.none",
+            Ok(SettingsAction::TextSelect {
+                key: "screensaverMode",
+                value: "none"
+            })
+        );
+        assert_action!(
+            "settings.wallpaper.fit",
+            Ok(SettingsAction::TextCycle {
+                key: "wallpaperFit",
+                ..
+            })
+        );
         assert!(parse_action("settings.toggle.screensaverSpanMonitors").is_err());
     }
 
@@ -3271,6 +4041,22 @@ mod value_text_tests {
         ] {
             assert!(parse_action(action).is_err(), "{action} must be rejected");
         }
+    }
+
+    #[test]
+    fn display_scale_slider_maps_all_five_percent_steps() {
+        for percent in (100_u16..=200).step_by(5) {
+            assert_eq!(
+                display_scale_from_slider(&(percent - 100).to_string()),
+                Ok(percent)
+            );
+        }
+        assert_eq!(display_scale_from_slider("0"), Ok(100));
+        assert_eq!(display_scale_from_slider("100"), Ok(200));
+        assert_eq!(display_scale_from_slider("35.1"), Ok(135));
+        assert_eq!(display_scale_from_slider("94.9"), Ok(195));
+        assert!(display_scale_from_slider("NaN").is_err());
+        assert!(display_scale_from_slider("abc").is_err());
     }
 
     #[test]
@@ -3357,12 +4143,14 @@ mod display_pager_fixture_tests {
         let mut transport = ScriptedTransport::default();
         let requests = Rc::new(RefCell::new(Vec::new()));
         transport.requests = requests.clone();
+        transport.responses.push_back(Ok(ControlResponse::Displays(
+            five_output_twelve_mode_snapshot(),
+        )));
         transport
             .responses
-            .push_back(Ok(ControlResponse::Displays(five_output_twelve_mode_snapshot())));
-        transport
-            .responses
-            .push_back(Ok(ControlResponse::Transaction(flamewm_api::TransactionId(7))));
+            .push_back(Ok(ControlResponse::Transaction(
+                flamewm_api::TransactionId(7),
+            )));
         let mut app = SettingsApplication::new(transport);
         app.client.refresh_displays().expect("display snapshot");
         app.reconcile_pages();
@@ -3379,7 +4167,10 @@ mod display_pager_fixture_tests {
         // Four vertical mode rows per page avoid the overflowing right column.
         assert_eq!(DISPLAY_MODE_SLOTS, 4);
         assert_eq!(app.client.display_mode_count(), 12);
-        assert_eq!(page_count(app.client.display_mode_count(), DISPLAY_MODE_SLOTS), 3);
+        assert_eq!(
+            page_count(app.client.display_mode_count(), DISPLAY_MODE_SLOTS),
+            3
+        );
         app.execute(SettingsAction::ModePage(PageStep::Next))
             .expect("next mode page");
         app.execute(SettingsAction::ModePage(PageStep::Next))
@@ -3396,20 +4187,24 @@ mod display_pager_fixture_tests {
             app.client.display_mode_page(app.pages.mode_page)[2].id,
             fifth_output_current_mode
         );
-        assert!(display_mode_label(
-            &app.client.display_mode_page(app.pages.mode_page)[2],
-            selected_output.current_mode == fifth_output_current_mode,
-        )
-        .contains("current"));
+        assert!(
+            display_mode_label(
+                &app.client.display_mode_page(app.pages.mode_page)[2],
+                selected_output.current_mode == fifth_output_current_mode,
+            )
+            .contains("current")
+        );
         assert_eq!(
             app.client.display_mode_page(app.pages.mode_page)[3].id,
             fifth_output_mode_11
         );
-        assert!(!display_mode_label(
-            &app.client.display_mode_page(app.pages.mode_page)[3],
-            selected_output.current_mode == fifth_output_mode_11,
-        )
-        .contains("current"));
+        assert!(
+            !display_mode_label(
+                &app.client.display_mode_page(app.pages.mode_page)[3],
+                selected_output.current_mode == fifth_output_mode_11,
+            )
+            .contains("current")
+        );
 
         app.execute(SettingsAction::DisplaySlot(3))
             .expect("begin mode 11");
@@ -3422,17 +4217,30 @@ mod display_pager_fixture_tests {
                 ..
             }) if output == &OutputId::new("DP-4") && *mode == fifth_output_mode_11
         ));
-        assert_eq!(app.client.ui().pending_display_transaction, Some(flamewm_api::TransactionId(7)));
+        assert_eq!(
+            app.client.ui().pending_display_transaction,
+            Some(flamewm_api::TransactionId(7))
+        );
 
         // End-of-list pager state is derived from the data and cannot advance past its last page.
-        assert_eq!(step_page(app.pages.mode_page, PageStep::Next, 3), app.pages.mode_page);
-        assert_eq!(page_label(app.pages.mode_page, DISPLAY_MODE_SLOTS, 12), "9-12 of 12");
+        assert_eq!(
+            step_page(app.pages.mode_page, PageStep::Next, 3),
+            app.pages.mode_page
+        );
+        assert_eq!(
+            page_label(app.pages.mode_page, DISPLAY_MODE_SLOTS, 12),
+            "9-12 of 12"
+        );
 
         // A cursor stamped against the prior generation rejects the same slot before any request.
         app.pages.generation = Some(41);
         let request_count = requests.borrow().len();
         let pending_before = app.client.ui().pending_display_transaction;
-        assert!(app.execute(SettingsAction::DisplaySlot(3)).unwrap_err().contains("stale"));
+        assert!(
+            app.execute(SettingsAction::DisplaySlot(3))
+                .unwrap_err()
+                .contains("stale")
+        );
         assert_eq!(requests.borrow().len(), request_count);
         assert_eq!(app.client.ui().pending_display_transaction, pending_before);
     }
@@ -3456,15 +4264,28 @@ mod accent_node_tests {
     }
 
     impl UiDocumentAccess for ColorDocument {
-        fn text(&mut self, _id: &str, _text: String) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn text(&mut self, _id: &str, _text: String) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn image_rgb8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn image_rgba8(&mut self, _id: &str, _image: RuntimeImage) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn visible(&mut self, _id: &str, _visible: bool) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn toggle(&mut self, _track_id: &str, _knob_id: &str, _checked: bool) -> Result<(), String> {
+        fn toggle(
+            &mut self,
+            _track_id: &str,
+            _knob_id: &str,
+            _checked: bool,
+        ) -> Result<(), String> {
             crate::ui_contract::require_markup_id(_track_id)?;
             crate::ui_contract::require_markup_id(_knob_id)
         }
@@ -3477,7 +4298,9 @@ mod accent_node_tests {
             Ok(())
         }
 
-        fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn size(&mut self, _id: &str, _width: f32, _height: f32) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
         fn background(&mut self, id: &str, color: UiColor) -> Result<(), String> {
             crate::ui_contract::require_markup_id(id)?;
@@ -3485,19 +4308,33 @@ mod accent_node_tests {
             Ok(())
         }
 
-        fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn border(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn foreground(&mut self, _id: &str, _color: UiColor) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn background_clear(&mut self, _id: &str) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn background_clear(&mut self, _id: &str) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn border_clear(&mut self, _id: &str) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn border_clear(&mut self, _id: &str) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn foreground_clear(&mut self, _id: &str) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn foreground_clear(&mut self, _id: &str) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn font_size(&mut self, _id: &str, _size_px: f32) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
-        fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> { crate::ui_contract::require_markup_id(_id) }
+        fn font_weight(&mut self, _id: &str, _weight: u16) -> Result<(), String> {
+            crate::ui_contract::require_markup_id(_id)
+        }
 
         fn overflow(
             &mut self,
@@ -3545,7 +4382,11 @@ mod accent_node_tests {
             application.sync(&mut document).expect("sync");
             let expected = solid_color(accent).expect("accent");
             for id in ACCENT_NODE_IDS {
-                assert_eq!(document.backgrounds.get(*id), Some(&expected), "{id} under {accent}");
+                assert_eq!(
+                    document.backgrounds.get(*id),
+                    Some(&expected),
+                    "{id} under {accent}"
+                );
             }
             assert!(!document.backgrounds.contains_key("anim-global-off"));
         }
@@ -3554,9 +4395,15 @@ mod accent_node_tests {
     #[test]
     fn sync_reports_recorded_write_failures_alongside_a_later_error() {
         let application = application_with_accent("not-a-colour");
-        let mut document = ColorDocument { reject_positions: true, ..ColorDocument::default() };
+        let mut document = ColorDocument {
+            reject_positions: true,
+            ..ColorDocument::default()
+        };
         let error = application.sync(&mut document).expect_err("sync must fail");
-        assert!(error.contains("position rejected for nav-selection"), "{error}");
+        assert!(
+            error.contains("position rejected for nav-selection"),
+            "{error}"
+        );
         assert!(error.contains("accent is not a #RRGGBB value"), "{error}");
     }
 
@@ -3567,7 +4414,11 @@ mod accent_node_tests {
         application.sync(&mut document).expect("sync");
         for id in ACCENT_NODE_IDS {
             let color = document.backgrounds.get(*id).expect("accent node painted");
-            assert_eq!((color.r, color.g, color.b, color.a), (0xEF, 0x40, 0x48, 255), "{id}");
+            assert_eq!(
+                (color.r, color.g, color.b, color.a),
+                (0xEF, 0x40, 0x48, 255),
+                "{id}"
+            );
         }
     }
 
@@ -3581,7 +4432,13 @@ mod accent_node_tests {
             .map(|after| &after[..after.find('"').expect("closed toggle id")])
             .collect();
         assert!(!ids.is_empty(), "no toggle-on ids found in settings.html");
-        let missing: Vec<&str> = ids.into_iter().filter(|id| !ACCENT_NODE_IDS.contains(id)).collect();
-        assert!(missing.is_empty(), "toggle-on ids missing from ACCENT_NODE_IDS: {missing:?}");
+        let missing: Vec<&str> = ids
+            .into_iter()
+            .filter(|id| !ACCENT_NODE_IDS.contains(id))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "toggle-on ids missing from ACCENT_NODE_IDS: {missing:?}"
+        );
     }
 }

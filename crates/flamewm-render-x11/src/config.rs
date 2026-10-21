@@ -387,9 +387,12 @@ mod dock_strut_tests {
         assert_eq!((s.bottom_start_x, s.bottom_end_x), (8, 1911));
         let top = DockStrut::from_edge_rect(1920, 1080, DockEdge::Top, 8, 8, 1904, 44).unwrap();
         assert_eq!(top.strut4(), [0, 0, 52, 0]);
-        let right = DockStrut::from_edge_rect(1920, 1080, DockEdge::Right, 1868, 8, 44, 1064).unwrap();
+        let right =
+            DockStrut::from_edge_rect(1920, 1080, DockEdge::Right, 1868, 8, 44, 1064).unwrap();
         assert_eq!(right.strut4(), [0, 52, 0, 0]);
-        assert!(DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, 0, 1080, 1920, 44).is_none());
+        assert!(
+            DockStrut::from_edge_rect(1920, 1080, DockEdge::Bottom, 0, 1080, 1920, 44).is_none()
+        );
     }
 }
 

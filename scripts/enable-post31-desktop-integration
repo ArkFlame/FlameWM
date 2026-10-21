@@ -65,14 +65,18 @@ def planned_changes(root: Path) -> dict[Path, str]:
     ):
         if record not in updated[name].splitlines():
             updated[name] = updated[name].rstrip("\n") + "\n" + record + "\n"
-    # Preserve whatever wallet/PAM recommendations Agent 03 produced.
-    line = re.search(r"(?m)^Recommends:[^\n]*$", updated[CONTROL])
-    if not line:
-        raise ValueError("control.in has no Recommends line; no files changed")
-    existing = {p.strip() for p in line.group().split(":",1)[1].split(",")}
-    extra = [p for p in ("dex", "lxqt-policykit", "xfce4-notifyd", "python3", "x11-utils") if p not in existing]
-    if extra:
-        updated[CONTROL] = updated[CONTROL][:line.end()] + ", " + ", ".join(extra) + updated[CONTROL][line.end():]
+    # Optional integrations are runtime-detected; only Python is required by
+    # the packaged session companion. Do not pull full desktop stacks via
+    # recommendations.
+    control = updated[CONTROL]
+    control = re.sub(r"(?m)^Recommends:[^\n]*\n?", "", control)
+    depends = re.search(r"(?m)^Depends:([^\n]*)$", control)
+    if not depends:
+        raise ValueError("control.in has no Depends line; no files changed")
+    names = {item.strip().split()[0] for item in depends.group(1).split(",") if item.strip()}
+    if "python3" not in names:
+        control = control[:depends.end()] + ", python3" + control[depends.end():]
+    updated[CONTROL] = control
     return {files[name]: updated[name] for name in FILES if updated[name] != original[name]}
 
 

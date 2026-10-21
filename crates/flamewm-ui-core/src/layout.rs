@@ -399,7 +399,11 @@ fn resolve_alignment(container: Alignment, item: Alignment) -> Alignment {
 
 fn basis(item: &LayoutItem, horizontal: bool) -> i32 {
     let measure = pick(horizontal, item.spec.width, item.spec.height);
-    let content = pick(horizontal, item.spec.content.width, item.spec.content.height);
+    let content = pick(
+        horizontal,
+        item.spec.content.width,
+        item.spec.content.height,
+    );
     match measure.mode {
         MeasureMode::Fixed | MeasureMode::Flex => clamp_measure(measure.value, measure),
         MeasureMode::Content => clamp_measure(content, measure),

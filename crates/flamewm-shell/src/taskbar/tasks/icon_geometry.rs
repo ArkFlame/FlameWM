@@ -72,7 +72,9 @@ impl IconGeometryTracker {
         // A reused XID is the same X property but a different managed client:
         // discard the old generation without clearing the replacement value.
         self.written.retain(|window, _| {
-            !desired.iter().any(|(current, _)| current.id == window.id && current != window)
+            !desired
+                .iter()
+                .any(|(current, _)| current.id == window.id && current != window)
         });
         let gone: Vec<WindowRef> = self
             .written
@@ -123,7 +125,12 @@ mod tests {
 
     #[test]
     fn slot_geometry_skips_empty_slots_and_missing_rects() {
-        let slots = [Some(WindowRef::new(7, 1)), None, Some(WindowRef::new(9, 1)), Some(WindowRef::new(11, 1))];
+        let slots = [
+            Some(WindowRef::new(7, 1)),
+            None,
+            Some(WindowRef::new(9, 1)),
+            Some(WindowRef::new(11, 1)),
+        ];
         let rects = [
             Some((10.0, 1000.0, 80.0, 40.0)),
             Some((90.0, 1000.0, 80.0, 40.0)),
@@ -133,15 +140,24 @@ mod tests {
         let desired = desired_slot_geometry(&slots, |index| rects[index]);
         assert_eq!(
             desired,
-            vec![(WindowRef::new(7, 1), [10, 1000, 80, 40]), (WindowRef::new(11, 1), [170, 1000, 80, 40])]
+            vec![
+                (WindowRef::new(7, 1), [10, 1000, 80, 40]),
+                (WindowRef::new(11, 1), [170, 1000, 80, 40])
+            ]
         );
     }
 
     #[test]
     fn output_slots_use_their_own_panel_rects() {
         let outputs = vec![
-            (flamewm_api::OutputId::new("left"), vec![Some(WindowRef::new(7, 1))]),
-            (flamewm_api::OutputId::new("right"), vec![Some(WindowRef::new(9, 1))]),
+            (
+                flamewm_api::OutputId::new("left"),
+                vec![Some(WindowRef::new(7, 1))],
+            ),
+            (
+                flamewm_api::OutputId::new("right"),
+                vec![Some(WindowRef::new(9, 1))],
+            ),
         ];
         let desired = desired_output_slot_geometry(&outputs, |output, _| {
             Some(if output.as_str() == "left" {
@@ -150,7 +166,13 @@ mod tests {
                 (1940.0, 700.0, 32.0, 40.0)
             })
         });
-        assert_eq!(desired, vec![(WindowRef::new(7, 1), [20, 1000, 32, 40]), (WindowRef::new(9, 1), [1940, 700, 32, 40])]);
+        assert_eq!(
+            desired,
+            vec![
+                (WindowRef::new(7, 1), [20, 1000, 32, 40]),
+                (WindowRef::new(9, 1), [1940, 700, 32, 40])
+            ]
+        );
     }
 
     #[test]
@@ -167,9 +189,21 @@ mod tests {
     fn moved_slot_rewrites_only_that_window() {
         let mut tracker = IconGeometryTracker::default();
         let mut sink = Recorder::default();
-        tracker.sync(&[(WindowRef::new(7, 1), [1, 2, 3, 4]), (WindowRef::new(8, 1), [5, 6, 7, 8])], &mut sink);
+        tracker.sync(
+            &[
+                (WindowRef::new(7, 1), [1, 2, 3, 4]),
+                (WindowRef::new(8, 1), [5, 6, 7, 8]),
+            ],
+            &mut sink,
+        );
         sink.ops.clear();
-        tracker.sync(&[(WindowRef::new(7, 1), [1, 2, 3, 4]), (WindowRef::new(8, 1), [9, 6, 7, 8])], &mut sink);
+        tracker.sync(
+            &[
+                (WindowRef::new(7, 1), [1, 2, 3, 4]),
+                (WindowRef::new(8, 1), [9, 6, 7, 8]),
+            ],
+            &mut sink,
+        );
         assert_eq!(sink.ops, vec![("set", 8, [9, 6, 7, 8])]);
     }
 
@@ -177,7 +211,13 @@ mod tests {
     fn removed_task_clears_property_once() {
         let mut tracker = IconGeometryTracker::default();
         let mut sink = Recorder::default();
-        tracker.sync(&[(WindowRef::new(7, 1), [1, 2, 3, 4]), (WindowRef::new(8, 1), [5, 6, 7, 8])], &mut sink);
+        tracker.sync(
+            &[
+                (WindowRef::new(7, 1), [1, 2, 3, 4]),
+                (WindowRef::new(8, 1), [5, 6, 7, 8]),
+            ],
+            &mut sink,
+        );
         sink.ops.clear();
         tracker.sync(&[(WindowRef::new(8, 1), [5, 6, 7, 8])], &mut sink);
         tracker.sync(&[(WindowRef::new(8, 1), [5, 6, 7, 8])], &mut sink);

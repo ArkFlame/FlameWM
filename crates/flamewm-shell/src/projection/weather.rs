@@ -6,7 +6,9 @@
 
 use super::*;
 use crate::weather_host::{LocationSearch, SearchStatus};
-use flamewm_shell_core::weather::{TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState};
+use flamewm_shell_core::weather::{
+    TemperatureUnit, WeatherCondition, WeatherSettings, WeatherState,
+};
 
 /// Rows in the popup forecast list.
 pub const WEATHER_DAY_ROWS: usize = 7;
@@ -114,7 +116,10 @@ pub struct WeatherPopupView {
 /// temperature is `--` and no forecast rows are shown.
 #[must_use]
 pub fn popup_view(state: &WeatherState, settings: &WeatherSettings) -> WeatherPopupView {
-    let configured_name = settings.location.as_ref().map_or_else(String::new, |l| l.name.clone());
+    let configured_name = settings
+        .location
+        .as_ref()
+        .map_or_else(String::new, |l| l.name.clone());
     let (snapshot, status) = match state {
         WeatherState::Disabled => (None, "Weather is off"),
         WeatherState::Unconfigured => (None, "Choose a location"),
@@ -161,9 +166,17 @@ fn place_name(name: &str, country: Option<&str>) -> String {
 }
 
 /// One icon node per condition under `prefix`; only `active` is visible, and only when `shown`.
-fn set_icons(document: &mut impl UiDocumentAccess, prefix: &str, active: Option<WeatherCondition>, shown: bool) -> Result<(), String> {
+fn set_icons(
+    document: &mut impl UiDocumentAccess,
+    prefix: &str,
+    active: Option<WeatherCondition>,
+    shown: bool,
+) -> Result<(), String> {
     for condition in WEATHER_CONDITIONS {
-        document.visible(&format!("{prefix}{}", icon_suffix(condition)), shown && active == Some(condition))?;
+        document.visible(
+            &format!("{prefix}{}", icon_suffix(condition)),
+            shown && active == Some(condition),
+        )?;
     }
     Ok(())
 }
@@ -177,7 +190,12 @@ pub fn project_weather_tray(
 ) -> Result<(), String> {
     let view = tray_view(state, units, shown);
     document.visible("tray-weather", view.visible)?;
-    set_icons(document, "tray-weather-", Some(view.condition), view.visible)?;
+    set_icons(
+        document,
+        "tray-weather-",
+        Some(view.condition),
+        view.visible,
+    )?;
     document.text("tray-weather-temp", view.temperature)
 }
 
@@ -219,7 +237,10 @@ pub fn project_weather_popup(
     let picker = picker_open(search);
     document.text("weather-location", view.location)?;
     document.text("weather-temp", view.temperature)?;
-    document.text("weather-condition", condition_label(view.condition).to_owned())?;
+    document.text(
+        "weather-condition",
+        condition_label(view.condition).to_owned(),
+    )?;
     document.text("weather-state", view.status)?;
     set_icons(document, "weather-icon-", Some(view.condition), true)?;
     for row in 1..=WEATHER_DAY_ROWS {
@@ -235,7 +256,12 @@ pub fn project_weather_popup(
             day.map_or_else(String::new, |d| d.range.clone()),
         )?;
         document.visible(&format!("weather-day-{row}-range"), shown)?;
-        set_icons(document, &format!("weather-day-{row}-icon-"), day.map(|d| d.condition), shown)?;
+        set_icons(
+            document,
+            &format!("weather-day-{row}-icon-"),
+            day.map(|d| d.condition),
+            shown,
+        )?;
     }
     document.visible("weather-offline-veil", offline_dimmed(state))?;
     document.background("weather-offline-veil", UiColor { a: 160, ..veil })?;
@@ -322,15 +348,24 @@ mod tests {
             assert!(shown.visible, "{state:?}");
             assert_eq!(shown.temperature, "--");
             assert_eq!(shown.condition, WeatherCondition::Unknown);
-            assert!(!tray_view(&state, TemperatureUnit::Celsius, false).visible, "{state:?}");
+            assert!(
+                !tray_view(&state, TemperatureUnit::Celsius, false).visible,
+                "{state:?}"
+            );
         }
     }
 
     #[test]
     fn tray_shows_integer_temperature_for_ready_and_offline_snapshots() {
         let ready = WeatherState::Ready(snapshot(0));
-        assert_eq!(tray_view(&ready, TemperatureUnit::Celsius, true).temperature, "12\u{b0}");
-        assert_eq!(tray_view(&ready, TemperatureUnit::Fahrenheit, true).temperature, "54\u{b0}");
+        assert_eq!(
+            tray_view(&ready, TemperatureUnit::Celsius, true).temperature,
+            "12\u{b0}"
+        );
+        assert_eq!(
+            tray_view(&ready, TemperatureUnit::Fahrenheit, true).temperature,
+            "54\u{b0}"
+        );
         let offline = WeatherState::Offline(Some(snapshot(0)));
         assert_eq!(
             tray_view(&offline, TemperatureUnit::Celsius, true).condition,
@@ -354,21 +389,36 @@ mod tests {
         assert!(!doc.visible["tray-weather-clear"]);
 
         let mut disabled = Recorder::default();
-        project_weather_tray(&mut disabled, &WeatherState::Disabled, TemperatureUnit::Celsius, true)
-            .unwrap();
+        project_weather_tray(
+            &mut disabled,
+            &WeatherState::Disabled,
+            TemperatureUnit::Celsius,
+            true,
+        )
+        .unwrap();
         assert!(!disabled.visible["tray-weather"]);
         assert!(!disabled.visible["tray-weather-none-available"]);
 
         let mut unconfigured = Recorder::default();
-        project_weather_tray(&mut unconfigured, &WeatherState::Unconfigured, TemperatureUnit::Celsius, true)
-            .unwrap();
+        project_weather_tray(
+            &mut unconfigured,
+            &WeatherState::Unconfigured,
+            TemperatureUnit::Celsius,
+            true,
+        )
+        .unwrap();
         assert!(unconfigured.visible["tray-weather"]);
         assert!(unconfigured.visible["tray-weather-none-available"]);
         assert_eq!(unconfigured.texts["tray-weather-temp"], "--");
 
         let mut off = Recorder::default();
-        project_weather_tray(&mut off, &WeatherState::Disabled, TemperatureUnit::Celsius, false)
-            .unwrap();
+        project_weather_tray(
+            &mut off,
+            &WeatherState::Disabled,
+            TemperatureUnit::Celsius,
+            false,
+        )
+        .unwrap();
         assert!(!off.visible["tray-weather"]);
         assert!(!off.visible["tray-weather-overcast"]);
     }
@@ -381,7 +431,10 @@ mod tests {
             (WeatherState::Unconfigured, "Choose a location"),
             (WeatherState::Loading, "Loading..."),
             (WeatherState::Offline(None), "Offline"),
-            (WeatherState::Error(WeatherError::Parse("x")), "Could not load weather"),
+            (
+                WeatherState::Error(WeatherError::Parse("x")),
+                "Could not load weather",
+            ),
         ];
         for (state, status) in cases {
             let view = popup_view(&state, &s);
@@ -417,7 +470,12 @@ mod tests {
             &WeatherState::Ready(snapshot(2)),
             &settings(TemperatureUnit::Celsius),
             &LocationSearch::default(),
-            UiColor { r: 0, g: 0, b: 0, a: 255 },
+            UiColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
         )
         .unwrap();
         assert_eq!(doc.texts["weather-day-1-name"], "Fri");
@@ -435,7 +493,12 @@ mod tests {
     fn picker_replaces_forecast_rows_and_offline_snapshot_is_veiled() {
         let mut search = LocationSearch::default();
         search.results = vec![berlin()];
-        let veil = UiColor { r: 1, g: 2, b: 3, a: 255 };
+        let veil = UiColor {
+            r: 1,
+            g: 2,
+            b: 3,
+            a: 255,
+        };
         let mut doc = Recorder::default();
         project_weather_popup(
             &mut doc,
@@ -517,8 +580,12 @@ mod panel_tray_tests {
             project_weather_tray(&mut doc, &state, TemperatureUnit::Celsius, true)
                 .unwrap_or_else(|error| panic!("tray projection refused: {error}"));
             let viewport = (1080.0, 72.0);
-            let button = doc.layout_box_by_id("tray-weather", viewport).expect("button");
-            let span = doc.layout_box_by_id("tray-weather-temp", viewport).expect("span");
+            let button = doc
+                .layout_box_by_id("tray-weather", viewport)
+                .expect("button");
+            let span = doc
+                .layout_box_by_id("tray-weather-temp", viewport)
+                .expect("span");
             assert!(span.2 > 0.0 && span.3 > 0.0, "zero-size temp span {span:?}");
             let inside = span.0 >= button.0
                 && span.1 >= button.1

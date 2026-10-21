@@ -185,7 +185,11 @@ mod tests {
         assert_eq!(texts(&layout), vec!["aa bb", "cc"]);
         assert!((layout.line_height - 13.0).abs() < 0.01);
         assert!((layout.height - 26.0).abs() < 0.01);
-        assert!(widths(&layout).iter().all(|&w| w <= 5.0 * 10.0 * 0.58 + 0.01));
+        assert!(
+            widths(&layout)
+                .iter()
+                .all(|&w| w <= 5.0 * 10.0 * 0.58 + 0.01)
+        );
     }
 
     #[test]
@@ -193,7 +197,11 @@ mod tests {
         let layout = layout_text("abcdefgh", 10.0, 3.0 * 10.0 * 0.58, TextWrap::Wrap, false);
         assert!(layout.lines.len() > 1);
         assert_eq!(layout.lines.iter().map(|l| l.text.len()).sum::<usize>(), 8);
-        assert!(widths(&layout).iter().all(|&w| w <= 3.0 * 10.0 * 0.58 + 0.01));
+        assert!(
+            widths(&layout)
+                .iter()
+                .all(|&w| w <= 3.0 * 10.0 * 0.58 + 0.01)
+        );
     }
 
     #[test]

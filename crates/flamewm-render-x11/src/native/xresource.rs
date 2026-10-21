@@ -1,12 +1,12 @@
 //! Checked X11 pixmap gateway + process ledger (J01).
 //!
-//! All native pixmap traffic (backbuffer, image cache, masks) goes through
-//! [`X11ResourceAllocator`]: dimension validation first, then a checked
-//! `XCreatePixmap` under an error-trap lock + `XSync`, then ledger + gauge
-//! accounting. Pure validation/ledger math is unit-testable without X.
+//! Pixmaps routed through [`X11ResourceAllocator`] use dimension validation,
+//! a checked `XCreatePixmap` under an error-trap lock + `XSync`, and local plus
+//! process-wide accounting. Pure validation/ledger math is unit-testable without X.
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use super::super::xlib::{
     Bool, Display, Drawable, Pixmap, XCreatePixmap, XErrorEvent, XFreePixmap, XSetErrorHandler,
@@ -59,13 +59,13 @@ pub fn validate_pixmap_dims(
     Ok(bytes)
 }
 
-fn set_gauge(label: &'static str, bytes: u64) {
-    flamewm_profiler::MemoryGauge::new(label).set(bytes);
-}
-
 pub const PIXMAP_GAUGE: &str = "render.x11.pixmap_bytes";
 pub const BACKBUFFER_GAUGE: &str = "render.x11.backbuffer_bytes";
 pub const IMAGE_GAUGE: &str = "render.x11.image_bytes";
+
+fn set_gauge(label: &'static str, bytes: u64) {
+    flamewm_profiler::MemoryGauge::new(label).set(bytes);
+}
 
 pub fn refresh_backbuffer_gauge(bytes: u64) {
     set_gauge(BACKBUFFER_GAUGE, bytes);
@@ -77,6 +77,104 @@ pub fn refresh_image_gauge(bytes: u64) {
 
 static TRAP_LOCK: Mutex<()> = Mutex::new(());
 static TRAP_FIRED: AtomicBool = AtomicBool::new(false);
+static NEXT_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+static PROCESS_PIXMAPS: OnceLock<Mutex<ProcessPixmapLedger>> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug)]
+struct LivePixmap {
+    owner_id: u64,
+    bytes: usize,
+}
+
+/// Aggregate for pixmaps routed through `X11ResourceAllocator`.
+#[derive(Debug, Default)]
+struct ProcessPixmapLedger {
+    totals: ResourceLedger,
+    live: HashMap<(usize, Pixmap), LivePixmap>,
+}
+
+impl ProcessPixmapLedger {
+    fn register(
+        &mut self,
+        owner_id: u64,
+        display: *mut Display,
+        pixmap: Pixmap,
+        bytes: usize,
+    ) -> bool {
+        let key = (display as usize, pixmap);
+        if self.live.contains_key(&key) {
+            return false;
+        }
+        self.live.insert(key, LivePixmap { owner_id, bytes });
+        self.totals.current_bytes = self.totals.current_bytes.saturating_add(bytes);
+        self.totals.peak_bytes = self.totals.peak_bytes.max(self.totals.current_bytes);
+        self.totals.live_count = self.totals.live_count.saturating_add(1);
+        self.totals.peak_count = self.totals.peak_count.max(self.totals.live_count);
+        self.totals.allocs = self.totals.allocs.saturating_add(1);
+        true
+    }
+
+    fn release(&mut self, owner_id: u64, display: *mut Display, pixmap: Pixmap) -> Option<usize> {
+        let key = (display as usize, pixmap);
+        if self.live.get(&key)?.owner_id != owner_id {
+            return None;
+        }
+        let bytes = self.live.remove(&key)?.bytes;
+        self.totals.current_bytes = self.totals.current_bytes.saturating_sub(bytes);
+        self.totals.live_count = self.totals.live_count.saturating_sub(1);
+        self.totals.frees = self.totals.frees.saturating_add(1);
+        Some(bytes)
+    }
+
+    fn note_failure(&mut self) {
+        self.totals.failures = self.totals.failures.saturating_add(1);
+    }
+}
+
+fn process_pixmaps() -> &'static Mutex<ProcessPixmapLedger> {
+    PROCESS_PIXMAPS.get_or_init(|| Mutex::new(ProcessPixmapLedger::default()))
+}
+
+fn update_process_gauge(ledger: &ProcessPixmapLedger) {
+    flamewm_profiler::MemoryGauge::new(PIXMAP_GAUGE).set(ledger.totals.current_bytes as u64);
+}
+
+fn process_register(owner_id: u64, display: *mut Display, pixmap: Pixmap, bytes: usize) -> bool {
+    let mut ledger = process_pixmaps()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let registered = ledger.register(owner_id, display, pixmap, bytes);
+    if registered {
+        update_process_gauge(&ledger);
+    }
+    registered
+}
+
+fn process_release(owner_id: u64, display: *mut Display, pixmap: Pixmap) -> Option<usize> {
+    let mut ledger = process_pixmaps()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let bytes = ledger.release(owner_id, display, pixmap);
+    if bytes.is_some() {
+        update_process_gauge(&ledger);
+    }
+    bytes
+}
+
+fn process_failure() {
+    process_pixmaps()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .note_failure();
+}
+
+/// Aggregate snapshot for resources tracked by this process's checked pixmap owners.
+pub fn process_pixmap_ledger() -> ResourceLedger {
+    process_pixmaps()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .totals
+}
 
 unsafe extern "C" fn trap_handler(
     _display: *mut Display,
@@ -88,15 +186,23 @@ unsafe extern "C" fn trap_handler(
 
 /// Checked pixmap owner: validates, traps X errors synchronously, and keeps
 /// the process ledger (current/peak bytes + count, allocs/frees/failures).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct X11ResourceAllocator {
     ledger: ResourceLedger,
+    owner_id: u64,
+}
+
+impl Default for X11ResourceAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl X11ResourceAllocator {
     pub fn new() -> Self {
         Self {
             ledger: ResourceLedger::default(),
+            owner_id: NEXT_OWNER_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -105,28 +211,23 @@ impl X11ResourceAllocator {
         self.ledger
     }
 
-    fn refresh_pixmap_gauge(&self) {
-        set_gauge(PIXMAP_GAUGE, self.ledger.current_bytes as u64);
-    }
-
     fn note_alloc(&mut self, bytes: usize) {
         self.ledger.current_bytes = self.ledger.current_bytes.saturating_add(bytes);
         self.ledger.peak_bytes = self.ledger.peak_bytes.max(self.ledger.current_bytes);
         self.ledger.live_count = self.ledger.live_count.saturating_add(1);
         self.ledger.peak_count = self.ledger.peak_count.max(self.ledger.live_count);
         self.ledger.allocs = self.ledger.allocs.saturating_add(1);
-        self.refresh_pixmap_gauge();
     }
 
     fn note_free(&mut self, bytes: usize) {
         self.ledger.current_bytes = self.ledger.current_bytes.saturating_sub(bytes);
         self.ledger.live_count = self.ledger.live_count.saturating_sub(1);
         self.ledger.frees = self.ledger.frees.saturating_add(1);
-        self.refresh_pixmap_gauge();
     }
 
     fn note_failure(&mut self) {
         self.ledger.failures = self.ledger.failures.saturating_add(1);
+        process_failure();
     }
 
     /// Test/headless ledger hooks: record an accounted alloc/free without X.
@@ -157,7 +258,13 @@ impl X11ResourceAllocator {
         root_w: u32,
         root_h: u32,
     ) -> Result<(Pixmap, usize), String> {
-        let bytes = validate_pixmap_dims(width, height, depth, root_w, root_h)?;
+        let bytes = match validate_pixmap_dims(width, height, depth, root_w, root_h) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.note_failure();
+                return Err(error);
+            }
+        };
         let _trap = TRAP_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -177,6 +284,10 @@ impl X11ResourceAllocator {
                 "XCreatePixmap failed for {width}x{height}x{depth} pixmap"
             ));
         }
+        if !process_register(self.owner_id, display, pixmap, bytes) {
+            self.note_failure();
+            return Err("XCreatePixmap returned an already tracked resource id".to_owned());
+        }
         self.note_alloc(bytes);
         Ok((pixmap, bytes))
     }
@@ -185,10 +296,13 @@ impl X11ResourceAllocator {
     ///
     /// # Safety
     /// `display`/`pixmap` must be live on the calling thread.
-    pub unsafe fn free_pixmap(&mut self, display: *mut Display, pixmap: Pixmap, bytes: usize) {
+    pub unsafe fn free_pixmap(&mut self, display: *mut Display, pixmap: Pixmap, _bytes: usize) {
         if pixmap == 0 {
             return;
         }
+        let Some(bytes) = process_release(self.owner_id, display, pixmap) else {
+            return;
+        };
         // SAFETY: display/pixmap are live per the caller contract.
         unsafe { XFreePixmap(display, pixmap) };
         self.note_free(bytes);
@@ -272,5 +386,50 @@ mod tests {
         assert_eq!((snap.allocs, snap.frees), (2, 1));
         alloc.note_failure();
         assert_eq!(alloc.ledger().failures, 1);
+    }
+
+    #[test]
+    fn process_ledger_aggregates_multiple_owners_and_releases_only_the_owner() {
+        let display = 1usize as *mut Display;
+        let mut ledger = ProcessPixmapLedger::default();
+        assert!(ledger.register(10, display, 101, 100));
+        assert!(ledger.register(11, display, 102, 50));
+        assert_eq!(ledger.totals.current_bytes, 150);
+        assert_eq!(ledger.totals.live_count, 2);
+
+        assert_eq!(ledger.release(10, display, 101), Some(100));
+        assert_eq!(ledger.totals.current_bytes, 50);
+        assert_eq!(ledger.totals.live_count, 1);
+        assert_eq!(ledger.release(10, display, 102), None);
+        assert_eq!(ledger.totals.current_bytes, 50);
+        assert_eq!(ledger.release(11, display, 102), Some(50));
+        assert_eq!(ledger.totals.current_bytes, 0);
+        assert_eq!((ledger.totals.allocs, ledger.totals.frees), (2, 2));
+        assert_eq!(ledger.totals.peak_bytes, 150);
+    }
+
+    #[test]
+    fn process_ledger_duplicate_release_is_idempotent() {
+        let display = 2usize as *mut Display;
+        let mut ledger = ProcessPixmapLedger::default();
+        assert!(ledger.register(20, display, 201, 64));
+        assert_eq!(ledger.release(20, display, 201), Some(64));
+        assert_eq!(ledger.release(20, display, 201), None);
+        assert_eq!(ledger.totals.current_bytes, 0);
+        assert_eq!(ledger.totals.live_count, 0);
+        assert_eq!(ledger.totals.frees, 1);
+    }
+
+    #[test]
+    fn process_ledger_rejects_duplicate_resource_ids_and_counts_failure_only() {
+        let display = 3usize as *mut Display;
+        let mut ledger = ProcessPixmapLedger::default();
+        assert!(ledger.register(30, display, 301, 32));
+        assert!(!ledger.register(31, display, 301, 64));
+        ledger.note_failure();
+        assert_eq!(ledger.totals.current_bytes, 32);
+        assert_eq!(ledger.totals.live_count, 1);
+        assert_eq!((ledger.totals.allocs, ledger.totals.frees), (1, 0));
+        assert_eq!(ledger.totals.failures, 1);
     }
 }

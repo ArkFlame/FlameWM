@@ -33,8 +33,11 @@ mod tests {
         "display-output-size-3",
         "display-selected-title",
         "display-selected-resolution",
+        "display-scale-value",
+        "icon-theme-selected-name",
         "selection-opacity-value",
         "snap-opacity-value",
+        "desktop-entry-size-value",
         "surface-blur-value",
         "surface-opacity-value",
         "start-icon-value",
@@ -48,7 +51,6 @@ mod tests {
         "screensaver-ribbons-value",
         "screensaver-ribbon-width-value",
         "screensaver-display-off-value",
-        "icon-theme-value",
         "cursor-theme-value",
         "theme-install-status",
         "theme-icon-page-label",
@@ -171,6 +173,18 @@ mod tests {
     }
 
     #[test]
+    fn scale_is_a_single_draggable_control_not_five_buckets() {
+        assert!(HTML.contains("id=\"display-scale-track\" data-action=\"slider.display-scale\""));
+        assert!(HTML.contains("id=\"display-scale-value\""));
+        assert!(HTML.contains("role=\"slider\""));
+        assert!(HTML.contains("aria-valuemin=\"100\""));
+        assert!(HTML.contains("aria-valuemax=\"200\""));
+        for old in [100, 125, 150, 175, 200] {
+            assert!(!HTML.contains(&format!("id=\"display-scale-{old}\"")));
+        }
+    }
+
+    #[test]
     fn display_modes_use_one_clipped_current_page_column() {
         let grid = css_rule(CSS, ".mode-grid");
         assert_eq!(css_value(grid, "flex-direction"), Some("column"));
@@ -183,7 +197,11 @@ mod tests {
     fn compiled_display_output_name_slots_are_mutable_text_targets() {
         let mut document = document().expect("settings artifact must decode");
         for slot in 0..4 {
-            seed_text(&mut document, &format!("display-output-name-{slot}"), &format!("output-{slot}"));
+            seed_text(
+                &mut document,
+                &format!("display-output-name-{slot}"),
+                &format!("output-{slot}"),
+            );
         }
     }
 
@@ -367,8 +385,16 @@ mod tests {
             ("wallpaper-choose", "settings.wallpaper.choose", "Choose…"),
             ("wallpaper-clear", "settings.wallpaper.clear", "Clear"),
             ("wallpaper-default", "settings.wallpaper.default", "Default"),
-            ("lock-background-default", "settings.lock.background.default", "Default"),
-            ("lock-background-clear", "settings.lock.background.clear", "Clear"),
+            (
+                "lock-background-default",
+                "settings.lock.background.default",
+                "Default",
+            ),
+            (
+                "lock-background-clear",
+                "settings.lock.background.clear",
+                "Clear",
+            ),
         ] {
             assert_action_control(id, action);
             seed_text(&mut document, id, label);
@@ -380,13 +406,29 @@ mod tests {
         let mut document = document().expect("settings artifact must decode");
         assert!(HTML.contains("Applies to newly opened applications."));
         for (id, action, label) in [
-            ("appearance-apps-dark", "settings.appearance.apps.dark", "Dark"),
-            ("appearance-apps-light", "settings.appearance.apps.light", "Light"),
+            (
+                "appearance-apps-dark",
+                "settings.appearance.apps.dark",
+                "Dark",
+            ),
+            (
+                "appearance-apps-light",
+                "settings.appearance.apps.light",
+                "Light",
+            ),
         ] {
             assert_action_control(id, action);
             seed_text(&mut document, id, label);
             document
-                .background(id, flamewm_ui_x11::UiColor { r: 0x3d, g: 0x3d, b: 0x3d, a: 0xff })
+                .background(
+                    id,
+                    flamewm_ui_x11::UiColor {
+                        r: 0x3d,
+                        g: 0x3d,
+                        b: 0x3d,
+                        a: 0xff,
+                    },
+                )
                 .unwrap_or_else(|error| panic!("compiled appearance selected state {id}: {error}"));
         }
     }

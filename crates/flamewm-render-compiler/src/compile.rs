@@ -444,13 +444,25 @@ impl<'a> Compiler<'a> {
                     style.text_shadow = None;
                 } else {
                     let parts: Vec<&str> = value.split_ascii_whitespace().collect();
-                    if parts.len() != 3 {
-                        return Err(format!("text-shadow '{value}' expects '<x px> <y px> <color>'"));
+                    if !(3..=4).contains(&parts.len()) {
+                        return Err(format!(
+                            "text-shadow '{value}' expects '<x px> <y px> [<blur px>] <color>'"
+                        ));
                     }
+                    let blur_radius = if parts.len() == 4 {
+                        let blur = parse_signed_px(parts[2])?;
+                        if !(0.0..=4.0).contains(&blur) {
+                            return Err(format!("text-shadow blur '{blur}' is outside 0..4px"));
+                        }
+                        blur
+                    } else {
+                        0.0
+                    };
                     style.text_shadow = Some(TextShadow {
                         offset_x: parse_signed_px(parts[0])?,
                         offset_y: parse_signed_px(parts[1])?,
-                        color: parse_color_value(parts[2], self.variable_map)?,
+                        blur_radius,
+                        color: parse_color_value(parts[parts.len() - 1], self.variable_map)?,
                     });
                 }
             }
@@ -660,8 +672,14 @@ fn parse_flex_grow(input: &str) -> Result<f32, String> {
 }
 
 fn parse_signed_px(input: &str) -> Result<f32, String> {
-    let value = input.trim().strip_suffix("px").ok_or_else(|| format!("text-shadow length '{input}' requires px"))?;
-    let parsed: f32 = value.trim().parse().map_err(|_| format!("invalid text-shadow offset '{input}'"))?;
+    let value = input
+        .trim()
+        .strip_suffix("px")
+        .ok_or_else(|| format!("text-shadow length '{input}' requires px"))?;
+    let parsed: f32 = value
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid text-shadow offset '{input}'"))?;
     if !parsed.is_finite() || parsed.abs() > 16.0 {
         return Err(format!("text-shadow offset '{input}' is outside -16..16px"));
     }
@@ -816,7 +834,14 @@ mod tests {
     }
 
     fn style_of(output: &CompileOutput, id: &str) -> Style {
-        output.document.nodes.iter().find(|node| node.id == id).unwrap().style.clone()
+        output
+            .document
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .unwrap()
+            .style
+            .clone()
     }
 
     fn temp_fixture_dir(tag: &str) -> PathBuf {
@@ -880,21 +905,70 @@ mod tests {
 
     #[test]
     fn desktop_label_text_shadow_is_inherited_but_menus_remain_clean() {
-        let css = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/desktop/desktop.css"));
+        let css = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ui/desktop/desktop.css"
+        ));
         let result = compile_str(
             r#"<body><div class="desktop-label-line" id="label">Test label</div><div id="menu">Menu</div></body>"#,
             css,
             CompileOptions::default(),
         ).expect("desktop CSS must compile under strict mode");
-        let label_id = result.document.nodes.iter().position(|n| n.id == "label").unwrap();
+        let label_id = result
+            .document
+            .nodes
+            .iter()
+            .position(|n| n.id == "label")
+            .unwrap();
         let label = &result.document.nodes[label_id];
-        let shadow = label.style.text_shadow.expect("desktop labels have a shadow");
-        assert_eq!((shadow.offset_x, shadow.offset_y), (0.0, 1.0));
+        let shadow = label
+            .style
+            .text_shadow
+            .expect("desktop labels have a shadow");
+        assert_eq!(
+            (shadow.offset_x, shadow.offset_y, shadow.blur_radius),
+            (0.0, 1.0, 2.0)
+        );
         let child = &result.document.nodes[label.first_child.unwrap() as usize];
-        assert_eq!(child.style.text_shadow, Some(shadow), "text inherits its label's shadow");
+        assert_eq!(
+            child.style.text_shadow,
+            Some(shadow),
+            "text inherits its label's shadow"
+        );
         assert_eq!(style_of(&result, "menu").text_shadow, None);
-        let binary = flamewm_render_core::encode(&result.document).expect("encode shadowed document");
-        assert_eq!(flamewm_render_core::decode(&binary).expect("decode shadowed document"), result.document);
+        let binary =
+            flamewm_render_core::encode(&result.document).expect("encode shadowed document");
+        assert_eq!(
+            flamewm_render_core::decode(&binary).expect("decode shadowed document"),
+            result.document
+        );
+    }
+
+    #[test]
+    fn text_shadow_blur_is_bounded_and_legacy_syntax_is_pixel_equivalent() {
+        let output = compile_body(
+            r#"<body><style>
+            .soft { text-shadow: 0px 1px 3px #000000b8; }
+            .legacy { text-shadow: 0px 1px #000000b8; }
+            .none { text-shadow: none; }
+        </style><div id="soft" class="soft">two lines</div><div id="legacy" class="legacy">old</div><div id="none" class="none">none</div></body>"#,
+        );
+        assert_eq!(
+            style_of(&output, "soft").text_shadow.unwrap().blur_radius,
+            3.0
+        );
+        let old = style_of(&output, "legacy").text_shadow.unwrap();
+        assert_eq!(
+            (old.blur_radius, old.offset_x, old.offset_y),
+            (0.0, 0.0, 1.0)
+        );
+        assert_eq!(style_of(&output, "none").text_shadow, None);
+        let invalid = compile_str(
+            r#"<body><style>#bad { text-shadow: 0px 1px 5px #000000; }</style><div id="bad">x</div></body>"#,
+            "",
+            CompileOptions::default(),
+        );
+        assert!(invalid.is_err(), "unbounded blur must be rejected");
     }
 
     #[test]

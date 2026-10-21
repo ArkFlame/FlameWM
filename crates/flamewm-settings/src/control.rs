@@ -200,6 +200,9 @@ mod signal_tests {
     #[test]
     fn unrelated_signals_never_reproject() {
         assert_eq!(scope_of(&ControlSignal::StartMenuToggleRequested), None);
-        assert_eq!(scope_of(&ControlSignal::WorkspacesChanged { revision: 2 }), None);
+        assert_eq!(
+            scope_of(&ControlSignal::WorkspacesChanged { revision: 2 }),
+            None
+        );
     }
 }

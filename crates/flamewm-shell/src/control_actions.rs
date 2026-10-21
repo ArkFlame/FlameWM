@@ -7,11 +7,11 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
-use flamewm_api::settings::SettingsSnapshot as ApiSettingsSnapshot;
 use flamewm_api::error::ErrorCode;
+use flamewm_api::settings::SettingsSnapshot as ApiSettingsSnapshot;
 use flamewm_control_core::{ControlMutationQueue, ControlRequest, MutationLane};
 use flamewm_control_dbus::MutationDispatcher;
 use flamewm_shell_core::weather::WeatherSettings;
@@ -20,8 +20,15 @@ use flamewm_shell_core::weather::WeatherSettings;
 /// to start. `app` is the user-visible application name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartLaunchOutcome {
-    Started { invocation: u64, app: String },
-    Failed { invocation: u64, app: String, message: String },
+    Started {
+        invocation: u64,
+        app: String,
+    },
+    Failed {
+        invocation: u64,
+        app: String,
+        message: String,
+    },
 }
 
 /// One weather location pick: the settings transaction, the location it selects
@@ -62,7 +69,10 @@ thread_local! {
 
 /// Enqueue a weather location settings transaction; its result is reported by
 /// [`take_weather_pick_outcomes`]. Never blocks.
-pub fn enqueue_weather_pick(dispatcher: Option<&Arc<MutationDispatcher>>, pick: WeatherPick) -> Option<u64> {
+pub fn enqueue_weather_pick(
+    dispatcher: Option<&Arc<MutationDispatcher>>,
+    pick: WeatherPick,
+) -> Option<u64> {
     let id = enqueue_action(dispatcher, pick.request.clone())?;
     PENDING_WEATHER_PICKS.with(|pending| pending.borrow_mut().push((id, pick)));
     Some(id)
@@ -72,7 +82,11 @@ pub fn take_weather_pick_outcomes() -> Vec<WeatherPickOutcome> {
     WEATHER_PICK_OUTCOMES.with(|outcomes| outcomes.borrow_mut().drain(..).collect())
 }
 
-pub fn enqueue_network_secret(dispatcher: Option<&Arc<MutationDispatcher>>, identity: (u64, u64), request: ControlRequest) -> Option<u64> {
+pub fn enqueue_network_secret(
+    dispatcher: Option<&Arc<MutationDispatcher>>,
+    identity: (u64, u64),
+    request: ControlRequest,
+) -> Option<u64> {
     let id = enqueue_action(dispatcher, request)?;
     PENDING_NETWORK_SECRETS.with(|pending| pending.borrow_mut().push((id, identity)));
     Some(id)
@@ -93,7 +107,9 @@ pub fn enqueue_start_launch(
     static NEXT_INVOCATION: AtomicU64 = AtomicU64::new(1);
     let invocation = NEXT_INVOCATION.fetch_add(1, Ordering::Relaxed);
     match enqueue_action(dispatcher, request) {
-        Some(id) => PENDING_LAUNCHES.with(|pending| pending.borrow_mut().push((id, invocation, app))),
+        Some(id) => {
+            PENDING_LAUNCHES.with(|pending| pending.borrow_mut().push((id, invocation, app)))
+        }
         None => record_launch_outcome(StartLaunchOutcome::Failed {
             invocation,
             app,
@@ -138,7 +154,9 @@ fn record_launch_outcome(outcome: StartLaunchOutcome) {
 fn take_pending_launch(id: u64) -> Option<(u64, String)> {
     PENDING_LAUNCHES.with(|pending| {
         let mut pending = pending.borrow_mut();
-        let index = pending.iter().position(|(pending_id, _, _)| *pending_id == id)?;
+        let index = pending
+            .iter()
+            .position(|(pending_id, _, _)| *pending_id == id)?;
         let (_, invocation, app) = pending.swap_remove(index);
         Some((invocation, app))
     })
@@ -202,31 +220,38 @@ pub fn drain_results_with_settings(
             Some(pending.swap_remove(position).1)
         });
         if let Some(pick) = weather_pick {
-            WEATHER_PICK_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(WeatherPickOutcome {
-                id: result.id,
-                pick,
-                result: match &result.outcome {
-                    Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => Ok(Some(snapshot.clone())),
-                    Ok(_) => Ok(None),
-                    Err(error) => Err(error.code),
-                },
-            }));
+            WEATHER_PICK_OUTCOMES.with(|outcomes| {
+                outcomes.borrow_mut().push_back(WeatherPickOutcome {
+                    id: result.id,
+                    pick,
+                    result: match &result.outcome {
+                        Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => {
+                            Ok(Some(snapshot.clone()))
+                        }
+                        Ok(_) => Ok(None),
+                        Err(error) => Err(error.code),
+                    },
+                })
+            });
         }
         if let Some(identity) = network_identity {
-            NETWORK_SECRET_OUTCOMES.with(|outcomes| outcomes.borrow_mut().push_back(NetworkSecretOutcome {
-                id: result.id,
-                identity,
-                result: result.outcome.as_ref().map(|_| ()).map_err(|_| ()),
-            }));
+            NETWORK_SECRET_OUTCOMES.with(|outcomes| {
+                outcomes.borrow_mut().push_back(NetworkSecretOutcome {
+                    id: result.id,
+                    identity,
+                    result: result.outcome.as_ref().map(|_| ()).map_err(|_| ()),
+                })
+            });
         }
-        let launch_outcome = take_pending_launch(result.id).map(|(invocation, app)| match &result.outcome {
-            Ok(_) => StartLaunchOutcome::Started { invocation, app },
-            Err(error) => StartLaunchOutcome::Failed {
-                invocation,
-                app,
-                message: error.message.clone(),
-            },
-        });
+        let launch_outcome =
+            take_pending_launch(result.id).map(|(invocation, app)| match &result.outcome {
+                Ok(_) => StartLaunchOutcome::Started { invocation, app },
+                Err(error) => StartLaunchOutcome::Failed {
+                    invocation,
+                    app,
+                    message: error.message.clone(),
+                },
+            });
         match result.outcome {
             Ok(flamewm_control_core::ControlResponse::Settings(snapshot)) => {
                 result_ok_counter().increment();
@@ -370,7 +395,10 @@ mod tests {
             },
         ];
         let current = matching_launch_outcome(outcomes, 2).expect("current result is retained");
-        assert!(matches!(current, StartLaunchOutcome::Started { invocation: 2, .. }));
+        assert!(matches!(
+            current,
+            StartLaunchOutcome::Started { invocation: 2, .. }
+        ));
         assert!(matching_launch_outcome(
             vec![StartLaunchOutcome::Failed {
                 invocation: 1,
@@ -378,6 +406,7 @@ mod tests {
                 message: "old failure".to_owned(),
             }],
             2,
-        ).is_none());
+        )
+        .is_none());
     }
 }

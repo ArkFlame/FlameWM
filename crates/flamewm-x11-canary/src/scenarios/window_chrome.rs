@@ -38,7 +38,13 @@ fn checkerboard(
         }
     }
     let nn = n.max(1);
-    (delivered, non_black, (sum[0] / nn) as u8, (sum[1] / nn) as u8, (sum[2] / nn) as u8)
+    (
+        delivered,
+        non_black,
+        (sum[0] / nn) as u8,
+        (sum[1] / nn) as u8,
+        (sum[2] / nn) as u8,
+    )
 }
 
 pub fn run_t09_t10(canary: &crate::Canary, args: &[String]) -> (bool, String) {

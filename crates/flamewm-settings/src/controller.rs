@@ -37,10 +37,14 @@ mod tests {
             .borrow()
             .iter()
             .filter_map(|request| match request {
-                ControlRequest::ApplySettings(transaction) => transaction
-                    .changes
-                    .first()
-                    .and_then(|change| change.value.clone().map(|value| (change.key.clone(), value))),
+                ControlRequest::ApplySettings(transaction) => {
+                    transaction.changes.first().and_then(|change| {
+                        change
+                            .value
+                            .clone()
+                            .map(|value| (change.key.clone(), value))
+                    })
+                }
                 _ => None,
             })
             .collect()
@@ -87,17 +91,23 @@ mod tests {
     }
 
     /// Controller over `transport`, with the queued settings snapshot already loaded.
-    fn settings_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
+    fn settings_application(
+        transport: RecordingTransport,
+    ) -> SettingsApplication<RecordingTransport> {
         loaded_application(transport, |client| client.refresh_settings())
     }
 
     /// Controller over `transport`, with the queued display snapshot already loaded.
-    fn displays_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
+    fn displays_application(
+        transport: RecordingTransport,
+    ) -> SettingsApplication<RecordingTransport> {
         loaded_application(transport, |client| client.refresh_displays())
     }
 
     /// Controller over `transport`, with the queued shortcut snapshot already loaded.
-    fn shortcuts_application(transport: RecordingTransport) -> SettingsApplication<RecordingTransport> {
+    fn shortcuts_application(
+        transport: RecordingTransport,
+    ) -> SettingsApplication<RecordingTransport> {
         loaded_application(transport, |client| client.refresh_shortcuts())
     }
 
@@ -607,8 +617,8 @@ mod tests {
     #[test]
     fn hotkey_row_markup_ids_parse_to_their_capture_action() {
         use flamewm_api::shortcuts::{
-            ACTION_SESSION_LOCK, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
-            ACTION_SCREENSHOT_WINDOW, ACTION_TOGGLE_START_MENU, ACTION_WORKSPACE_DOWN,
+            ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
+            ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WORKSPACE_DOWN,
             ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT, ACTION_WORKSPACE_UP,
         };
         let html = include_str!("../../../ui/settings.html");
@@ -839,8 +849,14 @@ mod tests {
     fn application_appearance_buttons_write_exact_values_and_highlight_the_snapshot() {
         let (requests, mut transport) = recording_transport();
         transport.responses.extend([
-            Ok(ControlResponse::Settings(appearance_snapshot(1, Some("dark")))),
-            Ok(ControlResponse::Settings(appearance_snapshot(2, Some("light")))),
+            Ok(ControlResponse::Settings(appearance_snapshot(
+                1,
+                Some("dark"),
+            ))),
+            Ok(ControlResponse::Settings(appearance_snapshot(
+                2,
+                Some("light"),
+            ))),
         ]);
         let mut application = settings_application(transport);
         let mut document = ProbeDocument::default();
@@ -1083,7 +1099,9 @@ mod tests {
     fn taskbar_visibility_snapshot(key: &str, value: Option<bool>) -> SettingsSnapshot {
         let mut snapshot = SettingsSnapshot::new(1);
         if let Some(value) = value {
-            snapshot.values.insert(key.to_owned(), SettingValue::Boolean(value));
+            snapshot
+                .values
+                .insert(key.to_owned(), SettingValue::Boolean(value));
         }
         snapshot
     }
@@ -1091,23 +1109,72 @@ mod tests {
     #[test]
     fn taskbar_visibility_twins_show_exactly_one_side_for_missing_default_and_explicit_values() {
         for (key, on_id, off_id, default) in [
-            ("taskbarShowWeather", "taskbar-weather-on", "taskbar-weather-off", true),
-            ("taskbarShowVolume", "taskbar-volume-on", "taskbar-volume-off", true),
-            ("taskbarShowNetwork", "taskbar-network-on", "taskbar-network-off", true),
-            ("taskbarShowBattery", "taskbar-battery-on", "taskbar-battery-off", true),
+            (
+                "taskbarShowWeather",
+                "taskbar-weather-on",
+                "taskbar-weather-off",
+                true,
+            ),
+            (
+                "taskbarShowVolume",
+                "taskbar-volume-on",
+                "taskbar-volume-off",
+                true,
+            ),
+            (
+                "taskbarShowNetwork",
+                "taskbar-network-on",
+                "taskbar-network-off",
+                true,
+            ),
+            (
+                "taskbarShowBattery",
+                "taskbar-battery-on",
+                "taskbar-battery-off",
+                true,
+            ),
             (
                 "taskbarBatteryOnlyWhenRelevant",
                 "taskbar-battery-relevant-on",
                 "taskbar-battery-relevant-off",
                 false,
             ),
-            ("taskbarShowClock", "taskbar-clock-on", "taskbar-clock-off", true),
-            ("taskbarShowWorkspaces", "taskbar-workspaces-on", "taskbar-workspaces-off", true),
-            ("weatherEnabled", "weather-enabled-on", "weather-enabled-off", true),
-            ("autoLocationEnabled", "weather-auto-location-on", "weather-auto-location-off", false),
-            ("autoTimeZoneEnabled", "time-auto-zone-on", "time-auto-zone-off", false),
+            (
+                "taskbarShowClock",
+                "taskbar-clock-on",
+                "taskbar-clock-off",
+                true,
+            ),
+            (
+                "taskbarShowWorkspaces",
+                "taskbar-workspaces-on",
+                "taskbar-workspaces-off",
+                true,
+            ),
+            (
+                "weatherEnabled",
+                "weather-enabled-on",
+                "weather-enabled-off",
+                true,
+            ),
+            (
+                "autoLocationEnabled",
+                "weather-auto-location-on",
+                "weather-auto-location-off",
+                false,
+            ),
+            (
+                "autoTimeZoneEnabled",
+                "time-auto-zone-on",
+                "time-auto-zone-off",
+                false,
+            ),
         ] {
-            for (value, expected_on) in [(None, default), (Some(default), default), (Some(!default), !default)] {
+            for (value, expected_on) in [
+                (None, default),
+                (Some(default), default),
+                (Some(!default), !default),
+            ] {
                 let mut transport = RecordingTransport::default();
                 transport.responses.push_back(Ok(ControlResponse::Settings(
                     taskbar_visibility_snapshot(key, value),
@@ -1115,8 +1182,16 @@ mod tests {
                 let application = settings_application(transport);
                 let mut document = ProbeDocument::default();
                 application.sync(&mut document).expect("sync");
-                assert_eq!(document.visible.get(on_id), Some(&expected_on), "{key} {value:?} on");
-                assert_eq!(document.visible.get(off_id), Some(&!expected_on), "{key} {value:?} off");
+                assert_eq!(
+                    document.visible.get(on_id),
+                    Some(&expected_on),
+                    "{key} {value:?} on"
+                );
+                assert_eq!(
+                    document.visible.get(off_id),
+                    Some(&!expected_on),
+                    "{key} {value:?} off"
+                );
             }
         }
     }
@@ -1519,7 +1594,7 @@ mod tests {
         }
 
         let written = applied_writes(&requests);
-        let text =|value: &str| SettingValue::Text(value.to_owned());
+        let text = |value: &str| SettingValue::Text(value.to_owned());
         assert_eq!(
             written,
             vec![
@@ -1595,7 +1670,10 @@ mod tests {
     fn weather_location_label_decodes_the_saved_city_and_hides_malformed_values() {
         use crate::weather_location_label;
         assert_eq!(weather_location_label("51.5\t-0.12\tGB\tLondon"), "London");
-        assert_eq!(weather_location_label("51.5\t-0.12\t\tSpringfield"), "Springfield");
+        assert_eq!(
+            weather_location_label("51.5\t-0.12\t\tSpringfield"),
+            "Springfield"
+        );
         let unset = "Not set - click the weather icon in the taskbar";
         assert_eq!(weather_location_label(""), unset);
         assert_eq!(weather_location_label("abc\t-0.12\tGB\tLondon"), unset);
@@ -1605,9 +1683,18 @@ mod tests {
     #[test]
     fn automatic_location_row_is_prefixed_and_manual_row_is_the_bare_city() {
         use crate::{time_zone_label, weather_location_text};
-        assert_eq!(weather_location_text("51.5\t-0.12\tGB\tLondon", true), "Automatic: London, GB");
-        assert_eq!(weather_location_text("51.5\t-0.12\t\tSpringfield", true), "Automatic: Springfield");
-        assert_eq!(weather_location_text("51.5\t-0.12\tGB\tLondon", false), "London");
+        assert_eq!(
+            weather_location_text("51.5\t-0.12\tGB\tLondon", true),
+            "Automatic: London, GB"
+        );
+        assert_eq!(
+            weather_location_text("51.5\t-0.12\t\tSpringfield", true),
+            "Automatic: Springfield"
+        );
+        assert_eq!(
+            weather_location_text("51.5\t-0.12\tGB\tLondon", false),
+            "London"
+        );
         assert_eq!(
             weather_location_text("", true),
             "Not set - click the weather icon in the taskbar"
@@ -1803,11 +1890,7 @@ mod tests {
     ) {
         let (requests, mut transport) = recording_transport();
         let mut snapshot = SettingsSnapshot::new(7);
-        for key in [
-            "surfaceColor",
-            "lockBackgroundColor",
-            "accent",
-        ] {
+        for key in ["surfaceColor", "lockBackgroundColor", "accent"] {
             snapshot
                 .values
                 .insert(key.to_owned(), SettingValue::Text(initial.to_owned()));

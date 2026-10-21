@@ -197,7 +197,7 @@ class Integration(unittest.TestCase):
             elif item == integration.PACKAGE:
                 target.write_text('install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"\n')
             elif item == integration.CONTROL:
-                target.write_text('Recommends: kwallet6, libpam-kwallet5\n')
+                target.write_text('Depends: libpam0g\nRecommends: kwallet6, libpam-kwallet5\n')
             else:
                 target.write_text('base\n')
         (root / 'Cargo.toml').write_text('version = "0.1.0"\n')
@@ -219,8 +219,9 @@ class Integration(unittest.TestCase):
             self.assertEqual(integration.apply(root), [])
             self.assertIn('flamewm-session-wrapper', (root / integration.SESSION).read_text())
             self.assertIn('flamewm-desktop-services', (root / integration.PACKAGE).read_text())
-            self.assertIn('kwallet6', (root / integration.CONTROL).read_text())
-            self.assertIn('dex', (root / integration.CONTROL).read_text())
+            control = (root / integration.CONTROL).read_text()
+            self.assertIn('Depends: libpam0g, python3', control)
+            self.assertNotIn('Recommends:', control)
 
     def test_reject_unrecognized_agent3_session_hook_without_mutating(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -240,14 +241,16 @@ class Integration(unittest.TestCase):
                 integration.apply(root)
             self.assertEqual((root / integration.SESSION).read_text(), before)
 
-    def test_preserves_existing_agent3_package_recommendations(self):
+    def test_drops_optional_recommendations_and_keeps_python_required(self):
         with tempfile.TemporaryDirectory() as folder:
             root = self.fixture(folder)
-            (root / integration.CONTROL).write_text('Recommends: kwallet6, libpam-kwallet5, other-package\n')
+            (root / integration.CONTROL).write_text('Depends: libpam0g\nRecommends: kwallet6, libpam-kwallet5, other-package\n')
             integration.apply(root)
             rec = (root / integration.CONTROL).read_text()
+            self.assertIn('Depends: libpam0g, python3', rec)
+            self.assertNotIn('Recommends:', rec)
             for dep in ['kwallet6', 'libpam-kwallet5', 'other-package', 'dex', 'x11-utils']:
-                self.assertIn(dep, rec)
+                self.assertNotIn(dep, rec)
 
 
 if __name__ == '__main__':

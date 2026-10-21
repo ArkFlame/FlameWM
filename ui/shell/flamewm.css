@@ -109,6 +109,7 @@ input { cursor:text; }
 .task-slot.running .underline { background:#87919b; }
 .task-slot.focused .underline { left:5px; right:5px; width:auto; height:3px; background:var(--accent); }
 .underline { position:absolute; left:7px; bottom:0px; width:28px; height:2px; }
+.task-progress { position:absolute; left:7px; bottom:4px; height:2px; width:0px; background:var(--accent); }
 .browser-line { background:#87919b; }.settings-line { background:#87919b; }.terminal-line { background:#87919b; }
 .taskbar-spacer { flex-grow:1; height:44px; }
 .tray-button { width:30px; height:44px; display:flex; align-items:center; justify-content:center; background:transparent; }
@@ -221,6 +222,13 @@ input { cursor:text; }
 .sticky-copy { width:166px; display:flex; flex-direction:column; gap:0px; font-size:13px; }
 .sticky-line { width:166px; height:18px; display:flex; align-items:center; }
 .toast { position:absolute; left:470px; top:18px; min-width:310px; height:36px; padding:0px 14px; display:flex; align-items:center; justify-content:center; background:#25282b; border:1px solid #555b60; border-radius:5px; }
+.notification-body { width:360px; height:148px; padding:0px; background:transparent; color:var(--text); }
+.notification-card { position:absolute; left:0px; top:0px; width:360px; height:148px; padding:14px; display:flex; flex-direction:column; align-items:flex-start; gap:6px; background:#25282b; color:var(--text); border:1px solid #555b60; border-radius:8px; }
+.notification-app { width:100%; color:#aeb4bb; font-size:11px; }
+.notification-summary { width:100%; font-size:14px; font-weight:600; }
+.notification-copy { width:100%; color:#d2d6da; font-size:12px; }
+.notification-progress { position:absolute; left:14px; right:14px; bottom:10px; height:4px; display:flex; background:#44494e; border-radius:2px; }
+.notification-progress-fill { height:4px; background:#df703e; border-radius:2px; }
 
 
 /* 0.0.8 parity: native context surfaces and task-entry state. */

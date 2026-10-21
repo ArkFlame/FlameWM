@@ -12,29 +12,29 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use calloop::Interest;
+use flamewm_api::Rect;
 use flamewm_api::display::DisplaySnapshot;
 use flamewm_api::session::SessionCapabilities;
-use flamewm_api::Rect;
 use flamewm_control_dbus::{ControlSignal, ControlSignalClient};
 use flamewm_reactor::{FdAction, Reactor};
 use flamewm_ui_x11::{
-    run_surface_runtime_with_reactor_access, ActionPhase, RuntimeImage, SurfaceConfig,
-    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError,
+    ActionPhase, RuntimeImage, SurfaceConfig, SurfaceHandle, SurfaceInputMode, SurfaceRole,
+    SurfaceRuntime, UiBackendError, run_surface_runtime_with_reactor_access,
 };
 
 use crate::document;
 use crate::native_time::local_now;
 use crate::pam::{self, Outcome};
-use crate::power::{self, Effect as PowerEffect, PowerEvent, PowerUi, PowerView, POWER_ORDER};
+use crate::power::{self, Effect as PowerEffect, POWER_ORDER, PowerEvent, PowerUi, PowerView};
 use crate::preview::{self, PreviewInput};
-use crate::ribbons::{RibbonFrames, FRAME_INTERVAL};
+use crate::ribbons::{FRAME_INTERVAL, RibbonFrames};
 use crate::screensaver::{Phase, Screensaver};
 use crate::secret::PasswordBuffer;
 use crate::settings::LockSettings;
 use crate::signals;
 use crate::state::{Effect, Key, LockState, Status};
 use crate::view::LockView;
-use crate::x11::{grab_with_retry, KeyBatch, PointerState, Session};
+use crate::x11::{KeyBatch, PointerState, Session, grab_with_retry};
 
 const GRAB_TIMEOUT: Duration = Duration::from_secs(2);
 /// Handles root ConfigureNotify promptly while still keeping activity sampling bounded.
@@ -1237,12 +1237,8 @@ mod tests {
             ControlSignal::SettingsSnapshotChanged {
                 snapshot: flamewm_api::settings::SettingsSnapshot::new(1),
             },
-            ControlSignal::SettingsSnapshotChanged {
-                snapshot: settings,
-            },
-            ControlSignal::DisplaysSnapshotChanged {
-                snapshot: displays,
-            },
+            ControlSignal::SettingsSnapshotChanged { snapshot: settings },
+            ControlSignal::DisplaysSnapshotChanged { snapshot: displays },
         ]);
         assert_eq!(settings.expect("settings snapshot").revision, 2);
         assert_eq!(displays.expect("display snapshot").generation, 3);

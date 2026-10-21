@@ -239,11 +239,12 @@ impl<T: ControlTransport> SettingsClient<T> {
     /// Empty past the last page. Read-only: never changes selection or the snapshot cache.
     #[must_use]
     pub fn display_mode_page(&self, page: usize) -> &[DisplayMode] {
-        self.selected_output_modes().map_or(&[] as &[DisplayMode], |modes| {
-            let start = page.saturating_mul(DISPLAY_MODE_SLOTS).min(modes.len());
-            let end = start.saturating_add(DISPLAY_MODE_SLOTS).min(modes.len());
-            &modes[start..end]
-        })
+        self.selected_output_modes()
+            .map_or(&[] as &[DisplayMode], |modes| {
+                let start = page.saturating_mul(DISPLAY_MODE_SLOTS).min(modes.len());
+                let end = start.saturating_add(DISPLAY_MODE_SLOTS).min(modes.len());
+                &modes[start..end]
+            })
     }
 
     /// Number of modes the selected output reports across all pages (0 when none).
@@ -394,7 +395,10 @@ impl<T: ControlTransport> SettingsClient<T> {
     /// Ends the server grab lease and discards any locally captured key.
     pub fn cancel_hotkey_capture(&mut self) -> Result<(), ControlError> {
         if let Some(lease) = self.ui.hotkey_capture_lease {
-            expect_unit(self.transport.call(ControlRequest::EndHotkeyCapture { lease })?)?;
+            expect_unit(
+                self.transport
+                    .call(ControlRequest::EndHotkeyCapture { lease })?,
+            )?;
         }
         self.ui.hotkey_capture_lease = None;
         self.ui.hotkey_capture = None;
@@ -413,10 +417,16 @@ impl<T: ControlTransport> SettingsClient<T> {
         let Some(capture) = self.ui.hotkey_capture.clone() else {
             return Ok(());
         };
-        let lease = self.ui.hotkey_capture_lease.ok_or_else(|| unexpected_response("hotkey capture lease"))?;
+        let lease = self
+            .ui
+            .hotkey_capture_lease
+            .ok_or_else(|| unexpected_response("hotkey capture lease"))?;
         // Restore WM grabs before the shortcut mutation. If End fails, retain the lease
         // and capture so the UI can retry or cancel instead of mutating under suspension.
-        expect_unit(self.transport.call(ControlRequest::EndHotkeyCapture { lease })?)?;
+        expect_unit(
+            self.transport
+                .call(ControlRequest::EndHotkeyCapture { lease })?,
+        )?;
         self.ui.hotkey_capture_lease = None;
         self.ui.hotkey_capture = None;
         let expected_revision = self
@@ -503,10 +513,10 @@ impl<T: ControlTransport> SettingsClient<T> {
         let Some(transaction) = self.ui.pending_display_transaction else {
             return Ok(());
         };
-        expect_unit(
-            self.transport
-                .call(ControlRequest::KeepDisplayMode { transaction, now_ms })?,
-        )?;
+        expect_unit(self.transport.call(ControlRequest::KeepDisplayMode {
+            transaction,
+            now_ms,
+        })?)?;
         self.ui.pending_display_transaction = None;
         self.refresh_displays()
     }
@@ -669,8 +679,13 @@ mod tests {
         }
     }
 
-    fn fake_client(responses: impl IntoIterator<Item = Result<ControlResponse, ControlError>>) -> SettingsClient<FakeTransport> {
-        SettingsClient::new(FakeTransport { responses: responses.into_iter().collect(), ..Default::default() })
+    fn fake_client(
+        responses: impl IntoIterator<Item = Result<ControlResponse, ControlError>>,
+    ) -> SettingsClient<FakeTransport> {
+        SettingsClient::new(FakeTransport {
+            responses: responses.into_iter().collect(),
+            ..Default::default()
+        })
     }
 
     struct RecordingTransport {
@@ -784,7 +799,9 @@ mod tests {
                 bindings: [(
                     "ToggleStartMenu".to_owned(),
                     flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())),
-                )].into_iter().collect(),
+                )]
+                .into_iter()
+                .collect(),
             })),
             Ok(ControlResponse::CaptureLease(9)),
             Ok(ControlResponse::Unit),
@@ -795,8 +812,12 @@ mod tests {
             })),
             Ok(ControlResponse::Settings(SettingsSnapshot::new(3))),
         ]);
-        client.refresh_shortcuts().expect("initial shortcut snapshot");
-        client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
+        client
+            .refresh_shortcuts()
+            .expect("initial shortcut snapshot");
+        client
+            .begin_hotkey_capture("ToggleStartMenu")
+            .expect("begin lease");
         assert!(client.capture_hotkey("Escape"));
         client.commit_hotkey_capture().expect("commit");
         assert_eq!(
@@ -853,28 +874,40 @@ mod tests {
     impl ControlTransport for RevisionServer {
         fn call(&mut self, request: ControlRequest) -> Result<ControlResponse, ControlError> {
             match request {
-                ControlRequest::GetSettings => {
-                    Ok(ControlResponse::Settings(SettingsSnapshot::new(self.settings_revision)))
-                }
+                ControlRequest::GetSettings => Ok(ControlResponse::Settings(
+                    SettingsSnapshot::new(self.settings_revision),
+                )),
                 ControlRequest::GetShortcuts => Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                     revision: self.shortcut_revision,
                     bindings: self.bindings.clone(),
                 })),
                 ControlRequest::BeginHotkeyCapture { .. } => Ok(ControlResponse::CaptureLease(1)),
                 ControlRequest::EndHotkeyCapture { .. } => Ok(ControlResponse::Unit),
-                ControlRequest::SetShortcut { action, binding, expected_revision } => {
+                ControlRequest::SetShortcut {
+                    action,
+                    binding,
+                    expected_revision,
+                } => {
                     self.check_shortcut_revision(expected_revision)?;
-                    self.bindings.insert(action, flamewm_api::shortcuts::KeyBinding(Some(binding)));
+                    self.bindings
+                        .insert(action, flamewm_api::shortcuts::KeyBinding(Some(binding)));
                     self.bump_hotkey_revisions();
                     Ok(ControlResponse::Unit)
                 }
-                ControlRequest::ClearShortcut { action, expected_revision } => {
+                ControlRequest::ClearShortcut {
+                    action,
+                    expected_revision,
+                } => {
                     self.check_shortcut_revision(expected_revision)?;
-                    self.bindings.insert(action, flamewm_api::shortcuts::KeyBinding(None));
+                    self.bindings
+                        .insert(action, flamewm_api::shortcuts::KeyBinding(None));
                     self.bump_hotkey_revisions();
                     Ok(ControlResponse::Unit)
                 }
-                ControlRequest::ResetShortcut { action, expected_revision } => {
+                ControlRequest::ResetShortcut {
+                    action,
+                    expected_revision,
+                } => {
                     self.check_shortcut_revision(expected_revision)?;
                     self.bindings.remove(&action);
                     self.bump_hotkey_revisions();
@@ -884,9 +917,12 @@ mod tests {
                     if transaction.expected_revision != self.settings_revision {
                         return Err(Self::stale("settings revision is stale"));
                     }
-                    self.applied_expected_revisions.push(transaction.expected_revision);
+                    self.applied_expected_revisions
+                        .push(transaction.expected_revision);
                     self.settings_revision += 1;
-                    Ok(ControlResponse::Settings(SettingsSnapshot::new(self.settings_revision)))
+                    Ok(ControlResponse::Settings(SettingsSnapshot::new(
+                        self.settings_revision,
+                    )))
                 }
                 _ => panic!("unexpected request in hotkey revision test"),
             }
@@ -900,24 +936,34 @@ mod tests {
             shortcut_revision: 1,
             ..RevisionServer::default()
         });
-        client.refresh_settings().expect("initial settings snapshot");
-        client.refresh_shortcuts().expect("initial shortcut snapshot");
+        client
+            .refresh_settings()
+            .expect("initial settings snapshot");
+        client
+            .refresh_shortcuts()
+            .expect("initial shortcut snapshot");
 
-        client.begin_hotkey_capture("ToggleStartMenu").expect("begin set lease");
+        client
+            .begin_hotkey_capture("ToggleStartMenu")
+            .expect("begin set lease");
         assert!(client.capture_hotkey("Super"));
         client.commit_hotkey_capture().expect("set binding");
         client
             .apply_setting("wallpaper", SettingValue::Text("a.png".to_owned()))
             .expect("apply after set");
 
-        client.begin_hotkey_capture("ToggleStartMenu").expect("begin clear lease");
+        client
+            .begin_hotkey_capture("ToggleStartMenu")
+            .expect("begin clear lease");
         assert!(client.capture_hotkey("Escape"));
         client.commit_hotkey_capture().expect("clear binding");
         client
             .apply_setting("wallpaper", SettingValue::Text("b.png".to_owned()))
             .expect("apply after clear");
 
-        client.reset_hotkey("ToggleStartMenu").expect("reset binding");
+        client
+            .reset_hotkey("ToggleStartMenu")
+            .expect("reset binding");
         client
             .apply_setting("wallpaper", SettingValue::Text("c.png".to_owned()))
             .expect("apply after reset");
@@ -930,9 +976,12 @@ mod tests {
         let mut client = fake_client([
             Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 3,
-                bindings: [("ToggleWorkspaceLeft".to_owned(),
-                    flamewm_api::shortcuts::KeyBinding(Some("Ctrl+Left".to_owned())))
-                ].into_iter().collect(),
+                bindings: [(
+                    "ToggleWorkspaceLeft".to_owned(),
+                    flamewm_api::shortcuts::KeyBinding(Some("Ctrl+Left".to_owned())),
+                )]
+                .into_iter()
+                .collect(),
             })),
             Ok(ControlResponse::CaptureLease(44)),
             Err(ControlError {
@@ -942,12 +991,20 @@ mod tests {
             }),
             Ok(ControlResponse::Unit),
         ]);
-        client.refresh_shortcuts().expect("initial shortcut snapshot");
-        client.begin_hotkey_capture("ToggleWorkspaceLeft").expect("begin lease");
+        client
+            .refresh_shortcuts()
+            .expect("initial shortcut snapshot");
+        client
+            .begin_hotkey_capture("ToggleWorkspaceLeft")
+            .expect("begin lease");
         assert!(client.capture_hotkey("Super+Left"));
         assert!(client.commit_hotkey_capture().is_err());
         assert_eq!(client.ui().hotkey_capture_lease, Some(44));
-        assert_eq!(client.transport.requests.len(), 3, "snapshot, lease acquisition, and failed End; no shortcut mutation");
+        assert_eq!(
+            client.transport.requests.len(),
+            3,
+            "snapshot, lease acquisition, and failed End; no shortcut mutation"
+        );
         assert!(matches!(
             client.transport.requests.as_slice(),
             [
@@ -957,8 +1014,12 @@ mod tests {
             ] if action == "ToggleWorkspaceLeft"
         ));
         assert_eq!(
-            client.shortcuts().and_then(|snapshot| snapshot.bindings.get("ToggleWorkspaceLeft")),
-            Some(&flamewm_api::shortcuts::KeyBinding(Some("Ctrl+Left".to_owned()))),
+            client
+                .shortcuts()
+                .and_then(|snapshot| snapshot.bindings.get("ToggleWorkspaceLeft")),
+            Some(&flamewm_api::shortcuts::KeyBinding(Some(
+                "Ctrl+Left".to_owned()
+            ))),
             "failed lease end preserves the authoritative binding"
         );
         client.cancel_hotkey_capture().expect("retry lease end");
@@ -968,7 +1029,10 @@ mod tests {
             client.transport.requests.as_slice(),
             [
                 ControlRequest::GetShortcuts,
-                ControlRequest::BeginHotkeyCapture { expected_revision: 3, .. },
+                ControlRequest::BeginHotkeyCapture {
+                    expected_revision: 3,
+                    ..
+                },
                 ControlRequest::EndHotkeyCapture { lease: 44 },
                 ControlRequest::EndHotkeyCapture { lease: 44 },
             ]
@@ -980,20 +1044,30 @@ mod tests {
         let mut client = fake_client([
             Ok(ControlResponse::Shortcuts(ShortcutSnapshot {
                 revision: 8,
-                bindings: [("ToggleStartMenu".to_owned(), flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())))].into_iter().collect(),
+                bindings: [(
+                    "ToggleStartMenu".to_owned(),
+                    flamewm_api::shortcuts::KeyBinding(Some("Super".to_owned())),
+                )]
+                .into_iter()
+                .collect(),
             })),
             Ok(ControlResponse::CaptureLease(23)),
             Ok(ControlResponse::Unit),
         ]);
         client.refresh_shortcuts().expect("initial snapshot");
-        client.begin_hotkey_capture("ToggleStartMenu").expect("begin lease");
+        client
+            .begin_hotkey_capture("ToggleStartMenu")
+            .expect("begin lease");
         assert!(client.capture_hotkey("Super"));
         client.commit_hotkey_capture().expect("unchanged capture");
         assert!(matches!(
             client.transport.requests.as_slice(),
             [
                 ControlRequest::GetShortcuts,
-                ControlRequest::BeginHotkeyCapture { expected_revision: 8, .. },
+                ControlRequest::BeginHotkeyCapture {
+                    expected_revision: 8,
+                    ..
+                },
                 ControlRequest::EndHotkeyCapture { lease: 23 },
             ]
         ));
@@ -1295,17 +1369,18 @@ mod tests {
             refresh_millihz: 60_000,
             preferred: false,
         };
-        let output = |id: &str, primary: bool, current: u64, modes: Vec<DisplayMode>| OutputSnapshot {
-            id: OutputId::new(id),
-            connector: id.to_owned(),
-            edid_identity: format!("edid-{id}"),
-            connected: true,
-            primary,
-            geometry: Rect::new(0, 0, 1920, 1080),
-            current_mode: ModeId(current),
-            modes,
-            shell_scale_percent: 100,
-        };
+        let output =
+            |id: &str, primary: bool, current: u64, modes: Vec<DisplayMode>| OutputSnapshot {
+                id: OutputId::new(id),
+                connector: id.to_owned(),
+                edid_identity: format!("edid-{id}"),
+                connected: true,
+                primary,
+                geometry: Rect::new(0, 0, 1920, 1080),
+                current_mode: ModeId(current),
+                modes,
+                shell_scale_percent: 100,
+            };
         DisplaySnapshot {
             generation: 5,
             outputs: vec![
@@ -1355,7 +1430,9 @@ mod tests {
         // Every B mode, slot and overflow alike, produces a BeginDisplayMode for DP-B and that ModeId.
         for index in 0..12u64 {
             let mode = client.display_mode_for_index(index as usize).expect("mode");
-            client.begin_display_mode(mode, 1000 + index).expect("begin");
+            client
+                .begin_display_mode(mode, 1000 + index)
+                .expect("begin");
             assert_eq!(
                 client.transport.requests[index as usize + 1],
                 ControlRequest::BeginDisplayMode {
@@ -1374,7 +1451,9 @@ mod tests {
         // Switching to the two-mode output begins on DP-A with its own ModeId.
         assert!(client.select_output(&OutputId::new("DP-A")));
         assert_eq!(client.display_mode_for_index(1), Some(ModeId(2)));
-        client.begin_display_mode(ModeId(2), 2000).expect("begin on DP-A");
+        client
+            .begin_display_mode(ModeId(2), 2000)
+            .expect("begin on DP-A");
         assert_eq!(
             client.transport.requests.last(),
             Some(&ControlRequest::BeginDisplayMode {

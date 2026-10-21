@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use flamewm_render_compiler::{compile_file, encode, CompileOptions};
+use flamewm_render_compiler::{CompileOptions, compile_file, encode};
 
 const LOCK_ICONS: [&str; 5] = [
     "system-suspend.svg",
@@ -43,11 +43,8 @@ fn main() {
     for source in ["lock.html", "lock.css"] {
         fs::copy(ui.join(source), staged.join(source)).expect("stage lock UI source");
     }
-    fs::copy(
-        ui.join("assets/blank.svg"),
-        staged_assets.join("blank.svg"),
-    )
-    .expect("stage lock UI blank image");
+    fs::copy(ui.join("assets/blank.svg"), staged_assets.join("blank.svg"))
+        .expect("stage lock UI blank image");
 
     // Lock-screen icons (near-white #EAF0FF variants) and the outline avatar,
     // staged under assets/breeze/ and assets/lock/ for the lock document.

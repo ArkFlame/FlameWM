@@ -33,10 +33,17 @@ impl PanelService {
 
     #[must_use]
     pub fn work_area_view(&self) -> Vec<(OutputId, flamewm_api::Rect, flamewm_api::Rect, bool)> {
-        self.manager.panels().map(|panel| (
-            panel.output.clone(), panel.output_rect, panel.work_area(),
-            self.manager.primary_output() == Some(&panel.output),
-        )).collect()
+        self.manager
+            .panels()
+            .map(|panel| {
+                (
+                    panel.output.clone(),
+                    panel.output_rect,
+                    panel.work_area(),
+                    self.manager.primary_output() == Some(&panel.output),
+                )
+            })
+            .collect()
     }
 
     #[must_use]
@@ -221,7 +228,9 @@ impl PanelService {
                 "task insertion index is invalid",
             ));
         }
-        self.mutate_tasks(expected_revision, |tasks| tasks.reorder_on_release(from, to))
+        self.mutate_tasks(expected_revision, |tasks| {
+            tasks.reorder_on_release(from, to)
+        })
     }
 
     #[must_use]
@@ -322,7 +331,10 @@ mod tests {
         assert!(service.manager().panel(&OutputId::new("HDMI-1")).is_none());
         let second = DisplaySnapshot {
             generation: 2,
-            outputs: vec![output("DP-1", 0, 1920, true), output("HDMI-1", 1920, 1920, false)],
+            outputs: vec![
+                output("DP-1", 0, 1920, true),
+                output("HDMI-1", 1920, 1920, false),
+            ],
             pending: None,
         };
         assert!(service.sync_outputs(&second));
@@ -365,9 +377,14 @@ mod tests {
     fn disconnected_or_geometryless_modes_never_create_panels() {
         let mut service = PanelService::default();
         let output = |name: &str, connected: bool, geometry: Rect| OutputSnapshot {
-            id: OutputId::new(name), connector: name.to_owned(),
-            edid_identity: String::new(), connected, primary: false,
-            geometry, current_mode: ModeId(0), modes: Vec::new(),
+            id: OutputId::new(name),
+            connector: name.to_owned(),
+            edid_identity: String::new(),
+            connected,
+            primary: false,
+            geometry,
+            current_mode: ModeId(0),
+            modes: Vec::new(),
             shell_scale_percent: 100,
         };
         assert!(!service.sync_outputs(&DisplaySnapshot {
@@ -433,7 +450,11 @@ mod tests {
             let output = OutputId::new("eDP-1");
             let panel = service.manager().panel(&output).expect("panel exists");
             assert_eq!(panel.thickness(), thickness, "scale {scale}");
-            assert_eq!(panel.work_area(), Rect::new(0, 0, 1920, 1080 - thickness), "scale {scale}");
+            assert_eq!(
+                panel.work_area(),
+                Rect::new(0, 0, 1920, 1080 - thickness),
+                "scale {scale}"
+            );
         }
     }
 
@@ -476,24 +497,43 @@ mod tests {
     #[test]
     fn unequal_output_swap_updates_every_panel_and_work_area() {
         use flamewm_api::PanelEdge;
-        let make = |id: &str, x: i32, y: i32, width: i32, height: i32, primary: bool| {
-            OutputSnapshot {
-                id: OutputId::new(id), connector: id.to_owned(), edid_identity: id.to_owned(),
-                connected: true, primary, geometry: Rect::new(x, y, width, height),
-                current_mode: ModeId(1), modes: Vec::new(), shell_scale_percent: 100,
-            }
-        };
+        let make =
+            |id: &str, x: i32, y: i32, width: i32, height: i32, primary: bool| OutputSnapshot {
+                id: OutputId::new(id),
+                connector: id.to_owned(),
+                edid_identity: id.to_owned(),
+                connected: true,
+                primary,
+                geometry: Rect::new(x, y, width, height),
+                current_mode: ModeId(1),
+                modes: Vec::new(),
+                shell_scale_percent: 100,
+            };
         let mut service = PanelService::default();
-        let mut snapshot = DisplaySnapshot { generation: 1, pending: None, outputs: vec![
-            make("DP-1", 0, 0, 1920, 1080, true),
-            make("HDMI-1", 1920, 0, 2560, 1440, false),
-            make("DP-2", 4480, -100, 1200, 1920, false),
-        ] };
+        let mut snapshot = DisplaySnapshot {
+            generation: 1,
+            pending: None,
+            outputs: vec![
+                make("DP-1", 0, 0, 1920, 1080, true),
+                make("HDMI-1", 1920, 0, 2560, 1440, false),
+                make("DP-2", 4480, -100, 1200, 1920, false),
+            ],
+        };
         assert!(service.sync_outputs(&snapshot));
         let before = service.revision();
-        service.set_edge(&OutputId::new("DP-1"), PanelEdge::Left, before).unwrap();
-        service.set_edge(&OutputId::new("HDMI-1"), PanelEdge::Right, service.revision()).unwrap();
-        service.set_edge(&OutputId::new("DP-2"), PanelEdge::Top, service.revision()).unwrap();
+        service
+            .set_edge(&OutputId::new("DP-1"), PanelEdge::Left, before)
+            .unwrap();
+        service
+            .set_edge(
+                &OutputId::new("HDMI-1"),
+                PanelEdge::Right,
+                service.revision(),
+            )
+            .unwrap();
+        service
+            .set_edge(&OutputId::new("DP-2"), PanelEdge::Top, service.revision())
+            .unwrap();
         snapshot.generation += 1;
         snapshot.outputs[0].geometry = Rect::new(2560, 0, 1920, 1080);
         snapshot.outputs[1].geometry = Rect::new(0, 0, 2560, 1440);
@@ -510,9 +550,11 @@ mod tests {
         let portrait = service.manager().panel(&OutputId::new("DP-2")).unwrap();
         assert_eq!(portrait.panel_rect(), Rect::new(4480, -100, 1200, 44));
         assert_eq!(portrait.work_area(), Rect::new(4480, -56, 1200, 1876));
-        assert_eq!(service.manager().primary_output(), Some(&OutputId::new("HDMI-1")));
+        assert_eq!(
+            service.manager().primary_output(),
+            Some(&OutputId::new("HDMI-1"))
+        );
         assert_eq!(service.snapshot().panels.len(), 3);
         assert!(!service.sync_outputs(&snapshot));
     }
-
 }

@@ -11,8 +11,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::icon_theme::{configured_icon_theme, unique_paths};
 use crate::icon_theme::IconThemeCaches as ThemeLookupCaches;
+use crate::icon_theme::{configured_icon_theme, unique_paths};
 
 const GENERIC_FALLBACK: &str = "assets/web/flamewm-icon.svg";
 /// Theme-independent generic application glyph bundled with the product.
@@ -355,7 +355,9 @@ impl RasterCache {
             return;
         }
         while !self.entries.is_empty() && self.used_bytes + cost > self.budget_bytes {
-            let Some(old) = self.order.pop_front() else { break };
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
             if let Some(removed) = self.entries.remove(&old) {
                 self.used_bytes = self.used_bytes.saturating_sub(Self::raster_bytes(&removed));
             }
@@ -383,8 +385,13 @@ impl IconResolver {
             &data_dirs,
             theme_generation,
         ));
-        let mut resolver =
-            Self::from_shared_index(packaged_root, theme_names, data_dirs, theme_generation, index);
+        let mut resolver = Self::from_shared_index(
+            packaged_root,
+            theme_names,
+            data_dirs,
+            theme_generation,
+            index,
+        );
         resolver.max_entries = 1024;
         resolver.raster = RasterCache::default();
         resolver
@@ -527,7 +534,9 @@ impl IconResolver {
 
     fn enforce_request_bound(&mut self) {
         while self.cache.len() > self.max_entries {
-            let Some(first) = self.cache.keys().next().cloned() else { break };
+            let Some(first) = self.cache.keys().next().cloned() else {
+                break;
+            };
             self.cache.remove(&first);
         }
     }
@@ -975,11 +984,23 @@ fn rasterize_path_with_origin(
         match extension.as_str() {
             "ppm" => decode_ppm,
             "xpm" => |path, bytes, size, origin| {
-                decode_natural(path, "XPM", flamewm_image_core::xpm::decode(bytes), size, origin)
+                decode_natural(
+                    path,
+                    "XPM",
+                    flamewm_image_core::xpm::decode(bytes),
+                    size,
+                    origin,
+                )
             },
             "svg" => decode_svg,
             "png" => |path, bytes, size, origin| {
-                decode_natural(path, "PNG", flamewm_image_core::png::decode(bytes), size, origin)
+                decode_natural(
+                    path,
+                    "PNG",
+                    flamewm_image_core::png::decode(bytes),
+                    size,
+                    origin,
+                )
             },
             "webp" => decode_webp,
             _ => {
@@ -1072,7 +1093,11 @@ fn decode_natural(
 ) -> Result<Rgb8Raster, RasterError> {
     let natural = natural.map_err(|message| invalid_raster_error(path, format, &message))?;
     if natural.width == 0 || natural.height == 0 {
-        return Err(invalid_raster_error(path, format, "dimensions must be non-zero"));
+        return Err(invalid_raster_error(
+            path,
+            format,
+            "dimensions must be non-zero",
+        ));
     }
     let image = scale_to_physical(path, format, natural, size)?;
     Ok(raster_from_image(path, image, origin))
@@ -1201,7 +1226,12 @@ pub fn xdg_data_search_dirs(
         .unwrap_or("/usr/local/share:/usr/share");
     let dirs = user_data_home(home, xdg_data_home)
         .into_iter()
-        .chain(system.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from))
+        .chain(
+            system
+                .split(':')
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
+        )
         .collect();
     unique_paths(dirs)
 }
@@ -1210,7 +1240,8 @@ pub fn xdg_data_search_dirs(
 mod tests {
     use super::*;
 
-    const HICOLOR_16_INDEX: &str = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+    const HICOLOR_16_INDEX: &str =
+        "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
 
     #[test]
     fn xdg_data_search_dirs_never_yields_relative_home_paths() {
@@ -1218,11 +1249,17 @@ mod tests {
         assert_eq!(user_data_home(Some(empty), None), None);
         assert_eq!(
             xdg_data_search_dirs(Some(empty), Some(empty), Some("")),
-            vec![PathBuf::from("/usr/local/share"), PathBuf::from("/usr/share")]
+            vec![
+                PathBuf::from("/usr/local/share"),
+                PathBuf::from("/usr/share")
+            ]
         );
         assert_eq!(
             xdg_data_search_dirs(Some(OsStr::new("/home/u")), None, Some("/opt/share:")),
-            vec![PathBuf::from("/home/u/.local/share"), PathBuf::from("/opt/share")]
+            vec![
+                PathBuf::from("/home/u/.local/share"),
+                PathBuf::from("/opt/share")
+            ]
         );
     }
 
@@ -1638,11 +1675,18 @@ mod tests {
         let dir = test_dir("c3-switch");
         write_theme(&dir, "ThemeA", HICOLOR_16_INDEX);
         write_theme(&dir, "ThemeB", HICOLOR_16_INDEX);
-        write_ppm(&dir.join("icons/ThemeA/16x16/apps/c3-switch.ppm"), [200, 10, 10]);
-        write_ppm(&dir.join("icons/ThemeB/16x16/apps/c3-switch.ppm"), [10, 200, 10]);
+        write_ppm(
+            &dir.join("icons/ThemeA/16x16/apps/c3-switch.ppm"),
+            [200, 10, 10],
+        );
+        write_ppm(
+            &dir.join("icons/ThemeB/16x16/apps/c3-switch.ppm"),
+            [10, 200, 10],
+        );
         let size = IconSize::new(16, 16);
         let data = vec![dir.clone()];
-        let mut resolver = IconResolver::new(dir.clone(), vec!["ThemeA".to_owned()], data.clone(), 1);
+        let mut resolver =
+            IconResolver::new(dir.clone(), vec!["ThemeA".to_owned()], data.clone(), 1);
         let first = resolver
             .prepare_application("c3-switch", size)
             .expect("theme A");
@@ -1702,20 +1746,25 @@ mod tests {
 
     #[test]
     fn oversized_raster_does_not_evict_or_escape_byte_budget() {
-        let mut cache = RasterCache { budget_bytes: 160, ..RasterCache::default() };
+        let mut cache = RasterCache {
+            budget_bytes: 160,
+            ..RasterCache::default()
+        };
         let key = |name: &str| RasterKey {
             path: PathBuf::from(name),
             physical: 2,
             origin: IconOrigin::ExplicitPath,
         };
-        let raster = |size: usize| Ok(Rgba8Raster {
-            source: "test".into(),
-            width: (size / 4) as u32,
-            height: 1,
-            pixels: vec![255; size],
-            origin: IconOrigin::ExplicitPath,
-            fallback_reason: None,
-        });
+        let raster = |size: usize| {
+            Ok(Rgba8Raster {
+                source: "test".into(),
+                width: (size / 4) as u32,
+                height: 1,
+                pixels: vec![255; size],
+                origin: IconOrigin::ExplicitPath,
+                fallback_reason: None,
+            })
+        };
         cache.insert(key("small"), raster(16));
         let retained = cache.used_bytes;
         cache.insert(key("oversized"), raster(256));
@@ -1857,8 +1906,15 @@ mod tests {
         let papirus = chain.iter().position(|name| name == "Papirus");
         let default = chain.iter().position(|name| name == DEFAULT_ICON_THEME);
         let breeze = chain.iter().position(|name| name == "Breeze");
-        assert!(papirus < default && default < breeze, "chain order: {chain:?}");
-        assert!(theme_chain(None).iter().any(|name| name == DEFAULT_ICON_THEME));
+        assert!(
+            papirus < default && default < breeze,
+            "chain order: {chain:?}"
+        );
+        assert!(
+            theme_chain(None)
+                .iter()
+                .any(|name| name == DEFAULT_ICON_THEME)
+        );
     }
 
     #[test]
@@ -1872,6 +1928,9 @@ mod tests {
         let preferred = names.iter().position(|name| name == "McMojave-circle");
         let breeze = names.iter().position(|name| name == "Breeze");
         assert!(preferred.is_some(), "startup preference missing: {names:?}");
-        assert!(preferred < breeze, "preference must win over Breeze: {names:?}");
+        assert!(
+            preferred < breeze,
+            "preference must win over Breeze: {names:?}"
+        );
     }
 }

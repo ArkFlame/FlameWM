@@ -343,7 +343,10 @@ fn shell_bootstrap_reconciles_display_and_panels_before_reply() {
     let ControlResponse::ShellBootstrap(snapshot) = response else {
         panic!("expected shell bootstrap")
     };
-    assert_eq!(snapshot.displays.outputs[0].geometry, Rect::new(-1350, 0, 1350, 641));
+    assert_eq!(
+        snapshot.displays.outputs[0].geometry,
+        Rect::new(-1350, 0, 1350, 641)
+    );
     assert_eq!(snapshot.panels.panels.len(), 1);
     let panel = &snapshot.panels.panels[0];
     // The default taskbar is floating: preserve its 4px gap on each side,

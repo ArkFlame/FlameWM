@@ -116,12 +116,18 @@ pub const CHEVRON_SHIFT_X_EM: f64 = 0.07;
 
 /// The chevron glyph box: the submit circle moved so the glyph ink centre lands on the circle centre.
 pub fn chevron_box(circle: RefRect, font_px: f64) -> RefRect {
-    shifted_x(lifted(circle, font_px * CHEVRON_LIFT_EM), font_px * CHEVRON_SHIFT_X_EM)
+    shifted_x(
+        lifted(circle, font_px * CHEVRON_LIFT_EM),
+        font_px * CHEVRON_SHIFT_X_EM,
+    )
 }
 
 /// The clock text box: the reference box moved by the measured lift and horizontal bias.
 fn clock_text_box() -> RefRect {
-    shifted_x(lifted(CLOCK, CLOCK_FONT * CLOCK_TEXT_LIFT_EM), CLOCK_FONT * CLOCK_TEXT_SHIFT_X_EM)
+    shifted_x(
+        lifted(CLOCK, CLOCK_FONT * CLOCK_TEXT_LIFT_EM),
+        CLOCK_FONT * CLOCK_TEXT_SHIFT_X_EM,
+    )
 }
 
 /// Lock screen elements in output pixels.
@@ -172,12 +178,18 @@ impl LockLayout {
 
 /// `rect` moved up by `dy` reference px.
 pub fn lifted(rect: RefRect, dy: f64) -> RefRect {
-    RefRect { y: rect.y - dy, ..rect }
+    RefRect {
+        y: rect.y - dy,
+        ..rect
+    }
 }
 
 /// Moves a rect horizontally by `dx` output pixels.
 pub fn shifted_x(rect: RefRect, dx: f64) -> RefRect {
-    RefRect { x: rect.x + dx, ..rect }
+    RefRect {
+        x: rect.x + dx,
+        ..rect
+    }
 }
 
 fn scaled_font(reference_px: f64, s: f64) -> u32 {
@@ -224,13 +236,7 @@ mod tests {
 
     fn all(l: &LockLayout) -> Vec<Placed> {
         let mut v = vec![
-            l.clock,
-            l.date,
-            l.avatar,
-            l.username,
-            l.password,
-            l.submit,
-            l.footer,
+            l.clock, l.date, l.avatar, l.username, l.password, l.submit, l.footer,
         ];
         v.extend(l.power_icons);
         v.extend(l.power_labels);
@@ -279,7 +285,14 @@ mod tests {
 
     #[test]
     fn every_element_is_inside_the_output() {
-        for (w, h) in [(701, 438), (1280, 720), (1920, 1080), (3840, 2160), (760, 500), (320, 240)] {
+        for (w, h) in [
+            (701, 438),
+            (1280, 720),
+            (1920, 1080),
+            (3840, 2160),
+            (760, 500),
+            (320, 240),
+        ] {
             let l = LockLayout::for_output(w, h);
             for p in all(&l) {
                 assert!(inside(&p, w, h), "{p:?} outside {w}x{h}");
@@ -295,12 +308,18 @@ mod tests {
             let tolerance = l.fit.s; // one reference pixel
             for p in [l.date, l.avatar, l.username] {
                 let cx = p.rect.x + p.rect.w / 2.0;
-                assert!((cx - centre).abs() <= tolerance + 1e-6, "{cx} vs {centre} at {w}x{h}");
+                assert!(
+                    (cx - centre).abs() <= tolerance + 1e-6,
+                    "{cx} vs {centre} at {w}x{h}"
+                );
             }
             // The clock box carries the measured horizontal bias, scaled with the output.
             let clock_cx = l.clock.rect.x + l.clock.rect.w / 2.0;
             let bias = CLOCK_FONT * CLOCK_TEXT_SHIFT_X_EM * l.fit.s;
-            assert!((clock_cx - centre - bias).abs() <= tolerance + 1e-6, "{clock_cx} vs {centre} at {w}x{h}");
+            assert!(
+                (clock_cx - centre - bias).abs() <= tolerance + 1e-6,
+                "{clock_cx} vs {centre} at {w}x{h}"
+            );
         }
     }
 
@@ -319,8 +338,14 @@ mod tests {
         let font = 16.0;
         let b = chevron_box(circle, font);
         // Ink centre offsets measured in the native screenshot: dx = +2.1 px, dy = -4.9 px at font 29 px.
-        assert!(((b.x - circle.x) - 0.07 * font).abs() < 1e-9, "shift right by 0.07 em");
-        assert!(((circle.y - b.y) - 0.17 * font).abs() < 1e-9, "lift up by 0.17 em");
+        assert!(
+            ((b.x - circle.x) - 0.07 * font).abs() < 1e-9,
+            "shift right by 0.07 em"
+        );
+        assert!(
+            ((circle.y - b.y) - 0.17 * font).abs() < 1e-9,
+            "lift up by 0.17 em"
+        );
         assert_eq!((b.w, b.h), (circle.w, circle.h), "only the position moves");
         // The circle centre is unchanged; the glyph box is the one that moves.
         assert_eq!(chevron_box(circle, 0.0), circle);
@@ -335,7 +360,10 @@ mod tests {
         let l = LockLayout::for_output(701, 438);
         assert!((l.clock.rect.y - (CLOCK.y - lift)).abs() < 1e-9);
         assert!((l.clock.rect.x - (CLOCK.x + shift)).abs() < 1e-9);
-        assert_eq!(l.clock.rect.h, CLOCK.h, "only the position moves, not the size");
+        assert_eq!(
+            l.clock.rect.h, CLOCK.h,
+            "only the position moves, not the size"
+        );
         // The reference anchor and the spacing invariants still use the unlifted CLOCK.
         assert_eq!(CLOCK.y, 46.0);
     }
@@ -343,7 +371,11 @@ mod tests {
     #[test]
     fn power_row_is_evenly_spaced_and_labels_sit_below_icons() {
         let l = LockLayout::for_output(701, 438);
-        let centres: Vec<f64> = l.power_icons.iter().map(|p| p.rect.x + p.rect.w / 2.0).collect();
+        let centres: Vec<f64> = l
+            .power_icons
+            .iter()
+            .map(|p| p.rect.x + p.rect.w / 2.0)
+            .collect();
         assert_eq!(centres, vec![245.0, 315.0, 386.0, 455.0]);
         for (icon, label) in l.power_icons.iter().zip(l.power_labels.iter()) {
             assert!(label.rect.y >= icon.rect.bottom());

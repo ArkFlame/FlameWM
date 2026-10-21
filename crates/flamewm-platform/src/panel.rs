@@ -23,7 +23,9 @@ pub fn logical_to_physical(logical: u16, scale_percent: u16) -> i32 {
 }
 
 fn effective_scale(scale_percent: u16) -> u16 {
-    is_supported_scale(scale_percent).then_some(scale_percent).unwrap_or(100)
+    is_supported_scale(scale_percent)
+        .then_some(scale_percent)
+        .unwrap_or(100)
 }
 
 /// Taskbar layout from `taskbarStyle`, `taskbarFloatingMargin` and `taskbarFloatingRadius`.
@@ -284,7 +286,6 @@ impl PanelManager {
     pub fn primary_output(&self) -> Option<&OutputId> {
         self.primary_output.as_ref()
     }
-
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -332,7 +333,12 @@ mod tests {
     }
 
     fn fhd_bottom(output: &str, scale: u16) -> OutputPanel {
-        OutputPanel::new(id(output), Rect::new(0, 0, 1920, 1080), PanelEdge::Bottom, scale)
+        OutputPanel::new(
+            id(output),
+            Rect::new(0, 0, 1920, 1080),
+            PanelEdge::Bottom,
+            scale,
+        )
     }
 
     #[test]
@@ -359,9 +365,19 @@ mod tests {
     }
 
     #[test]
+    fn panel_thickness_obeys_five_percent_scale() {
+        for scale in (100..=200).step_by(5) {
+            let panel = fhd_bottom("eDP-1", scale);
+            assert_eq!(panel.thickness(), logical_to_physical(44, scale));
+        }
+        assert_eq!(fhd_bottom("eDP-1", 135).thickness(), 59);
+        assert_eq!(fhd_bottom("eDP-1", 195).thickness(), 86);
+    }
+
+    #[test]
     fn unsupported_panel_scale_falls_back_to_one_hundred_percent() {
-        assert!(!is_supported_scale(110));
-        let panel = fhd_bottom("eDP-1", 110);
+        assert!(!is_supported_scale(111));
+        let panel = fhd_bottom("eDP-1", 111);
         assert_eq!(panel.scale_percent, 100);
         assert_eq!(panel.thickness(), 44);
     }

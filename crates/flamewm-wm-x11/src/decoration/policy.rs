@@ -163,7 +163,10 @@ pub fn gtk_frame_extents(values: &[u32]) -> Option<[u32; 4]> {
 pub fn decoration_policy(hints: &DecorationHints) -> Decoration {
     use crate::classifier::WindowKind;
     if hints.override_redirect
-        || matches!(hints.kind, WindowKind::Popup | WindowKind::Desktop | WindowKind::Dock)
+        || matches!(
+            hints.kind,
+            WindowKind::Popup | WindowKind::Desktop | WindowKind::Dock
+        )
         || hints.motif_decorations == Some(0)
     {
         return Decoration::None;
@@ -183,11 +186,19 @@ mod csd_tests {
     use crate::classifier::WindowKind;
 
     fn hints(kind: WindowKind) -> DecorationHints {
-        DecorationHints { override_redirect: false, kind, motif_decorations: None, gtk_frame_extents: None }
+        DecorationHints {
+            override_redirect: false,
+            kind,
+            motif_decorations: None,
+            gtk_frame_extents: None,
+        }
     }
 
     fn motif_hints(values: &[u32]) -> DecorationHints {
-        DecorationHints { motif_decorations: Some(values[2]), ..hints(WindowKind::Normal) }
+        DecorationHints {
+            motif_decorations: Some(values[2]),
+            ..hints(WindowKind::Normal)
+        }
     }
 
     #[test]
@@ -253,7 +264,11 @@ mod csd_tests {
     #[test]
     fn non_frame_kinds_have_no_frame() {
         for kind in [WindowKind::Popup, WindowKind::Desktop, WindowKind::Dock] {
-            assert_eq!(decoration_policy(&hints(kind)), Decoration::None, "{kind:?}");
+            assert_eq!(
+                decoration_policy(&hints(kind)),
+                Decoration::None,
+                "{kind:?}"
+            );
         }
     }
 
@@ -267,8 +282,14 @@ mod csd_tests {
     #[test]
     fn utility_and_normal_keep_server_frame() {
         // Negative control: utility windows are not stripped of their frame.
-        assert_eq!(decoration_policy(&hints(WindowKind::Utility)), Decoration::Server);
-        assert_eq!(decoration_policy(&hints(WindowKind::Normal)), Decoration::Server);
+        assert_eq!(
+            decoration_policy(&hints(WindowKind::Utility)),
+            Decoration::Server
+        );
+        assert_eq!(
+            decoration_policy(&hints(WindowKind::Normal)),
+            Decoration::Server
+        );
     }
 }
 
@@ -278,26 +299,42 @@ mod tests {
 
     #[test]
     fn override_redirect_is_undecorated() {
-        let policy = decide(DecorationRequest { override_redirect: true, is_normal_type: true, motif_no_decorations: false });
+        let policy = decide(DecorationRequest {
+            override_redirect: true,
+            is_normal_type: true,
+            motif_no_decorations: false,
+        });
         assert_eq!(policy, DecorationPolicy::Undecorated);
         assert!(!policy.has_flame_frame());
     }
 
     #[test]
     fn non_normal_type_is_undecorated() {
-        let policy = decide(DecorationRequest { override_redirect: false, is_normal_type: false, motif_no_decorations: false });
+        let policy = decide(DecorationRequest {
+            override_redirect: false,
+            is_normal_type: false,
+            motif_no_decorations: false,
+        });
         assert_eq!(policy, DecorationPolicy::Undecorated);
     }
 
     #[test]
     fn motif_zero_decorations_is_undecorated() {
-        let policy = decide(DecorationRequest { override_redirect: false, is_normal_type: true, motif_no_decorations: true });
+        let policy = decide(DecorationRequest {
+            override_redirect: false,
+            is_normal_type: true,
+            motif_no_decorations: true,
+        });
         assert_eq!(policy, DecorationPolicy::Undecorated);
     }
 
     #[test]
     fn normal_hint_free_is_server_decorated() {
-        let policy = decide(DecorationRequest { override_redirect: false, is_normal_type: true, motif_no_decorations: false });
+        let policy = decide(DecorationRequest {
+            override_redirect: false,
+            is_normal_type: true,
+            motif_no_decorations: false,
+        });
         assert_eq!(policy, DecorationPolicy::ServerDecorated);
         assert!(policy.has_flame_frame());
     }

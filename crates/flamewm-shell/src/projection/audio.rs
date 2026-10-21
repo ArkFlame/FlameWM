@@ -1,5 +1,5 @@
-use super::*;
 use super::calendar::ACTIVE_TAB_FILL;
+use super::*;
 use crate::taskbar::status::audio::{AUDIO_TRACK_HEIGHT, AUDIO_TRACK_WIDTH};
 
 pub fn project_audio(
@@ -106,11 +106,11 @@ fn audio_thumb_left(shown: f32, max: f32) -> f32 {
 #[cfg(test)]
 mod audio_template_tests {
     use super::*;
+    use crate::taskbar::status::audio::AUDIO_TRACK_X;
     use flamewm_api::system::{
         AudioEndpointKind, AudioEndpointSnapshot, AudioStreamSnapshot, ServiceAvailability,
     };
     use flamewm_shell_core::status::{AudioSettings, AudioTab};
-    use crate::taskbar::status::audio::AUDIO_TRACK_X;
 
     const AUDIO_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-audio.rwr"));
 
@@ -133,7 +133,10 @@ mod audio_template_tests {
 
     impl<'a> AudioRecorder<'a> {
         fn new(document: &'a mut flamewm_ui_x11::UiDocument) -> Self {
-            Self { document, recorded: Recorded::default() }
+            Self {
+                document,
+                recorded: Recorded::default(),
+            }
         }
     }
 
@@ -235,7 +238,11 @@ mod audio_template_tests {
         project(&snapshot, tab, AudioSettings { raise_maximum })
     }
 
-    fn project(snapshot: &crate::ShellSnapshot, tab: AudioTab, settings: AudioSettings) -> Recorded {
+    fn project(
+        snapshot: &crate::ShellSnapshot,
+        tab: AudioTab,
+        settings: AudioSettings,
+    ) -> Recorded {
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
         let mut recorder = AudioRecorder::new(&mut document);
@@ -264,10 +271,22 @@ mod audio_template_tests {
         assert_eq!(recorded.widths.get("audio-slot-1-fill"), Some(&350.0));
         assert_eq!(text(&recorded, "audio-slot-2-value"), "40%");
         assert_eq!(recorded.widths.get("audio-slot-2-fill"), Some(&140.0));
-        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-on"), Some(&true));
-        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-off"), Some(&false));
-        assert_eq!(recorded.visible.get("audio-slot-1-mute-icon-on"), Some(&false));
-        assert_eq!(recorded.visible.get("audio-slot-1-mute-icon-off"), Some(&true));
+        assert_eq!(
+            recorded.visible.get("audio-slot-2-mute-icon-on"),
+            Some(&true)
+        );
+        assert_eq!(
+            recorded.visible.get("audio-slot-2-mute-icon-off"),
+            Some(&false)
+        );
+        assert_eq!(
+            recorded.visible.get("audio-slot-1-mute-icon-on"),
+            Some(&false)
+        );
+        assert_eq!(
+            recorded.visible.get("audio-slot-1-mute-icon-off"),
+            Some(&true)
+        );
         assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&false));
         // Output rows keep the volume icon; the source (microphone) row swaps to the input icon.
         assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&true));
@@ -309,11 +328,20 @@ mod audio_template_tests {
     fn thumb_position_follows_snapped_fill_under_cap() {
         // Cap 100: 120% snaps to the track end, so the thumb matches the fill end minus radius.
         let capped = fixture(AudioTab::Devices, false);
-        assert_eq!(capped.positions.get("audio-slot-1-thumb"), Some(&(350.0, 0.0)));
-        assert_eq!(capped.positions.get("audio-slot-2-thumb"), Some(&(140.0, 0.0)));
+        assert_eq!(
+            capped.positions.get("audio-slot-1-thumb"),
+            Some(&(350.0, 0.0))
+        );
+        assert_eq!(
+            capped.positions.get("audio-slot-2-thumb"),
+            Some(&(140.0, 0.0))
+        );
         // Raise maximum: 120% of 150 is 280 px of fill, so the thumb centre is 280.
         let raised = fixture(AudioTab::Devices, true);
-        assert_eq!(raised.positions.get("audio-slot-1-thumb"), Some(&(280.0, 0.0)));
+        assert_eq!(
+            raised.positions.get("audio-slot-1-thumb"),
+            Some(&(280.0, 0.0))
+        );
     }
 
     #[test]
@@ -321,19 +349,31 @@ mod audio_template_tests {
         let recorded = fixture(AudioTab::Applications, false);
         assert_eq!(text(&recorded, "audio-slot-1-label"), "Firefox");
         assert_eq!(text(&recorded, "audio-slot-2-label"), "Spotify");
-        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-on"), Some(&true));
-        assert_eq!(recorded.visible.get("audio-slot-2-mute-icon-off"), Some(&false));
+        assert_eq!(
+            recorded.visible.get("audio-slot-2-mute-icon-on"),
+            Some(&true)
+        );
+        assert_eq!(
+            recorded.visible.get("audio-slot-2-mute-icon-off"),
+            Some(&false)
+        );
         assert_eq!(recorded.visible.get("audio-slot-1-icon-app"), Some(&true));
         assert_eq!(recorded.visible.get("audio-slot-1-icon-out"), Some(&false));
         assert_eq!(recorded.visible.get("audio-slot-3"), Some(&false));
-        assert_eq!(recorded.backgrounds.get("audio-tab-apps"), Some(&ACTIVE_TAB_FILL));
+        assert_eq!(
+            recorded.backgrounds.get("audio-tab-apps"),
+            Some(&ACTIVE_TAB_FILL)
+        );
         assert_eq!(recorded.backgrounds.get("audio-tab-devices"), None);
     }
 
     #[test]
     fn devices_tab_active_fill_matches_calendar_tab_mechanism() {
         let recorded = fixture(AudioTab::Devices, false);
-        assert_eq!(recorded.backgrounds.get("audio-tab-devices"), Some(&ACTIVE_TAB_FILL));
+        assert_eq!(
+            recorded.backgrounds.get("audio-tab-devices"),
+            Some(&ACTIVE_TAB_FILL)
+        );
         assert_eq!(recorded.backgrounds.get("audio-tab-apps"), None);
         assert!(!recorded.visible.contains_key("audio-tab-devices-bg"));
     }
@@ -369,7 +409,10 @@ mod audio_template_tests {
         }];
         let recorded = project(&snapshot, AudioTab::Devices, AudioSettings::default());
         assert!(
-            recorded.texts.values().all(|value| !value.contains("alsa_output")),
+            recorded
+                .texts
+                .values()
+                .all(|value| !value.contains("alsa_output")),
             "raw sink id leaked: {:?}",
             recorded.texts
         );
@@ -380,7 +423,10 @@ mod audio_template_tests {
         );
     }
 
-    fn layout_document(snapshot: &crate::ShellSnapshot, tab: AudioTab) -> flamewm_ui_x11::UiDocument {
+    fn layout_document(
+        snapshot: &crate::ShellSnapshot,
+        tab: AudioTab,
+    ) -> flamewm_ui_x11::UiDocument {
         let mut document =
             flamewm_ui_x11::decode_document(AUDIO_ARTIFACT).expect("audio artifact must decode");
         {
@@ -389,7 +435,9 @@ mod audio_template_tests {
                 &mut recorder,
                 snapshot,
                 tab,
-                AudioSettings { raise_maximum: true },
+                AudioSettings {
+                    raise_maximum: true,
+                },
                 0,
             )
             .expect("every projected audio id must be a valid target");

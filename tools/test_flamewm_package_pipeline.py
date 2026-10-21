@@ -9,9 +9,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 BINARIES = ("flamewm", "flamewm-session", "flamewm-desktop", "flamewm-shell", "flamewm-settings",
             "flamewm-screenshot", "flamewm-render-x11", "flamewm-render-compile", "flamewm-render-inspect", "flamewm-lock")
 
@@ -27,6 +29,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.root.mkdir()
         for file in ("Cargo.toml", "LICENSE", "README.md", "packaging/flamewm.desktop",
                      "packaging/flamewm-session.desktop", "packaging/flamewm-screenshot.desktop", "packaging/pam.d/flamewm-lock",
+                     "packaging/menus/flamewm-applications.menu", "packaging/notifications/dunstrc",
                      "packaging/install-manifest.txt", "packaging/debian/control.in",
                      "packaging/debian/copyright", "packaging/xdg-desktop-portal/flamewm-portals.conf", "scripts/version", "scripts/build-deb", "scripts/check-cargo", "scripts/package",
                      "scripts/package-source-archive", "scripts/flamewm-session-wrapper",
@@ -87,7 +90,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         events = self.events.read_text().splitlines()
         self.assertEqual(events[0], 'GATE --profile release --include-ui --force')
         self.assertTrue(events[1].startswith('CARGO build --release --workspace'), events)
-        deb = self.root / ".target/dist/flamewm_0.1.0_amd64.deb"
+        deb = self.root / f".target/dist/flamewm_{VERSION}_amd64.deb"
         self.assertEqual(subprocess.check_output(["dpkg-deb", "-f", str(deb), "Architecture"], text=True).strip(), "amd64")
         self.assertTrue((deb.parent / "SHA256SUMS").exists())
         contents = subprocess.check_output(["dpkg-deb", "--contents", str(deb)], text=True)
@@ -96,11 +99,13 @@ class DebianReleasePipelineTests(unittest.TestCase):
         self.assertIn("usr/share/xdg-desktop-portal/flamewm-portals.conf", contents)
         self.assertIn("usr/libexec/flamewm/flamewm-session-wrapper", contents)
         self.assertIn("usr/libexec/flamewm/flamewm-desktop-services", contents)
+        self.assertIn("etc/xdg/menus/flamewm-applications.menu", contents)
+        self.assertIn("usr/share/flamewm/dunstrc", contents)
 
     def test_build_failure_removes_old_deb_and_checksum(self):
         dist = self.root / ".target/dist"
         dist.mkdir(parents=True)
-        old = dist / "flamewm_0.1.0_amd64.deb"
+        old = dist / f"flamewm_{VERSION}_amd64.deb"
         old.write_bytes(b"old Architecture:any payload")
         (dist / "SHA256SUMS").write_text("stale", encoding="utf-8")
         result = self.build_deb(cargo_exit=17)
@@ -112,7 +117,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
     def test_missing_assets_preflight_removes_old_deb(self):
         dist = self.root / ".target/dist"
         dist.mkdir(parents=True)
-        old = dist / "flamewm_0.1.0_amd64.deb"
+        old = dist / f"flamewm_{VERSION}_amd64.deb"
         old.write_bytes(b"old invalid payload")
         (dist / "SHA256SUMS").write_text("stale", encoding="utf-8")
         shutil.rmtree(self.root / "assets/web/breeze")
@@ -125,7 +130,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
     def test_incomplete_core_gate_blocks_build_before_cargo_and_old_deb_is_gone(self):
         dist = self.root / '.target/dist'
         dist.mkdir(parents=True, exist_ok=True)
-        old = dist / 'flamewm_0.1.0_amd64.deb'
+        old = dist / f'flamewm_{VERSION}_amd64.deb'
         old.write_bytes(b'stale')
         (dist / 'SHA256SUMS').write_text('old')
         result = self.build_deb(gate_failure=True)
@@ -155,7 +160,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         result = self.package()
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         dist = self.root / ".target/dist"
-        deb = dist / "flamewm_0.1.0_amd64.deb"
+        deb = dist / f"flamewm_{VERSION}_amd64.deb"
         self.assertTrue(deb.is_file())
         fields = subprocess.check_output(["dpkg-deb", "-f", str(deb), "Architecture"], text=True).strip()
         self.assertEqual(fields, "amd64")
@@ -163,7 +168,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         checked = subprocess.run(["sha256sum", "-c", "SHA256SUMS"], cwd=dist,
                                  capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-        self.assertTrue((dist / "flamewm-0.1.0-source.tar.gz").exists())
+        self.assertTrue((dist / f"flamewm-{VERSION}-source.tar.gz").exists())
         entry = subprocess.check_output(["dpkg-deb", "--contents", str(deb)], text=True)
         self.assertIn("./usr/share/xsessions/flamewm.desktop", entry)
 
@@ -172,7 +177,7 @@ class DebianReleasePipelineTests(unittest.TestCase):
         result = self.package()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("executable is not registered: scripts/version", result.stderr)
-        self.assertFalse((self.root / ".target/dist/flamewm_0.1.0_amd64.deb").exists())
+        self.assertFalse((self.root / f".target/dist/flamewm_{VERSION}_amd64.deb").exists())
         self.assertFalse((self.root / ".target/dist/SHA256SUMS").exists())
         self.assertFalse((self.root / ".target/dist/flamewm-0.1.0-source.tar.gz").exists())
 

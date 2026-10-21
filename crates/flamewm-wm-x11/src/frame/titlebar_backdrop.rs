@@ -36,7 +36,10 @@ const DRAG_SLACK: u32 = 32;
 pub enum WallpaperSource {
     Solid([u8; 3]),
     /// Empty `path` is the bundled default wallpaper.
-    Image { path: String, fit: WallpaperFit },
+    Image {
+        path: String,
+        fit: WallpaperFit,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,7 +142,9 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 /// Publish the wallpaper source; returns the backdrop generation (bumped on change).
 pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
-    let Ok(mut guard) = STATE.lock() else { return 0 };
+    let Ok(mut guard) = STATE.lock() else {
+        return 0;
+    };
     let state = guard.get_or_insert_with(State::default);
     if state.source.as_ref() != Some(&source) {
         state.source = Some(source);
@@ -154,7 +159,12 @@ pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
 /// Freezes what is behind frame `owner` at drag start. `raw_root` is the live root as 24-bit
 /// LSB `BGRX` (`None` when the capture failed; the wallpaper is used instead). The frame's own
 /// rect `mask` is always wallpaper, so the titlebar never samples its own pixels.
-pub fn begin_drag(owner: u64, root: (u32, u32), raw_root: Option<Vec<u8>>, mask: (i32, i32, u32, u32)) {
+pub fn begin_drag(
+    owner: u64,
+    root: (u32, u32),
+    raw_root: Option<Vec<u8>>,
+    mask: (i32, i32, u32, u32),
+) {
     let Ok(mut guard) = STATE.lock() else { return };
     let state = guard.get_or_insert_with(State::default);
     let captured = raw_root.map(bgrx_to_rgba);
@@ -186,7 +196,11 @@ fn release_canvas_in(state: &mut State) {
 /// Resident root canvas bytes (0 when released or decode failed).
 #[cfg(test)]
 fn canvas_bytes(state: &State) -> usize {
-    state.canvas.as_ref().and_then(|(_, image)| image.as_ref()).map_or(0, |image| image.pixels.len())
+    state
+        .canvas
+        .as_ref()
+        .and_then(|(_, image)| image.as_ref())
+        .map_or(0, |image| image.pixels.len())
 }
 
 /// Drops everything kept for `owner` (window closed).
@@ -206,7 +220,11 @@ fn end_drag_in(state: &mut State, owner: u64) {
 
 fn forget_in(state: &mut State, owner: u64) {
     state.drag = state.drag.take().filter(|drag| drag.owner != owner);
-    if state.retained.as_ref().is_some_and(|(kept, _)| *kept == owner) {
+    if state
+        .retained
+        .as_ref()
+        .is_some_and(|(kept, _)| *kept == owner)
+    {
         state.retained = None;
     }
 }
@@ -227,7 +245,15 @@ pub fn drag_titlebar_pixels(
     blur_percent: u8,
 ) -> Option<Vec<u8>> {
     let mut guard = STATE.lock().ok()?;
-    titlebar_in(guard.as_mut()?, owner, origin, (width, height), rgb, alpha, blur_percent)
+    titlebar_in(
+        guard.as_mut()?,
+        owner,
+        origin,
+        (width, height),
+        rgb,
+        alpha,
+        blur_percent,
+    )
 }
 
 fn titlebar_in(
@@ -269,7 +295,14 @@ fn titlebar_in(
             drag.blurred = Some(Blurred { key, cell, region });
         }
         let blurred = drag.blurred.as_ref()?;
-        let crop = slice_region(&blurred.region, width + DRAG_SLACK, origin, cell, width, height);
+        let crop = slice_region(
+            &blurred.region,
+            width + DRAG_SLACK,
+            origin,
+            cell,
+            width,
+            height,
+        );
         return Some(compose_rgba(&crop, rgb, alpha));
     }
     let (kept_owner, kept) = state.retained.as_ref()?;
@@ -280,14 +313,24 @@ fn titlebar_in(
         state.retained = None;
         return None;
     }
-    let crop = slice_region(&kept.region, width + DRAG_SLACK, origin, kept.cell, width, height);
+    let crop = slice_region(
+        &kept.region,
+        width + DRAG_SLACK,
+        origin,
+        kept.cell,
+        width,
+        height,
+    );
     Some(compose_rgba(&crop, rgb, alpha))
 }
 
 /// Grid cell (top-left) of the [`DRAG_SLACK`]-sized cell containing `origin`.
 fn drag_cell(origin: (i32, i32)) -> (i32, i32) {
     let slack = DRAG_SLACK as i32;
-    (origin.0.div_euclid(slack) * slack, origin.1.div_euclid(slack) * slack)
+    (
+        origin.0.div_euclid(slack) * slack,
+        origin.1.div_euclid(slack) * slack,
+    )
 }
 
 /// `w x h` crop at `origin` out of a row-major region of width `region_w` whose top-left is
@@ -330,7 +373,14 @@ fn blur_region(
         }
     }
     // `origin` sits `pad` inside the padded region, whose top-left is `origin - pad`.
-    slice_region(crop, pw, origin, (origin.0 - pad as i32, origin.1 - pad as i32), w, h)
+    slice_region(
+        crop,
+        pw,
+        origin,
+        (origin.0 - pad as i32, origin.1 - pad as i32),
+        w,
+        h,
+    )
 }
 
 /// Fresh reference blur of the `w x h` crop at `origin`: the cell region's crop, so it equals
@@ -346,7 +396,15 @@ fn blur_crop(
 ) -> Vec<u8> {
     let cell = drag_cell(origin);
     let mut crop = Vec::new();
-    let region = blur_region(scratch, snapshot, cell, w + DRAG_SLACK, h + DRAG_SLACK, radius, &mut crop);
+    let region = blur_region(
+        scratch,
+        snapshot,
+        cell,
+        w + DRAG_SLACK,
+        h + DRAG_SLACK,
+        radius,
+        &mut crop,
+    );
     slice_region(&region, w + DRAG_SLACK, origin, cell, w, h)
 }
 
@@ -361,16 +419,31 @@ fn build_drag(
     let (mx, my, mw, mh) = mask;
     let captured = captured.filter(|pixels| pixels.len() == rw as usize * rh as usize * 4);
     // Masked first: without a capture it reads the canvas, which `wallpaper_base` may consume.
-    let masked = mask_pixels(state.source.as_ref(), &mut state.canvas, mask, root, captured.is_some());
-    let base = captured.unwrap_or_else(|| wallpaper_base(state.source.as_ref(), &mut state.canvas, root));
-    let layer = Layer { x: mx, y: my, w: mw, h: mh, rgba: &masked };
-    DragSnapshot::build((0, 0), rw, rh, base, &[layer]).ok().map(|snapshot| DragBackdrop {
-        owner,
-        snapshot,
-        blurred: None,
-        scratch: BlurScratch::new(),
-        crop: Vec::new(),
-    })
+    let masked = mask_pixels(
+        state.source.as_ref(),
+        &mut state.canvas,
+        mask,
+        root,
+        captured.is_some(),
+    );
+    let base =
+        captured.unwrap_or_else(|| wallpaper_base(state.source.as_ref(), &mut state.canvas, root));
+    let layer = Layer {
+        x: mx,
+        y: my,
+        w: mw,
+        h: mh,
+        rgba: &masked,
+    };
+    DragSnapshot::build((0, 0), rw, rh, base, &[layer])
+        .ok()
+        .map(|snapshot| DragBackdrop {
+            owner,
+            snapshot,
+            blurred: None,
+            scratch: BlurScratch::new(),
+            crop: Vec::new(),
+        })
 }
 
 /// Opaque straight RGBA from 24-bit LSB `BGRX` root pixels, swapped in place. A trailing
@@ -453,7 +526,12 @@ fn masked_from_natural(
         for col in 0..w as i32 {
             let sx = (clamp(x + col, root.0) - x0) as usize;
             let at = (sy * sw as usize + sx) * 4;
-            out.extend_from_slice(&[span.pixels[at], span.pixels[at + 1], span.pixels[at + 2], 255]);
+            out.extend_from_slice(&[
+                span.pixels[at],
+                span.pixels[at + 1],
+                span.pixels[at + 2],
+                255,
+            ]);
         }
     }
     Some(out)
@@ -472,7 +550,9 @@ fn canvas_image<'a>(
     canvas: &'a mut Option<((u32, u32), Option<RgbaImage>)>,
     root: (u32, u32),
 ) -> Option<&'a RgbaImage> {
-    let Some(WallpaperSource::Image { path, fit }) = source else { return None };
+    let Some(WallpaperSource::Image { path, fit }) = source else {
+        return None;
+    };
     if canvas.as_ref().map(|(size, _)| *size) != Some(root) {
         *canvas = Some((root, compose_canvas(path, *fit, root)));
     }
@@ -498,7 +578,12 @@ fn wallpaper_rect(
         for col in 0..w {
             let sx = (x + col as i32).clamp(0, image.width as i32 - 1) as usize;
             let at = (sy * image.width as usize + sx) * 4;
-            out.extend_from_slice(&[image.pixels[at], image.pixels[at + 1], image.pixels[at + 2], 255]);
+            out.extend_from_slice(&[
+                image.pixels[at],
+                image.pixels[at + 1],
+                image.pixels[at + 2],
+                255,
+            ]);
         }
     }
     out
@@ -585,10 +670,18 @@ fn titlebar_fill_in(
         radius_tenths: (radius * 10.0).round() as u32,
         root,
     };
-    let State { source, canvas, cache, drag, .. } = state;
+    let State {
+        source,
+        canvas,
+        cache,
+        drag,
+        ..
+    } = state;
     let hit = cache.contains(&key);
     let out = compose_rgba(
-        cache.get_or_insert_with(key, || build_backdrop(source.as_ref(), canvas, key.rect, root, radius)),
+        cache.get_or_insert_with(key, || {
+            build_backdrop(source.as_ref(), canvas, key.rect, root, radius)
+        }),
         rgb,
         alpha,
     );
@@ -614,9 +707,16 @@ fn build_backdrop(
     // replicate the nearest wallpaper pixel.
     let pad = radius.ceil() as u32;
     let (pw, ph) = (w + 2 * pad, h + 2 * pad);
-    let mut region = wallpaper_rect(source, canvas, (x - pad as i32, y - pad as i32, pw, ph), root);
+    let mut region = wallpaper_rect(
+        source,
+        canvas,
+        (x - pad as i32, y - pad as i32, pw, ph),
+        root,
+    );
     if radius > 0.0 {
-        if let Err(error) = flamewm_image_core::blur::gaussian_blur_rgba(&mut region, pw, ph, radius) {
+        if let Err(error) =
+            flamewm_image_core::blur::gaussian_blur_rgba(&mut region, pw, ph, radius)
+        {
             eprintln!("flamewm-wm-x11: titlebar backdrop blur skipped: {error:?}");
         }
     }
@@ -643,7 +743,10 @@ fn compose_canvas(path: &str, fit: WallpaperFit, root: (u32, u32)) -> Option<Rgb
     match composed {
         Ok(image) => Some(image),
         Err(error) => {
-            eprintln!("flamewm-wm-x11: titlebar backdrop wallpaper {}: {error}", file.display());
+            eprintln!(
+                "flamewm-wm-x11: titlebar backdrop wallpaper {}: {error}",
+                file.display()
+            );
             None
         }
     }
@@ -675,8 +778,17 @@ mod tests {
         let mut bytes = b"P6\n7 5\n255\n".to_vec();
         bytes.extend([90u8, 40, 10].repeat(7 * 5));
         std::fs::write(&path, &bytes).unwrap();
-        let source = WallpaperSource::Image { path: path.to_string_lossy().into_owned(), fit: WallpaperFit::Fill };
-        (State { source: Some(source), ..State::default() }, path)
+        let source = WallpaperSource::Image {
+            path: path.to_string_lossy().into_owned(),
+            fit: WallpaperFit::Fill,
+        };
+        (
+            State {
+                source: Some(source),
+                ..State::default()
+            },
+            path,
+        )
     }
 
     /// Fill-mode state whose image path never decodes.
@@ -693,9 +805,18 @@ mod tests {
     #[test]
     fn blend_math_at_opacity_0_50_100_over_known_backdrop() {
         let backdrop = [200u8, 100, 0, 255];
-        assert_eq!(compose_rgba(&backdrop, (0, 0, 0), 0), vec![200, 100, 0, 255]);
-        assert_eq!(compose_rgba(&backdrop, (0, 0, 0), 127), vec![100, 50, 0, 255]);
-        assert_eq!(compose_rgba(&backdrop, (10, 20, 30), 255), vec![10, 20, 30, 255]);
+        assert_eq!(
+            compose_rgba(&backdrop, (0, 0, 0), 0),
+            vec![200, 100, 0, 255]
+        );
+        assert_eq!(
+            compose_rgba(&backdrop, (0, 0, 0), 127),
+            vec![100, 50, 0, 255]
+        );
+        assert_eq!(
+            compose_rgba(&backdrop, (10, 20, 30), 255),
+            vec![10, 20, 30, 255]
+        );
     }
 
     #[test]
@@ -708,16 +829,33 @@ mod tests {
 
     #[test]
     fn cache_hits_on_same_key_and_misses_on_any_field_change() {
-        let key = BackdropKey { rect: (1, 2, 4, 2), generation: 1, radius_tenths: 0, root: (100, 50) };
+        let key = BackdropKey {
+            rect: (1, 2, 4, 2),
+            generation: 1,
+            radius_tenths: 0,
+            root: (100, 50),
+        };
         let mut cache = BackdropCache::default();
         cache.get_or_insert_with(key, || vec![1]);
         cache.get_or_insert_with(key, || panic!("must hit"));
         assert_eq!((cache.hits, cache.misses), (1, 1));
         for changed in [
-            BackdropKey { rect: (2, 2, 4, 2), ..key },
-            BackdropKey { generation: 2, ..key },
-            BackdropKey { radius_tenths: 240, ..key },
-            BackdropKey { root: (200, 50), ..key },
+            BackdropKey {
+                rect: (2, 2, 4, 2),
+                ..key
+            },
+            BackdropKey {
+                generation: 2,
+                ..key
+            },
+            BackdropKey {
+                radius_tenths: 240,
+                ..key
+            },
+            BackdropKey {
+                root: (200, 50),
+                ..key
+            },
         ] {
             cache.get_or_insert_with(changed, || vec![2]);
         }
@@ -728,7 +866,12 @@ mod tests {
     fn cache_is_bounded() {
         let mut cache = BackdropCache::default();
         for i in 0..(CACHE_ENTRIES as i32 * 2) {
-            let key = BackdropKey { rect: (i, 0, 1, 1), generation: 0, radius_tenths: 0, root: (1, 1) };
+            let key = BackdropKey {
+                rect: (i, 0, 1, 1),
+                generation: 0,
+                radius_tenths: 0,
+                root: (1, 1),
+            };
             cache.get_or_insert_with(key, || vec![0; 4]);
         }
         assert_eq!(cache.len(), CACHE_ENTRIES);
@@ -736,28 +879,52 @@ mod tests {
 
     #[test]
     fn cache_evicts_oldest_past_byte_budget_and_keeps_newest() {
-        let key = |i: i32| BackdropKey { rect: (i, 0, 1, 1), generation: 0, radius_tenths: 0, root: (1, 1) };
+        let key = |i: i32| BackdropKey {
+            rect: (i, 0, 1, 1),
+            generation: 0,
+            radius_tenths: 0,
+            root: (1, 1),
+        };
         let mut cache = BackdropCache::default();
         for i in 0..3 {
             cache.get_or_insert_with(key(i), || vec![0; 1_500_000]);
         }
-        assert_eq!(cache.len(), 2, "third 1.5 MB entry exceeds the 4 MiB budget");
+        assert_eq!(
+            cache.len(),
+            2,
+            "third 1.5 MB entry exceeds the 4 MiB budget"
+        );
         cache.get_or_insert_with(key(2), || panic!("newest must be kept"));
         cache.get_or_insert_with(key(0), || vec![0; 4]);
         assert_eq!(cache.misses, 4, "oldest was evicted");
 
         let mut oversize = BackdropCache::default();
         oversize.get_or_insert_with(key(0), || vec![0; CACHE_BYTE_BUDGET + 1]);
-        assert_eq!(oversize.len(), 1, "newest entry is kept even when alone over budget");
+        assert_eq!(
+            oversize.len(),
+            1,
+            "newest entry is kept even when alone over budget"
+        );
     }
 
     #[test]
     fn cache_drops_entries_of_previous_root_size() {
-        let key = |root| BackdropKey { rect: (0, 0, 1, 1), generation: 0, radius_tenths: 0, root };
+        let key = |root| BackdropKey {
+            rect: (0, 0, 1, 1),
+            generation: 0,
+            radius_tenths: 0,
+            root,
+        };
         let mut cache = BackdropCache::default();
         cache.get_or_insert_with(key((100, 50)), || vec![0; 4]);
         cache.get_or_insert_with(key((100, 50)), || panic!("same root must hit"));
-        cache.get_or_insert_with(BackdropKey { rect: (1, 0, 1, 1), ..key((100, 50)) }, || vec![0; 4]);
+        cache.get_or_insert_with(
+            BackdropKey {
+                rect: (1, 0, 1, 1),
+                ..key((100, 50))
+            },
+            || vec![0; 4],
+        );
         cache.get_or_insert_with(key((200, 80)), || vec![0; 4]);
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.entries[0].0.root, (200, 80));
@@ -779,13 +946,20 @@ mod tests {
 
     #[test]
     fn wallpaper_base_moves_matching_canvas_and_keeps_failed_decode() {
-        let image = RgbaImage { width: 2, height: 1, pixels: vec![1, 2, 3, 0, 4, 5, 6, 0] };
+        let image = RgbaImage {
+            width: 2,
+            height: 1,
+            pixels: vec![1, 2, 3, 0, 4, 5, 6, 0],
+        };
         let mut canvas = Some(((2, 1), Some(image)));
         let base = wallpaper_base(Some(&WallpaperSource::Solid([0; 3])), &mut canvas, (2, 1));
         assert_eq!(base, vec![1, 2, 3, 255, 4, 5, 6, 255]);
         assert!(canvas.is_none(), "canvas moved out, rebuilt lazily");
 
-        let image_source = WallpaperSource::Image { path: String::new(), fit: WallpaperFit::Fill };
+        let image_source = WallpaperSource::Image {
+            path: String::new(),
+            fit: WallpaperFit::Fill,
+        };
         let mut failed = Some(((2, 1), None));
         let base = wallpaper_base(Some(&image_source), &mut failed, (2, 1));
         assert_eq!(base, [0x1b, 0x1e, 0x20, 255].repeat(2));
@@ -796,7 +970,16 @@ mod tests {
     fn fallback_backdrop_blur_stays_flat() {
         let mut canvas = None;
         let px = build_backdrop(None, &mut canvas, (0, 0, 4, 2), (8, 8), 3.0);
-        assert_eq!(px, [FALLBACK_BACKDROP[0], FALLBACK_BACKDROP[1], FALLBACK_BACKDROP[2], 255].repeat(8));
+        assert_eq!(
+            px,
+            [
+                FALLBACK_BACKDROP[0],
+                FALLBACK_BACKDROP[1],
+                FALLBACK_BACKDROP[2],
+                255
+            ]
+            .repeat(8)
+        );
     }
 
     #[test]
@@ -811,8 +994,14 @@ mod tests {
         let mut state = missing_image_state();
         let px = titlebar_fill_in(&mut state, (0, 0), (64, 64), (4, 2), (10, 20, 30), 255, 0.0);
         assert_eq!(px, flat_pixels(4, 2, (10, 20, 30), 255));
-        assert!(state.canvas.is_none(), "opaque titlebar must not compose the root canvas");
-        assert_eq!(state.cache.misses, 0, "opaque titlebar must not build a backdrop");
+        assert!(
+            state.canvas.is_none(),
+            "opaque titlebar must not compose the root canvas"
+        );
+        assert_eq!(
+            state.cache.misses, 0,
+            "opaque titlebar must not build a backdrop"
+        );
     }
 
     #[test]
@@ -830,7 +1019,11 @@ mod tests {
             let mut missing = missing_image_state();
             let px = titlebar_fill_in(&mut missing, (0, 0), (64, 64), (4, 2), rgb, alpha, 0.0);
             let fallback = FALLBACK_BACKDROP;
-            let expected = compose_rgba(&[fallback[0], fallback[1], fallback[2], 255].repeat(8), rgb, alpha);
+            let expected = compose_rgba(
+                &[fallback[0], fallback[1], fallback[2], 255].repeat(8),
+                rgb,
+                alpha,
+            );
             assert_eq!(px, expected, "undecodable image, alpha {alpha}");
         }
     }
@@ -841,12 +1034,18 @@ mod tests {
         state.drag = build_drag(&mut state, 3, (1, 1), Some(vec![0; 4]), (0, 0, 0, 0));
         state.canvas = Some(((1, 1), None));
         end_drag_in(&mut state, 3);
-        assert!(state.canvas.is_some(), "a drag must not re-decode the wallpaper");
+        assert!(
+            state.canvas.is_some(),
+            "a drag must not re-decode the wallpaper"
+        );
     }
 
     #[test]
     fn drag_snapshot_uses_capture_outside_mask_and_wallpaper_inside() {
-        let mut state = State { source: Some(WallpaperSource::Solid([9, 9, 9])), ..State::default() };
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([9, 9, 9])),
+            ..State::default()
+        };
         let captured: Vec<u8> = (0..4 * 4).flat_map(|i| [i as u8, 0, 0, 255]).collect();
         // Mask the 2x2 block at (1,1) of a 4x4 root; it must read as wallpaper colour.
         let drag = build_drag(&mut state, 7, (4, 4), Some(captured.clone()), (1, 1, 2, 2)).unwrap();
@@ -858,20 +1057,36 @@ mod tests {
 
     #[test]
     fn drag_blur_keeps_uniform_colour_and_zero_radius_is_plain_crop() {
-        let mut state = State { source: Some(WallpaperSource::Solid([0, 0, 0])), ..State::default() };
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([0, 0, 0])),
+            ..State::default()
+        };
         let uniform: Vec<u8> = [40, 80, 120, 255].repeat(8 * 8);
         let drag = build_drag(&mut state, 1, (8, 8), Some(uniform), (0, 0, 0, 0)).unwrap();
         let blurred = blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 2.0);
         assert!(blurred.chunks_exact(4).all(|px| px == [40, 80, 120, 255]));
-        assert_eq!(blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 0.0), drag.snapshot.crop(2, 2, 3, 3));
+        assert_eq!(
+            blur_crop(&mut BlurScratch::new(), &drag.snapshot, (2, 2), 3, 3, 0.0),
+            drag.snapshot.crop(2, 2, 3, 3)
+        );
     }
 
     #[test]
     fn drag_moves_match_fresh_blur_and_reuse_cell_region() {
         let captured: Vec<u8> = (0..96 * 80u32)
-            .flat_map(|i| [(i * 37 % 251) as u8, (i * 91 % 253) as u8, (i * 13 % 247) as u8, 255])
+            .flat_map(|i| {
+                [
+                    (i * 37 % 251) as u8,
+                    (i * 91 % 253) as u8,
+                    (i * 13 % 247) as u8,
+                    255,
+                ]
+            })
             .collect();
-        let mut state = State { source: Some(WallpaperSource::Solid([0; 3])), ..State::default() };
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([0; 3])),
+            ..State::default()
+        };
         state.drag = build_drag(&mut state, 5, (96, 80), Some(captured), (0, 0, 0, 0));
         let snapshot = state.drag.as_ref().unwrap().snapshot.clone();
         let (w, h, rgb, alpha) = (20u32, 12u32, (10u8, 20u8, 30u8), 60u8);
@@ -879,10 +1094,27 @@ mod tests {
         for blur_percent in [30u8, 100] {
             let radius = blur_radius_px(opacity_percent(alpha), blur_percent);
             saw_large_radius |= radius > DRAG_SLACK as f32 / 2.0;
-            for origin in [(3, 3), (10, 3), (20, 3), (31, 3), (33, 3), (40, 20), (63, 40), (64, 41), (70, 50), (-5, -7), (70, 66)] {
-                let got = titlebar_in(&mut state, 5, origin, (w, h), rgb, alpha, blur_percent).unwrap();
+            for origin in [
+                (3, 3),
+                (10, 3),
+                (20, 3),
+                (31, 3),
+                (33, 3),
+                (40, 20),
+                (63, 40),
+                (64, 41),
+                (70, 50),
+                (-5, -7),
+                (70, 66),
+            ] {
+                let got =
+                    titlebar_in(&mut state, 5, origin, (w, h), rgb, alpha, blur_percent).unwrap();
                 let fresh = blur_crop(&mut BlurScratch::new(), &snapshot, origin, w, h, radius);
-                assert_eq!(got, compose_rgba(&fresh, rgb, alpha), "origin {origin:?} blur {blur_percent}");
+                assert_eq!(
+                    got,
+                    compose_rgba(&fresh, rgb, alpha),
+                    "origin {origin:?} blur {blur_percent}"
+                );
             }
         }
         assert!(saw_large_radius, "exercise the downscaled blur path too");
@@ -891,44 +1123,96 @@ mod tests {
         titlebar_in(&mut state, 5, (2, 2), (w, h), rgb, alpha, 30).unwrap();
         let before = state.drag.as_ref().unwrap().blurred.clone();
         titlebar_in(&mut state, 5, (9, 17), (w, h), rgb, alpha, 30).unwrap();
-        assert_eq!(state.drag.as_ref().unwrap().blurred.as_ref().map(|b| &b.region), before.as_ref().map(|b| &b.region));
+        assert_eq!(
+            state
+                .drag
+                .as_ref()
+                .unwrap()
+                .blurred
+                .as_ref()
+                .map(|b| &b.region),
+            before.as_ref().map(|b| &b.region)
+        );
         titlebar_in(&mut state, 5, (33, 17), (w, h), rgb, alpha, 30).unwrap();
-        assert_eq!(state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell, (32, 0));
+        assert_eq!(
+            state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell,
+            (32, 0)
+        );
     }
 
     #[test]
     fn kept_crop_survives_release_and_drops_on_move_wallpaper_or_forget() {
-        let mut state = State { source: Some(WallpaperSource::Solid([9, 9, 9])), ..State::default() };
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([9, 9, 9])),
+            ..State::default()
+        };
         let captured: Vec<u8> = [200, 0, 0, 255].repeat(8 * 8);
         state.drag = build_drag(&mut state, 3, (8, 8), Some(captured), (0, 0, 0, 0));
         let live = titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).unwrap();
         assert_eq!(&live[..4], &[200, 0, 0, 255]);
         end_drag_in(&mut state, 3);
-        assert!(state.drag.is_none() && state.retained.is_some(), "snapshot dropped, crop kept");
-        assert_eq!(titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0), Some(live.clone()));
-        assert_eq!(titlebar_in(&mut state, 4, (2, 2), (3, 2), (0, 0, 0), 0, 0), None, "other owner");
-        assert!(titlebar_in(&mut state, 3, (5, 2), (3, 2), (0, 0, 0), 0, 0).is_none(), "moved");
+        assert!(
+            state.drag.is_none() && state.retained.is_some(),
+            "snapshot dropped, crop kept"
+        );
+        assert_eq!(
+            titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0),
+            Some(live.clone())
+        );
+        assert_eq!(
+            titlebar_in(&mut state, 4, (2, 2), (3, 2), (0, 0, 0), 0, 0),
+            None,
+            "other owner"
+        );
+        assert!(
+            titlebar_in(&mut state, 3, (5, 2), (3, 2), (0, 0, 0), 0, 0).is_none(),
+            "moved"
+        );
         assert!(state.retained.is_none(), "moved frame drops the kept crop");
-        state.drag = build_drag(&mut state, 3, (8, 8), Some([200, 0, 0, 255].repeat(64)), (0, 0, 0, 0));
+        state.drag = build_drag(
+            &mut state,
+            3,
+            (8, 8),
+            Some([200, 0, 0, 255].repeat(64)),
+            (0, 0, 0, 0),
+        );
         end_drag_in(&mut state, 3);
         state.generation += 1;
-        assert!(titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).is_none(), "wallpaper change");
-        state.drag = build_drag(&mut state, 3, (8, 8), Some([200, 0, 0, 255].repeat(64)), (0, 0, 0, 0));
+        assert!(
+            titlebar_in(&mut state, 3, (2, 2), (3, 2), (0, 0, 0), 0, 0).is_none(),
+            "wallpaper change"
+        );
+        state.drag = build_drag(
+            &mut state,
+            3,
+            (8, 8),
+            Some([200, 0, 0, 255].repeat(64)),
+            (0, 0, 0, 0),
+        );
         end_drag_in(&mut state, 3);
         forget_in(&mut state, 3);
-        assert!(state.retained.is_none(), "closed window drops the kept crop");
+        assert!(
+            state.retained.is_none(),
+            "closed window drops the kept crop"
+        );
     }
 
     #[test]
     fn drag_snapshot_falls_back_to_wallpaper_without_capture() {
-        let mut state = State { source: Some(WallpaperSource::Solid([5, 6, 7])), ..State::default() };
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([5, 6, 7])),
+            ..State::default()
+        };
         let drag = build_drag(&mut state, 1, (2, 2), None, (0, 0, 1, 1)).unwrap();
         assert_eq!(drag.snapshot.crop(1, 1, 1, 1), vec![5, 6, 7, 255]);
     }
 
     #[test]
     fn drag_snapshot_rejects_wrong_capture_length_and_uses_wallpaper() {
-        let mut state = State { source: Some(WallpaperSource::Solid([5, 6, 7])), ..State::default() };
+        let mut state = State {
+            source: Some(WallpaperSource::Solid([5, 6, 7])),
+            ..State::default()
+        };
         let drag = build_drag(&mut state, 1, (2, 2), Some(vec![0; 4]), (0, 0, 0, 0)).unwrap();
         assert_eq!(drag.snapshot.crop(1, 1, 1, 1), vec![5, 6, 7, 255]);
     }
@@ -936,11 +1220,16 @@ mod tests {
     #[test]
     fn canvas_kept_across_misses_released_by_hook_and_rebuilt_lazily() {
         let mut state = State {
-            source: Some(WallpaperSource::Image { path: "/nonexistent/flamewm-test.png".into(), fit: WallpaperFit::Fill }),
+            source: Some(WallpaperSource::Image {
+                path: "/nonexistent/flamewm-test.png".into(),
+                fit: WallpaperFit::Fill,
+            }),
             ..State::default()
         };
         let root = (16, 8);
-        let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
+        let fill = |state: &mut State, origin| {
+            titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0)
+        };
         fill(&mut state, (0, 0));
         assert!(state.canvas.is_some(), "kept after first miss");
         assert_eq!(state.cache.misses, 1);
@@ -955,7 +1244,10 @@ mod tests {
         release_canvas_in(&mut state);
         assert!(state.canvas.is_none(), "released by hook");
         fill(&mut state, (3, 0));
-        assert!(state.canvas.is_some(), "rebuilt lazily after hook release on miss");
+        assert!(
+            state.canvas.is_some(),
+            "rebuilt lazily after hook release on miss"
+        );
         assert_eq!(state.cache.misses, 4);
     }
 
@@ -963,11 +1255,17 @@ mod tests {
     fn canvas_bytes_tracked_and_released_after_build_when_hit_needs_none() {
         let (mut state, path) = ppm_state("bytes");
         let root = (16, 8);
-        let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
+        let fill = |state: &mut State, origin| {
+            titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0)
+        };
         fill(&mut state, (0, 0));
         let canvas = root.0 as usize * root.1 as usize * 4;
         assert_eq!(canvas_bytes(&state), canvas, "miss builds the root canvas");
-        assert_eq!(state.cache.bytes(), 4 * 2 * 4, "one titlebar backdrop cached");
+        assert_eq!(
+            state.cache.bytes(),
+            4 * 2 * 4,
+            "one titlebar backdrop cached"
+        );
         fill(&mut state, (0, 0));
         assert_eq!(canvas_bytes(&state), 0, "hit releases resident canvas");
         assert_eq!(state.cache.bytes(), 4 * 2 * 4, "cache untouched by release");
@@ -980,21 +1278,34 @@ mod tests {
         let root = (16, 8);
         state.drag = build_drag(&mut state, 9, root, None, (0, 0, 2, 2));
         assert!(state.drag.is_some());
-        let fill = |state: &mut State, origin| titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0);
+        let fill = |state: &mut State, origin| {
+            titlebar_fill_in(state, origin, root, (4, 2), (0, 0, 0), 0, 0.0)
+        };
         fill(&mut state, (0, 0));
         assert!(state.canvas.is_some(), "drag keeps canvas for the miss");
         fill(&mut state, (0, 0));
-        assert_eq!(canvas_bytes(&state), 16 * 8 * 4, "hit during drag keeps canvas resident");
+        assert_eq!(
+            canvas_bytes(&state),
+            16 * 8 * 4,
+            "hit during drag keeps canvas resident"
+        );
         fill(&mut state, (5, 0));
         assert_eq!((state.cache.hits, state.cache.misses), (1, 2));
-        assert_eq!(canvas_bytes(&state), 16 * 8 * 4, "miss during drag rebuilds without re-decode loss");
+        assert_eq!(
+            canvas_bytes(&state),
+            16 * 8 * 4,
+            "miss during drag rebuilds without re-decode loss"
+        );
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn solid_source_blends_over_wallpaper_colour_and_tracks_generation() {
         let g1 = set_wallpaper_source(WallpaperSource::Solid([100, 100, 100]));
-        assert_eq!(set_wallpaper_source(WallpaperSource::Solid([100, 100, 100])), g1);
+        assert_eq!(
+            set_wallpaper_source(WallpaperSource::Solid([100, 100, 100])),
+            g1
+        );
         let px = titlebar_pixels((-10, -5), (64, 64), 4, 2, (0, 0, 0), 255, 80);
         assert_eq!(&px[..4], &[0, 0, 0, 255]);
         let half = titlebar_pixels((0, 0), (64, 64), 4, 2, (0, 0, 0), 0, 80);
@@ -1013,9 +1324,20 @@ mod tests {
     /// Opaque, non-uniform 7x5 image so every channel and sampling path is exercised.
     fn synthetic_natural() -> RgbaImage {
         let pixels = (0..7u32 * 5)
-            .flat_map(|i| [(i * 37 % 251) as u8, (i * 91 % 253) as u8, (i * 13 % 247) as u8, 255])
+            .flat_map(|i| {
+                [
+                    (i * 37 % 251) as u8,
+                    (i * 91 % 253) as u8,
+                    (i * 13 % 247) as u8,
+                    255,
+                ]
+            })
             .collect();
-        RgbaImage { width: 7, height: 5, pixels }
+        RgbaImage {
+            width: 7,
+            height: 5,
+            pixels,
+        }
     }
 
     const MASKS: [(i32, i32, u32, u32); 7] = [
@@ -1034,7 +1356,10 @@ mod tests {
         for root in [(16, 9), (3, 11), (1, 1)] {
             for fit in ALL_FITS {
                 let canvas_image = wallpaper::compose(&natural, root.0, root.1, fit).unwrap();
-                let source = WallpaperSource::Image { path: "unused".to_owned(), fit };
+                let source = WallpaperSource::Image {
+                    path: "unused".to_owned(),
+                    fit,
+                };
                 for mask in MASKS {
                     let mut canvas = Some((root, Some(canvas_image.clone())));
                     let old = wallpaper_rect(Some(&source), &mut canvas, mask, root);
@@ -1050,20 +1375,34 @@ mod tests {
         let natural = synthetic_natural();
         let path = std::env::temp_dir().join(format!("flamewm-mask-{}.ppm", std::process::id()));
         let mut bytes = b"P6\n7 5\n255\n".to_vec();
-        bytes.extend(natural.pixels.chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]));
+        bytes.extend(
+            natural
+                .pixels
+                .chunks_exact(4)
+                .flat_map(|px| [px[0], px[1], px[2]]),
+        );
         std::fs::write(&path, &bytes).unwrap();
-        assert!(wallpaper::decode_file(&path).is_ok(), "synthetic PPM must decode");
+        assert!(
+            wallpaper::decode_file(&path).is_ok(),
+            "synthetic PPM must decode"
+        );
         let file = path.to_string_lossy().into_owned();
         for root in [(16, 9), (3, 11), (1, 1)] {
             for fit in ALL_FITS {
-                let source = WallpaperSource::Image { path: file.clone(), fit };
+                let source = WallpaperSource::Image {
+                    path: file.clone(),
+                    fit,
+                };
                 for mask in MASKS {
                     let mut old_canvas = None;
                     let old = wallpaper_rect(Some(&source), &mut old_canvas, mask, root);
                     let mut new_canvas = None;
                     let new = mask_pixels(Some(&source), &mut new_canvas, mask, root, true);
                     assert_eq!(new, old, "root {root:?} {fit:?} mask {mask:?}");
-                    assert!(new_canvas.is_none(), "captured drag must not build the root canvas");
+                    assert!(
+                        new_canvas.is_none(),
+                        "captured drag must not build the root canvas"
+                    );
                 }
             }
         }
@@ -1076,7 +1415,10 @@ mod tests {
         let captured = [1u8, 2, 3, 255].repeat(16 * 9);
         state.drag = build_drag(&mut state, 9, (16, 9), Some(captured), (-2, 3, 5, 4));
         assert!(state.drag.is_some());
-        assert!(state.canvas.is_none(), "captured drag composes only the mask");
+        assert!(
+            state.canvas.is_none(),
+            "captured drag composes only the mask"
+        );
         std::fs::remove_file(&path).ok();
     }
 }

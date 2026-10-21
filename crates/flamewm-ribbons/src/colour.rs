@@ -127,7 +127,10 @@ mod tests {
         for c in (0..=255u8).step_by(5) {
             let lin = srgb_to_linear(c);
             let back = encode_table(4096)[(lin * 4095.0).round() as usize];
-            assert!((i32::from(back) - i32::from(c)).abs() <= 1, "c={c} back={back}");
+            assert!(
+                (i32::from(back) - i32::from(c)).abs() <= 1,
+                "c={c} back={back}"
+            );
         }
     }
 }

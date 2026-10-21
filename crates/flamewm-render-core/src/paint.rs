@@ -37,6 +37,15 @@ pub enum PaintCommand {
         weight: u16,
         text: String,
     },
+    TextShadow {
+        x: f32,
+        y: f32,
+        color: Color,
+        size: f32,
+        weight: u16,
+        blur_radius: f32,
+        text: String,
+    },
     PushClip {
         rect: Rect,
     },
@@ -182,16 +191,31 @@ pub fn build_paint_commands_with_scroll(
                             }
                             let y = rect.y + laid.line_height * line_index as f32 + style.font_size;
                             if let Some(shadow) = style.text_shadow {
-                                let shade = apply_opacity(document.resolve_color(shadow.color), style.opacity);
+                                let shade = apply_opacity(
+                                    document.resolve_color(shadow.color),
+                                    style.opacity,
+                                );
                                 if shade.a != 0 {
-                                    commands.push(PaintCommand::Text {
-                                        x: rect.x + shadow.offset_x,
-                                        y: y + shadow.offset_y,
-                                        color: shade,
-                                        size: style.font_size,
-                                        weight: style.font_weight,
-                                        text: line.text.clone(),
-                                    });
+                                    if shadow.blur_radius > 0.0 {
+                                        commands.push(PaintCommand::TextShadow {
+                                            x: rect.x + shadow.offset_x,
+                                            y: y + shadow.offset_y,
+                                            color: shade,
+                                            size: style.font_size,
+                                            weight: style.font_weight,
+                                            blur_radius: shadow.blur_radius,
+                                            text: line.text.clone(),
+                                        });
+                                    } else {
+                                        commands.push(PaintCommand::Text {
+                                            x: rect.x + shadow.offset_x,
+                                            y: y + shadow.offset_y,
+                                            color: shade,
+                                            size: style.font_size,
+                                            weight: style.font_weight,
+                                            text: line.text.clone(),
+                                        });
+                                    }
                                 }
                             }
                             commands.push(PaintCommand::Text {

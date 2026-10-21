@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-pattern="${1:-flamewm|flamewm-shell}"
-pids="$(pgrep -f "$pattern" || true)"
-[[ -n "$pids" ]] || { echo "No process matched: $pattern" >&2; exit 1; }
-for pid in $pids; do
-  [[ -r "/proc/$pid/smaps_rollup" ]] || continue
-  name="$(tr -d '\0' </proc/$pid/comm 2>/dev/null || echo unknown)"
-  pss="$(awk '/^Pss:/{print $2}' /proc/$pid/smaps_rollup)"
-  rss="$(awk '/^Rss:/{print $2}' /proc/$pid/smaps_rollup)"
-  printf 'pid=%s name=%s PSS_KiB=%s RSS_KiB=%s\n' "$pid" "$name" "$pss" "$rss"
-done
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
+exec python3 "$ROOT/tools/bench-flamewm-memory.py" "$@"

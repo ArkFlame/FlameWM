@@ -225,7 +225,11 @@ mod network_template_tests {
         let snapshot = network_snapshot(
             "/org/freedesktop/NetworkManager/AccessPoint/9",
             "LinsaFTW",
-            vec![("/org/freedesktop/NetworkManager/AccessPoint/2", "StubNeighbor", 42)],
+            vec![(
+                "/org/freedesktop/NetworkManager/AccessPoint/2",
+                "StubNeighbor",
+                42,
+            )],
         );
         let mut recorder = NetworkRecorder::new(&mut document);
         project_network(&mut recorder, &snapshot).expect("network projection must succeed");

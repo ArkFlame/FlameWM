@@ -177,7 +177,6 @@ The `.vendor/` directory holds historical reference corpora only. No active crat
 
 - The workspace package license in [`Cargo.toml`](Cargo.toml) (`workspace.package.license`) is `LGPL-2.0-only`; the full text is in [`LICENSE`](LICENSE). [`packaging/debian/copyright`](packaging/debian/copyright) also declares LGPL-2.0-only.
 - **Known mismatch:** `crates/flamewm-render-compiler/Cargo.toml` declares `license = "MIT"` and [`LICENSES/RustWebRender-MIT.txt`](LICENSES/RustWebRender-MIT.txt) contains MIT text, while the rest of the workspace is LGPL-2.0-only. The license for that crate is pending maintainer confirmation; this README does not resolve it.
-- Third-party notices and icon/theme licenses are in [`LICENSES/`](LICENSES/). Weather data attribution (Open-Meteo, CC BY 4.0): [`LICENSES/Open-Meteo-CC-BY-4.0.txt`](LICENSES/Open-Meteo-CC-BY-4.0.txt).
 
 ## Documentation
 

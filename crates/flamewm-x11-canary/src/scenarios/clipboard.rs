@@ -15,11 +15,11 @@ use std::time::{Duration, Instant};
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event;
-use x11rb::wrapper::ConnectionExt as _;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask,
     PropMode, Property, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, Window, WindowClass,
 };
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{CURRENT_TIME, NONE};
 
 /// Payload above this size always takes the INCR path (independent of server limits).
@@ -65,7 +65,12 @@ struct Atoms {
 
 fn intern_atoms<C: Connection>(conn: &C) -> Result<Atoms, String> {
     let get = |name: &[u8]| -> Result<Atom, String> {
-        Ok(conn.intern_atom(false, name).map_err(err)?.reply().map_err(err)?.atom)
+        Ok(conn
+            .intern_atom(false, name)
+            .map_err(err)?
+            .reply()
+            .map_err(err)?
+            .atom)
     };
     Ok(Atoms {
         clipboard: get(b"CLIPBOARD")?,
@@ -184,8 +189,7 @@ fn owner_main(
                     let total = u32::try_from(big.len()).unwrap_or(u32::MAX);
                     conn.change_window_attributes(
                         req.requestor,
-                        &ChangeWindowAttributesAux::new()
-                            .event_mask(EventMask::PROPERTY_CHANGE),
+                        &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
                     )
                     .map_err(err)?;
                     conn.change_property32(
@@ -336,9 +340,10 @@ fn run_case<C: Connection>(
     {
         return fail(format!("convert failed: {e}"));
     }
-    let notify = match wait_event(conn, |e| {
-        matches!(e, Event::SelectionNotify(n) if n.requestor == wid && n.selection == selection && n.target == target)
-    }) {
+    let notify = match wait_event(
+        conn,
+        |e| matches!(e, Event::SelectionNotify(n) if n.requestor == wid && n.selection == selection && n.target == target),
+    ) {
         Ok(Event::SelectionNotify(n)) => n,
         Ok(_) => return fail("unexpected event".to_owned()),
         Err(e) => return fail(e),
@@ -358,11 +363,15 @@ fn run_case<C: Connection>(
             .map_or(0, u32::from_ne_bytes);
         data.clear();
         loop {
-            let event = wait_event(conn, |e| {
-                matches!(e, Event::PropertyNotify(p) if p.window == wid && p.atom == atoms.data && p.state == Property::NEW_VALUE)
-            });
+            let event = wait_event(
+                conn,
+                |e| matches!(e, Event::PropertyNotify(p) if p.window == wid && p.atom == atoms.data && p.state == Property::NEW_VALUE),
+            );
             if let Err(e) = event {
-                return fail(format!("INCR chunk timeout after {} bytes: {e}", data.len()));
+                return fail(format!(
+                    "INCR chunk timeout after {} bytes: {e}",
+                    data.len()
+                ));
             }
             let (_, chunk) = match read_property(conn, wid, atoms.data) {
                 Ok(v) => v,
@@ -429,7 +438,10 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let (report, owner_err) = match report {
         Ok(Ok(r)) => (r, None),
         Ok(Err(e)) => (OwnerReport::default(), Some(e)),
-        Err(_) => (OwnerReport::default(), Some("owner thread panicked".to_owned())),
+        Err(_) => (
+            OwnerReport::default(),
+            Some("owner thread panicked".to_owned()),
+        ),
     };
     let owners_held = owners_before_stop == [owner_wid, owner_wid];
     let (cases, setup_err) = match outcome {
@@ -445,7 +457,14 @@ pub fn run(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         && report.incr_transfers >= 1;
     let case_text: Vec<String> = cases
         .iter()
-        .map(|c| format!("{}={} ({})", c.name, if c.pass { "PASS" } else { "FAIL" }, c.detail))
+        .map(|c| {
+            format!(
+                "{}={} ({})",
+                c.name,
+                if c.pass { "PASS" } else { "FAIL" },
+                c.detail
+            )
+        })
         .collect();
     (
         pass,
@@ -477,14 +496,35 @@ fn requestor_cases(root: Window, atoms: Atoms) -> Result<Vec<CaseResult>, String
     let small = SMALL_TEXT.as_bytes().to_vec();
     let big = pattern(BIG_PAYLOAD_LEN);
     let cases = [
-        ("clipboard-targets", atoms.clipboard, atoms.targets, targets_expected.clone(), false),
+        (
+            "clipboard-targets",
+            atoms.clipboard,
+            atoms.targets,
+            targets_expected.clone(),
+            false,
+        ),
         ("clipboard-utf8", atoms.clipboard, atoms.utf8, small, false),
-        ("primary-targets", atoms.primary, atoms.targets, targets_expected, false),
+        (
+            "primary-targets",
+            atoms.primary,
+            atoms.targets,
+            targets_expected,
+            false,
+        ),
         ("primary-utf8-incr", atoms.primary, atoms.utf8, big, true),
     ];
     let mut results = Vec::new();
     for (name, sel, target, expected, expect_incr) in cases {
-        results.push(run_case(&conn, atoms, wid, name, sel, target, &expected, expect_incr));
+        results.push(run_case(
+            &conn,
+            atoms,
+            wid,
+            name,
+            sel,
+            target,
+            &expected,
+            expect_incr,
+        ));
     }
     let _ = conn.destroy_window(wid);
     let _ = conn.flush();

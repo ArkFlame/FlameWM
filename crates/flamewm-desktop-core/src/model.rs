@@ -134,7 +134,10 @@ impl DesktopModel {
                     let cells = occupied.entry(default_output.clone()).or_default();
                     let cell = first_free(cells, grid);
                     cells.insert(cell);
-                    assigned.entry(default_output.clone()).or_default().insert(cell);
+                    assigned
+                        .entry(default_output.clone())
+                        .or_default()
+                        .insert(cell);
                     StoredPosition {
                         output: default_output.clone(),
                         cell,
@@ -183,7 +186,11 @@ impl DesktopModel {
                 position.cell = next;
             }
         }
-        for item in self.items.values_mut().filter(|item| item.output == *output) {
+        for item in self
+            .items
+            .values_mut()
+            .filter(|item| item.output == *output)
+        {
             if let Some(position) = self.positions.get(&item.path) {
                 item.cell = position.cell;
             }
@@ -315,36 +322,77 @@ mod tests {
         let left_grid = GridConfig::compute(flamewm_api::Rect::new(0, 0, 960, 640), 100);
         let right_grid = GridConfig::compute(flamewm_api::Rect::new(960, 0, 2400, 1440), 100);
         let mut model = DesktopModel::default();
-        model.set_position(root.join("left-file"), StoredPosition {
-            output: left.clone(), cell: Cell::new(3, 2),
-        });
-        model.set_position(root.join("right-file"), StoredPosition {
-            output: right.clone(), cell: Cell::new(23, 14),
-        });
-        model.rescan_with_grids(&root, &left, &BTreeMap::from([
-            (left.clone(), left_grid), (right.clone(), right_grid),
-        ]), left_grid).unwrap();
+        model.set_position(
+            root.join("left-file"),
+            StoredPosition {
+                output: left.clone(),
+                cell: Cell::new(3, 2),
+            },
+        );
+        model.set_position(
+            root.join("right-file"),
+            StoredPosition {
+                output: right.clone(),
+                cell: Cell::new(23, 14),
+            },
+        );
+        model
+            .rescan_with_grids(
+                &root,
+                &left,
+                &BTreeMap::from([(left.clone(), left_grid), (right.clone(), right_grid)]),
+                left_grid,
+            )
+            .unwrap();
 
         let right_position = model.positions()[&root.join("right-file")].clone();
         assert_eq!(right_position.output, right);
         assert_eq!(right_position.cell, Cell::new(23, 14));
 
-        model.rescan_with_grids(&root, &left, &BTreeMap::from([(left.clone(), left_grid)]), left_grid).unwrap();
+        model
+            .rescan_with_grids(
+                &root,
+                &left,
+                &BTreeMap::from([(left.clone(), left_grid)]),
+                left_grid,
+            )
+            .unwrap();
         assert_eq!(model.positions()[&root.join("right-file")], right_position);
-        assert_eq!(model.items().find(|item| item.display_name == "right-file").unwrap().output, right);
+        assert_eq!(
+            model
+                .items()
+                .find(|item| item.display_name == "right-file")
+                .unwrap()
+                .output,
+            right
+        );
 
-        model.rescan_with_grids(&root, &left, &BTreeMap::from([
-            (left.clone(), left_grid), (right.clone(), right_grid),
-        ]), left_grid).unwrap();
+        model
+            .rescan_with_grids(
+                &root,
+                &left,
+                &BTreeMap::from([(left.clone(), left_grid), (right.clone(), right_grid)]),
+                left_grid,
+            )
+            .unwrap();
         assert_eq!(model.positions()[&root.join("right-file")], right_position);
 
         let smaller_right = GridConfig::compute(flamewm_api::Rect::new(960, 0, 1920, 1080), 100);
-        model.rescan_with_grids(&root, &left, &BTreeMap::from([
-            (left.clone(), left_grid), (right.clone(), smaller_right),
-        ]), left_grid).unwrap();
-        assert_eq!(model.positions()[&root.join("right-file")], StoredPosition {
-            output: right, cell: Cell::new(19, 10),
-        });
+        model
+            .rescan_with_grids(
+                &root,
+                &left,
+                &BTreeMap::from([(left.clone(), left_grid), (right.clone(), smaller_right)]),
+                left_grid,
+            )
+            .unwrap();
+        assert_eq!(
+            model.positions()[&root.join("right-file")],
+            StoredPosition {
+                output: right,
+                cell: Cell::new(19, 10),
+            }
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

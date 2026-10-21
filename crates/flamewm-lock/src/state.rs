@@ -122,7 +122,11 @@ impl LockState {
 }
 
 fn edited_if(changed: bool) -> Effect {
-    if changed { Effect::Edited } else { Effect::None }
+    if changed {
+        Effect::Edited
+    } else {
+        Effect::None
+    }
 }
 
 #[cfg(test)]

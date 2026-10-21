@@ -15,7 +15,7 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 
 use crate::manager::{
-    ManagerPort, MANAGER_MESSAGE_ATOM, SETTINGS_PROPERTY_ATOM, SelectionClear, XSettingsManager,
+    MANAGER_MESSAGE_ATOM, ManagerPort, SETTINGS_PROPERTY_ATOM, SelectionClear, XSettingsManager,
     acquire_manager,
 };
 use crate::{XSETTINGS_SELECTION, XSettingsValue};
@@ -133,7 +133,12 @@ impl ManagerPort for X11ManagerPort {
             .map_err(x11_error)
     }
 
-    fn announce_manager(&mut self, timestamp: u32, selection: &str, window: u32) -> FlameResult<()> {
+    fn announce_manager(
+        &mut self,
+        timestamp: u32,
+        selection: &str,
+        window: u32,
+    ) -> FlameResult<()> {
         let manager = self.atom(MANAGER_MESSAGE_ATOM)?;
         let selection_atom = self.atom(selection)?;
         let event = ClientMessageEvent::new(
@@ -155,7 +160,15 @@ impl ManagerPort for X11ManagerPort {
         let length = u32::try_from(blob.len())
             .map_err(|_| FlameError::unavailable("XSettings blob too large"))?;
         self.conn
-            .change_property(PropMode::REPLACE, window, property, property, 8, length, blob)
+            .change_property(
+                PropMode::REPLACE,
+                window,
+                property,
+                property,
+                8,
+                length,
+                blob,
+            )
             .map_err(x11_error)?
             .check()
             .map_err(x11_error)?;

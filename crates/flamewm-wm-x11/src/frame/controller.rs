@@ -10,14 +10,13 @@ use std::collections::HashMap;
 use flamewm_render_core::CursorKind;
 
 use super::coords::{ClientRootRect, RootPoint, RootRect};
+#[cfg(test)]
+use super::geometry::plan_client_configure;
 use super::geometry::{
     FrameExtents, GeometryReason, GeometryRequest, frame_to_client_local, frame_to_client_root,
     plan_move, plan_resize,
 };
-#[cfg(test)]
-use super::geometry::plan_client_configure;
 use super::input::target_for_xid;
-use super::layout::TITLEBAR_H;
 use super::model::{
     FrameControl, FrameRegion, PlacementMode, PlacementSnapshot, PlacementState, ResizeEdges,
     SnapTarget,
@@ -267,10 +266,10 @@ fn snap_rect(work_area: RootRect, target: SnapTarget) -> RootRect {
     }
 }
 
-fn move_anchor(pointer: RootPoint, rect: RootRect) -> MoveAnchor {
+fn move_anchor(pointer: RootPoint, rect: RootRect, titlebar_h: i32) -> MoveAnchor {
     let den = rect.w.max(1) as u32;
     let num = pointer.x.saturating_sub(rect.x).clamp(0, rect.w.max(0)) as u32;
-    let vert = pointer.y.saturating_sub(rect.y).clamp(0, TITLEBAR_H);
+    let vert = pointer.y.saturating_sub(rect.y).clamp(0, titlebar_h);
     MoveAnchor::new(num, den, vert)
 }
 
@@ -412,7 +411,11 @@ pub fn reduce_owned(
                         PlacementMode::Fullscreen => return (state, vec![FrameEffect::Noop]),
                         PlacementMode::Maximized | PlacementMode::Snapped(_) => {
                             // Re-anchor the floating restore rect to the visible frame.
-                            let visible_anchor = move_anchor(pointer, state.placement.current);
+                            let visible_anchor = move_anchor(
+                                pointer,
+                                state.placement.current,
+                                state.extents.titlebar_h,
+                            );
                             (
                                 PlacementMode::Floating,
                                 maximized_restore_rect(
@@ -421,7 +424,7 @@ pub fn reduce_owned(
                                     visible_anchor.frac_num,
                                     visible_anchor.frac_den,
                                     pointer.y.saturating_sub(state.placement.current.y),
-                                    TITLEBAR_H,
+                                    state.extents.titlebar_h,
                                 ),
                             )
                         }
@@ -429,7 +432,7 @@ pub fn reduce_owned(
                             (PlacementMode::Floating, state.placement.current)
                         }
                     };
-                    let anchor = move_anchor(pointer, start_rect);
+                    let anchor = move_anchor(pointer, start_rect, state.extents.titlebar_h);
                     state.session.begin_move(MoveSession {
                         client: state.client,
                         start_pointer: pointer,
@@ -519,7 +522,12 @@ pub fn reduce_owned(
                     FrameControl::MaximizeRestore => {
                         let (mut out, effects) = toggle_max(state);
                         out.session = InteractionSession::Idle;
-                        (out, std::iter::once(FrameEffect::Ungrab).chain(effects).collect())
+                        (
+                            out,
+                            std::iter::once(FrameEffect::Ungrab)
+                                .chain(effects)
+                                .collect(),
+                        )
                     }
                     FrameControl::Minimize | FrameControl::Close => {
                         (state, vec![FrameEffect::Ungrab, FrameEffect::PaintChrome])
@@ -562,7 +570,11 @@ pub fn reduce_owned(
             }
             state.placement.current = plan.frame;
             let mut effects = configure_effects(plan.frame, state.extents);
-            effects.extend([FrameEffect::LayoutInput, FrameEffect::PaintChrome, FrameEffect::ApplyShape]);
+            effects.extend([
+                FrameEffect::LayoutInput,
+                FrameEffect::PaintChrome,
+                FrameEffect::ApplyShape,
+            ]);
             (state, effects)
         }
         FrameEvent::Snap { target } => {
@@ -587,7 +599,9 @@ pub fn reduce_owned(
                 FrameEffect::LayoutInput,
                 FrameEffect::PaintChrome,
                 FrameEffect::ApplyShape,
-                FrameEffect::SnapPreview { target: Some(target) },
+                FrameEffect::SnapPreview {
+                    target: Some(target),
+                },
             ]);
             effects.push(FrameEffect::Ungrab);
             (state, effects)
@@ -599,7 +613,13 @@ pub fn reduce_owned(
                 (state, vec![FrameEffect::Noop])
             } else {
                 state.session.cancel();
-                (state, vec![FrameEffect::Ungrab, FrameEffect::SnapPreview { target: None }])
+                (
+                    state,
+                    vec![
+                        FrameEffect::Ungrab,
+                        FrameEffect::SnapPreview { target: None },
+                    ],
+                )
             }
         }
     }
@@ -689,11 +709,16 @@ mod tests {
     const SCREEN: RootRect = RootRect::new(0, 0, 1920, 1080);
 
     fn press(source: u32, x: i32, y: i32) -> FrameEvent {
-        FrameEvent::Press { source, pointer: RootPoint::new(x, y) }
+        FrameEvent::Press {
+            source,
+            pointer: RootPoint::new(x, y),
+        }
     }
 
     fn motion(x: i32, y: i32) -> FrameEvent {
-        FrameEvent::Motion { pointer: RootPoint::new(x, y) }
+        FrameEvent::Motion {
+            pointer: RootPoint::new(x, y),
+        }
     }
 
     fn pressed(state: &ControllerState, source: u32, x: i32, y: i32) -> ControllerState {
@@ -705,7 +730,10 @@ mod tests {
     }
 
     fn release_at(x: i32, y: i32, time_ms: u32) -> FrameEvent {
-        FrameEvent::Release { pointer: RootPoint::new(x, y), time_ms }
+        FrameEvent::Release {
+            pointer: RootPoint::new(x, y),
+            time_ms,
+        }
     }
 
     fn floating_state() -> ControllerState {
@@ -998,7 +1026,18 @@ mod tests {
         assert_eq!(&children[9..12], &[72, 73, 74]);
         assert_eq!(RESIZE_ORDER.len(), 8);
         assert_eq!(CONTROL_ORDER.len(), 3);
-        let scene = plan_scene(400, 300, "app", true, None, None, false, false, true, &flamewm_skin::recipes::decoration::ChromeTokens::default());
+        let scene = plan_scene(
+            400,
+            300,
+            "app",
+            true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            &flamewm_skin::recipes::decoration::ChromeTokens::default(),
+        );
         let fx = effects_for(70, &scene);
         let kind = |e: &super::super::chrome::ChromeEffect| match e {
             super::super::chrome::ChromeEffect::Retarget { .. } => 0,
@@ -1207,7 +1246,9 @@ mod tests {
     fn resize_motion_paints_after_native_resize_not_at_the_old_size() {
         let s1 = pressed(&floating_state(), 2, 500, 400);
         let (_, effects) = reduce(&s1, motion(550, 460));
-        let at = |predicate: fn(&FrameEffect) -> bool| effects.iter().position(predicate).expect("effect");
+        let at = |predicate: fn(&FrameEffect) -> bool| {
+            effects.iter().position(predicate).expect("effect")
+        };
         let frame = at(|e| matches!(e, FrameEffect::ConfigureFrameRoot { .. }));
         let client = at(|e| matches!(e, FrameEffect::ConfigureClientLocal { .. }));
         let paint = at(|e| matches!(e, FrameEffect::PaintChrome));

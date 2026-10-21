@@ -6,7 +6,7 @@
 //! plans skin-exact values (J06 freeze) and describes effects.
 
 use flamewm_skin::palette::{Rgb, TEXT};
-use flamewm_skin::recipes::decoration::{ChromeTokens, corner_radius};
+use flamewm_skin::recipes::decoration::ChromeTokens;
 use flamewm_skin::recipes::window_chrome::WINDOW_CHROME;
 use flamewm_skin::typography::{FontWeight, Typography};
 
@@ -29,6 +29,7 @@ pub const TITLE_FONT_WEIGHT: i32 = 600;
 pub struct ChromeScene {
     pub frame_w: u32,
     pub frame_h: u32,
+    pub titlebar_height: u16,
     pub title: String,
     pub title_family: &'static str,
     pub title_size_px: u16,
@@ -70,18 +71,57 @@ pub fn plan_scene(
     floating: bool,
     tokens: &ChromeTokens,
 ) -> ChromeScene {
+    plan_scene_with_titlebar(
+        frame_w,
+        frame_h,
+        WINDOW_CHROME.metrics.titlebar,
+        title,
+        active,
+        hover,
+        pressed,
+        maximized,
+        fullscreen,
+        floating,
+        tokens,
+    )
+}
+
+/// The physical titlebar height is the same frame-extents metric passed to
+/// native child placement and ICCCM/EWMH publishing.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn plan_scene_with_titlebar(
+    frame_w: u32,
+    frame_h: u32,
+    titlebar_height: u16,
+    title: &str,
+    active: bool,
+    hover: Option<FrameControl>,
+    pressed: Option<FrameControl>,
+    maximized: bool,
+    fullscreen: bool,
+    floating: bool,
+    tokens: &ChromeTokens,
+) -> ChromeScene {
     let title_style = Typography::RWR_0_0_9.title;
     let bg = tokens.titlebar_bg;
     let text = TEXT;
-    let radius = corner_radius(floating, tokens.style);
-    let title_width = crate::chrome::title_text_width(title);
-    let title_x = crate::chrome::live_title_x(frame_w, title_width);
+    let radius =
+        super::geometry_shape::scaled_corner_radius(floating, tokens.style, titlebar_height);
+    let logical_h = u32::from(WINDOW_CHROME.metrics.titlebar);
+    let scaled = |value: u32| (value * u32::from(titlebar_height) + logical_h / 2) / logical_h;
+    let title_width = i32::try_from(scaled(crate::chrome::title_text_width(title).max(0) as u32))
+        .unwrap_or(i32::MAX);
+    let title_x = crate::chrome::live_title_x_for_height(frame_w, title_width, titlebar_height);
     ChromeScene {
         frame_w,
         frame_h,
+        titlebar_height,
         title: title.to_owned(),
         title_family: Typography::RWR_0_0_9.family,
-        title_size_px: title_style.size_px,
+        title_size_px: u16::try_from(scaled(u32::from(title_style.size_px)))
+            .unwrap_or(u16::MAX)
+            .max(1),
         title_weight: title_style.weight,
         title_color: rgb_channels(text),
         bg: rgb_channels(bg),
@@ -90,11 +130,10 @@ pub fn plan_scene(
         title_x,
         icon_present: false,
         icon: None,
-        icon_dest: Some(crate::chrome::icon_dest_rect(
-            WINDOW_CHROME.metrics.titlebar,
-        )),
-        icon_edge: WINDOW_CHROME.metrics.icon,
-        baseline: crate::chrome::title_baseline(WINDOW_CHROME.metrics.titlebar),
+        icon_dest: Some(crate::chrome::icon_dest_rect(titlebar_height)),
+        icon_edge: crate::chrome::icon_slot_for(titlebar_height),
+        baseline: (f32::from(titlebar_height) - f32::from(u16::try_from(scaled(11)).unwrap_or(11)))
+            .max(11.0),
         hover,
         pressed,
         active,
@@ -170,12 +209,12 @@ pub fn effects_for(frame_xid: u64, scene: &ChromeScene) -> Vec<ChromeEffect> {
     });
     effects.push(ChromeEffect::FillTitlebar {
         w: scene.frame_w,
-        h: u32::from(WINDOW_CHROME.metrics.titlebar),
+        h: u32::from(scene.titlebar_height),
     });
     if !scene.title.is_empty() {
         effects.push(ChromeEffect::DrawTitle {
             font: TITLE_FONT_FAMILY,
-            size_px: TITLE_FONT_SIZE_PX,
+            size_px: f32::from(scene.title_size_px),
             weight: TITLE_FONT_WEIGHT,
             x: scene.title_x,
             baseline: scene.baseline,
@@ -254,12 +293,26 @@ pub fn render(
     // headless hosts where retarget/fill already failed. Live behavior is
     // unchanged: any failure is still returned as an error.
     let retarget_result = renderer.retarget(frame_xid, scene.frame_w, scene.frame_h);
-    let titlebar_h = f32::from(WINDOW_CHROME.metrics.titlebar);
+    let titlebar_h = f32::from(scene.titlebar_height);
     // No compositor: the surface material (`surfaceColor` @ `surfaceOpacity` over the blurred
     // wallpaper behind the frame) is baked into opaque pixels and blitted. An opaque blit needs
     // no XRender, so hosts without it paint the same fill.
     let fill_result = {
-        let pixels = titlebar_fill_pixels(renderer, frame_xid, scene, titlebar_h as u32);
+        let mut pixels = titlebar_fill_pixels(renderer, frame_xid, scene, titlebar_h as u32);
+        let plates = crate::chrome::control_backplates_for(
+            scene.frame_w,
+            scene.titlebar_height,
+            scene.radius,
+            scene.hover,
+            scene.pressed,
+            &scene.tokens,
+        );
+        crate::chrome::composite_control_backplates(
+            &mut pixels,
+            scene.frame_w,
+            scene.titlebar_height,
+            &plates,
+        );
         renderer.blit_rgba(
             &pixels,
             scene.frame_w,
@@ -295,7 +348,7 @@ pub fn render(
         renderer.draw_title(
             &scene.title,
             TITLE_FONT_FAMILY,
-            TITLE_FONT_SIZE_PX,
+            f32::from(scene.title_size_px),
             TITLE_FONT_WEIGHT,
             scene.title_x,
             scene.baseline,
@@ -309,8 +362,9 @@ pub fn render(
     } else {
         Ok(())
     };
-    let controls_result = crate::chrome::control_blits_for(
+    let controls_result = crate::chrome::control_blits_for_height(
         scene.frame_w,
+        scene.titlebar_height,
         scene.maximized,
         scene.fullscreen,
         scene.hover,

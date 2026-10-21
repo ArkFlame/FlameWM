@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::network_manager::{item_string, item_strings, item_u32, unwrap_variant};
 use dbus::Message;
 use dbus::arg::messageitem::{MessageItem, MessageItemArray};
 use dbus::strings::Signature;
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 use flamewm_dbus_reactor::{BusKind, BusPump, MessageDisposition};
 use flamewm_image_core::ImageSourceFormat;
-use crate::network_manager::{item_string, item_strings, item_u32, unwrap_variant};
 
 pub const PORTAL_SERVICE: &str = "org.freedesktop.portal.Desktop";
 pub const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -102,8 +102,13 @@ impl PortalFileChooser {
         let expected_request_path = self.expected_request_path(&handle_token)?;
         self.add_response_match(&expected_request_path)?;
         let options = options(&handle_token)?;
-        let call = method_call(PORTAL_SERVICE, PORTAL_PATH, FILE_CHOOSER_INTERFACE, OPEN_FILE)?
-            .append3(parent_window.to_owned(), title.to_owned(), options);
+        let call = method_call(
+            PORTAL_SERVICE,
+            PORTAL_PATH,
+            FILE_CHOOSER_INTERFACE,
+            OPEN_FILE,
+        )?
+        .append3(parent_window.to_owned(), title.to_owned(), options);
         let reply = self.pump.send_with_reply(call, self.timeout)?;
         let request_path = one_object_path(&reply.get_items(), "portal OpenFile handle")?;
         if request_path != expected_request_path {
@@ -247,7 +252,11 @@ fn signature(value: &'static str) -> FlameResult<Signature<'static>> {
 }
 
 /// Wrap items in a D-Bus array of `signature_value`; `what` names it in the invalid error.
-fn array_item(items: Vec<MessageItem>, signature_value: &'static str, what: &str) -> FlameResult<MessageItem> {
+fn array_item(
+    items: Vec<MessageItem>,
+    signature_value: &'static str,
+    what: &str,
+) -> FlameResult<MessageItem> {
     MessageItemArray::new(items, signature(signature_value)?)
         .map(MessageItem::Array)
         .map_err(|error| FlameError::invalid(format!("{what} are invalid: {error:?}")))
@@ -255,7 +264,9 @@ fn array_item(items: Vec<MessageItem>, signature_value: &'static str, what: &str
 
 fn validate_parent_window(parent_window: &str) -> FlameResult<()> {
     if parent_window.contains('\0') {
-        return Err(FlameError::invalid("portal parent window contains a NUL byte"));
+        return Err(FlameError::invalid(
+            "portal parent window contains a NUL byte",
+        ));
     }
     Ok(())
 }
@@ -274,7 +285,9 @@ where
     A: Fn(&str) -> FlameResult<PathBuf>,
 {
     if items.len() != 2 {
-        return Err(FlameError::invalid("portal FileChooser response has invalid arguments"));
+        return Err(FlameError::invalid(
+            "portal FileChooser response has invalid arguments",
+        ));
     }
     let response = item_u32(&items[0], "portal FileChooser response code")?;
     if response == 1 {
@@ -287,7 +300,9 @@ where
         ));
     }
     let MessageItem::Dict(results) = unwrap_variant(items[1].clone()) else {
-        return Err(FlameError::invalid("portal FileChooser results are not a dictionary"));
+        return Err(FlameError::invalid(
+            "portal FileChooser results are not a dictionary",
+        ));
     };
     let mut uris = None;
     for (key, value) in results.into_vec() {
@@ -335,7 +350,11 @@ fn is_theme_archive(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(str::to_ascii_lowercase)
-        .is_some_and(|name| THEME_ARCHIVE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
+        .is_some_and(|name| {
+            THEME_ARCHIVE_SUFFIXES
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+        })
 }
 
 /// Parses a local `file://` URI (optionally `localhost`) into an absolute path.
@@ -352,7 +371,9 @@ fn local_file_uri_to_path(uri: &str) -> FlameResult<PathBuf> {
     }
     let decoded = percent_decode(&rest[slash..])?;
     if decoded.is_empty() || decoded.chars().any(char::is_control) {
-        return Err(FlameError::invalid("portal file URI contains an invalid path"));
+        return Err(FlameError::invalid(
+            "portal file URI contains an invalid path",
+        ));
     }
     let path = PathBuf::from(decoded);
     if !path.is_absolute() {
@@ -372,7 +393,9 @@ fn percent_decode(value: &str) -> FlameResult<String> {
             continue;
         }
         if index + 2 >= bytes.len() {
-            return Err(FlameError::invalid("portal file URI has an incomplete percent escape"));
+            return Err(FlameError::invalid(
+                "portal file URI has an incomplete percent escape",
+            ));
         }
         let high = hex_value(bytes[index + 1])?;
         let low = hex_value(bytes[index + 2])?;
@@ -388,7 +411,9 @@ fn hex_value(value: u8) -> FlameResult<u8> {
         b'0'..=b'9' => Ok(value - b'0'),
         b'a'..=b'f' => Ok(value - b'a' + 10),
         b'A'..=b'F' => Ok(value - b'A' + 10),
-        _ => Err(FlameError::invalid("portal file URI has an invalid percent escape")),
+        _ => Err(FlameError::invalid(
+            "portal file URI has an invalid percent escape",
+        )),
     }
 }
 
@@ -474,9 +499,9 @@ mod tests {
     #[test]
     fn cancelled_theme_source_response_is_none_without_error() {
         for folder in [false, true] {
-            let results = MessageItem::from_dict(
-                std::iter::empty::<Result<(String, MessageItem), FlameError>>(),
-            )
+            let results = MessageItem::from_dict(std::iter::empty::<
+                Result<(String, MessageItem), FlameError>,
+            >())
             .expect("empty results");
             let accept = |uri: &str| theme_source_uri_to_path(uri, folder);
             assert_eq!(
@@ -525,7 +550,8 @@ mod tests {
 
     #[test]
     fn theme_source_options_select_archive_filters_or_directory_mode() {
-        let MessageItem::Dict(archive) = theme_source_options("tok", false).expect("archive options")
+        let MessageItem::Dict(archive) =
+            theme_source_options("tok", false).expect("archive options")
         else {
             panic!("archive options must be a dictionary");
         };

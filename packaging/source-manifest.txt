@@ -31,8 +31,6 @@ lint
 package
 verify-visual
 xephyr
-@exec LICENSES/FontAwesome.txt
-@exec assets/web/FONTAWESOME_LICENSE.txt
 @exec assets/web/github.svg
 @exec assets/web/paypal.svg
 @exec scripts/prepare-ibm-plex
@@ -60,6 +58,7 @@ xephyr
 @exec tools/profile_summary.py
 @exec tools/verify_rwr_promotion.py
 @exec tools/performance_retention.py
+@exec tools/bench-flamewm-memory.py
 @exec .vendor/RustWebRender-0.0.9/verify-visual
 @exec .vendor/RustWebRender-0.0.9/doctor
 @exec .vendor/RustWebRender-0.0.9/xephyr
@@ -85,6 +84,8 @@ xephyr
 @exec xephyr
 @exec scripts/flamewm-session-wrapper
 @exec tools/flamewm_desktop_services.py
+@exec tools/flamewm-test
+@exec tools/test-bin/dbus-run-session
 @exec scripts/enable-post31-desktop-integration
 @exec scripts/apply-pass33-merge
 @exec scripts/apply-pass30-cargo-layout

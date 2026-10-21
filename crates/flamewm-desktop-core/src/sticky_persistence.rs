@@ -72,7 +72,9 @@ pub fn serialize(store: &StickyNoteStore) -> String {
 
 pub fn parse(text: &str) -> FlameResult<StickyNoteStore> {
     let mut lines = text.lines();
-    let header = lines.next().ok_or_else(|| FlameError::invalid("empty sticky state"))?;
+    let header = lines
+        .next()
+        .ok_or_else(|| FlameError::invalid("empty sticky state"))?;
     let (version, enabled) = match header {
         "v1\t0" => (1_u8, false),
         "v1\t1" => (1_u8, true),

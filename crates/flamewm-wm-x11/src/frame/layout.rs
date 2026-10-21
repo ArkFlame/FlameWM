@@ -8,7 +8,7 @@
 //! Children: 8 resize zones + 1 title-drag body + 3 control buttons.
 //! Non-overlap partition (half-open rects):
 //! corners 6x6 at outer extremes; top/bottom strips exclude corners
-//! (top additionally excludes the controls band); left/right strips start
+//! (top covers the full width between corners); left/right strips start
 //! at `titlebar_h` and exclude corners; title-drag is the titlebar body
 //! below the top-6px strip excluding control rects; controls follow the
 //! skin formula (`x = W - cw + i*38`, `w = 38`, `h = titlebar_h`) clipped
@@ -26,6 +26,28 @@ pub const CONTROLS_WIDTH: i32 = 114;
 pub const BUTTON_WIDTH: i32 = 38;
 /// Resize hit thickness.
 pub const RESIZE_T: i32 = 6;
+
+/// Convert authoritative logical control width to the physical titlebar size.
+/// The titlebar height is supplied by the frame-extents authority, so hit,
+/// glyph, fill and input children derive their scale from the same metric.
+#[must_use]
+pub fn button_width_for_titlebar(titlebar_h: i32) -> i32 {
+    (i64::from(BUTTON_WIDTH) * i64::from(titlebar_h.max(1)) + i64::from(TITLEBAR_H / 2))
+        .checked_div(i64::from(TITLEBAR_H))
+        .unwrap_or(1)
+        .clamp(1, i64::from(i32::MAX)) as i32
+}
+
+/// Keep the invisible resize targets proportional to the same titlebar scale.
+#[must_use]
+pub fn resize_thickness_for_titlebar(titlebar_h: i32) -> i32 {
+    (RESIZE_T * titlebar_h.max(1) + TITLEBAR_H / 2) / TITLEBAR_H
+}
+
+#[must_use]
+pub fn controls_width_for_titlebar(titlebar_h: i32) -> i32 {
+    button_width_for_titlebar(titlebar_h).saturating_mul(3)
+}
 
 /// Twelve frame children: 8 resize + 1 title-drag + 3 controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,11 +103,9 @@ pub fn layout_frame_children(
     let t = resize_t.max(1);
     let tb = titlebar_h.max(t + 1);
     let cw = controls_width.clamp(0, (w - 2 * t).max(0));
-    let bw = if cw == controls_width {
-        BUTTON_WIDTH
-    } else {
-        (cw / 3).max(1)
-    };
+    // Divide the clipped band by thirds without dropping remainder pixels:
+    // even the narrowest frame must keep the last Close hit cell flush right.
+    let cell_edge = |index: i32| cw.saturating_mul(index) / 3;
 
     let strip_w = (w - 2 * t).max(0);
     let mid_w = (strip_w - cw).max(0);
@@ -94,7 +114,9 @@ pub fn layout_frame_children(
     // Controls from the skin formula, then clipped below the top strip
     // when touching it (control top lives at y=0, strip owns y=0..t).
     let controls = std::array::from_fn(|i| {
-        let raw = FrameRect::new(w - cw + bw * i as i32, 0, bw, tb);
+        let begin = cell_edge(i as i32);
+        let end = cell_edge(i as i32 + 1);
+        let raw = FrameRect::new(w - cw + begin, 0, end - begin, tb);
         if raw.y < t {
             FrameRect::new(raw.x, t, raw.w, (raw.h - (t - raw.y)).max(0))
         } else {
@@ -107,7 +129,7 @@ pub fn layout_frame_children(
         top_right: FrameRect::new(w - t, 0, t, t),
         bottom_left: FrameRect::new(0, h - t, t, t),
         bottom_right: FrameRect::new(w - t, h - t, t, t),
-        top: FrameRect::new(t, 0, mid_w, t),
+        top: FrameRect::new(t, 0, strip_w, t),
         bottom: FrameRect::new(t, h - t, strip_w, t),
         left: FrameRect::new(0, tb, t, side_h),
         right: FrameRect::new(w - t, tb, t, side_h),
@@ -147,7 +169,7 @@ mod tests {
         assert_eq!(l.top_right, FrameRect::new(394, 0, 6, 6));
         assert_eq!(l.bottom_left, FrameRect::new(0, 294, 6, 6));
         assert_eq!(l.bottom_right, FrameRect::new(394, 294, 6, 6));
-        assert_eq!(l.top, FrameRect::new(6, 0, 274, 6));
+        assert_eq!(l.top, FrameRect::new(6, 0, 388, 6));
         assert_eq!(l.bottom, FrameRect::new(6, 294, 388, 6));
         assert_eq!(l.left, FrameRect::new(0, 31, 6, 263));
         assert_eq!(l.right, FrameRect::new(394, 31, 6, 263));
@@ -160,6 +182,24 @@ mod tests {
                 FrameRect::new(362, 6, 38, 25),
             ]
         );
+    }
+
+    #[test]
+    fn top_resize_strip_covers_every_pixel_above_controls() {
+        for (w, height) in [(160, 31), (400, 31), (400, 42), (800, 62)] {
+            let t = resize_thickness_for_titlebar(height);
+            let layout =
+                layout_frame_children(w, 300, height, controls_width_for_titlebar(height), t);
+            for x in 0..w {
+                for y in 0..t {
+                    let count = [layout.top_left, layout.top_right, layout.top]
+                        .into_iter()
+                        .filter(|r| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+                        .count();
+                    assert_eq!(count, 1, "x={x} y={y} w={w} height={height}");
+                }
+            }
+        }
     }
 
     #[test]

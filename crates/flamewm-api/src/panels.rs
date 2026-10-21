@@ -39,10 +39,50 @@ pub struct TaskEntry {
     pub order_index: usize,
 }
 
+/// A determinate task progress percentage, in the inclusive range 0–100.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskProgress(u8);
+
+impl TaskProgress {
+    #[must_use]
+    pub const fn new(percent: u8) -> Option<Self> {
+        if percent <= 100 {
+            Some(Self(percent))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn percent(self) -> u8 {
+        self.0
+    }
+}
+
+/// Optional progress attached to a task entry by a provider. Absence means no authoritative
+/// progress is available for that entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskProgressEntry {
+    pub task_id: TaskEntryId,
+    pub progress: TaskProgress,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelsSnapshot {
     pub revision: u64,
     pub panels: Vec<PanelSnapshot>,
     pub tasks: Vec<TaskEntry>,
     pub pinned_apps: Vec<DesktopAppId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskProgress;
+
+    #[test]
+    fn task_progress_accepts_only_percentages_between_zero_and_one_hundred() {
+        assert_eq!(TaskProgress::new(0).map(TaskProgress::percent), Some(0));
+        assert_eq!(TaskProgress::new(100).map(TaskProgress::percent), Some(100));
+        assert_eq!(TaskProgress::new(101), None);
+    }
 }

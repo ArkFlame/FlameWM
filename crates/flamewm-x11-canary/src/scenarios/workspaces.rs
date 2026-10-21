@@ -95,7 +95,9 @@ fn color_probe(bounds: ColorBounds) -> (i16, i16) {
 
 fn sticky_scan(canary: &crate::Canary, color: StickyPixel) -> Option<Option<ColorBounds>> {
     let (width, height) = canary.root_geometry();
-    let data = canary.sample(canary.root, 0, 0, width.max(1), height.max(1)).ok()?;
+    let data = canary
+        .sample(canary.root, 0, 0, width.max(1), height.max(1))
+        .ok()?;
     Some(color_bounds(&data, width, height, color))
 }
 
@@ -188,7 +190,13 @@ fn restore_workspace(canary: &crate::Canary, original: u32) -> bool {
     let switched = if original <= 1 {
         real_workspace_click(canary, original)
     } else {
-        ewmh_request(canary, canary.root, "_NET_CURRENT_DESKTOP", original, CURRENT_TIME)
+        ewmh_request(
+            canary,
+            canary.root,
+            "_NET_CURRENT_DESKTOP",
+            original,
+            CURRENT_TIME,
+        )
     };
     switched && wait_workspace(canary, original, 500) && current_workspace(canary) == Some(original)
 }
@@ -418,8 +426,8 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         && ewmh_request(canary, t.id, "_NET_WM_STATE", 1, max_atom)
         && (max_h == 0 || ewmh_request(canary, t.id, "_NET_WM_STATE", 1, max_h));
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let maxed = has_state(canary, t.id, "_NET_WM_STATE_MAXIMIZED_VERT")
-        || fills_root(canary, t.id, rw, rh);
+    let maxed =
+        has_state(canary, t.id, "_NET_WM_STATE_MAXIMIZED_VERT") || fills_root(canary, t.id, rw, rh);
     // Leg 2: snap left half via configure; verify width shrinks toward half.
     let snapped_cfg = canary
         .conn
@@ -443,7 +451,8 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let fs_atom = canary.intern("_NET_WM_STATE_FULLSCREEN").unwrap_or(0);
     let fs_sent = fs_atom != 0 && ewmh_request(canary, t.id, "_NET_WM_STATE", 1, fs_atom);
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let fs = has_state(canary, t.id, "_NET_WM_STATE_FULLSCREEN") || fills_root(canary, t.id, rw, rh);
+    let fs =
+        has_state(canary, t.id, "_NET_WM_STATE_FULLSCREEN") || fills_root(canary, t.id, rw, rh);
     // Restore: remove fullscreen + maximize.
     if fs_atom != 0 {
         let _ = ewmh_request(canary, t.id, "_NET_WM_STATE", 0, fs_atom);
@@ -478,7 +487,10 @@ pub fn run_t11(canary: &crate::Canary, args: &[String]) -> (bool, String) {
 /// visibility (viewable on current or sticky-listed), then restore.
 pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     if canary.intern("_NET_CURRENT_DESKTOP").is_none() {
-        return (false, "no EWMH workspaces path=ewmh-client-message".to_owned());
+        return (
+            false,
+            "no EWMH workspaces path=ewmh-client-message".to_owned(),
+        );
     }
     let num: u32 = canary
         .prop_u32(canary.root, "_NET_NUMBER_OF_DESKTOPS")
@@ -486,7 +498,10 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         .copied()
         .unwrap_or(1);
     if num < 2 {
-        return (false, format!("single desktop num={num} path=ewmh-client-message"));
+        return (
+            false,
+            format!("single desktop num={num} path=ewmh-client-message"),
+        );
     }
     let cycles: u32 = crate::arg(args, "--cycles")
         .and_then(|v| v.parse().ok())
@@ -498,7 +513,13 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
     let mut legs = 0;
     let mut visible = 0;
     for ws in 0..cycles {
-        let sent = ewmh_request(canary, canary.root, "_NET_CURRENT_DESKTOP", ws, CURRENT_TIME);
+        let sent = ewmh_request(
+            canary,
+            canary.root,
+            "_NET_CURRENT_DESKTOP",
+            ws,
+            CURRENT_TIME,
+        );
         std::thread::sleep(std::time::Duration::from_millis(200));
         if !sent {
             continue;
@@ -522,7 +543,13 @@ pub fn run_t12(canary: &crate::Canary, args: &[String]) -> (bool, String) {
         }
     }
     // Restore original workspace.
-    let _ = ewmh_request(canary, canary.root, "_NET_CURRENT_DESKTOP", orig, CURRENT_TIME);
+    let _ = ewmh_request(
+        canary,
+        canary.root,
+        "_NET_CURRENT_DESKTOP",
+        orig,
+        CURRENT_TIME,
+    );
     let pass = legs == cycles && visible == legs;
     (
         pass,

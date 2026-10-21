@@ -66,6 +66,15 @@ impl SurfaceCursor {
 }
 
 impl CursorThemeOwner for SurfaceCursor {
+    fn set_cursor_shadow(&mut self, enabled: bool) -> Result<(), String> {
+        unsafe { self.session.set_shadow(enabled) }?;
+        if self.define(self.kind) {
+            Ok(())
+        } else {
+            Err("cursor shadow redefine failed".into())
+        }
+    }
+
     fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String> {
         reload_then_redefine(&mut self.session, self.window, self.kind, theme)
     }
@@ -137,8 +146,8 @@ mod tests {
             fail_define: true,
             ..FakeSession::default()
         };
-        let error = reload_then_redefine(&mut session, 0x10, CursorKind::Text, "Breeze")
-            .unwrap_err();
+        let error =
+            reload_then_redefine(&mut session, 0x10, CursorKind::Text, "Breeze").unwrap_err();
         assert!(error.contains("0x10"));
     }
 }

@@ -4,14 +4,18 @@ impl<'a, C: Connection> Wm<'a, C> {
     /// Captures the root once (24-bit LSB only; otherwise the wallpaper is used) and freezes
     /// the backdrop for the dragged frame.
     pub(super) fn begin_drag_backdrop(&self, client: Window) {
-        let Some((frame, outer)) = self.clients.get(&client).map(|state| (state.frame, state.outer))
+        let Some((frame, outer)) = self
+            .clients
+            .get(&client)
+            .map(|state| (state.frame, state.outer))
         else {
             return;
         };
         // Opaque titlebars never sample the backdrop: skip the root capture entirely. Drop any
         // snapshot or kept crop this frame still holds so none outlives a skipped drag.
-        if !crate::frame::titlebar_backdrop::needs_drag_backdrop(self.decoration_tokens.titlebar_alpha)
-        {
+        if !crate::frame::titlebar_backdrop::needs_drag_backdrop(
+            self.decoration_tokens.titlebar_alpha,
+        ) {
             crate::frame::titlebar_backdrop::forget(u64::from(frame));
             return;
         }
@@ -24,7 +28,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             && self.conn.setup().image_byte_order == ImageOrder::LSB_FIRST)
             .then(|| {
                 self.conn
-                    .get_image(ImageFormat::Z_PIXMAP,
+                    .get_image(
+                        ImageFormat::Z_PIXMAP,
                         screen.root,
                         0,
                         0,
@@ -85,11 +90,14 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         // Single chrome paint path: delegate scene build to chrome_runtime
         // (J08 paint_plan seam); this owner only bridges cached rasters.
+        let titlebar_height = u16::try_from(self.extents_for(client).titlebar_h)
+            .unwrap_or(self.config.titlebar_height);
         let Some((chrome_state, identity, icon, frame)) = self.clients.get(&client).map(|state| {
             (
                 chrome_runtime::ChromeState {
                     frame_w: state.outer.width.max(1),
                     frame_h: state.outer.height.max(1),
+                    titlebar_height,
                     active: self.active.is_none_or(|current| current == client),
                     hover: state.hover_control,
                     pressed: self.pressed_control(client),
@@ -120,7 +128,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                 // A failed chrome paint leaves the frame's dark background visible
                 // during resize/maximize. Surface the error instead of silently
                 // continuing as though the titlebar was painted successfully.
-                eprintln!("FLAMEWM_CHROME_PAINT_FAILED frame={frame} client={client} reason={error}");
+                eprintln!(
+                    "FLAMEWM_CHROME_PAINT_FAILED frame={frame} client={client} reason={error}"
+                );
             }
         }
         Ok(())

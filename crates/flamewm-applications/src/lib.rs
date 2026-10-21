@@ -68,12 +68,17 @@ pub fn desktop_file_display_name(path: &Path) -> Option<String> {
     let source = fs::read_to_string(path).ok()?;
     let mut in_entry = false;
     let mut labels = std::collections::BTreeMap::new();
-    for line in source.lines().map(|line| line.trim().trim_end_matches('\r')) {
+    for line in source
+        .lines()
+        .map(|line| line.trim().trim_end_matches('\r'))
+    {
         if line.starts_with('[') && line.ends_with(']') {
             in_entry = line == "[Desktop Entry]";
             continue;
         }
-        if !in_entry || line.starts_with('#') { continue; }
+        if !in_entry || line.starts_with('#') {
+            continue;
+        }
         if let Some((key, value)) = line.split_once('=') {
             if key == "Name" || key.starts_with("Name[") && key.ends_with(']') {
                 if !value.trim().is_empty() {
@@ -84,12 +89,19 @@ pub fn desktop_file_display_name(path: &Path) -> Option<String> {
     }
     // XDG locale selection: LC_MESSAGES, then LANG; @modifier and territory
     // variants degrade to the language before the unconditional Name.
-    let locale = std::env::var("LC_MESSAGES").ok().filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("LANG").ok()).unwrap_or_default();
+    let locale = std::env::var("LC_MESSAGES")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("LANG").ok())
+        .unwrap_or_default();
     let locale = locale.split('.').next().unwrap_or("");
     let locale_no_modifier = locale.split('@').next().unwrap_or(locale);
-    let language = locale_no_modifier.split('_').next().unwrap_or(locale_no_modifier);
-    [locale, locale_no_modifier, language].into_iter()
+    let language = locale_no_modifier
+        .split('_')
+        .next()
+        .unwrap_or(locale_no_modifier);
+    [locale, locale_no_modifier, language]
+        .into_iter()
         .filter(|locale| !locale.is_empty())
         .map(|locale| format!("Name[{locale}]"))
         .find_map(|key| labels.get(&key).cloned())
@@ -435,11 +447,21 @@ fn expand_exec_with_path(
 /// KDE's own KIO opener gives Dolphin/Kate users their existing defaults and
 /// Open With chooser; XDG remains the universal fallback.
 #[must_use]
-pub fn preferred_file_opener(available: impl Fn(&str) -> bool) -> (&'static str, &'static [&'static str]) {
-    if available("kde-open6") { return ("kde-open6", &[]); }
-    if available("kde-open5") { return ("kde-open5", &[]); }
-    if available("kioclient6") { return ("kioclient6", &["exec"]); }
-    if available("kioclient5") { return ("kioclient5", &["exec"]); }
+pub fn preferred_file_opener(
+    available: impl Fn(&str) -> bool,
+) -> (&'static str, &'static [&'static str]) {
+    if available("kde-open6") {
+        return ("kde-open6", &[]);
+    }
+    if available("kde-open5") {
+        return ("kde-open5", &[]);
+    }
+    if available("kioclient6") {
+        return ("kioclient6", &["exec"]);
+    }
+    if available("kioclient5") {
+        return ("kioclient5", &["exec"]);
+    }
     ("xdg-open", &[])
 }
 
@@ -448,7 +470,9 @@ pub fn preferred_file_opener(available: impl Fn(&str) -> bool) -> (&'static str,
 /// Child processes are reaped by the application's existing canonical launcher.
 pub fn open_target(target: &std::ffi::OsStr) -> FlameResult<()> {
     let (program, prefix) = preferred_file_opener(|name| {
-        let Some(path) = std::env::var_os("PATH") else { return false; };
+        let Some(path) = std::env::var_os("PATH") else {
+            return false;
+        };
         std::env::split_paths(&path).any(|dir| {
             let binary = dir.join(name);
             binary.metadata().is_ok_and(|meta| {
@@ -468,55 +492,97 @@ pub fn open_target(target: &std::ffi::OsStr) -> FlameResult<()> {
 
 fn short_command_output(program: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
     use std::process::Stdio;
-    let mut child = Command::new(program).args(args).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
     loop {
         match child.try_wait().ok()? {
             Some(status) if status.success() => break,
             Some(_) => return None,
-            None if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(2)),
-            None => { let _ = child.kill(); let _ = child.wait(); return None; }
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(2))
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
     let output = child.wait_with_output().ok()?;
-    std::str::from_utf8(&output.stdout).ok().map(|text| text.trim().to_owned()).filter(|text| !text.is_empty())
+    std::str::from_utf8(&output.stdout)
+        .ok()
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
 }
 
 fn startup_identity_for_target(target: &std::ffi::OsStr) -> Option<(String, String, String)> {
     use std::sync::{Mutex, OnceLock};
-    static DEFAULTS: OnceLock<Mutex<std::collections::BTreeMap<String, Option<String>>>> = OnceLock::new();
+    static DEFAULTS: OnceLock<Mutex<std::collections::BTreeMap<String, Option<String>>>> =
+        OnceLock::new();
     static CATALOG: OnceLock<ApplicationCatalog> = OnceLock::new();
     let target_text = target.to_str();
     let mime = if let Some((scheme, _)) = target_text.and_then(|value| value.split_once("://")) {
-        if scheme.is_empty() || !scheme.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.')) { return None; }
+        if scheme.is_empty()
+            || !scheme
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+        {
+            return None;
+        }
         format!("x-scheme-handler/{scheme}")
     } else {
-        short_command_output("xdg-mime", &[std::ffi::OsStr::new("query"), std::ffi::OsStr::new("filetype"), target])?
+        short_command_output(
+            "xdg-mime",
+            &[
+                std::ffi::OsStr::new("query"),
+                std::ffi::OsStr::new("filetype"),
+                target,
+            ],
+        )?
     };
     let defaults = DEFAULTS.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()));
     let cached = { defaults.lock().ok()?.get(&mime).cloned() };
     let desktop_id = match cached {
         Some(id) => id,
         None => {
-            let id = short_command_output("xdg-mime", &[
-                std::ffi::OsStr::new("query"), std::ffi::OsStr::new("default"),
-                std::ffi::OsStr::new(&mime),
-            ]);
+            let id = short_command_output(
+                "xdg-mime",
+                &[
+                    std::ffi::OsStr::new("query"),
+                    std::ffi::OsStr::new("default"),
+                    std::ffi::OsStr::new(&mime),
+                ],
+            );
             defaults.lock().ok()?.insert(mime, id.clone());
             id
         }
     }?;
     let catalog = CATALOG.get_or_init(|| ApplicationCatalog::discover().unwrap_or_default());
     let entry = catalog.find(&DesktopAppId::new(desktop_id)).ok()?;
-    Some((entry.application.name.clone(),
-        if entry.application.icon_name.is_empty() { entry.application.startup_wm_class.clone() } else { entry.application.icon_name.clone() },
-        entry.application.startup_wm_class.clone()))
+    Some((
+        entry.application.name.clone(),
+        if entry.application.icon_name.is_empty() {
+            entry.application.startup_wm_class.clone()
+        } else {
+            entry.application.icon_name.clone()
+        },
+        entry.application.startup_wm_class.clone(),
+    ))
 }
 
 #[must_use]
 fn is_brave_program(program: &str) -> bool {
-    matches!(std::path::Path::new(program).file_name().and_then(|name| name.to_str()),
-        Some("brave-browser" | "brave-browser-stable" | "brave" | "brave-bin"))
+    matches!(
+        std::path::Path::new(program)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("brave-browser" | "brave-browser-stable" | "brave" | "brave-bin")
+    )
 }
 
 pub fn launch_argv(argv: &[String], options: &ApplicationLaunchOptions) -> FlameResult<()> {
@@ -524,55 +590,121 @@ pub fn launch_argv(argv: &[String], options: &ApplicationLaunchOptions) -> Flame
         .first()
         .ok_or_else(|| FlameError::invalid("empty application argv"))?;
     let mut command = Command::new(program);
+    configure_kde_theme(&mut command, program, None);
     // The regular FlameWM application launcher can start Brave directly,
     // without going through the generated .desktop compatibility override.
     // Give ONLY Brave the KDE wallet identity; making the whole session KDE
     // would activate competing KScreen/XRandR services.
-    if is_brave_program(program) && std::env::var("XDG_CURRENT_DESKTOP")
-        .is_ok_and(|desktop| desktop.split(':').any(|part| part == "FlameWM")) {
+    if is_brave_program(program)
+        && std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|desktop| desktop.split(':').any(|part| part == "FlameWM"))
+    {
         command.env("XDG_CURRENT_DESKTOP", "KDE");
     }
     command
         .args(&argv[1..])
         .args(&options.extra_args)
         .args(&options.uris);
-    let icon = std::path::Path::new(program).file_name()
-        .and_then(|value| value.to_str()).unwrap_or(program);
+    let icon = std::path::Path::new(program)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(program);
     spawn_with_startup(&mut command, program, icon, "", true)
 }
 
-fn launch_argv_for_app(argv: &[String], app: &DesktopApplication, startup_notify: Option<bool>) -> FlameResult<()> {
-    let program = argv.first().ok_or_else(|| FlameError::invalid("empty application argv"))?;
+fn launch_argv_for_app(
+    argv: &[String],
+    app: &DesktopApplication,
+    startup_notify: Option<bool>,
+) -> FlameResult<()> {
+    let program = argv
+        .first()
+        .ok_or_else(|| FlameError::invalid("empty application argv"))?;
     let mut command = Command::new(program);
-    if is_brave_program(program) && std::env::var("XDG_CURRENT_DESKTOP")
-        .is_ok_and(|desktop| desktop.split(':').any(|part| part == "FlameWM")) {
+    configure_kde_theme(&mut command, program, Some(&app.id));
+    if is_brave_program(program)
+        && std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|desktop| desktop.split(':').any(|part| part == "FlameWM"))
+    {
         command.env("XDG_CURRENT_DESKTOP", "KDE");
     }
     command.args(&argv[1..]);
-    let icon = if app.icon_name.is_empty() { &app.startup_wm_class } else { &app.icon_name };
-    spawn_with_startup(&mut command, &app.name, icon, &app.startup_wm_class, startup_notify != Some(false))
+    let icon = if app.icon_name.is_empty() {
+        &app.startup_wm_class
+    } else {
+        &app.icon_name
+    };
+    spawn_with_startup(
+        &mut command,
+        &app.name,
+        icon,
+        &app.startup_wm_class,
+        startup_notify != Some(false),
+    )
+}
+
+fn configure_kde_theme(command: &mut Command, program: &str, app_id: Option<&DesktopAppId>) {
+    if is_dolphin_application(program, app_id) {
+        // Match the KDE platform theme used when Dolphin is opened through KIO,
+        // scoped to Dolphin so FlameWM does not start KDE session services.
+        command
+            .env("XDG_CURRENT_DESKTOP", "KDE")
+            .env("KDE_FULL_SESSION", "true")
+            .env("KDE_SESSION_VERSION", "6")
+            .env("QT_QPA_PLATFORMTHEME", "KDE");
+    }
+}
+
+fn is_dolphin_application(program: &str, app_id: Option<&DesktopAppId>) -> bool {
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("dolphin"))
+        || app_id.is_some_and(|id| id.as_str().eq_ignore_ascii_case("org.kde.dolphin.desktop"))
 }
 
 /// Preserve the command intent working directory while reporting desktop utility launches.
 pub fn launch_command(program: &str, args: &[String], cwd: Option<&Path>) -> FlameResult<()> {
     let mut command = Command::new(program);
     command.args(args);
-    if let Some(cwd) = cwd { command.current_dir(cwd); }
-    let icon = std::path::Path::new(program).file_name()
-        .and_then(|value| value.to_str()).unwrap_or(program);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let icon = std::path::Path::new(program)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(program);
     spawn_with_startup(&mut command, program, icon, "", true)
 }
 
-fn spawn_with_startup(command: &mut Command, name: &str, icon: &str, wm_class: &str, enabled: bool) -> FlameResult<()> {
+fn spawn_with_startup(
+    command: &mut Command,
+    name: &str,
+    icon: &str,
+    wm_class: &str,
+    enabled: bool,
+) -> FlameResult<()> {
     let id = enabled.then(launch_feedback::new_id);
-    let sent = id.as_deref().is_some_and(|id| launch_feedback::broadcast(launch_feedback::MessageKind::New, id, name, icon, wm_class));
+    let sent = id.as_deref().is_some_and(|id| {
+        launch_feedback::broadcast(launch_feedback::MessageKind::New, id, name, icon, wm_class)
+    });
     // Never pass a stale launch ID from the parent shell to an unrelated child.
     command.env_remove("DESKTOP_STARTUP_ID");
-    if sent { command.env("DESKTOP_STARTUP_ID", id.as_deref().unwrap_or_default()); }
+    if sent {
+        command.env("DESKTOP_STARTUP_ID", id.as_deref().unwrap_or_default());
+    }
     match spawn_reaped_with_id(command, if sent { id.clone() } else { None }) {
         Ok(_) => Ok(()),
         Err(error) => {
-            if sent { let _ = launch_feedback::broadcast(launch_feedback::MessageKind::Remove, id.as_deref().unwrap_or_default(), "", "", ""); }
+            if sent {
+                let _ = launch_feedback::broadcast(
+                    launch_feedback::MessageKind::Remove,
+                    id.as_deref().unwrap_or_default(),
+                    "",
+                    "",
+                    "",
+                );
+            }
             Err(error)
         }
     }
@@ -604,7 +736,12 @@ fn spawn_reaped_with_id(command: &mut Command, startup_id: Option<String>) -> Fl
                 if !status.success() {
                     if let Some(id) = startup_id {
                         let _ = launch_feedback::broadcast(
-                            launch_feedback::MessageKind::Remove, &id, "", "", "");
+                            launch_feedback::MessageKind::Remove,
+                            &id,
+                            "",
+                            "",
+                            "",
+                        );
                     }
                 }
             }
@@ -672,7 +809,10 @@ fn parse_desktop_entry(path: &Path, id: DesktopAppId) -> FlameResult<Option<Desk
         return Ok(None);
     };
     let argv = tokenize_exec(exec)?;
-    if values.get("Name").is_none_or(|value| value.trim().is_empty()) {
+    if values
+        .get("Name")
+        .is_none_or(|value| value.trim().is_empty())
+    {
         return Ok(None);
     }
     let app = DesktopApplication {
@@ -691,7 +831,9 @@ fn parse_desktop_entry(path: &Path, id: DesktopAppId) -> FlameResult<Option<Desk
         application: app,
         path: path.to_owned(),
         exec: exec.clone(),
-        startup_notify: values.get("StartupNotify").map(|value| is_true(Some(value))),
+        startup_notify: values
+            .get("StartupNotify")
+            .map(|value| is_true(Some(value))),
     }))
 }
 
@@ -1056,6 +1198,42 @@ mod tests {
     }
 
     #[test]
+    fn dolphin_launch_sets_the_kde_platform_theme_and_other_apps_stay_untouched() {
+        let mut dolphin = Command::new("dolphin");
+        configure_kde_theme(&mut dolphin, "dolphin", None);
+        let envs: std::collections::BTreeMap<_, _> = dolphin
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            envs.get("XDG_CURRENT_DESKTOP").and_then(Option::as_deref),
+            Some("KDE")
+        );
+        assert_eq!(
+            envs.get("KDE_SESSION_VERSION").and_then(Option::as_deref),
+            Some("6")
+        );
+        assert_eq!(
+            envs.get("QT_QPA_PLATFORMTHEME").and_then(Option::as_deref),
+            Some("KDE")
+        );
+        assert!(envs.contains_key("KDE_FULL_SESSION"));
+
+        let mut konsole = Command::new("konsole");
+        configure_kde_theme(
+            &mut konsole,
+            "/usr/bin/konsole",
+            Some(&DesktopAppId::new("konsole.desktop")),
+        );
+        assert_eq!(konsole.get_envs().count(), 0);
+    }
+
+    #[test]
     fn identity_matches_dolphin_by_startup_wm_class() {
         let catalog = identity_catalog();
         let found = catalog
@@ -1064,6 +1242,15 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(found.id.as_str(), "org.kde.dolphin.desktop");
+        assert!(is_dolphin_application("/usr/bin/dolphin", None));
+        assert!(is_dolphin_application(
+            "/usr/libexec/other",
+            Some(&found.id)
+        ));
+        assert!(!is_dolphin_application(
+            "/usr/bin/konsole",
+            Some(&DesktopAppId::new("konsole.desktop"))
+        ));
         assert_eq!(found.application.id, found.id);
         assert_eq!(
             catalog
@@ -1162,16 +1349,27 @@ mod desktop_label_metadata_tests {
     use super::*;
     #[test]
     fn desktop_name_survives_an_unlaunchable_kde_only_shortcut() {
-        let file = std::env::temp_dir().join(format!("flamewm-name-{}-{}.desktop",std::process::id(), "kde"));
+        let file = std::env::temp_dir().join(format!(
+            "flamewm-name-{}-{}.desktop",
+            std::process::id(),
+            "kde"
+        ));
         std::fs::write(&file, "[Desktop Entry]\nType=Application\nOnlyShowIn=KDE;\nName=Dolphin File Manager\nExec=does-not-exist\n").unwrap();
-        assert_eq!(desktop_file_display_name(&file).as_deref(), Some("Dolphin File Manager"));
+        assert_eq!(
+            desktop_file_display_name(&file).as_deref(),
+            Some("Dolphin File Manager")
+        );
         std::fs::remove_file(file).unwrap();
     }
     #[test]
     fn ignores_desktop_actions_and_non_desktop_entry_names() {
-        let file = std::env::temp_dir().join(format!("flamewm-name-{}-{}.desktop",std::process::id(), "sections"));
+        let file = std::env::temp_dir().join(format!(
+            "flamewm-name-{}-{}.desktop",
+            std::process::id(),
+            "sections"
+        ));
         std::fs::write(&file,"[Other]\nName=Wrong\n[Desktop Entry]\nName=Correct\n[Desktop Action More]\nName=Not the icon name\n").unwrap();
-        assert_eq!(desktop_file_display_name(&file).as_deref(),Some("Correct"));
+        assert_eq!(desktop_file_display_name(&file).as_deref(), Some("Correct"));
         std::fs::remove_file(file).unwrap();
     }
 }
@@ -1190,9 +1388,18 @@ mod native_mime_open_tests {
 
     #[test]
     fn kde_default_provider_wins_without_overriding_mimeapps() {
-        assert_eq!(preferred_file_opener(|name| name == "kioclient6").0, "kioclient6");
-        assert_eq!(preferred_file_opener(|name| name == "kioclient6").1, &["exec"]);
-        assert_eq!(preferred_file_opener(|name| name == "kde-open6").0, "kde-open6");
+        assert_eq!(
+            preferred_file_opener(|name| name == "kioclient6").0,
+            "kioclient6"
+        );
+        assert_eq!(
+            preferred_file_opener(|name| name == "kioclient6").1,
+            &["exec"]
+        );
+        assert_eq!(
+            preferred_file_opener(|name| name == "kde-open6").0,
+            "kde-open6"
+        );
         assert_eq!(preferred_file_opener(|_| false).0, "xdg-open");
     }
 }

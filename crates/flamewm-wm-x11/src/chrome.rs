@@ -11,6 +11,7 @@ use flamewm_skin::recipes::window_chrome::{self as recipe, WINDOW_CHROME, Window
 pub const TITLEBAR_HEIGHT: u16 = WINDOW_CHROME.metrics.titlebar;
 /// Frame border width (no skin token; WM-owned 1px border).
 pub const FRAME_BORDER: u16 = 1;
+const MAX_CONTROL_GLYPH_EDGE: u32 = 4096;
 
 /// WM-owned view of control roles (mirrors skin WindowControlRole).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -260,7 +261,7 @@ pub fn control_glyph_raster_shared(
     material: ControlMaterial,
     look: ControlLook,
 ) -> Option<Arc<flamewm_image_core::RgbaImage>> {
-    if edge == 0 || edge > flamewm_image_core::MAX_DIMENSION {
+    if edge == 0 || edge > MAX_CONTROL_GLYPH_EDGE {
         return None;
     }
     let key = ControlGlyphKey {
@@ -277,13 +278,15 @@ pub fn control_glyph_raster_shared(
     // machine, not from the builder's CARGO_MANIFEST_DIR. This is the same
     // canonical runtime data root used by the titlebar wallpaper compositor.
     let path = crate::frame::titlebar_backdrop::packaged_root().join(role.asset_path());
-    let mut raster = match std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok())
-    {
+    let mut raster = match std::fs::read(&path).ok().and_then(|bytes| {
+        flamewm_image_core::svg::render_with_color_scheme(&bytes, edge, edge, &scheme).ok()
+    }) {
         Some(raster) => raster,
         None => {
-            eprintln!("flamewm: titlebar control asset unavailable ({}); using native vector fallback", path.display());
+            eprintln!(
+                "flamewm: titlebar control asset unavailable ({}); using native vector fallback",
+                path.display()
+            );
             fallback_control_glyph(role, edge, scheme.text)?
         }
     };
@@ -295,9 +298,9 @@ pub fn control_glyph_raster_shared(
                 paint_fill_behind(&mut raster, scheme.background, FillMask::Circle);
             }
             ButtonShape::Flat => {}
-            ButtonShape::Square => {
-                paint_fill_behind(&mut raster, scheme.background, FillMask::Square);
-            }
+            // Square style fills the whole titlebar cell in the frame paint owner.
+            // Baking a background into this 16px glyph would leave an inset pill.
+            ButtonShape::Square => {}
         }
     }
     let raster = Arc::new(raster);
@@ -310,7 +313,6 @@ pub fn control_glyph_raster_shared(
     Some(raster)
 }
 
-
 /// No native titlebar control is allowed to disappear because an icon theme or
 /// SVG decoder is unavailable on the installed machine. The normal Breeze
 /// asset remains authoritative; this bounded raster is the failure fallback.
@@ -319,7 +321,9 @@ fn fallback_control_glyph(
     edge: u32,
     rgba: [u8; 4],
 ) -> Option<flamewm_image_core::RgbaImage> {
-    if edge < 4 || edge > 128 { return None; }
+    if edge < 4 || edge > 128 {
+        return None;
+    }
     let mut pixels = vec![0_u8; (edge as usize) * (edge as usize) * 4];
     let put = |x: u32, y: u32, pixels: &mut [u8]| {
         if x < edge && y < edge {
@@ -344,8 +348,12 @@ fn fallback_control_glyph(
                 ControlRole::Restore => {
                     put(i, low + k, &mut pixels);
                     put(high.saturating_sub(k), i, &mut pixels);
-                    if i > low + stroke { put(i - stroke, high.saturating_sub(k), &mut pixels); }
-                    if i < high - stroke { put(low + stroke + k, i, &mut pixels); }
+                    if i > low + stroke {
+                        put(i - stroke, high.saturating_sub(k), &mut pixels);
+                    }
+                    if i < high - stroke {
+                        put(low + stroke + k, i, &mut pixels);
+                    }
                 }
                 ControlRole::Close => {
                     put(i, i.saturating_add(k), &mut pixels);
@@ -360,11 +368,7 @@ fn fallback_control_glyph(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FillMask {
     Circle,
-    Square,
 }
-
-/// Corner radius of the rounded-square backing, in glyph-edge pixels.
-const SQUARE_CORNER_RADIUS: f32 = 3.0;
 
 impl FillMask {
     /// Whether the pixel center `(px, py)` lies inside the mask over a `size`-square glyph edge.
@@ -374,12 +378,6 @@ impl FillMask {
                 let radius = size / 2.0;
                 let dx = px - radius;
                 let dy = py - radius;
-                dx * dx + dy * dy <= radius * radius
-            }
-            Self::Square => {
-                let radius = (size / 5.0).min(SQUARE_CORNER_RADIUS);
-                let dx = px - px.clamp(radius, size - radius);
-                let dy = py - py.clamp(radius, size - radius);
                 dx * dx + dy * dy <= radius * radius
             }
         }
@@ -473,9 +471,13 @@ fn external_drawable_delegation_target() -> &'static str {
 /// Titlebar icon slot edge for the configured titlebar height.
 #[must_use]
 pub fn icon_slot_for(titlebar_height: u16) -> u16 {
-    recipe::icon_slot_edge()
-        .min(titlebar_height.saturating_sub(4))
-        .max(recipe::ICON_SLOT_MIN)
+    let base_h = u32::from(WINDOW_CHROME.metrics.titlebar);
+    let scaled =
+        (u32::from(recipe::icon_slot_edge()) * u32::from(titlebar_height) + base_h / 2) / base_h;
+    scaled
+        .min(u32::from(titlebar_height.saturating_sub(4)))
+        .max(u32::from(recipe::ICON_SLOT_MIN))
+        .min(u32::from(u16::MAX)) as u16
 }
 
 /// Title baseline (Xft device pixels) for the configured titlebar height.
@@ -485,7 +487,7 @@ pub fn title_baseline(titlebar_height: u16) -> f32 {
 }
 
 /// Live control blit plan: one cached glyph raster per visible control,
-/// destination rects from skin `control_button_geometries`.
+/// destination rects from the native input-child geometry authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControlBlit {
     pub control: crate::frame::model::FrameControl,
@@ -497,10 +499,7 @@ pub struct ControlBlit {
     pub dest_h: f32,
 }
 
-/// Resolve the live control blits for one frame: exact skin control
-/// geometry/colors per button, glyph edge from skin
-/// `control_glyph_edge`, centered in the 38px button. Hover/pressed swap
-/// the cached glyph material; the hit target keeps its geometry.
+/// Resolve default-size control glyphs; hover/pressed never move the hit targets.
 #[must_use]
 pub fn control_blits_for(
     frame_width: u32,
@@ -510,18 +509,49 @@ pub fn control_blits_for(
     pressed: Option<crate::frame::model::FrameControl>,
     tokens: &ChromeTokens,
 ) -> Vec<ControlBlit> {
+    control_blits_for_height(
+        frame_width,
+        WINDOW_CHROME.metrics.titlebar,
+        maximized,
+        fullscreen,
+        hover,
+        pressed,
+        tokens,
+    )
+}
+
+/// Uses the same physical cells as the registered X11 input children. Glyphs
+/// remain centered independently of the edge-to-edge square background.
+#[must_use]
+pub fn control_blits_for_height(
+    frame_width: u32,
+    titlebar_height: u16,
+    maximized: bool,
+    fullscreen: bool,
+    hover: Option<crate::frame::model::FrameControl>,
+    pressed: Option<crate::frame::model::FrameControl>,
+    tokens: &ChromeTokens,
+) -> Vec<ControlBlit> {
+    use crate::frame::layout::{
+        controls_width_for_titlebar, layout_frame_children, resize_thickness_for_titlebar,
+    };
     use crate::frame::model::FrameControl;
     let policy = ControlPolicy::for_state(maximized, fullscreen);
-    let titlebar = recipe::SceneRect::new(
-        0,
-        0,
+    let titlebar_h = i32::from(titlebar_height);
+    let geometries = layout_frame_children(
         i32::try_from(frame_width).unwrap_or(i32::MAX),
-        i32::from(WINDOW_CHROME.metrics.titlebar),
-    );
-    let geometries = recipe::control_button_geometries(titlebar);
-    let glyph_edge = f32::from(WINDOW_CHROME.metrics.control_glyph_edge);
-    let button_w = f32::from(WINDOW_CHROME.metrics.button_width);
-    let button_h = f32::from(WINDOW_CHROME.metrics.titlebar);
+        titlebar_h + resize_thickness_for_titlebar(titlebar_h),
+        titlebar_h,
+        controls_width_for_titlebar(titlebar_h),
+        resize_thickness_for_titlebar(titlebar_h),
+    )
+    .controls;
+    let base_h = u32::from(WINDOW_CHROME.metrics.titlebar);
+    let glyph_edge = ((u32::from(WINDOW_CHROME.metrics.control_glyph_edge)
+        * u32::from(titlebar_height)
+        + base_h / 2)
+        / base_h)
+        .max(1);
     let controls = [
         FrameControl::Minimize,
         FrameControl::MaximizeRestore,
@@ -539,26 +569,273 @@ pub fn control_blits_for(
         };
         let Some(raster) = control_glyph_raster_shared(
             role,
-            u32::from(WINDOW_CHROME.metrics.control_glyph_edge),
+            glyph_edge
+                .min(u32::try_from(geometries[index].w.saturating_sub(2)).unwrap_or(1))
+                .max(1),
             material,
             look,
         ) else {
             continue;
         };
-        let bounds = geometries[index].bounds;
-        let dest_x = bounds.x as f32 + (button_w - glyph_edge) / 2.0;
-        let dest_y = bounds.y as f32 + (button_h - glyph_edge) / 2.0;
+        let bounds = geometries[index];
+        let edge = raster.width as f32;
+        let dest_x = bounds.x as f32 + (bounds.w as f32 - edge) / 2.0;
+        let dest_y = (f32::from(titlebar_height) - edge) / 2.0;
         blits.push(ControlBlit {
             control: *control,
             role,
             raster,
             dest_x,
             dest_y,
-            dest_w: glyph_edge,
-            dest_h: glyph_edge,
+            dest_w: edge,
+            dest_h: edge,
         });
     }
     blits
+}
+
+/// Independent radii for the four corners of a control-cell fill.
+/// Only the outer top-right of Close may inherit the window frame radius.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ControlCorners {
+    pub top_left: u16,
+    pub top_right: u16,
+    pub bottom_right: u16,
+    pub bottom_left: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ControlMaskKey {
+    w: u16,
+    h: u16,
+    corners: ControlCorners,
+}
+
+/// Coverage is cached by geometry, not color: live theme/accent edits can
+/// reuse the same AA mask and cannot leave stale cached paint behind.
+const CONTROL_MASK_CACHE_CAPACITY: usize = 64;
+fn control_mask_cache() -> &'static Mutex<HashMap<ControlMaskKey, Arc<Vec<u8>>>> {
+    static CACHE: OnceLock<Mutex<HashMap<ControlMaskKey, Arc<Vec<u8>>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Coverage of the four independently rounded corners at subpixel coordinates.
+/// The input coordinates are relative to the tile's *outer* top-left edge.
+fn inside_control_mask(x: f32, y: f32, w: f32, h: f32, corners: ControlCorners) -> bool {
+    let corner = if x < f32::from(corners.top_left) && y < f32::from(corners.top_left) {
+        Some((
+            corners.top_left,
+            f32::from(corners.top_left),
+            f32::from(corners.top_left),
+        ))
+    } else if x > w - f32::from(corners.top_right) && y < f32::from(corners.top_right) {
+        Some((
+            corners.top_right,
+            w - f32::from(corners.top_right),
+            f32::from(corners.top_right),
+        ))
+    } else if x > w - f32::from(corners.bottom_right) && y > h - f32::from(corners.bottom_right) {
+        Some((
+            corners.bottom_right,
+            w - f32::from(corners.bottom_right),
+            h - f32::from(corners.bottom_right),
+        ))
+    } else if x < f32::from(corners.bottom_left) && y > h - f32::from(corners.bottom_left) {
+        Some((
+            corners.bottom_left,
+            f32::from(corners.bottom_left),
+            h - f32::from(corners.bottom_left),
+        ))
+    } else {
+        None
+    };
+    corner.is_none_or(|(radius, cx, cy)| {
+        let dx = x - cx;
+        let dy = y - cy;
+        dx * dx + dy * dy <= f32::from(radius).powi(2)
+    })
+}
+
+fn control_mask(key: ControlMaskKey) -> Arc<Vec<u8>> {
+    if let Ok(cache) = control_mask_cache().lock() {
+        if let Some(mask) = cache.get(&key) {
+            return Arc::clone(mask);
+        }
+    }
+    // A 4x4 analytic coverage mask is generated ONLY on a cache miss, never
+    // by supersampling a full RGBA button every time its hover state changes.
+    const SAMPLES: u32 = 4;
+    let mut alpha = Vec::with_capacity(usize::from(key.w) * usize::from(key.h));
+    for y in 0..u32::from(key.h) {
+        for x in 0..u32::from(key.w) {
+            let mut covered = 0;
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let px = x as f32 + (sx as f32 + 0.5) / SAMPLES as f32;
+                    let py = y as f32 + (sy as f32 + 0.5) / SAMPLES as f32;
+                    if inside_control_mask(px, py, f32::from(key.w), f32::from(key.h), key.corners)
+                    {
+                        covered += 1;
+                    }
+                }
+            }
+            alpha.push(((covered * 255 + (SAMPLES * SAMPLES) / 2) / (SAMPLES * SAMPLES)) as u8);
+        }
+    }
+    let mask = Arc::new(alpha);
+    if let Ok(mut cache) = control_mask_cache().lock() {
+        if cache.len() >= CONTROL_MASK_CACHE_CAPACITY {
+            cache.clear();
+        }
+        cache.insert(key, Arc::clone(&mask));
+    }
+    mask
+}
+
+/// Frame-local fill geometry, with its coverage in an immutable cached mask.
+#[derive(Debug, Clone)]
+pub struct ControlBackplate {
+    pub control: crate::frame::model::FrameControl,
+    pub x: i32,
+    pub y: i32,
+    pub width: u16,
+    pub height: u16,
+    pub corners: ControlCorners,
+    pub rgb: [u8; 3],
+    pub coverage: Arc<Vec<u8>>,
+}
+
+/// Plan square-style hover/pressed fills over the *entire* titlebar cells.
+/// The input children own the clickable band below the resize strip; the
+/// visual backplate intentionally extends to y=0 so the upper seam disappears.
+#[must_use]
+pub fn control_backplates_for(
+    frame_width: u32,
+    titlebar_height: u16,
+    frame_radius: u16,
+    hover: Option<crate::frame::model::FrameControl>,
+    pressed: Option<crate::frame::model::FrameControl>,
+    tokens: &ChromeTokens,
+) -> Vec<ControlBackplate> {
+    use crate::frame::layout::{
+        controls_width_for_titlebar, layout_frame_children, resize_thickness_for_titlebar,
+    };
+    use crate::frame::model::FrameControl;
+    let h = i32::from(titlebar_height);
+    let layout = layout_frame_children(
+        i32::try_from(frame_width).unwrap_or(i32::MAX),
+        h + resize_thickness_for_titlebar(h),
+        h,
+        controls_width_for_titlebar(h),
+        resize_thickness_for_titlebar(h),
+    );
+    let controls = [
+        FrameControl::Minimize,
+        FrameControl::MaximizeRestore,
+        FrameControl::Close,
+    ];
+    let mut plates = Vec::with_capacity(3);
+    for (index, control) in controls.into_iter().enumerate() {
+        let button = tokens.buttons[index];
+        let material =
+            ControlMaterial::for_pointer(hover == Some(control), pressed == Some(control));
+        if button.shape != ButtonShape::Square || material == ControlMaterial::Rest {
+            continue;
+        }
+        let rect = layout.controls[index];
+        if rect.w <= 0 || h <= 0 {
+            continue;
+        }
+        let Ok(width) = u16::try_from(rect.w) else {
+            continue;
+        };
+        let radius = (titlebar_height / 5)
+            .max(1)
+            .min(width / 2)
+            .min(titlebar_height / 2);
+        let corners = ControlCorners {
+            top_left: 0,
+            top_right: if control == FrameControl::Close {
+                frame_radius.min(width).min(titlebar_height)
+            } else {
+                0
+            },
+            bottom_right: radius,
+            bottom_left: radius,
+        };
+        let key = ControlMaskKey {
+            w: width,
+            h: titlebar_height,
+            corners,
+        };
+        let role = match control {
+            FrameControl::Minimize => ControlRole::Minimize,
+            FrameControl::MaximizeRestore => ControlRole::Maximize,
+            FrameControl::Close => ControlRole::Close,
+        };
+        let scheme = control_glyph_scheme(
+            role,
+            material,
+            ControlLook {
+                button,
+                titlebar: tokens.titlebar_bg,
+            },
+        );
+        plates.push(ControlBackplate {
+            control,
+            x: rect.x,
+            y: 0,
+            width,
+            height: titlebar_height,
+            corners,
+            rgb: [
+                scheme.background[0],
+                scheme.background[1],
+                scheme.background[2],
+            ],
+            coverage: control_mask(key),
+        });
+    }
+    plates
+}
+
+/// Composite AA cell backgrounds into the titlebar's already-opaque,
+/// wallpaper-resolved pixels. This correctly handles transparent titlebars
+/// and still paints the same AA edges on X11 hosts without XRender.
+pub fn composite_control_backplates(
+    titlebar_pixels: &mut [u8],
+    titlebar_width: u32,
+    titlebar_height: u16,
+    plates: &[ControlBackplate],
+) {
+    for plate in plates {
+        for y in 0..usize::from(plate.height) {
+            let py = plate.y + y as i32;
+            if py < 0 || py >= i32::from(titlebar_height) {
+                continue;
+            }
+            for x in 0..usize::from(plate.width) {
+                let px = plate.x + x as i32;
+                if px < 0 || px >= i32::try_from(titlebar_width).unwrap_or(i32::MAX) {
+                    continue;
+                }
+                let coverage = u16::from(plate.coverage[y * usize::from(plate.width) + x]);
+                if coverage == 0 {
+                    continue;
+                }
+                let dest = (py as usize * titlebar_width as usize + px as usize) * 4;
+                if dest + 3 >= titlebar_pixels.len() {
+                    continue;
+                }
+                for (channel, value) in plate.rgb.into_iter().enumerate() {
+                    titlebar_pixels[dest + channel] = ((u16::from(value) * coverage
+                        + u16::from(titlebar_pixels[dest + channel]) * (255 - coverage)
+                        + 127)
+                        / 255) as u8;
+                }
+            }
+        }
+    }
 }
 
 /// Centered title origin for the live paint path using the skin
@@ -567,16 +844,27 @@ pub fn control_blits_for(
 /// 114px control strip, padded by skin `TITLE_PAD`.
 #[must_use]
 pub fn live_title_x(frame_width: u32, title_width: i32) -> f32 {
+    live_title_x_for_height(frame_width, title_width, WINDOW_CHROME.metrics.titlebar)
+}
+
+#[must_use]
+pub fn live_title_x_for_height(frame_width: u32, title_width: i32, titlebar_h: u16) -> f32 {
+    use crate::frame::layout::controls_width_for_titlebar;
     let bar_w = i32::try_from(frame_width).unwrap_or(i32::MAX);
-    let left_occupied =
-        recipe::ICON_PAD_LEFT + i32::from(recipe::icon_slot_edge()) + recipe::TITLE_PAD;
-    let right_occupied = bar_w - recipe::controls_width();
+    let scale = |value: i32| {
+        (value * i32::from(titlebar_h) + i32::from(WINDOW_CHROME.metrics.titlebar) / 2)
+            / i32::from(WINDOW_CHROME.metrics.titlebar)
+    };
+    let left_occupied = scale(recipe::ICON_PAD_LEFT)
+        + i32::from(icon_slot_for(titlebar_h))
+        + scale(recipe::TITLE_PAD);
+    let right_occupied = bar_w - controls_width_for_titlebar(i32::from(titlebar_h));
     recipe::center_title_x(
         bar_w,
         title_width,
         left_occupied,
         right_occupied,
-        recipe::TITLE_PAD,
+        scale(recipe::TITLE_PAD),
     ) as f32
 }
 
@@ -585,7 +873,8 @@ pub fn live_title_x(frame_width: u32, title_width: i32) -> f32 {
 pub fn icon_dest_rect(titlebar_height: u16) -> (f32, f32, f32) {
     let slot = f32::from(icon_slot_for(titlebar_height));
     (
-        recipe::ICON_PAD_LEFT as f32,
+        recipe::ICON_PAD_LEFT as f32 * f32::from(titlebar_height)
+            / f32::from(WINDOW_CHROME.metrics.titlebar),
         (f32::from(titlebar_height) - slot) / 2.0,
         slot,
     )
@@ -720,7 +1009,11 @@ fn wallpaper_source_from_settings(
         }
         mode => WallpaperSource::Image {
             // Anything but `custom` is the bundled default (empty path).
-            path: if mode == "custom" { text("wallpaper").to_owned() } else { String::new() },
+            path: if mode == "custom" {
+                text("wallpaper").to_owned()
+            } else {
+                String::new()
+            },
             fit: flamewm_image_core::wallpaper::parse(text("wallpaperFit")),
         },
     }
@@ -808,8 +1101,17 @@ mod tests {
     fn settings_map_to_skin_tokens_and_bad_values_fall_back() {
         let mut snapshot = SettingsSnapshot::new(1);
         let unset = chrome_tokens_from_settings(&snapshot);
-        assert!(unset.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
-        put(&mut snapshot, "titlebarButtonStyle", SettingValue::Text(String::new()));
+        assert!(
+            unset
+                .buttons
+                .iter()
+                .all(|button| button.shape == ButtonShape::Circle)
+        );
+        put(
+            &mut snapshot,
+            "titlebarButtonStyle",
+            SettingValue::Text(String::new()),
+        );
         assert!(
             chrome_tokens_from_settings(&snapshot)
                 .buttons
@@ -827,19 +1129,33 @@ mod tests {
         assert_eq!(tokens.style, DecorationStyle::Squared);
         assert_eq!(tokens.titlebar_bg, Rgb(0x202326));
         assert_eq!(tokens.titlebar_alpha, 127);
-        assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Square));
+        assert!(
+            tokens
+                .buttons
+                .iter()
+                .all(|button| button.shape == ButtonShape::Square)
+        );
         assert_eq!(tokens.buttons[2].hover, Some(Rgb(0x00ff00)));
         assert_eq!(tokens.buttons[0].glyph, None);
         put(&mut snapshot, "titlebarButtonStyle", text("bogus"));
         let tokens = chrome_tokens_from_settings(&snapshot);
-        assert!(tokens.buttons.iter().all(|button| button.shape == ButtonShape::Circle));
+        assert!(
+            tokens
+                .buttons
+                .iter()
+                .all(|button| button.shape == ButtonShape::Circle)
+        );
     }
 
     #[test]
     fn surface_opacity_maps_to_titlebar_alpha() {
         let mut snapshot = SettingsSnapshot::new(1);
         let mut alpha = |percent: u8| {
-            put(&mut snapshot, "surfaceOpacity", SettingValue::Percent(percent));
+            put(
+                &mut snapshot,
+                "surfaceOpacity",
+                SettingValue::Percent(percent),
+            );
             chrome_tokens_from_settings(&snapshot).titlebar_alpha
         };
         assert_eq!(alpha(0), 0);
@@ -852,14 +1168,21 @@ mod tests {
     #[test]
     fn titlebar_color_setting_is_ignored() {
         let mut snapshot = SettingsSnapshot::new(1);
-        put(&mut snapshot, "titlebarColor", SettingValue::Text("#202326".to_owned()));
+        put(
+            &mut snapshot,
+            "titlebarColor",
+            SettingValue::Text("#202326".to_owned()),
+        );
         let tokens = chrome_tokens_from_settings(&snapshot);
-        assert_eq!(tokens.titlebar_bg, flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB);
+        assert_eq!(
+            tokens.titlebar_bg,
+            flamewm_skin::recipes::decoration::DEFAULT_SURFACE_RGB
+        );
         assert_eq!(tokens.titlebar_alpha, 127);
     }
 
     #[test]
-    fn square_backing_is_rounded_not_sharp_and_circle_stays_round() {
+    fn square_glyph_has_no_inset_fill_circle_keeps_legacy_disk() {
         let edge = u32::from(WINDOW_CHROME.metrics.control_glyph_edge);
         let look = |shape| ControlLook {
             button: ButtonTokens {
@@ -868,31 +1191,217 @@ mod tests {
             },
             titlebar: WINDOW_CHROME.titlebar_background,
         };
-        let alpha_at = |raster: &flamewm_image_core::RgbaImage, x: u32, y: u32| {
-            raster.pixels[((y * raster.width + x) * 4 + 3) as usize]
-        };
         let square = control_glyph_raster(
             ControlRole::Close,
             edge,
             ControlMaterial::Hover,
             look(ButtonShape::Square),
         )
-        .expect("square raster");
-        let mid = edge / 2;
-        // The corner is outside the rounded mask, so a sharp (zero-radius) square would fail here.
-        assert_eq!(alpha_at(&square, 0, 0), 0);
-        // Inside the rounded corner but outside a circle: only the rounded square fills it.
-        assert_eq!(alpha_at(&square, 1, 1), 255);
-        assert_eq!(alpha_at(&square, 0, mid), 255);
+        .unwrap();
+        assert_eq!(square.pixels[((8 * edge + 1) * 4 + 3) as usize], 0);
         let circle = control_glyph_raster(
             ControlRole::Close,
             edge,
             ControlMaterial::Hover,
             look(ButtonShape::Circle),
         )
-        .expect("circle raster");
-        assert_eq!(alpha_at(&circle, 1, 1), 0);
-        assert_eq!(alpha_at(&circle, 0, mid), 255);
+        .unwrap();
+        assert_eq!(circle.pixels[((8 * edge + 1) * 4 + 3) as usize], 255);
+    }
+
+    #[test]
+    fn windows11_square_hover_coverage_at_100_135_200_percent() {
+        use crate::frame::layout::{
+            controls_width_for_titlebar, layout_frame_children, resize_thickness_for_titlebar,
+        };
+        use crate::frame::model::FrameControl;
+        for (height, radius) in [(31_u16, 12_u16), (42, 16), (62, 24)] {
+            for decoration in [DecorationStyle::Rounded, DecorationStyle::Squared] {
+                let mut tokens = ChromeTokens {
+                    style: decoration,
+                    ..Default::default()
+                };
+                for button in &mut tokens.buttons {
+                    button.shape = ButtonShape::Square;
+                }
+                let full = i32::from(height);
+                let cells = layout_frame_children(
+                    600,
+                    400,
+                    full,
+                    controls_width_for_titlebar(full),
+                    resize_thickness_for_titlebar(full),
+                )
+                .controls;
+                for (index, control) in [
+                    FrameControl::Minimize,
+                    FrameControl::MaximizeRestore,
+                    FrameControl::Close,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let outer_radius = if decoration == DecorationStyle::Rounded {
+                        radius
+                    } else {
+                        0
+                    };
+                    let plates = control_backplates_for(
+                        600,
+                        height,
+                        outer_radius,
+                        Some(control),
+                        None,
+                        &tokens,
+                    );
+                    assert_eq!(plates.len(), 1);
+                    let plate = &plates[0];
+                    assert_eq!(plate.control, control);
+                    assert_eq!(plate.x, cells[index].x);
+                    assert_eq!(
+                        plate.x + i32::from(plate.width),
+                        cells[index].x + cells[index].w
+                    );
+                    assert_eq!(plate.y, 0);
+                    assert_eq!(plate.height, height);
+                    assert_eq!(plate.corners.top_left, 0);
+                    assert_eq!(
+                        plate.corners.top_right,
+                        if control == FrameControl::Close {
+                            outer_radius
+                        } else {
+                            0
+                        }
+                    );
+                    assert_eq!(plate.corners.bottom_right, plate.corners.bottom_left);
+                    assert!(plate.corners.bottom_right > 0);
+                    let at = |x: usize, y: usize| plate.coverage[y * usize::from(plate.width) + x];
+                    let w = usize::from(plate.width);
+                    let h = usize::from(height);
+                    assert_eq!(at(0, 0), 255, "top left is square");
+                    assert_eq!(at(w / 2, 0), 255, "top edge is full");
+                    assert_eq!(at(w / 2, h - 1), 255, "bottom edge between curves is full");
+                    assert_eq!(at(0, h - 1), 0, "bottom-left curve cuts the corner");
+                    assert_eq!(at(w - 1, h - 1), 0, "bottom-right curve cuts the corner");
+                    assert_eq!(
+                        at(w - 1, 0),
+                        if control == FrameControl::Close && outer_radius > 0 {
+                            0
+                        } else {
+                            255
+                        }
+                    );
+                    assert!(
+                        plate.coverage.iter().any(|&a| a > 0 && a < 255),
+                        "curve requires antialiasing"
+                    );
+                    assert_eq!(
+                        plate.rgb,
+                        if control == FrameControl::Close {
+                            [0xe8, 0x11, 0x23]
+                        } else {
+                            [0xf1, 0xf2, 0xf3]
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn frame_backplates_blend_over_wallpaper_and_leave_adjacent_pixels_unchanged() {
+        use crate::frame::model::FrameControl;
+        let mut tokens = ChromeTokens::default();
+        tokens.buttons[2].shape = ButtonShape::Square;
+        let plates = control_backplates_for(400, 31, 12, Some(FrameControl::Close), None, &tokens);
+        let mut pixels = vec![30, 40, 50, 255].repeat(400 * 31);
+        composite_control_backplates(&mut pixels, 400, 31, &plates);
+        let pixel = |x: usize, y: usize| &pixels[(y * 400 + x) * 4..(y * 400 + x) * 4 + 4];
+        assert_eq!(
+            pixel(361, 15),
+            &[30, 40, 50, 255],
+            "adjacent maximize cell untouched"
+        );
+        assert_eq!(
+            pixel(362, 15),
+            &[0xe8, 0x11, 0x23, 255],
+            "close starts at exact cell boundary"
+        );
+        assert_eq!(
+            pixel(380, 30),
+            &[0xe8, 0x11, 0x23, 255],
+            "bottom edge filled"
+        );
+        assert_eq!(
+            pixel(399, 0),
+            &[30, 40, 50, 255],
+            "outer rounded corner clipped"
+        );
+        assert_eq!(
+            pixel(399, 15),
+            &[0xe8, 0x11, 0x23, 255],
+            "right edge filled below outer corner"
+        );
+        assert!(
+            pixels.chunks_exact(4).all(|p| p[3] == 255),
+            "opaque wallpaper composite keeps opaque alpha"
+        );
+        let mut clean = vec![30, 40, 50, 255].repeat(400 * 31);
+        composite_control_backplates(
+            &mut clean,
+            400,
+            31,
+            &control_backplates_for(400, 31, 12, None, None, &tokens),
+        );
+        assert!(clean.chunks_exact(4).all(|p| p == [30, 40, 50, 255]));
+    }
+
+    #[test]
+    fn hot_button_settings_update_color_and_reuse_geometry_cache() {
+        use crate::frame::model::FrameControl;
+        let mut tokens = ChromeTokens::default();
+        tokens.buttons[0].shape = ButtonShape::Square;
+        let a = control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens);
+        tokens.buttons[0].hover = Some(Rgb(0x224466));
+        let b = control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens);
+        assert_eq!(b[0].rgb, [0x22, 0x44, 0x66]);
+        assert!(Arc::ptr_eq(&a[0].coverage, &b[0].coverage));
+        tokens.buttons[0].pressed = Some(Rgb(0x102030));
+        let pressed =
+            control_backplates_for(400, 31, 12, None, Some(FrameControl::Minimize), &tokens);
+        assert_eq!(pressed[0].rgb, [0x10, 0x20, 0x30]);
+        tokens.buttons[0].shape = ButtonShape::Circle;
+        assert!(
+            control_backplates_for(400, 31, 12, Some(FrameControl::Minimize), None, &tokens)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn narrow_frame_backplates_tile_without_leaking_beyond_frame() {
+        use crate::frame::model::FrameControl;
+        let mut tokens = ChromeTokens::default();
+        for button in &mut tokens.buttons {
+            button.shape = ButtonShape::Square;
+        }
+        for width in [100_u32, 160, 400] {
+            let plates: Vec<_> = [
+                FrameControl::Minimize,
+                FrameControl::MaximizeRestore,
+                FrameControl::Close,
+            ]
+            .into_iter()
+            .flat_map(|control| control_backplates_for(width, 31, 12, Some(control), None, &tokens))
+            .collect();
+            assert_eq!(plates.len(), 3);
+            for pair in plates.windows(2) {
+                assert_eq!(pair[0].x + i32::from(pair[0].width), pair[1].x);
+            }
+            assert_eq!(plates[2].x + i32::from(plates[2].width), width as i32);
+            let mut background = vec![42_u8, 42, 42, 255].repeat(width as usize * 31);
+            composite_control_backplates(&mut background, width, 31, &plates);
+            assert_eq!(background.len(), width as usize * 31 * 4);
+        }
     }
 
     #[test]
@@ -956,7 +1465,11 @@ mod tests {
     fn decoration_setting_parses_rounded_squared_and_legacy_ios() {
         let style_of = |value: &str| {
             let mut snapshot = SettingsSnapshot::new(1);
-            put(&mut snapshot, "decoration", SettingValue::Text(value.to_owned()));
+            put(
+                &mut snapshot,
+                "decoration",
+                SettingValue::Text(value.to_owned()),
+            );
             chrome_tokens_from_settings(&snapshot).style
         };
         assert_eq!(style_of("ios"), DecorationStyle::Rounded);
@@ -1006,8 +1519,14 @@ mod tests {
 
     #[test]
     fn installed_control_fallback_is_visible_for_every_role() {
-        for role in [ControlRole::Minimize, ControlRole::Maximize, ControlRole::Restore, ControlRole::Close] {
-            let raster = fallback_control_glyph(role, 16, [242, 242, 242, 255]).expect("native fallback");
+        for role in [
+            ControlRole::Minimize,
+            ControlRole::Maximize,
+            ControlRole::Restore,
+            ControlRole::Close,
+        ] {
+            let raster =
+                fallback_control_glyph(role, 16, [242, 242, 242, 255]).expect("native fallback");
             assert_eq!((raster.width, raster.height), (16, 16));
             assert!(raster.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
         }

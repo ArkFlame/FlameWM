@@ -23,7 +23,10 @@ pub fn format_clock(hour: u8, minute: u8, format: ClockFormat) -> String {
     match format {
         ClockFormat::H24 => format!("{hour:02}:{minute:02}"),
         ClockFormat::H12 => {
-            let display = match hour % 12 { 0 => 12, value => value };
+            let display = match hour % 12 {
+                0 => 12,
+                value => value,
+            };
             let suffix = if hour < 12 { "AM" } else { "PM" };
             format!("{display}:{minute:02} {suffix}")
         }
@@ -31,11 +34,27 @@ pub fn format_clock(hour: u8, minute: u8, format: ClockFormat) -> String {
 }
 
 const WEEKDAYS: [&str; 7] = [
-    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
 ];
 const MONTHS: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September",
-    "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 /// Formats a Gregorian date as e.g. "Monday, 12 October 2026".

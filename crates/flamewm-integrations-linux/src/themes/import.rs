@@ -101,7 +101,12 @@ pub fn install_theme(
     // An extracted folder is itself the theme, so its name is the fallback id.
     let folder_name = source
         .is_dir()
-        .then(|| source.file_name().and_then(|n| n.to_str()).map(str::to_owned))
+        .then(|| {
+            source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned)
+        })
         .flatten();
     let plan = build_plan(raw, options.id.as_deref(), folder_name.as_deref(), cancel)?;
     let dest = icons_dir.join(&plan.id);
@@ -112,10 +117,22 @@ pub fn install_theme(
     fs::create_dir_all(icons_dir)?;
     // Best effort: a failed sweep must not block the import.
     let _ = sweep_stale(icons_dir, STALE_AGE);
-    let staging = icons_dir.join(format!(".flamewm-staging-{}-{}", std::process::id(), stamp()));
+    let staging = icons_dir.join(format!(
+        ".flamewm-staging-{}-{}",
+        std::process::id(),
+        stamp()
+    ));
     fs::create_dir(&staging)?;
-    let outcome = write_plan(&staging, &plan.entries, cancel)
-        .and_then(|()| commit(&staging, &dest, icons_dir, &plan.id, options.overwrite, cancel));
+    let outcome = write_plan(&staging, &plan.entries, cancel).and_then(|()| {
+        commit(
+            &staging,
+            &dest,
+            icons_dir,
+            &plan.id,
+            options.overwrite,
+            cancel,
+        )
+    });
     if outcome.is_err() {
         let _ = remove_entry(&staging);
     }
@@ -195,7 +212,11 @@ fn commit(
     if !overwrite {
         return Err(ImportError::IdCollision(id.to_owned()));
     }
-    let backup = icons_dir.join(format!(".flamewm-replaced-{}-{}", std::process::id(), stamp()));
+    let backup = icons_dir.join(format!(
+        ".flamewm-replaced-{}-{}",
+        std::process::id(),
+        stamp()
+    ));
     fs::rename(dest, &backup)?;
     if let Err(err) = fs::rename(staging, dest) {
         let _ = fs::rename(&backup, dest);
@@ -226,7 +247,10 @@ fn write_plan(
         match kind {
             PlanKind::Dir => fs::create_dir_all(&path)?,
             PlanKind::File(data) => {
-                let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)?;
                 file.write_all(data)?;
             }
             PlanKind::Symlink(target) => symlink(target, &path)?,
@@ -243,7 +267,8 @@ fn load_source(source: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, Impo
     let name = source.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         let file = File::open(source)?;
-        let archive_bytes = archive::read_decoded(flate2::read::GzDecoder::new(file), cancel, "gzip")?;
+        let archive_bytes =
+            archive::read_decoded(flate2::read::GzDecoder::new(file), cancel, "gzip")?;
         return archive::parse(&archive_bytes, MAX_ENTRIES, cancel);
     }
     if name.ends_with(".tar.xz") || name.ends_with(".txz") {
@@ -255,7 +280,8 @@ fn load_source(source: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, Impo
 fn walk_folder(root: &Path, cancel: &AtomicBool) -> Result<Vec<RawEntry>, ImportError> {
     let mut out: Vec<RawEntry> = Vec::new();
     let mut total: u64 = 0;
-    let mut stack: Vec<(std::path::PathBuf, Vec<u8>, usize)> = vec![(root.to_path_buf(), Vec::new(), 0)];
+    let mut stack: Vec<(std::path::PathBuf, Vec<u8>, usize)> =
+        vec![(root.to_path_buf(), Vec::new(), 0)];
     while let Some((dir, prefix, depth)) = stack.pop() {
         for item in fs::read_dir(&dir)? {
             check_cancel(cancel)?;
@@ -323,7 +349,9 @@ fn sanitize_path(bytes: &[u8]) -> Result<Option<String>, ImportError> {
     for part in text.split('/') {
         match part {
             "" | "." => {}
-            p if p == ".." || p.contains('\0') => return Err(ImportError::UnsafePath(text.to_owned())),
+            p if p == ".." || p.contains('\0') => {
+                return Err(ImportError::UnsafePath(text.to_owned()));
+            }
             p => parts.push(p),
         }
     }
@@ -372,7 +400,12 @@ fn validate_id(id: &str) -> Result<(), ImportError> {
 
 /// Follow a symlink target lexically, resolving intermediate links inside the
 /// plan. Every step must stay inside `root`. `None` means it escapes or loops.
-fn resolve_link(files: &BTreeMap<String, PlanKind>, root: &str, link: &str, target: &str) -> Option<()> {
+fn resolve_link(
+    files: &BTreeMap<String, PlanKind>,
+    root: &str,
+    link: &str,
+    target: &str,
+) -> Option<()> {
     if target.starts_with('/') {
         return None;
     }
@@ -427,7 +460,9 @@ fn build_plan(
                 sanitize_path(&target)?.ok_or_else(|| ImportError::UnsafePath(rel.clone()))?,
             ),
             RawKind::Other(code) => {
-                return Err(ImportError::UnsupportedEntry(format!("{rel} (type {code})")));
+                return Err(ImportError::UnsupportedEntry(format!(
+                    "{rel} (type {code})"
+                )));
             }
         };
         if files.insert(rel.clone(), kind).is_some() {
@@ -445,7 +480,9 @@ fn build_plan(
                 .get(&key[..idx])
                 .is_some_and(|kind| !matches!(kind, PlanKind::Dir))
             {
-                return Err(ImportError::Corrupt(format!("{key} is below a non-directory")));
+                return Err(ImportError::Corrupt(format!(
+                    "{key} is below a non-directory"
+                )));
             }
         }
     }
@@ -543,9 +580,11 @@ fn build_plan(
             key[root.len() + 1..].to_owned()
         };
         let kind = match kind {
-            PlanKind::HardLink(src) => {
-                PlanKind::HardLink(if root.is_empty() { src } else { src[root.len() + 1..].to_owned() })
-            }
+            PlanKind::HardLink(src) => PlanKind::HardLink(if root.is_empty() {
+                src
+            } else {
+                src[root.len() + 1..].to_owned()
+            }),
             other => other,
         };
         entries.push((rel, kind));
@@ -571,18 +610,35 @@ mod tests {
 
     fn age_dir(path: &Path, age: Duration) {
         let when = SystemTime::now() - age;
-        fs::File::open(path).and_then(|f| f.set_modified(when)).expect("set mtime");
+        fs::File::open(path)
+            .and_then(|f| f.set_modified(when))
+            .expect("set mtime");
     }
 
     #[test]
     fn stale_staging_and_replaced_dirs_are_swept_but_fresh_and_foreign_entries_stay() {
         let icons = scratch("sweep");
-        let stale_staging = icons.join(format!("{}1-2", std::str::from_utf8(STAGING_PREFIX).unwrap()));
-        let stale_replaced = icons.join(format!("{}1-2", std::str::from_utf8(REPLACED_PREFIX).unwrap()));
-        let fresh_staging = icons.join(format!("{}9-9", std::str::from_utf8(STAGING_PREFIX).unwrap()));
+        let stale_staging = icons.join(format!(
+            "{}1-2",
+            std::str::from_utf8(STAGING_PREFIX).unwrap()
+        ));
+        let stale_replaced = icons.join(format!(
+            "{}1-2",
+            std::str::from_utf8(REPLACED_PREFIX).unwrap()
+        ));
+        let fresh_staging = icons.join(format!(
+            "{}9-9",
+            std::str::from_utf8(STAGING_PREFIX).unwrap()
+        ));
         let theme = icons.join("Adwaita");
         let foreign = icons.join(".flamewm-other-1");
-        for dir in [&stale_staging, &stale_replaced, &fresh_staging, &theme, &foreign] {
+        for dir in [
+            &stale_staging,
+            &stale_replaced,
+            &fresh_staging,
+            &theme,
+            &foreign,
+        ] {
             fs::create_dir_all(dir.join("keep")).expect("dir");
         }
         age_dir(&stale_staging, STALE_AGE * 2);
@@ -594,7 +650,10 @@ mod tests {
 
         assert!(!stale_staging.exists(), "stale staging dir must be swept");
         assert!(!stale_replaced.exists(), "stale replaced dir must be swept");
-        assert!(fresh_staging.exists(), "fresh staging dir may belong to a live import");
+        assert!(
+            fresh_staging.exists(),
+            "fresh staging dir may belong to a live import"
+        );
         assert!(theme.exists(), "installed themes are never swept");
         assert!(foreign.exists(), "only the exact prefixes are swept");
         let _ = fs::remove_dir_all(&icons);
@@ -605,13 +664,19 @@ mod tests {
         let icons = scratch("sweep-link");
         let outside = scratch("sweep-link-target");
         fs::write(outside.join("precious"), b"keep").expect("target file");
-        let link = icons.join(format!("{}3-4", std::str::from_utf8(STAGING_PREFIX).unwrap()));
+        let link = icons.join(format!(
+            "{}3-4",
+            std::str::from_utf8(STAGING_PREFIX).unwrap()
+        ));
         symlink(&outside, &link).expect("symlink");
         age_dir(&outside, STALE_AGE * 2);
 
         sweep_stale(&icons, STALE_AGE).expect("sweep");
 
-        assert!(outside.join("precious").exists(), "sweep must not follow the symlink");
+        assert!(
+            outside.join("precious").exists(),
+            "sweep must not follow the symlink"
+        );
         let _ = fs::remove_dir_all(&icons);
         let _ = fs::remove_dir_all(&outside);
     }

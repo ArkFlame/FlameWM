@@ -10,7 +10,9 @@
 
 use crate::frame::coords::{ClientLocalRect, RootRect};
 use crate::frame::geometry::{FrameExtents, frame_to_client_local};
-use crate::frame::layout::{CONTROLS_WIDTH, RESIZE_T, layout_frame_children};
+use crate::frame::layout::{
+    controls_width_for_titlebar, layout_frame_children, resize_thickness_for_titlebar,
+};
 use crate::frame::resources::FrameResources;
 
 /// Twelve input-child XIDs in `manage` order: 8 resize, title-drag, 3 controls.
@@ -101,8 +103,8 @@ pub fn input_child_placements(
         frame_w.max(1),
         frame_h.max(1),
         titlebar_h,
-        CONTROLS_WIDTH,
-        RESIZE_T,
+        controls_width_for_titlebar(titlebar_h),
+        resize_thickness_for_titlebar(titlebar_h),
     );
     let mut rects = layout.resize_rects().to_vec();
     rects.push(layout.title_drag);

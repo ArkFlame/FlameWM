@@ -41,8 +41,8 @@ fn t10_settings_snapshot_changed_projects_payload_without_fetch_or_rescan() {
         "settings snapshot signal must be admitted by the desktop subscription"
     );
     assert!(
-        callback.contains("snapshot.values"),
-        "settings projection must consume the delivered snapshot payload"
+        callback.contains("state.settings = snapshot"),
+        "settings callback must retain the delivered snapshot for projection"
     );
     assert!(
         callback.contains("settings_visual_dirty"),
@@ -81,6 +81,8 @@ fn t10_settings_projection_applies_sticky_selection_and_wallpaper_together() {
         "wallpaper",
         "stickyNotesEnabled",
         "DesktopSelectionFillOpacity",
+        "DesktopEntryScalePercent",
+        "sync_document",
     ] {
         assert!(
             projection.contains(marker),

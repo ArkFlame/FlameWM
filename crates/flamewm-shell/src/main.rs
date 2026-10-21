@@ -13,15 +13,179 @@ use std::time::Duration;
 use flamewm_api::ports::FdEvents;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
 use flamewm_control_wire::ControlSignal;
-use flamewm_dbus_reactor::BusKind;
+use flamewm_dbus_reactor::{BusKind, BusWatch};
 use flamewm_reactor::{Reactor, SystemWallClock, WallClockSource};
 use flamewm_shell::async_projection;
 use flamewm_shell::projection;
 use flamewm_shell::start;
 use flamewm_shell::{ShellSnapshot, ShellSurfaces};
-use flamewm_ui_x11::{run_surface_runtime_with_reactor_access, SurfaceEvent, SurfaceRuntime};
+use flamewm_ui_x11::{
+    decode_document, run_surface_runtime_with_reactor_access, SurfaceConfig, SurfaceEvent,
+    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiDocumentAccess, UiTemplate,
+};
 
 use app::ShellLoop;
+
+const NOTIFICATION_ARTIFACT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-notification.rwr"));
+const NOTIFICATION_WIDTH: u32 = 360;
+const NOTIFICATION_HEIGHT: u32 = 148;
+
+struct NotificationHost {
+    provider: flamewm_integrations_linux::notifications::NotificationProvider,
+    surface: SurfaceHandle,
+    visible: Option<flamewm_integrations_linux::notifications::NotificationView>,
+}
+
+impl NotificationHost {
+    fn connect(
+        runtime: &mut SurfaceRuntime,
+        snapshot: &ShellSnapshot,
+    ) -> Result<Option<Self>, String> {
+        let mut provider =
+            flamewm_integrations_linux::notifications::NotificationProvider::connect()
+                .map_err(|error| error.message)?;
+        if !provider.start().map_err(|error| error.message)? {
+            return Ok(None);
+        }
+        let Some(output) = snapshot
+            .displays
+            .outputs
+            .iter()
+            .find(|output| output.connected)
+        else {
+            let _ = provider.stop();
+            return Ok(None);
+        };
+        let x = output
+            .geometry
+            .x
+            .saturating_add(i32::try_from(output.geometry.width).unwrap_or(i32::MAX))
+            .saturating_sub(i32::try_from(NOTIFICATION_WIDTH).unwrap_or(i32::MAX))
+            .saturating_sub(16);
+        let y = output.geometry.y.saturating_add(16);
+        let document = decode_document(NOTIFICATION_ARTIFACT)
+            .map_err(|error| format!("decode notification UI: {error:?}"))?;
+        let surface = runtime
+            .create_surface(
+                UiTemplate::new(document),
+                SurfaceConfig {
+                    width: NOTIFICATION_WIDTH,
+                    height: NOTIFICATION_HEIGHT,
+                    title: "FlameWM notification".to_owned(),
+                    role: SurfaceRole::Overlay,
+                    input: SurfaceInputMode::Interactive,
+                    initially_visible: false,
+                    x,
+                    y,
+                },
+            )
+            .map_err(|error| format!("create notification surface: {error:?}"))?;
+        Ok(Some(Self {
+            provider,
+            surface,
+            visible: None,
+        }))
+    }
+
+    fn watch(&self) -> BusWatch {
+        self.provider.watch()
+    }
+
+    fn on_ready(&mut self) -> Result<(), String> {
+        self.provider
+            .on_ready()
+            .map(|_| ())
+            .map_err(|error| error.message)
+    }
+
+    fn handle_event(&mut self, event: &SurfaceEvent, runtime: &mut SurfaceRuntime) -> bool {
+        if event.surface != self.surface
+            || event.action.action != "notification.dismiss"
+            || event.action.phase != flamewm_ui_x11::ActionPhase::Release
+            || !event.action.inside
+        {
+            return false;
+        }
+        if let Some(notification) = &self.visible {
+            if let Err(error) = self.provider.dismiss(notification.id) {
+                eprintln!(
+                    "flamewm-shell: notification dismiss failed: {}",
+                    error.message
+                );
+            }
+        }
+        if let Err(error) = self.tick(runtime, None) {
+            eprintln!("flamewm-shell: notification update failed: {error}");
+        }
+        true
+    }
+
+    fn tick(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        wake: Option<&flamewm_reactor::WakeDeadline>,
+    ) -> Result<(), String> {
+        self.provider
+            .expire(std::time::Instant::now())
+            .map_err(|error| error.message)?;
+        let _ = self.provider.drain_ui_updates();
+        let next = self.provider.active().into_iter().last();
+        if self.visible == next {
+            if let Some(deadline) = self.provider.next_deadline() {
+                if let Some(wake) = wake {
+                    wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
+                }
+            }
+            return Ok(());
+        }
+        self.visible = next.clone();
+        if let Some(notification) = next {
+            runtime
+                .with_document(self.surface, |document| {
+                    document.text("notification-app", display_text(&notification.app_name, 80))?;
+                    document.text(
+                        "notification-summary",
+                        display_text(&notification.summary, 120),
+                    )?;
+                    document.text("notification-body", display_text(&notification.body, 500))?;
+                    document.visible("notification-progress", notification.progress.is_some())?;
+                    if let Some(progress) = notification.progress {
+                        document.size(
+                            "notification-progress-fill",
+                            3.32 * f32::from(progress),
+                            4.0,
+                        )?;
+                    }
+                    Ok(())
+                })
+                .map_err(|error| format!("project notification: {error:?}"))?;
+            runtime
+                .show(self.surface)
+                .map_err(|error| format!("show notification: {error:?}"))?;
+        } else {
+            runtime
+                .hide(self.surface)
+                .map_err(|error| format!("hide notification: {error:?}"))?;
+        }
+        if let Some(deadline) = self.provider.next_deadline() {
+            if let Some(wake) = wake {
+                wake.set(Some(wake.get().map_or(deadline, |old| old.min(deadline))));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn display_text(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let text: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{text}…")
+    } else {
+        text
+    }
+}
 
 fn main() {
     // J07 role branching at process entry: `--quick-control-host` runs the
@@ -69,7 +233,10 @@ fn execute() -> Result<(), String> {
             None
         }
         Err(error) => {
-            eprintln!("flamewm-shell: GetSettings failed (nonfatal): {}", error.message);
+            eprintln!(
+                "flamewm-shell: GetSettings failed (nonfatal): {}",
+                error.message
+            );
             None
         }
     };
@@ -121,6 +288,14 @@ fn execute() -> Result<(), String> {
         Ok(observer) => Some(Rc::new(RefCell::new(observer))),
         Err(error) => {
             eprintln!("flamewm-shell: launch feedback disabled: {error}");
+            None
+        }
+    };
+    let notifications = match NotificationHost::connect(&mut runtime, &snapshot) {
+        Ok(Some(host)) => Some(Rc::new(RefCell::new(host))),
+        Ok(None) => None,
+        Err(error) => {
+            eprintln!("flamewm-shell: native notifications disabled: {error}");
             None
         }
     };
@@ -186,6 +361,30 @@ fn execute() -> Result<(), String> {
     // J07 parent: start the helper asynchronously after panel show. The
     // parent never blocks on the helper; spawn failure is nonfatal.
     state.borrow_mut().start_helper_after_panel();
+    if let Some(watch) = state.borrow_mut().start_job_view_provider() {
+        let job_state = Rc::clone(&state);
+        reactor
+            .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+                job_state.borrow_mut().job_view_ready();
+                flamewm_reactor::FdAction::Continue
+            })
+            .map_err(|error| format!("register KIO job progress source: {error}"))?;
+    }
+    if let Some(host) = notifications.as_ref() {
+        let watch = host.borrow().watch();
+        let notification_state = Rc::clone(host);
+        reactor
+            .register_raw_fd_with_action(watch.fd, signal_interest(watch.events), move |_, _| {
+                match notification_state.borrow_mut().on_ready() {
+                    Ok(()) => flamewm_reactor::FdAction::Continue,
+                    Err(error) => {
+                        eprintln!("flamewm-shell: notification D-Bus source failed: {error}");
+                        flamewm_reactor::FdAction::Remove
+                    }
+                }
+            })
+            .map_err(|error| format!("register notification source: {error}"))?;
+    }
     let event_state = Rc::clone(&state);
     let tick_state = Rc::clone(&state);
     let signal_state = Rc::clone(&state);
@@ -213,15 +412,17 @@ fn execute() -> Result<(), String> {
     if let Some(observer) = badge.as_ref() {
         let observer = Rc::clone(observer);
         let fd = observer.borrow().fd();
-        reactor.register_raw_fd_with_action(fd, calloop::Interest::READ, move |_, _| {
-            match observer.borrow_mut().on_ready() {
-                Ok(()) => flamewm_reactor::FdAction::Continue,
-                Err(error) => {
-                    eprintln!("flamewm-shell: launch notification observer failed: {error}");
-                    flamewm_reactor::FdAction::Remove
+        reactor
+            .register_raw_fd_with_action(fd, calloop::Interest::READ, move |_, _| {
+                match observer.borrow_mut().on_ready() {
+                    Ok(()) => flamewm_reactor::FdAction::Continue,
+                    Err(error) => {
+                        eprintln!("flamewm-shell: launch notification observer failed: {error}");
+                        flamewm_reactor::FdAction::Remove
+                    }
                 }
-            }
-        }).map_err(|error| format!("register launch observer: {error}"))?;
+            })
+            .map_err(|error| format!("register launch observer: {error}"))?;
     }
     // Volume OSD and weather: the tick publishes their deadlines to the reactor wake slot.
     state.borrow_mut().attach_wake(reactor.wake_deadline());
@@ -255,7 +456,19 @@ fn execute() -> Result<(), String> {
     run_surface_runtime_with_reactor_access(
         &mut runtime,
         &mut reactor,
-        move |event: SurfaceEvent, runtime| event_state.borrow_mut().route_event(event, runtime),
+        {
+            let notification_state = notifications.clone();
+            move |event: SurfaceEvent, runtime| {
+                if notification_state
+                    .as_ref()
+                    .is_some_and(|host| host.borrow_mut().handle_event(&event, runtime))
+                {
+                    Ok(())
+                } else {
+                    event_state.borrow_mut().route_event(event, runtime)
+                }
+            }
+        },
         {
             let tick_profile = Arc::clone(&profile_due);
             move |runtime| {
@@ -263,17 +476,26 @@ fn execute() -> Result<(), String> {
                     let _ = flamewm_profiler::report_window();
                 }
                 let pointer = if tick_state.borrow().needs_output_pointer() {
-                    badge_tick.as_ref().and_then(|observer| observer.borrow().pointer_position())
+                    badge_tick
+                        .as_ref()
+                        .and_then(|observer| observer.borrow().pointer_position())
                 } else {
                     None
                 };
                 tick_state.borrow_mut().set_output_pointer(pointer);
                 tick_state.borrow_mut().tick(runtime, &clock_due)?;
+                if let Some(host) = notifications.as_ref() {
+                    if let Err(error) = host.borrow_mut().tick(runtime, Some(&shared_wake)) {
+                        eprintln!("flamewm-shell: notification UI update failed: {error}");
+                    }
+                }
                 let badge_result = badge_tick.as_ref().map(|observer| {
                     let state = tick_state.borrow();
                     observer.borrow_mut().tick(
-                        runtime, &state.shell.snapshot().displays,
-                        state.settings_cache.as_ref(), std::time::Instant::now(),
+                        runtime,
+                        &state.shell.snapshot().displays,
+                        state.settings_cache.as_ref(),
+                        std::time::Instant::now(),
                     )
                 });
                 match badge_result {
@@ -310,20 +532,16 @@ fn project_panel_critical(
     start_model: &flamewm_shell_core::StartModel,
     items: projection::TaskbarItems,
 ) -> Result<(), String> {
-    projection::for_each_panel_record(
-        snapshot,
-        surfaces.panel_outputs(),
-        |handle, view| {
-            runtime.with_document(handle, |document| {
-                async_projection::project_panel_async(
-                    document,
-                    view.with_items(items),
-                    None,
-                    &mut Default::default(),
-                )
-            })
-        },
-    )
+    projection::for_each_panel_record(snapshot, surfaces.panel_outputs(), |handle, view| {
+        runtime.with_document(handle, |document| {
+            async_projection::project_panel_async(
+                document,
+                view.with_items(items),
+                None,
+                &mut Default::default(),
+            )
+        })
+    })
     .map_err(|error| format!("project panel: {error:?}"))?;
     runtime
         .with_document(surfaces.start, |document| {
@@ -406,5 +624,25 @@ mod tests {
             now.abs_diff(utc) < 1_000,
             "wall clock {now} vs chrono UTC {utc}"
         );
+    }
+
+    #[test]
+    fn notification_text_is_truncated_on_character_boundaries() {
+        assert_eq!(display_text("short", 5), "short");
+        assert_eq!(display_text("🙂🙂🙂", 2), "🙂🙂…");
+    }
+
+    #[test]
+    fn notification_template_has_runtime_text_nodes() {
+        let mut document = decode_document(NOTIFICATION_ARTIFACT).expect("notification template");
+        for id in [
+            "notification-app",
+            "notification-summary",
+            "notification-body",
+        ] {
+            document
+                .text(id, "test".to_owned())
+                .unwrap_or_else(|error| panic!("{id}: {error}"));
+        }
     }
 }

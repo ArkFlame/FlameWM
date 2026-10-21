@@ -251,6 +251,40 @@ mod wallpaper_backdrop_tests {
     }
 
     #[test]
+    fn popup_region_matches_full_root_crop_for_fit_scale_and_output_offsets() {
+        // Device dimensions follow the panel's scale conversion, including its rounding rule.
+        for scale in [100u16, 150] {
+            let width = flamewm_platform::panel::logical_to_physical(41, scale) as u32;
+            let height = flamewm_platform::panel::logical_to_physical(29, scale) as u32;
+            // Top/left, right/bottom edge alignment, and a normalized secondary-output offset.
+            let origins = [
+                (0u32, 0u32),
+                (ROOT.0 - width, 0),
+                (0, ROOT.1 - height),
+                (ROOT.0 - width, ROOT.1 - height),
+                (53, 31),
+            ];
+            for (x, y) in origins {
+                let rect = (x as i32, y as i32, width, height);
+                for fit in FITS {
+                    let direct = wallpaper_backdrop(&natural(), ROOT, fit, rect)
+                        .expect("direct popup-region composition");
+                    assert_eq!(
+                        direct,
+                        expected_crop(fit, rect),
+                        "scale={scale} {rect:?} {fit:?}"
+                    );
+                    assert_eq!(
+                        direct.pixels.len(),
+                        rect.2 as usize * rect.3 as usize * 4,
+                        "region allocation only: scale={scale} {rect:?} {fit:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rect_outside_the_root_has_no_wallpaper_backdrop() {
         assert!(
             wallpaper_backdrop(&natural(), ROOT, WallpaperFit::Fill, (0, 100, 160, 44)).is_none()

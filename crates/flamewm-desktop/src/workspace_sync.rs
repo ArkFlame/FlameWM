@@ -3,7 +3,10 @@
 use flamewm_api::workspace::WorkspaceSnapshot;
 
 pub(crate) fn is_legacy_workspace_signal(signal: &flamewm_control_wire::ControlSignal) -> bool {
-    matches!(signal, flamewm_control_wire::ControlSignal::WorkspacesChanged { .. })
+    matches!(
+        signal,
+        flamewm_control_wire::ControlSignal::WorkspacesChanged { .. }
+    )
 }
 
 #[cfg(test)]

@@ -59,7 +59,10 @@ fn resolve_in_theme_root(theme_root: &Path, path: &Path) -> std::io::Result<std:
     if resolved.starts_with(&root) {
         Ok(resolved)
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "left_ptr resolves outside theme root"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "left_ptr resolves outside theme root",
+        ))
     }
 }
 
@@ -72,7 +75,23 @@ mod tests {
 
     fn one_pixel_xcursor() -> Vec<u8> {
         let mut v = b"Xcur".to_vec();
-        for word in [16u32, 0x0001_0000, 1, 0xfffd_0002, 24, 28, 36, 0xfffd_0002, 24, 1, 1, 1, 0, 0, 0] {
+        for word in [
+            16u32,
+            0x0001_0000,
+            1,
+            0xfffd_0002,
+            24,
+            28,
+            36,
+            0xfffd_0002,
+            24,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+        ] {
             v.extend_from_slice(&word.to_le_bytes());
         }
         v.extend_from_slice(&[0x00, 0x00, 0xff, 0xff]); // B, G, R, A
@@ -82,46 +101,66 @@ mod tests {
     #[test]
     fn valid_frame_decodes_to_straight_rgba() {
         let preview = parse_xcursor_preview(&one_pixel_xcursor()).expect("valid one-pixel Xcursor");
-        assert_eq!((preview.width, preview.height, preview.nominal_size), (1, 1, 24));
+        assert_eq!(
+            (preview.width, preview.height, preview.nominal_size),
+            (1, 1, 24)
+        );
         assert_eq!(preview.rgba, vec![0xff, 0x00, 0x00, 0xff]);
     }
 
     #[test]
     fn corrupt_or_truncated_xcursor_yields_no_preview() {
         let valid = one_pixel_xcursor();
-        for bytes in [&valid[..40], b"Xcur".as_slice(), b"Xcur\x00\x00\x00\x00".as_slice(), b"nope".as_slice()] {
-            assert!(parse_xcursor_preview(bytes).is_err(), "must not decode {bytes:?}");
+        for bytes in [
+            &valid[..40],
+            b"Xcur".as_slice(),
+            b"Xcur\x00\x00\x00\x00".as_slice(),
+            b"nope".as_slice(),
+        ] {
+            assert!(
+                parse_xcursor_preview(bytes).is_err(),
+                "must not decode {bytes:?}"
+            );
         }
     }
 
     #[test]
     fn oversized_left_ptr_is_refused_before_decoding() {
-        let root = std::env::temp_dir().join(format!("flamewm-cursor-oversize-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-cursor-oversize-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("cursors")).expect("cursors dir");
         let file = fs::File::create(root.join("cursors").join("left_ptr")).expect("left_ptr");
         file.set_len(16 * 1024 * 1024 + 1).expect("sparse oversize");
         let err = load_left_ptr_preview(&root).unwrap_err();
-        assert!(matches!(err, CursorError::TooLarge), "oversized left_ptr must be refused: {err:?}");
+        assert!(
+            matches!(err, CursorError::TooLarge),
+            "oversized left_ptr must be refused: {err:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn left_ptr_symlink_escaping_theme_root_is_refused() {
-        let base = std::env::temp_dir().join(format!("flamewm-cursor-escape-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("flamewm-cursor-escape-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("theme");
         fs::create_dir_all(root.join("cursors")).expect("cursors dir");
         fs::write(base.join("outside"), one_pixel_xcursor()).expect("outside file");
         symlink(base.join("outside"), root.join("cursors").join("left_ptr")).expect("symlink");
         let err = load_left_ptr_preview(&root).unwrap_err();
-        assert!(matches!(err, CursorError::Io(_)), "escaping left_ptr symlink must be refused: {err:?}");
+        assert!(
+            matches!(err, CursorError::Io(_)),
+            "escaping left_ptr symlink must be refused: {err:?}"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn left_ptr_symlink_inside_theme_root_previews() {
-        let root = std::env::temp_dir().join(format!("flamewm-cursor-inroot-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-cursor-inroot-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("cursors")).expect("cursors dir");
         fs::write(root.join("cursors").join("default"), one_pixel_xcursor()).expect("default");
@@ -130,7 +169,6 @@ mod tests {
         assert_eq!((preview.width, preview.height), (1, 1));
         let _ = fs::remove_dir_all(&root);
     }
-
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> Result<u32, CursorError> {

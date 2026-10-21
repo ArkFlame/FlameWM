@@ -78,9 +78,15 @@ pub fn parse_ipinfo(body: &str) -> Result<IpFix, WeatherError> {
     let name = text_field(root.field("city")?)?;
     let country = text_field(root.field("country")?)?;
     let loc = text_field(root.field("loc")?)?;
-    let (lat, lon) = loc.split_once(',').ok_or(WeatherError::Parse("malformed loc"))?;
-    let latitude = lat.parse::<f64>().map_err(|_| WeatherError::Parse("malformed loc"))?;
-    let longitude = lon.parse::<f64>().map_err(|_| WeatherError::Parse("malformed loc"))?;
+    let (lat, lon) = loc
+        .split_once(',')
+        .ok_or(WeatherError::Parse("malformed loc"))?;
+    let latitude = lat
+        .parse::<f64>()
+        .map_err(|_| WeatherError::Parse("malformed loc"))?;
+    let longitude = lon
+        .parse::<f64>()
+        .map_err(|_| WeatherError::Parse("malformed loc"))?;
     let time_zone = match root.optional("timezone")? {
         Some(tz) => zone(text_field(tz)?),
         None => None,
@@ -152,7 +158,11 @@ impl AutoLookup {
             self.last_started = None;
             return None;
         }
-        let polled = match self.inflight.as_ref().map(|rx| rx.lock().map(|g| g.try_recv())) {
+        let polled = match self
+            .inflight
+            .as_ref()
+            .map(|rx| rx.lock().map(|g| g.try_recv()))
+        {
             None => None,
             Some(Ok(Ok(result))) => Some(result),
             Some(Ok(Err(mpsc::TryRecvError::Empty))) => None,
@@ -164,9 +174,9 @@ impl AutoLookup {
         }
         let due = enable_edge
             || online_edge
-            || self
-                .last_started
-                .map_or(true, |started| now.duration_since(started) >= AUTO_LOOKUP_INTERVAL);
+            || self.last_started.map_or(true, |started| {
+                now.duration_since(started) >= AUTO_LOOKUP_INTERVAL
+            });
         if due && self.inflight.is_none() {
             self.last_started = Some(now);
             self.inflight = Some(Arc::new(Mutex::new(start())));
@@ -178,7 +188,10 @@ impl AutoLookup {
 /// Settings change that writes the auto fix as the weather location. The current enabled and
 /// units values are not part of it.
 #[must_use]
-pub fn location_change(current: &WeatherSettings, fix: &IpFix) -> Option<flamewm_api::settings::SettingsChange> {
+pub fn location_change(
+    current: &WeatherSettings,
+    fix: &IpFix,
+) -> Option<flamewm_api::settings::SettingsChange> {
     if current.location.as_ref() == Some(&fix.location) {
         return None;
     }
@@ -241,14 +254,17 @@ pub fn restore_system_time_zone() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::weather_host::test_support::answer as finished;
+    use std::collections::BTreeMap;
 
     struct Canned(BTreeMap<&'static str, Result<String, WeatherError>>);
 
     impl HttpGet for Canned {
         fn get(&self, url: &str) -> Result<String, WeatherError> {
-            self.0.get(url).cloned().unwrap_or(Err(WeatherError::Transport))
+            self.0
+                .get(url)
+                .cloned()
+                .unwrap_or(Err(WeatherError::Transport))
         }
     }
 
@@ -261,7 +277,10 @@ mod tests {
         assert_eq!(fix.location.name, "Buenos Aires");
         assert_eq!(fix.location.country.as_deref(), Some("Argentina"));
         assert!((fix.location.latitude + 34.6131499).abs() < 1e-9);
-        assert_eq!(fix.time_zone.as_deref(), Some("America/Argentina/Buenos_Aires"));
+        assert_eq!(
+            fix.time_zone.as_deref(),
+            Some("America/Argentina/Buenos_Aires")
+        );
     }
 
     #[test]
@@ -269,7 +288,10 @@ mod tests {
         let fix = parse_ipinfo(IPINFO).expect("fixture");
         assert_eq!(fix.location.country.as_deref(), Some("AR"));
         assert!((fix.location.longitude + 58.3772).abs() < 1e-9);
-        assert_eq!(fix.time_zone.as_deref(), Some("America/Argentina/Buenos_Aires"));
+        assert_eq!(
+            fix.time_zone.as_deref(),
+            Some("America/Argentina/Buenos_Aires")
+        );
     }
 
     #[test]
@@ -281,7 +303,12 @@ mod tests {
         assert!(parse_ipinfo(&IPINFO.replace("-34.6131,-58.3772", "nope")).is_err());
         assert!(parse_ipinfo(&IPINFO.replace("-34.6131,-58.3772", "-34.6,-58.3,9")).is_err());
         let bad_zone = IPWHO.replace("America/Argentina/Buenos_Aires", "../../etc/passwd");
-        assert_eq!(parse_ipwho(&bad_zone).expect("location still valid").time_zone, None);
+        assert_eq!(
+            parse_ipwho(&bad_zone)
+                .expect("location still valid")
+                .time_zone,
+            None
+        );
         assert!(parse_ipinfo("not json").is_err());
     }
 
@@ -291,7 +318,14 @@ mod tests {
             ("https://ipwho.is/", Err(WeatherError::Transport)),
             ("https://ipinfo.io/json", Ok(IPINFO.to_owned())),
         ]));
-        assert_eq!(lookup_with(&http).expect("fallback").location.country.as_deref(), Some("AR"));
+        assert_eq!(
+            lookup_with(&http)
+                .expect("fallback")
+                .location
+                .country
+                .as_deref(),
+            Some("AR")
+        );
 
         let both_down = Canned(BTreeMap::new());
         assert_eq!(lookup_with(&both_down), Err(WeatherError::Transport));
@@ -300,7 +334,14 @@ mod tests {
             ("https://ipwho.is/", Ok(IPWHO.to_owned())),
             ("https://ipinfo.io/json", Ok(IPINFO.to_owned())),
         ]));
-        assert_eq!(lookup_with(&first_wins).expect("first").location.country.as_deref(), Some("Argentina"));
+        assert_eq!(
+            lookup_with(&first_wins)
+                .expect("first")
+                .location
+                .country
+                .as_deref(),
+            Some("Argentina")
+        );
     }
 
     fn fix() -> IpFix {
@@ -328,12 +369,16 @@ mod tests {
         assert!(host.tick(soon, true, true, || start(&mut starts)).is_none());
         assert_eq!(starts, 1);
         // Offline then online again: network-up edge starts a lookup.
-        assert!(host.tick(soon, true, false, || start(&mut starts)).is_none());
+        assert!(host
+            .tick(soon, true, false, || start(&mut starts))
+            .is_none());
         assert!(host.tick(soon, true, true, || start(&mut starts)).is_none());
         assert_eq!(starts, 2);
         // Six hours after the last start: the settled result lands and the next lookup starts.
         let later = soon + AUTO_LOOKUP_INTERVAL;
-        assert!(host.tick(later, true, true, || start(&mut starts)).is_some());
+        assert!(host
+            .tick(later, true, true, || start(&mut starts))
+            .is_some());
         assert_eq!(starts, 3);
     }
 
@@ -347,8 +392,14 @@ mod tests {
         host.tick(t0, true, true, || pending.take().expect("one lookup"));
         assert!(host.poll_deadline(t0).is_some(), "lookup in flight");
         tx.send(Ok(fix())).unwrap();
-        assert!(host.tick(t0, true, true, || unreachable!("lookup in flight")).is_some());
-        assert_eq!(host.poll_deadline(t0), None, "idle once the fix is delivered");
+        assert!(host
+            .tick(t0, true, true, || unreachable!("lookup in flight"))
+            .is_some());
+        assert_eq!(
+            host.poll_deadline(t0),
+            None,
+            "idle once the fix is delivered"
+        );
     }
 
     #[test]
@@ -363,10 +414,17 @@ mod tests {
 
     #[test]
     fn location_change_skips_identical_fix_and_keeps_switches() {
-        let current = WeatherSettings { enabled: true, location: None, units: flamewm_shell_core::weather::TemperatureUnit::Celsius };
+        let current = WeatherSettings {
+            enabled: true,
+            location: None,
+            units: flamewm_shell_core::weather::TemperatureUnit::Celsius,
+        };
         let change = location_change(&current, &fix()).expect("location differs");
         assert_eq!(change.key, WeatherSettings::LOCATION_KEY);
-        let same = WeatherSettings { location: Some(fix().location), ..current };
+        let same = WeatherSettings {
+            location: Some(fix().location),
+            ..current
+        };
         assert!(location_change(&same, &fix()).is_none());
     }
 
@@ -379,19 +437,32 @@ mod tests {
         let mut applied = None;
         assert!(apply_time_zone_in(&dir, "Test/Zone", |zone| applied = Some(zone.to_owned())));
         assert_eq!(applied.as_deref(), Some("Test/Zone"));
-        assert!(!apply_time_zone_in(&dir, "Test/Missing", |_| unreachable!("missing zone")));
-        assert!(!apply_time_zone_in(&dir, "../Test/Zone", |_| unreachable!("invalid name")));
+        assert!(!apply_time_zone_in(&dir, "Test/Missing", |_| unreachable!(
+            "missing zone"
+        )));
+        assert!(!apply_time_zone_in(&dir, "../Test/Zone", |_| unreachable!(
+            "invalid name"
+        )));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn desired_zone_requires_switch_and_valid_cache() {
         let mut snapshot = SettingsSnapshot::new(1);
-        snapshot.values.insert(AUTO_TIME_ZONE_KEY.to_owned(), SettingValue::Text("Asia/Tokyo".to_owned()));
+        snapshot.values.insert(
+            AUTO_TIME_ZONE_KEY.to_owned(),
+            SettingValue::Text("Asia/Tokyo".to_owned()),
+        );
         assert_eq!(desired_time_zone(&snapshot), None);
-        snapshot.values.insert(AUTO_TIME_ZONE_ENABLED_KEY.to_owned(), SettingValue::Boolean(true));
+        snapshot.values.insert(
+            AUTO_TIME_ZONE_ENABLED_KEY.to_owned(),
+            SettingValue::Boolean(true),
+        );
         assert_eq!(desired_time_zone(&snapshot).as_deref(), Some("Asia/Tokyo"));
-        snapshot.values.insert(AUTO_TIME_ZONE_KEY.to_owned(), SettingValue::Text("/etc".to_owned()));
+        snapshot.values.insert(
+            AUTO_TIME_ZONE_KEY.to_owned(),
+            SettingValue::Text("/etc".to_owned()),
+        );
         assert_eq!(desired_time_zone(&snapshot), None);
     }
 }

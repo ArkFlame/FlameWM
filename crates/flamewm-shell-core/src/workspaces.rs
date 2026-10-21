@@ -1,6 +1,6 @@
 use flamewm_api::workspace::{
-    grid_index, grid_position, workspace_columns, GridPosition, WorkspaceSnapshot, MAX_WORKSPACES,
-    WORKSPACE_ROWS,
+    GridPosition, MAX_WORKSPACES, WORKSPACE_ROWS, WorkspaceSnapshot, grid_index, grid_position,
+    workspace_columns,
 };
 
 #[must_use]
@@ -120,8 +120,8 @@ pub fn project(snapshot: Option<&WorkspaceSnapshot>) -> Vec<WorkspaceView> {
         .zip(labels)
         .enumerate()
         .map(|(index, (name, label))| {
-            let position = grid_position(index, snapshot.count)
-                .unwrap_or(GridPosition { row: 0, column: 0 });
+            let position =
+                grid_position(index, snapshot.count).unwrap_or(GridPosition { row: 0, column: 0 });
             WorkspaceView {
                 index,
                 label,

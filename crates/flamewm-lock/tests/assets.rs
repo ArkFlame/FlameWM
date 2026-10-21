@@ -20,7 +20,10 @@ fn staged_lock_icons_exist_and_are_near_white() {
         let svg = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("missing staged lock icon {}: {error}", path.display()));
         assert!(svg.contains("color:#eaf0ff"), "{icon} is not lock-coloured");
-        assert!(svg.contains("viewBox=\"0 0 22 22\""), "{icon} viewBox changed");
+        assert!(
+            svg.contains("viewBox=\"0 0 22 22\""),
+            "{icon} viewBox changed"
+        );
     }
 }
 

@@ -6,16 +6,18 @@ use std::rc::Rc;
 
 use flamewm_api::settings::{AppearanceMode, SettingValue, SettingsSnapshot};
 use flamewm_session_core::{
-    AppearancePlan, AppearanceProbe, SessionPaths,
-    build_launch_plan_with_appearance, default_paths_from_home, gtk3_theme_name,
-    kde_platform_theme_installed, materialize_owned_files, owned_appearance_root, plan_appearance,
-    resolve_cursor_theme, resolve_startup_appearance,
+    AppearancePlan, AppearanceProbe, SessionPaths, build_launch_plan_with_appearance,
+    default_paths_from_home, gtk3_theme_name, kde_platform_theme_installed,
+    materialize_owned_files, owned_appearance_root, plan_appearance, resolve_cursor_theme,
+    resolve_startup_appearance,
 };
 use flamewm_wm::{
-    SettingsObserver, SettingsWake, WmConfig, apply_cursor_theme, persisted_appearance,
-    persisted_cursor_theme, run_with_settings_observer,
+    SettingsObserver, SettingsWake, WmConfig, apply_cursor_shadow, apply_cursor_theme,
+    persisted_appearance, persisted_cursor_theme, run_with_settings_observer,
 };
-use flamewm_xsettings::{XSettingsInput, X11XSettingsManager, claim_x11_manager, published_settings};
+use flamewm_xsettings::{
+    X11XSettingsManager, XSettingsInput, claim_x11_manager, published_settings,
+};
 
 fn main() {
     let inherited: BTreeMap<String, String> = env::vars().collect();
@@ -100,8 +102,12 @@ fn session_overlay(
             continue;
         }
         let absent = inherited.get(key).is_none_or(String::is_empty);
-        if key.starts_with("FLAMEWM_") || key == "XDG_CONFIG_DIRS"
-            || key == "XDG_CURRENT_DESKTOP" || key == "XDG_SESSION_DESKTOP" || absent {
+        if key.starts_with("FLAMEWM_")
+            || key == "XDG_CONFIG_DIRS"
+            || key == "XDG_CURRENT_DESKTOP"
+            || key == "XDG_SESSION_DESKTOP"
+            || absent
+        {
             pending.insert(key.clone(), value.clone());
         }
     }
@@ -318,10 +324,23 @@ fn font_size_points(snapshot: &SettingsSnapshot) -> Option<u32> {
     }
 }
 
+/// Each FlameWM process owns its Xcursor registry. Apply the shadow toggle even
+/// when all XSETTINGS fields are unchanged, including the no-manager path.
+fn sync_cursor_shadow(snapshot: &SettingsSnapshot) {
+    let enabled = !matches!(
+        snapshot.values.get("cursorShadow"),
+        Some(SettingValue::Boolean(false))
+    );
+    for error in apply_cursor_shadow(enabled) {
+        eprintln!("flamewm: cursor shadow reload failed: {error}");
+    }
+}
+
 /// Settings observer used when no XSETTINGS manager is claimed: still applies
 /// the Flame `cursorTheme` to live cursor owners at every settings sync point.
 fn cursor_only_observer() -> SettingsObserver {
     Box::new(|snapshot: &SettingsSnapshot| {
+        sync_cursor_shadow(snapshot);
         let theme = xsettings_input_from_snapshot(snapshot).cursor_theme;
         for error in apply_cursor_theme(&theme) {
             eprintln!("flamewm: cursor theme reload failed: {error}");
@@ -349,6 +368,7 @@ fn xsettings_owner(
     // republish both succeeded, so a failed step is retried on the next snapshot.
     let mut published: Option<XSettingsInput> = None;
     let observer: SettingsObserver = Box::new(move |snapshot: &SettingsSnapshot| {
+        sync_cursor_shadow(snapshot);
         let mut pinned_snapshot = snapshot.clone();
         if let Some(mode) = sync.pinned {
             pinned_snapshot.values.insert(
@@ -455,17 +475,32 @@ mod tests {
         let dark = snapshot_with(&[("appearance", text("dark"))]);
         let light = snapshot_with(&[("appearance", text("LIGHT"))]);
         let system = snapshot_with(&[("appearance", text("system"))]);
-        assert_eq!(xsettings_input_from_snapshot(&dark).appearance, AppearanceMode::Dark);
-        assert_eq!(xsettings_input_from_snapshot(&light).appearance, AppearanceMode::Light);
-        assert_eq!(xsettings_input_from_snapshot(&system).appearance, AppearanceMode::System);
+        assert_eq!(
+            xsettings_input_from_snapshot(&dark).appearance,
+            AppearanceMode::Dark
+        );
+        assert_eq!(
+            xsettings_input_from_snapshot(&light).appearance,
+            AppearanceMode::Light
+        );
+        assert_eq!(
+            xsettings_input_from_snapshot(&system).appearance,
+            AppearanceMode::System
+        );
     }
 
     #[test]
     fn unknown_or_non_text_appearance_falls_back_to_default() {
         let unknown = snapshot_with(&[("appearance", text("purple"))]);
         let wrong_type = snapshot_with(&[("appearance", SettingValue::Integer(1))]);
-        assert_eq!(xsettings_input_from_snapshot(&unknown).appearance, AppearanceMode::Dark);
-        assert_eq!(xsettings_input_from_snapshot(&wrong_type).appearance, AppearanceMode::Dark);
+        assert_eq!(
+            xsettings_input_from_snapshot(&unknown).appearance,
+            AppearanceMode::Dark
+        );
+        assert_eq!(
+            xsettings_input_from_snapshot(&wrong_type).appearance,
+            AppearanceMode::Dark
+        );
     }
 
     #[test]
@@ -526,7 +561,10 @@ mod tests {
     fn cursor_search_path_falls_back_to_the_session_plan_when_not_inherited() {
         let mut plan = BTreeMap::new();
         plan.insert("XCURSOR_PATH".to_owned(), "/usr/share/icons".to_owned());
-        assert_eq!(cursor_search_path(&BTreeMap::new(), &plan), "/usr/share/icons");
+        assert_eq!(
+            cursor_search_path(&BTreeMap::new(), &plan),
+            "/usr/share/icons"
+        );
         let mut inherited = BTreeMap::new();
         inherited.insert("XCURSOR_PATH".to_owned(), "/opt/icons".to_owned());
         assert_eq!(cursor_search_path(&inherited, &plan), "/opt/icons");
@@ -575,7 +613,10 @@ mod tests {
         ]);
         // Plan value already prefixes the inherited XDG_CONFIG_DIRS (session-core).
         let overlay = env_map(&[
-            ("XDG_CONFIG_DIRS", "/home/u/.config/flamewm/appearance:/opt/xdg"),
+            (
+                "XDG_CONFIG_DIRS",
+                "/home/u/.config/flamewm/appearance:/opt/xdg",
+            ),
             ("FLAMEWM_APPEARANCE", "dark"),
         ]);
         let pending = session_overlay(&inherited, &overlay);
@@ -583,7 +624,10 @@ mod tests {
             pending.get("XDG_CONFIG_DIRS").map(String::as_str),
             Some("/home/u/.config/flamewm/appearance:/opt/xdg")
         );
-        assert_eq!(pending.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("dark"));
+        assert_eq!(
+            pending.get("FLAMEWM_APPEARANCE").map(String::as_str),
+            Some("dark")
+        );
         // Explicit toolkit values are never overlaid, even when the plan supplies them.
         let hostile = env_map(&[("QT_QPA_PLATFORMTHEME", "fusion"), ("GTK_THEME", "Flame")]);
         let pending = session_overlay(&inherited, &hostile);
@@ -604,7 +648,10 @@ mod tests {
         let pending = session_overlay(&inherited, &overlay);
         assert!(!pending.contains_key("XDG_CURRENT_DESKTOP"));
         assert!(!pending.contains_key("XCURSOR_SIZE"));
-        assert_eq!(pending.get("XCURSOR_THEME_CORE").map(String::as_str), Some("1"));
+        assert_eq!(
+            pending.get("XCURSOR_THEME_CORE").map(String::as_str),
+            Some("1")
+        );
     }
 
     #[test]
@@ -612,7 +659,9 @@ mod tests {
         let inherited = env_map(&[("QT_QPA_PLATFORMTHEME", "")]);
         let overlay = env_map(&[("QT_QPA_PLATFORMTHEME", "kde")]);
         assert_eq!(
-            session_overlay(&inherited, &overlay).get("QT_QPA_PLATFORMTHEME").map(String::as_str),
+            session_overlay(&inherited, &overlay)
+                .get("QT_QPA_PLATFORMTHEME")
+                .map(String::as_str),
             Some("kde")
         );
         let explicit = env_map(&[("QT_QPA_PLATFORMTHEME", "fusion")]);
@@ -621,12 +670,16 @@ mod tests {
 
     #[test]
     fn live_appearance_change_rewrites_owned_kdeglobals_and_never_host() {
-        let home = env::temp_dir().join(format!("flamewm-wm-live-appearance-{}", std::process::id()));
+        let home =
+            env::temp_dir().join(format!("flamewm-wm-live-appearance-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let plugins = home.join("plugins");
         std::fs::create_dir_all(plugins.join("platformthemes")).expect("plugins");
-        std::fs::write(plugins.join("platformthemes/KDEPlasmaPlatformTheme6.so"), b"")
-            .expect("plugin");
+        std::fs::write(
+            plugins.join("platformthemes/KDEPlasmaPlatformTheme6.so"),
+            b"",
+        )
+        .expect("plugin");
         let schemes = home.join("share/color-schemes");
         std::fs::create_dir_all(&schemes).expect("schemes");
         std::fs::write(
@@ -652,21 +705,45 @@ mod tests {
         let mut sync = AppearanceSync::new(paths(), inherited, AppearanceMode::Dark, None);
         // The applied mode is not rewritten: the startup publish already wrote it.
         assert!(sync.change(AppearanceMode::Dark, false).is_none());
-        let light = sync.change(AppearanceMode::Light, false).expect("light plan");
-        assert_eq!(light.environment.get("FLAMEWM_APPEARANCE").map(String::as_str), Some("light"));
+        let light = sync
+            .change(AppearanceMode::Light, false)
+            .expect("light plan");
+        assert_eq!(
+            light
+                .environment
+                .get("FLAMEWM_APPEARANCE")
+                .map(String::as_str),
+            Some("light")
+        );
         let light_file = std::fs::read_to_string(&owned).expect("light file");
-        assert!(light_file.contains("ColorScheme=BreezeLight\n"), "{light_file}");
-        assert!(light_file.contains("[Colors:View]\nBackgroundNormal=255,255,255\n"), "{light_file}");
+        assert!(
+            light_file.contains("ColorScheme=BreezeLight\n"),
+            "{light_file}"
+        );
+        assert!(
+            light_file.contains("[Colors:View]\nBackgroundNormal=255,255,255\n"),
+            "{light_file}"
+        );
         assert!(sync.change(AppearanceMode::Light, false).is_none());
         sync.change(AppearanceMode::Dark, false).expect("dark plan");
         let dark_file = std::fs::read_to_string(&owned).expect("dark file");
-        assert!(dark_file.contains("ColorScheme=BreezeDark\n"), "{dark_file}");
-        assert!(dark_file.contains("[Colors:View]\nBackgroundNormal=20,22,24\n"), "{dark_file}");
+        assert!(
+            dark_file.contains("ColorScheme=BreezeDark\n"),
+            "{dark_file}"
+        );
+        assert!(
+            dark_file.contains("[Colors:View]\nBackgroundNormal=20,22,24\n"),
+            "{dark_file}"
+        );
         assert!(!dark_file.contains("BreezeLight"), "{dark_file}");
         // System has no owned scheme: the stale owned file must go, not linger.
-        sync.change(AppearanceMode::System, false).expect("system plan");
+        sync.change(AppearanceMode::System, false)
+            .expect("system plan");
         assert!(!owned.exists());
-        assert!(!paths().config_home.join("kdeglobals").exists(), "host kdeglobals untouched");
+        assert!(
+            !paths().config_home.join("kdeglobals").exists(),
+            "host kdeglobals untouched"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -676,12 +753,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         let paths = default_paths_from_home("/usr/bin", &home);
         let gtk3_status = |installed: bool| {
-            let mut sync = AppearanceSync::new(
-                paths.clone(),
-                BTreeMap::new(),
-                AppearanceMode::Dark,
-                None,
-            );
+            let mut sync =
+                AppearanceSync::new(paths.clone(), BTreeMap::new(), AppearanceMode::Dark, None);
             sync.change(AppearanceMode::Light, installed)
                 .expect("light plan")
                 .toolkits[&Toolkit::Gtk3]

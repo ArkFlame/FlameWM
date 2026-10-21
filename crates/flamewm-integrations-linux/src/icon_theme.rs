@@ -200,7 +200,12 @@ impl IconThemeIndex {
             .filter_map(|dir| Some((dir.clone(), parse_dir(sections.get(dir.as_str())?))))
             .collect();
         // ScaledDirectories entries share the same section format.
-        for dir in header.get("ScaledDirectories").map(String::as_str).map(split_list).unwrap_or_default() {
+        for dir in header
+            .get("ScaledDirectories")
+            .map(String::as_str)
+            .map(split_list)
+            .unwrap_or_default()
+        {
             if dirs.contains_key(&dir) {
                 continue;
             }
@@ -416,7 +421,11 @@ fn child_dirs(dir: &Path) -> Vec<PathBuf> {
 fn interleave_by_parent(groups: &[Vec<PathBuf>]) -> Vec<PathBuf> {
     let rounds = groups.iter().map(Vec::len).max().unwrap_or(0);
     (0..rounds)
-        .flat_map(|index| groups.iter().filter_map(move |group| group.get(index).cloned()))
+        .flat_map(|index| {
+            groups
+                .iter()
+                .filter_map(move |group| group.get(index).cloned())
+        })
         .collect()
 }
 
@@ -442,7 +451,10 @@ pub fn parse_ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     let mut current = String::new();
     for line in text.lines() {
         let line = line.trim();
-        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
             current = name.trim().to_owned();
             continue;
         }
@@ -683,17 +695,20 @@ impl IconFileBuilder {
                 id
             }
         };
-        self.by_name.entry(base.into_boxed_str()).or_default().push((
-            IndexedIconFile {
-                dir: dir_id,
-                ext: ext_id,
-                raw_name,
-                theme_rank,
-                directory_rank,
-                format_rank,
-            },
-            rel_id,
-        ));
+        self.by_name
+            .entry(base.into_boxed_str())
+            .or_default()
+            .push((
+                IndexedIconFile {
+                    dir: dir_id,
+                    ext: ext_id,
+                    raw_name,
+                    theme_rank,
+                    directory_rank,
+                    format_rank,
+                },
+                rel_id,
+            ));
     }
 
     fn intern_dir(&mut self, path: &Path) -> u32 {
@@ -707,7 +722,14 @@ impl IconFileBuilder {
     }
 
     fn finish(self) -> IconFileIndex {
-        let IconFileBuilder { by_name, rel_ids, dirs, dir_ids, exts, ext_ids } = self;
+        let IconFileBuilder {
+            by_name,
+            rel_ids,
+            dirs,
+            dir_ids,
+            exts,
+            ext_ids,
+        } = self;
         drop(rel_ids);
         drop(dir_ids);
         drop(ext_ids);
@@ -718,7 +740,12 @@ impl IconFileBuilder {
             names.insert(name, (entries.len() as u32, files.len() as u32));
             entries.extend(files.into_iter().map(|(file, _)| file));
         }
-        IconFileIndex { names, entries, dirs, exts }
+        IconFileIndex {
+            names,
+            entries,
+            dirs,
+            exts,
+        }
     }
 }
 
@@ -1141,7 +1168,8 @@ mod tests {
     use super::*;
 
     fn fixture_root(tag: &str, line: u32) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("flamewm-{tag}-{}-{line}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("flamewm-{tag}-{}-{line}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         root
     }
@@ -1280,7 +1308,10 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let next = next.expect("stale watch mtime must produce a rebuilt snapshot");
         assert_eq!(next.generation, 4);
-        assert!(throttled.is_none(), "second check inside 5s must be throttled");
+        assert!(
+            throttled.is_none(),
+            "second check inside 5s must be throttled"
+        );
     }
 
     fn build_index(data: &Path, names: &[&str]) -> IconLookupIndex {
@@ -1297,7 +1328,8 @@ mod tests {
         }
     }
 
-    const FIXED_16: &str = "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
+    const FIXED_16: &str =
+        "[Icon Theme]\nDirectories=16x16/apps\n\n[16x16/apps]\nSize=16\nType=Fixed\n";
 
     #[cfg(unix)]
     #[test]
@@ -1330,7 +1362,11 @@ mod tests {
         let _ = fs::remove_dir_all(&data);
         let (paths, hit) = index.lookup("linked-app", 16);
         assert!(hit, "valid symlinked subdir must stay indexed");
-        assert!(paths.iter().any(|p| p.ends_with("linked/alias/linked-app.png")));
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.ends_with("linked/alias/linked-app.png"))
+        );
     }
 
     #[test]
@@ -1345,7 +1381,10 @@ mod tests {
         let _ = fs::remove_dir_all(&data);
         let (paths, hit) = index.lookup("chain-app", 16);
         assert!(hit);
-        assert_eq!(index.ordered_themes.first().map(String::as_str), Some("McMojave-circle"));
+        assert_eq!(
+            index.ordered_themes.first().map(String::as_str),
+            Some("McMojave-circle")
+        );
         // Inherited Numix must outrank Breeze, which the old ordering put first.
         assert!(paths[0].ends_with("Numix-Circle-Light/16x16/apps/chain-app.png"));
     }
@@ -1372,7 +1411,10 @@ mod tests {
         let _ = fs::remove_dir_all(&data);
         assert!(hit, "Breeze must serve when the selected theme is absent");
         assert!(paths[0].ends_with("Breeze/16x16/apps/fallback-app.png"));
-        assert!(missing.is_empty() && !missing_hit, "intentionally missing icon stays empty");
+        assert!(
+            missing.is_empty() && !missing_hit,
+            "intentionally missing icon stays empty"
+        );
     }
 
     #[test]
@@ -1444,7 +1486,10 @@ mod tests {
         let names = vec!["FlameDup".to_owned()];
         let index = IconLookupIndex::build(&names, &[first.clone(), second.clone()], 1);
         let (paths, hit) = index.lookup("flame-dup-app", 16);
-        let copies = index.files.get("flame-dup-app").map_or(0, |files| files.len());
+        let copies = index
+            .files
+            .get("flame-dup-app")
+            .map_or(0, |files| files.len());
         let _ = fs::remove_dir_all(&first);
         let _ = fs::remove_dir_all(&second);
         assert!(hit);
@@ -1469,6 +1514,9 @@ mod tests {
         let _ = fs::remove_dir_all(&data);
         // Both names lossy-decode to `a\u{FFFD}`; the key must stay exact.
         let copies = index.files.get("a\u{FFFD}").map_or(0, |files| files.len());
-        assert_eq!(copies, 2, "distinct raw names must not dedupe by lossy base");
+        assert_eq!(
+            copies, 2,
+            "distinct raw names must not dedupe by lossy base"
+        );
     }
 }

@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use flamewm_api::settings::AppearanceMode;
 
-use crate::{appearance_environment, SessionPaths};
+use crate::{SessionPaths, appearance_environment};
 
 /// Breeze color scheme names shipped with Plasma (`/usr/share/color-schemes`).
 pub const KDE_COLOR_SCHEME_DARK: &str = "BreezeDark";
@@ -269,8 +269,14 @@ pub fn plan_appearance(
             owned_files.insert(PathBuf::from("kdeglobals"), colors);
             // GTK reads these through the same owned XDG_CONFIG_DIRS prefix; the
             // user's own gtk-*/settings.ini still wins per key.
-            owned_files.insert(PathBuf::from("gtk-3.0/settings.ini"), gtk_settings_ini(mode));
-            owned_files.insert(PathBuf::from("gtk-4.0/settings.ini"), gtk_settings_ini(mode));
+            owned_files.insert(
+                PathBuf::from("gtk-3.0/settings.ini"),
+                gtk_settings_ini(mode),
+            );
+            owned_files.insert(
+                PathBuf::from("gtk-4.0/settings.ini"),
+                gtk_settings_ini(mode),
+            );
             // Owned root is listed first; the user's ~/.config/kdeglobals still
             // wins per key, and an inherited XDG_CONFIG_DIRS is kept after it.
             let inherited = existing_env
@@ -404,7 +410,12 @@ mod tests {
         for forbidden in ["GTK_THEME", "QT_STYLE_OVERRIDE"] {
             assert!(!plan.environment.contains_key(forbidden), "{forbidden}");
         }
-        assert_eq!(plan.environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str), Some("kde"));
+        assert_eq!(
+            plan.environment
+                .get("QT_QPA_PLATFORMTHEME")
+                .map(String::as_str),
+            Some("kde")
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -438,7 +449,10 @@ mod tests {
         );
         assert!(plan.owned_files.is_empty());
         assert!(!plan.environment.contains_key("XDG_CONFIG_DIRS"));
-        assert!(matches!(plan.toolkits[&Toolkit::Qt], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unsupported(_)
+        ));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -452,24 +466,45 @@ mod tests {
             kde_platform_theme: true,
         };
         let owned = plan_appearance(&paths, &BTreeMap::new(), AppearanceMode::Dark, ready);
-        assert!(matches!(owned.toolkits[&Toolkit::Gtk3], ToolkitStatus::Unverified(_)));
-        assert!(matches!(owned.toolkits[&Toolkit::Qt], ToolkitStatus::Unverified(_)));
-        assert_eq!(owned.environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str), Some("kde"));
-        assert!(matches!(owned.toolkits[&Toolkit::Gtk4], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            owned.toolkits[&Toolkit::Gtk3],
+            ToolkitStatus::Unverified(_)
+        ));
+        assert!(matches!(
+            owned.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unverified(_)
+        ));
+        assert_eq!(
+            owned
+                .environment
+                .get("QT_QPA_PLATFORMTHEME")
+                .map(String::as_str),
+            Some("kde")
+        );
+        assert!(matches!(
+            owned.toolkits[&Toolkit::Gtk4],
+            ToolkitStatus::Unsupported(_)
+        ));
         let foreign = AppearanceProbe {
             xsettings_owned: false,
             gtk3_theme_installed: true,
             kde_platform_theme: true,
         };
         let plan = plan_appearance(&paths, &BTreeMap::new(), AppearanceMode::Dark, foreign);
-        assert!(matches!(plan.toolkits[&Toolkit::Gtk3], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Gtk3],
+            ToolkitStatus::Unsupported(_)
+        ));
         let no_theme = AppearanceProbe {
             xsettings_owned: true,
             gtk3_theme_installed: false,
             kde_platform_theme: true,
         };
         let plan = plan_appearance(&paths, &BTreeMap::new(), AppearanceMode::Dark, no_theme);
-        assert!(matches!(plan.toolkits[&Toolkit::Gtk3], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Gtk3],
+            ToolkitStatus::Unsupported(_)
+        ));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -486,7 +521,10 @@ mod tests {
         std::fs::create_dir_all(home.join(".themes/Breeze-Dark")).expect("bare dark");
         assert_eq!(gtk3_theme_name(AppearanceMode::Dark, &env), None);
         std::fs::create_dir_all(home.join(".themes/Breeze-Dark/gtk-3.0")).expect("dark");
-        assert_eq!(gtk3_theme_name(AppearanceMode::Dark, &env), Some("Breeze-Dark"));
+        assert_eq!(
+            gtk3_theme_name(AppearanceMode::Dark, &env),
+            Some("Breeze-Dark")
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -501,19 +539,34 @@ mod tests {
         // Plugin absent: no platform theme, Qt reported unsupported.
         let absent = plan_appearance(&paths, &BTreeMap::new(), AppearanceMode::Dark, probe(false));
         assert!(!absent.environment.contains_key("QT_QPA_PLATFORMTHEME"));
-        assert!(matches!(absent.toolkits[&Toolkit::Qt], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            absent.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unsupported(_)
+        ));
         // Plugin present and unset: kde is exported.
         let unset = plan_appearance(&paths, &BTreeMap::new(), AppearanceMode::Light, probe(true));
-        assert_eq!(unset.environment.get("QT_QPA_PLATFORMTHEME").map(String::as_str), Some("kde"));
+        assert_eq!(
+            unset
+                .environment
+                .get("QT_QPA_PLATFORMTHEME")
+                .map(String::as_str),
+            Some("kde")
+        );
         // Explicit inherited values are never overridden; a non-kde one disables the channel.
         let fusion = BTreeMap::from([("QT_QPA_PLATFORMTHEME".to_owned(), "fusion".to_owned())]);
         let plan = plan_appearance(&paths, &fusion, AppearanceMode::Dark, probe(true));
         assert!(!plan.environment.contains_key("QT_QPA_PLATFORMTHEME"));
-        assert!(matches!(plan.toolkits[&Toolkit::Qt], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unsupported(_)
+        ));
         let kde = BTreeMap::from([("QT_QPA_PLATFORMTHEME".to_owned(), "kde".to_owned())]);
         let plan = plan_appearance(&paths, &kde, AppearanceMode::Dark, probe(true));
         assert!(!plan.environment.contains_key("QT_QPA_PLATFORMTHEME"));
-        assert!(matches!(plan.toolkits[&Toolkit::Qt], ToolkitStatus::Unverified(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unverified(_)
+        ));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -540,7 +593,10 @@ mod tests {
         let plan = qt_plan(&paths, AppearanceMode::Dark);
         assert!(plan.owned_files.is_empty());
         assert!(!plan.environment.contains_key("XDG_CONFIG_DIRS"));
-        assert!(matches!(plan.toolkits[&Toolkit::Qt], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unsupported(_)
+        ));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -560,7 +616,10 @@ mod tests {
         );
         assert!(plan.owned_files.is_empty());
         assert!(!plan.environment.contains_key("XDG_CONFIG_DIRS"));
-        assert!(matches!(plan.toolkits[&Toolkit::Qt], ToolkitStatus::Unsupported(_)));
+        assert!(matches!(
+            plan.toolkits[&Toolkit::Qt],
+            ToolkitStatus::Unsupported(_)
+        ));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -607,7 +666,10 @@ mod tests {
         );
         // Neither source: default Dark.
         assert_eq!(resolve_startup_appearance(None, None), AppearanceMode::Dark);
-        assert_eq!(resolve_startup_appearance(Some("purple"), None), AppearanceMode::Dark);
+        assert_eq!(
+            resolve_startup_appearance(Some("purple"), None),
+            AppearanceMode::Dark
+        );
     }
 
     #[test]
@@ -619,8 +681,14 @@ mod tests {
         let dark = qt_plan(&paths, AppearanceMode::Dark);
         materialize_owned_files(&dark).expect("dark");
         let root = owned_appearance_root(&paths);
-        assert_eq!(std::fs::read_to_string(root.join("kdeglobals")).expect("owned"), DARK_SCHEME);
-        assert!(!root.join("kdeglobals.tmp").exists(), "temp file must be renamed away");
+        assert_eq!(
+            std::fs::read_to_string(root.join("kdeglobals")).expect("owned"),
+            DARK_SCHEME
+        );
+        assert!(
+            !root.join("kdeglobals.tmp").exists(),
+            "temp file must be renamed away"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 

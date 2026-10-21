@@ -30,7 +30,6 @@ pub const REQUIRED_DESKTOP_IDS: &[&str] = &[
     "convert-slot-5",
     "convert-slot-6",
     "convert-slot-7",
-
 ];
 
 /// Reject an old/partial compiled document before it reaches desktop projection.

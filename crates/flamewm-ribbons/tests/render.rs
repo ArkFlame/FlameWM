@@ -9,7 +9,12 @@ fn config(num: usize, width_px: f64, seed: u64) -> Config {
     Config {
         num,
         width_px,
-        span_rects: vec![Rect { x: 0, y: 0, w: W, h: H }],
+        span_rects: vec![Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        }],
         seed,
     }
 }
@@ -43,12 +48,21 @@ fn ribbon_width_setting_changes_rendered_stroke_area() {
     };
     let (thin, mid, wide) = (ink(2.0), ink(11.0), ink(28.0));
     assert!(thin > 0, "thin ribbon must be visible");
-    assert!(mid as f64 > thin as f64 * 1.5, "11 px ({mid}) vs 2 px ({thin})");
-    assert!(wide as f64 > mid as f64 * 1.5, "28 px ({wide}) vs 11 px ({mid})");
+    assert!(
+        mid as f64 > thin as f64 * 1.5,
+        "11 px ({mid}) vs 2 px ({thin})"
+    );
+    assert!(
+        wide as f64 > mid as f64 * 1.5,
+        "28 px ({wide}) vs 11 px ({mid})"
+    );
 }
 
 fn changed_pixels(a: &[u8], b: &[u8]) -> usize {
-    a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(p, q)| p != q).count()
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .filter(|(p, q)| p != q)
+        .count()
 }
 
 #[test]
@@ -65,10 +79,19 @@ fn frames_visibly_change_over_time_and_are_not_black() {
     let total = (W * H) as usize;
     let at_100 = changed_pixels(&f0, &f_100ms);
     let at_250 = changed_pixels(&f0, &f_250ms);
-    assert!(at_100 * 100 > total * 2, "only {at_100} of {total} pixels changed at 100 ms");
-    assert!(at_250 * 100 > total * 3, "only {at_250} of {total} pixels changed at 250 ms");
+    assert!(
+        at_100 * 100 > total * 2,
+        "only {at_100} of {total} pixels changed at 100 ms"
+    );
+    assert!(
+        at_250 * 100 > total * 3,
+        "only {at_250} of {total} pixels changed at 250 ms"
+    );
     assert!(lit_pixels(&f0, 0) > total / 20, "frame must not be black");
-    assert!(lit_pixels(&f_250ms, 0) > total / 20, "frame must not be black");
+    assert!(
+        lit_pixels(&f_250ms, 0) > total / 20,
+        "frame must not be black"
+    );
 }
 
 #[test]
@@ -77,17 +100,39 @@ fn identical_time_renders_identical_frames() {
     advance(&mut r, 1, 180);
     let a = frame(&r, Quality::Half);
     let b = frame(&r, Quality::Half);
-    assert_eq!(changed_pixels(&a, &b), 0, "negative control: same time must change 0%");
+    assert_eq!(
+        changed_pixels(&a, &b),
+        0,
+        "negative control: same time must change 0%"
+    );
 }
 
 #[test]
 fn gaps_of_an_l_shaped_span_stay_black() {
     // Two rects forming an L: the union bounds are 2000x1000 and the top-right corner is a gap.
     let rects = vec![
-        Rect { x: 0, y: 0, w: 1000, h: 1000 },
-        Rect { x: 1000, y: 0, w: 1000, h: 400 },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 1000,
+            h: 1000,
+        },
+        Rect {
+            x: 1000,
+            y: 0,
+            w: 1000,
+            h: 400,
+        },
     ];
-    let mut r = Ribbons::new(Config { num: 6, width_px: 11.0, span_rects: rects, seed: 8 }, 0.0);
+    let mut r = Ribbons::new(
+        Config {
+            num: 6,
+            width_px: 11.0,
+            span_rects: rects,
+            seed: 8,
+        },
+        0.0,
+    );
     advance(&mut r, 1, 60 * 6);
     assert!(r.is_masked());
     assert!(!r.covers(1900, 900));

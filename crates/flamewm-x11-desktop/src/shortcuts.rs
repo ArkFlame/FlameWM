@@ -548,7 +548,9 @@ mod tests {
 
     /// Stages `pairs` against the standard lookup and commits them.
     fn install(grabs: &mut ShortcutGrabs, backend: &mut FakeBackend, pairs: &[(&str, &str)]) {
-        grabs.prepare(&desired(pairs), &FakeLookup::standard()).unwrap();
+        grabs
+            .prepare(&desired(pairs), &FakeLookup::standard())
+            .unwrap();
         grabs.commit(backend).unwrap();
     }
 
@@ -747,7 +749,11 @@ mod tests {
         grabs
             .commit(&mut backend)
             .expect("optional conflict must not fail the commit");
-        assert!(backend.held.contains(&base_grab(113, MOD_CONTROL | MOD_SUPER)));
+        assert!(
+            backend
+                .held
+                .contains(&base_grab(113, MOD_CONTROL | MOD_SUPER))
+        );
         assert!(backend.held.contains(&base_grab(70, MOD_ALT)));
         assert!(
             !backend.held.iter().any(|grab| grab.keycode == 123),
@@ -783,7 +789,10 @@ mod tests {
             .expect_err("required conflict must fail");
         assert_eq!(error.code, ErrorCode::Conflict);
         assert!(grabs.active().is_empty());
-        assert!(backend.held.is_empty(), "optional grab released on rollback");
+        assert!(
+            backend.held.is_empty(),
+            "optional grab released on rollback"
+        );
     }
 
     #[test]

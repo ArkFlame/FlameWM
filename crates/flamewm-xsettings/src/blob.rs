@@ -203,12 +203,18 @@ mod tests {
     #[test]
     fn serial_increments_only_changed_settings_and_keeps_others() {
         let base = desired(&[
-            ("Net/ThemeName", XSettingsValue::Text("Flame-Dark".to_owned())),
+            (
+                "Net/ThemeName",
+                XSettingsValue::Text("Flame-Dark".to_owned()),
+            ),
             ("Xft/Antialias", XSettingsValue::Integer(1)),
         ]);
         let first = next_publication(&PublishedState::default(), &base).expect("first");
         let changed = desired(&[
-            ("Net/ThemeName", XSettingsValue::Text("Flame-Light".to_owned())),
+            (
+                "Net/ThemeName",
+                XSettingsValue::Text("Flame-Light".to_owned()),
+            ),
             ("Xft/Antialias", XSettingsValue::Integer(1)),
         ]);
         let second = next_publication(&first, &changed).expect("theme change");
@@ -333,8 +339,14 @@ mod tests {
 
     #[test]
     fn same_value_with_different_type_counts_as_change() {
-        let first = publish(&PublishedState::default(), &[("Xft/RGBA", XSettingsValue::Integer(1))]);
-        let second = publish(&first, &[("Xft/RGBA", XSettingsValue::Text("1".to_owned()))]);
+        let first = publish(
+            &PublishedState::default(),
+            &[("Xft/RGBA", XSettingsValue::Integer(1))],
+        );
+        let second = publish(
+            &first,
+            &[("Xft/RGBA", XSettingsValue::Text("1".to_owned()))],
+        );
         assert_eq!(second.serial, 2);
     }
 
@@ -402,7 +414,10 @@ mod tests {
     #[test]
     fn blob_declares_lsb_first_and_round_trips_through_spec_parser() {
         let base = desired(&[
-            ("Net/ThemeName", XSettingsValue::Text("Flame-Dark".to_owned())),
+            (
+                "Net/ThemeName",
+                XSettingsValue::Text("Flame-Dark".to_owned()),
+            ),
             ("Xft/DPI", XSettingsValue::Integer(98_304)),
             ("Gtk/CursorThemeSize", XSettingsValue::Integer(-1)),
         ]);
@@ -415,8 +430,16 @@ mod tests {
         assert_eq!(
             settings,
             vec![
-                ("Gtk/CursorThemeSize".to_owned(), 1, XSettingsValue::Integer(-1)),
-                ("Net/ThemeName".to_owned(), 1, XSettingsValue::Text("Flame-Dark".to_owned())),
+                (
+                    "Gtk/CursorThemeSize".to_owned(),
+                    1,
+                    XSettingsValue::Integer(-1)
+                ),
+                (
+                    "Net/ThemeName".to_owned(),
+                    1,
+                    XSettingsValue::Text("Flame-Dark".to_owned())
+                ),
                 ("Xft/DPI".to_owned(), 1, XSettingsValue::Integer(98_304)),
             ]
         );

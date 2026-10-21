@@ -6,7 +6,8 @@ impl<'a, C: Connection> Wm<'a, C> {
     fn transition_corner_radius(&self, client: Window) -> u32 {
         self.clients.get(&client).map_or(0, |state| {
             u32::from(flamewm_skin::recipes::decoration::corner_radius(
-                state.is_floating(), self.decoration_tokens.style,
+                state.is_floating(),
+                self.decoration_tokens.style,
             ))
         })
     }
@@ -39,7 +40,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .get(&client)
                     .and_then(|state| unmaximize_target(&state.placement))
                     .ok_or("transition: no restored rect")?;
-                (capture, false, anim_rect(crate::client::root_to_rect(restored)))
+                (
+                    capture,
+                    false,
+                    anim_rect(crate::client::root_to_rect(restored)),
+                )
             }
             Effect::Open => {
                 let capture = renderer.borrow().capture_window(u64::from(frame))?;
@@ -58,7 +63,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         // the root under it, so the frame is unmapped first, then synced before the snapshot.
         // Restore needs no hide: its frame is already unmapped while minimized.
         let hide = !renderer.borrow().warp_argb_usable()
-            && matches!(effect, Effect::Minimize | Effect::Maximize | Effect::Unmaximize | Effect::Open);
+            && matches!(
+                effect,
+                Effect::Minimize | Effect::Maximize | Effect::Unmaximize | Effect::Open
+            );
         if hide {
             self.conn.unmap_window(frame).map_err(|e| e.to_string())?;
             if let Some(state) = self.clients.get_mut(&client) {
@@ -83,7 +91,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         let mirrored = mirrored && style != animation::Style::Fade;
         let source = warp_rect(anim_rect(outer));
         let opened = match (effect, style) {
-            (Effect::Minimize | Effect::Restore | Effect::Open | Effect::Close, animation::Style::Fade) => {
+            (
+                Effect::Minimize | Effect::Restore | Effect::Open | Effect::Close,
+                animation::Style::Fade,
+            ) => {
                 let direction = if matches!(effect, Effect::Minimize | Effect::Close) {
                     TransitionDirection::Out
                 } else {
@@ -101,12 +112,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             // Window-open Scale is a single affine scale of the complete frame.
             // The old default branch accidentally invoked the Magic Lamp band
             // warp, dropping the upper content while the window emerged.
-            (Effect::Open, animation::Style::Scale) => {
-                renderer.borrow().open_warp_overlay_styled(
-                    capture, source, warp_rect(target), PanelEdge::Bottom,
-                    TransitionStyle::Stretch, TransitionDirection::In,
-                )
-            }
+            (Effect::Open, animation::Style::Scale) => renderer.borrow().open_warp_overlay_styled(
+                capture,
+                source,
+                warp_rect(target),
+                PanelEdge::Bottom,
+                TransitionStyle::Stretch,
+                TransitionDirection::In,
+            ),
             (Effect::Maximize | Effect::Unmaximize, animation::Style::Fade) => {
                 renderer.borrow().open_warp_overlay_styled(
                     capture,
@@ -117,17 +130,20 @@ impl<'a, C: Connection> Wm<'a, C> {
                     TransitionDirection::In,
                 )
             }
-            (Effect::Maximize | Effect::Unmaximize, animation::Style::Scale | animation::Style::MagicLamp) => {
-                renderer.borrow().open_warp_overlay_styled(
-                    capture,
-                    source,
-                    warp_rect(target),
-                    PanelEdge::Bottom,
-                    TransitionStyle::Stretch,
-                    TransitionDirection::In,
-                )
-            }
-            _ => renderer.borrow().open_warp_overlay(capture, source, warp_rect(target)),
+            (
+                Effect::Maximize | Effect::Unmaximize,
+                animation::Style::Scale | animation::Style::MagicLamp,
+            ) => renderer.borrow().open_warp_overlay_styled(
+                capture,
+                source,
+                warp_rect(target),
+                PanelEdge::Bottom,
+                TransitionStyle::Stretch,
+                TransitionDirection::In,
+            ),
+            _ => renderer
+                .borrow()
+                .open_warp_overlay(capture, source, warp_rect(target)),
         };
         let mut overlay = match opened {
             Ok(overlay) => overlay,
@@ -154,8 +170,14 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Err(error);
         }
         self.linger.remove(client);
-        self.overlays
-            .insert(client, TransitionOverlay { overlay, mirrored, frame_hidden: hide });
+        self.overlays.insert(
+            client,
+            TransitionOverlay {
+                overlay,
+                mirrored,
+                frame_hidden: hide,
+            },
+        );
         Ok(hide)
     }
 
@@ -184,12 +206,19 @@ impl<'a, C: Connection> Wm<'a, C> {
         let titlebar_height = u32::try_from(self.extents_for(client).titlebar_h).unwrap_or(0);
         let unpainted = animation::is_blank_capture(&capture.argb)
             || animation::is_unpainted_client_capture(
-                &capture.argb, capture.width, capture.height, titlebar_height,
+                &capture.argb,
+                capture.width,
+                capture.height,
+                titlebar_height,
             );
         if !self.open_gate.attempt(client, unpainted) {
             return Ok(());
         }
-        if self.animator.start(client, Effect::Open, std::time::Instant::now()) != Begin::Started {
+        if self
+            .animator
+            .start(client, Effect::Open, std::time::Instant::now())
+            != Begin::Started
+        {
             return Ok(());
         }
         // Fade is a crossfade of the window rect, which works with or without a compositing manager.
@@ -207,7 +236,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
             return Ok(());
         }
-        let opened = renderer.borrow().open_fade_overlay(capture, outer.x, outer.y);
+        let opened = renderer
+            .borrow()
+            .open_fade_overlay(capture, outer.x, outer.y);
         match opened {
             Ok(mut overlay) => {
                 // The direct ARGB open-fade path bypasses `open_overlay`; it
@@ -215,7 +246,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 overlay.set_corner_radius(self.transition_corner_radius(client));
                 self.overlays.insert(
                     client,
-                    TransitionOverlay { overlay, mirrored: false, frame_hidden: false },
+                    TransitionOverlay {
+                        overlay,
+                        mirrored: false,
+                        frame_hidden: false,
+                    },
                 );
             }
             Err(_) => {
@@ -242,7 +277,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             .output_for_rect(outer)
             .map_or(self.screen_rect, |output| output.geometry);
         let output = anim_rect(output);
-        let icon = self.read_icon_geometry(client)
+        let icon = self
+            .read_icon_geometry(client)
             .filter(|icon| animation::icon_target_matches_output(*icon, output));
         animation::minimize_target(icon, output)
     }
@@ -251,7 +287,14 @@ impl<'a, C: Connection> Wm<'a, C> {
     pub(super) fn read_icon_geometry(&self, client: Window) -> Option<animation::Rect> {
         let reply = self
             .conn
-            .get_property(false, client, self.atoms.net_wm_icon_geometry, AtomEnum::CARDINAL, 0, 4)
+            .get_property(
+                false,
+                client,
+                self.atoms.net_wm_icon_geometry,
+                AtomEnum::CARDINAL,
+                0,
+                4,
+            )
             .ok()?
             .reply()
             .ok()?;

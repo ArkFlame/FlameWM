@@ -1,1 +1,0 @@
-sha256sum: /dev/fd/63: no properly formatted checksum lines found

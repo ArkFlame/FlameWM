@@ -72,7 +72,10 @@ fn header(member: &Member<'_>, size: u64) -> [u8; 512] {
 fn entry(member: &Member<'_>) -> Vec<u8> {
     let mut out = header(member, member.body.len() as u64).to_vec();
     out.extend_from_slice(member.body);
-    out.extend(std::iter::repeat_n(0u8, (512 - member.body.len() % 512) % 512));
+    out.extend(std::iter::repeat_n(
+        0u8,
+        (512 - member.body.len() % 512) % 512,
+    ));
     out
 }
 
@@ -113,7 +116,11 @@ fn demo_with(base: &Path, name: &str, extra: Vec<Member<'_>>) -> PathBuf {
     write_tgz(base, name, &members)
 }
 
-fn run(source: &Path, icons: &Path, options: &InstallOptions) -> Result<flamewm_integrations_linux::themes::import::InstalledTheme, ImportError> {
+fn run(
+    source: &Path,
+    icons: &Path,
+    options: &InstallOptions,
+) -> Result<flamewm_integrations_linux::themes::import::InstalledTheme, ImportError> {
     install_theme(source, icons, options, &AtomicBool::new(false))
 }
 
@@ -135,7 +142,10 @@ fn tgz_installs_theme_with_internal_symlink_and_no_staging_left() {
     assert_eq!(installed.id, "Demo");
     assert_eq!(installed.kind, ThemeKind::Icon);
     assert_eq!(installed.root, icons.join("Demo"));
-    assert_eq!(fs::read(icons.join("Demo/16x16/apps/app.png")).unwrap(), b"png-bytes");
+    assert_eq!(
+        fs::read(icons.join("Demo/16x16/apps/app.png")).unwrap(),
+        b"png-bytes"
+    );
     let link = fs::read_link(icons.join("Demo/cursors/default")).unwrap();
     assert_eq!(link, Path::new("left_ptr"));
     assert_no_staging(&icons);
@@ -147,7 +157,11 @@ fn folder_source_installs_and_keeps_internal_links() {
     let base = scratch("folder-valid");
     let src = base.join("src/Demo");
     fs::create_dir_all(src.join("cursors")).unwrap();
-    fs::write(src.join("index.theme"), "[Icon Theme]\nName=Demo\nDirectories=d\n[d]\nSize=8\n").unwrap();
+    fs::write(
+        src.join("index.theme"),
+        "[Icon Theme]\nName=Demo\nDirectories=d\n[d]\nSize=8\n",
+    )
+    .unwrap();
     fs::write(src.join("cursors/left_ptr"), b"c").unwrap();
     symlink("left_ptr", src.join("cursors/default")).unwrap();
     let icons = base.join("icons");
@@ -161,9 +175,20 @@ fn folder_source_installs_and_keeps_internal_links() {
 fn hardlink_inside_theme_is_accepted_and_copies_content() {
     let base = scratch("hardlink-ok");
     let icons = base.join("icons");
-    let src = demo_with(&base, "h.tar.gz", vec![link("Demo/16x16/apps/alias.png", b'1', "Demo/16x16/apps/app.png")]);
+    let src = demo_with(
+        &base,
+        "h.tar.gz",
+        vec![link(
+            "Demo/16x16/apps/alias.png",
+            b'1',
+            "Demo/16x16/apps/app.png",
+        )],
+    );
     run(&src, &icons, &InstallOptions::default()).expect("install");
-    assert_eq!(fs::read(icons.join("Demo/16x16/apps/alias.png")).unwrap(), b"png-bytes");
+    assert_eq!(
+        fs::read(icons.join("Demo/16x16/apps/alias.png")).unwrap(),
+        b"png-bytes"
+    );
     fs::remove_dir_all(&base).unwrap();
 }
 
@@ -174,7 +199,10 @@ fn xz_archive_with_bad_stream_header_is_rejected_without_writing() {
     fs::write(&src, b"\xFD7zXZ\0not really xz").unwrap();
     let err = run(&src, &base.join("icons"), &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::Corrupt(_)), "{err:?}");
-    assert!(!base.join("icons").exists(), "nothing may be created for xz");
+    assert!(
+        !base.join("icons").exists(),
+        "nothing may be created for xz"
+    );
     fs::remove_dir_all(&base).unwrap();
 }
 
@@ -204,8 +232,14 @@ fn xz_tar_installs_through_the_shared_tar_path() {
     fs::write(&src, out.stdout).unwrap();
     let installed = run(&src, &icons, &InstallOptions::default()).expect("xz install");
     assert_eq!(installed.id, "Demo");
-    assert_eq!(fs::read(icons.join("Demo/16x16/apps/app.png")).unwrap(), b"png-bytes");
-    assert_eq!(fs::read_link(icons.join("Demo/cursors/default")).unwrap(), Path::new("left_ptr"));
+    assert_eq!(
+        fs::read(icons.join("Demo/16x16/apps/app.png")).unwrap(),
+        b"png-bytes"
+    );
+    assert_eq!(
+        fs::read_link(icons.join("Demo/cursors/default")).unwrap(),
+        Path::new("left_ptr")
+    );
     assert_no_staging(&icons);
     fs::remove_dir_all(&base).unwrap();
 }
@@ -215,13 +249,13 @@ fn ambiguous_archive_requires_id_and_then_selects_that_theme() {
     let base = scratch("ambiguous");
     let icons = base.join("icons");
     let a = INDEX.as_bytes();
-    let members = [
-        m("A/index.theme", b'0', a),
-        m("B/index.theme", b'0', a),
-    ];
+    let members = [m("A/index.theme", b'0', a), m("B/index.theme", b'0', a)];
     let src = write_tgz(&base, "two.tar.gz", &members);
     let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
-    assert!(matches!(err, ImportError::AmbiguousThemes(ref v) if v.len() == 2), "{err:?}");
+    assert!(
+        matches!(err, ImportError::AmbiguousThemes(ref v) if v.len() == 2),
+        "{err:?}"
+    );
     assert!(!icons.exists());
 
     let picked = run(
@@ -235,7 +269,10 @@ fn ambiguous_archive_requires_id_and_then_selects_that_theme() {
     .expect("select B");
     assert_eq!(picked.id, "B");
     assert!(icons.join("B/index.theme").is_file());
-    assert!(!icons.join("A").exists(), "only the chosen theme is installed");
+    assert!(
+        !icons.join("A").exists(),
+        "only the chosen theme is installed"
+    );
     fs::remove_dir_all(&base).unwrap();
 }
 
@@ -246,11 +283,20 @@ fn id_collision_refuses_unless_overwrite_and_overwrite_replaces_content() {
     let first = write_tgz(&base, "one.tar.gz", &demo_members(b"c"));
     run(&first, &icons, &InstallOptions::default()).expect("first install");
 
-    let second_members = [m("Demo/index.theme", b'0', INDEX.as_bytes()), m("Demo/marker", b'0', b"v2")];
+    let second_members = [
+        m("Demo/index.theme", b'0', INDEX.as_bytes()),
+        m("Demo/marker", b'0', b"v2"),
+    ];
     let second = write_tgz(&base, "two.tar.gz", &second_members);
     let err = run(&second, &icons, &InstallOptions::default()).unwrap_err();
-    assert!(matches!(err, ImportError::IdCollision(ref id) if id == "Demo"), "{err:?}");
-    assert!(icons.join("Demo/16x16/apps/app.png").is_file(), "existing theme untouched");
+    assert!(
+        matches!(err, ImportError::IdCollision(ref id) if id == "Demo"),
+        "{err:?}"
+    );
+    assert!(
+        icons.join("Demo/16x16/apps/app.png").is_file(),
+        "existing theme untouched"
+    );
 
     run(
         &second,
@@ -262,7 +308,10 @@ fn id_collision_refuses_unless_overwrite_and_overwrite_replaces_content() {
     )
     .expect("overwrite");
     assert_eq!(fs::read(icons.join("Demo/marker")).unwrap(), b"v2");
-    assert!(!icons.join("Demo/16x16").exists(), "old tree fully replaced");
+    assert!(
+        !icons.join("Demo/16x16").exists(),
+        "old tree fully replaced"
+    );
     assert_no_staging(&icons);
     fs::remove_dir_all(&base).unwrap();
 }
@@ -304,10 +353,17 @@ fn hostile_paths_are_rejected() {
     for (label, extra) in cases {
         let src = demo_with(&base, "p.tar.gz", vec![extra]);
         let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
-        assert!(matches!(err, ImportError::UnsafePath(_)), "{label}: {err:?}");
+        assert!(
+            matches!(err, ImportError::UnsafePath(_)),
+            "{label}: {err:?}"
+        );
     }
     let raw = tar_raw_name(b"Demo/\xff\xfe", b"x");
-    fs::write(base.join("u.tar.gz"), gzip(&[raw, tar(&demo_members(b"c"))].concat())).unwrap();
+    fs::write(
+        base.join("u.tar.gz"),
+        gzip(&[raw, tar(&demo_members(b"c"))].concat()),
+    )
+    .unwrap();
     let err = run(&base.join("u.tar.gz"), &icons, &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::InvalidUtf8), "{err:?}");
     assert!(!icons.exists());
@@ -315,7 +371,12 @@ fn hostile_paths_are_rejected() {
 }
 
 fn tar_raw_name(name: &[u8], body: &[u8]) -> Vec<u8> {
-    entry(&Member { name, flag: b'0', body, link: b"" })
+    entry(&Member {
+        name,
+        flag: b'0',
+        body,
+        link: b"",
+    })
 }
 
 #[test]
@@ -335,7 +396,10 @@ fn escaping_and_absolute_links_are_rejected() {
         members.push(extra);
         let src = write_tgz(&base, "l.tar.gz", &members);
         let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
-        assert!(matches!(err, ImportError::EscapingLink(_)), "{label}: {err:?}");
+        assert!(
+            matches!(err, ImportError::EscapingLink(_)),
+            "{label}: {err:?}"
+        );
     }
     assert!(!icons.exists());
     fs::remove_dir_all(&base).unwrap();
@@ -348,7 +412,10 @@ fn hardlink_to_outside_file_is_rejected() {
     let src = demo_with(
         &base,
         "hl.tar.gz",
-        vec![m("Other/secret", b'0', b"secret"), link("Demo/steal", b'1', "Other/secret")],
+        vec![
+            m("Other/secret", b'0', b"secret"),
+            link("Demo/steal", b'1', "Other/secret"),
+        ],
     );
     let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::EscapingLink(_)), "{err:?}");
@@ -363,7 +430,10 @@ fn device_and_fifo_entries_are_rejected() {
     for flag in [b'3', b'4', b'6'] {
         let src = demo_with(&base, "d.tar.gz", vec![m("Demo/node", flag, b"")]);
         let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
-        assert!(matches!(err, ImportError::UnsupportedEntry(_)), "flag {flag}: {err:?}");
+        assert!(
+            matches!(err, ImportError::UnsupportedEntry(_)),
+            "flag {flag}: {err:?}"
+        );
     }
     assert!(!icons.exists());
     fs::remove_dir_all(&base).unwrap();
@@ -426,7 +496,10 @@ fn file_below_symlinked_directory_is_rejected() {
     let src = demo_with(
         &base,
         "a.tar.gz",
-        vec![link("Demo/cursors/extra", b'2', "left_ptr"), m("Demo/cursors/extra/x", b'0', b"x")],
+        vec![
+            link("Demo/cursors/extra", b'2', "left_ptr"),
+            m("Demo/cursors/extra/x", b'0', b"x"),
+        ],
     );
     let err = run(&src, &icons, &InstallOptions::default()).unwrap_err();
     assert!(matches!(err, ImportError::Corrupt(_)), "{err:?}");

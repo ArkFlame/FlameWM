@@ -11,13 +11,13 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection as _;
+use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask, MapState,
     WindowClass,
 };
-use x11rb::protocol::Event;
 
-use super::{real_click, real_escape, xtest_motion, InputPath};
+use super::{InputPath, real_click, real_escape, xtest_motion};
 use crate::{Canary, WinInfo};
 
 const PATH: &str = "path=real-pointer";

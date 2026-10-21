@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::{fs, path::PathBuf};
 
 use flamewm_ui_x11::{
     ActionPhase, PointerButton, SurfaceEvent, SurfaceRuntime, UiBackendError, UiDocumentAccess,
@@ -7,6 +8,7 @@ use flamewm_ui_x11::{
 use crate::app::{is_popup_refusal, shell_slow_note, ShellLoop};
 use flamewm_shell::quick_controls::host::is_quick_popup_title;
 use flamewm_shell::quick_controls::QuickControlKind;
+use flamewm_shell::runtime::InteractionContext;
 
 /// C07 stage helper: open a static profiler span. Static labels only.
 macro_rules! shell_stage {
@@ -22,6 +24,106 @@ const TRAY_VOLUME_ACTION: &str = "volume.open";
 const TASKBAR_SURFACE_ACTION: &str = "taskbar.surface";
 const TASKBAR_MENU_SETTINGS_ACTION: &str = "taskbar.menu.settings";
 const GENERAL_SETTINGS_PROGRAM: &str = "flamewm-settings";
+const START_DRAG_THRESHOLD_PX: f32 = 6.0;
+
+#[derive(Debug, Clone)]
+pub(crate) struct StartAppDrag {
+    app_id: flamewm_api::DesktopAppId,
+    origin_x: f32,
+    origin_y: f32,
+    dragging: bool,
+}
+
+impl StartAppDrag {
+    fn press(app_id: flamewm_api::DesktopAppId, x: f32, y: f32) -> Self {
+        Self {
+            app_id,
+            origin_x: x,
+            origin_y: y,
+            dragging: false,
+        }
+    }
+
+    fn motion(&mut self, x: f32, y: f32) -> bool {
+        if !self.dragging && (x - self.origin_x).hypot(y - self.origin_y) > START_DRAG_THRESHOLD_PX
+        {
+            self.dragging = true;
+        }
+        self.dragging
+    }
+}
+
+fn create_app_shortcut(app_id: &flamewm_api::DesktopAppId) -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_owned())?;
+    let user_dirs = fs::read_to_string(home.join(".config/user-dirs.dirs")).ok();
+    let desktop =
+        flamewm_desktop_core::model::DesktopDirResolver::resolve(&home, user_dirs.as_deref());
+    let catalog = flamewm_applications::ApplicationCatalog::discover()
+        .map_err(|error| format!("discover application catalog: {error}"))?;
+    let entry = catalog
+        .find(app_id)
+        .map_err(|error| format!("find application {}: {error}", app_id.as_str()))?;
+    let source = entry.path();
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|_| {
+            source
+                .extension()
+                .is_some_and(|extension| extension == "desktop")
+        })
+        .ok_or_else(|| "application has no desktop-entry file".to_owned())?;
+    fs::create_dir_all(&desktop)
+        .map_err(|error| format!("create desktop directory {}: {error}", desktop.display()))?;
+    let destination = flamewm_desktop_core::file_actions::shortcut_destination(&desktop, file_name);
+    fs::copy(source, &destination).map_err(|error| {
+        format!(
+            "copy application shortcut to {}: {error}",
+            destination.display()
+        )
+    })?;
+    Ok(destination)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InteractionOrigin {
+    Ignore,
+    Output(flamewm_api::OutputId),
+}
+
+fn resolve_interaction_origin(output: Option<flamewm_api::OutputId>) -> InteractionOrigin {
+    output.map_or(InteractionOrigin::Ignore, InteractionOrigin::Output)
+}
+
+fn interaction_origin_is_connected<'a>(
+    output: &flamewm_api::OutputId,
+    mut outputs: impl Iterator<Item = (&'a flamewm_api::OutputId, bool)>,
+) -> bool {
+    outputs.any(|(candidate, connected)| connected && candidate == output)
+}
+
+fn task_drag_stays_on_origin(
+    target: Option<&flamewm_shell::runtime::TaskSlotTarget>,
+    output: &flamewm_api::OutputId,
+) -> bool {
+    target.is_some_and(|target| &target.output == output)
+}
+
+fn task_drag_cleanup_output(
+    target: Option<&flamewm_shell::runtime::TaskSlotTarget>,
+) -> Option<&flamewm_api::OutputId> {
+    target.map(|target| &target.output)
+}
+
+fn task_drag_can_start(
+    target: Option<&(usize, flamewm_shell::runtime::TaskSlotTarget)>,
+    slot: usize,
+    output: &flamewm_api::OutputId,
+) -> bool {
+    target.is_some_and(|(pressed_slot, target)| *pressed_slot == slot && &target.output == output)
+}
 
 /// Program to spawn for a taskbar-menu row action; `None` for other actions.
 fn general_settings_launch(action: &str) -> Option<&'static str> {
@@ -34,6 +136,45 @@ fn slot_of(action: &str, prefix: &str) -> Option<usize> {
         .strip_prefix(prefix)
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|slot| slot.checked_sub(1))
+}
+
+/// A release keeps the press-captured task target while a drag owns it; a
+/// release inside a task slot also keeps it for the click path.
+fn release_keeps_task_press(
+    phase: ActionPhase,
+    inside: bool,
+    action: &str,
+    drag_armed: bool,
+) -> bool {
+    phase != ActionPhase::Release
+        || drag_armed
+        || (inside && slot_of(action, "task.slot.").is_some())
+}
+
+/// Secondary release target: the press capture when it matches the slot,
+/// otherwise the task currently shown there. Non-primary presses are not
+/// dispatched, so a right-click has no capture to consume.
+fn secondary_task_target(
+    captured: Option<(usize, flamewm_shell::runtime::TaskSlotTarget)>,
+    slot: usize,
+    current: impl FnOnce() -> Option<flamewm_shell::runtime::TaskSlotTarget>,
+) -> Option<flamewm_shell::runtime::TaskSlotTarget> {
+    captured
+        .filter(|(pressed_slot, _)| *pressed_slot == slot)
+        .map(|(_, target)| target)
+        .or_else(current)
+}
+
+fn root_pointer_for_surface(
+    runtime: &mut SurfaceRuntime,
+    event: &SurfaceEvent,
+) -> Option<flamewm_api::Point> {
+    let rect = runtime.surface_device_rect(event.surface).ok()?;
+    let scale = runtime.surface_ui_scale(event.surface).ok()?;
+    Some(flamewm_api::Point::new(
+        (rect.x + event.action.x * scale).round() as i32,
+        (rect.y + event.action.y * scale).round() as i32,
+    ))
 }
 
 /// Non-primary releases are dropped, except an outside release: a right-button press outside an
@@ -173,9 +314,30 @@ impl ShellLoop {
         event: SurfaceEvent,
         runtime: &mut SurfaceRuntime,
     ) -> Result<(), UiBackendError> {
-        if let Some(output) = self.surfaces.select_input_output(event.surface) {
-            self.shell.select_panel_output(output);
+        let output = match resolve_interaction_origin(self.surfaces.input_output(event.surface)) {
+            InteractionOrigin::Ignore => return Ok(()),
+            InteractionOrigin::Output(output) => output,
+        };
+        if !interaction_origin_is_connected(
+            &output,
+            self.shell
+                .snapshot()
+                .displays
+                .outputs
+                .iter()
+                .map(|candidate| (&candidate.id, candidate.connected)),
+        ) || !self.surfaces.select_panel_output(&output)
+        {
+            return Ok(());
         }
+        let snapshot = self.shell.snapshot();
+        let interaction = InteractionContext {
+            source_surface: event.surface,
+            output: output.clone(),
+            display_generation: snapshot.displays.generation,
+            panels_revision: snapshot.panels.revision,
+        };
+        self.shell.select_panel_output(output.clone());
         // Presses are queued during the same reactor step, ahead of this release.
         self.drain_raw_press_observations(runtime);
         let action = event.action.action.as_str();
@@ -183,30 +345,40 @@ impl ShellLoop {
         let button = PointerButton::from_raw_x(event.action.button);
         if event.action.phase == ActionPhase::Press {
             if let Some(slot) = slot_of(action, "task.slot.") {
-                self.capture_task_target(slot);
+                self.capture_task_target_for_output(slot, &output);
             } else {
                 self.task_press_target = None;
             }
-        } else if event.action.phase == ActionPhase::Release
-            && (!event.action.inside || slot_of(action, "task.slot.").is_none())
-        {
+        } else if !release_keeps_task_press(
+            event.action.phase,
+            event.action.inside,
+            action,
+            self.task_drag.is_some(),
+        ) {
             self.task_press_target = None;
         }
         if matches!(button, PointerButton::WheelUp | PointerButton::WheelDown) {
             return Ok(());
         }
+        if self.route_start_app_drag(&event, runtime)? {
+            return Ok(());
+        }
         let release_inside = event.action.phase == ActionPhase::Release && event.action.inside;
         if release_inside && matches!(button, PointerButton::Secondary) {
-            return self.route_secondary(&event, runtime);
+            return self.route_secondary(&event, runtime, &interaction);
         }
-        if self.route_task_drag(&event, runtime) {
+        if self.route_task_drag(&event, runtime, &output) {
             return Ok(());
         }
         // ESC-V3: keyboard events carry button 0; gating them as
         // non-primary pointer releases drops every real Escape press
         // before the keyboard arms below. Exempt them here.
         let is_keyboard = action == "keyboard.input";
-        if non_primary_release_is_dropped(action, event.action.phase == ActionPhase::Release, button) {
+        if non_primary_release_is_dropped(
+            action,
+            event.action.phase == ActionPhase::Release,
+            button,
+        ) {
             return Ok(());
         }
         if action == "keyboard.input" && event.action.phase == ActionPhase::Release {
@@ -318,7 +490,9 @@ impl ShellLoop {
             let _measure = shell_stage!("shell.start.open.measure");
             let _place = shell_stage!("shell.start.open.place");
             let _prepare = shell_stage!("shell.start.open.prepare");
-            let opened = self.surfaces.open_start_group(runtime);
+            let opened = self
+                .surfaces
+                .open_start_group_for_output(runtime, &interaction.output);
             let _present = shell_stage!("shell.start.open.present");
             shell_slow_note("start", started);
             match opened {
@@ -410,12 +584,14 @@ impl ShellLoop {
             }
             let transition = flamewm_profiler::ProfilePoint::new("shell.category_transition");
             let _s = transition.start();
-            self.shell.dispatch(action);
+            self.shell
+                .dispatch_with_context(action, interaction.clone());
             self.apply_controls(runtime)?;
             return Ok(());
         }
         if event.action.phase == ActionPhase::Release && event.action.inside {
-            self.shell.dispatch(action);
+            self.shell
+                .dispatch_with_context(action, interaction.clone());
             self.apply_controls(runtime)?;
         }
         Ok(())
@@ -423,16 +599,28 @@ impl ShellLoop {
 
     /// Task-slot drag gesture. Returns true when the event is consumed; a
     /// short press returns false so the normal release click still runs.
-    fn route_task_drag(&mut self, event: &SurfaceEvent, runtime: &mut SurfaceRuntime) -> bool {
+    fn route_task_drag(
+        &mut self,
+        event: &SurfaceEvent,
+        runtime: &mut SurfaceRuntime,
+        event_output: &flamewm_api::OutputId,
+    ) -> bool {
         use flamewm_shell::taskbar::tasks::drag::{TaskDrag, TaskDragRelease};
         let action = event.action.action.as_str();
         if self.task_drag.is_some()
             && action == "keyboard.input"
             && event.action.text.as_deref() == Some("\u{1b}")
         {
-            self.task_drag = None;
-            self.task_press_target = None;
-            self.set_task_insert_marker(runtime, None);
+            self.cancel_task_drag(runtime);
+            return true;
+        }
+        if self.task_drag.is_some()
+            && !task_drag_stays_on_origin(
+                self.task_press_target.as_ref().map(|(_, target)| target),
+                event_output,
+            )
+        {
+            self.cancel_task_drag(runtime);
             return true;
         }
         let slot = slot_of(action, "task.slot.");
@@ -443,7 +631,14 @@ impl ShellLoop {
                     PointerButton::Primary
                 );
                 self.task_drag = slot
-                    .filter(|_| primary)
+                    .filter(|slot| {
+                        primary
+                            && task_drag_can_start(
+                                self.task_press_target.as_ref(),
+                                *slot,
+                                event_output,
+                            )
+                    })
                     .map(|slot| TaskDrag::press(slot, event.action.x));
                 false
             }
@@ -454,7 +649,7 @@ impl ShellLoop {
                 };
                 if drag.motion(event.action.x) {
                     let target = drag.target(event.action.x, count);
-                    self.set_task_insert_marker(runtime, Some(target));
+                    self.set_task_insert_marker(runtime, event_output, Some(target));
                 }
                 true
             }
@@ -462,7 +657,7 @@ impl ShellLoop {
                 let Some(drag) = self.task_drag.take() else {
                     return false;
                 };
-                self.set_task_insert_marker(runtime, None);
+                self.set_task_insert_marker(runtime, event_output, None);
                 let count = self.shell.task_slot_count();
                 match drag.release_on_strip(event.action.x, event.action.y, count) {
                     TaskDragRelease::Click => false,
@@ -486,18 +681,136 @@ impl ShellLoop {
         }
     }
 
+    fn route_start_app_drag(
+        &mut self,
+        event: &SurfaceEvent,
+        runtime: &mut SurfaceRuntime,
+    ) -> Result<bool, UiBackendError> {
+        let action = event.action.action.as_str();
+        match event.action.phase {
+            ActionPhase::Press => {
+                let primary = matches!(
+                    PointerButton::from_raw_x(event.action.button),
+                    PointerButton::Primary
+                );
+                self.start_drag = slot_of(action, "start.app.")
+                    .filter(|_| primary && self.start_open)
+                    .and_then(|slot| {
+                        crate::projection::start_application_for_slot(
+                            &self.start_model,
+                            self.start_category,
+                            &self.start_query,
+                            slot,
+                        )
+                    })
+                    .map(|app_id| StartAppDrag::press(app_id, event.action.x, event.action.y));
+                Ok(false)
+            }
+            ActionPhase::Motion => {
+                let Some(drag) = self.start_drag.as_mut() else {
+                    return Ok(false);
+                };
+                Ok(drag.motion(event.action.x, event.action.y))
+            }
+            ActionPhase::Release => {
+                let Some(drag) = self.start_drag.take() else {
+                    return Ok(false);
+                };
+                if !drag.dragging {
+                    return Ok(false);
+                }
+                if let Some(point) = root_pointer_for_surface(runtime, event) {
+                    let surface_rect = runtime.surface_device_rect(event.surface).ok();
+                    let outside_start = surface_rect.is_none_or(|rect| {
+                        !flamewm_api::Rect::new(
+                            rect.x.round() as i32,
+                            rect.y.round() as i32,
+                            rect.width.round() as i32,
+                            rect.height.round() as i32,
+                        )
+                        .contains(point)
+                    });
+                    if outside_start && self.is_desktop_drop_target(point) {
+                        if let Err(error) = create_app_shortcut(&drag.app_id) {
+                            eprintln!(
+                                "flamewm-shell: create desktop shortcut for {}: {error}",
+                                drag.app_id.as_str()
+                            );
+                        }
+                    }
+                }
+                self.close_transients(runtime)?;
+                Ok(true)
+            }
+            ActionPhase::Hover => Ok(false),
+        }
+    }
+
+    fn is_desktop_drop_target(&self, point: flamewm_api::Point) -> bool {
+        let snapshot = self.shell.snapshot();
+        if !snapshot
+            .displays
+            .outputs
+            .iter()
+            .any(|output| output.connected && output.geometry.contains(point))
+            || snapshot
+                .panels
+                .panels
+                .iter()
+                .any(|panel| panel.visible && panel.geometry.contains(point))
+        {
+            return false;
+        }
+        let active_workspace = snapshot
+            .workspaces
+            .as_ref()
+            .map(|workspaces| workspaces.active_index);
+        !snapshot.windows.iter().any(|window| {
+            window.is_visible()
+                && (window.sticky
+                    || active_workspace.is_none_or(|active| {
+                        usize::try_from(window.workspace.index).ok() == Some(active)
+                    }))
+                && window.outer_geometry.contains(point)
+        })
+    }
+
     /// Show the 2 px accent insertion marker before slot `target`, or hide it
     /// (`None`). Only the marker node is written, so the panel repaints once.
-    fn set_task_insert_marker(&mut self, runtime: &mut SurfaceRuntime, target: Option<usize>) {
+    fn set_task_insert_marker(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        output: &flamewm_api::OutputId,
+        target: Option<usize>,
+    ) {
+        if let Some(panel) = self.surfaces.panel_for_output(output) {
+            self.set_task_insert_marker_on_panel(runtime, panel, target);
+        }
+    }
+
+    fn cancel_task_drag(&mut self, runtime: &mut SurfaceRuntime) {
+        let panel = self
+            .task_press_target
+            .as_ref()
+            .and_then(|(_, target)| task_drag_cleanup_output(Some(target)))
+            .and_then(|output| self.surfaces.panel_for_output(output));
+        self.task_drag = None;
+        self.task_press_target = None;
+        if let Some(panel) = panel {
+            self.set_task_insert_marker_on_panel(runtime, panel, None);
+        }
+    }
+
+    fn set_task_insert_marker_on_panel(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        panel: flamewm_ui_x11::SurfaceHandle,
+        target: Option<usize>,
+    ) {
         use flamewm_shell::taskbar::tasks::drag::insertion_marker_left;
-        let panel = self.surfaces.selected_panel();
         let result = runtime.with_document(panel, |document| match target {
             Some(index) => {
-                document.position(
-                    "task-slot-insert",
-                    insertion_marker_left(index),
-                    6.0,
-                )?;
+                document.position("task-slot-insert", insertion_marker_left(index), 6.0)?;
                 document.size("task-slot-insert", 2.0, 32.0)
             }
             None => document.size("task-slot-insert", 0.0, 0.0),
@@ -511,37 +824,63 @@ impl ShellLoop {
         &mut self,
         event: &SurfaceEvent,
         runtime: &mut SurfaceRuntime,
+        interaction: &InteractionContext,
     ) -> Result<(), UiBackendError> {
         let action = event.action.action.as_str();
         if action == "start.search" || action.starts_with("start.app.") {
             return Ok(());
         }
         if let Some(slot) = slot_of(action, "task.slot.") {
-            let pointer = Some(self.surfaces.root_pointer(runtime, event.action.x, event.action.y));
-            if let Some((_pressed_slot, target)) = self.task_press_target.take()
-                .filter(|(pressed_slot, _)| *pressed_slot == slot)
-            {
-                self.shell.open_task_context_for_target(&target, pointer);
+            let Some(pointer) = self.surfaces.root_pointer_for_output(
+                runtime,
+                &interaction.output,
+                event.action.x,
+                event.action.y,
+            ) else {
+                return Ok(());
+            };
+            let target = secondary_task_target(self.task_press_target.take(), slot, || {
+                self.shell
+                    .task_target_for_slot_on_output(slot, &interaction.output)
+            });
+            if let Some(target) = target {
+                self.shell.open_task_context_for_target_scoped(
+                    &target,
+                    Some(pointer),
+                    Some(interaction.clone()),
+                );
             }
             self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
         if let Some(cell) = slot_of(action, "workspace.") {
-            self.shell.open_workspace_context_at_cell(
+            let Some(pointer) = self.surfaces.root_pointer_for_output(
+                runtime,
+                &interaction.output,
+                event.action.x,
+                event.action.y,
+            ) else {
+                return Ok(());
+            };
+            self.shell.open_workspace_context_at_cell_scoped(
                 cell,
-                Some(
-                    self.surfaces
-                        .root_pointer(runtime, event.action.x, event.action.y),
-                ),
+                Some(pointer),
+                interaction.clone(),
             );
             self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
         if action == TASKBAR_SURFACE_ACTION {
-            self.shell.open_taskbar_context_at(Some(
-                self.surfaces
-                    .root_pointer(runtime, event.action.x, event.action.y),
-            ));
+            let Some(pointer) = self.surfaces.root_pointer_for_output(
+                runtime,
+                &interaction.output,
+                event.action.x,
+                event.action.y,
+            ) else {
+                return Ok(());
+            };
+            self.shell
+                .open_taskbar_context_at_scoped(Some(pointer), interaction.clone());
             self.close_quick_control_nonfatal();
             return self.apply_controls(runtime);
         }
@@ -552,6 +891,161 @@ impl ShellLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_scoped_interaction_origin_requires_a_registered_surface() {
+        assert_eq!(resolve_interaction_origin(None), InteractionOrigin::Ignore);
+        let output = flamewm_api::OutputId::new("B");
+        assert_eq!(
+            resolve_interaction_origin(Some(output.clone())),
+            InteractionOrigin::Output(output),
+        );
+    }
+
+    #[test]
+    fn stale_or_disconnected_origin_is_rejected_without_fallback() {
+        let output = flamewm_api::OutputId::new("B");
+        let connected = flamewm_api::OutputId::new("A");
+        let outputs = [(&connected, true), (&output, false)];
+        assert!(!interaction_origin_is_connected(
+            &output,
+            outputs.into_iter()
+        ));
+        assert!(!interaction_origin_is_connected(
+            &flamewm_api::OutputId::new("gone"),
+            [(&connected, true)].into_iter()
+        ));
+        assert!(interaction_origin_is_connected(
+            &connected,
+            [(&connected, true)].into_iter()
+        ));
+    }
+
+    #[test]
+    fn task_drag_is_cancelled_when_release_origin_differs_from_pressed_task() {
+        let origin = flamewm_api::OutputId::new("A");
+        let other = flamewm_api::OutputId::new("B");
+        let window = flamewm_api::WindowRef::new(7, 1);
+        let target = flamewm_shell::runtime::TaskSlotTarget {
+            id: flamewm_api::TaskEntryId::window(window),
+            app_id: flamewm_api::DesktopAppId::new("org.example.editor"),
+            window: Some(window),
+            output: origin.clone(),
+        };
+
+        assert!(task_drag_stays_on_origin(Some(&target), &origin));
+        assert!(!task_drag_stays_on_origin(Some(&target), &other));
+        assert!(!task_drag_stays_on_origin(None, &origin));
+        assert_eq!(task_drag_cleanup_output(Some(&target)), Some(&origin));
+        assert_eq!(task_drag_cleanup_output(None), None);
+        let captured = Some((2, target));
+        assert!(task_drag_can_start(captured.as_ref(), 2, &origin));
+        assert!(!task_drag_can_start(captured.as_ref(), 1, &origin));
+        assert!(!task_drag_can_start(captured.as_ref(), 2, &other));
+        assert!(!task_drag_can_start(None, 2, &origin));
+    }
+
+    #[test]
+    fn release_keeps_the_pressed_task_target_only_for_clicks_or_armed_drags() {
+        // Cross-slot drag release: the drag still owns the capture.
+        assert!(release_keeps_task_press(
+            ActionPhase::Release,
+            false,
+            "task.slot.3",
+            true
+        ));
+        // Plain release outside the pressed node with no drag clears it.
+        assert!(!release_keeps_task_press(
+            ActionPhase::Release,
+            false,
+            "task.slot.3",
+            false
+        ));
+        // Release inside a task slot keeps it for the click path.
+        assert!(release_keeps_task_press(
+            ActionPhase::Release,
+            true,
+            "task.slot.3",
+            false
+        ));
+        assert!(!release_keeps_task_press(
+            ActionPhase::Release,
+            true,
+            "taskbar.surface",
+            false
+        ));
+        assert!(release_keeps_task_press(
+            ActionPhase::Press,
+            false,
+            "taskbar.surface",
+            false
+        ));
+    }
+
+    #[test]
+    fn secondary_release_without_press_capture_uses_the_slot_task() {
+        let output = flamewm_api::OutputId::new("A");
+        let window = flamewm_api::WindowRef::new(9, 1);
+        let target = flamewm_shell::runtime::TaskSlotTarget {
+            id: flamewm_api::TaskEntryId::window(window),
+            app_id: flamewm_api::DesktopAppId::new("org.example.terminal"),
+            window: Some(window),
+            output,
+        };
+        // Right-click: no primary press capture exists.
+        assert_eq!(
+            secondary_task_target(None, 2, || Some(target.clone())),
+            Some(target.clone())
+        );
+        // A matching capture wins over the currently shown task.
+        assert_eq!(
+            secondary_task_target(Some((2, target.clone())), 2, || None),
+            Some(target.clone())
+        );
+        // A stale capture from another slot never redirects the release.
+        assert_eq!(
+            secondary_task_target(Some((0, target.clone())), 2, || Some(target.clone())),
+            Some(target.clone())
+        );
+        assert_eq!(secondary_task_target(None, 2, || None), None);
+    }
+
+    #[test]
+    fn monitor_scoped_start_transfer_and_unknown_surface_are_not_fail_open() {
+        let app = include_str!("app.rs");
+        let controls = app
+            .split("ShellControl::ToggleStart {")
+            .nth(1)
+            .and_then(|tail| tail.split("ShellControl::CloseStart").next())
+            .expect("ToggleStart control branch exists");
+        let router = include_str!("event_router.rs");
+        let route = router
+            .split("pub(crate) fn route_event(")
+            .nth(1)
+            .and_then(|tail| tail.split("// Presses are queued").next())
+            .expect("route_event origin handling exists");
+
+        let mut missing_contracts = Vec::new();
+        if !controls.contains("open_start_group_for_output(runtime, &target_output)") {
+            missing_contracts
+                .push("an already-open Start must transfer to the newly requested output");
+        }
+        if route.contains("select_input_output(event.surface)") {
+            missing_contracts
+                .push("an unknown/stale surface must be rejected before routing actions");
+        }
+        if !route.contains("interaction_origin_is_connected")
+            || !router.contains("source_surface: event.surface")
+            || !router.contains("dispatch_with_context(action, interaction.clone())")
+        {
+            missing_contracts.push("pointer controls must use a connected, explicit source output");
+        }
+
+        assert!(
+            missing_contracts.is_empty(),
+            "missing monitor-scoped contracts: {missing_contracts:?}"
+        );
+    }
 
     #[test]
     fn taskbar_settings_row_maps_to_general_settings_program_only() {
@@ -616,11 +1110,31 @@ mod tests {
 
     #[test]
     fn right_button_outside_release_reaches_dismissal_but_other_secondary_releases_drop() {
-        assert!(!non_primary_release_is_dropped(OUTSIDE_RELEASE_ACTION, true, PointerButton::Secondary));
-        assert!(!non_primary_release_is_dropped(OUTSIDE_RELEASE_ACTION, true, PointerButton::Primary));
-        assert!(non_primary_release_is_dropped("network.open", true, PointerButton::Secondary));
-        assert!(!non_primary_release_is_dropped("keyboard.input", true, PointerButton::Other(0)));
-        assert!(!non_primary_release_is_dropped(OUTSIDE_RELEASE_ACTION, false, PointerButton::Secondary));
+        assert!(!non_primary_release_is_dropped(
+            OUTSIDE_RELEASE_ACTION,
+            true,
+            PointerButton::Secondary
+        ));
+        assert!(!non_primary_release_is_dropped(
+            OUTSIDE_RELEASE_ACTION,
+            true,
+            PointerButton::Primary
+        ));
+        assert!(non_primary_release_is_dropped(
+            "network.open",
+            true,
+            PointerButton::Secondary
+        ));
+        assert!(!non_primary_release_is_dropped(
+            "keyboard.input",
+            true,
+            PointerButton::Other(0)
+        ));
+        assert!(!non_primary_release_is_dropped(
+            OUTSIDE_RELEASE_ACTION,
+            false,
+            PointerButton::Secondary
+        ));
     }
 
     fn latch_for(group: &'static str, at: Instant) -> Option<DismissLatch> {
@@ -723,17 +1237,39 @@ mod tests {
             assert_eq!(opener_group(opener), Some(group), "{opener}");
             let mut latch = Some(DismissLatch { group, at: now });
             assert!(latch_consumes_opener(&mut latch, opener, now), "{opener}");
-            assert!(!latch_consumes_opener(&mut latch, opener, now), "{opener} second release opens");
+            assert!(
+                !latch_consumes_opener(&mut latch, opener, now),
+                "{opener} second release opens"
+            );
         }
     }
 
     #[test]
     fn press_classification_treats_only_quick_popup_titles_as_inside() {
-        for title in ["FlameWM audio", "FlameWM network", "FlameWM calendar", "FlameWM battery", "FlameWM weather", "FlameWM media"] {
-            assert!(!raw_press_is_outside_quick_popups(Some(title)), "{title} is inside");
+        for title in [
+            "FlameWM audio",
+            "FlameWM network",
+            "FlameWM calendar",
+            "FlameWM battery",
+            "FlameWM weather",
+            "FlameWM media",
+        ] {
+            assert!(
+                !raw_press_is_outside_quick_popups(Some(title)),
+                "{title} is inside"
+            );
         }
-        assert!(raw_press_is_outside_quick_popups(None), "no window under pointer");
-        assert!(raw_press_is_outside_quick_popups(Some("FlameWM Render 0.0.9")), "panel");
-        assert!(raw_press_is_outside_quick_popups(Some("FlameWM audio2")), "prefix is not a match");
+        assert!(
+            raw_press_is_outside_quick_popups(None),
+            "no window under pointer"
+        );
+        assert!(
+            raw_press_is_outside_quick_popups(Some("FlameWM Render 0.0.9")),
+            "panel"
+        );
+        assert!(
+            raw_press_is_outside_quick_popups(Some("FlameWM audio2")),
+            "prefix is not a match"
+        );
     }
 }

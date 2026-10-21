@@ -11,9 +11,9 @@ use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_applications::launch_feedback::{Counters, Fragments, Sequences};
 use flamewm_shell::icon_loader::{IconLoader, IconTarget};
 use flamewm_ui_x11::{
-    decode_document, RuntimeImage, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
-    SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
-    StartupX11Event, StartupX11Observer,
+    decode_document, RuntimeImage, StartupX11Event, StartupX11Observer, SurfaceConfig,
+    SurfaceHandle, SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess,
+    UiTemplate,
 };
 
 const ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-launch-feedback.rwr"));
@@ -40,14 +40,23 @@ impl LaunchFeedback {
     pub fn connect(loader_root: PathBuf) -> Result<Self, String> {
         Ok(Self {
             observer: StartupX11Observer::connect()?,
-            fragments: Fragments::default(), sequences: Sequences::default(),
-            surface: None, visible: false, requested: None, painted: None,
-            loader: None, loader_root, icon_theme: String::new(), last_poll: None,
+            fragments: Fragments::default(),
+            sequences: Sequences::default(),
+            surface: None,
+            visible: false,
+            requested: None,
+            painted: None,
+            loader: None,
+            loader_root,
+            icon_theme: String::new(),
+            last_poll: None,
             indicator_frame: None,
         })
     }
 
-    pub fn fd(&self) -> RawFd { self.observer.fd() }
+    pub fn fd(&self) -> RawFd {
+        self.observer.fd()
+    }
 
     pub fn pointer_position(&self) -> Option<(i32, i32)> {
         self.observer.pointer_position()
@@ -58,15 +67,30 @@ impl LaunchFeedback {
         let previous = self.sequences.counters;
         for event in self.observer.on_ready(self.sequences.active())? {
             match event {
-                StartupX11Event::Fragment { sender, begin, data } => {
+                StartupX11Event::Fragment {
+                    sender,
+                    begin,
+                    data,
+                } => {
                     if let Some(message) = self.fragments.push(sender, begin, data) {
                         self.sequences.accept(message, Instant::now());
                     }
                 }
-                StartupX11Event::WindowIdentity { startup_id, classes } => {
-                    if self.sequences.complete_for_window(startup_id.as_deref(), None).is_none() {
+                StartupX11Event::WindowIdentity {
+                    startup_id,
+                    classes,
+                } => {
+                    if self
+                        .sequences
+                        .complete_for_window(startup_id.as_deref(), None)
+                        .is_none()
+                    {
                         for class in classes {
-                            if self.sequences.complete_for_window(None, Some(&class)).is_some() {
+                            if self
+                                .sequences
+                                .complete_for_window(None, Some(&class))
+                                .is_some()
+                            {
                                 break;
                             }
                         }
@@ -80,20 +104,29 @@ impl LaunchFeedback {
 
     fn report_transition(&self, previous: Counters) {
         let current = self.sequences.counters;
-        if current == previous { return; }
+        if current == previous {
+            return;
+        }
         flamewm_debug::emit(
             flamewm_debug::DebugEventId("shell.launch-feedback.lifecycle"),
             Duration::ZERO,
-            || format!("started={} completed={} expired={}",
-                current.started, current.completed, current.expired),
+            || {
+                format!(
+                    "started={} completed={} expired={}",
+                    current.started, current.completed, current.expired
+                )
+            },
         );
     }
 
     /// No motion events are assumed to originate from XFixes cursor-image subscriptions.
     /// One active-only query per 50ms follows the pointer above *all* client windows.
     pub fn tick(
-        &mut self, runtime: &mut SurfaceRuntime, displays: &DisplaySnapshot,
-        settings: Option<&SettingsSnapshot>, now: Instant,
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        displays: &DisplaySnapshot,
+        settings: Option<&SettingsSnapshot>,
+        now: Instant,
     ) -> Result<Option<Instant>, UiBackendError> {
         let previous = self.sequences.counters;
         self.sequences.expire(now);
@@ -103,13 +136,24 @@ impl LaunchFeedback {
             // A SILENT launch still needs its expiry deadline, without pointer polling.
             return Ok(self.sequences.next_deadline());
         }
-        let should_poll = self.last_poll.is_none_or(|last| now.saturating_duration_since(last) >= POLL_ACTIVE);
-        let icon_theme = settings.and_then(|s| s.values.get("iconTheme"))
-            .and_then(|v| if let SettingValue::Text(v) = v { Some(v.as_str()) } else { None })
+        let should_poll = self
+            .last_poll
+            .is_none_or(|last| now.saturating_duration_since(last) >= POLL_ACTIVE);
+        let icon_theme = settings
+            .and_then(|s| s.values.get("iconTheme"))
+            .and_then(|v| {
+                if let SettingValue::Text(v) = v {
+                    Some(v.as_str())
+                } else {
+                    None
+                }
+            })
             .unwrap_or("breeze");
         if self.icon_theme != icon_theme {
             self.icon_theme = icon_theme.to_owned();
-            if let Some(loader) = &mut self.loader { loader.set_theme(icon_theme); }
+            if let Some(loader) = &mut self.loader {
+                loader.set_theme(icon_theme);
+            }
             self.requested = None;
             self.painted = None;
         }
@@ -122,15 +166,19 @@ impl LaunchFeedback {
             return Ok(self.sequences.next_deadline());
         };
         let output = output_at(displays, px, py);
-        let scale = output.map(|o| u32::from(o.shell_scale_percent)).unwrap_or(100).clamp(50, 400);
+        let scale = output
+            .map(|o| u32::from(o.shell_scale_percent))
+            .unwrap_or(100)
+            .clamp(50, 400);
         let side = ((BASE_ICON as u32 * scale + 50) / 100).clamp(8, 64);
         // Compare borrowed sequence fields before allocating a new request key.
         // Pointer updates must not clone app IDs/icons on every active poll.
         let (started, replacement) = {
             let sequence = self.sequences.visible().expect("checked above");
-            (sequence.started, updated_launch_key(
-                &sequence.id, &sequence.icon, side, self.requested.as_ref(),
-            ))
+            (
+                sequence.started,
+                updated_launch_key(&sequence.id, &sequence.icon, side, self.requested.as_ref()),
+            )
         };
         if let Some(key) = replacement {
             self.requested = Some(key);
@@ -146,7 +194,10 @@ impl LaunchFeedback {
                 runtime.redraw(surface)?;
             }
             if self.loader.is_none() {
-                self.loader = Some(IconLoader::spawn(self.loader_root.clone(), self.icon_theme.clone()));
+                self.loader = Some(IconLoader::spawn(
+                    self.loader_root.clone(),
+                    self.icon_theme.clone(),
+                ));
             }
             if let (Some(loader), Some((_, icon, _))) = (&mut self.loader, &self.requested) {
                 loader.request(IconTarget::TaskSlot(0), icon, side, side);
@@ -154,22 +205,42 @@ impl LaunchFeedback {
         }
         // Maintain a bounded query interval while decoding is still pending.
         self.last_poll = Some(now);
-        let results = self.loader.as_mut().map(IconLoader::drain_ready).unwrap_or_default();
+        let results = self
+            .loader
+            .as_mut()
+            .map(IconLoader::drain_ready)
+            .unwrap_or_default();
         let mut icon_ready = false;
         for result in results {
             // The loader deduplicates by icon identity, not by startup ID. If
             // another launch of the same app begins during a pending decode,
             // the first result is still the correct raster for the new badge.
-            if !self.requested.as_ref().is_some_and(|(_, icon, requested_side)| {
-                matches_icon_result(result.target, &result.name, result.width,
-                    result.height, icon, *requested_side)
-            }) {
+            if !self
+                .requested
+                .as_ref()
+                .is_some_and(|(_, icon, requested_side)| {
+                    matches_icon_result(
+                        result.target,
+                        &result.name,
+                        result.width,
+                        result.height,
+                        icon,
+                        *requested_side,
+                    )
+                })
+            {
                 continue;
             }
-            let Some(raster) = result.raster else { continue; };
+            let Some(raster) = result.raster else {
+                continue;
+            };
             let surface = self.surface(runtime)?;
-            let image = RuntimeImage { source: raster.source, width: raster.width,
-                height: raster.height, pixels: raster.pixels };
+            let image = RuntimeImage {
+                source: raster.source,
+                width: raster.width,
+                height: raster.height,
+                pixels: raster.pixels,
+            };
             runtime.with_document(surface, |doc| {
                 doc.image_rgba8("launch-icon", image)?;
                 doc.visible("launch-icon", true)?;
@@ -187,8 +258,8 @@ impl LaunchFeedback {
         // Opt-in only; global animation/reduced-motion policy always wins.
         let animate = settings.is_some_and(|s| {
             s.values.get("launchFeedbackAnimation") == Some(&SettingValue::Boolean(true))
-            && s.values.get("animationsEnabled") != Some(&SettingValue::Boolean(false))
-            && s.values.get("reducedMotion") != Some(&SettingValue::Boolean(true))
+                && s.values.get("animationsEnabled") != Some(&SettingValue::Boolean(false))
+                && s.values.get("reducedMotion") != Some(&SettingValue::Boolean(true))
         });
         let animate_indicator = settings.is_none_or(|s| {
             s.values.get("animationsEnabled") != Some(&SettingValue::Boolean(false))
@@ -204,9 +275,19 @@ impl LaunchFeedback {
                 runtime.with_document(surface, |doc| {
                     for index in 0..4 {
                         let color = if index == frame {
-                            flamewm_ui_x11::UiColor { r: 101, g: 168, b: 255, a: 255 }
+                            flamewm_ui_x11::UiColor {
+                                r: 101,
+                                g: 168,
+                                b: 255,
+                                a: 255,
+                            }
                         } else {
-                            flamewm_ui_x11::UiColor { r: 70, g: 80, b: 90, a: 160 }
+                            flamewm_ui_x11::UiColor {
+                                r: 70,
+                                g: 80,
+                                b: 90,
+                                a: 160,
+                            }
                         };
                         doc.background(&format!("launch-dot-{index}"), color)?;
                     }
@@ -222,7 +303,10 @@ impl LaunchFeedback {
         runtime.apply_output_scale(surface, scale as f32 / 100.0)?;
         runtime.move_resize(surface, x, y, side, side)?;
         let was_visible = self.visible;
-        if !was_visible { runtime.show(surface)?; self.visible = true; }
+        if !was_visible {
+            runtime.show(surface)?;
+            self.visible = true;
+        }
         if should_poll || icon_ready || !was_visible {
             runtime.redraw(surface)?;
         }
@@ -234,19 +318,31 @@ impl LaunchFeedback {
     }
 
     fn surface(&mut self, runtime: &mut SurfaceRuntime) -> Result<SurfaceHandle, UiBackendError> {
-        if let Some(surface) = self.surface { return Ok(surface); }
+        if let Some(surface) = self.surface {
+            return Ok(surface);
+        }
         let template = decode_document(ARTIFACT).map_err(UiBackendError::Document)?;
-        let surface = runtime.create_surface(UiTemplate::new(template), SurfaceConfig {
-            width: 16, height: 16, title: "FlameWM launch feedback".into(),
-            role: SurfaceRole::Overlay, input: SurfaceInputMode::PassThrough,
-            initially_visible: false, x: 0, y: 0,
-        })?;
+        let surface = runtime.create_surface(
+            UiTemplate::new(template),
+            SurfaceConfig {
+                width: 16,
+                height: 16,
+                title: "FlameWM launch feedback".into(),
+                role: SurfaceRole::Overlay,
+                input: SurfaceInputMode::PassThrough,
+                initially_visible: false,
+                x: 0,
+                y: 0,
+            },
+        )?;
         self.surface = Some(surface);
         Ok(surface)
     }
     fn hide(&mut self, runtime: &mut SurfaceRuntime) -> Result<(), UiBackendError> {
         if self.visible {
-            if let Some(surface) = self.surface { runtime.hide(surface)?; }
+            if let Some(surface) = self.surface {
+                runtime.hide(surface)?;
+            }
             self.visible = false;
         }
         if !self.sequences.active() {
@@ -260,13 +356,22 @@ impl LaunchFeedback {
         }
         Ok(())
     }
-    pub fn counters(&self) -> flamewm_applications::launch_feedback::Counters { self.sequences.counters }
+    pub fn counters(&self) -> flamewm_applications::launch_feedback::Counters {
+        self.sequences.counters
+    }
 }
 
 fn updated_launch_key(
-    id: &str, icon: &str, side: u32, existing: Option<&(String, String, u32)>,
+    id: &str,
+    icon: &str,
+    side: u32,
+    existing: Option<&(String, String, u32)>,
 ) -> Option<(String, String, u32)> {
-    let icon = if icon.trim().is_empty() { "application-x-executable" } else { icon };
+    let icon = if icon.trim().is_empty() {
+        "application-x-executable"
+    } else {
+        icon
+    };
     if existing.is_some_and(|(old_id, old_icon, old_side)| {
         old_id.as_str() == id && old_icon.as_str() == icon && *old_side == side
     }) {
@@ -276,20 +381,39 @@ fn updated_launch_key(
     }
 }
 
-fn matches_icon_result(target: IconTarget, name: &str, width: u32,
-    height: u32, requested: &str, side: u32) -> bool {
-    target == IconTarget::TaskSlot(0) && name == requested
-        && width == side && height == side
+fn matches_icon_result(
+    target: IconTarget,
+    name: &str,
+    width: u32,
+    height: u32,
+    requested: &str,
+    side: u32,
+) -> bool {
+    target == IconTarget::TaskSlot(0) && name == requested && width == side && height == side
 }
 
 fn output_at(displays: &DisplaySnapshot, x: i32, y: i32) -> Option<&OutputSnapshot> {
-    displays.outputs.iter().filter(|o| o.connected).find(|o| {
-        let r = o.geometry;
-        x >= r.x && y >= r.y && x < r.x.saturating_add(r.width) && y < r.y.saturating_add(r.height)
-    }).or_else(|| displays.outputs.iter().find(|o| o.primary && o.connected))
+    displays
+        .outputs
+        .iter()
+        .filter(|o| o.connected)
+        .find(|o| {
+            let r = o.geometry;
+            x >= r.x
+                && y >= r.y
+                && x < r.x.saturating_add(r.width)
+                && y < r.y.saturating_add(r.height)
+        })
+        .or_else(|| displays.outputs.iter().find(|o| o.primary && o.connected))
 }
 
-fn badge_position(px: i32, py: i32, side: i32, scale: u32, output: Option<&OutputSnapshot>) -> (i32, i32) {
+fn badge_position(
+    px: i32,
+    py: i32,
+    side: i32,
+    scale: u32,
+    output: Option<&OutputSnapshot>,
+) -> (i32, i32) {
     let offset = ((BASE_OFFSET as i64 * i64::from(scale) + 50) / 100) as i32;
     let (mut x, mut y) = (px.saturating_add(offset), py.saturating_add(offset));
     if let Some(out) = output {
@@ -297,8 +421,12 @@ fn badge_position(px: i32, py: i32, side: i32, scale: u32, output: Option<&Outpu
         let right = r.x.saturating_add(r.width);
         let bottom = r.y.saturating_add(r.height);
         // Flip rather than clamp across the pointer hot spot at screen edges.
-        if x.saturating_add(side) > right { x = px.saturating_sub(offset).saturating_sub(side); }
-        if y.saturating_add(side) > bottom { y = py.saturating_sub(offset).saturating_sub(side); }
+        if x.saturating_add(side) > right {
+            x = px.saturating_sub(offset).saturating_sub(side);
+        }
+        if y.saturating_add(side) > bottom {
+            y = py.saturating_sub(offset).saturating_sub(side);
+        }
         x = x.clamp(r.x, right.saturating_sub(side).max(r.x));
         y = y.clamp(r.y, bottom.saturating_sub(side).max(r.y));
     }
@@ -310,41 +438,85 @@ mod tests {
     use super::*;
     use flamewm_api::{ModeId, OutputId, Rect};
     fn snapshot() -> DisplaySnapshot {
-        DisplaySnapshot { generation: 0, pending: None, outputs: vec![OutputSnapshot {
-            id: OutputId::new("left"), connector: "DP-1".into(), edid_identity: String::new(),
-            connected: true, primary: true, geometry: Rect::new(-1920, -100, 1920, 1080),
-            current_mode: ModeId(1), modes: vec![], shell_scale_percent: 150,
-        }] }
+        DisplaySnapshot {
+            generation: 0,
+            pending: None,
+            outputs: vec![OutputSnapshot {
+                id: OutputId::new("left"),
+                connector: "DP-1".into(),
+                edid_identity: String::new(),
+                connected: true,
+                primary: true,
+                geometry: Rect::new(-1920, -100, 1920, 1080),
+                current_mode: ModeId(1),
+                modes: vec![],
+                shell_scale_percent: 150,
+            }],
+        }
     }
     #[test]
     fn same_app_overlapping_launch_uses_inflight_icon_result() {
         // A first launch's result is reusable by a second launch with the
         // same icon. The loader does not know startup IDs and coalesces keys.
-        assert!(matches_icon_result(IconTarget::TaskSlot(0), "org.kde.dolphin",
-            24, 24, "org.kde.dolphin", 24));
-        assert!(!matches_icon_result(IconTarget::TaskSlot(0), "org.kde.dolphin",
-            24, 24, "org.kde.kate", 24));
-        assert!(!matches_icon_result(IconTarget::TaskSlot(0), "org.kde.dolphin",
-            16, 16, "org.kde.dolphin", 24));
+        assert!(matches_icon_result(
+            IconTarget::TaskSlot(0),
+            "org.kde.dolphin",
+            24,
+            24,
+            "org.kde.dolphin",
+            24
+        ));
+        assert!(!matches_icon_result(
+            IconTarget::TaskSlot(0),
+            "org.kde.dolphin",
+            24,
+            24,
+            "org.kde.kate",
+            24
+        ));
+        assert!(!matches_icon_result(
+            IconTarget::TaskSlot(0),
+            "org.kde.dolphin",
+            16,
+            16,
+            "org.kde.dolphin",
+            24
+        ));
     }
 
     #[test]
     fn stable_launch_key_does_not_allocate_another_owned_key() {
         let current = ("launch-1".to_owned(), "org.kde.kate".to_owned(), 24);
-        assert_eq!(updated_launch_key("launch-1", "org.kde.kate", 24, Some(&current)), None);
-        assert_eq!(updated_launch_key("launch-2", "org.kde.kate", 24, Some(&current)),
-            Some(("launch-2".to_owned(), "org.kde.kate".to_owned(), 24)));
-        assert_eq!(updated_launch_key("launch-1", "org.kde.kate", 32, Some(&current)),
-            Some(("launch-1".to_owned(), "org.kde.kate".to_owned(), 32)));
-        assert_eq!(updated_launch_key("launch-1", "  ", 24, None),
-            Some(("launch-1".to_owned(), "application-x-executable".to_owned(), 24)));
+        assert_eq!(
+            updated_launch_key("launch-1", "org.kde.kate", 24, Some(&current)),
+            None
+        );
+        assert_eq!(
+            updated_launch_key("launch-2", "org.kde.kate", 24, Some(&current)),
+            Some(("launch-2".to_owned(), "org.kde.kate".to_owned(), 24))
+        );
+        assert_eq!(
+            updated_launch_key("launch-1", "org.kde.kate", 32, Some(&current)),
+            Some(("launch-1".to_owned(), "org.kde.kate".to_owned(), 32))
+        );
+        assert_eq!(
+            updated_launch_key("launch-1", "  ", 24, None),
+            Some((
+                "launch-1".to_owned(),
+                "application-x-executable".to_owned(),
+                24
+            ))
+        );
     }
 
     #[test]
     fn placement_handles_negative_origin_and_output_corner() {
         let snap = snapshot();
         let output = output_at(&snap, -1910, -90).expect("left output");
-        assert_eq!(badge_position(-1910, -90, 24, 150, Some(output)), (-1890, -70));
+        assert_eq!(
+            badge_position(-1910, -90, 24, 150, Some(output)),
+            (-1890, -70)
+        );
         assert_eq!(badge_position(-5, 970, 24, 150, Some(output)), (-49, 926));
     }
 }

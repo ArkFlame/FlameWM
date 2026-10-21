@@ -152,7 +152,10 @@ mod tests {
         let mut drag = TaskDrag::press(0, 10.0);
         assert!(drag.motion(200.0));
         // Released far to the right but off the strip: nothing happens.
-        assert_eq!(drag.release_on_strip(200.0, -200.0, 3), TaskDragRelease::Noop);
+        assert_eq!(
+            drag.release_on_strip(200.0, -200.0, 3),
+            TaskDragRelease::Noop
+        );
         // Same release inside the strip reorders as before.
         let mut drag = TaskDrag::press(0, 10.0);
         assert!(drag.motion(200.0));

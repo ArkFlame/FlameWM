@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet};
 use super::*;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeKind {
@@ -182,7 +182,11 @@ impl RuntimeDocument {
             .enumerate()
             .map(|(index, variable)| (variable.name.clone(), index as u16))
             .collect();
-        let variable_values = document.variables.iter().map(|variable| variable.default).collect();
+        let variable_values = document
+            .variables
+            .iter()
+            .map(|variable| variable.default)
+            .collect();
         Ok(Self {
             document,
             variable_values,
@@ -226,7 +230,8 @@ impl RuntimeDocument {
     }
 
     pub(crate) fn require_node(&self, id: &str) -> Result<u32, String> {
-        self.node_by_id(id).ok_or_else(|| format!("no node with id '{id}'"))
+        self.node_by_id(id)
+            .ok_or_else(|| format!("no node with id '{id}'"))
     }
 
     pub fn set_text(&mut self, id: &str, text: impl Into<String>) -> Result<(), String> {
@@ -367,7 +372,11 @@ impl RuntimeDocument {
         if let Some(entry) = self.node_image_overrides.get(&index) {
             return entry.revision;
         }
-        let asset_id = self.document.nodes.get(index as usize).and_then(|node| node.image);
+        let asset_id = self
+            .document
+            .nodes
+            .get(index as usize)
+            .and_then(|node| node.image);
         asset_id.map_or(0, |asset_id| self.image_revision(asset_id))
     }
 

@@ -38,11 +38,10 @@ pub(super) fn device_signal_refresh(
             access_points: false,
         };
     };
-    let active_access_point =
-        signal
-            .active_access_point
-            .as_deref()
-            .map(|path| if path == "/" { "" } else { path });
+    let active_access_point = signal
+        .active_access_point
+        .as_deref()
+        .map(|path| if path == "/" { "" } else { path });
     let access_point_changed =
         active_access_point.is_some_and(|path| path != cached.active_access_point);
     let connection_changed = signal

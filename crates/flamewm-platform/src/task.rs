@@ -104,7 +104,10 @@ impl TaskStrip {
             .collect();
         for window in stale {
             if std::env::var_os("FLAMEWM_DEBUG_TASKS").is_some() {
-                eprintln!("flamewm-task: remove window={} gen={} (absent from live list)", window.id, window.generation);
+                eprintln!(
+                    "flamewm-task: remove window={} gen={} (absent from live list)",
+                    window.id, window.generation
+                );
             }
             self.remove_window(window);
         }
@@ -477,7 +480,9 @@ mod order_invariant_tests {
 
     fn live(list: &[(&str, u64, u64)]) -> Vec<(DesktopAppId, WindowRef)> {
         list.iter()
-            .map(|(name, id, generation)| (DesktopAppId::new(*name), WindowRef::new(*id, *generation)))
+            .map(|(name, id, generation)| {
+                (DesktopAppId::new(*name), WindowRef::new(*id, *generation))
+            })
             .collect()
     }
 
@@ -508,7 +513,10 @@ mod order_invariant_tests {
         let mut strip = abc();
         strip.reconcile_live(&live(&[("a", 1, 1), ("b", 2, 5), ("c", 3, 1)]));
         assert_eq!(order(&strip), vec![1, 2, 3]);
-        assert_eq!(strip.entries()[1].represented_window(), Some(WindowRef::new(2, 5)));
+        assert_eq!(
+            strip.entries()[1].represented_window(),
+            Some(WindowRef::new(2, 5))
+        );
     }
 
     #[test]

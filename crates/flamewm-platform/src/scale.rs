@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use flamewm_api::OutputId;
 
-pub const SCALE_BUCKETS: [u16; 5] = [100, 125, 150, 175, 200];
+pub const SCALE_BUCKETS: [u16; 21] = [
+    100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190,
+    195, 200,
+];
 pub const CACHE_GENERATIONS: u64 = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -14,7 +17,7 @@ pub struct ScaleManager {
 
 impl ScaleManager {
     pub fn cached_physical_size(&mut self, logical: i32, requested_scale: u16) -> i32 {
-        let scale = nearest_supported_scale(requested_scale);
+        let scale = effective_scale(requested_scale);
         *self
             .cache
             .entry((logical, scale, self.theme_generation))
@@ -47,9 +50,19 @@ impl ScaleManager {
 
 #[must_use]
 pub const fn is_supported_scale(percent: u16) -> bool {
-    matches!(percent, 100 | 125 | 150 | 175 | 200)
+    percent >= 100 && percent <= 200 && percent % 5 == 0
 }
 
+#[must_use]
+pub fn effective_scale(percent: u16) -> u16 {
+    if is_supported_scale(percent) {
+        percent
+    } else {
+        100
+    }
+}
+
+/// Rounds only for non-authoritative visual previews; never use for settings writes.
 #[must_use]
 pub fn nearest_supported_scale(percent: u16) -> u16 {
     SCALE_BUCKETS
@@ -61,7 +74,7 @@ pub fn nearest_supported_scale(percent: u16) -> u16 {
 
 #[must_use]
 pub fn scale_value(logical: i32, percent: u16) -> i32 {
-    let scale = i64::from(nearest_supported_scale(percent));
+    let scale = i64::from(effective_scale(percent));
     let scaled = (i64::from(logical) * scale + if logical >= 0 { 50 } else { -50 }) / 100;
     scaled.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
@@ -74,6 +87,28 @@ mod tests {
     fn supported_scale_rounds_logical_size() {
         assert_eq!(scale_value(44, 125), 55);
         assert_eq!(scale_value(44, 150), 66);
+    }
+
+    #[test]
+    fn all_five_percent_steps_are_exact_and_cached_independently() {
+        let mut manager = ScaleManager::default();
+        for percent in SCALE_BUCKETS {
+            assert!(is_supported_scale(percent));
+            assert_eq!(nearest_supported_scale(percent), percent);
+            assert_eq!(scale_value(100, percent), i32::from(percent));
+            assert_eq!(
+                manager.cached_physical_size(100, percent),
+                i32::from(percent)
+            );
+        }
+        assert_eq!(manager.cache_size(), 21);
+        for percent in [0, 99, 101, 104, 106, 133, 199, 201, u16::MAX] {
+            assert!(!is_supported_scale(percent));
+            assert_eq!(effective_scale(percent), 100);
+        }
+        assert_eq!(scale_value(44, 100), 44);
+        assert_eq!(scale_value(100, 135), 135);
+        assert_eq!(scale_value(100, 195), 195);
     }
 
     #[test]

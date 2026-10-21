@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use flamewm_api::shortcuts::{
+    ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION, ACTION_SCREENSHOT_WINDOW,
     ACTION_SESSION_LOCK, ACTION_TOGGLE_START_MENU, ACTION_WINDOW_CLOSE, ACTION_WINDOW_MAXIMIZE,
     ACTION_WINDOW_MINIMIZE, ACTION_WORKSPACE_DOWN, ACTION_WORKSPACE_LEFT, ACTION_WORKSPACE_RIGHT,
-    ACTION_WORKSPACE_UP, ACTION_SCREENSHOT_FULL, ACTION_SCREENSHOT_REGION,
-    ACTION_SCREENSHOT_WINDOW, KeyBinding,
+    ACTION_WORKSPACE_UP, KeyBinding,
 };
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
@@ -73,15 +73,36 @@ impl Default for ShortcutRegistry {
                 ACTION_WINDOW_CLOSE.to_owned(),
                 KeyBinding::assigned("Alt+F4"),
             ),
-            (ACTION_SCREENSHOT_FULL.to_owned(), KeyBinding::assigned("Print")),
-            (ACTION_SCREENSHOT_REGION.to_owned(), KeyBinding::assigned("Shift+Print")),
-            (ACTION_SCREENSHOT_WINDOW.to_owned(), KeyBinding::assigned("Ctrl+Print")),
+            (
+                ACTION_SCREENSHOT_FULL.to_owned(),
+                KeyBinding::assigned("Print"),
+            ),
+            (
+                ACTION_SCREENSHOT_REGION.to_owned(),
+                KeyBinding::assigned("Shift+Print"),
+            ),
+            (
+                ACTION_SCREENSHOT_WINDOW.to_owned(),
+                KeyBinding::assigned("Ctrl+Print"),
+            ),
             (ACTION_WINDOW_MINIMIZE.to_owned(), KeyBinding::unassigned()),
             (ACTION_WINDOW_MAXIMIZE.to_owned(), KeyBinding::unassigned()),
-            (ACTION_OPEN_FILES_SUPER.to_owned(), KeyBinding::assigned("Super+E")),
-            (ACTION_OPEN_FILES_CTRL_ALT.to_owned(), KeyBinding::assigned("Ctrl+Alt+E")),
-            (ACTION_OPEN_TERMINAL_SUPER.to_owned(), KeyBinding::assigned("Super+T")),
-            (ACTION_OPEN_TERMINAL_CTRL_ALT.to_owned(), KeyBinding::assigned("Ctrl+Alt+T")),
+            (
+                ACTION_OPEN_FILES_SUPER.to_owned(),
+                KeyBinding::assigned("Super+E"),
+            ),
+            (
+                ACTION_OPEN_FILES_CTRL_ALT.to_owned(),
+                KeyBinding::assigned("Ctrl+Alt+E"),
+            ),
+            (
+                ACTION_OPEN_TERMINAL_SUPER.to_owned(),
+                KeyBinding::assigned("Super+T"),
+            ),
+            (
+                ACTION_OPEN_TERMINAL_CTRL_ALT.to_owned(),
+                KeyBinding::assigned("Ctrl+Alt+T"),
+            ),
             (
                 ACTION_SESSION_LOCK.to_owned(),
                 KeyBinding::assigned("Super+L"),
@@ -331,14 +352,26 @@ mod tests {
             (ACTION_SCREENSHOT_REGION, "Shift+Print"),
             (ACTION_SCREENSHOT_WINDOW, "Ctrl+Print"),
         ] {
-            assert_eq!(registry.binding(action), Some(&KeyBinding::assigned(binding)));
+            assert_eq!(
+                registry.binding(action),
+                Some(&KeyBinding::assigned(binding))
+            );
             assert!(ACTIONS.contains(&action));
         }
-        assert_eq!(registry.conflict_for(ACTION_SCREENSHOT_REGION, "Print"), Some(ACTION_SCREENSHOT_FULL.to_owned()));
+        assert_eq!(
+            registry.conflict_for(ACTION_SCREENSHOT_REGION, "Print"),
+            Some(ACTION_SCREENSHOT_FULL.to_owned())
+        );
         registry.clear(ACTION_SCREENSHOT_REGION).unwrap();
-        assert_eq!(registry.binding(ACTION_SCREENSHOT_REGION), Some(&KeyBinding::unassigned()));
+        assert_eq!(
+            registry.binding(ACTION_SCREENSHOT_REGION),
+            Some(&KeyBinding::unassigned())
+        );
         registry.reset_one(ACTION_SCREENSHOT_REGION).unwrap();
-        assert_eq!(registry.binding(ACTION_SCREENSHOT_REGION), Some(&KeyBinding::assigned("Shift+Print")));
+        assert_eq!(
+            registry.binding(ACTION_SCREENSHOT_REGION),
+            Some(&KeyBinding::assigned("Shift+Print"))
+        );
     }
 
     #[test]

@@ -59,7 +59,11 @@ impl<'a, C: Connection> Wm<'a, C> {
 
     /// Keeps every dock above a normal client that was just raised to the top of the stack.
     /// Fullscreen clients keep their existing stacking, so they are not raised over docks here.
-    pub(super) fn raise_docks_above_normal(&self, client: Window, frame: Window) -> Result<(), ReplyError> {
+    pub(super) fn raise_docks_above_normal(
+        &self,
+        client: Window,
+        frame: Window,
+    ) -> Result<(), ReplyError> {
         let fullscreen = match self.clients.get(&client) {
             Some(state) => state.is_fullscreen(),
             None => return Ok(()),
@@ -68,12 +72,17 @@ impl<'a, C: Connection> Wm<'a, C> {
             return Ok(());
         }
         for dock in self.dock_struts.keys() {
-            self.conn.configure_window(*dock, &dock_above_frame_aux(frame))?;
+            self.conn
+                .configure_window(*dock, &dock_above_frame_aux(frame))?;
         }
         Ok(())
     }
 
-    pub(super) fn map_unframed(&self, window: Window, stack_mode: StackMode) -> Result<(), ReplyError> {
+    pub(super) fn map_unframed(
+        &self,
+        window: Window,
+        stack_mode: StackMode,
+    ) -> Result<(), ReplyError> {
         self.conn.map_window(window)?;
         self.conn
             .configure_window(window, &ConfigureWindowAux::new().stack_mode(stack_mode))?;
@@ -133,7 +142,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                 *value = values.next().unwrap_or(0);
             }
         }
-        let (h, w) = (self.screen_rect.height.saturating_sub(1), self.screen_rect.width.saturating_sub(1));
+        let (h, w) = (
+            self.screen_rect.height.saturating_sub(1),
+            self.screen_rect.width.saturating_sub(1),
+        );
         result[4..].copy_from_slice(&[0, h, 0, h, 0, w, 0, w]);
         Ok(result)
     }
@@ -194,7 +206,10 @@ impl<'a, C: Connection> Wm<'a, C> {
             frame_extents: extents,
         };
         let origin = RootPoint::new(i32::from(geometry.x), i32::from(geometry.y));
-        let size = (u32::from(geometry.width).max(1), u32::from(geometry.height).max(1));
+        let size = (
+            u32::from(geometry.width).max(1),
+            u32::from(geometry.height).max(1),
+        );
         let frame_rect = if adopt {
             crate::frame::geometry::plan_adopt(origin, size, extents)
         } else if crate::frame::geometry::can_place_near_pointer(
@@ -361,7 +376,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.next_client_lifetime = self.next_client_lifetime.saturating_add(1);
         self.chrome_runtimes
             .insert(window, chrome_runtime::ChromeRuntime::new());
-        if self.clients.get(&window).is_some_and(|client| client.icon.is_none()) {
+        if self
+            .clients
+            .get(&window)
+            .is_some_and(|client| client.icon.is_none())
+        {
             self.request_catalog_icon(window);
         }
         self.managed_order.push(window);
@@ -389,7 +408,10 @@ impl<'a, C: Connection> Wm<'a, C> {
 
         // Retarget + paint chrome + shape + cursors.
         self.paint_chrome(window)?;
-        let _ = self.renderer.as_ref().map(|renderer| renderer.borrow().flush());
+        let _ = self
+            .renderer
+            .as_ref()
+            .map(|renderer| renderer.borrow().flush());
         let floating = self
             .clients
             .get(&window)
@@ -417,7 +439,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn unmanage(&mut self, window: Window, restore_to_root: bool) -> Result<(), ReplyError> {
+    pub(super) fn unmanage(
+        &mut self,
+        window: Window,
+        restore_to_root: bool,
+    ) -> Result<(), ReplyError> {
         self.snap_preview.hide();
         if let Some(frame) = self.clients.get(&window).map(|state| state.frame) {
             crate::frame::titlebar_backdrop::forget(u64::from(frame));
@@ -450,7 +476,8 @@ impl<'a, C: Connection> Wm<'a, C> {
         for requesters in self.icon_requests.values_mut() {
             requesters.retain(|(id, _)| *id != window);
         }
-        self.icon_requests.retain(|_, requesters| !requesters.is_empty());
+        self.icon_requests
+            .retain(|_, requesters| !requesters.is_empty());
         self.managed_order.retain(|managed| *managed != window);
         self.frame_to_client.remove(&client.frame);
         self.chrome_runtimes.remove(&window);

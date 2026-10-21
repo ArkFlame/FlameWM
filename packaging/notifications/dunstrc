@@ -1,0 +1,21 @@
+# FlameWM-owned defaults used only for the FlameWM-started dunst instance.
+# Existing notification daemons already owning the bus are left untouched.
+[global]
+    origin = bottom-right
+    follow = mouse
+    offset = (16, 16)
+    width = (300, 380)
+    height = (0, 180)
+    notification_limit = 4
+    progress_bar = true
+    progress_bar_height = 8
+    font = Sans 10
+    corner_radius = 10
+    frame_width = 1
+    separator_height = 2
+[urgency_low]
+    timeout = 5
+[urgency_normal]
+    timeout = 6
+[urgency_critical]
+    timeout = 0

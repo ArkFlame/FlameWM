@@ -5,8 +5,8 @@ use flamewm_ui_core::context_menu::{settings_row, MenuRow};
 use flamewm_ui_core::MenuEntry;
 
 pub use flamewm_shell_core::menu_policy::{
-    task_menu_for_entry, TASK_ROW_ACTIVATE, TASK_ROW_CLOSE, TASK_ROW_UNPIN, WORKSPACE_ROW_ACTIVATE,
-    WORKSPACE_ROW_INSERT_AFTER, WORKSPACE_ROW_REMOVE,
+    task_menu_for_entry, TASK_ROW_ACTIVATE, TASK_ROW_CLOSE, TASK_ROW_PIN, TASK_ROW_UNPIN,
+    WORKSPACE_ROW_ACTIVATE, WORKSPACE_ROW_INSERT_AFTER, WORKSPACE_ROW_REMOVE,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,10 +195,12 @@ mod taskbar_menu_tests {
     #[test]
     fn every_markup_menu_row_has_canonical_icon_size_and_action() {
         let rows = menu_rows(TASK_MENU_HTML);
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         for line in rows {
             assert!(
-                line.contains(&format!("width=\"{ROW_ICON_SIZE}\" height=\"{ROW_ICON_SIZE}\"")),
+                line.contains(&format!(
+                    "width=\"{ROW_ICON_SIZE}\" height=\"{ROW_ICON_SIZE}\""
+                )),
                 "{line}"
             );
             assert!(line.contains("data-action=\""), "{line}");
@@ -208,8 +210,12 @@ mod taskbar_menu_tests {
     #[test]
     fn markup_rows_carry_policy_row_ids_and_actions() {
         let expected = [
-            (format!("context-task-{TASK_ROW_ACTIVATE}"), "task.menu.activate"),
+            (
+                format!("context-task-{TASK_ROW_ACTIVATE}"),
+                "task.menu.activate",
+            ),
             (format!("context-task-{TASK_ROW_CLOSE}"), "task.menu.close"),
+            (format!("context-task-{TASK_ROW_PIN}"), "task.menu.pin"),
             (format!("context-task-{TASK_ROW_UNPIN}"), "task.menu.unpin"),
             (
                 format!("context-workspace-{WORKSPACE_ROW_ACTIVATE}"),
@@ -300,7 +306,10 @@ mod taskbar_menu_tests {
             .find(|line| line.starts_with(".context-menu {"))
             .expect("shared menu frame rule");
         assert!(frame.contains("border:1px solid #474b4f"), "{frame}");
-        assert!(!TASK_MENU_HTML.contains("style="), "task menu markup must not override the frame inline");
+        assert!(
+            !TASK_MENU_HTML.contains("style="),
+            "task menu markup must not override the frame inline"
+        );
     }
 
     #[test]
@@ -315,7 +324,10 @@ mod taskbar_menu_tests {
             assert!(!rows.is_empty(), "{name} menu has rows");
             for line in rows {
                 assert!(line.contains("<img "), "{name}: {line}");
-                assert!(line.contains("<span>") && line.contains("</span></button>"), "{name}: {line}");
+                assert!(
+                    line.contains("<span>") && line.contains("</span></button>"),
+                    "{name}: {line}"
+                );
             }
         }
     }
@@ -323,8 +335,13 @@ mod taskbar_menu_tests {
     #[test]
     fn taskbar_html_uses_shared_labels_and_settings_icon() {
         let html = include_str!("../../../../ui/shell/task-menu.html");
-        assert!(!html.contains("Add Virtual Desktop"), "unrouted row removed");
+        assert!(
+            !html.contains("Add Virtual Desktop"),
+            "unrouted row removed"
+        );
         assert!(!html.contains("Create New Virtual Desktop"));
-        assert!(html.contains("preferences-desktop.svg\" width=\"16\" height=\"16\"><span>FlameWM Settings</span>"));
+        assert!(html.contains(
+            "preferences-desktop.svg\" width=\"16\" height=\"16\"><span>FlameWM Settings</span>"
+        ));
     }
 }

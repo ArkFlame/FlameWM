@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::popup_controller::PopupError;
+use crate::projection::project_weather_popup;
+use crate::weather_host::{spawn_location_search, LocationSearch, SearchStatus};
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_control_core::ControlRequest;
 use flamewm_control_dbus::{ControlClient, ControlSignalClient};
@@ -22,17 +24,17 @@ use flamewm_dbus_reactor::BusKind;
 use flamewm_debug::DebugEventId;
 use flamewm_shell_core::status::{AudioSettings, AudioTab, NetworkQuery};
 use flamewm_shell_core::weather::WeatherFeed;
-use crate::projection::project_weather_popup;
-use crate::weather_host::{spawn_location_search, LocationSearch, SearchStatus};
 use flamewm_ui_x11::{
-    decode_document, ActionPhase, SlideConfig, SurfaceConfig, SurfaceHandle,
-    SurfaceInputMode, SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
+    decode_document, ActionPhase, SlideConfig, SurfaceConfig, SurfaceHandle, SurfaceInputMode,
+    SurfaceRole, SurfaceRuntime, UiBackendError, UiDocumentAccess, UiTemplate,
 };
 
 use self::popup::{
     arm_slide, close_helper, fit_helper, grab, measure_helper, popup_slide, prepare_commit, present,
 };
-use super::protocol::{decode_line, Command, OpenRequest, QuickControlKind, MAX_LINE_LEN};
+use super::protocol::{
+    decode_line, Command, OpenRequest, OpenResult, OpenScope, QuickControlKind, MAX_LINE_LEN,
+};
 use super::supervisor::{QuickControlSupervisor, SupervisorError};
 
 #[path = "popup.rs"]
@@ -234,7 +236,8 @@ impl QuickControlSnapshot {
     /// Stores one settings snapshot: presentation for the shared menu background and the
     /// audio tab/settings projection.
     pub fn store_settings(&mut self, snapshot: SettingsSnapshot) {
-        if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY) {
+        if let Some(SettingValue::Boolean(raise)) = snapshot.values.get(AudioSettings::SETTINGS_KEY)
+        {
             self.audio_settings.raise_maximum = *raise;
         }
         self.settings = snapshot;
@@ -256,6 +259,8 @@ struct HostState {
     shutdown: bool,
     /// Applied live cursor theme for this thread's helper windows.
     cursor_theme: crate::cursor_theme::CursorThemeSync,
+    latest_sequence: u64,
+    active_sequence: Option<u64>,
 }
 
 /// Duplicate stdin + O_NONBLOCK on the dup. No unsafe: the std File
@@ -384,6 +389,8 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
         queue: VecDeque::new(),
         shutdown: false,
         cursor_theme: crate::cursor_theme::CursorThemeSync::default(),
+        latest_sequence: 0,
+        active_sequence: None,
     }));
 
     // Nonblocking parent command FD: duplicate the stdin description so
@@ -610,14 +617,77 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
 fn coalesce_commands(queue: &mut VecDeque<Command>) -> VecDeque<Command> {
     let mut out: VecDeque<Command> = VecDeque::new();
     for cmd in queue.drain(..) {
-        if matches!(cmd, Command::Open(_)) {
-            while matches!(out.back(), Some(Command::Open(_))) {
+        if matches!(&cmd, Command::Open(req) if req.scope.is_none()) {
+            while matches!(out.back(), Some(Command::Open(req)) if req.scope.is_none()) {
                 out.pop_back();
             }
         }
         out.push_back(cmd);
     }
     out
+}
+
+fn accept_scoped_open(
+    latest_sequence: &mut u64,
+    scope: Option<&super::protocol::OpenScope>,
+) -> bool {
+    let Some(scope) = scope else { return true };
+    if scope.sequence <= *latest_sequence {
+        return false;
+    }
+    *latest_sequence = scope.sequence;
+    true
+}
+
+fn close_matches_active(active_sequence: Option<u64>, sequence: u64) -> bool {
+    active_sequence == Some(sequence)
+}
+
+fn scoped_result(
+    scope: Option<&OpenScope>,
+    presented: bool,
+    rolled_back: bool,
+) -> Option<OpenResult> {
+    let sequence = scope?.sequence;
+    Some(if presented {
+        OpenResult::Presented(sequence)
+    } else if rolled_back {
+        OpenResult::RolledBack(sequence)
+    } else {
+        OpenResult::Refused(sequence)
+    })
+}
+
+fn send_open_result(result: Option<OpenResult>) {
+    use std::io::Write;
+    if let Some(result) = result {
+        // The parent drains this pipe nonblocking once per shell turn. Frames
+        // are tiny and sequence fenced; failure is recovered as host exit.
+        let _ = std::io::stdout()
+            .lock()
+            .write_all(format!("{}\n", result.encode()).as_bytes());
+    }
+}
+
+#[derive(Debug)]
+struct OpenFailure {
+    reason: String,
+    rolled_back: bool,
+}
+
+impl OpenFailure {
+    fn refused(reason: impl ToString) -> Self {
+        Self {
+            reason: reason.to_string(),
+            rolled_back: false,
+        }
+    }
+}
+
+impl core::fmt::Display for OpenFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.reason)
+    }
 }
 
 /// Fetches the current settings over the control session for one popup open. A failed connect
@@ -628,7 +698,11 @@ fn refresh_settings_for_open(state: &std::rc::Rc<std::cell::RefCell<HostState>>)
             // Windows exist once a popup opens, so the live cursor reload is safe only here.
             let mut host = state.borrow_mut();
             host.snapshot.refresh_settings(&client);
-            let HostState { snapshot, cursor_theme, .. } = &mut *host;
+            let HostState {
+                snapshot,
+                cursor_theme,
+                ..
+            } = &mut *host;
             cursor_theme.sync_snapshot(&snapshot.settings);
         }
         Err(error) => eprintln!(
@@ -665,6 +739,14 @@ fn tick_host(
             Command::Close => {
                 let mut guard = state.borrow_mut();
                 guard.surfaces.close(runtime);
+                guard.active_sequence = None;
+            }
+            Command::CloseSession(sequence) => {
+                let mut guard = state.borrow_mut();
+                if close_matches_active(guard.active_sequence, sequence) {
+                    guard.surfaces.close(runtime);
+                    guard.active_sequence = None;
+                }
             }
             Command::Weather(feed) => {
                 let mut guard = state.borrow_mut();
@@ -674,6 +756,13 @@ fn tick_host(
                 }
             }
             Command::Open(request) => {
+                {
+                    let mut guard = state.borrow_mut();
+                    if !accept_scoped_open(&mut guard.latest_sequence, request.scope.as_ref()) {
+                        send_open_result(scoped_result(request.scope.as_ref(), false, false));
+                        continue;
+                    }
+                }
                 // Live menu settings: re-read the current settings on every open (no timers).
                 refresh_settings_for_open(state);
                 let mut guard = state.borrow_mut();
@@ -691,7 +780,14 @@ fn tick_host(
                     close_elapsed,
                 ) {
                     eprintln!("flamewm-quick-control: open refused: {error}");
+                    send_open_result(scoped_result(
+                        request.scope.as_ref(),
+                        false,
+                        error.rolled_back,
+                    ));
                 } else {
+                    guard.active_sequence = request.scope.as_ref().map(|scope| scope.sequence);
+                    send_open_result(scoped_result(request.scope.as_ref(), true, false));
                     // OPEN already projected the current snapshot; consume a
                     // signal queued before this turn without a second pass.
                     guard.system_reprojection_pending = false;
@@ -860,7 +956,7 @@ fn open_request(
     snapshot: &QuickControlSnapshot,
     request: &OpenRequest,
     close_elapsed: Duration,
-) -> Result<(), String> {
+) -> Result<(), OpenFailure> {
     let total_start = std::time::Instant::now();
     let _total = crate::runtime::shell_span("shell.quick.open.total").start();
     flamewm_debug::emit(POPUP_TRANSITION, Duration::from_millis(0), || {
@@ -872,17 +968,17 @@ fn open_request(
     let surface = surfaces.surface_for(request.kind);
     let project_start = std::time::Instant::now();
     let _project = crate::runtime::shell_span("shell.quick.project").start();
-    project_snapshot(runtime, surface, snapshot, request.kind)?;
+    project_snapshot(runtime, surface, snapshot, request.kind).map_err(OpenFailure::refused)?;
     let project_elapsed = project_start.elapsed();
     drop(_project);
     let (rect, measure_elapsed, place_elapsed) =
-        fitted_rect(runtime, surface, request).map_err(|error| error.to_string())?;
+        fitted_rect(runtime, surface, request).map_err(OpenFailure::refused)?;
     flamewm_debug::emit(POPUP_TRANSITION, Duration::from_millis(0), || {
         format!("quick-control fitted kind={:?} rect={rect:?}", request.kind)
     });
     let prepare_start = std::time::Instant::now();
     let _prepare = crate::runtime::shell_span("shell.quick.prepare/commit_geometry").start();
-    prepare_commit(runtime, surface, rect).map_err(|error| error.to_string())?;
+    prepare_commit(runtime, surface, rect).map_err(OpenFailure::refused)?;
     let prepare_elapsed = prepare_start.elapsed();
     drop(_prepare);
     // Same frosted backdrop as the Start menu, captured at the first show.
@@ -891,11 +987,14 @@ fn open_request(
         eprintln!("flamewm-quick-control: popup backdrop skipped (nonfatal): {error:?}");
     }
     // This helper has no Dock surface: the parent's panel rect clips slide transit frames.
-    runtime.set_external_dock(
-        request
-            .dock
-            .map(|dock| (dock.x, dock.y, dock.width.max(0) as u32, dock.height.max(0) as u32)),
-    );
+    runtime.set_external_dock(request.dock.map(|dock| {
+        (
+            dock.x,
+            dock.y,
+            dock.width.max(0) as u32,
+            dock.height.max(0) as u32,
+        )
+    }));
     // Same Start slide preference and speed as the Start menu, on this panel edge.
     let slide = popup_slide(&snapshot.settings, request.panel_edge);
     let slide = match arm_slide(runtime, surface, slide) {
@@ -907,7 +1006,7 @@ fn open_request(
     };
     let present_start = std::time::Instant::now();
     let _present = crate::runtime::shell_span("shell.quick.present").start();
-    present(runtime, surface).map_err(|error| error.to_string())?;
+    present(runtime, surface).map_err(OpenFailure::refused)?;
     let present_elapsed = present_start.elapsed();
     drop(_present);
     // DEBUG-ONLY: one observed root-rect probe after present. Normal mode
@@ -922,16 +1021,24 @@ fn open_request(
         .map(|r| (r.x as i32, r.y as i32, r.width as i32, r.height as i32));
     let grab_start = std::time::Instant::now();
     let _grab = crate::runtime::shell_span("shell.quick.pointer_grab").start();
-    if let Err(error) = grab(runtime, surface).map_err(|error| error.to_string()) {
+    let grab_result = grab(runtime, surface).map_err(|error| error.to_string());
+    if let Err(error) = grab_result {
         drop(_grab);
-        if let Err(close_error) = close_helper(runtime, surface, None) {
-            eprintln!("flamewm-quick-control: popup rollback close failed: {close_error}");
-        }
+        let rolled_back = match close_helper(runtime, surface, None) {
+            Ok(()) => true,
+            Err(close_error) => {
+                eprintln!("flamewm-quick-control: popup rollback close failed: {close_error}");
+                false
+            }
+        };
         match surfaces.open {
             Some(kind) if kind != request.kind => {}
             _ => surfaces.open = None,
         }
-        return Err(error);
+        return Err(OpenFailure {
+            reason: error,
+            rolled_back,
+        });
     }
     let grab_elapsed = grab_start.elapsed();
     drop(_grab);
@@ -1314,7 +1421,10 @@ fn pick_weather_location(
 
 /// The settings transaction for picking result `index`, fenced on the settings revision
 /// (the store's revision), not the system snapshot revision.
-fn weather_pick_for(snapshot: &QuickControlSnapshot, index: usize) -> Option<crate::control_actions::WeatherPick> {
+fn weather_pick_for(
+    snapshot: &QuickControlSnapshot,
+    index: usize,
+) -> Option<crate::control_actions::WeatherPick> {
     let location = snapshot.weather_search.results.get(index).cloned()?;
     let mut settings = snapshot.weather.settings.clone();
     settings.location = Some(location);
@@ -1365,7 +1475,8 @@ fn finish_weather_pick(state: &mut HostState, outcome: crate::control_actions::W
             }
             let revision = state.snapshot.settings.revision;
             let retry = weather_pick(outcome.pick.settings, revision, 1);
-            let retried = crate::control_actions::enqueue_weather_pick(state.dispatcher.as_ref(), retry);
+            let retried =
+                crate::control_actions::enqueue_weather_pick(state.dispatcher.as_ref(), retry);
             if retried.is_none() {
                 state.snapshot.weather_search.status = SearchStatus::SaveFailed;
                 state.system_reprojection_pending = true;
@@ -1543,7 +1654,11 @@ fn helper_control_request(action: &str, snapshot: &QuickControlSnapshot) -> Opti
     let cap = snapshot.audio_settings.max_percent();
     let (percent, muted) = match command {
         "up" => (
-            Some(snapshot.audio_settings.clamp_percent(row.volume_percent.saturating_add(5))),
+            Some(
+                snapshot
+                    .audio_settings
+                    .clamp_percent(row.volume_percent.saturating_add(5)),
+            ),
             None,
         ),
         "down" => (Some(row.volume_percent.saturating_sub(5).min(cap)), None),
@@ -1629,7 +1744,13 @@ impl HelperSurfaces {
                 first_error = Some(UiBackendError::Renderer(error.to_string()));
             }
         }
-        for surface in [self.audio, self.network, self.calendar, self.battery, self.weather] {
+        for surface in [
+            self.audio,
+            self.network,
+            self.calendar,
+            self.battery,
+            self.weather,
+        ] {
             if let Err(error) = runtime.destroy(surface) {
                 eprintln!(
                     "flamewm-quick-control: surface destroy during shutdown failed: {error:?}"
@@ -1702,8 +1823,36 @@ pub fn open_via_supervisor_nonfatal(
         work_area,
         panel_edge,
         dock,
+        scope: None,
     }) {
         eprintln!("flamewm-shell: quick-control open failed (nonfatal): {error}");
+    }
+}
+
+pub fn open_via_supervisor_scoped_nonfatal(
+    supervisor: &mut QuickControlSupervisor,
+    kind: QuickControlKind,
+    anchor: flamewm_api::Rect,
+    work_area: flamewm_api::Rect,
+    panel_edge: flamewm_api::PanelEdge,
+    dock: Option<flamewm_api::Rect>,
+    scope: super::protocol::OpenScope,
+) -> bool {
+    let _span = crate::runtime::shell_span("shell.quick_control.open_request").start();
+    let request = super::protocol::OpenRequest {
+        kind,
+        anchor,
+        work_area,
+        panel_edge,
+        dock,
+        scope: None,
+    };
+    match supervisor.open_scoped(request, scope) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("flamewm-shell: quick-control open failed (nonfatal): {error}");
+            false
+        }
     }
 }
 
@@ -1839,7 +1988,13 @@ mod tests {
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1830, 1036, 70, 44);
         let size = flamewm_api::Size::new(310, 220);
-        let rect = measured(anchor, size, PopoverEdge::Above, PopoverAlign::OutputEnd, area);
+        let rect = measured(
+            anchor,
+            size,
+            PopoverEdge::Above,
+            PopoverAlign::OutputEnd,
+            area,
+        );
         assert_eq!(rect.right(), area.right());
         assert!(rect.right() <= area.right());
         assert!(rect.bottom() <= anchor.y);
@@ -1851,7 +2006,13 @@ mod tests {
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1830, 0, 70, 44);
         let size = flamewm_api::Size::new(310, 220);
-        let rect = measured(anchor, size, PopoverEdge::Below, PopoverAlign::OutputEnd, area);
+        let rect = measured(
+            anchor,
+            size,
+            PopoverEdge::Below,
+            PopoverAlign::OutputEnd,
+            area,
+        );
         assert!(rect.y >= anchor.bottom());
         assert_eq!(rect.right(), area.right());
     }
@@ -1877,7 +2038,13 @@ mod tests {
         let area = flamewm_api::Rect::new(0, 0, 1920, 1080);
         let anchor = flamewm_api::Rect::new(1900, 1036, 20, 44);
         let size = flamewm_api::Size::new(310, 200);
-        let rect = measured(anchor, size, PopoverEdge::Above, PopoverAlign::OutputEnd, area);
+        let rect = measured(
+            anchor,
+            size,
+            PopoverEdge::Above,
+            PopoverAlign::OutputEnd,
+            area,
+        );
         assert!(rect.right() <= area.right());
         assert!(rect.bottom() <= anchor.y);
     }
@@ -1889,6 +2056,7 @@ mod tests {
             work_area: flamewm_api::Rect::new(0, 0, 100, 100),
             panel_edge: flamewm_api::PanelEdge::Bottom,
             dock: None,
+            scope: None,
         })
     }
 
@@ -1902,9 +2070,71 @@ mod tests {
         let out = coalesce_commands(&mut q);
         assert_eq!(out.len(), 1);
         assert!(matches!(
-            out[0],
+            &out[0],
             Command::Open(r) if r.kind == QuickControlKind::Calendar
         ));
+    }
+
+    #[test]
+    fn helper_fences_old_open_and_close_sequences() {
+        use crate::quick_controls::protocol::OpenScope;
+        use flamewm_api::OutputId;
+        let scope = |sequence| OpenScope {
+            output: OutputId::new("A"),
+            topology_generation: 4,
+            sequence,
+        };
+        let mut latest = 0;
+        assert!(accept_scoped_open(&mut latest, Some(&scope(7))));
+        assert!(!accept_scoped_open(&mut latest, Some(&scope(6))));
+        assert!(!accept_scoped_open(&mut latest, Some(&scope(7))));
+        assert_eq!(latest, 7);
+        assert!(close_matches_active(Some(7), 7));
+        assert!(!close_matches_active(Some(8), 7));
+        assert!(!close_matches_active(None, 7));
+    }
+
+    #[test]
+    fn scoped_open_ack_distinguishes_present_refusal_and_completed_rollback() {
+        use crate::quick_controls::protocol::OpenScope;
+        use flamewm_api::OutputId;
+        let scope = OpenScope {
+            output: OutputId::new("A"),
+            topology_generation: 4,
+            sequence: 23,
+        };
+        assert_eq!(
+            scoped_result(Some(&scope), true, false),
+            Some(OpenResult::Presented(23))
+        );
+        assert_eq!(
+            scoped_result(Some(&scope), false, false),
+            Some(OpenResult::Refused(23))
+        );
+        assert_eq!(
+            scoped_result(Some(&scope), false, true),
+            Some(OpenResult::RolledBack(23))
+        );
+        assert_eq!(scoped_result(None, true, false), None); // legacy OPEN has no lease ACK
+    }
+
+    #[test]
+    fn stale_open_gets_refusal_for_its_own_sequence() {
+        use crate::quick_controls::protocol::OpenScope;
+        use flamewm_api::OutputId;
+        let scope = |sequence| OpenScope {
+            output: OutputId::new("A"),
+            topology_generation: 1,
+            sequence,
+        };
+        let mut latest = 9;
+        let stale = scope(8);
+        assert!(!accept_scoped_open(&mut latest, Some(&stale)));
+        assert_eq!(
+            scoped_result(Some(&stale), false, false),
+            Some(OpenResult::Refused(8))
+        );
+        assert_eq!(latest, 9);
     }
 
     #[test]
@@ -2152,10 +2382,13 @@ mod audio_routing_tests {
         let mut snapshot = quick(AudioTab::Devices, false);
         snapshot.settings = service.snapshot();
         snapshot.weather.settings.enabled = true;
-        snapshot.weather_search.results = vec![
-            flamewm_shell_core::weather::WeatherLocation::new("Berlin", 52.52, 13.405, Some("Germany"))
-                .unwrap(),
-        ];
+        snapshot.weather_search.results = vec![flamewm_shell_core::weather::WeatherLocation::new(
+            "Berlin",
+            52.52,
+            13.405,
+            Some("Germany"),
+        )
+        .unwrap()];
         let pick = weather_pick_for(&snapshot, 0).expect("pick");
         let ControlRequest::ApplySettings(transaction) = &pick.request else {
             panic!("pick must be a settings transaction");
@@ -2168,7 +2401,10 @@ mod audio_routing_tests {
 
         let feed = flamewm_shell_core::weather::WeatherSettings::from_snapshot(&applied);
         assert!(feed.enabled);
-        assert_eq!(feed.location.as_ref().map(|l| l.name.as_str()), Some("Berlin"));
+        assert_eq!(
+            feed.location.as_ref().map(|l| l.name.as_str()),
+            Some("Berlin")
+        );
         assert_eq!(
             applied.values.get(crate::weather_auto::AUTO_LOCATION_KEY),
             Some(&SettingValue::Boolean(false)),

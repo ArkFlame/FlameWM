@@ -155,7 +155,14 @@ mod tests {
 
         // Pointer over the non-scrollable 180x500 child: target is the scrollable root.
         let wheel = |doc: &mut RuntimeDocument, dy: f32| {
-            apply_wheel_scroll(&layout, doc, InteractionState::default(), 10.0, 10.0, (0.0, dy))
+            apply_wheel_scroll(
+                &layout,
+                doc,
+                InteractionState::default(),
+                10.0,
+                10.0,
+                (0.0, dy),
+            )
         };
         assert_eq!(wheel(&mut doc, down), Some(0));
         assert_eq!(doc.scroll_offset(0).offset_y, 24.0);

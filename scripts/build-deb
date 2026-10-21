@@ -5,6 +5,14 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 cd "$ROOT"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
+if [[ "$TARGET_DIR" != /* ]]; then
+    TARGET_DIR="$ROOT/$TARGET_DIR"
+fi
+if [[ ! -w "$TARGET_DIR" ]]; then
+    TARGET_DIR="$ROOT/.target"
+fi
+export CARGO_TARGET_DIR="$TARGET_DIR"
 VERSION="$(./scripts/version)"
 DIST="$ROOT/.target/dist"
 DEB="$DIST/flamewm_${VERSION}_amd64.deb"
@@ -18,10 +26,9 @@ on_error() {
 }
 trap 'on_error "$LINENO"' ERR
 
-# Invalidate prior published files before even checking tools/assets.
-# A preflight failure must not leave an older Architecture:any deb available.
+# Clear the complete distribution directory before any build or preflight.
+rm -rf "$DIST"
 mkdir -p "$DIST"
-rm -f "$DEB" "$DIST/SHA256SUMS"
 
 command -v cargo >/dev/null 2>&1 || fail 'cargo not found (install the Rust toolchain)'
 command -v python3 >/dev/null 2>&1 || fail 'python3 not found (required for Cargo cache consistency gate)'

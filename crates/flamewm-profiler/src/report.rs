@@ -195,7 +195,9 @@ fn spans_into(rows: &[SpanAgg]) -> Vec<SpanAgg> {
 }
 
 fn append_to_profile_dir(text: &str) {
-    let Some(dir) = std::env::var_os("FLAMEWM_PROFILE_DIR").filter(|d| !d.is_empty()) else { return };
+    let Some(dir) = std::env::var_os("FLAMEWM_PROFILE_DIR").filter(|d| !d.is_empty()) else {
+        return;
+    };
     let dir = std::path::PathBuf::from(dir);
     let path = dir.join(profile_filename(&process_name()));
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -212,7 +214,9 @@ fn append_to_profile_dir(text: &str) {
 /// Only the winning `init_process` call truncates; a fresh process
 /// (restart) is a new generation and truncates again.
 fn truncate_profile_log_once(name: &str) {
-    let Some(dir) = std::env::var_os("FLAMEWM_PROFILE_DIR").filter(|d| !d.is_empty()) else { return };
+    let Some(dir) = std::env::var_os("FLAMEWM_PROFILE_DIR").filter(|d| !d.is_empty()) else {
+        return;
+    };
     let dir = std::path::PathBuf::from(dir);
     let path = dir.join(profile_filename(name));
     if let Some(parent) = path.parent() {

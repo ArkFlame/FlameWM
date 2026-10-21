@@ -2,9 +2,9 @@ use std::borrow::Cow;
 
 use super::input::apply_wheel_scroll;
 use super::*;
+use crate::WindowGeometrySlot;
 use crate::runtime::{RawPress, RawPressWatch};
 use crate::xinput::{GENERIC_EVENT, generic_cookie};
-use crate::WindowGeometrySlot;
 
 fn keyboard_text(symbol: u64) -> Option<String> {
     match symbol {
@@ -170,7 +170,12 @@ fn action_event(
 
 /// Slider value text for a drag whose track starts at `track_x` (logical points).
 fn range_drag_text(track_x: f32, track_w: f32, min: f32, max: f32, x: f32) -> String {
-    let track = Rect { x: track_x, y: 0.0, width: track_w, height: 8.0 };
+    let track = Rect {
+        x: track_x,
+        y: 0.0,
+        width: track_w,
+        height: 8.0,
+    };
     slider_value_from_pointer(track, min, max, 0.0, x).to_string()
 }
 
@@ -212,8 +217,13 @@ where
         payload.push(key);
     }
     let mut event = action_event(
-        document.ui_scale(), phase, 0, (key.x, key.y),
-        true, key.time as u64, Some(payload),
+        document.ui_scale(),
+        phase,
+        0,
+        (key.x, key.y),
+        true,
+        key.time as u64,
+        Some(payload),
     );
     let result = fire_static(on_action, document, buffers, TYPED_KEY_ACTION, &mut event);
     buffers.payload = event.text.take().unwrap_or_default();
@@ -256,7 +266,9 @@ impl X11App {
             // Root raw presses carry no window of ours; handle them before the window filter.
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
             if unsafe { event.type_ } == GENERIC_EVENT {
-                if Some(unsafe { generic_cookie(&event) }.extension) == self.press_selection.opcode() {
+                if Some(unsafe { generic_cookie(&event) }.extension)
+                    == self.press_selection.opcode()
+                {
                     // SAFETY: the event is a GenericEvent of the selected XI extension.
                     unsafe { self.record_raw_press(&event, document.ui_scale()) };
                 }
@@ -352,17 +364,16 @@ impl X11App {
                     // delta via existing ActionEvent path (Motion, text=value).
                     if let Some((drag_index, track_x, track_w, min, max)) = self.range_drag {
                         let scale = document.ui_scale();
-                        let text = range_drag_text(
-                            track_x,
-                            track_w,
-                            min,
-                            max,
-                            motion.x as f32 / scale,
-                        );
+                        let text =
+                            range_drag_text(track_x, track_w, min, max, motion.x as f32 / scale);
                         let mut event = action_event(
-                            scale, ActionPhase::Motion,
-                            self.pointer_button.unwrap_or(1), (motion.x, motion.y),
-                            hover == Some(drag_index), motion.time as u64, Some(text),
+                            scale,
+                            ActionPhase::Motion,
+                            self.pointer_button.unwrap_or(1),
+                            (motion.x, motion.y),
+                            hover == Some(drag_index),
+                            motion.time as u64,
+                            Some(text),
                         );
                         if fire_node(on_action, document, &mut buffers, drag_index, &mut event)? {
                             self.mark_full();
@@ -377,10 +388,17 @@ impl X11App {
                         (self.pointer_button, self.interaction.active)
                     {
                         let mut event = action_event(
-                            document.ui_scale(), ActionPhase::Motion, button, (motion.x, motion.y),
-                            hover == Some(index), motion.time as u64, None,
+                            document.ui_scale(),
+                            ActionPhase::Motion,
+                            button,
+                            (motion.x, motion.y),
+                            hover == Some(index),
+                            motion.time as u64,
+                            None,
                         );
-                        if fire_node(on_action, document, &mut buffers, index, &mut event)? || changed {
+                        if fire_node(on_action, document, &mut buffers, index, &mut event)?
+                            || changed
+                        {
                             self.mark_full();
                         }
                     } else {
@@ -391,12 +409,19 @@ impl X11App {
                         // force a renderer redraw; actual document mutations carry damage.
                         if let Some(index) = hover {
                             let mut event = action_event(
-                                document.ui_scale(), ActionPhase::Hover, 0, (motion.x, motion.y),
-                                true, motion.time as u64, None,
+                                document.ui_scale(),
+                                ActionPhase::Hover,
+                                0,
+                                (motion.x, motion.y),
+                                true,
+                                motion.time as u64,
+                                None,
                             );
                             fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
-                        if changed { self.mark_full(); }
+                        if changed {
+                            self.mark_full();
+                        }
                     }
                 }
                 LEAVE_NOTIFY => {
@@ -452,16 +477,26 @@ impl X11App {
                     };
                     if let Some(action) = action {
                         let mut event = action_event(
-                            document.ui_scale(), ActionPhase::Release, 0, (key.x, key.y),
-                            true, key.time as u64, None,
+                            document.ui_scale(),
+                            ActionPhase::Release,
+                            0,
+                            (key.x, key.y),
+                            true,
+                            key.time as u64,
+                            None,
                         );
                         fire_static(on_action, document, &mut buffers, action, &mut event)?;
                         self.mark_full();
                     } else if !ctrl && !alt && !super_key {
                         if let Some(text) = keyboard_text(typed_symbol) {
                             let mut event = action_event(
-                                document.ui_scale(), ActionPhase::Release, 0, (key.x, key.y),
-                                true, key.time as u64, Some(text),
+                                document.ui_scale(),
+                                ActionPhase::Release,
+                                0,
+                                (key.x, key.y),
+                                true,
+                                key.time as u64,
+                                Some(text),
                             );
                             fire_static(
                                 on_action,
@@ -490,8 +525,13 @@ impl X11App {
                     if symbol == XK_SUPER_L || symbol == XK_SUPER_R {
                         if !self.super_chord_used {
                             let mut event = action_event(
-                                document.ui_scale(), ActionPhase::Release, 0, (key.x, key.y),
-                                true, key.time as u64, None,
+                                document.ui_scale(),
+                                ActionPhase::Release,
+                                0,
+                                (key.x, key.y),
+                                true,
+                                key.time as u64,
+                                None,
                             );
                             fire_static(
                                 on_action,
@@ -515,7 +555,8 @@ impl X11App {
                         // primary button press, never on ordinary mouse motion.
                         unsafe {
                             crate::surface_controller::raw_press::XSetInputFocus(
-                                self.display, self.window,
+                                self.display,
+                                self.window,
                                 crate::surface_controller::raw_press::REVERT_TO_POINTER_ROOT,
                                 button.time,
                             );
@@ -536,8 +577,13 @@ impl X11App {
                             );
                         }
                         let mut event = action_event(
-                            scale, ActionPhase::Motion, button.button, (button.x, button.y),
-                            true, button.time as u64, Some(format!("{dx},{dy}")),
+                            scale,
+                            ActionPhase::Motion,
+                            button.button,
+                            (button.x, button.y),
+                            true,
+                            button.time as u64,
+                            Some(format!("{dx},{dy}")),
                         );
                         fire_static(on_action, document, &mut buffers, "scroll", &mut event)?;
                         self.mark_full();
@@ -555,9 +601,11 @@ impl X11App {
                             let is_title_move =
                                 name.starts_with("window.") && name.ends_with(".move");
                             let double_title = is_title_move
-                                && self.last_title_press.is_some_and(|(last_index, last_time)| {
-                                    last_index == index && now.saturating_sub(last_time) <= 350
-                                });
+                                && self
+                                    .last_title_press
+                                    .is_some_and(|(last_index, last_time)| {
+                                        last_index == index && now.saturating_sub(last_time) <= 350
+                                    });
                             if double_title {
                                 let maximize = name
                                     .strip_prefix("window.")
@@ -568,9 +616,13 @@ impl X11App {
                                 self.pointer_button = None;
                                 if let Some(maximize) = maximize {
                                     let mut event = action_event(
-                                        document.ui_scale(), ActionPhase::Release,
-                                        button.button, (button.x, button.y),
-                                        true, button.time as u64, None,
+                                        document.ui_scale(),
+                                        ActionPhase::Release,
+                                        button.button,
+                                        (button.x, button.y),
+                                        true,
+                                        button.time as u64,
+                                        None,
                                     );
                                     fire_static(
                                         on_action,
@@ -596,9 +648,13 @@ impl X11App {
                         self.pointer_button = Some(button.button);
                         if let Some(index) = hit {
                             let mut event = action_event(
-                                document.ui_scale(), ActionPhase::Press,
-                                button.button, (button.x, button.y),
-                                true, button.time as u64, None,
+                                document.ui_scale(),
+                                ActionPhase::Press,
+                                button.button,
+                                (button.x, button.y),
+                                true,
+                                button.time as u64,
+                                None,
                             );
                             fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
@@ -641,9 +697,13 @@ impl X11App {
                                 button.x as f32 / document.ui_scale(),
                             );
                             let mut event = action_event(
-                                document.ui_scale(), ActionPhase::Release,
-                                button.button, (button.x, button.y),
-                                true, button.time as u64, Some(text),
+                                document.ui_scale(),
+                                ActionPhase::Release,
+                                button.button,
+                                (button.x, button.y),
+                                true,
+                                button.time as u64,
+                                Some(text),
                             );
                             fire_node(on_action, document, &mut buffers, drag_index, &mut event)?;
                         }
@@ -659,9 +719,13 @@ impl X11App {
                     };
                     if let Some(index) = dispatch {
                         let mut event = action_event(
-                            document.ui_scale(), ActionPhase::Release,
-                            button.button, (button.x, button.y),
-                            hit == Some(index), button.time as u64, None,
+                            document.ui_scale(),
+                            ActionPhase::Release,
+                            button.button,
+                            (button.x, button.y),
+                            hit == Some(index),
+                            button.time as u64,
+                            None,
                         );
                         fire_node(on_action, document, &mut buffers, index, &mut event)?;
                     }
@@ -717,7 +781,9 @@ impl X11App {
             // single_event returns. Avoid blocking on the fd reactor in that case.
             let timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
                 .then_some(std::time::Duration::ZERO);
-            reactor.dispatch(timeout).map_err(|error| error.to_string())?;
+            reactor
+                .dispatch(timeout)
+                .map_err(|error| error.to_string())?;
             on_reactor(document)?;
             // Pending geometry request (if any) is applied before the damage
             // gate so the resized window repaints in this same wake.
@@ -862,9 +928,15 @@ mod pointer_sample_regressions {
             width: 180.0,
             height: 12.0,
         };
-        assert!(!track.contains(531.0, 451.0), "corner sample misses the track");
+        assert!(
+            !track.contains(531.0, 451.0),
+            "corner sample misses the track"
+        );
         let (x, y) = pointer_sample_point(531.0, 451.0, 1.0);
-        assert!(track.contains(x, y), "pixel-center sample must hit the track");
+        assert!(
+            track.contains(x, y),
+            "pixel-center sample must hit the track"
+        );
     }
 
     #[test]
@@ -876,9 +948,8 @@ mod pointer_sample_regressions {
 #[cfg(test)]
 mod reactor_presentation_regressions {
     use super::{
-        CONTROL_MASK, MOD4_MASK, XK_ESCAPE, XK_LEFT, XK_SUPER_L, X11WindowRole,
-        canonical_key_name, desktop_takes_focus_on_press, normalized_modifiers,
-        printable_key_text,
+        CONTROL_MASK, MOD4_MASK, X11WindowRole, XK_ESCAPE, XK_LEFT, XK_SUPER_L, canonical_key_name,
+        desktop_takes_focus_on_press, normalized_modifiers, printable_key_text,
     };
 
     fn reactor_loop_source() -> &'static str {

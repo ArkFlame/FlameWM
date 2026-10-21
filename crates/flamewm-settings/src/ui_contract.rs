@@ -440,19 +440,40 @@ fn every_visible_mode_slot_resolves_on_every_page() {
 }
 
 #[test]
-fn settings_sync_projects_live_font_defaults_and_accent_scale_outline() {
+fn settings_sync_projects_live_font_defaults_and_scale_slider_value() {
     let mut settings = settings_fixture("#3DAEE9", "dark");
-    settings.values.insert("fontSizeOffset".into(), SettingValue::Integer(2));
-    settings.values.insert("fontBold".into(), SettingValue::Boolean(true));
+    settings
+        .values
+        .insert("fontSizeOffset".into(), SettingValue::Integer(2));
+    settings
+        .values
+        .insert("fontBold".into(), SettingValue::Boolean(true));
     let mut app = application(settings, display_fixtures().remove(0));
     let mut document = StrictDocument::new();
     app.sync(&mut document).expect("settings sync");
 
     // This fixture is the single HDMI-1 output; DP-1 belongs to the separate mode-paging fixture.
-    assert_eq!(document.texts.get("display-output-name-0").map(String::as_str), Some("1 · HDMI-1"));
+    assert_eq!(
+        document
+            .texts
+            .get("display-output-name-0")
+            .map(String::as_str),
+        Some("1 · HDMI-1")
+    );
     assert_eq!(document.font_defaults, Some((2.0, true)));
-    assert_eq!(document.borders.get("display-scale-100"), Some(&UiColor { r: 61, g: 174, b: 233, a: 255 }));
-    assert_eq!(document.borders.get("display-scale-125"), Some(&UiColor { r: 74, g: 80, b: 86, a: 255 }));
+    assert_eq!(
+        document
+            .texts
+            .get("display-scale-value")
+            .map(String::as_str),
+        Some("100%")
+    );
+    assert!(
+        !document
+            .borders
+            .keys()
+            .any(|key| key.starts_with("display-scale-"))
+    );
 }
 
 fn hex_rgb(value: &str) -> (u8, u8, u8) {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use flamewm_api::settings::SettingValue;
-use flamewm_api::{display::DisplaySnapshot, Rect};
+use flamewm_api::{Rect, display::DisplaySnapshot};
 use flamewm_control_core::{ControlRequest, ControlResponse};
 use flamewm_control_dbus::ControlClient;
 use flamewm_dbus_reactor::BusKind;
@@ -61,11 +61,7 @@ fn output_rects_from_snapshot(snapshot: Option<&DisplaySnapshot>, root: Rect) ->
         .collect::<Vec<_>>();
     rects.sort_by_key(|rect| (rect.y, rect.x, rect.height, rect.width));
     rects.dedup();
-    if rects.is_empty() {
-        vec![root]
-    } else {
-        rects
-    }
+    if rects.is_empty() { vec![root] } else { rects }
 }
 
 pub(crate) fn lock_output_rects_from_snapshot(snapshot: &DisplaySnapshot, root: Rect) -> Vec<Rect> {
@@ -138,8 +134,8 @@ pub fn username() -> Option<String> {
 mod username_tests {
     use super::{name_for_uid, real_uid};
     use flamewm_api::{
-        display::{DisplaySnapshot, OutputSnapshot},
         Rect,
+        display::{DisplaySnapshot, OutputSnapshot},
     };
 
     fn output(geometry: Rect, connected: bool) -> OutputSnapshot {

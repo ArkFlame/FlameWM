@@ -154,7 +154,11 @@ fn move_frame(canary: &crate::Canary, client: u32, target: (i32, i32)) -> Option
         }
         sleep_ms(120);
         let next = frame_of(canary, client)?;
-        stuck = if (next.0, next.1) == (f.0, f.1) { stuck + 1 } else { 0 };
+        stuck = if (next.0, next.1) == (f.0, f.1) {
+            stuck + 1
+        } else {
+            0
+        };
         f = next;
         if stuck >= 2 {
             break;

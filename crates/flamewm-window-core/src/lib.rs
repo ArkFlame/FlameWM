@@ -59,8 +59,12 @@ pub fn snap_target_in_output(pointer: Point, output: Rect, work_area: Rect) -> S
 pub fn snap_geometry(target: SnapTarget, work_area: Rect, current: Size) -> Rect {
     let half_w = (work_area.width / 2).max(1);
     let half_h = (work_area.height / 2).max(1);
-    let right_x = work_area.x.saturating_add(work_area.width.saturating_sub(half_w));
-    let bottom_y = work_area.y.saturating_add(work_area.height.saturating_sub(half_h));
+    let right_x = work_area
+        .x
+        .saturating_add(work_area.width.saturating_sub(half_w));
+    let bottom_y = work_area
+        .y
+        .saturating_add(work_area.height.saturating_sub(half_h));
     match target {
         SnapTarget::None => Rect::new(work_area.x, work_area.y, current.width, current.height),
         SnapTarget::LeftHalf => Rect::new(work_area.x, work_area.y, half_w, work_area.height),

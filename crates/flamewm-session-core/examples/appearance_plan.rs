@@ -42,6 +42,9 @@ fn main() {
         std::process::exit(1);
     }
     for key in ["XDG_CONFIG_DIRS", "QT_QPA_PLATFORMTHEME"] {
-        println!("{key}={}", plan.environment.get(key).map_or("", String::as_str));
+        println!(
+            "{key}={}",
+            plan.environment.get(key).map_or("", String::as_str)
+        );
     }
 }

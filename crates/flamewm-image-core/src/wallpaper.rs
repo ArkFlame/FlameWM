@@ -8,7 +8,7 @@ use std::path::Path;
 
 use flamewm_api::background::WallpaperFit;
 
-use crate::scale::{ScaleFilter, scale_rgba};
+use crate::scale::{ScaleFilter, area_tap, scale_rgba};
 use crate::{ImageSourceFormat, RgbaImage, check_size_limits};
 
 /// Opaque black: the desktop background colour from `project_background`. Used for letterbox
@@ -215,32 +215,6 @@ fn layer(natural: &RgbaImage, width: u32, height: u32, fit: WallpaperFit) -> Opt
         WallpaperFit::Center => scaled(nw, nh, centred(tw, nw), centred(th, nh)),
         WallpaperFit::Tile => Some(Layer::Tiled),
     }
-}
-
-/// Area-filter taps for destination index `destination` of a `src_len` -> `dst_len` axis: the
-/// first covered source index and the normalised coverage weights for the consecutive indices
-/// from there. Per-index form of the `Area` filter in `scale.rs`, so a sub-range of the scaled
-/// layer needs only its own taps.
-fn area_tap(src_len: usize, dst_len: usize, destination: usize) -> (usize, Vec<f32>) {
-    let ratio = src_len as f64 / dst_len as f64;
-    let start = destination as f64 * ratio;
-    let end = (destination + 1) as f64 * ratio;
-    let first = start.floor() as usize;
-    let last = (end.ceil() as usize).min(src_len);
-    let mut weights: Vec<f32> = (first..last)
-        .map(|index| {
-            let lo = start.max(index as f64);
-            let hi = end.min((index + 1) as f64);
-            (hi - lo).max(0.0) as f32
-        })
-        .collect();
-    let total: f32 = weights.iter().sum();
-    if total > 0.0 {
-        for weight in &mut weights {
-            *weight /= total;
-        }
-    }
-    (first, weights)
 }
 
 /// One output pixel of the area-filtered natural image, accumulated in the same order and
@@ -495,7 +469,12 @@ mod region_tests {
         for (width, height) in [(1, 1), (101, 137), (192, 108)] {
             let canvas = super::solid(width, height, fill).expect("canvas");
             assert_eq!(canvas.pixels.len(), width as usize * height as usize * 4);
-            assert!(canvas.pixels.chunks_exact(4).all(|pixel| pixel == fill.as_slice()));
+            assert!(
+                canvas
+                    .pixels
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == fill.as_slice())
+            );
         }
     }
 

@@ -76,7 +76,9 @@ fn eval(edge: PanelEdge, window: WarpRect, icon: WarpRect, p: f64, s: f64) -> (f
 }
 
 fn is_finite_rect(rect: WarpRect) -> bool {
-    [rect.x, rect.y, rect.width, rect.height].iter().all(|v| v.is_finite())
+    [rect.x, rect.y, rect.width, rect.height]
+        .iter()
+        .all(|v| v.is_finite())
 }
 
 /// Chooses the panel edge for an icon: beside the window on that side, otherwise the screen
@@ -95,13 +97,22 @@ pub fn edge_for(window: WarpRect, icon: WarpRect, screen: WarpRect) -> PanelEdge
         PanelEdge::Bottom
     } else {
         let gaps = [
-            (PanelEdge::Bottom, screen.y + screen.height - (icon.y + icon.height)),
+            (
+                PanelEdge::Bottom,
+                screen.y + screen.height - (icon.y + icon.height),
+            ),
             (PanelEdge::Top, icon.y - screen.y),
-            (PanelEdge::Right, screen.x + screen.width - (icon.x + icon.width)),
+            (
+                PanelEdge::Right,
+                screen.x + screen.width - (icon.x + icon.width),
+            ),
             (PanelEdge::Left, icon.x - screen.x),
         ];
         gaps.iter()
-            .fold(gaps[0], |best, cur| if cur.1 < best.1 { *cur } else { best })
+            .fold(
+                gaps[0],
+                |best, cur| if cur.1 < best.1 { *cur } else { best },
+            )
             .0
     }
 }
@@ -137,11 +148,27 @@ pub fn lamp_bands(
     let vertical = matches!(edge, PanelEdge::Left | PanelEdge::Right);
     // Along axis: bands are rows (bottom/top) or columns (left/right).
     let (along_len, along_origin, lat_len, lat_origin, lat_off, lat_icon) = if vertical {
-        (window.width, window.x, window.height, window.y, icon.y - window.y, icon.height)
+        (
+            window.width,
+            window.x,
+            window.height,
+            window.y,
+            icon.y - window.y,
+            icon.height,
+        )
     } else {
-        (window.height, window.y, window.width, window.x, icon.x - window.x, icon.width)
+        (
+            window.height,
+            window.y,
+            window.width,
+            window.x,
+            icon.x - window.x,
+            icon.width,
+        )
     };
-    let count = (band_extent_px / BAND_PX).ceil().clamp(1.0, MAX_BANDS as f64) as usize;
+    let count = (band_extent_px / BAND_PX)
+        .ceil()
+        .clamp(1.0, MAX_BANDS as f64) as usize;
 
     let mut bands = Vec::with_capacity(count);
     let mut s0 = 0.0_f64;
@@ -177,13 +204,32 @@ pub fn lamp_bands(
 mod tests {
     use super::*;
 
-    const G: WarpRect = WarpRect { x: 300.0, y: 100.0, width: 800.0, height: 600.0 };
-    const I: WarpRect = WarpRect { x: 650.0, y: 900.0, width: 48.0, height: 48.0 };
-    const SCREEN: WarpRect = WarpRect { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 };
+    const G: WarpRect = WarpRect {
+        x: 300.0,
+        y: 100.0,
+        width: 800.0,
+        height: 600.0,
+    };
+    const I: WarpRect = WarpRect {
+        x: 650.0,
+        y: 900.0,
+        width: 48.0,
+        height: 48.0,
+    };
+    const SCREEN: WarpRect = WarpRect {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
     const PROGRESS: [f64; 9] = [0.0, 0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99, 1.0];
 
     fn bands(edge: PanelEdge, p: f64) -> Vec<LampBand> {
-        let extent = if matches!(edge, PanelEdge::Left | PanelEdge::Right) { G.width } else { G.height };
+        let extent = if matches!(edge, PanelEdge::Left | PanelEdge::Right) {
+            G.width
+        } else {
+            G.height
+        };
         lamp_bands(G, I, edge, p, extent).unwrap()
     }
 
@@ -191,13 +237,49 @@ mod tests {
     fn identity_at_zero_progress_for_all_edges() {
         // Icons placed beside the window on each side so the identity holds for every edge.
         let cases = [
-            (PanelEdge::Bottom, WarpRect { x: 650.0, y: 900.0, width: 48.0, height: 48.0 }),
-            (PanelEdge::Top, WarpRect { x: 650.0, y: 20.0, width: 48.0, height: 48.0 }),
-            (PanelEdge::Right, WarpRect { x: 1200.0, y: 400.0, width: 48.0, height: 48.0 }),
-            (PanelEdge::Left, WarpRect { x: 20.0, y: 400.0, width: 48.0, height: 48.0 }),
+            (
+                PanelEdge::Bottom,
+                WarpRect {
+                    x: 650.0,
+                    y: 900.0,
+                    width: 48.0,
+                    height: 48.0,
+                },
+            ),
+            (
+                PanelEdge::Top,
+                WarpRect {
+                    x: 650.0,
+                    y: 20.0,
+                    width: 48.0,
+                    height: 48.0,
+                },
+            ),
+            (
+                PanelEdge::Right,
+                WarpRect {
+                    x: 1200.0,
+                    y: 400.0,
+                    width: 48.0,
+                    height: 48.0,
+                },
+            ),
+            (
+                PanelEdge::Left,
+                WarpRect {
+                    x: 20.0,
+                    y: 400.0,
+                    width: 48.0,
+                    height: 48.0,
+                },
+            ),
         ];
         for (edge, icon) in cases {
-            let extent = if matches!(edge, PanelEdge::Left | PanelEdge::Right) { G.width } else { G.height };
+            let extent = if matches!(edge, PanelEdge::Left | PanelEdge::Right) {
+                G.width
+            } else {
+                G.height
+            };
             let list = lamp_bands(G, icon, edge, 0.0, extent).unwrap();
             let mut covered = 0.0;
             for band in &list {
@@ -220,8 +302,15 @@ mod tests {
                     }
                 }
             }
-            let extent_covered = if matches!(edge, PanelEdge::Left | PanelEdge::Right) { G.width } else { G.height };
-            assert!((covered - extent_covered).abs() < 1e-9, "{edge:?} covers the window");
+            let extent_covered = if matches!(edge, PanelEdge::Left | PanelEdge::Right) {
+                G.width
+            } else {
+                G.height
+            };
+            assert!(
+                (covered - extent_covered).abs() < 1e-9,
+                "{edge:?} covers the window"
+            );
         }
     }
 
@@ -233,7 +322,10 @@ mod tests {
         assert!((top.dst.1 - 150.0).abs() < 1e-6, "top row y {}", top.dst.1);
         let bottom = list.last().unwrap();
         // Bottom row clipped to the icon top: local 800, root 900.
-        assert!((bottom.dst.1 + bottom.dst.3 - 900.0).abs() < 1e-6, "bottom row edge");
+        assert!(
+            (bottom.dst.1 + bottom.dst.3 - 900.0).abs() < 1e-6,
+            "bottom row edge"
+        );
     }
 
     #[test]
@@ -241,13 +333,24 @@ mod tests {
         let list = bands(PanelEdge::Bottom, 0.5);
         let far = list.first().unwrap().dst.2;
         let dock = list.last().unwrap().dst.2;
-        assert!(dock < far, "dock row {dock} must be narrower than far row {far}");
-        assert!(G.width - dock > 2.0 * (G.width - far), "contraction is not a rigid scale");
+        assert!(
+            dock < far,
+            "dock row {dock} must be narrower than far row {far}"
+        );
+        assert!(
+            G.width - dock > 2.0 * (G.width - far),
+            "contraction is not a rigid scale"
+        );
     }
 
     #[test]
     fn neighbouring_band_edges_meet_within_a_millionth_of_a_pixel() {
-        for edge in [PanelEdge::Bottom, PanelEdge::Top, PanelEdge::Left, PanelEdge::Right] {
+        for edge in [
+            PanelEdge::Bottom,
+            PanelEdge::Top,
+            PanelEdge::Left,
+            PanelEdge::Right,
+        ] {
             for p in PROGRESS {
                 let list = bands(edge, p);
                 for pair in list.windows(2) {
@@ -259,7 +362,10 @@ mod tests {
                     } else {
                         (a.1 + a.3, b.1)
                     };
-                    assert!((a_end - b_start).abs() < 1e-9, "{edge:?} p={p}: {a_end} vs {b_start}");
+                    assert!(
+                        (a_end - b_start).abs() < 1e-9,
+                        "{edge:?} p={p}: {a_end} vs {b_start}"
+                    );
                 }
             }
         }
@@ -267,24 +373,70 @@ mod tests {
 
     #[test]
     fn values_stay_finite_for_sample_progress_and_degenerate_inputs() {
-        for edge in [PanelEdge::Bottom, PanelEdge::Top, PanelEdge::Left, PanelEdge::Right] {
+        for edge in [
+            PanelEdge::Bottom,
+            PanelEdge::Top,
+            PanelEdge::Left,
+            PanelEdge::Right,
+        ] {
             for p in PROGRESS {
                 for band in bands(edge, p) {
-                    for v in [band.src.0, band.src.1, band.src.2, band.src.3, band.dst.0, band.dst.1, band.dst.2, band.dst.3] {
+                    for v in [
+                        band.src.0, band.src.1, band.src.2, band.src.3, band.dst.0, band.dst.1,
+                        band.dst.2, band.dst.3,
+                    ] {
                         assert!(v.is_finite(), "{edge:?} p={p}");
                     }
                 }
             }
         }
-        let zero_icon = WarpRect { width: 0.0, height: 0.0, ..I };
-        let overlap = WarpRect { x: 400.0, y: 500.0, width: 200.0, height: 200.0 };
-        let edge_icon = WarpRect { x: 1000.0, y: 1000.0, width: 48.0, height: 48.0 };
-        let fourk = WarpRect { x: 0.0, y: 0.0, width: 3840.0, height: 2160.0 };
-        let fourk_icon = WarpRect { x: 3800.0, y: 2100.0, width: 40.0, height: 40.0 };
-        let cases = [(G, zero_icon), (G, overlap), (G, edge_icon), (fourk, fourk_icon)];
+        let zero_icon = WarpRect {
+            width: 0.0,
+            height: 0.0,
+            ..I
+        };
+        let overlap = WarpRect {
+            x: 400.0,
+            y: 500.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let edge_icon = WarpRect {
+            x: 1000.0,
+            y: 1000.0,
+            width: 48.0,
+            height: 48.0,
+        };
+        let fourk = WarpRect {
+            x: 0.0,
+            y: 0.0,
+            width: 3840.0,
+            height: 2160.0,
+        };
+        let fourk_icon = WarpRect {
+            x: 3800.0,
+            y: 2100.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let cases = [
+            (G, zero_icon),
+            (G, overlap),
+            (G, edge_icon),
+            (fourk, fourk_icon),
+        ];
         for (window, icon) in cases {
-            for edge in [PanelEdge::Bottom, PanelEdge::Top, PanelEdge::Left, PanelEdge::Right] {
-                let extent = if matches!(edge, PanelEdge::Left | PanelEdge::Right) { window.width } else { window.height };
+            for edge in [
+                PanelEdge::Bottom,
+                PanelEdge::Top,
+                PanelEdge::Left,
+                PanelEdge::Right,
+            ] {
+                let extent = if matches!(edge, PanelEdge::Left | PanelEdge::Right) {
+                    window.width
+                } else {
+                    window.height
+                };
                 for p in PROGRESS {
                     let list = lamp_bands(window, icon, edge, p, extent).unwrap();
                     assert!(!list.is_empty() && list.len() <= MAX_BANDS);
@@ -309,30 +461,81 @@ mod tests {
 
     #[test]
     fn band_count_is_adaptive_and_capped() {
-        assert_eq!(lamp_bands(G, I, PanelEdge::Bottom, 0.5, 600.0).unwrap().len(), 100);
-        assert_eq!(lamp_bands(G, I, PanelEdge::Bottom, 0.5, 2160.0).unwrap().len(), MAX_BANDS);
-        assert_eq!(lamp_bands(G, I, PanelEdge::Bottom, 0.5, 1.0).unwrap().len(), 1);
+        assert_eq!(
+            lamp_bands(G, I, PanelEdge::Bottom, 0.5, 600.0)
+                .unwrap()
+                .len(),
+            100
+        );
+        assert_eq!(
+            lamp_bands(G, I, PanelEdge::Bottom, 0.5, 2160.0)
+                .unwrap()
+                .len(),
+            MAX_BANDS
+        );
+        assert_eq!(
+            lamp_bands(G, I, PanelEdge::Bottom, 0.5, 1.0).unwrap().len(),
+            1
+        );
     }
 
     #[test]
     fn progress_is_clamped_to_unit_interval() {
-        assert_eq!(bands(PanelEdge::Bottom, -4.0), bands(PanelEdge::Bottom, 0.0));
+        assert_eq!(
+            bands(PanelEdge::Bottom, -4.0),
+            bands(PanelEdge::Bottom, 0.0)
+        );
         assert_eq!(bands(PanelEdge::Bottom, 7.0), bands(PanelEdge::Bottom, 1.0));
     }
 
     #[test]
     fn edge_for_follows_icon_side_and_falls_back_to_bottom() {
-        let below = WarpRect { x: 650.0, y: 900.0, width: 48.0, height: 48.0 };
-        let above = WarpRect { x: 650.0, y: 20.0, width: 48.0, height: 48.0 };
-        let right = WarpRect { x: 1200.0, y: 400.0, width: 48.0, height: 48.0 };
-        let left = WarpRect { x: 20.0, y: 400.0, width: 48.0, height: 48.0 };
+        let below = WarpRect {
+            x: 650.0,
+            y: 900.0,
+            width: 48.0,
+            height: 48.0,
+        };
+        let above = WarpRect {
+            x: 650.0,
+            y: 20.0,
+            width: 48.0,
+            height: 48.0,
+        };
+        let right = WarpRect {
+            x: 1200.0,
+            y: 400.0,
+            width: 48.0,
+            height: 48.0,
+        };
+        let left = WarpRect {
+            x: 20.0,
+            y: 400.0,
+            width: 48.0,
+            height: 48.0,
+        };
         assert_eq!(edge_for(G, below, SCREEN), PanelEdge::Bottom);
         assert_eq!(edge_for(G, above, SCREEN), PanelEdge::Top);
         assert_eq!(edge_for(G, right, SCREEN), PanelEdge::Right);
         assert_eq!(edge_for(G, left, SCREEN), PanelEdge::Left);
-        let overlapping = WarpRect { x: 500.0, y: 300.0, width: 48.0, height: 48.0 };
+        let overlapping = WarpRect {
+            x: 500.0,
+            y: 300.0,
+            width: 48.0,
+            height: 48.0,
+        };
         // Overlapping the window: nearest screen edge (top, 300 px away) wins.
         assert_eq!(edge_for(G, overlapping, SCREEN), PanelEdge::Top);
-        assert_eq!(edge_for(G, overlapping, WarpRect { width: 0.0, ..SCREEN }), PanelEdge::Bottom);
+        assert_eq!(
+            edge_for(
+                G,
+                overlapping,
+                WarpRect {
+                    width: 0.0,
+                    ..SCREEN
+                }
+            ),
+            PanelEdge::Bottom
+        );
     }
 }

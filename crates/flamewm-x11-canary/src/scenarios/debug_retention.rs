@@ -29,15 +29,20 @@ pub fn run_t13(args: &[String]) -> (bool, String) {
     };
     match (which.as_str(), current.is_empty()) {
         ("a" | "b", true) => needs_digest(&which),
-        ("a", false) => match std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))
-            .and_then(|()| std::fs::write(&path, format!("{current}\n")))
-        {
-            Ok(()) => (
-                true,
-                format!("run=a stored digest={current} file={file} path=file-retention"),
-            ),
-            Err(e) => (false, format!("run=a write failed {e} file={file} path=file-retention")),
-        },
+        ("a", false) => {
+            match std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))
+                .and_then(|()| std::fs::write(&path, format!("{current}\n")))
+            {
+                Ok(()) => (
+                    true,
+                    format!("run=a stored digest={current} file={file} path=file-retention"),
+                ),
+                Err(e) => (
+                    false,
+                    format!("run=a write failed {e} file={file} path=file-retention"),
+                ),
+            }
+        }
         ("b", false) => match std::fs::read_to_string(&path) {
             Ok(stored) => {
                 let stored = stored.trim().to_owned();

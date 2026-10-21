@@ -1,8 +1,7 @@
-use super::*;
 use super::actions::*;
 use super::reply::*;
 use super::rules::*;
-
+use super::*;
 
 #[test]
 fn properties_rules_exclude_device_statistics_signal() {
@@ -11,8 +10,16 @@ fn properties_rules_exclude_device_statistics_signal() {
         .map(|interface| properties_changed_rule(interface))
         .collect();
     assert!(rules.iter().all(|rule| rule.contains("arg0='")));
-    assert!(rules.iter().any(|rule| rule.contains("arg0='org.freedesktop.NetworkManager.Device.Wireless'")));
-    assert!(rules.iter().any(|rule| rule.contains("arg0='org.freedesktop.NetworkManager.Device'")));
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule.contains("arg0='org.freedesktop.NetworkManager.Device.Wireless'"))
+    );
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule.contains("arg0='org.freedesktop.NetworkManager.Device'"))
+    );
     assert!(!rules.iter().any(|rule| rule.contains("Device.Statistics")));
 }
 
@@ -240,9 +247,7 @@ fn device_parser_reads_active_access_point_and_treats_slash_as_none() {
                 ),
                 (
                     "ActiveAccessPoint".to_owned(),
-                    MessageItem::ObjectPath(
-                        object_path(active_ap.to_owned()).expect("valid path"),
-                    ),
+                    MessageItem::ObjectPath(object_path(active_ap.to_owned()).expect("valid path")),
                 ),
             ]
             .into_iter()
@@ -641,7 +646,11 @@ fn settings_item() -> MessageItem {
 }
 
 fn peer_call(member: &str) -> Message {
-    secret_agent_call_with(SECRET_AGENT_INTERFACE, member, &[empty_dict(), settings_item()])
+    secret_agent_call_with(
+        SECRET_AGENT_INTERFACE,
+        member,
+        &[empty_dict(), settings_item()],
+    )
 }
 
 fn assert_empty_return(message: &Message) {
@@ -704,11 +713,8 @@ fn assert_error_reply(message: &Message, expected: &str) {
 
 #[test]
 fn secret_agent_wrong_interface_replies_unknown_interface() {
-    let message = secret_agent_call_with(
-        "org.example.Wrong",
-        GET_SECRETS,
-        &valid_get_secrets_items(),
-    );
+    let message =
+        secret_agent_call_with("org.example.Wrong", GET_SECRETS, &valid_get_secrets_items());
     assert_error_reply(&message, "org.freedesktop.DBus.Error.UnknownInterface");
 }
 

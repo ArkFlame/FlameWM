@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TOOLS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+CONF="$TOOLS_DIR/flamewm-test-dbus.conf"
+
+# Explicit test-specific configurations must take precedence.
+for arg in "$@"; do
+  case "$arg" in
+    --config-file|--config-file=*)
+      exec /usr/bin/dbus-run-session "$@"
+      ;;
+    --)
+      break
+      ;;
+  esac
+done
+
+exec /usr/bin/dbus-run-session --config-file="$CONF" "$@"

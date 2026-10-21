@@ -7,7 +7,10 @@ impl<'a, C: Connection> Wm<'a, C> {
     pub(super) fn handle_event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
         match self.handle_event_inner(event) {
             Err(error) if is_destroyed_window_race(&error) => {
-                log_once(&DESTROYED_WINDOW_RACE_LOG, &format!("ignored a request that raced a destroyed window: {error}"));
+                log_once(
+                    &DESTROYED_WINDOW_RACE_LOG,
+                    &format!("ignored a request that raced a destroyed window: {error}"),
+                );
                 Ok(())
             }
             other => other,
@@ -51,7 +54,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             Event::FocusOut(_) => self.super_tap.focus_lost(),
             Event::MotionNotify(event) => self.handle_motion(event)?,
             Event::PropertyNotify(event) => self.handle_property(event.window, event.atom)?,
-            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => self.display_topology_dirty.mark(),
+            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
+                self.display_topology_dirty.mark()
+            }
             Event::ClientMessage(event) => self.handle_client_message(event)?,
             _ => {}
         }
@@ -92,7 +97,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             ACTION_WINDOW_MAXIMIZE => self.on_active(Self::toggle_maximize)?,
             // Arrow shortcuts follow the product two-row grid: left/right stay inside the
             // current row, up/down switch rows, and a missing neighbour is a no-op.
-            ACTION_WORKSPACE_LEFT | ACTION_WORKSPACE_RIGHT | ACTION_WORKSPACE_UP
+            ACTION_WORKSPACE_LEFT
+            | ACTION_WORKSPACE_RIGHT
+            | ACTION_WORKSPACE_UP
             | ACTION_WORKSPACE_DOWN => {
                 if let Some(target) = workspace_shortcut_target(
                     self.current_workspace,
@@ -107,9 +114,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let home = std::env::var_os("HOME")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::path::PathBuf::from("/"));
-                if let Err(error) = std::process::Command::new("xdg-open")
-                    .arg(home).spawn()
-                {
+                if let Err(error) = std::process::Command::new("xdg-open").arg(home).spawn() {
                     eprintln!("flamewm: file explorer shortcut failed: {error}");
                 }
             }
@@ -117,8 +122,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 // Default terminal first, then the Debian x-terminal-emulator
                 // alternative if Konsole is not installed.
                 if let Err(error) = std::process::Command::new("konsole").spawn() {
-                    if let Err(fallback) = std::process::Command::new("x-terminal-emulator").spawn() {
-                        eprintln!("flamewm: terminal shortcut failed: {error}; fallback: {fallback}");
+                    if let Err(fallback) = std::process::Command::new("x-terminal-emulator").spawn()
+                    {
+                        eprintln!(
+                            "flamewm: terminal shortcut failed: {error}; fallback: {fallback}"
+                        );
                     }
                 }
             }
@@ -131,7 +139,9 @@ impl<'a, C: Connection> Wm<'a, C> {
                     _ => &["--active", "--copy"],
                 };
                 if let Err(error) = std::process::Command::new("flamewm-screenshot")
-                    .args(options).spawn() {
+                    .args(options)
+                    .spawn()
+                {
                     eprintln!("flamewm: screenshot shortcut failed: {error}");
                 }
             }
@@ -151,7 +161,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    fn on_active(&mut self, act: fn(&mut Self, Window) -> Result<(), ReplyError>) -> Result<(), ReplyError> {
+    fn on_active(
+        &mut self,
+        act: fn(&mut Self, Window) -> Result<(), ReplyError>,
+    ) -> Result<(), ReplyError> {
         match self.active {
             Some(client) => act(self, client),
             None => Ok(()),
@@ -176,7 +189,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
     }
 
-    pub(super) fn handle_map_request(&mut self, event: MapRequestEvent) -> Result<(), ReplyOrIdError> {
+    pub(super) fn handle_map_request(
+        &mut self,
+        event: MapRequestEvent,
+    ) -> Result<(), ReplyOrIdError> {
         if self.clients.contains_key(&event.window) {
             self.conn.map_window(event.window)?;
             if let Some(client) = self.clients.get(&event.window) {
@@ -292,19 +308,26 @@ impl<'a, C: Connection> Wm<'a, C> {
                 let count = self.read_first_cardinal(window, self.atoms.net_number_of_desktops);
                 let names = self
                     .conn
-                    .get_property(false, window, self.atoms.net_desktop_names, AtomEnum::ANY, 0, u32::MAX)
+                    .get_property(
+                        false,
+                        window,
+                        self.atoms.net_desktop_names,
+                        AtomEnum::ANY,
+                        0,
+                        u32::MAX,
+                    )
                     .ok()
                     .and_then(|cookie| cookie.reply().ok())
                     .map(|reply| reply.value)
                     .unwrap_or_default();
                 let own_names = desktop_names_payload(self.workspace_count);
-                if workspace_metadata_is_external(count, &names, self.workspace_count, &own_names)
-                {
+                if workspace_metadata_is_external(count, &names, self.workspace_count, &own_names) {
                     match count.map(|value| value as usize) {
                         Some(external) if external != self.workspace_count => {
                             // Adopt the root's current desktop before republishing so the
                             // metadata publish does not revert an external switch.
-                            let current = self.read_first_cardinal(window, self.atoms.net_current_desktop);
+                            let current =
+                                self.read_first_cardinal(window, self.atoms.net_current_desktop);
                             if let Some(value) = current.map(|v| v as usize) {
                                 if value < external {
                                     self.current_workspace = value;
@@ -366,7 +389,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             for requesters in self.icon_requests.values_mut() {
                 requesters.retain(|(id, _)| *id != client_id);
             }
-            self.icon_requests.retain(|_, requesters| !requesters.is_empty());
+            self.icon_requests
+                .retain(|_, requesters| !requesters.is_empty());
             if let Some(client) = self.clients.get_mut(&client_id) {
                 client.wm_instance = wm_instance;
                 client.wm_class = wm_class;
@@ -376,7 +400,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                 client.catalog_icon_key = None;
             }
             self.next_client_lifetime = self.next_client_lifetime.saturating_add(1);
-            if self.clients.get(&client_id).is_some_and(|client| client.icon.is_none()) {
+            if self
+                .clients
+                .get(&client_id)
+                .is_some_and(|client| client.icon.is_none())
+            {
                 self.request_catalog_icon(client_id);
             }
             self.mark_windows();
@@ -401,14 +429,19 @@ impl<'a, C: Connection> Wm<'a, C> {
     }
 
     fn read_first_cardinal(&self, window: Window, atom: Atom) -> Option<u32> {
-        self.read_cardinals(window, atom, 1).and_then(|values| values.first().copied())
+        self.read_cardinals(window, atom, 1)
+            .and_then(|values| values.first().copied())
     }
 
     fn is_maximize_atom(&self, atom: Atom) -> bool {
-        atom == self.atoms.net_wm_state_maximized_horz || atom == self.atoms.net_wm_state_maximized_vert
+        atom == self.atoms.net_wm_state_maximized_horz
+            || atom == self.atoms.net_wm_state_maximized_vert
     }
 
-    pub(super) fn handle_client_message(&mut self, event: ClientMessageEvent) -> Result<(), ReplyError> {
+    pub(super) fn handle_client_message(
+        &mut self,
+        event: ClientMessageEvent,
+    ) -> Result<(), ReplyError> {
         if event.type_ == self.atoms.wm_change_state && self.clients.contains_key(&event.window) {
             let data = event.data.as_data32();
             trace_restore("restore.trace.wm.change_state", || {
@@ -430,7 +463,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         } else if event.type_ == self.atoms.net_active_window {
             if self.clients.contains_key(&event.window) {
-                if self.clients.get(&event.window).is_some_and(|state| state.minimized) {
+                if self
+                    .clients
+                    .get(&event.window)
+                    .is_some_and(|state| state.minimized)
+                {
                     // Restore retains the PlacementState, including Maximized.
                     // A focus-only activation of an iconic client is not a restore.
                     self.restore_minimized(event.window)?;
@@ -449,7 +486,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         } else if event.type_ == self.atoms.net_wm_state && self.clients.contains_key(&event.window)
         {
-            let wants_maximize = [data[1], data[2]].iter().any(|&atom| self.is_maximize_atom(atom));
+            let wants_maximize = [data[1], data[2]]
+                .iter()
+                .any(|&atom| self.is_maximize_atom(atom));
             let before = self
                 .clients
                 .get(&event.window)
@@ -463,7 +502,10 @@ impl<'a, C: Connection> Wm<'a, C> {
                 .get(&event.window)
                 .map(|state| state.placement.mode);
             if let (Some(before), Some(after)) = (before, after) {
-                let session = self.sessions.get(&event.window).map(|session| session.session);
+                let session = self
+                    .sessions
+                    .get(&event.window)
+                    .map(|session| session.session);
                 flamewm_debug::emit(
                     flamewm_debug::WM_FRAME_EVENT_DISPATCH,
                     std::time::Duration::ZERO,

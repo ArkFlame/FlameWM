@@ -1,11 +1,14 @@
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use flamewm_api::ports::WorkspacePort;
-use flamewm_api::workspace::{MAX_WORKSPACES, WORKSPACE_COUNT_KEY, WorkspacePlan, WorkspaceSnapshot};
+use flamewm_api::workspace::{
+    MAX_WORKSPACES, WORKSPACE_COUNT_KEY, WorkspacePlan, WorkspaceSnapshot,
+};
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
+use crate::storage::write_atomic_text;
 use crate::workspace::WorkspacePlanner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,29 +40,7 @@ pub fn load_persisted_count(path: &Path) -> Option<usize> {
 }
 
 fn persist_count(path: &Path, count: usize) -> FlameResult<()> {
-    write_atomic(path, &format!("{WORKSPACE_COUNT_KEY}={count}\n")).map_err(io_error)
-}
-
-fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        fs::create_dir_all(parent)?;
-    }
-    let temp = path.with_extension("conf.tmp");
-    let result = (|| -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temp, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
+    write_atomic_text(path, &format!("{WORKSPACE_COUNT_KEY}={count}\n")).map_err(io_error)
 }
 
 fn io_error(error: io::Error) -> FlameError {
@@ -144,7 +125,6 @@ impl WorkspaceService {
         }
         Ok(())
     }
-
 }
 
 fn require_revision(snapshot: &WorkspaceSnapshot, expected: u64) -> FlameResult<()> {
@@ -193,7 +173,12 @@ mod tests {
         fn move_window_to_workspace(&mut self, _: WindowRef, _: usize) -> FlameResult<()> {
             Ok(())
         }
-        fn switch_workspace_with_window(&mut self, _: WindowRef, _: usize, _: u64) -> FlameResult<()> {
+        fn switch_workspace_with_window(
+            &mut self,
+            _: WindowRef,
+            _: usize,
+            _: u64,
+        ) -> FlameResult<()> {
             Ok(())
         }
         fn apply_workspace_plan(&mut self, plan: &WorkspacePlan) -> FlameResult<()> {
@@ -231,6 +216,10 @@ mod tests {
         service.insert_after(&mut port, 0, 0).expect("insert");
         assert_eq!(port.applied.len(), 1);
         assert_eq!(load_persisted_count(&count_store_path(&settings)), Some(5));
+        assert_eq!(
+            fs::read(count_store_path(&settings)).unwrap(),
+            b"workspaces.count=5\n"
+        );
         let restarted = WorkspaceService::new(count_store_path(&settings));
         assert_eq!(restarted.load_count(), Some(5));
     }
@@ -280,7 +269,12 @@ mod tests {
     fn invalid_or_out_of_range_stored_value_is_ignored() {
         let dir = scratch_dir("invalid");
         let path = dir.join("workspaces.conf");
-        for text in ["workspaces.count=0\n", "workspaces.count=19\n", "workspaces.count=abc\n", "garbage\n"] {
+        for text in [
+            "workspaces.count=0\n",
+            "workspaces.count=19\n",
+            "workspaces.count=abc\n",
+            "garbage\n",
+        ] {
             fs::write(&path, text).expect("write");
             assert_eq!(load_persisted_count(&path), None, "{text:?}");
         }

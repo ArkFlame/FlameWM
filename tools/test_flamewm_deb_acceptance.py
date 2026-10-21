@@ -84,6 +84,15 @@ class DependsTests(unittest.TestCase):
         declared = self._control_depends()
         self.assertEqual([d for d in deb.REQUIRED_DEPENDS if d not in declared], [])
 
+    def test_optional_desktop_tools_are_not_package_recommendations(self):
+        control = self.CONTROL_IN.read_text()
+        recommends = next((line.split(":", 1)[1] for line in control.splitlines()
+                           if line.startswith("Recommends:")), "")
+        self.assertFalse(deb.FORBIDDEN_RECOMMENDS.intersection(deb.depend_names(recommends)))
+
+    def test_notification_daemon_is_optional(self):
+        self.assertNotIn("dunst", self._control_depends())
+
 
 class SessionRegistrationTests(unittest.TestCase):
     SESSION = Path(__file__).resolve().parent.parent / "packaging/flamewm-session.desktop"

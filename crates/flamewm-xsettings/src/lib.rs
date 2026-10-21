@@ -182,7 +182,10 @@ pub fn published_settings(input: &XSettingsInput) -> BTreeMap<String, XSettingsV
     let mut settings = build_settings(input).settings;
     let strings = string_table(input);
     if let Some(font) = strings.get("Gtk/FontName") {
-        settings.insert("Gtk/FontName".to_owned(), XSettingsValue::Text(font.clone()));
+        settings.insert(
+            "Gtk/FontName".to_owned(),
+            XSettingsValue::Text(font.clone()),
+        );
     }
     settings.insert(
         "Gtk/CursorThemeName".to_owned(),
@@ -338,7 +341,9 @@ mod tests {
             Some(XSettingsValue::Integer(0))
         );
         assert_eq!(
-            string_table(&input).get("Net/ThemeName").map(String::as_str),
+            string_table(&input)
+                .get("Net/ThemeName")
+                .map(String::as_str),
             Some("Flame-Light")
         );
     }
@@ -377,7 +382,9 @@ mod tests {
             Some(&XSettingsValue::Text("Breeze-Dark".to_owned()))
         );
         assert_eq!(
-            string_table(&input).get("Net/ThemeName").map(String::as_str),
+            string_table(&input)
+                .get("Net/ThemeName")
+                .map(String::as_str),
             Some("Breeze-Dark")
         );
     }

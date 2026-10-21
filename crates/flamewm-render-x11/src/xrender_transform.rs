@@ -110,8 +110,7 @@ impl XRenderTransformApi {
             create_solid_fill: unsafe { library.symbol(b"XRenderCreateSolidFill\0") }?,
         };
         // SAFETY: names are static NUL-terminated; a failed lookup is an absent extension.
-        let set_picture_transform =
-            unsafe { library.symbol(b"XRenderSetPictureTransform\0") }.ok();
+        let set_picture_transform = unsafe { library.symbol(b"XRenderSetPictureTransform\0") }.ok();
         let set_picture_filter = unsafe { library.symbol(b"XRenderSetPictureFilter\0") }.ok();
         let set_picture_clip_rectangles =
             unsafe { library.symbol(b"XRenderSetPictureClipRectangles\0") }.ok();
@@ -161,13 +160,17 @@ impl XRenderTransformApi {
         // SAFETY: `display` is live per contract; NULL means no such standard format.
         let format = unsafe { (self.base.find_standard_format)(display, standard) };
         if format.is_null() {
-            return Err(format!("XRenderFindStandardFormat({standard}) returned NULL"));
+            return Err(format!(
+                "XRenderFindStandardFormat({standard}) returned NULL"
+            ));
         }
         // SAFETY: live `display`/`drawable`/`format`; NULL attributes select defaults.
         let picture =
             unsafe { (self.base.create_picture)(display, drawable, format, 0, std::ptr::null()) };
         if picture == 0 {
-            return Err(format!("XRenderCreatePicture returned 0 for format {standard}"));
+            return Err(format!(
+                "XRenderCreatePicture returned 0 for format {standard}"
+            ));
         }
         Ok(picture)
     }
@@ -186,7 +189,12 @@ impl XRenderTransformApi {
         blue: u16,
         alpha: u16,
     ) -> Result<Picture, String> {
-        let color = XRenderColor { red, green, blue, alpha };
+        let color = XRenderColor {
+            red,
+            green,
+            blue,
+            alpha,
+        };
         // SAFETY: live `display` per contract; `color` outlives the call.
         let picture = unsafe { (self.base.create_solid_fill)(display, &color) };
         if picture == 0 {
@@ -286,7 +294,21 @@ impl XRenderTransformApi {
         // SAFETY: forwarded contract; no mask; the source origin is zero so the transform input is
         // relative to the rect origin.
         unsafe {
-            (self.base.composite)(display, PICT_OP_SRC, src, 0, dst, 0, 0, 0, 0, x, y, width, height)
+            (self.base.composite)(
+                display,
+                PICT_OP_SRC,
+                src,
+                0,
+                dst,
+                0,
+                0,
+                0,
+                0,
+                x,
+                y,
+                width,
+                height,
+            )
         };
     }
 

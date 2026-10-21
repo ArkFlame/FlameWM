@@ -98,7 +98,6 @@ pub enum NetworkManagerProviderState {
     Started,
 }
 
-
 enum PendingRequest {
     AddMatch,
     ServiceOwner,
@@ -272,7 +271,6 @@ impl NetworkManagerProvider {
     pub fn snapshot(&self) -> NetworkSnapshot {
         self.controller.snapshot()
     }
-
 }
 
 impl NetworkManagerProvider {
@@ -335,10 +333,7 @@ impl NetworkManagerProvider {
 
 /// Applies every drained event in order. A failing event is logged by error text only (the
 /// event payload can carry secrets, so it is never printed) and does not stop the batch.
-fn dispatch_incoming(
-    events: Vec<Incoming>,
-    mut apply: impl FnMut(Incoming) -> FlameResult<()>,
-) {
+fn dispatch_incoming(events: Vec<Incoming>, mut apply: impl FnMut(Incoming) -> FlameResult<()>) {
     for event in events {
         if let Err(error) = apply(event) {
             eprintln!(
@@ -415,9 +410,7 @@ impl NetworkManagerProvider {
             .controller
             .inject_status(self.status.clone(), generation);
     }
-
 }
-
 
 fn object_paths(items: &[MessageItem], context: &str) -> FlameResult<Vec<String>> {
     let Some(MessageItem::Array(paths)) = items.first() else {

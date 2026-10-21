@@ -65,7 +65,9 @@ impl ShortcutService {
         binding: &str,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.mutate(port, expected_revision, |registry| registry.set(action, binding))
+        self.mutate(port, expected_revision, |registry| {
+            registry.set(action, binding)
+        })
     }
 
     pub fn clear_binding<P: ShortcutPort>(
@@ -83,7 +85,9 @@ impl ShortcutService {
         action: &str,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.mutate(port, expected_revision, |registry| registry.reset_one(action))
+        self.mutate(port, expected_revision, |registry| {
+            registry.reset_one(action)
+        })
     }
 
     pub fn apply<P: ShortcutPort>(
@@ -92,7 +96,9 @@ impl ShortcutService {
         bindings: &BTreeMap<String, KeyBinding>,
         expected_revision: u64,
     ) -> FlameResult<()> {
-        self.mutate(port, expected_revision, |registry| registry.replace_all(bindings))
+        self.mutate(port, expected_revision, |registry| {
+            registry.replace_all(bindings)
+        })
     }
 
     /// Refuses during capture or on a stale revision, applies `edit` to a candidate copy, then commits it.
@@ -261,10 +267,8 @@ mod effective_registry_tests {
 
     #[test]
     fn persisted_binding_overlays_only_its_own_action() {
-        let persisted = BTreeMap::from([(
-            ACTION_WINDOW_MAXIMIZE.to_owned(),
-            "Ctrl+Super+M".to_owned(),
-        )]);
+        let persisted =
+            BTreeMap::from([(ACTION_WINDOW_MAXIMIZE.to_owned(), "Ctrl+Super+M".to_owned())]);
         let effective = effective_registry(&persisted).expect("single custom binding is valid");
         let defaults = ShortcutRegistry::default();
 
@@ -274,7 +278,11 @@ mod effective_registry_tests {
         );
         for action in crate::shortcuts::ACTIONS {
             if action != ACTION_WINDOW_MAXIMIZE {
-                assert_eq!(effective.binding(action), defaults.binding(action), "{action}");
+                assert_eq!(
+                    effective.binding(action),
+                    defaults.binding(action),
+                    "{action}"
+                );
             }
         }
     }
@@ -400,7 +408,9 @@ mod capture_lease_tests {
             .begin_capture(&mut port, ACTION_TOGGLE_START_MENU, revision(&service))
             .expect("lease");
         // Settings disconnect is observed by the bus adapter and ends the lease it owned.
-        service.end_capture(&mut port, lease).expect("owner loss end");
+        service
+            .end_capture(&mut port, lease)
+            .expect("owner loss end");
         assert_eq!(port.live, defaults());
     }
 
@@ -410,7 +420,9 @@ mod capture_lease_tests {
         service
             .begin_capture(&mut port, ACTION_TOGGLE_START_MENU, revision(&service))
             .expect("lease");
-        service.release_capture(&mut port).expect("teardown release");
+        service
+            .release_capture(&mut port)
+            .expect("teardown release");
         assert!(!service.capture_active());
         assert_eq!(port.live, defaults());
         service
@@ -424,7 +436,9 @@ mod capture_lease_tests {
         service
             .begin_capture(&mut port, ACTION_TOGGLE_START_MENU, revision(&service))
             .expect("lease");
-        let error = service.end_capture(&mut port, 999).expect_err("wrong lease");
+        let error = service
+            .end_capture(&mut port, 999)
+            .expect_err("wrong lease");
         assert_eq!(error.code, ErrorCode::Conflict);
         assert!(service.capture_active());
         assert!(port.live.is_empty());
@@ -446,7 +460,12 @@ mod capture_lease_tests {
             .begin_capture(&mut port, ACTION_TOGGLE_START_MENU, revision(&service))
             .expect("lease");
         let error = service
-            .set_binding(&mut port, ACTION_WINDOW_MAXIMIZE, "Ctrl+Super+M", before.revision)
+            .set_binding(
+                &mut port,
+                ACTION_WINDOW_MAXIMIZE,
+                "Ctrl+Super+M",
+                before.revision,
+            )
             .expect_err("mutation during capture");
         assert_eq!(error.code, ErrorCode::Busy);
         assert_eq!(service.snapshot(), before);
@@ -483,7 +502,9 @@ mod capture_lease_tests {
         port.fail_commits = 1;
         assert!(service.end_capture(&mut port, lease).is_err());
         assert!(service.capture_active(), "lease kept after failed restore");
-        service.end_capture(&mut port, lease).expect("retry restores");
+        service
+            .end_capture(&mut port, lease)
+            .expect("retry restores");
         assert_eq!(port.live, defaults());
         assert!(!service.capture_active());
     }

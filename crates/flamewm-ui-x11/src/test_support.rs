@@ -29,11 +29,13 @@ impl UiDocumentAccess for RecordingUiDoc {
         Ok(())
     }
     fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        self.images.insert(id.to_owned(), (image.width, image.height));
+        self.images
+            .insert(id.to_owned(), (image.width, image.height));
         Ok(())
     }
     fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
-        self.images.insert(id.to_owned(), (image.width, image.height));
+        self.images
+            .insert(id.to_owned(), (image.width, image.height));
         Ok(())
     }
     fn image_reset(&mut self, id: &str) -> Result<(), String> {

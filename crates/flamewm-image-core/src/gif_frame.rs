@@ -10,7 +10,8 @@ pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
     let mut decoder = options
         .read_info(bytes)
         .map_err(|error| error.to_string())?;
-    let (screen_width, screen_height) = (usize::from(decoder.width()), usize::from(decoder.height()));
+    let (screen_width, screen_height) =
+        (usize::from(decoder.width()), usize::from(decoder.height()));
     check_size_limits(screen_width as u32, screen_height as u32)?;
     let frame = decoder
         .read_next_frame()
@@ -39,8 +40,8 @@ mod tests {
 
     #[test]
     fn decodes_first_frame_fixture_with_colour() {
-        let image = decode(include_bytes!("../tests/fixtures/first-frame-4x4.gif"))
-            .expect("GIF fixture");
+        let image =
+            decode(include_bytes!("../tests/fixtures/first-frame-4x4.gif")).expect("GIF fixture");
         assert_eq!((image.width, image.height), (4, 4));
         assert_eq!(&image.pixels[..4], &[255, 0, 0, 255]);
         assert!(image.is_fully_opaque());

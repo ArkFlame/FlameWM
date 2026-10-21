@@ -40,7 +40,10 @@ impl ControlPower {
             .as_ref()
             .and_then(|client| {
                 match client
-                    .call_with_timeout(&ControlRequest::GetSessionCapabilities, CAPABILITIES_TIMEOUT)
+                    .call_with_timeout(
+                        &ControlRequest::GetSessionCapabilities,
+                        CAPABILITIES_TIMEOUT,
+                    )
                     .ok()?
                 {
                     ControlResponse::SessionCapabilities(caps) => Some(caps),
@@ -86,7 +89,9 @@ pub fn perform_on_worker(action: SessionAction, events: Sender<PowerEvent>) {
             let _ = events.send(PowerEvent::Result(outcome));
         });
     if spawned.is_err() {
-        let _ = fallback.send(PowerEvent::Result(Err("cannot start power action".to_string())));
+        let _ = fallback.send(PowerEvent::Result(Err(
+            "cannot start power action".to_string()
+        )));
     }
 }
 
@@ -310,9 +315,15 @@ impl PowerUi {
     pub fn view(&self) -> PowerView {
         PowerView {
             enabled: POWER_ORDER.map(|button| button.enabled(self.capabilities)),
-            confirm: match self.state { PowerState::Confirm(action) => Some(action), _ => None },
+            confirm: match self.state {
+                PowerState::Confirm(action) => Some(action),
+                _ => None,
+            },
             other_open: self.state == PowerState::OtherOpen,
-            message: match &self.state { PowerState::Error(m) => m.clone(), _ => String::new() },
+            message: match &self.state {
+                PowerState::Error(m) => m.clone(),
+                _ => String::new(),
+            },
         }
     }
 }
@@ -378,11 +389,19 @@ mod tests {
         assert_eq!(PowerButton::Shutdown.label(), "Shut Down");
         assert_eq!(PowerButton::Other.label(), "Other…");
         let none = SessionCapabilities::default();
-        for b in [PowerButton::Sleep, PowerButton::Restart, PowerButton::Shutdown, PowerButton::Other] {
+        for b in [
+            PowerButton::Sleep,
+            PowerButton::Restart,
+            PowerButton::Shutdown,
+            PowerButton::Other,
+        ] {
             assert!(!b.enabled(none));
             assert!(b.enabled(all_caps()));
         }
-        let only_logout = SessionCapabilities { logout: true, ..Default::default() };
+        let only_logout = SessionCapabilities {
+            logout: true,
+            ..Default::default()
+        };
         assert!(PowerButton::Other.enabled(only_logout));
         assert!(!PowerButton::Sleep.enabled(only_logout));
         assert_eq!(Confirmable::Restart.label(), "Restart");
@@ -392,25 +411,40 @@ mod tests {
     #[test]
     fn sleep_performs_suspend_immediately() {
         let mut p = ui(all_caps());
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::Perform(SessionAction::Suspend));
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Sleep)),
+            Effect::Perform(SessionAction::Suspend)
+        );
         assert_eq!(p.state(), &PowerState::Busy);
     }
 
     #[test]
     fn restart_requires_confirm_then_reboots() {
         let mut p = ui(all_caps());
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Restart)), Effect::None);
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Restart)),
+            Effect::None
+        );
         assert_eq!(p.state(), &PowerState::Confirm(Confirmable::Restart));
-        assert_eq!(p.handle(PowerEvent::Confirm), Effect::Perform(SessionAction::Reboot));
+        assert_eq!(
+            p.handle(PowerEvent::Confirm),
+            Effect::Perform(SessionAction::Reboot)
+        );
         assert_eq!(p.state(), &PowerState::Busy);
     }
 
     #[test]
     fn shutdown_requires_confirm_then_shuts_down() {
         let mut p = ui(all_caps());
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Shutdown)), Effect::None);
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Shutdown)),
+            Effect::None
+        );
         assert_eq!(p.state(), &PowerState::Confirm(Confirmable::Shutdown));
-        assert_eq!(p.handle(PowerEvent::Confirm), Effect::Perform(SessionAction::Shutdown));
+        assert_eq!(
+            p.handle(PowerEvent::Confirm),
+            Effect::Perform(SessionAction::Shutdown)
+        );
     }
 
     #[test]
@@ -427,9 +461,15 @@ mod tests {
     #[test]
     fn other_opens_list_and_logout_performs_logout() {
         let mut p = ui(all_caps());
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Other)), Effect::None);
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Other)),
+            Effect::None
+        );
         assert_eq!(p.state(), &PowerState::OtherOpen);
-        assert_eq!(p.handle(PowerEvent::ClickLogout), Effect::Perform(SessionAction::Logout));
+        assert_eq!(
+            p.handle(PowerEvent::ClickLogout),
+            Effect::Perform(SessionAction::Logout)
+        );
         assert_eq!(p.state(), &PowerState::Busy);
     }
 
@@ -445,11 +485,19 @@ mod tests {
     #[test]
     fn disabled_actions_are_inert() {
         let mut p = ui(SessionCapabilities::default());
-        for b in [PowerButton::Sleep, PowerButton::Restart, PowerButton::Shutdown, PowerButton::Other] {
+        for b in [
+            PowerButton::Sleep,
+            PowerButton::Restart,
+            PowerButton::Shutdown,
+            PowerButton::Other,
+        ] {
             assert_eq!(p.handle(PowerEvent::Click(b)), Effect::None);
             assert_eq!(p.state(), &PowerState::Idle);
         }
-        let mut no_logout = ui(SessionCapabilities { suspend: true, ..Default::default() });
+        let mut no_logout = ui(SessionCapabilities {
+            suspend: true,
+            ..Default::default()
+        });
         no_logout.handle(PowerEvent::Click(PowerButton::Other));
         assert_eq!(no_logout.state(), &PowerState::Idle);
         assert_eq!(no_logout.handle(PowerEvent::ClickLogout), Effect::None);
@@ -457,8 +505,14 @@ mod tests {
 
     #[test]
     fn restart_without_capability_never_confirms() {
-        let mut p = ui(SessionCapabilities { shutdown: true, ..Default::default() });
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Restart)), Effect::None);
+        let mut p = ui(SessionCapabilities {
+            shutdown: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Restart)),
+            Effect::None
+        );
         assert_eq!(p.state(), &PowerState::Idle);
     }
 
@@ -466,8 +520,14 @@ mod tests {
     fn busy_ignores_further_clicks_and_confirms() {
         let mut p = ui(all_caps());
         p.handle(PowerEvent::Click(PowerButton::Sleep));
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::None);
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Other)), Effect::None);
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Sleep)),
+            Effect::None
+        );
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Other)),
+            Effect::None
+        );
         assert_eq!(p.handle(PowerEvent::ClickLogout), Effect::None);
         assert_eq!(p.handle(PowerEvent::Escape), Effect::None);
         assert_eq!(p.state(), &PowerState::Busy);
@@ -501,7 +561,10 @@ mod tests {
         assert_eq!(p.state(), &PowerState::Error("boom".into()));
         p.handle(PowerEvent::Tick(Duration::from_millis(1)));
         assert_eq!(p.state(), &PowerState::Idle);
-        assert_eq!(p.handle(PowerEvent::Tick(Duration::from_secs(10))), Effect::None);
+        assert_eq!(
+            p.handle(PowerEvent::Tick(Duration::from_secs(10))),
+            Effect::None
+        );
     }
 
     #[test]
@@ -509,13 +572,20 @@ mod tests {
         let mut p = ui(all_caps());
         p.handle(PowerEvent::Click(PowerButton::Sleep));
         p.handle(PowerEvent::Result(Err("boom".into())));
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::Perform(SessionAction::Suspend));
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Sleep)),
+            Effect::Perform(SessionAction::Suspend)
+        );
         assert_eq!(p.state(), &PowerState::Busy);
     }
 
     #[test]
     fn fake_power_records_calls_through_port() {
-        let mut fake = FakePower { capabilities: all_caps(), calls: Vec::new(), result: Ok(()) };
+        let mut fake = FakePower {
+            capabilities: all_caps(),
+            calls: Vec::new(),
+            result: Ok(()),
+        };
         assert_eq!(fake.capabilities(), all_caps());
         assert_eq!(fake.perform(SessionAction::Reboot), Ok(()));
         assert_eq!(fake.calls, vec![SessionAction::Reboot]);
@@ -524,14 +594,23 @@ mod tests {
     #[test]
     fn capabilities_event_replaces_the_fail_closed_default() {
         let mut p = PowerUi::new(SessionCapabilities::default());
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::None);
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Sleep)),
+            Effect::None
+        );
         assert_eq!(p.handle(PowerEvent::Capabilities(all_caps())), Effect::None);
-        assert_eq!(p.handle(PowerEvent::Click(PowerButton::Sleep)), Effect::Perform(SessionAction::Suspend));
+        assert_eq!(
+            p.handle(PowerEvent::Click(PowerButton::Sleep)),
+            Effect::Perform(SessionAction::Suspend)
+        );
     }
 
     #[test]
     fn view_marks_disabled_buttons_and_open_strips() {
-        let mut p = ui(SessionCapabilities { reboot: true, ..Default::default() });
+        let mut p = ui(SessionCapabilities {
+            reboot: true,
+            ..Default::default()
+        });
         let idle = p.view();
         assert_eq!(idle.enabled, [false, true, false, false]);
         assert_eq!(idle.confirm, None);
@@ -549,7 +628,10 @@ mod tests {
 
     #[test]
     fn ui_actions_map_to_power_events_and_unknown_names_do_nothing() {
-        assert_eq!(ui_action("lock.power.2"), Some(PowerEvent::Click(PowerButton::Shutdown)));
+        assert_eq!(
+            ui_action("lock.power.2"),
+            Some(PowerEvent::Click(PowerButton::Shutdown))
+        );
         assert_eq!(ui_action("lock.confirm"), Some(PowerEvent::Confirm));
         assert_eq!(ui_action("lock.cancel"), Some(PowerEvent::Cancel));
         assert_eq!(ui_action("lock.logout"), Some(PowerEvent::ClickLogout));
@@ -561,6 +643,9 @@ mod tests {
     fn control_power_fails_closed_when_bus_cannot_connect() {
         let mut port = ControlPower::from_connect(|| Err::<ControlClient, _>("no bus"));
         assert_eq!(port.capabilities(), SessionCapabilities::default());
-        assert_eq!(port.perform(SessionAction::Suspend), Err("control bus unavailable".into()));
+        assert_eq!(
+            port.perform(SessionAction::Suspend),
+            Err("control bus unavailable".into())
+        );
     }
 }

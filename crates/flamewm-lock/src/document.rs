@@ -4,14 +4,14 @@ use std::fs;
 use std::path::Path;
 
 use flamewm_api::Rect;
-use flamewm_image_core::scale::{scale_rgba, ScaleFilter};
-use flamewm_image_core::{decode_bytes, svg, ImageSourceFormat, RgbaImage, SvgColorScheme};
-use flamewm_ui_x11::{decode_document, RuntimeImage, UiColor, UiDocumentAccess, UiTemplate};
+use flamewm_image_core::scale::{ScaleFilter, scale_rgba};
+use flamewm_image_core::{ImageSourceFormat, RgbaImage, SvgColorScheme, decode_bytes, svg};
+use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess, UiTemplate, decode_document};
 
 use crate::background;
 use crate::layout::{self, LockLayout, Placed, RefRect};
-use crate::power::{PowerView, POWER_ORDER};
-use crate::settings::{LockBackgroundMode, LockSettings, DEFAULT_BACKGROUND};
+use crate::power::{POWER_ORDER, PowerView};
+use crate::settings::{DEFAULT_BACKGROUND, LockBackgroundMode, LockSettings};
 use crate::view::LockView;
 
 const LOCK_ARTIFACT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flamewm-lock.rwr"));

@@ -4,12 +4,12 @@ mod session_app_compat;
 use std::collections::BTreeMap;
 use std::env;
 use std::io::{ErrorKind, Read};
-use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
-use std::sync::{Arc, OnceLock};
+use std::path::PathBuf;
+use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -63,8 +63,12 @@ fn execute() -> Result<(), String> {
         return Err("session parent exited during supervisor setup".to_owned());
     }
 
-    let executable = env::current_exe().map_err(|error| format!("locate session executable: {error}"))?;
-    let bindir = executable.parent().ok_or_else(|| "session executable has no parent directory".to_owned())?.to_path_buf();
+    let executable =
+        env::current_exe().map_err(|error| format!("locate session executable: {error}"))?;
+    let bindir = executable
+        .parent()
+        .ok_or_else(|| "session executable has no parent directory".to_owned())?
+        .to_path_buf();
     let home = env::var_os("HOME").map_or_else(|| PathBuf::from("/root"), PathBuf::from);
     let mut paths = default_paths_from_home(&bindir, home.clone());
     if let Some(config) = env::var_os("XDG_CONFIG_HOME") {
@@ -83,7 +87,9 @@ fn execute() -> Result<(), String> {
         || plan.processes[1].role != SessionRole::Desktop
         || plan.processes[2].role != SessionRole::Shell
     {
-        return Err("session launch plan does not contain WM, Desktop, Shell in required order".to_owned());
+        return Err(
+            "session launch plan does not contain WM, Desktop, Shell in required order".to_owned(),
+        );
     }
     // D-Bus/systemd user activation runs outside the process supervisor.
     // Without updating its environment, a portal or KWallet service activated
@@ -128,26 +134,43 @@ const ALLOCATOR_TUNING: [(&str, &str); 3] = [
 
 /// Allocator-tuning pairs whose key is not already set; a user-provided value always wins.
 fn allocator_tuning_defaults(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
-    ALLOCATOR_TUNING.into_iter().filter(|(key, _)| !is_set(key)).collect()
+    ALLOCATOR_TUNING
+        .into_iter()
+        .filter(|(key, _)| !is_set(key))
+        .collect()
 }
 
 /// A two-connector preference belongs to FlameWM, not Plasma/KScreen.
 /// Restore only when BOTH connector names are currently active. A stale
 /// hotplug preference does not cause a mode-set or block login.
 fn restore_saved_display_order() {
-    let Some((left, right)) = flamewm_session_core::display_order::load_order() else { return; };
-    let Ok(snapshot) = Command::new("xrandr").arg("--query").output() else { return; };
-    if !snapshot.status.success() { return; }
+    let Some((left, right)) = flamewm_session_core::display_order::load_order() else {
+        return;
+    };
+    let Ok(snapshot) = Command::new("xrandr").arg("--query").output() else {
+        return;
+    };
+    if !snapshot.status.success() {
+        return;
+    }
     let output = String::from_utf8_lossy(&snapshot.stdout);
-    let connected = |connector: &str| output.lines().any(|line| {
-        line.strip_prefix(connector).is_some_and(|rest| {
-            rest.starts_with(" connected ") && rest.split_whitespace()
-                .any(|token| token.contains('x') && token.contains('+'))
+    let connected = |connector: &str| {
+        output.lines().any(|line| {
+            line.strip_prefix(connector).is_some_and(|rest| {
+                rest.starts_with(" connected ")
+                    && rest
+                        .split_whitespace()
+                        .any(|token| token.contains('x') && token.contains('+'))
+            })
         })
-    });
-    if !connected(&left) || !connected(&right) { return; }
+    };
+    if !connected(&left) || !connected(&right) {
+        return;
+    }
     match Command::new("xrandr")
-        .args(["--output", &right, "--right-of", &left]).status() {
+        .args(["--output", &right, "--right-of", &left])
+        .status()
+    {
         Ok(status) if status.success() => (),
         Ok(status) => eprintln!("flamewm-session: monitor order restore rejected: {status}"),
         Err(error) => eprintln!("flamewm-session: monitor order restore unavailable: {error}"),
@@ -158,35 +181,55 @@ fn restore_saved_display_order() {
 /// activated later by Dolphin, Brave, xdg-desktop-portal or KWallet.
 /// No credential access and no global user-config mutation.
 fn activation_assignments(
-    environment: &BTreeMap<String, String>, inherited: &BTreeMap<String, String>,
+    environment: &BTreeMap<String, String>,
+    inherited: &BTreeMap<String, String>,
 ) -> Vec<String> {
     const KEYS: &[&str] = &[
-        "DISPLAY", "XAUTHORITY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP",
-        "XDG_SESSION_TYPE", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "QT_QPA_PLATFORMTHEME",
+        "DISPLAY",
+        "XAUTHORITY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+        "XDG_DATA_DIRS",
+        "XDG_CONFIG_DIRS",
+        "XDG_MENU_PREFIX",
+        "QT_QPA_PLATFORMTHEME",
         "KDE_SESSION_VERSION",
     ];
-    KEYS.iter().filter_map(|key| {
-        // Unlike other keys, a missing KDE version must CLEAR stale activation
-        // state from a prior Plasma login, not resurrect an inherited value.
-        if *key == "KDE_SESSION_VERSION" {
-            return Some(format!("KDE_SESSION_VERSION={}", environment.get(*key)
-                .map(String::as_str).unwrap_or("")));
-        }
-        environment.get(*key).or_else(|| inherited.get(*key))
-            .filter(|value| !value.is_empty()).map(|value| format!("{key}={value}"))
-    }).collect()
+    KEYS.iter()
+        .filter_map(|key| {
+            // Unlike other keys, a missing KDE version must CLEAR stale activation
+            // state from a prior Plasma login, not resurrect an inherited value.
+            if *key == "KDE_SESSION_VERSION" {
+                return Some(format!(
+                    "KDE_SESSION_VERSION={}",
+                    environment.get(*key).map(String::as_str).unwrap_or("")
+                ));
+            }
+            environment
+                .get(*key)
+                .or_else(|| inherited.get(*key))
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("{key}={value}"))
+        })
+        .collect()
 }
 
 fn sync_activation_environment(environment: &BTreeMap<String, String>) {
     let mut command = Command::new("dbus-update-activation-environment");
     command.arg("--systemd").args(activation_assignments(
-        environment, &env::vars().collect::<BTreeMap<_, _>>(),
+        environment,
+        &env::vars().collect::<BTreeMap<_, _>>(),
     ));
     match command.status() {
         Ok(status) if status.success() => (),
-        Ok(status) => eprintln!("flamewm-session: D-Bus activation environment not synchronized: {status}"),
+        Ok(status) => {
+            eprintln!("flamewm-session: D-Bus activation environment not synchronized: {status}")
+        }
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            eprintln!("flamewm-session: dbus-update-activation-environment unavailable; portal session integration degraded");
+            eprintln!(
+                "flamewm-session: dbus-update-activation-environment unavailable; portal session integration degraded"
+            );
         }
         Err(error) => eprintln!("flamewm-session: activation environment: {error}"),
     }
@@ -197,33 +240,56 @@ fn spawn(plan: ProcessPlan) -> Result<Running, String> {
     command
         .args(&plan.arguments)
         .envs(&plan.environment)
-        .env("FLAMEWM_SESSION_SUPERVISOR_PID", std::process::id().to_string())
+        .env(
+            "FLAMEWM_SESSION_SUPERVISOR_PID",
+            std::process::id().to_string(),
+        )
         .env_remove("FLAMEWM_SESSION_LOGOUT_OWNER");
     if plan.role == SessionRole::WindowManager {
         command.env("FLAMEWM_SESSION_LOGOUT_OWNER", "1");
     }
-    for (key, value) in allocator_tuning_defaults(|key| env::var_os(key).is_some() || plan.environment.contains_key(key)) {
+    for (key, value) in allocator_tuning_defaults(|key| {
+        env::var_os(key).is_some() || plan.environment.contains_key(key)
+    }) {
         command.env(key, value);
     }
-    let child = command.spawn().map_err(|error| format!("spawn {:?} at {}: {error}", plan.role, plan.program.display()))?;
-    Ok(Running { plan, child, supervisor: ProcessSupervisorPolicy::default() })
+    let child = command.spawn().map_err(|error| {
+        format!(
+            "spawn {:?} at {}: {error}",
+            plan.role,
+            plan.program.display()
+        )
+    })?;
+    Ok(Running {
+        plan,
+        child,
+        supervisor: ProcessSupervisorPolicy::default(),
+    })
 }
 
 /// Read end of the self-pipe written by the signal handlers for SIGCHLD and stop signals.
 static WAKEUP: OnceLock<UnixStream> = OnceLock::new();
 
 fn register_wakeups() -> Result<(), String> {
-    let (reader, writer) = UnixStream::pair().map_err(|error| format!("create supervisor wakeup pipe: {error}"))?;
+    let (reader, writer) =
+        UnixStream::pair().map_err(|error| format!("create supervisor wakeup pipe: {error}"))?;
     for signal in [SIGCHLD, SIGTERM, SIGINT, SIGHUP] {
-        let fd = writer.try_clone().map_err(|error| format!("duplicate supervisor wakeup pipe: {error}"))?;
-        pipe::register(signal, fd).map_err(|error| format!("register supervisor wakeup for signal {signal}: {error}"))?;
+        let fd = writer
+            .try_clone()
+            .map_err(|error| format!("duplicate supervisor wakeup pipe: {error}"))?;
+        pipe::register(signal, fd)
+            .map_err(|error| format!("register supervisor wakeup for signal {signal}: {error}"))?;
     }
-    WAKEUP.set(reader).map_err(|_| "supervisor wakeup pipe registered twice".to_owned())
+    WAKEUP
+        .set(reader)
+        .map_err(|_| "supervisor wakeup pipe registered twice".to_owned())
 }
 
 /// Blocks until a child exits, a stop signal arrives, or `timeout` elapses (`None` waits indefinitely).
 fn wait_for_wakeup(timeout: Option<Duration>) -> Result<(), String> {
-    let reader = WAKEUP.get().ok_or_else(|| "supervisor wakeup pipe is not registered".to_owned())?;
+    let reader = WAKEUP
+        .get()
+        .ok_or_else(|| "supervisor wakeup pipe is not registered".to_owned())?;
     reader
         .set_read_timeout(timeout.map(|duration| duration.max(Duration::from_millis(1))))
         .map_err(|error| format!("configure supervisor wakeup: {error}"))?;
@@ -231,68 +297,127 @@ fn wait_for_wakeup(timeout: Option<Duration>) -> Result<(), String> {
     match (&*reader).read(&mut buffer) {
         Ok(0) => Err("supervisor wakeup pipe closed".to_owned()),
         Ok(_) => Ok(()),
-        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(())
+        }
         Err(error) => Err(format!("wait for supervisor wakeup: {error}")),
     }
 }
 
 fn check_stop(stop_requested: &AtomicBool) -> Result<(), String> {
-    if stop_requested.load(Ordering::Relaxed) { Err("session shutdown signal received".to_owned()) } else { Ok(()) }
+    if stop_requested.load(Ordering::Relaxed) {
+        Err("session shutdown signal received".to_owned())
+    } else {
+        Ok(())
+    }
 }
 
 fn check_parent(parent: rustix::process::Pid, stop_requested: &AtomicBool) -> Result<(), String> {
     check_stop(stop_requested)?;
-    if getppid() != Some(parent) { Err("session parent exited or is unavailable; stopping session children".to_owned()) } else { Ok(()) }
+    if getppid() != Some(parent) {
+        Err("session parent exited or is unavailable; stopping session children".to_owned())
+    } else {
+        Ok(())
+    }
 }
 
-fn startup_grace(child: &mut Running, parent: rustix::process::Pid, stop_requested: &AtomicBool) -> Result<(), String> {
+fn startup_grace(
+    child: &mut Running,
+    parent: rustix::process::Pid,
+    stop_requested: &AtomicBool,
+) -> Result<(), String> {
     let until = Instant::now() + STARTUP_GRACE;
     while Instant::now() < until {
         check_parent(parent, stop_requested)?;
-        if let Some(status) = child.child.try_wait().map_err(|error| child_error(child, "check startup", error))? {
-            return Err(format!("{:?} at {} exited during startup: {status}", child.plan.role, child.plan.program.display()));
+        if let Some(status) = child
+            .child
+            .try_wait()
+            .map_err(|error| child_error(child, "check startup", error))?
+        {
+            return Err(format!(
+                "{:?} at {} exited during startup: {status}",
+                child.plan.role,
+                child.plan.program.display()
+            ));
         }
         wait_for_wakeup(Some(until.saturating_duration_since(Instant::now())))?;
     }
     Ok(())
 }
 
-fn wait_ready(wm: &mut Running, parent: rustix::process::Pid, stop_requested: &AtomicBool) -> Result<(), String> {
+fn wait_ready(
+    wm: &mut Running,
+    parent: rustix::process::Pid,
+    stop_requested: &AtomicBool,
+) -> Result<(), String> {
     let deadline = Instant::now() + READY_TIMEOUT;
     let mut last_error = String::from("readiness not yet available");
     while Instant::now() < deadline {
-        if Instant::now() >= deadline { break; }
-        check_parent(parent, stop_requested)?;
-        if let Some(status) = wm.child.try_wait().map_err(|error| child_error(wm, "check WM readiness", error))? {
-            return Err(format!("WindowManager at {} exited before readiness: {status}", wm.plan.program.display()));
+        if Instant::now() >= deadline {
+            break;
         }
-        if Instant::now() >= deadline { break; }
+        check_parent(parent, stop_requested)?;
+        if let Some(status) = wm
+            .child
+            .try_wait()
+            .map_err(|error| child_error(wm, "check WM readiness", error))?
+        {
+            return Err(format!(
+                "WindowManager at {} exited before readiness: {status}",
+                wm.plan.program.display()
+            ));
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
         let ewmh = ewmh_ready();
-        if Instant::now() >= deadline { break; }
+        if Instant::now() >= deadline {
+            break;
+        }
         match ewmh {
             Ok(true) => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() { break; }
-                match control_ready(remaining) {
-                Ok(true) if Instant::now() < deadline => return Ok(()),
-                Ok(true) => break,
-                Ok(false) => last_error = "session control returned a non-bootstrap response".to_owned(),
-                Err(error) => last_error = format!("session control bootstrap: {error}"),
+                if remaining.is_zero() {
+                    break;
                 }
-                if Instant::now() >= deadline { break; }
+                match control_ready(remaining) {
+                    Ok(true) if Instant::now() < deadline => return Ok(()),
+                    Ok(true) => break,
+                    Ok(false) => {
+                        last_error = "session control returned a non-bootstrap response".to_owned()
+                    }
+                    Err(error) => last_error = format!("session control bootstrap: {error}"),
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
             }
             Ok(false) => last_error = "EWMH supporting-WM check is not valid".to_owned(),
             Err(error) => last_error = format!("EWMH readiness: {error}"),
         }
         thread::sleep(TICK.min(deadline.saturating_duration_since(Instant::now())));
     }
-    Err(format!("WindowManager readiness timed out after {} seconds ({}): {last_error}", READY_TIMEOUT.as_secs(), wm.plan.program.display()))
+    Err(format!(
+        "WindowManager readiness timed out after {} seconds ({}): {last_error}",
+        READY_TIMEOUT.as_secs(),
+        wm.plan.program.display()
+    ))
 }
 
 fn control_ready(timeout: Duration) -> Result<bool, String> {
-    if timeout.is_zero() { return Ok(false); }
+    if timeout.is_zero() {
+        return Ok(false);
+    }
     let client = ControlClient::connect(BusKind::Session).map_err(|error| error.to_string())?;
-    match client.call_with_timeout(&ControlRequest::GetShellBootstrap, timeout).map_err(|error| error.message)? {
+    match client
+        .call_with_timeout(&ControlRequest::GetShellBootstrap, timeout)
+        .map_err(|error| error.message)?
+    {
         ControlResponse::ShellBootstrap(_) => Ok(true),
         _ => Ok(false),
     }
@@ -300,18 +425,39 @@ fn control_ready(timeout: Duration) -> Result<bool, String> {
 
 fn ewmh_ready() -> Result<bool, String> {
     let (connection, screen_num) = x11rb::connect(None).map_err(|error| error.to_string())?;
-    let root = connection.setup().roots.get(screen_num).ok_or_else(|| "X11 screen missing".to_owned())?.root;
+    let root = connection
+        .setup()
+        .roots
+        .get(screen_num)
+        .ok_or_else(|| "X11 screen missing".to_owned())?
+        .root;
     let atom = |name: &[u8]| -> Result<u32, String> {
-        connection.intern_atom(false, name).map_err(|error| error.to_string())?.reply().map(|reply| reply.atom).map_err(|error| error.to_string())
+        connection
+            .intern_atom(false, name)
+            .map_err(|error| error.to_string())?
+            .reply()
+            .map(|reply| reply.atom)
+            .map_err(|error| error.to_string())
     };
     let property = atom(b"_NET_SUPPORTING_WM_CHECK")?;
-    let first = connection.get_property(false, root, property, AtomEnum::WINDOW, 0, 1)
-        .map_err(|error| error.to_string())?.reply().map_err(|error| error.to_string())?;
+    let first = connection
+        .get_property(false, root, property, AtomEnum::WINDOW, 0, 1)
+        .map_err(|error| error.to_string())?
+        .reply()
+        .map_err(|error| error.to_string())?;
     let root_support = first.value32().and_then(|mut values| values.next());
-    let Some(support) = root_support else { return Ok(false); };
-    let second = connection.get_property(false, support, property, AtomEnum::WINDOW, 0, 1)
-        .map_err(|error| error.to_string())?.reply().map_err(|error| error.to_string())?;
-    Ok(supporting_wm_check_is_valid(root_support, second.value32().and_then(|mut values| values.next())))
+    let Some(support) = root_support else {
+        return Ok(false);
+    };
+    let second = connection
+        .get_property(false, support, property, AtomEnum::WINDOW, 0, 1)
+        .map_err(|error| error.to_string())?
+        .reply()
+        .map_err(|error| error.to_string())?;
+    Ok(supporting_wm_check_is_valid(
+        root_support,
+        second.value32().and_then(|mut values| values.next()),
+    ))
 }
 
 fn supporting_wm_check_is_valid(root_support: Option<u32>, self_support: Option<u32>) -> bool {
@@ -325,14 +471,14 @@ fn clean_wm_exit(index: usize, status: ExitStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_assignments, allocator_tuning_defaults, clean_wm_exit, scan_exits,
-        stop_all, supporting_wm_check_is_valid, ProcessPlan, Running, WAKEUP,
+        ProcessPlan, Running, WAKEUP, activation_assignments, allocator_tuning_defaults,
+        clean_wm_exit, scan_exits, stop_all, supporting_wm_check_is_valid,
     };
+    use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
     use std::collections::BTreeMap;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, ExitStatus};
-    use flamewm_session_core::{ProcessSupervisorPolicy, SessionRole, SupervisorPolicy};
 
     #[test]
     fn successful_wm_exit_stops_session_without_restarting_it() {
@@ -405,7 +551,10 @@ mod tests {
                 .all(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists()),
             "managed child remained alive"
         );
-        assert!(unrelated_status.is_none(), "cleanup affected an unrelated process");
+        assert!(
+            unrelated_status.is_none(),
+            "cleanup affected an unrelated process"
+        );
     }
 
     #[test]
@@ -417,27 +566,38 @@ mod tests {
         let inherited = BTreeMap::from([
             ("XDG_CURRENT_DESKTOP".to_owned(), "KDE".to_owned()),
             ("KDE_SESSION_VERSION".to_owned(), "5".to_owned()),
-            ("PAM_KWALLET5_LOGIN".to_owned(), "/private/socket".to_owned()),
+            (
+                "PAM_KWALLET5_LOGIN".to_owned(),
+                "/private/socket".to_owned(),
+            ),
         ]);
         let args = activation_assignments(&live, &inherited);
         assert!(args.contains(&"XDG_CURRENT_DESKTOP=FlameWM".to_owned()));
         assert!(args.contains(&"KDE_SESSION_VERSION=".to_owned()));
         assert!(!args.iter().any(|arg| arg.contains("PAM_KWALLET5_LOGIN")));
-        let kde6 = BTreeMap::from([
-            ("KDE_SESSION_VERSION".to_owned(), "6".to_owned()),
-        ]);
+        let kde6 = BTreeMap::from([("KDE_SESSION_VERSION".to_owned(), "6".to_owned())]);
         let selected = activation_assignments(&kde6, &inherited);
         assert!(selected.contains(&"KDE_SESSION_VERSION=6".to_owned()));
     }
 
     #[test]
     fn scan_exits_reports_every_exited_child_before_blocking() {
-        let mixed = scan_exits(3, |index| Ok(if index == 1 { None } else { Some(index as i32) })).unwrap();
+        let mixed = scan_exits(3, |index| {
+            Ok(if index == 1 { None } else { Some(index as i32) })
+        })
+        .unwrap();
         assert_eq!(mixed, vec![(2, 2), (0, 0)]);
         let both = scan_exits(2, |index| Ok(Some(index as i32))).unwrap();
         assert_eq!(both, vec![(1, 1), (0, 0)]);
-        assert!(scan_exits(2, |_| Ok::<Option<i32>, String>(None)).unwrap().is_empty());
-        assert_eq!(scan_exits(2, |_| Err::<Option<i32>, _>("poll".to_owned())), Err("poll".to_owned()));
+        assert!(
+            scan_exits(2, |_| Ok::<Option<i32>, String>(None))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            scan_exits(2, |_| Err::<Option<i32>, _>("poll".to_owned())),
+            Err("poll".to_owned())
+        );
     }
 
     #[test]
@@ -469,7 +629,10 @@ mod tests {
 
 /// Polls every child without early exit and returns exits in descending index order, so a
 /// single pass sees all simultaneous exits before the supervisor decides to block.
-fn scan_exits<T>(count: usize, mut poll: impl FnMut(usize) -> Result<Option<T>, String>) -> Result<Vec<(usize, T)>, String> {
+fn scan_exits<T>(
+    count: usize,
+    mut poll: impl FnMut(usize) -> Result<Option<T>, String>,
+) -> Result<Vec<(usize, T)>, String> {
     let mut exits = Vec::new();
     for index in (0..count).rev() {
         if let Some(status) = poll(index)? {
@@ -479,11 +642,19 @@ fn scan_exits<T>(count: usize, mut poll: impl FnMut(usize) -> Result<Option<T>, 
     Ok(exits)
 }
 
-fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_plans: &[ProcessPlan], stop_requested: &AtomicBool) -> Result<(), String> {
+fn supervise(
+    children: &mut Vec<Running>,
+    parent: rustix::process::Pid,
+    role_plans: &[ProcessPlan],
+    stop_requested: &AtomicBool,
+) -> Result<(), String> {
     loop {
         check_parent(parent, stop_requested)?;
         let exits = scan_exits(children.len(), |index| {
-            children[index].child.try_wait().map_err(|error| child_error(&children[index], "supervise", error))
+            children[index]
+                .child
+                .try_wait()
+                .map_err(|error| child_error(&children[index], "supervise", error))
         })?;
         if let Some(&(index, status)) = exits.first() {
             if clean_wm_exit(index, status) {
@@ -525,7 +696,13 @@ fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_pla
                         }
                     }
                 }
-                SupervisorDecision::GiveUp => return Err(format!("{:?} at {} exhausted its restart budget", children[index].plan.role, children[index].plan.program.display())),
+                SupervisorDecision::GiveUp => {
+                    return Err(format!(
+                        "{:?} at {} exhausted its restart budget",
+                        children[index].plan.role,
+                        children[index].plan.program.display()
+                    ));
+                }
                 SupervisorDecision::StopCleanly => return Ok(()),
                 SupervisorDecision::SpawnNow => {
                     return Err(format!(
@@ -543,7 +720,11 @@ fn supervise(children: &mut Vec<Running>, parent: rustix::process::Pid, role_pla
     }
 }
 
-fn wait_backoff(delay_ms: u64, parent: rustix::process::Pid, stop_requested: &AtomicBool) -> Result<(), String> {
+fn wait_backoff(
+    delay_ms: u64,
+    parent: rustix::process::Pid,
+    stop_requested: &AtomicBool,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
     while Instant::now() < deadline {
         check_parent(parent, stop_requested)?;
@@ -554,17 +735,33 @@ fn wait_backoff(delay_ms: u64, parent: rustix::process::Pid, stop_requested: &At
 
 fn stop_dependents(children: &mut Vec<Running>) -> Result<(), String> {
     let mut failures = Vec::new();
-    while children.len() > 1 { if let Some(mut child) = children.pop() { if let Err(error) = stop_role(&mut child) { failures.push(error); } } }
-    if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }
+    while children.len() > 1 {
+        if let Some(mut child) = children.pop() {
+            if let Err(error) = stop_role(&mut child) {
+                failures.push(error);
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 fn stop_all(children: &mut Vec<Running>) -> Result<(), String> {
     let mut failures = Vec::new();
     while let Some(mut child) = children.pop() {
         child.supervisor.request_stop();
-        if let Err(error) = stop_role(&mut child) { failures.push(error); }
+        if let Err(error) = stop_role(&mut child) {
+            failures.push(error);
+        }
     }
-    if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 fn stop_role(child: &mut Running) -> Result<(), String> {
@@ -589,14 +786,18 @@ fn stop_role(child: &mut Running) -> Result<(), String> {
     }
     let deadline = Instant::now() + Duration::from_millis(child.supervisor.graceful_stop_ms());
     loop {
-        if exited { break; }
+        if exited {
+            break;
+        }
         match child.child.try_wait() {
             Ok(Some(_)) => {
                 exited = true;
                 break;
             }
             Ok(None) if Instant::now() < deadline => {
-                if let Err(error) = wait_for_wakeup(Some(deadline.saturating_duration_since(Instant::now()))) {
+                if let Err(error) =
+                    wait_for_wakeup(Some(deadline.saturating_duration_since(Instant::now())))
+                {
                     failures.push(error);
                     break;
                 }
@@ -620,7 +821,11 @@ fn stop_role(child: &mut Running) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => failures.push(format!("reap {:?}: {error}", child.plan.role)),
     }
-    if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 fn status_to_exit(status: ExitStatus) -> ChildExit {
@@ -636,5 +841,9 @@ fn status_to_exit(status: ExitStatus) -> ChildExit {
 }
 
 fn child_error(child: &Running, action: &str, error: std::io::Error) -> String {
-    format!("{action} {:?} at {}: {error}", child.plan.role, child.plan.program.display())
+    format!(
+        "{action} {:?} at {}: {error}",
+        child.plan.role,
+        child.plan.program.display()
+    )
 }

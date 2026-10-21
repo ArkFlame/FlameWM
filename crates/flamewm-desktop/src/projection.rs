@@ -1,5 +1,5 @@
-use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_api::Point;
+use flamewm_api::settings::{SettingValue, SettingsSnapshot};
 use flamewm_desktop_core::model::DesktopItemKind;
 use flamewm_desktop_core::presentation::desktop_label_lines;
 use flamewm_integrations_linux::icon_service::{IconJob, IconPriority, IconService};
@@ -12,8 +12,8 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::wallpaper_loader::WallpaperPresentation;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Mirror of the shared icon theme generation for [`ParallelIconService::icon_key`],
 /// which stays a static constructor for its existing callers. Written only by
@@ -28,6 +28,10 @@ pub const DESKTOP_TILE_HEIGHT: f32 = 82.0;
 pub const STICKY_SLOT_COUNT: usize = 16;
 const ICON_TILE_PX: u32 = 44;
 
+fn scaled_icon_px(scale: u16) -> u32 {
+    (ICON_TILE_PX * u32::from(scale) + 50) / 100
+}
+
 pub fn project_background(
     document: &mut impl UiDocumentAccess,
     _wallpaper: Option<&SettingValue>,
@@ -35,8 +39,24 @@ pub fn project_background(
 ) -> Result<(), String> {
     let has_image = matches!(presentation, WallpaperPresentation::Image(_));
     let (background, watermark) = match presentation {
-        WallpaperPresentation::Solid([r, g, b]) => (UiColor { r: *r, g: *g, b: *b, a: 255 }, false),
-        _ => (UiColor { r: 0, g: 0, b: 0, a: 255 }, true),
+        WallpaperPresentation::Solid([r, g, b]) => (
+            UiColor {
+                r: *r,
+                g: *g,
+                b: *b,
+                a: 255,
+            },
+            false,
+        ),
+        _ => (
+            UiColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            true,
+        ),
     };
     document.background("desktop", background)?;
     document.visible("desktop-watermark", watermark)?;
@@ -66,7 +86,10 @@ fn global_font_defaults(snapshot: &SettingsSnapshot) -> (f32, bool) {
         Some(SettingValue::Integer(value)) => (*value).clamp(-2, 4) as f32,
         _ => 0.0,
     };
-    let bold = matches!(snapshot.values.get("fontBold"), Some(SettingValue::Boolean(true)));
+    let bold = matches!(
+        snapshot.values.get("fontBold"),
+        Some(SettingValue::Boolean(true))
+    );
     (size_offset, bold)
 }
 
@@ -112,7 +135,10 @@ fn project_wallpaper_image(
     cache: &mut Option<WallpaperStamp>,
     raster: &Rgba8Raster,
 ) -> Result<(), String> {
-    if cache.as_ref().is_some_and(|stamp| wallpaper_matches(stamp, raster)) {
+    if cache
+        .as_ref()
+        .is_some_and(|stamp| wallpaper_matches(stamp, raster))
+    {
         return Ok(());
     }
     document.image_rgba8(
@@ -157,7 +183,14 @@ pub fn project_menu_surface(
             a: fill.alpha,
         },
     )?;
-    document.corner_radius(id, if id == "desktop-convert-wheel" { 164.0 } else { menu_surface(snapshot).radius as f32 })?;
+    document.corner_radius(
+        id,
+        if id == "desktop-convert-wheel" {
+            164.0
+        } else {
+            menu_surface(snapshot).radius as f32
+        },
+    )?;
     // Translucent menus blur the wallpaper beneath them; 0 clears the backdrop.
     let blur = match snapshot.values.get("surfaceBlurPercent") {
         Some(SettingValue::Percent(value)) => (*value).min(100),
@@ -252,11 +285,19 @@ impl ParallelIconService {
 
     #[must_use]
     pub fn icon_key(kind: DesktopItemKind, icon_override: Option<&str>) -> IconKey {
+        Self::icon_key_scaled(kind, icon_override, 100)
+    }
+
+    pub fn icon_key_scaled(
+        kind: DesktopItemKind,
+        icon_override: Option<&str>,
+        scale: u16,
+    ) -> IconKey {
         let override_name = icon_override.map(str::trim).filter(|icon| !icon.is_empty());
         IconKey::new(
             icon_purpose(kind, override_name.is_some()),
             IconRequest::name(launcher_icon_name(kind, icon_override)),
-            IconSize::new(ICON_TILE_PX, ICON_TILE_PX),
+            IconSize::new(scaled_icon_px(scale), scaled_icon_px(scale)),
             THEME_GENERATION.load(Ordering::Acquire),
             0,
         )
@@ -317,15 +358,35 @@ impl ParallelIconService {
         label: &str,
         point: Point,
         icon_override: Option<&str>,
+        scale: u16,
     ) -> Result<IconKey, String> {
         let item_id = format!("desktop-item-{index}");
         document.visible(&item_id, true)?;
         document.position(&item_id, point.x as f32, point.y as f32)?;
-        document.size(&item_id, DESKTOP_TILE_WIDTH, DESKTOP_TILE_HEIGHT)?;
+        let factor = f32::from(scale) / 100.0;
+        document.size(
+            &item_id,
+            DESKTOP_TILE_WIDTH * factor,
+            DESKTOP_TILE_HEIGHT * factor,
+        )?;
+        // Keep all click/drag children on the same output-local physical scale as the grid.
+        for kind in ICON_KINDS {
+            let id = format!("desktop-glyph-{index}-{kind}");
+            document.position(&id, 18.0 * factor, 5.0 * factor)?;
+            document.size(&id, 44.0 * factor, 44.0 * factor)?;
+        }
+        let label_id = format!("desktop-label-{index}");
+        document.position(&label_id, 2.0 * factor, 52.0 * factor)?;
+        document.size(&label_id, 76.0 * factor, 30.0 * factor)?;
+        for line in 1..=2 {
+            let id = format!("desktop-label-{index}-line-{line}");
+            document.size(&id, 76.0 * factor, 15.0 * factor)?;
+            document.font_size(&id, LABEL_FONT_SIZE_PX * factor)?;
+        }
         // Per-frame theme watch (throttled inside needs_rebuild). A new
         // generation changes the key below, so stale cache entries miss.
         self.refresh_theme();
-        let key = Self::icon_key(kind, icon_override);
+        let key = Self::icon_key_scaled(kind, icon_override, scale);
         if let Some(Ok(raster)) = self.service.cached(&key) {
             apply_raster(document, index, kind, raster)?;
         } else {
@@ -337,7 +398,7 @@ impl ParallelIconService {
                 priority: IconPriority::High,
             });
         }
-        project_item_label(document, index, label)?;
+        project_item_label_scaled(document, index, label, scale)?;
         Ok(key)
     }
 
@@ -426,8 +487,9 @@ pub fn project_item(
     label: &str,
     point: Point,
     icon_override: Option<&str>,
+    scale: u16,
 ) -> Result<IconKey, String> {
-    icons.project_row(document, index, kind, label, point, icon_override)
+    icons.project_row(document, index, kind, label, point, icon_override, scale)
 }
 
 pub fn clear_item(document: &mut impl UiDocumentAccess, index: usize) -> Result<(), String> {
@@ -452,7 +514,17 @@ pub fn project_drag_ghost_icon(
     kind: DesktopItemKind,
     icon_override: Option<&str>,
 ) -> Result<(), String> {
-    let key = ParallelIconService::icon_key(kind, icon_override);
+    project_drag_ghost_icon_scaled(document, icons, kind, icon_override, 100)
+}
+
+pub fn project_drag_ghost_icon_scaled(
+    document: &mut impl UiDocumentAccess,
+    icons: &mut ParallelIconService,
+    kind: DesktopItemKind,
+    icon_override: Option<&str>,
+    scale: u16,
+) -> Result<(), String> {
+    let key = ParallelIconService::icon_key_scaled(kind, icon_override, scale);
     // Miss: Flame fallback now, HIGH request queued, drain replaces it.
     let cached = icons.cached(&key);
     let miss = cached.is_none();
@@ -476,12 +548,29 @@ pub fn project_conversion_preview_icon(
     icons: &mut ParallelIconService,
     output: &std::path::Path,
 ) -> Result<(), String> {
-    let key = ParallelIconService::icon_key(DesktopItemKind::File, Some(file_icon_name(output)));
+    project_conversion_preview_icon_scaled(document, icons, output, 100)
+}
+
+pub fn project_conversion_preview_icon_scaled(
+    document: &mut impl UiDocumentAccess,
+    icons: &mut ParallelIconService,
+    output: &std::path::Path,
+    scale: u16,
+) -> Result<(), String> {
+    let key = ParallelIconService::icon_key_scaled(
+        DesktopItemKind::File,
+        Some(file_icon_name(output)),
+        scale,
+    );
     let cached = icons.cached(&key);
     let miss = cached.is_none();
-    document.image_rgba8("desktop-convert-preview-icon",
-        runtime_image(cached.unwrap_or_else(flame_fallback_raster)))?;
-    if miss { icons.request_high(key); }
+    document.image_rgba8(
+        "desktop-convert-preview-icon",
+        runtime_image(cached.unwrap_or_else(flame_fallback_raster)),
+    )?;
+    if miss {
+        icons.request_high(key);
+    }
     Ok(())
 }
 
@@ -533,18 +622,25 @@ pub fn launcher_icon_name(kind: DesktopItemKind, icon_override: Option<&str>) ->
 pub fn file_icon_name(path: &std::path::Path) -> &'static str {
     let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
     match extension.to_ascii_lowercase().as_str() {
-        "png" => "image-png", "jpg" | "jpeg" => "image-jpeg",
-        "webp" => "image-webp", "gif" => "image-gif", "bmp" => "image-bmp",
-        "svg" | "svgz" => "image-svg+xml", "tif" | "tiff" => "image-tiff",
-        "avif" => "image-avif", "heic" | "heif" => "image-heic",
-        "pdf" => "application-pdf", "md" | "markdown" => "text-markdown",
+        "png" => "image-png",
+        "jpg" | "jpeg" => "image-jpeg",
+        "webp" => "image-webp",
+        "gif" => "image-gif",
+        "bmp" => "image-bmp",
+        "svg" | "svgz" => "image-svg+xml",
+        "tif" | "tiff" => "image-tiff",
+        "avif" => "image-avif",
+        "heic" | "heif" => "image-heic",
+        "pdf" => "application-pdf",
+        "md" | "markdown" => "text-markdown",
         "txt" | "log" | "ini" | "conf" => "text-plain",
         "rs" | "py" | "js" | "ts" | "c" | "h" | "cpp" | "java" | "sh" => "text-x-script",
         "json" | "xml" | "yaml" | "yml" | "toml" => "text-x-generic",
         "doc" | "docx" | "odt" => "x-office-document",
         "xls" | "xlsx" | "ods" | "csv" => "x-office-spreadsheet",
         "ppt" | "pptx" | "odp" => "x-office-presentation",
-        "zip" => "application-zip", "tar" | "gz" | "xz" | "7z" | "rar" => "package-x-generic",
+        "zip" => "application-zip",
+        "tar" | "gz" | "xz" | "7z" | "rar" => "package-x-generic",
         "mp3" | "wav" | "ogg" | "flac" | "m4a" => "audio-x-generic",
         "mp4" | "mkv" | "avi" | "mov" | "webm" => "video-x-generic",
         "exe" | "appimage" => "application-x-executable",
@@ -571,7 +667,18 @@ pub fn project_item_label(
     index: usize,
     label: &str,
 ) -> Result<(), String> {
-    let [first, second] = desktop_label_lines(label, LABEL_WIDTH_PX, LABEL_FONT_SIZE_PX);
+    project_item_label_scaled(document, index, label, 100)
+}
+
+fn project_item_label_scaled(
+    document: &mut impl UiDocumentAccess,
+    index: usize,
+    label: &str,
+    scale: u16,
+) -> Result<(), String> {
+    let factor = f32::from(scale) / 100.0;
+    let [first, second] =
+        desktop_label_lines(label, LABEL_WIDTH_PX * factor, LABEL_FONT_SIZE_PX * factor);
     document.text(&format!("desktop-label-{index}-line-1"), first)?;
     document.text(&format!("desktop-label-{index}-line-2"), second)
 }
@@ -590,7 +697,7 @@ fn icon_name(kind: DesktopItemKind) -> &'static str {
     match kind {
         DesktopItemKind::Directory => "folder",
         DesktopItemKind::DesktopLauncher => "desktop",
-        DesktopItemKind::File => "text-x-generic",
+        DesktopItemKind::File => "document-edit",
         DesktopItemKind::Symlink => "link",
         DesktopItemKind::TrashPseudo => "trash",
     }
@@ -676,7 +783,10 @@ mod tests {
             .find(|line| line.starts_with(".sticky-text {"))
             .expect(".sticky-text rule");
         assert!(rule.contains("overflow-x:hidden"), "{rule}");
-        assert!(rule.contains("overflow:auto"), "vertical scroll kept: {rule}");
+        assert!(
+            rule.contains("overflow:auto"),
+            "vertical scroll kept: {rule}"
+        );
     }
 
     #[test]
@@ -694,8 +804,16 @@ mod tests {
             let selector = format!("sticky-resize-{corner}");
             assert_eq!(css_px(css, &selector, "width"), 10, "{selector} width");
             assert_eq!(css_px(css, &selector, "height"), 10, "{selector} height");
-            assert_eq!(css_px(css, &selector, horizontal), -6, "{selector} {horizontal}");
-            assert_eq!(css_px(css, &selector, vertical), -6, "{selector} {vertical}");
+            assert_eq!(
+                css_px(css, &selector, horizontal),
+                -6,
+                "{selector} {horizontal}"
+            );
+            assert_eq!(
+                css_px(css, &selector, vertical),
+                -6,
+                "{selector} {vertical}"
+            );
         }
     }
 
@@ -831,8 +949,14 @@ mod tests {
             icon_candidates(DesktopItemKind::DesktopLauncher, None),
             vec!["desktop".to_owned(), String::new()]
         );
-        assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("  ")), "text-x-generic");
-        assert_eq!(launcher_icon_name(DesktopItemKind::File, Some("editor")), "editor");
+        assert_eq!(
+            launcher_icon_name(DesktopItemKind::File, Some("  ")),
+            "document-edit"
+        );
+        assert_eq!(
+            launcher_icon_name(DesktopItemKind::File, Some("editor")),
+            "editor"
+        );
     }
 
     struct LayerProbe {
@@ -912,8 +1036,15 @@ mod tests {
         }
         assert_eq!(probe.corners.len(), MENU_SURFACE_IDS.len());
         for (id, radius) in &probe.corners {
-            let expected = if id == "desktop-convert-wheel" { 164.0 } else { 0.0 };
-            assert_eq!(*radius, expected, "only the radial wheel keeps its circular shape: {id}");
+            let expected = if id == "desktop-convert-wheel" {
+                164.0
+            } else {
+                0.0
+            };
+            assert_eq!(
+                *radius, expected,
+                "only the radial wheel keeps its circular shape: {id}"
+            );
         }
         for (id, color) in &probe.fills {
             assert_eq!(color.a, 127, "surfaceOpacity 50% must reach {id}");
@@ -956,7 +1087,10 @@ mod tests {
 
     #[test]
     fn desktop_menu_radius_defaults_to_rounded_twelve() {
-        for snapshot in [menu_snapshot(None, None), menu_snapshot(Some("rounded"), None)] {
+        for snapshot in [
+            menu_snapshot(None, None),
+            menu_snapshot(Some("rounded"), None),
+        ] {
             let mut probe = MenuShapeProbe::default();
             project_menu_surface(&mut probe, "desktop-menu", &snapshot).expect("project menu");
             assert_eq!(probe.corners, vec![("desktop-menu".to_owned(), 12.0)]);
@@ -1030,7 +1164,11 @@ mod tests {
         ] {
             let mut probe = VisibilityProbe::default();
             project_background(&mut probe, wallpaper.as_ref(), &image).expect("project image");
-            assert!(probe.shown.contains(&"desktop-wallpaper-selection".to_owned()));
+            assert!(
+                probe
+                    .shown
+                    .contains(&"desktop-wallpaper-selection".to_owned())
+            );
             assert!(probe.shown.contains(&"desktop-watermark".to_owned()));
             assert!(!probe.hidden.contains(&"desktop-watermark".to_owned()));
         }
@@ -1042,7 +1180,11 @@ mod tests {
             &WallpaperPresentation::DefaultBlackWatermark,
         )
         .expect("project reset fallback");
-        assert!(reset.hidden.contains(&"desktop-wallpaper-selection".to_owned()));
+        assert!(
+            reset
+                .hidden
+                .contains(&"desktop-wallpaper-selection".to_owned())
+        );
         assert!(reset.shown.contains(&"desktop-watermark".to_owned()));
     }
 
@@ -1150,7 +1292,9 @@ mod tests {
         }
         assert!(probe.shown.is_empty());
         // Showing one restores its authored display; unrelated nodes untouched.
-        probe.visible("desktop-menu", true).expect("show restores authored display");
+        probe
+            .visible("desktop-menu", true)
+            .expect("show restores authored display");
         assert_eq!(probe.shown, vec!["desktop-menu".to_owned()]);
     }
 
@@ -1222,11 +1366,26 @@ mod tests {
 
     #[test]
     fn icon_purpose_routes_launcher_override_to_application() {
-        assert_eq!(icon_purpose(DesktopItemKind::DesktopLauncher, true), IconLookupPurpose::Application);
-        assert_eq!(icon_purpose(DesktopItemKind::DesktopLauncher, false), IconLookupPurpose::Semantic);
-        assert_eq!(icon_purpose(DesktopItemKind::Directory, true), IconLookupPurpose::Semantic);
-        assert_eq!(icon_purpose(DesktopItemKind::File, false), IconLookupPurpose::Semantic);
-        assert_eq!(icon_purpose(DesktopItemKind::TrashPseudo, false), IconLookupPurpose::Semantic);
+        assert_eq!(
+            icon_purpose(DesktopItemKind::DesktopLauncher, true),
+            IconLookupPurpose::Application
+        );
+        assert_eq!(
+            icon_purpose(DesktopItemKind::DesktopLauncher, false),
+            IconLookupPurpose::Semantic
+        );
+        assert_eq!(
+            icon_purpose(DesktopItemKind::Directory, true),
+            IconLookupPurpose::Semantic
+        );
+        assert_eq!(
+            icon_purpose(DesktopItemKind::File, false),
+            IconLookupPurpose::Semantic
+        );
+        assert_eq!(
+            icon_purpose(DesktopItemKind::TrashPseudo, false),
+            IconLookupPurpose::Semantic
+        );
     }
 
     /// Polls `apply_icon_theme` until the requested chain is installed.
@@ -1316,13 +1475,21 @@ mod global_font_setting_tests {
     #[test]
     fn global_font_defaults_read_typed_live_values_and_bound_size_offset() {
         let mut settings = SettingsSnapshot::new(1);
-        settings.values.insert("fontSizeOffset".into(), SettingValue::Integer(3));
-        settings.values.insert("fontBold".into(), SettingValue::Boolean(true));
+        settings
+            .values
+            .insert("fontSizeOffset".into(), SettingValue::Integer(3));
+        settings
+            .values
+            .insert("fontBold".into(), SettingValue::Boolean(true));
         assert_eq!(global_font_defaults(&settings), (3.0, true));
 
-        settings.values.insert("fontSizeOffset".into(), SettingValue::Integer(99));
+        settings
+            .values
+            .insert("fontSizeOffset".into(), SettingValue::Integer(99));
         assert_eq!(global_font_defaults(&settings), (4.0, true));
-        settings.values.insert("fontBold".into(), SettingValue::Text("true".into()));
+        settings
+            .values
+            .insert("fontBold".into(), SettingValue::Text("true".into()));
         assert_eq!(global_font_defaults(&settings), (4.0, false));
     }
 }

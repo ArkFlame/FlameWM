@@ -24,6 +24,7 @@ fn main() {
         "launch-feedback.html",
         "battery.html",
         "weather.html",
+        "notification.html",
     ];
     let artifacts = [
         ("flamewm-panel.rwr", "panel.html"),
@@ -37,6 +38,7 @@ fn main() {
         ("flamewm-launch-feedback.rwr", "launch-feedback.html"),
         ("flamewm-battery.rwr", "battery.html"),
         ("flamewm-weather.rwr", "weather.html"),
+        ("flamewm-notification.rwr", "notification.html"),
     ];
 
     println!("cargo:rerun-if-changed={}", css.display());
@@ -92,7 +94,7 @@ fn compile_to(source: &Path, shared_menu_css: &Path, output: &Path) {
         &[shared_menu_css.to_path_buf()],
         CompileOptions::default(),
     )
-        .unwrap_or_else(|error| panic!("failed to compile {}: {error}", source.display()));
+    .unwrap_or_else(|error| panic!("failed to compile {}: {error}", source.display()));
     let bytes = encode(&compiled.document).expect("compiled FlameWM UI must encode");
     fs::write(output, bytes).expect("write compiled FlameWM UI artifact");
 }

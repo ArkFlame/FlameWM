@@ -10,8 +10,8 @@ use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
 use crate::start::{StartCategory, PRESENTATION_CATEGORIES};
 use crate::taskbar::workspaces::{
-    cell_left, pager_cell, pager_columns, pager_width, project as project_workspaces, WorkspaceView,
-    PAGER_CELLS, PAGER_COLUMNS, PAGER_HEIGHT,
+    cell_left, pager_cell, pager_columns, pager_width, project as project_workspaces,
+    WorkspaceView, PAGER_CELLS, PAGER_COLUMNS, PAGER_HEIGHT,
 };
 use crate::ShellSnapshot;
 use flamewm_shell_core::start_menu::{bucket_for_application, StartBucket};
@@ -175,7 +175,7 @@ pub fn taskbar_css_height(logical_size: u16) -> f32 {
 /// bar exactly one window wide. Unsupported scales fall back to 100%, as the
 /// panel surface does when it applies its UI scale.
 pub fn taskbar_css_width(device_width: i32, scale_percent: u16) -> f32 {
-    let percent = if matches!(scale_percent, 100 | 125 | 150 | 175 | 200) {
+    let percent = if (100..=200).contains(&scale_percent) && scale_percent % 5 == 0 {
         scale_percent
     } else {
         100
@@ -214,6 +214,7 @@ pub struct PanelView<'a> {
     pub output: Option<&'a flamewm_api::display::OutputSnapshot>,
     pub panel: Option<&'a flamewm_api::panels::PanelSnapshot>,
     pub items: TaskbarItems,
+    pub task_progress: &'a [flamewm_api::panels::TaskProgressEntry],
 }
 
 /// Taskbar item visibility settings. Each flag is the setting alone; the
@@ -261,6 +262,7 @@ impl<'a> PanelView<'a> {
             output,
             panel,
             items: TaskbarItems::default(),
+            task_progress: &[],
         }
     }
 
@@ -268,6 +270,18 @@ impl<'a> PanelView<'a> {
     #[must_use]
     pub fn with_items(self, items: TaskbarItems) -> Self {
         Self { items, ..self }
+    }
+
+    /// Attach provider-owned task progress for this projection turn.
+    #[must_use]
+    pub fn with_task_progress(
+        self,
+        task_progress: &'a [flamewm_api::panels::TaskProgressEntry],
+    ) -> Self {
+        Self {
+            task_progress,
+            ..self
+        }
     }
 }
 
@@ -304,6 +318,7 @@ pub fn for_each_panel_record<K, E>(
                 output: Some(output),
                 panel: Some(panel),
                 items: TaskbarItems::default(),
+                task_progress: &[],
             },
         )?;
     }
@@ -330,9 +345,11 @@ pub fn project_panel(
         &snapshot.windows,
         &snapshot.applications,
         view.panel.map(|panel| &panel.output),
-        snapshot.workspaces.as_ref().map(|workspaces| workspaces.active_index),
+        snapshot
+            .workspaces
+            .as_ref()
+            .map(|workspaces| workspaces.active_index),
     );
-    let status = crate::taskbar::status::project(&snapshot.system).views;
     let (mut slot_id, mut icon_id, mut label_id, mut line_id) =
         (String::new(), String::new(), String::new(), String::new());
     for index in 0..TASK_SLOT_COUNT {
@@ -345,6 +362,12 @@ pub fn project_panel(
         write!(label_id, "task-slot-{n}-label").expect("write to String is infallible");
         line_id.clear();
         write!(line_id, "task-slot-{n}-line").expect("write to String is infallible");
+        project_task_progress(
+            document,
+            index,
+            states.get(index).map(|state| &state.id),
+            view.task_progress,
+        )?;
         if let Some(state) = states.get(index) {
             let label = snapshot
                 .applications
@@ -382,11 +405,43 @@ pub fn project_panel(
     project_pager(document, snapshot.workspaces.as_ref())?;
 
     project_clock(document)?;
+    project_status_tray(document, &snapshot.system, view.items)
+}
+
+/// Projects a determinate progress fill for one task slot, clearing stale fills when
+/// identity disappears or the provider no longer reports progress.
+pub(crate) fn project_task_progress(
+    document: &mut impl UiDocumentAccess,
+    index: usize,
+    task_id: Option<&flamewm_api::TaskEntryId>,
+    progress: &[flamewm_api::panels::TaskProgressEntry],
+) -> Result<(), String> {
+    let fill_id = format!("task-slot-{}-progress", index + 1);
+    let percent = task_id
+        .and_then(|id| progress.iter().find(|entry| &entry.task_id == id))
+        .map(|entry| entry.progress.percent());
+    document.visible(&fill_id, percent.is_some())?;
+    document.size(
+        &fill_id,
+        percent.map_or(0.0, |percent| 28.0 * f32::from(percent) / 100.0),
+        2.0,
+    )?;
+    Ok(())
+}
+
+/// Projects only the status tray and clock button. The async partial update
+/// path shares this routine without touching task or pager nodes.
+pub(crate) fn project_status_tray(
+    document: &mut impl UiDocumentAccess,
+    system: &flamewm_api::system::SystemSnapshot,
+    items: TaskbarItems,
+) -> Result<(), String> {
+    let status = crate::taskbar::status::project(system).views;
     document.visible(
         "tray-media",
         status.media.visible
             && matches!(
-                snapshot.system.media.playback,
+                system.media.playback,
                 flamewm_api::system::PlaybackState::Playing
                     | flamewm_api::system::PlaybackState::Paused
             ),
@@ -405,12 +460,12 @@ pub fn project_panel(
             Some(flamewm_ui_core::IconRole::MediaPause)
         ),
     )?;
-    document.visible("tray-volume", status.audio.visible && view.items.volume)?;
+    document.visible("tray-volume", status.audio.visible && items.volume)?;
     document.visible("tray-volume-icon", !status.audio.muted)?;
     document.visible("tray-volume-muted-icon", status.audio.muted)?;
-    document.visible("tray-network", status.network.visible && view.items.network)?;
-    project_battery_tray(document, &snapshot.system.power, view.items)?;
-    document.visible("clock-button", view.items.clock)?;
+    document.visible("tray-network", status.network.visible && items.network)?;
+    project_battery_tray(document, &system.power, items)?;
+    document.visible("clock-button", items.clock)?;
     Ok(())
 }
 
@@ -589,11 +644,15 @@ pub fn project_context_menu(
     // Shared menu surface (radius + fill) from the Surfaces settings, same owner as desktop menus.
     let surface = flamewm_ui_core::context_menu::menu_surface(settings);
     // The shell task-menu popup document holds only the `task-menu` root; desktop roots live in the desktop document.
-    document.background("task-menu", crate::settings_projection::surface_background(settings))?;
+    document.background(
+        "task-menu",
+        crate::settings_projection::surface_background(settings),
+    )?;
     document.corner_radius("task-menu", surface.radius as f32)?;
     for id in [
         "context-task-activate",
         "context-task-close",
+        "context-task-pin",
         "context-task-unpin",
         "context-workspace-activate",
         "context-workspace-insert-after",
@@ -681,7 +740,11 @@ pub fn project_media(
             });
     for (enabled, disabled, active) in [
         ("media-previous", "media-previous-disabled", can_previous),
-        ("media-playpause", "media-playpause-disabled", can_play_pause),
+        (
+            "media-playpause",
+            "media-playpause-disabled",
+            can_play_pause,
+        ),
         ("media-next", "media-next-disabled", can_next),
     ] {
         document.visible(enabled, active)?;
@@ -852,10 +915,16 @@ mod panel_template_tests {
     }
 
     fn box_width(document: &flamewm_ui_x11::UiDocument, id: &str, viewport: (f32, f32)) -> f32 {
-        document.layout_box_by_id(id, viewport).map_or(0.0, |rect| rect.2)
+        document
+            .layout_box_by_id(id, viewport)
+            .map_or(0.0, |rect| rect.2)
     }
 
-    fn lit_ids<'a>(document: &flamewm_ui_x11::UiDocument, ids: &'a [String], viewport: (f32, f32)) -> Vec<&'a str> {
+    fn lit_ids<'a>(
+        document: &flamewm_ui_x11::UiDocument,
+        ids: &'a [String],
+        viewport: (f32, f32),
+    ) -> Vec<&'a str> {
         ids.iter()
             .map(String::as_str)
             .filter(|id| box_width(document, id, viewport) > 0.0)
@@ -1048,7 +1117,11 @@ mod panel_template_tests {
             );
         }
         for cell in 5..=PAGER_CELLS {
-            assert_eq!(rect(&document, &format!("workspace-{cell}")), hidden, "cell {cell}");
+            assert_eq!(
+                rect(&document, &format!("workspace-{cell}")),
+                hidden,
+                "cell {cell}"
+            );
         }
         let columns = column_rects(&document);
         assert_eq!(columns[0], (pager_x + 3.0, pager_y + 4.0, 22.0, 33.0));
@@ -1096,7 +1169,12 @@ mod panel_template_tests {
         for (index, column) in columns.iter().enumerate() {
             assert_eq!(
                 *column,
-                (pager_x + 3.0 + index as f32 * 23.0, pager_y + 4.0, 22.0, 33.0),
+                (
+                    pager_x + 3.0 + index as f32 * 23.0,
+                    pager_y + 4.0,
+                    22.0,
+                    33.0
+                ),
                 "column {}",
                 index + 1
             );
@@ -1140,10 +1218,14 @@ mod panel_template_tests {
         let ids = glyph_node_ids("battery-icon-");
         for (percent, state, expected) in cases {
             let power = power_snapshot(ServiceAvailability::Available, true, percent, state);
-            let mut document =
-                flamewm_ui_x11::decode_document(BATTERY_ARTIFACT).expect("battery artifact must decode");
+            let mut document = flamewm_ui_x11::decode_document(BATTERY_ARTIFACT)
+                .expect("battery artifact must decode");
             project_battery_menu(&mut document, &power, 268.0).expect("battery menu projects");
-            assert_eq!(lit_ids(&document, &ids, (300.0, 132.0)), vec![expected], "{percent}% {state:?}");
+            assert_eq!(
+                lit_ids(&document, &ids, (300.0, 132.0)),
+                vec![expected],
+                "{percent}% {state:?}"
+            );
         }
     }
 
@@ -1161,25 +1243,75 @@ mod panel_template_tests {
         let glyphs = glyph_node_ids("tray-battery-");
         let avail = ServiceAvailability::Available;
         let cases: [(PowerSnapshot, Option<&str>); 14] = [
-            (power_snapshot(avail, true, 87, PowerState::Unknown), Some("tray-battery-090")),
-            (power_snapshot(avail, true, 45, PowerState::Discharging), Some("tray-battery-050")),
-            (power_snapshot(avail, true, 45, PowerState::Unknown), Some("tray-battery-050")),
-            (power_snapshot(avail, true, 15, PowerState::Discharging), Some("tray-battery-020")),
-            (power_snapshot(avail, true, 5, PowerState::Discharging), Some("tray-battery-caution")),
-            (power_snapshot(avail, true, 30, PowerState::Charging), Some("tray-battery-030-charging")),
-            (power_snapshot(avail, true, 79, PowerState::Charging), Some("tray-battery-080-charging")),
-            (power_snapshot(avail, true, 80, PowerState::Charging), Some("tray-battery-080-charging")),
-            (power_snapshot(avail, true, 100, PowerState::Charging), Some("tray-battery-100-charging")),
-            (power_snapshot(ServiceAvailability::Unavailable, true, 40, PowerState::Discharging), None),
-            (power_snapshot(avail, true, 79, PowerState::Discharging), Some("tray-battery-080")),
-            (power_snapshot(avail, true, 80, PowerState::Discharging), Some("tray-battery-080")),
-            (power_snapshot(avail, true, 100, PowerState::Full), Some("tray-battery-100")),
-            (power_snapshot(avail, false, 45, PowerState::Discharging), None),
+            (
+                power_snapshot(avail, true, 87, PowerState::Unknown),
+                Some("tray-battery-090"),
+            ),
+            (
+                power_snapshot(avail, true, 45, PowerState::Discharging),
+                Some("tray-battery-050"),
+            ),
+            (
+                power_snapshot(avail, true, 45, PowerState::Unknown),
+                Some("tray-battery-050"),
+            ),
+            (
+                power_snapshot(avail, true, 15, PowerState::Discharging),
+                Some("tray-battery-020"),
+            ),
+            (
+                power_snapshot(avail, true, 5, PowerState::Discharging),
+                Some("tray-battery-caution"),
+            ),
+            (
+                power_snapshot(avail, true, 30, PowerState::Charging),
+                Some("tray-battery-030-charging"),
+            ),
+            (
+                power_snapshot(avail, true, 79, PowerState::Charging),
+                Some("tray-battery-080-charging"),
+            ),
+            (
+                power_snapshot(avail, true, 80, PowerState::Charging),
+                Some("tray-battery-080-charging"),
+            ),
+            (
+                power_snapshot(avail, true, 100, PowerState::Charging),
+                Some("tray-battery-100-charging"),
+            ),
+            (
+                power_snapshot(
+                    ServiceAvailability::Unavailable,
+                    true,
+                    40,
+                    PowerState::Discharging,
+                ),
+                None,
+            ),
+            (
+                power_snapshot(avail, true, 79, PowerState::Discharging),
+                Some("tray-battery-080"),
+            ),
+            (
+                power_snapshot(avail, true, 80, PowerState::Discharging),
+                Some("tray-battery-080"),
+            ),
+            (
+                power_snapshot(avail, true, 100, PowerState::Full),
+                Some("tray-battery-100"),
+            ),
+            (
+                power_snapshot(avail, false, 45, PowerState::Discharging),
+                None,
+            ),
         ];
         for (power, expected) in cases {
             let mut snapshot = crate::ShellSnapshot::default();
             snapshot.system.power = power;
-            let paths: [(&str, fn(&mut flamewm_ui_x11::UiDocument, &crate::ShellSnapshot)); 3] = [
+            let paths: [(
+                &str,
+                fn(&mut flamewm_ui_x11::UiDocument, &crate::ShellSnapshot),
+            ); 3] = [
                 ("sync project", |document, snapshot| {
                     let mut resolver = flamewm_integrations_linux::icons::IconResolver::new(
                         std::path::PathBuf::new(),
@@ -1196,7 +1328,7 @@ mod panel_template_tests {
                         None,
                         &mut Default::default(),
                     )
-                        .expect("async panel projects");
+                    .expect("async panel projects");
                 }),
                 ("async system scope", |document, snapshot| {
                     crate::async_projection::project_panel_for_changed(
@@ -1217,11 +1349,25 @@ mod panel_template_tests {
                 project_path(&mut document, &snapshot);
                 let viewport = (1080.0, 72.0);
                 let button = box_width(&document, "tray-battery", viewport) > 0.0;
-                assert_eq!(button, expected.is_some(), "{path}: button for {:?}", snapshot.system.power);
+                assert_eq!(
+                    button,
+                    expected.is_some(),
+                    "{path}: button for {:?}",
+                    snapshot.system.power
+                );
                 let lit = lit_ids(&document, &glyphs, viewport);
                 match expected {
-                    Some(glyph) => assert_eq!(lit, vec![glyph], "{path}: glyph for {:?}", snapshot.system.power),
-                    None => assert!(lit.is_empty(), "{path}: no glyph while hidden for {:?}", snapshot.system.power),
+                    Some(glyph) => assert_eq!(
+                        lit,
+                        vec![glyph],
+                        "{path}: glyph for {:?}",
+                        snapshot.system.power
+                    ),
+                    None => assert!(
+                        lit.is_empty(),
+                        "{path}: no glyph while hidden for {:?}",
+                        snapshot.system.power
+                    ),
                 }
             }
         }
@@ -1251,7 +1397,8 @@ mod panel_template_tests {
         ] {
             for percent in [15_u8, 45, 79, 80, 100] {
                 for present in [true, false] {
-                    let power = power_snapshot(ServiceAvailability::Available, present, percent, state);
+                    let power =
+                        power_snapshot(ServiceAvailability::Available, present, percent, state);
                     let charging = state == PowerState::Charging;
                     let visible = present;
                     let mut document = decode_panel();
@@ -1508,7 +1655,11 @@ mod media_projection_tests {
 
         let mut text_ids: Vec<&str> = document.texts.keys().map(String::as_str).collect();
         text_ids.sort_unstable();
-        assert_eq!(text_ids, ["media-title"], "popup text nodes must be title only");
+        assert_eq!(
+            text_ids,
+            ["media-title"],
+            "popup text nodes must be title only"
+        );
         assert!(!document.texts.contains_key("media-artist"));
         assert_eq!(document.visible.get("media-previous"), Some(&true));
         assert_eq!(document.visible.get("media-next"), Some(&true));
@@ -1526,7 +1677,10 @@ mod media_projection_tests {
         let long = format!("{} tail words that keep going", "Abcdefghij ".repeat(5));
         let fitted = media_title_text(&long);
         assert!(fitted.ends_with('…'), "{fitted:?}");
-        assert!(fitted.chars().count() <= MEDIA_TITLE_MAX_CHARS, "{fitted:?}");
+        assert!(
+            fitted.chars().count() <= MEDIA_TITLE_MAX_CHARS,
+            "{fitted:?}"
+        );
         assert!(fitted.starts_with("Abcdefghij Abcdefghij"), "{fitted:?}");
         assert!(!fitted.contains("  "), "{fitted:?}");
     }
@@ -1544,7 +1698,10 @@ mod media_projection_tests {
         let title = "🎵 Ünïcødé 日本語のタイトル 🎶 ".repeat(4);
         let fitted = media_title_text(&title);
         assert!(fitted.ends_with('…'), "{fitted:?}");
-        assert!(fitted.chars().count() <= MEDIA_TITLE_MAX_CHARS, "{fitted:?}");
+        assert!(
+            fitted.chars().count() <= MEDIA_TITLE_MAX_CHARS,
+            "{fitted:?}"
+        );
         assert!(std::str::from_utf8(fitted.as_bytes()).is_ok());
     }
 
@@ -1761,7 +1918,10 @@ mod task_menu_root_tests {
     fn task_menu_projection_never_writes_a_border() {
         let recorder = project_idle();
         assert!(
-            recorder.writes.iter().all(|(method, _)| !method.starts_with("border")),
+            recorder
+                .writes
+                .iter()
+                .all(|(method, _)| !method.starts_with("border")),
             "task menu frame comes from the shared sheet; projection must not paint a border: {:?}",
             recorder.writes
         );

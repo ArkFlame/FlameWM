@@ -17,23 +17,32 @@ use super::resources::FrameEventTarget;
 /// Hit rects derive from skin geometry; glyph pixels never affect them.
 #[must_use]
 pub fn frame_control_at(frame_width: u32, titlebar_height: u16, x: i16) -> Option<FrameControl> {
-    use flamewm_skin::recipes::window_chrome::{
-        SceneRect, WindowControlRole, control_button_geometries,
+    use super::layout::{
+        controls_width_for_titlebar, layout_frame_children, resize_thickness_for_titlebar,
     };
     let width = i32::try_from(frame_width).unwrap_or(i32::MAX);
-    let titlebar = SceneRect::new(0, 0, width, i32::from(titlebar_height));
-    let geometries = control_button_geometries(titlebar);
+    let titlebar_h = i32::from(titlebar_height);
+    let rects = layout_frame_children(
+        width,
+        titlebar_h + resize_thickness_for_titlebar(titlebar_h),
+        titlebar_h,
+        controls_width_for_titlebar(titlebar_h),
+        resize_thickness_for_titlebar(titlebar_h),
+    )
+    .controls;
     let x = i32::from(x);
-    for geometry in geometries.iter().rev() {
-        if x >= geometry.bounds.x {
-            return Some(match geometry.role {
-                WindowControlRole::Minimize => FrameControl::Minimize,
-                WindowControlRole::Close => FrameControl::Close,
-                _ => FrameControl::MaximizeRestore,
-            });
-        }
+    if x < 0 || x >= width {
+        return None;
     }
-    None
+    let roles = [
+        FrameControl::Minimize,
+        FrameControl::MaximizeRestore,
+        FrameControl::Close,
+    ];
+    rects
+        .into_iter()
+        .zip(roles)
+        .find_map(|(rect, role)| (x >= rect.x && x < rect.x + rect.w).then_some(role))
 }
 
 /// Resolve an event source XID via the registry map (value-side).
@@ -45,7 +54,10 @@ pub fn target_for_xid(
     client: u32,
     source: u32,
 ) -> FrameEventTarget {
-    let region = registry.get(&source).copied().unwrap_or(FrameRegion::Client);
+    let region = registry
+        .get(&source)
+        .copied()
+        .unwrap_or(FrameRegion::Client);
     FrameEventTarget { client, region }
 }
 
@@ -85,6 +97,54 @@ mod tests {
         registry.insert(202, FrameRegion::Control(FrameControl::MaximizeRestore));
         registry.insert(203, FrameRegion::Control(FrameControl::Close));
         (registry, client)
+    }
+
+    #[test]
+    fn every_control_pixel_matches_native_child_at_100_135_200_percent() {
+        use crate::frame::layout::{
+            controls_width_for_titlebar, layout_frame_children, resize_thickness_for_titlebar,
+        };
+        for titlebar_h in [31_u16, 42, 62] {
+            for width in [100_u32, 160, 400, 800] {
+                let height = i32::from(titlebar_h);
+                let layout = layout_frame_children(
+                    width as i32,
+                    300,
+                    height,
+                    controls_width_for_titlebar(height),
+                    resize_thickness_for_titlebar(height),
+                );
+                for (index, expected) in [
+                    FrameControl::Minimize,
+                    FrameControl::MaximizeRestore,
+                    FrameControl::Close,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let rect = layout.controls[index];
+                    for x in rect.x..rect.x + rect.w {
+                        assert_eq!(
+                            frame_control_at(width, titlebar_h, x as i16),
+                            Some(expected),
+                            "width={width} height={height} x={x}"
+                        );
+                    }
+                }
+                assert_eq!(frame_control_at(width, titlebar_h, -1), None);
+                assert_eq!(frame_control_at(width, titlebar_h, width as i16), None);
+                assert_eq!(
+                    frame_control_fallback(
+                        width,
+                        titlebar_h,
+                        width as i16 - 1,
+                        titlebar_h as i16,
+                        None
+                    ),
+                    None
+                );
+            }
+        }
     }
 
     #[test]

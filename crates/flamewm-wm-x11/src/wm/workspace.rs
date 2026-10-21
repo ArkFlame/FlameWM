@@ -60,9 +60,15 @@ impl<'a, C: Connection> Wm<'a, C> {
         if target >= self.workspace_count || target == self.current_workspace {
             return Ok(());
         }
-        let Some(state) = self.clients.get(&client) else { return Ok(()); };
-        if state.sticky { return Ok(()); }
-        let Some(controller) = self.sessions.get(&client) else { return Ok(()); };
+        let Some(state) = self.clients.get(&client) else {
+            return Ok(());
+        };
+        if state.sticky {
+            return Ok(());
+        }
+        let Some(controller) = self.sessions.get(&client) else {
+            return Ok(());
+        };
         if !matches!(controller.session, InteractionSession::Move(m) if m.anchor.is_activated()) {
             return Ok(());
         }
@@ -88,7 +94,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             new_pointer.x.saturating_sub(delta_x),
             new_pointer.y.saturating_sub(delta_y),
         );
-        let Some(mut planned) = self.controller_for(client) else { return Ok(()); };
+        let Some(mut planned) = self.controller_for(client) else {
+            return Ok(());
+        };
         if let InteractionSession::Move(ref mut move_session) = planned.session {
             move_session.start_pointer = synthetic_start;
             move_session.start_placement = PlacementSnapshot {
@@ -98,7 +106,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         let (mut next, commit) = interaction::step_owned(
             planned,
-            FrameEvent::Motion { pointer: new_pointer },
+            FrameEvent::Motion {
+                pointer: new_pointer,
+            },
         );
         // The pure effect plan is kept intact except for the separate-X11-
         // connection repaint; reject newly introduced effects at this boundary.
@@ -130,7 +140,12 @@ impl<'a, C: Connection> Wm<'a, C> {
             // but defer only the separate-connection paint until after ungrab.
             self.execute_effects(client, &commit)?;
             self.conn.warp_pointer(
-                x11rb::NONE, self.screen().root, 0, 0, 0, 0,
+                x11rb::NONE,
+                self.screen().root,
+                0,
+                0,
+                0,
+                0,
                 new_pointer.x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
                 new_pointer.y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
             )?;
@@ -147,8 +162,12 @@ impl<'a, C: Connection> Wm<'a, C> {
         }
         workspace_counters().switch_total.increment();
         // Do not keep the transferred window as the former workspace's focus.
-        if let Some(slot) = self.workspace_focus.get_mut(old) { *slot = None; }
-        if let Some(slot) = self.workspace_focus.get_mut(target) { *slot = Some(client); }
+        if let Some(slot) = self.workspace_focus.get_mut(old) {
+            *slot = None;
+        }
+        if let Some(slot) = self.workspace_focus.get_mut(target) {
+            *slot = Some(client);
+        }
         self.focus(client)?;
         self.mark_windows();
         self.mark_workspaces();
@@ -168,9 +187,9 @@ impl<'a, C: Connection> Wm<'a, C> {
         // neither a copied ID list nor a visibility-pair allocation.
         let mut changed = false;
         for state in self.clients.values_mut() {
-            let Some(should_map) = frame_visibility_delta(
-                state.visible_on(old), state.visible_on(target),
-            ) else {
+            let Some(should_map) =
+                frame_visibility_delta(state.visible_on(old), state.visible_on(target))
+            else {
                 continue;
             };
             changed = true;
@@ -211,7 +230,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         // otherwise newly added workspaces have no focus-restoration slot.
         self.workspace_focus.resize(requested, None);
         if let Some(active) = self.active {
-            if self.clients.get(&active).is_some_and(|state| state.visible_on(self.current_workspace)) {
+            if self
+                .clients
+                .get(&active)
+                .is_some_and(|state| state.visible_on(self.current_workspace))
+            {
                 self.workspace_focus[self.current_workspace] = Some(active);
             }
         }
@@ -245,7 +268,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn move_to_workspace(&mut self, client: Window, target: usize) -> Result<(), ReplyError> {
+    pub(super) fn move_to_workspace(
+        &mut self,
+        client: Window,
+        target: usize,
+    ) -> Result<(), ReplyError> {
         if target >= self.workspace_count {
             return Ok(());
         }
@@ -256,7 +283,11 @@ impl<'a, C: Connection> Wm<'a, C> {
             };
             let was_visible = state.visible_on(self.current_workspace);
             state.workspace = target;
-            (state.frame, was_visible, state.visible_on(self.current_workspace))
+            (
+                state.frame,
+                was_visible,
+                state.visible_on(self.current_workspace),
+            )
         };
         self.set_client_workspace(client, target)?;
         // A window moved out of the active workspace cannot remain the
@@ -290,7 +321,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         Ok(())
     }
 
-    pub(super) fn set_client_workspace(&self, client: Window, workspace: usize) -> Result<(), ReplyError> {
+    pub(super) fn set_client_workspace(
+        &self,
+        client: Window,
+        workspace: usize,
+    ) -> Result<(), ReplyError> {
         self.conn.change_property32(
             PropMode::REPLACE,
             client,

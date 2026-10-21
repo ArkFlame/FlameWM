@@ -169,15 +169,33 @@ impl<'a, C: Connection> Wm<'a, C> {
         result
     }
 
-    fn emit_effect_boundary(&self, client: Window, boundary: &str, commit: &interaction::PointerCommit) {
+    fn emit_effect_boundary(
+        &self,
+        client: Window,
+        boundary: &str,
+        commit: &interaction::PointerCommit,
+    ) {
         let session = self.session_of(client);
         if let Some(probe) = self.resize_probe.as_ref() {
-            emit_resize_probe("effect", boundary, probe, Some(probe.last_pointer), session, Some(commit));
+            emit_resize_probe(
+                "effect",
+                boundary,
+                probe,
+                Some(probe.last_pointer),
+                session,
+                Some(commit),
+            );
         }
     }
 
-    fn client_and_session_mut(&mut self, client: Window) -> Option<(&mut ManagedClient, &mut ControllerState)> {
-        Some((self.clients.get_mut(&client)?, self.sessions.get_mut(&client)?))
+    fn client_and_session_mut(
+        &mut self,
+        client: Window,
+    ) -> Option<(&mut ManagedClient, &mut ControllerState)> {
+        Some((
+            self.clients.get_mut(&client)?,
+            self.sessions.get_mut(&client)?,
+        ))
     }
 
     pub(super) fn commit_frame_position(&mut self, client: Window, x: i32, y: i32) {
@@ -253,7 +271,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             }
         };
         if let Some(renderer) = self.renderer.as_ref() {
-            let _ = renderer.borrow_mut().define_cursor(u64::from(capture), cursor);
+            let _ = renderer
+                .borrow_mut()
+                .define_cursor(u64::from(capture), cursor);
         }
         let _ = self.conn.map_window(capture);
         let result = self.conn.configure_window(
@@ -308,7 +328,11 @@ impl<'a, C: Connection> Wm<'a, C> {
         self.release_pointer();
     }
 
-    pub(super) fn reduce_and_execute(&mut self, client: Window, event: FrameEvent) -> Result<(), ReplyError> {
+    pub(super) fn reduce_and_execute(
+        &mut self,
+        client: Window,
+        event: FrameEvent,
+    ) -> Result<(), ReplyError> {
         let Some(controller) = self.controller_for(client) else {
             return Ok(());
         };
@@ -365,9 +389,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             FrameEvent::Press { .. } if matches!(region, Some(FrameRegion::Resize(_))) => {
                 Some(("first", next.session))
             }
-            FrameEvent::Release { .. }
-                if matches!(pre_session, InteractionSession::Resize(_)) =>
-            {
+            FrameEvent::Release { .. } if matches!(pre_session, InteractionSession::Resize(_)) => {
                 Some(("last", pre_session))
             }
             _ => None,

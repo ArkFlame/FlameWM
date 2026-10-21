@@ -10,7 +10,10 @@ use std::ptr;
 use flamewm_render_core::Color;
 
 use crate::ffi::dynamic_library::DynamicLibrary;
-use crate::xlib::{Colormap, Display, Drawable, Visual};
+use crate::xlib::{
+    Colormap, Display, Drawable, Visual, XCreateGC, XCreatePixmap, XDestroyImage, XFillRectangle,
+    XFreeGC, XFreePixmap, XGetImage, XImageHead, XRootWindow, XSetForeground, ZPIXMAP,
+};
 
 #[repr(C)]
 struct XftDraw {
@@ -77,6 +80,7 @@ const _: () = {
 type XftDrawCreateFn =
     unsafe extern "C" fn(*mut Display, Drawable, *mut Visual, Colormap) -> *mut XftDraw;
 type XftDrawDestroyFn = unsafe extern "C" fn(*mut XftDraw);
+type XftDrawCreateAlphaFn = unsafe extern "C" fn(*mut Display, Drawable, c_int) -> *mut XftDraw;
 type XftDrawChangeFn = unsafe extern "C" fn(*mut XftDraw, Drawable);
 type XftDrawStringUtf8Fn = unsafe extern "C" fn(
     *mut XftDraw,
@@ -108,6 +112,7 @@ type FcConfigBuildFontsFn = unsafe extern "C" fn(*mut FcConfig) -> c_int;
 struct XftApi {
     draw_create: XftDrawCreateFn,
     draw_destroy: XftDrawDestroyFn,
+    draw_create_alpha: Option<XftDrawCreateAlphaFn>,
     draw_change: XftDrawChangeFn,
     draw_string_utf8: XftDrawStringUtf8Fn,
     text_extents_utf8: Option<XftTextExtentsUtf8Fn>,
@@ -162,6 +167,7 @@ impl XftBackend {
         let api = XftApi {
             draw_create: unsafe { xft_library.symbol(b"XftDrawCreate\0") }?,
             draw_destroy: unsafe { xft_library.symbol(b"XftDrawDestroy\0") }?,
+            draw_create_alpha: unsafe { xft_library.symbol(b"XftDrawCreateAlpha\0").ok() },
             draw_change: unsafe { xft_library.symbol(b"XftDrawChange\0") }?,
             draw_string_utf8: unsafe { xft_library.symbol(b"XftDrawStringUtf8\0") }?,
             text_extents_utf8: unsafe { xft_library.symbol(b"XftTextExtentsUtf8\0").ok() },
@@ -279,6 +285,112 @@ impl XftBackend {
         Ok(())
     }
 
+    /// Render a bounded antialiased A8 glyph coverage mask, once per retained paint.
+    /// A real alpha mask is blurred by the shared image engine; never overlay shifted glyphs.
+    /// # Safety
+    /// This backend must hold the live X display, font and Xft library.
+    pub unsafe fn text_alpha_mask(
+        &mut self,
+        size: f32,
+        weight: u16,
+        text: &str,
+        pad: u32,
+    ) -> Result<(u32, u32, Vec<u8>), String> {
+        let create_alpha = self
+            .api
+            .draw_create_alpha
+            .ok_or("XftDrawCreateAlpha unavailable")?;
+        let (advance, _) = unsafe { self.measure_text(size, weight, text) };
+        let width = ((advance.ceil().max(1.0) as u32).saturating_add(pad * 2 + 8)).min(1024);
+        let height = ((size.max(1.0).ceil() as u32)
+            .saturating_mul(2)
+            .saturating_add(pad * 2))
+        .min(192);
+        let pixmap = unsafe {
+            XCreatePixmap(
+                self.display,
+                XRootWindow(self.display, self.screen),
+                width,
+                height,
+                8,
+            )
+        };
+        if pixmap == 0 {
+            return Err("Xft text shadow A8 pixmap unavailable".to_string());
+        }
+        let result = (|| {
+            let gc = unsafe { XCreateGC(self.display, pixmap, 0, ptr::null_mut()) };
+            if gc.is_null() {
+                return Err("text shadow A8 GC unavailable".to_string());
+            }
+            unsafe {
+                XSetForeground(self.display, gc, 0);
+                XFillRectangle(self.display, pixmap, gc, 0, 0, width, height);
+                XFreeGC(self.display, gc);
+            }
+            let draw = unsafe { create_alpha(self.display, pixmap, 8) };
+            if draw.is_null() {
+                return Err("XftDrawCreateAlpha returned NULL".to_string());
+            }
+            let draw_result = (|| {
+                let font = unsafe { self.font_for(size, weight) }?;
+                let white = XftColor {
+                    pixel: 0,
+                    color: XRenderColor {
+                        red: 65535,
+                        green: 65535,
+                        blue: 65535,
+                        alpha: 65535,
+                    },
+                };
+                let bytes = text.as_bytes();
+                unsafe {
+                    (self.api.draw_string_utf8)(
+                        draw,
+                        &white,
+                        font,
+                        pad as c_int + 4,
+                        pad as c_int + size.ceil() as c_int,
+                        bytes.as_ptr(),
+                        bytes.len().min(c_int::MAX as usize) as c_int,
+                    );
+                }
+                let image =
+                    unsafe { XGetImage(self.display, pixmap, 0, 0, width, height, !0, ZPIXMAP) };
+                if image.is_null() {
+                    return Err("XGetImage of A8 text shadow failed".to_string());
+                }
+                let result = (|| {
+                    let head = unsafe { &*(image as *const XImageHead) };
+                    if head.bits_per_pixel != 8
+                        || head.bytes_per_line < width as i32
+                        || head.data.is_null()
+                    {
+                        return Err("unsupported A8 text shadow pixel layout".to_string());
+                    }
+                    let row_bytes = head.bytes_per_line as usize;
+                    let data = unsafe {
+                        std::slice::from_raw_parts(
+                            head.data as *const u8,
+                            row_bytes * height as usize,
+                        )
+                    };
+                    let mut mask = vec![0; width as usize * height as usize];
+                    for (y, row) in mask.chunks_exact_mut(width as usize).enumerate() {
+                        row.copy_from_slice(&data[y * row_bytes..y * row_bytes + width as usize]);
+                    }
+                    Ok((width, height, mask))
+                })();
+                unsafe { XDestroyImage(image) };
+                result
+            })();
+            unsafe { (self.api.draw_destroy)(draw) };
+            draw_result
+        })();
+        unsafe { XFreePixmap(self.display, pixmap) };
+        result
+    }
+
     /// Reusable measurement for decorations: true Xft advance when
     /// `XftTextExtentsUtf8` is available, else the canonical layout
     /// estimate (0.58em/char, 1.30em height) so callers never branch.
@@ -359,7 +471,12 @@ impl XftBackend {
             return Ok(value);
         }
         let (red, green, blue, alpha) = xrender_color_for(color);
-        let render = XRenderColor { red, green, blue, alpha };
+        let render = XRenderColor {
+            red,
+            green,
+            blue,
+            alpha,
+        };
         let mut allocated = XftColor {
             pixel: 0,
             color: render,

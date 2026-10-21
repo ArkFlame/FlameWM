@@ -1,4 +1,4 @@
-//! Bounded baseline JPEG decode into the shared straight-alpha RGBA8 image contract.
+//! Baseline JPEG decode into the shared straight-alpha RGBA8 image contract.
 //!
 //! Progressive, arithmetic, lossless and CMYK/YCCK JPEGs are rejected with an
 //! error. Output is always opaque.
@@ -8,15 +8,15 @@ use std::io::Cursor;
 use zune_jpeg::JpegDecoder;
 use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
 
-use crate::{MAX_DIMENSION, RgbaImage, check_size_limits};
+use crate::{RgbaImage, check_size_limits};
 
 /// Decodes a baseline or extended-sequential JPEG at natural size.
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
     reject_unsupported_frame(bytes)?;
     let options = DecoderOptions::default()
         .jpeg_set_out_colorspace(ColorSpace::RGB)
-        .set_max_width(MAX_DIMENSION as usize)
-        .set_max_height(MAX_DIMENSION as usize);
+        .set_max_width(usize::MAX)
+        .set_max_height(usize::MAX);
     let mut decoder = JpegDecoder::new_with_options(Cursor::new(bytes), options);
     decoder
         .decode_headers()
@@ -84,11 +84,15 @@ mod tests {
     const PROGRESSIVE: &[u8] = include_bytes!("../tests/fixtures/progressive-16x16.jpg");
     const CMYK: &[u8] = include_bytes!("../tests/fixtures/cmyk-16x16.jpg");
     const WIDE: &[u8] = include_bytes!("../tests/fixtures/wide-4097x1.jpg");
+    const VERY_WIDE: &[u8] = include_bytes!("../tests/fixtures/wide-16385x1.jpg");
 
     fn assert_near(actual: [u8; 4], expected: [u8; 3]) {
         for channel in 0..3 {
             let delta = i32::from(actual[channel]) - i32::from(expected[channel]);
-            assert!(delta.abs() <= 8, "channel {channel}: {actual:?} vs {expected:?}");
+            assert!(
+                delta.abs() <= 8,
+                "channel {channel}: {actual:?} vs {expected:?}"
+            );
         }
         assert_eq!(actual[3], 255);
     }
@@ -98,16 +102,40 @@ mod tests {
         let image = decode(BASELINE).expect("baseline JPEG");
         assert_eq!((image.width, image.height), (16, 16));
         assert!(image.is_fully_opaque());
-        assert_near([image.pixels[0], image.pixels[1], image.pixels[2], image.pixels[3]], [200, 30, 40]);
+        assert_near(
+            [
+                image.pixels[0],
+                image.pixels[1],
+                image.pixels[2],
+                image.pixels[3],
+            ],
+            [200, 30, 40],
+        );
         let last = image.pixels.len() - 4;
-        assert_near([image.pixels[last], image.pixels[last + 1], image.pixels[last + 2], image.pixels[last + 3]], [200, 30, 40]);
+        assert_near(
+            [
+                image.pixels[last],
+                image.pixels[last + 1],
+                image.pixels[last + 2],
+                image.pixels[last + 3],
+            ],
+            [200, 30, 40],
+        );
     }
 
     #[test]
     fn decodes_grayscale_fixture_as_opaque_rgb() {
         let image = decode(GRAY).expect("grayscale JPEG");
         assert_eq!((image.width, image.height), (16, 16));
-        assert_near([image.pixels[0], image.pixels[1], image.pixels[2], image.pixels[3]], [128, 128, 128]);
+        assert_near(
+            [
+                image.pixels[0],
+                image.pixels[1],
+                image.pixels[2],
+                image.pixels[3],
+            ],
+            [128, 128, 128],
+        );
     }
 
     #[test]
@@ -127,7 +155,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_oversize_dimensions() {
-        assert!(decode(WIDE).is_err());
+    fn decodes_images_wider_than_4096_pixels() {
+        let image = decode(WIDE).expect("wide JPEG");
+        assert_eq!((image.width, image.height), (4097, 1));
+    }
+
+    #[test]
+    fn decodes_images_wider_than_decoder_default_limit() {
+        let image = decode(VERY_WIDE).expect("JPEG wider than decoder default limit");
+        assert_eq!((image.width, image.height), (16385, 1));
     }
 }

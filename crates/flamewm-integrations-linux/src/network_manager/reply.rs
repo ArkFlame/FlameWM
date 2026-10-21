@@ -1,6 +1,6 @@
-use super::*;
 use super::actions::*;
 use super::rules::*;
+use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConnectAttempt {
@@ -105,7 +105,12 @@ impl ConnectAttempts {
         }
     }
 
-    pub(super) fn on_device_state(&mut self, device: &str, state: u32, reason: u32) -> AttemptEffect {
+    pub(super) fn on_device_state(
+        &mut self,
+        device: &str,
+        state: u32,
+        reason: u32,
+    ) -> AttemptEffect {
         let activating = match self
             .current
             .as_mut()
@@ -176,7 +181,6 @@ pub(super) struct AccessPointProperties {
     pub(super) secured: bool,
 }
 
-
 pub(super) fn parse_message(message: &Message) -> Option<Result<Incoming, FlameError>> {
     if message.msg_type() == MessageType::MethodReturn || message.msg_type() == MessageType::Error {
         return message.get_reply_serial().map(|serial| {
@@ -233,15 +237,11 @@ pub(super) fn parse_device_state_changed(
 
 /// Answers a SecretAgent call with a D-Bus error so NetworkManager gets a reply and the reactor
 /// keeps running. Nothing secret-bearing is echoed: only the fixed error name and text.
-fn secret_agent_error(
-    message: &Message,
-    name: &str,
-    text: &str,
-) -> FlameResult<SecretAgentCall> {
-    let name = ErrorName::new(name)
-        .map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
-    let text = CString::new(text)
-        .map_err(|_| FlameError::invalid("SecretAgent error text is invalid"))?;
+fn secret_agent_error(message: &Message, name: &str, text: &str) -> FlameResult<SecretAgentCall> {
+    let name =
+        ErrorName::new(name).map_err(|error| FlameError::new(ErrorCode::InvalidArgument, error))?;
+    let text =
+        CString::new(text).map_err(|_| FlameError::invalid("SecretAgent error text is invalid"))?;
     Ok(SecretAgentCall::SendReply {
         reply: (!message.get_no_reply()).then(|| message.error(&name, &text)),
     })
@@ -312,7 +312,6 @@ pub(super) fn parse_secret_agent_call(message: &Message) -> FlameResult<SecretAg
     }
 }
 
-
 pub(super) fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, FlameError> {
     if items.len() != 3 {
         return Err(FlameError::invalid(
@@ -326,7 +325,10 @@ pub(super) fn parse_owner_changed(items: Vec<MessageItem>) -> Result<Incoming, F
     })
 }
 
-pub(super) fn parse_properties_changed(items: Vec<MessageItem>, path: String) -> Result<Incoming, FlameError> {
+pub(super) fn parse_properties_changed(
+    items: Vec<MessageItem>,
+    path: String,
+) -> Result<Incoming, FlameError> {
     if items.len() < 2 {
         return Err(FlameError::invalid(
             "NetworkManager property event has invalid arguments",
@@ -340,14 +342,19 @@ pub(super) fn parse_properties_changed(items: Vec<MessageItem>, path: String) ->
 }
 
 /// Entries of a dictionary reply item; `what` names it in the not-a-dictionary error.
-fn dict_entries(item: Option<&MessageItem>, what: &str) -> FlameResult<Vec<(MessageItem, MessageItem)>> {
+fn dict_entries(
+    item: Option<&MessageItem>,
+    what: &str,
+) -> FlameResult<Vec<(MessageItem, MessageItem)>> {
     let Some(MessageItem::Dict(dict)) = item else {
         return Err(FlameError::invalid(format!("{what} are not a dictionary")));
     };
     Ok(dict.clone().into_vec())
 }
 
-pub(super) fn parse_property_dict(item: Option<&MessageItem>) -> FlameResult<NetworkManagerProperties> {
+pub(super) fn parse_property_dict(
+    item: Option<&MessageItem>,
+) -> FlameResult<NetworkManagerProperties> {
     let mut properties = NetworkManagerProperties::default();
     for (key, value) in dict_entries(item, "NetworkManager properties")? {
         let key = item_string(&key, "NetworkManager property name")?;
@@ -403,7 +410,9 @@ pub(super) fn parse_device_properties(item: Option<&MessageItem>) -> FlameResult
     })
 }
 
-pub(super) fn parse_access_point_properties(item: Option<&MessageItem>) -> FlameResult<AccessPointProperties> {
+pub(super) fn parse_access_point_properties(
+    item: Option<&MessageItem>,
+) -> FlameResult<AccessPointProperties> {
     let mut properties = AccessPointProperties::default();
     let mut flags = 0_u32;
     let mut wpa_flags = 0_u32;
@@ -611,8 +620,13 @@ impl NetworkManagerProvider {
                     })
                     .and_then(|item| saved_profile_update_settings(item.clone(), &secret));
                 let settings = self.clear_attempt_on_error(settings)?;
-                let queued =
-                    self.queue_update_saved_profile(attempt, profile, device, access_point, settings);
+                let queued = self.queue_update_saved_profile(
+                    attempt,
+                    profile,
+                    device,
+                    access_point,
+                    settings,
+                );
                 self.clear_attempt_on_error(queued)
             }
             PendingRequest::UpdateSavedProfile {

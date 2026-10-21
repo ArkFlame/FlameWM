@@ -24,7 +24,12 @@ fn main() {
     println!("cargo:rerun-if-changed={}", css.display());
     rerun_tree(&breeze);
     rerun_tree(&branding);
-    for name in ["flamewm-icon.svg", "github.svg", "paypal.svg", "color-wheel.png"] {
+    for name in [
+        "flamewm-icon.svg",
+        "github.svg",
+        "paypal.svg",
+        "color-wheel.png",
+    ] {
         println!("cargo:rerun-if-changed={}", web.join(name).display());
     }
 
@@ -38,7 +43,12 @@ fn main() {
     stage_tree(&branding, &staged_assets.join("branding"));
     let staged_web = staged_assets.join("web");
     fs::create_dir_all(&staged_web).expect("create staged settings web assets");
-    for name in ["flamewm-icon.svg", "github.svg", "paypal.svg", "color-wheel.png"] {
+    for name in [
+        "flamewm-icon.svg",
+        "github.svg",
+        "paypal.svg",
+        "color-wheel.png",
+    ] {
         fs::copy(web.join(name), staged_assets.join("web").join(name))
             .unwrap_or_else(|_| panic!("stage settings web asset {name}"));
     }

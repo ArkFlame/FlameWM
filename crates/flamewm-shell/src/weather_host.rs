@@ -259,8 +259,8 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_support::answer;
+    use super::*;
     use flamewm_shell_core::weather::{TemperatureUnit, WeatherCondition, WeatherSnapshot};
     use std::cell::Cell;
 
@@ -287,15 +287,17 @@ mod tests {
         }))
     }
 
-    fn search_fixture(
-        result: SearchResult,
-    ) -> impl FnOnce(String) -> mpsc::Receiver<SearchResult> {
+    fn search_fixture(result: SearchResult) -> impl FnOnce(String) -> mpsc::Receiver<SearchResult> {
         move |_| answer(result)
     }
 
     #[test]
     fn disabled_or_unconfigured_never_fetches() {
-        for s in [settings(false, true), settings(true, false), settings(false, false)] {
+        for s in [
+            settings(false, true),
+            settings(true, false),
+            settings(false, false),
+        ] {
             let mut host = WeatherHost::new();
             host.apply_settings(s);
             host.request_open_fetch();
@@ -324,8 +326,13 @@ mod tests {
         let (tx, rx) = mpsc::channel::<WeatherResult>();
         let mut pending = Some(rx);
         host.tick(start, |_| pending.take().expect("one fetch"));
-        assert_eq!(host.poll_deadline(start), Some(start + WEATHER_POLL_INTERVAL));
-        host.tick(start + WEATHER_POLL_INTERVAL, |_| unreachable!("fetch in flight"));
+        assert_eq!(
+            host.poll_deadline(start),
+            Some(start + WEATHER_POLL_INTERVAL)
+        );
+        host.tick(start + WEATHER_POLL_INTERVAL, |_| {
+            unreachable!("fetch in flight")
+        });
         assert_eq!(host.state, WeatherState::Loading);
         assert!(host.poll_deadline(start).is_some());
         tx.send(Ok(WeatherSnapshot {
@@ -338,7 +345,11 @@ mod tests {
         .unwrap();
         assert!(host.tick(start + WEATHER_POLL_INTERVAL, |_| unreachable!()));
         assert!(matches!(host.state, WeatherState::Ready(_)));
-        assert_eq!(host.poll_deadline(start), None, "idle again after the result");
+        assert_eq!(
+            host.poll_deadline(start),
+            None,
+            "idle again after the result"
+        );
     }
 
     #[test]
@@ -353,7 +364,11 @@ mod tests {
             fixture_rx()
         };
         host.tick(start, fetch);
-        assert_eq!(calls.get(), 1, "enabling with a location fetches once for the tray");
+        assert_eq!(
+            calls.get(),
+            1,
+            "enabling with a location fetches once for the tray"
+        );
         host.tick(start, fetch);
         assert!(matches!(host.state, WeatherState::Ready(_)));
         assert_eq!(calls.get(), 1);
@@ -423,7 +438,10 @@ mod tests {
         let (tx, rx) = mpsc::channel::<SearchResult>();
         let mut pending = Some(rx);
         assert!(search.submit(|_| pending.take().expect("one search")));
-        assert!(search.in_flight(), "helper loop must keep polling while a search runs");
+        assert!(
+            search.in_flight(),
+            "helper loop must keep polling while a search runs"
+        );
         assert!(!search.poll(), "no result yet");
         assert!(search.in_flight());
         tx.send(Ok(vec![location()])).unwrap();
@@ -470,15 +488,22 @@ mod tests {
 
 #[cfg(test)]
 mod flow_tests {
+    use super::test_support::answer;
     use super::*;
     use crate::projection::{project_weather_popup, project_weather_tray};
-    use flamewm_shell_core::weather::{DayForecast, TemperatureUnit, WeatherCondition, WeatherSnapshot};
+    use flamewm_shell_core::weather::{
+        DayForecast, TemperatureUnit, WeatherCondition, WeatherSnapshot,
+    };
     use flamewm_ui_x11::test_support::RecordingUiDoc;
     use flamewm_ui_x11::UiColor;
-    use super::test_support::answer;
     use std::cell::Cell;
 
-    const VEIL: UiColor = UiColor { r: 0, g: 0, b: 0, a: 255 };
+    const VEIL: UiColor = UiColor {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
 
     fn berlin() -> WeatherLocation {
         WeatherLocation::new("Berlin", 52.52, 13.41, Some("Germany")).unwrap()
@@ -597,7 +622,10 @@ mod flow_tests {
         refresh(&mut failed, now, Err(WeatherError::Transport));
         assert_eq!(failed.state, WeatherState::Error(WeatherError::Transport));
         assert_eq!(tray_of(&failed).texts["tray-weather-temp"], "--");
-        assert_eq!(popup_of(&failed).texts["weather-state"], "Could not load weather");
+        assert_eq!(
+            popup_of(&failed).texts["weather-state"],
+            "Could not load weather"
+        );
     }
 
     #[test]

@@ -99,9 +99,7 @@ pub(crate) fn parse(
         }
         let body = usize::try_from(size).map_err(|_| ImportError::TooLarge)?;
         let data_start = offset + BLOCK;
-        let data_end = data_start
-            .checked_add(body)
-            .ok_or(ImportError::TooLarge)?;
+        let data_end = data_start.checked_add(body).ok_or(ImportError::TooLarge)?;
         let data = archive
             .get(data_start..data_end)
             .ok_or_else(|| ImportError::Corrupt("truncated tar entry".into()))?;
@@ -170,7 +168,9 @@ fn verify_checksum(header: &[u8]) -> Result<(), ImportError> {
 
 fn parse_octal(field: &[u8]) -> Result<u64, ImportError> {
     if field.first().is_some_and(|&b| b & 0x80 != 0) {
-        return Err(ImportError::Corrupt("unsupported tar numeric encoding".into()));
+        return Err(ImportError::Corrupt(
+            "unsupported tar numeric encoding".into(),
+        ));
     }
     let token = field
         .split(|&b| b == 0 || b == b' ')
@@ -274,26 +274,53 @@ mod tests {
     fn pre_set_cancel_never_drives_the_decoder() {
         let cancel = AtomicBool::new(true);
         let reads = Cell::new(0);
-        let err = read_decoded(Endless { reads: &reads, on_read: None }, &cancel, "gzip").unwrap_err();
+        let err = read_decoded(
+            Endless {
+                reads: &reads,
+                on_read: None,
+            },
+            &cancel,
+            "gzip",
+        )
+        .unwrap_err();
         assert!(matches!(err, ImportError::Cancelled), "got {err:?}");
-        assert_eq!(reads.get(), 0, "a pre-cancelled decode must not read any input");
+        assert_eq!(
+            reads.get(),
+            0,
+            "a pre-cancelled decode must not read any input"
+        );
     }
 
     #[test]
     fn cancel_during_decode_stops_before_the_output_cap() {
         let cancel = AtomicBool::new(false);
         let reads = Cell::new(0);
-        let decoder = Endless { reads: &reads, on_read: Some((3, &cancel)) };
+        let decoder = Endless {
+            reads: &reads,
+            on_read: Some((3, &cancel)),
+        };
         let err = read_decoded(decoder, &cancel, "xz").unwrap_err();
         assert!(matches!(err, ImportError::Cancelled), "got {err:?}");
-        assert!(reads.get() <= 4, "decode kept running after cancel: {} reads", reads.get());
+        assert!(
+            reads.get() <= 4,
+            "decode kept running after cancel: {} reads",
+            reads.get()
+        );
     }
 
     #[test]
     fn decoded_output_over_cap_is_too_large() {
         let cancel = AtomicBool::new(false);
         let reads = Cell::new(0);
-        let err = read_decoded(Endless { reads: &reads, on_read: None }, &cancel, "gzip").unwrap_err();
+        let err = read_decoded(
+            Endless {
+                reads: &reads,
+                on_read: None,
+            },
+            &cancel,
+            "gzip",
+        )
+        .unwrap_err();
         assert!(matches!(err, ImportError::TooLarge), "got {err:?}");
     }
 }

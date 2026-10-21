@@ -105,12 +105,16 @@ mod ui_scale_tests {
     fn global_font_defaults_apply_after_node_styles_and_invalidate_layout() {
         let mut document = labelled_document();
         let label = document.node_by_id("label").expect("label");
-        let text = document.document.nodes[label as usize].first_child.expect("text");
+        let text = document.document.nodes[label as usize]
+            .first_child
+            .expect("text");
         let before = document.runtime_style(text, InteractionState::default());
         let revision = document.revision();
         let _ = document.take_damage();
 
-        document.set_ui_font_defaults(2.0, true).expect("global font defaults");
+        document
+            .set_ui_font_defaults(2.0, true)
+            .expect("global font defaults");
 
         assert_eq!(document.revision(), revision.wrapping_add(1));
         assert_eq!(document.peek_damage(), SurfaceDamage::Full);
@@ -204,7 +208,9 @@ mod ui_scale_tests {
     #[test]
     fn hidden_mode_like_action_is_not_painted_or_hit_testable() {
         let mut document = clickable_document();
-        document.set_visible("button", false).expect("hide inactive slot");
+        document
+            .set_visible("button", false)
+            .expect("hide inactive slot");
         let layout = crate::layout::LayoutEngine::compute(
             &document,
             100.0,
@@ -241,7 +247,12 @@ mod image_replace_tests {
                 fixture_node(NodeKind::Image, "icon", "", Some(0)),
                 fixture_node(NodeKind::Text, "label", "hi", None),
             ],
-            vec![image_asset("old", 2, 1, vec![10, 20, 30, 255, 40, 50, 60, 255])],
+            vec![image_asset(
+                "old",
+                2,
+                1,
+                vec![10, 20, 30, 255, 40, 50, 60, 255],
+            )],
         )
     }
 
@@ -466,7 +477,6 @@ mod idempotent_mutation_tests {
     }
 }
 
-
 #[cfg(test)]
 mod geometry_mutation_tests {
     use super::*;
@@ -505,28 +515,46 @@ mod geometry_mutation_tests {
         let _ = document.take_damage();
         let initial_revision = document.revision();
 
-        document.set_position_px("desktop-drag-ghost", 80.0, 120.0).unwrap();
+        document
+            .set_position_px("desktop-drag-ghost", 80.0, 120.0)
+            .unwrap();
         assert_eq!(document.revision(), initial_revision.wrapping_add(1));
         assert_eq!(document.peek_damage(), SurfaceDamage::Full);
         let first = crate::layout::LayoutEngine::compute(
-            &document, 800.0, 600.0, InteractionState::default(),
+            &document,
+            800.0,
+            600.0,
+            InteractionState::default(),
         );
         assert_eq!(first.revision, document.revision());
-        assert_eq!((first.boxes[index].rect.x, first.boxes[index].rect.y), (80.0, 120.0));
+        assert_eq!(
+            (first.boxes[index].rect.x, first.boxes[index].rect.y),
+            (80.0, 120.0)
+        );
 
         let _ = document.take_damage();
         let first_revision = document.revision();
-        document.set_position_px("desktop-drag-ghost", 125.0, 165.0).unwrap();
+        document
+            .set_position_px("desktop-drag-ghost", 125.0, 165.0)
+            .unwrap();
         assert_eq!(document.revision(), first_revision.wrapping_add(1));
         assert_eq!(document.peek_damage(), SurfaceDamage::Full);
         let second = crate::layout::LayoutEngine::compute(
-            &document, 800.0, 600.0, InteractionState::default(),
+            &document,
+            800.0,
+            600.0,
+            InteractionState::default(),
         );
-        assert_eq!((second.boxes[index].rect.x, second.boxes[index].rect.y), (125.0, 165.0));
+        assert_eq!(
+            (second.boxes[index].rect.x, second.boxes[index].rect.y),
+            (125.0, 165.0)
+        );
 
         let _ = document.take_damage();
         let stable_revision = document.revision();
-        document.set_position_px("desktop-drag-ghost", 125.0, 165.0).unwrap();
+        document
+            .set_position_px("desktop-drag-ghost", 125.0, 165.0)
+            .unwrap();
         assert_eq!(document.revision(), stable_revision);
         assert_eq!(document.peek_damage(), SurfaceDamage::None);
     }
@@ -536,21 +564,42 @@ mod geometry_mutation_tests {
         let mut document = drag_ghost_document();
         let _ = document.take_damage();
         let previous = document.revision();
-        document.set_size_px("desktop-drag-ghost", 88.0, 90.0).unwrap();
+        document
+            .set_size_px("desktop-drag-ghost", 88.0, 90.0)
+            .unwrap();
         assert_eq!(document.revision(), previous.wrapping_add(1));
         assert_eq!(document.peek_damage(), SurfaceDamage::Full);
         let index = document.node_by_id("desktop-drag-ghost").unwrap() as usize;
         let layout = crate::layout::LayoutEngine::compute(
-            &document, 800.0, 600.0, InteractionState::default(),
+            &document,
+            800.0,
+            600.0,
+            InteractionState::default(),
         );
-        assert_eq!((layout.boxes[index].rect.width, layout.boxes[index].rect.height), (88.0, 90.0));
+        assert_eq!(
+            (
+                layout.boxes[index].rect.width,
+                layout.boxes[index].rect.height
+            ),
+            (88.0, 90.0)
+        );
         let _ = document.take_damage();
         let revision = document.revision();
-        document.set_size_px("desktop-drag-ghost", 88.0, 90.0).unwrap();
+        document
+            .set_size_px("desktop-drag-ghost", 88.0, 90.0)
+            .unwrap();
         assert_eq!(document.revision(), revision);
         assert_eq!(document.peek_damage(), SurfaceDamage::None);
-        assert!(document.set_position_px("desktop-drag-ghost", f32::NAN, 0.0).is_err());
-        assert!(document.set_size_px("desktop-drag-ghost", -1.0, 0.0).is_err());
+        assert!(
+            document
+                .set_position_px("desktop-drag-ghost", f32::NAN, 0.0)
+                .is_err()
+        );
+        assert!(
+            document
+                .set_size_px("desktop-drag-ghost", -1.0, 0.0)
+                .is_err()
+        );
         assert_eq!(document.revision(), revision);
     }
 }

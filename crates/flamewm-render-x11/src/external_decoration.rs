@@ -13,20 +13,20 @@ use std::rc::{Rc, Weak};
 
 use flamewm_render_core::{Color, CursorKind, Rect};
 
-use super::overlay::{
-    TransitionDirection, TransitionStyle, WarpOverlay, argb_visual_available, warp_argb_usable,
-};
-use super::lamp::PanelEdge;
-use super::warp::WarpRect;
-use super::xcomposite::{CapturedImage, capture_window};
-use super::xrender_transform::XRenderTransformApi;
 use super::external_drawable::{
     ExternalDrawableSession, ExternalDrawableTarget, external_text_measure, use_cstring_title,
 };
+use super::lamp::PanelEdge;
 use super::native::cursor::{DeferredNativeLibraryHandles, NativeCursorSession, XcursorBackend};
+use super::overlay::{
+    TransitionDirection, TransitionStyle, WarpOverlay, argb_visual_available, warp_argb_usable,
+};
+use super::warp::WarpRect;
+use super::xcomposite::{CapturedImage, capture_window};
 use super::xlib::{
     Display, XCloseDisplay, XFlush, XOpenDisplay, install_x_protocol_error_handler, x_io_broken,
 };
+use super::xrender_transform::XRenderTransformApi;
 
 /// Safe renderer for wm-owned frame chrome. Created via [`Self::open`]
 /// (opens its own X connection) or [`Self::unavailable`] (explicit fake
@@ -114,8 +114,8 @@ impl ExternalDecorationRenderer {
             }
         };
         let backend = unsafe { XcursorBackend::with_theme(display, None, None) };
-        let picture_transform = XRenderTransformApi::load()
-            .is_ok_and(|api| api.capabilities().picture_transform);
+        let picture_transform =
+            XRenderTransformApi::load().is_ok_and(|api| api.capabilities().picture_transform);
         Ok(Self {
             display,
             session: Some(Box::new(session)),
@@ -443,9 +443,23 @@ impl ExternalDecorationRenderer {
 /// A renderer whose Xcursor theme can be swapped in place by the registry.
 pub trait CursorThemeOwner {
     fn reload_cursor_theme(&mut self, theme: &str) -> Result<(), String>;
+    fn set_cursor_shadow(&mut self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl CursorThemeOwner for ExternalDecorationRenderer {
+    fn set_cursor_shadow(&mut self, enabled: bool) -> Result<(), String> {
+        let cursor = self
+            .cursor
+            .as_mut()
+            .ok_or("external decoration has no cursor backend")?;
+        unsafe { cursor.set_shadow(enabled) }?;
+        redefine_cursors(&self.defined_cursors, |xid, kind| {
+            unsafe { cursor.define(xid as super::xlib::Window, kind) }.is_some()
+        })
+    }
+
     /// Replaces the cursor set, then re-defines the cursor on every window this
     /// renderer already set, so live frames show the new theme. If the theme
     /// reload fails, the old theme stays and the windows keep their cursors. If
@@ -491,6 +505,7 @@ struct CursorThemeRegistry {
     /// Theme the registered owners currently hold. `None` until the first owner
     /// registers, so an unset session theme still reloads on the first change.
     applied: Option<String>,
+    shadow_applied: bool,
 }
 
 impl CursorThemeRegistry {
@@ -500,7 +515,29 @@ impl CursorThemeRegistry {
         if self.applied.is_none() {
             self.applied = in_use;
         }
+        if self.shadow_applied {
+            if let Err(error) = owner.borrow_mut().set_cursor_shadow(true) {
+                eprintln!("FLAMEWM_CURSOR_SHADOW_RELOAD {error}");
+            }
+        }
         self.owners.push(Rc::downgrade(owner));
+    }
+
+    fn apply_shadow(&mut self, enabled: bool) -> Vec<String> {
+        if self.shadow_applied == enabled {
+            return Vec::new();
+        }
+        self.owners.retain(|owner| owner.strong_count() > 0);
+        let mut errors = Vec::new();
+        for owner in self.owners.iter().filter_map(Weak::upgrade) {
+            if let Err(error) = owner.borrow_mut().set_cursor_shadow(enabled) {
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            self.shadow_applied = enabled;
+        }
+        errors
     }
 
     /// Reloads every live owner when `resolved` differs from the last applied
@@ -534,6 +571,12 @@ thread_local! {
 /// one message per failed owner; empty when nothing changed or all succeeded.
 pub fn apply_cursor_theme(resolved: &str) -> Vec<String> {
     CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply(resolved))
+}
+
+/// Apply the persisted cursorShadow toggle to Flame-owned native cursor handles.
+/// Per-client Xcursor cursors remain client-controlled by the X11 protocol.
+pub fn apply_cursor_shadow(enabled: bool) -> Vec<String> {
+    CURSOR_THEME_REGISTRY.with(|registry| registry.borrow_mut().apply_shadow(enabled))
 }
 
 #[cfg(test)]

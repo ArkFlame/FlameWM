@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::runtime::{RawPress, RawPressWatch};
-use crate::surface_controller::{grab_popup_presses, release_popup_presses, PRESS_OBSERVER};
+use crate::surface_controller::{PRESS_OBSERVER, grab_popup_presses, release_popup_presses};
 use crate::xinput::*;
 
 impl X11App {
@@ -19,11 +19,25 @@ impl X11App {
         let root = unsafe { XRootWindow(self.display, self.screen) };
         if want {
             // SAFETY: same live display and root; the selection outlives the request.
-            unsafe { grab_popup_presses(self.display, root, &mut self.press_selection, PRESS_OBSERVER) };
+            unsafe {
+                grab_popup_presses(
+                    self.display,
+                    root,
+                    &mut self.press_selection,
+                    PRESS_OBSERVER,
+                )
+            };
         } else {
             self.raw_presses.clear();
             // SAFETY: same live display; armed by the branch above on an earlier turn.
-            unsafe { release_popup_presses(self.display, root, &mut self.press_selection, PRESS_OBSERVER) };
+            unsafe {
+                release_popup_presses(
+                    self.display,
+                    root,
+                    &mut self.press_selection,
+                    PRESS_OBSERVER,
+                )
+            };
         }
     }
 

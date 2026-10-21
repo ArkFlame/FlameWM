@@ -96,10 +96,25 @@ mod tests {
         let image = frames.frame(now);
         let at = |x: u32, y: u32| {
             let i = (y as usize * w as usize + x as usize) * 4;
-            [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2], image.pixels[i + 3]]
+            [
+                image.pixels[i],
+                image.pixels[i + 1],
+                image.pixels[i + 2],
+                image.pixels[i + 3],
+            ]
         };
-        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w / 2, h / 2)] {
-            assert_eq!(at(x, y), [0, 0, 0, 255], "pixel ({x}, {y}) is not opaque black");
+        for (x, y) in [
+            (0, 0),
+            (w - 1, 0),
+            (0, h - 1),
+            (w - 1, h - 1),
+            (w / 2, h / 2),
+        ] {
+            assert_eq!(
+                at(x, y),
+                [0, 0, 0, 255],
+                "pixel ({x}, {y}) is not opaque black"
+            );
         }
     }
 
@@ -112,7 +127,10 @@ mod tests {
         for secs in [1u64, 2, 5, 13, 40] {
             let image = frames.frame(now + Duration::from_secs(secs));
             let transparent = image.pixels.chunks(4).filter(|p| p[3] != 255).count();
-            assert_eq!(transparent, 0, "frame at {secs}s has {transparent} non-opaque pixels");
+            assert_eq!(
+                transparent, 0,
+                "frame at {secs}s has {transparent} non-opaque pixels"
+            );
         }
     }
 
@@ -122,13 +140,26 @@ mod tests {
         let mut frames = RibbonFrames::new(320, 180, &saver(), now);
         let first = frames.frame(now + Duration::from_secs(1));
         let second = frames.frame(now + Duration::from_secs(3));
-        assert_ne!(first.pixels, second.pixels, "ribbons must animate between frames");
+        assert_ne!(
+            first.pixels, second.pixels,
+            "ribbons must animate between frames"
+        );
     }
 
     #[test]
     fn big_outputs_use_quarter_resolution() {
         let now = Instant::now();
-        assert_eq!(RibbonFrames::new(1280, 800, &saver(), now).rasterizer.quality(), Quality::Half);
-        assert_eq!(RibbonFrames::new(3840, 2160, &saver(), now).rasterizer.quality(), Quality::Quarter);
+        assert_eq!(
+            RibbonFrames::new(1280, 800, &saver(), now)
+                .rasterizer
+                .quality(),
+            Quality::Half
+        );
+        assert_eq!(
+            RibbonFrames::new(3840, 2160, &saver(), now)
+                .rasterizer
+                .quality(),
+            Quality::Quarter
+        );
     }
 }

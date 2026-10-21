@@ -16,8 +16,6 @@ use crate::icons::user_data_home;
 
 /// Largest source file accepted for import (64 MiB).
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
-/// Largest accepted `width * height` product (decompression-bomb guard).
-pub const MAX_PIXELS: u64 = 100_000_000;
 const STORE_SUBDIR: &str = "flamewm/wallpapers";
 const SHORT_HASH_LEN: usize = 16;
 
@@ -63,7 +61,6 @@ pub enum MediaError {
     UnsupportedFormat,
     UnsupportedStartIconFormat,
     Decode(String),
-    TooManyPixels { width: u32, height: u32 },
     NameCollision(PathBuf),
 }
 
@@ -80,9 +77,6 @@ impl fmt::Display for MediaError {
                 f.write_str("unsupported start icon format (PNG, WebP or JPEG)")
             }
             Self::Decode(message) => write!(f, "image decode failed: {message}"),
-            Self::TooManyPixels { width, height } => {
-                write!(f, "image {width}x{height} exceeds {MAX_PIXELS} pixels")
-            }
             Self::NameCollision(path) => {
                 write!(
                     f,
@@ -137,9 +131,6 @@ impl MediaStore {
             })?;
         let image = decode_bytes(bytes, format).map_err(MediaError::Decode)?;
         let (width, height) = (image.width, image.height);
-        if u64::from(width) * u64::from(height) > MAX_PIXELS {
-            return Err(MediaError::TooManyPixels { width, height });
-        }
         let sha256_hex = sha256_hex(bytes);
         let name = format!(
             "{}-{}.{extension}",
@@ -165,7 +156,7 @@ impl MediaStore {
         self.ensure_root()?;
         match fs::symlink_metadata(dest) {
             Ok(meta) => {
-                return if meta.is_file() && fs::read(dest)? == bytes {
+                return if meta.is_file() && existing_file_matches(dest, bytes)? {
                     Ok(())
                 } else {
                     Err(MediaError::NameCollision(dest.to_path_buf()))
@@ -201,7 +192,7 @@ impl MediaStore {
                 Ok(())
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                if fs::read(dest)? == bytes {
+                if existing_file_matches(dest, bytes)? {
                     Ok(())
                 } else {
                     Err(MediaError::NameCollision(dest.to_path_buf()))
@@ -251,6 +242,39 @@ impl MediaStore {
         }
         Ok(())
     }
+}
+
+/// Compares an existing regular file without buffering its full contents.
+fn existing_file_matches(path: &Path, expected: &[u8]) -> io::Result<bool> {
+    const CHUNK_BYTES: usize = 16 * 1024;
+
+    let path_meta = fs::symlink_metadata(path)?;
+    if !path_meta.is_file() || path_meta.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    let mut file = File::open(path)?;
+    let opened_meta = file.metadata()?;
+    let current_meta = fs::symlink_metadata(path)?;
+    if !opened_meta.is_file()
+        || !current_meta.is_file()
+        || opened_meta.dev() != path_meta.dev()
+        || opened_meta.ino() != path_meta.ino()
+        || current_meta.dev() != opened_meta.dev()
+        || current_meta.ino() != opened_meta.ino()
+        || opened_meta.len() != expected.len() as u64
+    {
+        return Ok(false);
+    }
+
+    let mut buffer = [0; CHUNK_BYTES];
+    for chunk in expected.chunks(CHUNK_BYTES) {
+        file.read_exact(&mut buffer[..chunk.len()])?;
+        if buffer[..chunk.len()] != *chunk {
+            return Ok(false);
+        }
+    }
+    let mut extra = [0];
+    Ok(file.read(&mut extra)? == 0)
 }
 
 /// Imports a user-selected image and returns the managed absolute path to store in settings.
@@ -617,6 +641,60 @@ mod tests {
     }
 
     #[test]
+    fn existing_file_comparison_streams_multiple_chunks() {
+        let dir = TempDir::new();
+        let path = dir.0.join("existing.bin");
+        let expected = vec![0x5a; 16 * 1024 * 3 + 7];
+        write_file(&path, &expected);
+        assert!(existing_file_matches(&path, &expected).unwrap());
+
+        let mut different = expected.clone();
+        different[16 * 1024 * 2] ^= 1;
+        assert!(!existing_file_matches(&path, &different).unwrap());
+    }
+
+    #[test]
+    fn publish_race_compares_identical_file_and_rejects_collision() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        let identical = store.root.join("same.bin");
+        let payload = vec![0xa5; 32 * 1024 + 3];
+        let make_identical = |_: &mut File, bytes: &[u8]| {
+            write_file(&identical, bytes);
+            Ok(())
+        };
+        assert!(store.persist(&identical, &payload, make_identical).is_ok());
+
+        let collision = store.root.join("collision.bin");
+        let make_collision = |_: &mut File, _: &[u8]| {
+            write_file(&collision, b"other content");
+            Ok(())
+        };
+        assert!(matches!(
+            store.persist(&collision, &payload, make_collision),
+            Err(MediaError::NameCollision(_))
+        ));
+        assert_eq!(fs::read(&collision).unwrap(), b"other content");
+    }
+
+    #[test]
+    fn existing_symlink_is_a_collision_without_reading_its_target() {
+        let dir = TempDir::new();
+        let store = store_in(&dir);
+        store.ensure_root().unwrap();
+        let dest = store.root.join("linked.bin");
+        let outside = dir.0.join("outside.bin");
+        write_file(&outside, b"same bytes");
+        std::os::unix::fs::symlink(&outside, &dest).unwrap();
+
+        assert!(matches!(
+            store.persist(&dest, b"same bytes", |file, bytes| file.write_all(bytes)),
+            Err(MediaError::NameCollision(_))
+        ));
+        assert_eq!(fs::read(&outside).unwrap(), b"same bytes");
+    }
+
+    #[test]
     fn failed_write_leaves_no_partial_file() {
         let dir = TempDir::new();
         let store = store_in(&dir);
@@ -664,12 +742,12 @@ mod tests {
     }
 
     #[test]
-    fn oversized_dimensions_are_rejected() {
+    fn dimensions_above_4096_are_imported() {
         let dir = TempDir::new();
         let src = dir.0.join("wide.png");
         write_file(&src, &png_bytes(4097, 1));
-        let error = import_desktop(&dir, &src).unwrap_err();
-        assert!(matches!(error, MediaError::Decode(_)));
+        let imported = import_desktop(&dir, &src).unwrap();
+        assert_eq!((imported.width, imported.height), (4097, 1));
     }
 
     #[test]
@@ -788,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn start_icon_rejects_oversized_source_and_dimensions() {
+    fn start_icon_rejects_oversized_source_but_accepts_dimensions_above_4096() {
         let dir = TempDir::new();
         let store = store_in(&dir);
         let huge = dir.0.join("huge.png");
@@ -803,10 +881,8 @@ mod tests {
 
         let wide = dir.0.join("wide.png");
         write_file(&wide, &png_bytes(4097, 1));
-        assert!(matches!(
-            store.import(&wide, MediaKind::StartIcon),
-            Err(MediaError::Decode(_))
-        ));
+        let imported = store.import(&wide, MediaKind::StartIcon).unwrap();
+        assert_eq!((imported.width, imported.height), (4097, 1));
     }
 
     #[test]

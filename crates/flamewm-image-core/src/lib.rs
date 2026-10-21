@@ -2,13 +2,14 @@
 //!
 //! Single owner for PPM/SVG/PNG/WebP/JPEG/GIF decoding into straight (non-premultiplied)
 //! RGBA8. PPM and JPEG inputs are always opaque (alpha=255); SVG/PNG/WebP/GIF preserve alpha.
-//! Size limits: max 4096x4096, max 64 MiB decoded.
+//! Decoded dimensions are limited only by the source format, platform address
+//! space, and available memory.
 
 use std::path::Path;
 
 pub mod blur;
 pub use blur::{
-    frosted_backdrop, gaussian_blur_rgba, gaussian_blur_rgba_with, BlurError, BlurScratch, Rect,
+    BlurError, BlurScratch, Rect, frosted_backdrop, gaussian_blur_rgba, gaussian_blur_rgba_with,
 };
 pub mod gif_frame;
 pub mod jpeg;
@@ -41,11 +42,6 @@ impl SvgColorScheme {
         }
     }
 }
-
-/// Maximum decoded width or height in pixels.
-pub const MAX_DIMENSION: u32 = 4096;
-/// Maximum decoded pixel payload in bytes (64 MiB).
-pub const MAX_PIXEL_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ImageSourceFormat {
@@ -152,17 +148,11 @@ pub fn check_size_limits(width: u32, height: u32) -> Result<(), String> {
     if width == 0 || height == 0 {
         return Err("image dimensions must be non-zero".to_string());
     }
-    if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        return Err(format!(
-            "image dimensions {width}x{height} exceed maximum {MAX_DIMENSION}x{MAX_DIMENSION}"
-        ));
-    }
     (width as usize)
         .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
-        .filter(|&len| len <= MAX_PIXEL_BYTES)
         .map(|_| ())
-        .ok_or_else(|| format!("image pixel payload exceeds maximum {MAX_PIXEL_BYTES} bytes"))
+        .ok_or_else(|| format!("image dimensions {width}x{height} overflow addressable memory"))
 }
 
 /// Decodes at natural size. SVG without intrinsic dimensions is rejected.
@@ -225,7 +215,12 @@ pub fn unpremultiply_swapped_to_rgba(premultiplied: &[u8]) -> Vec<u8> {
             continue;
         }
         let straight = |c: u8| ((u16::from(c) * 255 + a / 2) / a).min(255) as u8;
-        pixels.extend_from_slice(&[straight(rgba[0]), straight(rgba[1]), straight(rgba[2]), a as u8]);
+        pixels.extend_from_slice(&[
+            straight(rgba[0]),
+            straight(rgba[1]),
+            straight(rgba[2]),
+            a as u8,
+        ]);
     }
     pixels
 }
@@ -235,11 +230,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn limits_reject_oversized_and_empty() {
+    fn dimensions_have_no_arbitrary_cap_but_reject_zero_and_overflow() {
         assert!(check_size_limits(0, 8).is_err());
-        assert!(check_size_limits(4097, 8).is_err());
+        assert!(check_size_limits(4097, 8).is_ok());
         assert!(check_size_limits(4096, 4096).is_ok());
-        assert!(check_size_limits(8192, 8192).is_err());
+        assert!(check_size_limits(8192, 8192).is_ok());
+        assert!(check_size_limits(u32::MAX, u32::MAX).is_err());
         assert!(check_size_limits(64, 64).is_ok());
     }
 

@@ -5,8 +5,8 @@
 //! and can be exercised without a running window manager.
 
 mod atomic_file;
-pub mod file_actions;
 pub mod conversion;
+pub mod file_actions;
 pub mod layout;
 pub mod model;
 pub mod persistence;

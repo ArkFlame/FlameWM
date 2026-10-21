@@ -16,11 +16,11 @@ pub mod runtime;
 #[path = "settings_projection.rs"]
 pub mod settings_projection;
 pub mod start;
-pub mod surface_backdrop;
 pub mod status;
+pub mod surface_backdrop;
+pub mod weather_auto;
 pub mod weather_host;
 mod weather_provider;
-pub mod weather_auto;
 
 /// The active taskbar status projection is compiled without activating stale
 /// taskbar controllers that target an older control contract.

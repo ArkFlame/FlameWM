@@ -160,7 +160,9 @@ impl SurfaceController {
             install_x_protocol_error_handler();
             let press_opcode = xi_raw_press_opcode(display);
             if press_opcode.is_none() {
-                eprintln!("flamewm: XInput2 2.0 unavailable; popups dismiss on focus loss and Escape only");
+                eprintln!(
+                    "flamewm: XInput2 2.0 unavailable; popups dismiss on focus loss and Escape only"
+                );
             }
             Ok(Self {
                 screen: XDefaultScreen(display),
@@ -315,6 +317,7 @@ impl SurfaceController {
 
     pub fn destroy_surface(&mut self, id: SurfaceId) -> Result<(), String> {
         if let Some(mut instance) = self.surfaces.remove(&id) {
+            Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);
             self.slides.cancel(id.get());
             self.windows.remove(&instance.app.window);
             drop_popup_grab(
@@ -365,6 +368,7 @@ impl SurfaceController {
         // starts a fresh slide instead of taking the "already shown" path with no animation.
         instance.shown = false;
         instance.slide_drawn = None;
+        Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);
         // SAFETY: display/window live; a closed popup must not keep a slide clip for its next show.
         unsafe { instance.app.refresh_shape_mask(&instance.document) };
         // Immediate close drops any Fade/Lamp overlay without playing it.
@@ -515,6 +519,7 @@ impl SurfaceController {
         let display = self.display;
         let now = Instant::now();
         let key = id.get();
+        Self::clear_popup_wallpaper(&mut self.instance_mut(id)?.popup_wallpaper);
         let (slide, shown) = {
             let instance = self.instance_mut(id)?;
             (instance.slide, instance.shown)
@@ -1201,6 +1206,7 @@ impl SurfaceController {
                 unsafe { XSync(display, 0) };
                 instance.shown = false;
                 instance.slide_drawn = None;
+                Self::clear_popup_wallpaper(&mut instance.popup_wallpaper);
                 unsafe { instance.app.refresh_shape_mask(&instance.document) };
                 instance.app.clear_surface_backdrop();
                 instance.app.clear_node_backdrops();

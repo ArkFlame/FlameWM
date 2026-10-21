@@ -30,16 +30,16 @@ class Pass26Tests(unittest.TestCase):
 
     def test_shadow_has_shared_compiler_codec_and_paint_owners(self):
         css = read('ui/desktop/desktop.css')
-        self.assertIn('text-shadow:0px 1px #000000b8', css)
+        self.assertIn('text-shadow:0px 1px 2px #000000b8', css)
         self.assertIn('"text-shadow" =>', read('crates/flamewm-render-compiler/src/compile.rs'))
         core = read('crates/flamewm-render-core/src/paint.rs')
         self.assertIn('if let Some(shadow) = style.text_shadow', core)
         self.assertLess(core.index('x: rect.x + shadow.offset_x'), core.index('text: line.text.clone()'))
         codec = read('crates/flamewm-render-core/src/codec.rs')
-        self.assertIn('text_shadow: if version == FORMAT_VERSION', codec)
+        self.assertIn('text_shadow: if version >= FORMAT_VERSION_SHADOW_LEGACY', codec)
         self.assertIn('v5_style_decodes_without_text_shadow', codec)
         self.assertIn('v6_shadow_roundtrip_preserves_offset_and_color', codec)
-        self.assertIn('FORMAT_VERSION: u16 = 6', read('crates/flamewm-render-core/src/model/mod.rs'))
+        self.assertIn('FORMAT_VERSION: u16 = 7', read('crates/flamewm-render-core/src/model/mod.rs'))
 
     def test_shadows_only_on_desktop_labels(self):
         css = read('ui/desktop/desktop.css')

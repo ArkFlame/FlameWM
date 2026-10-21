@@ -8,7 +8,10 @@ pub const MIN_CELL_PHYSICAL: i32 = 48;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridConfig {
     pub work_area: Rect,
+    /// Output UI scale from the display configuration.
     pub scale_percent: u16,
+    /// User preference for desktop icon/label size. Always 50..=200.
+    pub entry_scale_percent: u16,
     pub cell_width: i32,
     pub cell_height: i32,
     pub columns: i32,
@@ -18,21 +21,45 @@ pub struct GridConfig {
 impl GridConfig {
     #[must_use]
     pub fn compute(work_area: Rect, scale_percent: u16) -> Self {
-        let scale = if matches!(scale_percent, 100 | 125 | 150 | 175 | 200) {
+        Self::compute_with_entry_scale(work_area, scale_percent, 100)
+    }
+
+    /// Output scale and the desktop entry preference multiply: cell spacing grows
+    /// with the icons and labels so neighbouring entries keep their own space.
+    #[must_use]
+    pub fn compute_with_entry_scale(
+        work_area: Rect,
+        scale_percent: u16,
+        entry_scale_percent: u16,
+    ) -> Self {
+        let scale = if (100..=200).contains(&scale_percent) && scale_percent % 5 == 0 {
             scale_percent
         } else {
             100
         };
-        let cell = ((BASE_CELL_LOGICAL as i64 * i64::from(scale) + 50) / 100) as i32;
+        let entry_scale = if (50..=200).contains(&entry_scale_percent) {
+            entry_scale_percent
+        } else {
+            100
+        };
+        let numerator = i64::from(BASE_CELL_LOGICAL) * i64::from(scale) * i64::from(entry_scale);
+        let cell = ((numerator + 5_000) / 10_000) as i32;
         let cell = cell.max(MIN_CELL_PHYSICAL);
         Self {
             work_area,
             scale_percent: scale,
+            entry_scale_percent: entry_scale,
             cell_width: cell,
             cell_height: cell,
             columns: (work_area.width / cell).max(1),
             rows: (work_area.height / cell).max(1),
         }
+    }
+
+    /// Combined output × entry scale used for glyph, label, item box, and previews.
+    #[must_use]
+    pub const fn visual_scale_percent(self) -> u16 {
+        ((self.scale_percent as u32 * self.entry_scale_percent as u32) / 100) as u16
     }
 
     #[must_use]
@@ -204,6 +231,43 @@ mod tests {
         let grid = GridConfig::compute(Rect::new(0, 0, 1920, 1080), 150);
         assert_eq!(grid.cell_width, 144);
         assert_eq!(grid.columns, 13);
+    }
+
+    #[test]
+    fn entry_scale_changes_cell_spacing_and_visual_scale_not_output_scale() {
+        let area = Rect::new(0, 0, 1920, 1080);
+        let grid = GridConfig::compute_with_entry_scale(area, 150, 120);
+        assert_eq!(grid.scale_percent, 150);
+        assert_eq!(grid.entry_scale_percent, 120);
+        assert_eq!(grid.visual_scale_percent(), 180);
+        assert_eq!(grid.cell_width, 173);
+        assert_eq!(grid.columns, 11);
+    }
+
+    #[test]
+    fn invalid_or_out_of_range_entry_scale_falls_back_to_default() {
+        let area = Rect::new(0, 0, 1920, 1080);
+        for entry in [0, 49, 201, u16::MAX] {
+            let grid = GridConfig::compute_with_entry_scale(area, 100, entry);
+            assert_eq!(grid.entry_scale_percent, 100);
+            assert_eq!(grid.cell_width, 96);
+            assert_eq!(grid.visual_scale_percent(), 100);
+        }
+    }
+
+    #[test]
+    fn five_percent_scale_steps_preserve_coordinate_roundtrip() {
+        let area = Rect::new(-1920, 24, 1920, 1056);
+        for scale in (100..=200).step_by(5) {
+            let grid = GridConfig::compute(area, scale);
+            assert_eq!(grid.scale_percent, scale);
+            assert_eq!(grid.cell_width, ((96 * u32::from(scale) + 50) / 100) as i32);
+            let cell = grid.clamp_cell(Cell::new(2, 3));
+            assert_eq!(grid.pixel_to_cell(grid.cell_to_pixel(cell)), cell);
+        }
+        for invalid in [0, 99, 101, 199, 201, u16::MAX] {
+            assert_eq!(GridConfig::compute(area, invalid).scale_percent, 100);
+        }
     }
 
     #[test]

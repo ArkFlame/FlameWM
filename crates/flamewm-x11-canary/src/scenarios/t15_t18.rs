@@ -10,8 +10,8 @@
 use std::time::{Duration, Instant};
 
 use super::interaction_regressions::{
-    bottom_right, maximized, maximized_both, native_configures, root_point, root_work_area,
-    title, wait_until, wm_state,
+    bottom_right, maximized, maximized_both, native_configures, root_point, root_work_area, title,
+    wait_until, wm_state,
 };
 use super::{xtest_button_press, xtest_button_release, xtest_drag_path, xtest_motion};
 use x11rb::connection::Connection as _;
@@ -100,7 +100,12 @@ fn frame_matches(frame: &crate::WinInfo, geometry: (i32, i32, u32, u32)) -> bool
 }
 
 fn geom_of(frame: &crate::WinInfo) -> (i32, i32, u32, u32) {
-    (i32::from(frame.x), i32::from(frame.y), u32::from(frame.width), u32::from(frame.height))
+    (
+        i32::from(frame.x),
+        i32::from(frame.y),
+        u32::from(frame.width),
+        u32::from(frame.height),
+    )
 }
 
 fn clamp_i16(value: i32) -> i16 {
@@ -112,7 +117,9 @@ fn configure_size(canary: &crate::Canary, window: u32, width: u16, height: u16) 
         .conn
         .configure_window(
             window,
-            &ConfigureWindowAux::new().width(u32::from(width)).height(u32::from(height)),
+            &ConfigureWindowAux::new()
+                .width(u32::from(width))
+                .height(u32::from(height)),
         )
         .ok()?
         .check()
@@ -125,7 +132,10 @@ fn t17_geometry(frame: &crate::WinInfo) -> String {
 }
 
 fn t17_geometry_values(geometry: (i32, i32, u32, u32)) -> String {
-    format!("{}x{}+{}+{}", geometry.2, geometry.3, geometry.0, geometry.1)
+    format!(
+        "{}x{}+{}+{}",
+        geometry.2, geometry.3, geometry.0, geometry.1
+    )
 }
 
 fn t17_atom_values(values: &[u32]) -> String {
@@ -221,9 +231,17 @@ fn t17_window_probe(canary: &crate::Canary, window: u32) -> T17WindowProbe {
         }
         Ok(reply) => {
             probe.parent = Some(reply.parent);
-            let children: Vec<String> =
-                reply.children.iter().take(8).map(ToString::to_string).collect();
-            probe.tree = format!("ok=parent:{} children:[{}]", reply.parent, children.join(","));
+            let children: Vec<String> = reply
+                .children
+                .iter()
+                .take(8)
+                .map(ToString::to_string)
+                .collect();
+            probe.tree = format!(
+                "ok=parent:{} children:[{}]",
+                reply.parent,
+                children.join(",")
+            );
         }
     }
     probe
@@ -382,7 +400,19 @@ fn t17_setup_failure(
     client_id: u32,
     frame_id: u32,
 ) -> (bool, String) {
-    (false, t17_failure(canary, row, stage, client_id, frame_id, "setup_failed", None, true))
+    (
+        false,
+        t17_failure(
+            canary,
+            row,
+            stage,
+            client_id,
+            frame_id,
+            "setup_failed",
+            None,
+            true,
+        ),
+    )
 }
 
 fn t17_restore_diagnostic(
@@ -579,7 +609,12 @@ fn normalize_t17_baseline(
     let client = canary.by_id(target.id)?;
     let _frame = input_surface(canary, &client)?;
     if client.width != baseline.client.width || client.height != baseline.client.height {
-        configure_size(canary, client.id, baseline.client.width, baseline.client.height)?;
+        configure_size(
+            canary,
+            client.id,
+            baseline.client.width,
+            baseline.client.height,
+        )?;
         if !wait_until(WAIT_MS, || {
             canary.by_id(client.id).is_some_and(|current| {
                 current.width == baseline.client.width && current.height == baseline.client.height

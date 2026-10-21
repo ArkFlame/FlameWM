@@ -91,7 +91,9 @@ impl DisplayService {
     }
 
     fn pending_id(&self) -> Option<TransactionId> {
-        self.coordinator.pending().map(|pending| pending.transaction)
+        self.coordinator
+            .pending()
+            .map(|pending| pending.transaction)
     }
 
     #[must_use]
@@ -298,7 +300,7 @@ impl DisplayService {
         if !is_supported_scale(scale_percent) {
             return Err(FlameError::new(
                 ErrorCode::InvalidArgument,
-                "shell scale must be 100/125/150/175/200",
+                "shell scale must be 100..=200 in 5% steps",
             ));
         }
         let snapshot = self.cached.as_mut().ok_or_else(|| {
@@ -396,7 +398,10 @@ mod tests {
     }
 
     fn pending_of(service: &DisplayService) -> PendingModeChange {
-        service.cached().and_then(|s| s.pending.clone()).expect("pending")
+        service
+            .cached()
+            .and_then(|s| s.pending.clone())
+            .expect("pending")
     }
 
     struct TwoModePort {
@@ -480,7 +485,10 @@ mod tests {
             .keep(&mut port, transaction, 100)
             .expect("keep mode");
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert_eq!(service.cached().map(|s| s.outputs[0].current_mode), Some(ModeId(2)));
+        assert_eq!(
+            service.cached().map(|s| s.outputs[0].current_mode),
+            Some(ModeId(2))
+        );
     }
 
     #[test]
@@ -492,7 +500,10 @@ mod tests {
         assert!(service.tick(&mut port, 15_100).expect("deadline tick"));
         assert!(!service.tick(&mut port, 15_101).expect("subsequent tick"));
         assert_eq!(service.cached().and_then(|s| s.pending.as_ref()), None);
-        assert_eq!(service.cached().map(|s| s.outputs[0].current_mode), Some(ModeId(1)));
+        assert_eq!(
+            service.cached().map(|s| s.outputs[0].current_mode),
+            Some(ModeId(1))
+        );
     }
 
     #[test]
@@ -703,7 +714,13 @@ mod tests {
         now_ms: u64,
     ) -> FlameResult<TransactionId> {
         let generation = service.refresh(port)?.generation;
-        service.begin_mode(port, &OutputId::new(output), ModeId(mode), generation, now_ms)
+        service.begin_mode(
+            port,
+            &OutputId::new(output),
+            ModeId(mode),
+            generation,
+            now_ms,
+        )
     }
 
     #[test]
@@ -801,7 +818,12 @@ mod tests {
             "one rollback at late Keep"
         );
         assert_eq!(port.output("DP-B").current, ModeId(101));
-        assert_eq!(service.cached().and_then(|snapshot| snapshot.pending.as_ref()), None);
+        assert_eq!(
+            service
+                .cached()
+                .and_then(|snapshot| snapshot.pending.as_ref()),
+            None
+        );
         assert!(
             !service
                 .tick(&mut port, 15_002)
@@ -1026,6 +1048,39 @@ mod tests {
             .find(|candidate| candidate.id.as_str() == output)
             .map(|candidate| candidate.shell_scale_percent)
             .expect("output present in snapshot")
+    }
+
+    #[test]
+    fn five_percent_scale_does_not_round_and_rejects_stale_generation() {
+        let mut port = five_output_port();
+        let mut service = DisplayService::default();
+        let generation = service.refresh(&mut port).expect("initial").generation;
+        let id = OutputId::new("O3");
+        assert!(service.set_shell_scale(&id, 135, generation).expect("135%"));
+        let next = service.cached().expect("cached").generation;
+        assert_eq!(scale_of(service.cached().unwrap(), "O3"), 135);
+        assert_eq!(
+            service
+                .set_shell_scale(&id, 195, generation)
+                .expect_err("stale")
+                .code,
+            ErrorCode::StaleRevision
+        );
+        assert!(service.set_shell_scale(&id, 195, next).expect("195%"));
+        let current = service.cached().expect("cached").generation;
+        for invalid in [99, 101, 106, 133, 201] {
+            assert_eq!(
+                service
+                    .set_shell_scale(&id, invalid, current)
+                    .expect_err("invalid")
+                    .code,
+                ErrorCode::InvalidArgument
+            );
+        }
+        assert_eq!(
+            scale_of(service.refresh(&mut port).expect("rescan"), "O3"),
+            195
+        );
     }
 
     #[test]

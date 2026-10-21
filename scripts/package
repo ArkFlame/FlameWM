@@ -4,7 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd -P)"
 VERSION="$("$ROOT/scripts/version")"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
-BUILD_DIR="$ROOT/.target/release"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.target}"
+if [[ "$TARGET_DIR" != /* ]]; then
+    TARGET_DIR="$ROOT/$TARGET_DIR"
+fi
+if [[ ! -w "$TARGET_DIR" ]]; then
+    TARGET_DIR="$ROOT/.target"
+fi
+BUILD_DIR="$TARGET_DIR/release"
 DIST="$ROOT/.target/dist"
 STAGE="$DIST/flamewm-$VERSION"
 SOURCE_ARCHIVE="$DIST/flamewm-$VERSION-source.tar.gz"
@@ -48,6 +55,8 @@ for source in \
     "$ROOT/packaging/flamewm.desktop" \
     "$ROOT/packaging/flamewm-screenshot.desktop" \
     "$ROOT/packaging/flamewm-session.desktop" \
+    "$ROOT/packaging/menus/flamewm-applications.menu" \
+    "$ROOT/packaging/notifications/dunstrc" \
     "$ROOT/packaging/pam.d/flamewm-lock" \
     "$ROOT/packaging/install-manifest.txt" \
     "$ROOT/packaging/debian/control.in" \
@@ -76,6 +85,11 @@ install -m 0644 "$ROOT/packaging/pam.d/flamewm-lock" "$STAGE/etc/pam.d/flamewm-l
 install -m 0644 "$ROOT/packaging/flamewm.desktop" "$STAGE/usr/share/applications/flamewm.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-screenshot.desktop" "$STAGE/usr/share/applications/flamewm-screenshot.desktop"
 install -m 0644 "$ROOT/packaging/flamewm-session.desktop" "$STAGE/usr/share/xsessions/flamewm.desktop"
+# Publish the KService menu selected by XDG_MENU_PREFIX=flamewm-.
+install -d -m 0755 "$STAGE/etc/xdg/menus"
+install -m 0644 "$ROOT/packaging/menus/flamewm-applications.menu" \
+    "$STAGE/etc/xdg/menus/flamewm-applications.menu"
+install -m 0644 "$ROOT/packaging/notifications/dunstrc" "$STAGE/usr/share/flamewm/dunstrc"
 install -d -m 0755 "$STAGE/usr/libexec/flamewm"
 install -m 0755 "$ROOT/scripts/flamewm-session-wrapper" "$STAGE/usr/libexec/flamewm/flamewm-session-wrapper"
 install -m 0755 "$ROOT/tools/flamewm_desktop_services.py" "$STAGE/usr/libexec/flamewm/flamewm-desktop-services"
@@ -101,12 +115,18 @@ sed -e 's/^Name=Breeze Dark/Name=FlameWM-Breeze-Dark/' \
     "$ROOT/assets/cursors/index.theme" > "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
 chmod 0644 "$STAGE/usr/share/icons/FlameWM-Breeze-Dark/index.theme"
 # Only PlagueSur and Fluent are selectable icon themes. Cursor themes
-# remain independent; do not install historical McMojave/candy icon packs.
+# remain independent; never install the historical McMojave-circle icon pack.
 mkdir -p "$STAGE/usr/share/icons"
-# Preserve the existing McMojave cursor package when present.
-if [[ -d "$ROOT/assets/themes/cursors/McMojave-cursors" ]]; then
+# McMojave is the preferred cursor when its payload is supplied in the checkout.
+if [[ -d "$ROOT/assets/themes/cursors/McMojave-cursors/cursors" \
+      && -f "$ROOT/assets/themes/cursors/McMojave-cursors/index.theme" \
+      && -f "$ROOT/assets/themes/cursors/McMojave-cursors/cursors/left_ptr" ]]; then
     cp -a "$ROOT/assets/themes/cursors/McMojave-cursors" "$STAGE/usr/share/icons/McMojave-cursors"
+else
+    echo 'FLAMEWM-PACKAGE-NOTICE: McMojave cursor payload unavailable; using installed Oxygen or emergency Breeze fallback' >&2
 fi
+# Oxygen is resolved from installed Xcursor themes; no Oxygen bytes or
+# redistribution evidence were supplied in this Pass 49 source overlay.
 for theme in PlagueSur Fluent; do
     if [[ -d "$ROOT/assets/themes/icons/$theme" ]]; then
         cp -a "$ROOT/assets/themes/icons/$theme" "$STAGE/usr/share/icons/$theme"
@@ -126,7 +146,7 @@ if command -v dpkg-deb >/dev/null 2>&1; then
         "$ROOT/packaging/debian/control.in" > "$STAGE/DEBIAN/control"
     grep -Fqx "Architecture: $BUILD_ARCH" "$STAGE/DEBIAN/control" \
         || fail 'invalid Debian binary control architecture'
-    printf '%s\n' /etc/pam.d/flamewm-lock > "$STAGE/DEBIAN/conffiles"
+    printf '%s\n' /etc/pam.d/flamewm-lock /etc/xdg/menus/flamewm-applications.menu > "$STAGE/DEBIAN/conffiles"
     chmod 0644 "$STAGE/DEBIAN/conffiles"
     install -m 0644 "$ROOT/packaging/debian/copyright" "$STAGE/usr/share/doc/flamewm/copyright"
     dpkg-deb --build --root-owner-group "$STAGE" "$DEB" >/dev/null

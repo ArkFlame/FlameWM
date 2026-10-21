@@ -26,7 +26,10 @@ pub fn resolve_identity(input: &AppIdentityInput) -> String {
     ]
     .into_iter()
     .find(|candidate| !candidate.is_empty())
-    .map_or_else(|| "unknown".to_owned(), |candidate| normalize_identity(candidate))
+    .map_or_else(
+        || "unknown".to_owned(),
+        |candidate| normalize_identity(candidate),
+    )
 }
 
 #[must_use]

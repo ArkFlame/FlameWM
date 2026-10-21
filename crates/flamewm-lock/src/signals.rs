@@ -35,7 +35,10 @@ extern "C" fn on_preview_terminate(_signum: c_int) {
 pub fn install_preview_terminate() {
     // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
     unsafe {
-        signal(SIGTERM, on_preview_terminate as extern "C" fn(c_int) as usize);
+        signal(
+            SIGTERM,
+            on_preview_terminate as extern "C" fn(c_int) as usize,
+        );
     }
 }
 

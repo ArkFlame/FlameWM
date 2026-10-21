@@ -3,9 +3,13 @@
 //! Owns a [`std::process::Child`], polls with `try_wait` only (never blocks),
 //! bounds restarts, reaps on poll (no zombies), and shuts down idempotently.
 
-use std::process::Child;
+use std::{
+    collections::{BTreeSet, VecDeque},
+    io::Read,
+    process::Child,
+};
 
-use super::protocol::{encode_command, Command, OpenRequest};
+use super::protocol::{encode_command, Command, OpenRequest, OpenResult, OpenScope};
 use flamewm_shell_core::weather::WeatherFeed;
 
 pub const DEFAULT_MAX_RESTARTS: u32 = 3;
@@ -75,12 +79,23 @@ fn set_stdin_nonblocking(child: &mut Child) -> Result<(), SupervisorError> {
     Ok(())
 }
 
+fn set_stdout_nonblocking(child: &mut Child) -> Result<(), SupervisorError> {
+    use std::os::unix::io::AsFd;
+    let stdout = child.stdout.as_mut().ok_or(SupervisorError::NotRunning)?;
+    let io = |e: rustix::io::Errno| SupervisorError::Io(e.into());
+    let flags = rustix::fs::fcntl_getfl(stdout.as_fd()).map_err(io)?;
+    rustix::fs::fcntl_setfl(stdout.as_fd(), flags | rustix::fs::OFlags::NONBLOCK).map_err(io)?;
+    Ok(())
+}
+
 fn spawn_host(program: &str) -> Result<Child, SupervisorError> {
     let mut child = std::process::Command::new(program)
         .arg("--quick-control-host")
         .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .spawn()?;
     set_stdin_nonblocking(&mut child)?;
+    set_stdout_nonblocking(&mut child)?;
     Ok(child)
 }
 
@@ -91,6 +106,9 @@ pub struct QuickControlSupervisor {
     max_restarts: u32,
     shut_down: bool,
     pending: Option<OpenRequest>,
+    response_bytes: Vec<u8>,
+    open_results: VecDeque<OpenResult>,
+    awaiting: BTreeSet<u64>,
 }
 
 impl QuickControlSupervisor {
@@ -108,6 +126,9 @@ impl QuickControlSupervisor {
             max_restarts,
             shut_down: false,
             pending: None,
+            response_bytes: Vec::new(),
+            open_results: VecDeque::new(),
+            awaiting: BTreeSet::new(),
         }
     }
 
@@ -147,9 +168,25 @@ impl QuickControlSupervisor {
         coalesce_pending_open(&mut self.pending, req.clone());
         let result = self.send(&Command::Open(req));
         if result.is_ok() {
+            if let Some(scope) = self
+                .pending
+                .as_ref()
+                .and_then(|request| request.scope.as_ref())
+            {
+                self.awaiting.insert(scope.sequence);
+            }
             self.pending = None;
         }
         result
+    }
+
+    pub fn open_scoped(
+        &mut self,
+        mut req: OpenRequest,
+        scope: OpenScope,
+    ) -> Result<(), SupervisorError> {
+        req.scope = Some(scope);
+        self.open(req)
     }
 
     /// CLOSE/SHUTDOWN are best-effort: WouldBlock is swallowed so a stalled
@@ -158,14 +195,74 @@ impl QuickControlSupervisor {
         close_result(self.send(&Command::Close))
     }
 
+    pub fn close_session(&mut self, sequence: u64) -> Result<(), SupervisorError> {
+        close_result(self.send(&Command::CloseSession(sequence)))
+    }
+
+    fn drain_open_responses(&mut self) -> Result<(), SupervisorError> {
+        use std::io::ErrorKind;
+        let Some(child) = self.child.as_mut() else {
+            return Ok(());
+        };
+        let Some(stdout) = child.stdout.as_mut() else {
+            return Err(SupervisorError::NotRunning);
+        };
+        let mut buffer = [0u8; 1024];
+        loop {
+            match stdout.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    self.response_bytes.extend_from_slice(&buffer[..n]);
+                    while let Some(end) = self.response_bytes.iter().position(|byte| *byte == b'\n')
+                    {
+                        let line = self.response_bytes.drain(..=end).collect::<Vec<_>>();
+                        if let Ok(line) = std::str::from_utf8(&line[..line.len() - 1]) {
+                            if let Ok(result) = OpenResult::decode(line.trim()) {
+                                if let Some(sequence) = open_result_sequence(result) {
+                                    self.awaiting.remove(&sequence);
+                                }
+                                self.open_results.push_back(result);
+                            }
+                        }
+                    }
+                    if self.response_bytes.len() > super::protocol::MAX_LINE_LEN {
+                        self.response_bytes.clear();
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) => return Err(classify_write_error(error)),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read available helper responses without blocking. Child exit resolves
+    /// every still outstanding OPEN so callers can release its popup lease.
+    pub fn take_open_results(&mut self) -> Result<Vec<OpenResult>, SupervisorError> {
+        self.drain_open_responses()?;
+        Ok(self.open_results.drain(..).collect())
+    }
+
     /// Non-blocking poll: reaps an exited child (`try_wait`), counts one
     /// restart while budget remains, and never treats a nonzero exit as
     /// fatal by itself. Returns the exit status when the child exited.
     pub fn poll(&mut self) -> Result<Option<std::process::ExitStatus>, SupervisorError> {
-        let Some(child) = self.child.as_mut() else { return Ok(None) };
-        let Some(status) = child.try_wait()? else { return Ok(None) };
+        self.drain_open_responses()?;
+        let Some(child) = self.child.as_mut() else {
+            return Ok(None);
+        };
+        let Some(status) = child.try_wait()? else {
+            return Ok(None);
+        };
         // Reaped via try_wait above; drop handle so no zombie lingers.
         self.child = None;
+        self.response_bytes.clear();
+        self.open_results.extend(
+            std::mem::take(&mut self.awaiting)
+                .into_iter()
+                .map(OpenResult::HostExited),
+        );
         if self.shut_down {
             return Ok(Some(status));
         }
@@ -202,7 +299,15 @@ impl QuickControlSupervisor {
     pub fn restart_count(self: &Self) -> u32 {
         self.restarts
     }
+}
 
+fn open_result_sequence(result: OpenResult) -> Option<u64> {
+    match result {
+        OpenResult::Presented(sequence)
+        | OpenResult::Refused(sequence)
+        | OpenResult::RolledBack(sequence)
+        | OpenResult::HostExited(sequence) => Some(sequence),
+    }
 }
 
 impl Drop for QuickControlSupervisor {
@@ -224,7 +329,51 @@ mod tests {
             work_area: Rect::new(0, 0, 100, 100),
             panel_edge: PanelEdge::Bottom,
             dock: None,
+            scope: None,
         }
+    }
+
+    #[test]
+    fn helper_death_resolves_unacknowledged_scoped_open() {
+        use flamewm_api::OutputId;
+        let mut sup = QuickControlSupervisor::with_max_restarts("false".to_owned(), 0);
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "IFS= read -r _; exit 0"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn helper fixture");
+        set_stdin_nonblocking(&mut child).expect("nonblocking stdin");
+        set_stdout_nonblocking(&mut child).expect("nonblocking stdout");
+        sup.child = Some(child);
+        let sequence = 55;
+        sup.open_scoped(
+            req(),
+            OpenScope {
+                output: OutputId::new("A"),
+                topology_generation: 3,
+                sequence,
+            },
+        )
+        .expect("send scoped open");
+        let mut exited = false;
+        for _ in 0..100 {
+            match sup.poll() {
+                Ok(Some(_)) | Err(SupervisorError::RestartBudgetExhausted) => {
+                    exited = true;
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => panic!("poll helper: {error}"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(exited, "helper fixture should exit after receiving OPEN");
+        assert_eq!(
+            sup.take_open_results().expect("drain helper outcomes"),
+            vec![OpenResult::HostExited(sequence)]
+        );
+        sup.shutdown().expect("shutdown restarted child");
     }
 
     #[test]

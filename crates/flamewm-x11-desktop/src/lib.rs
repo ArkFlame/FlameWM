@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use flamewm_api::applications::ApplicationLaunchOptions;
 use flamewm_api::background::BackgroundState;
-use flamewm_api::display::{DisplayMode, DisplaySnapshot, OutputSnapshot};
+use flamewm_api::display::{DisplaySnapshot, OutputSnapshot};
 use flamewm_api::input::PointerPosition;
 use flamewm_api::ports::*;
 use flamewm_api::session::{SessionAction, SessionCapabilities};
@@ -22,8 +22,8 @@ use flamewm_api::workspace::{
     WorkspacePlan, WorkspacePlanKind, WorkspaceSnapshot, remapped_desktop,
 };
 use flamewm_api::{
-    DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, Size,
-    TransactionId, WindowRef, WorkspaceRef,
+    DesktopAppId, ErrorCode, FlameError, FlameResult, ModeId, OutputId, Point, Rect, TransactionId,
+    WindowRef, WorkspaceRef,
 };
 use flamewm_applications::ApplicationCatalog;
 use shared::PendingMode;
@@ -803,8 +803,11 @@ impl WindowPort for X11Desktop {
         Ok(windows
             .into_iter()
             .filter(|&window| {
-                self.property_bytes(window, "WM_CLASS").is_ok_and(|v| !v.is_empty())
-                    || self.property_bytes(window, "_NET_WM_NAME").is_ok_and(|v| !v.is_empty())
+                self.property_bytes(window, "WM_CLASS")
+                    .is_ok_and(|v| !v.is_empty())
+                    || self
+                        .property_bytes(window, "_NET_WM_NAME")
+                        .is_ok_and(|v| !v.is_empty())
             })
             .filter_map(|window| self.get(WindowRef::new(u64::from(window), 0)).ok())
             .collect())
@@ -855,24 +858,9 @@ impl WindowPort for X11Desktop {
         )
     }
     fn set_outer_geometry(&mut self, w: WindowRef, geometry: Rect) -> FlameResult<()> {
-        if !geometry.is_valid() {
-            return Err(FlameError::invalid("window geometry is invalid"));
-        }
+        let geometry = shared::window_geometry_aux(geometry)?;
         self.conn
-            .configure_window(
-                self.check_window(w)?,
-                &xproto::ConfigureWindowAux::new()
-                    .x(geometry.x)
-                    .y(geometry.y)
-                    .width(
-                        u32::try_from(geometry.width)
-                            .map_err(|_| FlameError::invalid("window width is invalid"))?,
-                    )
-                    .height(
-                        u32::try_from(geometry.height)
-                            .map_err(|_| FlameError::invalid("window height is invalid"))?,
-                    ),
-            )
+            .configure_window(self.check_window(w)?, &geometry)
             .map_err(io_error)?
             .check()
             .map_err(io_error)?;
@@ -886,17 +874,7 @@ impl WindowPort for X11Desktop {
     }
     fn feature_snapshot(&self, w: WindowRef) -> FlameResult<WindowFeatureSnapshot> {
         let states = self.property32(self.check_window(w)?, "_NET_WM_STATE")?;
-        let has = |n: &str| states.contains(&self.atom(n));
-        Ok(WindowFeatureSnapshot {
-            sticky: has("_NET_WM_STATE_STICKY"),
-            modal: has("_NET_WM_STATE_MODAL"),
-            shaded: has("_NET_WM_STATE_SHADED"),
-            skip_taskbar: has("_NET_WM_STATE_SKIP_TASKBAR"),
-            skip_pager: has("_NET_WM_STATE_SKIP_PAGER"),
-            above: has("_NET_WM_STATE_ABOVE"),
-            below: has("_NET_WM_STATE_BELOW"),
-            demands_attention: has("_NET_WM_STATE_DEMANDS_ATTENTION"),
-        })
+        Ok(shared::feature_snapshot(&states, |name| self.atom(name)))
     }
     fn apply_window_feature(
         &mut self,
@@ -931,18 +909,7 @@ impl WorkspacePort for X11Desktop {
             .copied()
             .unwrap_or(0) as usize;
         let bytes = self.property_bytes(self.root, "_NET_DESKTOP_NAMES")?;
-        let names = bytes
-            .split(|b| *b == 0)
-            .filter(|v| !v.is_empty())
-            .map(|v| String::from_utf8_lossy(v).into_owned())
-            .collect();
-        Ok(WorkspaceSnapshot {
-            revision: 0,
-            count: count.max(1),
-            active_index: active_index.min(count.max(1) - 1),
-            last_index: None,
-            names,
-        })
+        Ok(shared::workspace_snapshot(count, active_index, &bytes, 0))
     }
     fn activate_workspace(&mut self, index: usize, expected_revision: u64) -> FlameResult<()> {
         let current = self.workspace_snapshot()?;
@@ -1104,17 +1071,8 @@ impl TrayPort for X11Desktop {
 impl WorkAreaPort for X11Desktop {
     fn base_work_areas(&self) -> FlameResult<Vec<(OutputId, Rect)>> {
         let work_area = self.root_work_area()?;
-        Ok(self
-            .display_snapshot()?
-            .outputs
-            .into_iter()
-            .filter_map(|output| {
-                output
-                    .geometry
-                    .intersection(work_area)
-                    .map(|area| (output.id, area))
-            })
-            .collect())
+        let outputs = self.display_snapshot()?;
+        Ok(shared::base_work_areas(work_area, &outputs.outputs))
     }
     fn apply_flame_reservations(&mut self, _reservations: &[(OutputId, Rect)]) -> FlameResult<()> {
         Err(unsupported(
@@ -1134,7 +1092,9 @@ impl DisplayPort for X11Desktop {
             .map_err(io_error)?;
         // Stable physical output identity: never infer primary from RandR
         // resource enumeration order (it can change after hotplug/rotation).
-        let primary_output = self.conn.randr_get_output_primary(self.root)
+        let primary_output = self
+            .conn
+            .randr_get_output_primary(self.root)
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .map(|reply| reply.output)
@@ -1170,22 +1130,7 @@ impl DisplayPort for X11Desktop {
             } else {
                 (Rect::default(), ModeId(0))
             };
-            let modes = info
-                .modes
-                .iter()
-                .filter_map(|id| resources.modes.iter().find(|m| m.id == *id))
-                .map(|m| DisplayMode {
-                    id: ModeId(u64::from(m.id)),
-                    resolution: Size::new(i32::from(m.width), i32::from(m.height)),
-                    refresh_millihz: if m.htotal == 0 || m.vtotal == 0 {
-                        0
-                    } else {
-                        ((m.dot_clock as u64 * 1000) / u64::from(m.htotal) / u64::from(m.vtotal))
-                            as i32
-                    },
-                    preferred: info.modes.first() == Some(&m.id),
-                })
-                .collect::<Vec<_>>();
+            let modes = shared::display_modes(&info.modes, &resources.modes);
             outputs.push(OutputSnapshot {
                 id: OutputId::new(String::from_utf8_lossy(&info.name).into_owned()),
                 connector: String::from_utf8_lossy(&info.name).into_owned(),

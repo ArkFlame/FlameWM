@@ -255,7 +255,10 @@ mod tests {
 
     #[test]
     fn entry_menu_maps_trash_to_empty_trash_only() {
-        assert_eq!(entry_context_menu(true, true), vec![EntryMenuAction::EmptyTrash]);
+        assert_eq!(
+            entry_context_menu(true, true),
+            vec![EntryMenuAction::EmptyTrash]
+        );
         assert_eq!(
             entry_context_menu(false, true),
             vec![

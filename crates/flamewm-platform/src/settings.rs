@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 use std::time::Duration;
 
 use flamewm_api::panels::PanelEdge;
@@ -13,6 +12,7 @@ use flamewm_api::shortcuts::{
 use flamewm_api::{ErrorCode, FlameError, FlameResult};
 
 use crate::chrome::parse_hex_rgb;
+use crate::storage::write_atomic_text;
 
 const KNOWN_HOTKEYS: [&str; 8] = [
     ACTION_TOGGLE_START_MENU,
@@ -196,6 +196,8 @@ pub struct ProductSettings {
     /// When enabled, the desktop stretches one wallpaper across all outputs.
     pub share_wallpaper: bool,
     pub desktop_selection_fill_opacity: u8,
+    /// Desktop entry (icon + label) scale, in percent. 100 keeps the default size.
+    pub desktop_entry_scale_percent: u16,
     pub window_snap_preview_fill_opacity: u8,
     pub snap_preview_enabled: bool,
     pub focus_follows_mouse: bool,
@@ -255,6 +257,7 @@ pub struct ProductSettings {
     pub cursor_theme: String,
     /// Cursor pixel size; one of 24, 32, 48, 64.
     pub cursor_size: u16,
+    pub cursor_shadow: bool,
     pub animations_enabled: bool,
     pub animation_speed: u16,
     pub start_animation: AnimationStyle,
@@ -304,6 +307,7 @@ impl Default for ProductSettings {
             wallpaper_fit: WallpaperFit::Fill,
             share_wallpaper: false,
             desktop_selection_fill_opacity: 20,
+            desktop_entry_scale_percent: 100,
             window_snap_preview_fill_opacity: 20,
             snap_preview_enabled: true,
             focus_follows_mouse: false,
@@ -356,6 +360,7 @@ impl Default for ProductSettings {
             titlebar_close_pressed_color: String::new(),
             cursor_theme: String::new(),
             cursor_size: 24,
+            cursor_shadow: true,
             animations_enabled: true,
             animation_speed: 100,
             start_animation: AnimationStyle::Slide,
@@ -414,7 +419,10 @@ impl ProductSettings {
     /// Effective window-open style. A disabled toggle or the `none` style both mean no animation.
     #[must_use]
     pub fn window_open_animation_style(&self) -> AnimationStyle {
-        gated_animation(self.window_open_animation_enabled, self.window_open_animation)
+        gated_animation(
+            self.window_open_animation_enabled,
+            self.window_open_animation,
+        )
     }
 
     /// Taskbar backdrop from the shared surface policy. See [`Backdrop`] for the blur-to-radius mapping.
@@ -455,6 +463,9 @@ impl ProductSettings {
         }
         if self.desktop_selection_fill_opacity > 60 {
             return invalid("DesktopSelectionFillOpacity must be 0..60");
+        }
+        if !(50..=200).contains(&self.desktop_entry_scale_percent) {
+            return invalid("DesktopEntryScalePercent must be 50..200");
         }
         if self.window_snap_preview_fill_opacity > 60 {
             return invalid("WindowSnapPreviewFillOpacity must be 0..60");
@@ -581,8 +592,8 @@ impl ProductSettings {
             if !is_valid_output_id(output) {
                 return invalid("perOutputScale output id is invalid");
             }
-            if !matches!(*scale, 100 | 125 | 150 | 175 | 200) {
-                return invalid("perOutputScale supports only 100/125/150/175/200");
+            if !crate::scale::is_supported_scale(*scale) {
+                return invalid("perOutputScale supports 100..=200 in 5% steps");
             }
         }
         for action in self.hotkeys.keys() {
@@ -705,7 +716,8 @@ impl ConfigStore {
         // One shared shape: square only when every present legacy button agrees; otherwise circle.
         if !has_button_style && !legacy_square_flags.is_empty() {
             let all_square = legacy_square_flags.iter().all(|square| *square);
-            snapshot.titlebar_button_style = if all_square { "square" } else { "circle" }.to_owned();
+            snapshot.titlebar_button_style =
+                if all_square { "square" } else { "circle" }.to_owned();
         }
         if snapshot.decoration == "ios" {
             "rounded".clone_into(&mut snapshot.decoration);
@@ -756,7 +768,10 @@ impl ConfigStore {
         // A mode is written only when the legacy inference from the saved values would pick a
         // different one, so defaults stay silent and Default with a saved path still round-trips.
         if snapshot.wallpaper_mode != legacy_wallpaper_mode(snapshot) {
-            lines.push(format!("wallpaperMode={}", snapshot.wallpaper_mode.as_str()));
+            lines.push(format!(
+                "wallpaperMode={}",
+                snapshot.wallpaper_mode.as_str()
+            ));
         }
         if snapshot.lock_background_mode != legacy_lock_background_mode(snapshot) {
             lines.push(format!(
@@ -801,35 +816,7 @@ impl ConfigStore {
                 "settings persistence path is empty",
             ));
         }
-        let parent = path
-            .parent()
-            .filter(|candidate| !candidate.as_os_str().is_empty());
-        if let Some(parent) = parent {
-            fs::create_dir_all(parent).map_err(io_error)?;
-        }
-        let temp = temp_path(path);
-        let write_result = (|| -> io::Result<()> {
-            let mut file = OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&temp)?;
-            file.write_all(Self::serialize(snapshot).as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp, path)?;
-            Ok(())
-        })();
-        if let Err(error) = write_result {
-            let _ = fs::remove_file(&temp);
-            return Err(io_error(error));
-        }
-        if let Some(parent) = parent {
-            if let Ok(directory) = File::open(parent) {
-                let _ = directory.sync_all();
-            }
-        }
-        Ok(())
+        write_atomic_text(path, &Self::serialize(snapshot)).map_err(io_error)
     }
 }
 
@@ -970,7 +957,13 @@ macro_rules! text_enum_slot {
     )*};
 }
 
-text_enum_slot!(LockClockFormat, TaskbarStyle, BackgroundMode, WallpaperFit, ScreensaverMode);
+text_enum_slot!(
+    LockClockFormat,
+    TaskbarStyle,
+    BackgroundMode,
+    WallpaperFit,
+    ScreensaverMode
+);
 
 impl Slot for AppearanceMode {
     fn to_value(&self) -> SettingValue {
@@ -1041,6 +1034,7 @@ stable_settings! {
     (false, desktop, "wallpaperColor", wallpaper_color),
     (false, desktop, "shareWallpaper", share_wallpaper),
     (true, desktop, "DesktopSelectionFillOpacity", desktop_selection_fill_opacity),
+    (true, desktop, "DesktopEntryScalePercent", desktop_entry_scale_percent),
     (true, windows, "WindowSnapPreviewFillOpacity", window_snap_preview_fill_opacity),
     (true, fonts, "fontFamily", font_family),
     (true, fonts, "fontBold", font_bold),
@@ -1079,6 +1073,7 @@ stable_settings! {
     (false, windows, "snapPreviewEnabled", snap_preview_enabled),
     (false, windows, "focusFollowsMouse", focus_follows_mouse),
     (false, appearance, "cursorSize", cursor_size),
+    (false, appearance, "cursorShadow", cursor_shadow),
     (false, appearance, "accentOpacity", accent_opacity),
     (false, appearance, "decoration", decoration),
     (false, windows, "titlebarButtonStyle", titlebar_button_style),
@@ -1124,7 +1119,11 @@ stable_settings! {
 
 #[must_use]
 pub(crate) fn stable_setting(key: &str) -> Option<&'static StableSetting> {
-    let key = if key == "wallpaperShare" { "shareWallpaper" } else { key };
+    let key = if key == "wallpaperShare" {
+        "shareWallpaper"
+    } else {
+        key
+    };
     STABLE_SETTINGS.iter().find(|row| row.key == key)
 }
 
@@ -1178,7 +1177,10 @@ fn parse_bool(value: &str, name: &str) -> FlameResult<bool> {
 }
 
 fn is_valid_output_id(output: &str) -> bool {
-    !output.is_empty() && !output.chars().any(|c| c.is_whitespace() || c.is_control() || c == '=')
+    !output.is_empty()
+        && !output
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '=')
 }
 
 fn validate_color(value: &str, allow_empty: bool, name: &str) -> FlameResult<()> {
@@ -1242,10 +1244,6 @@ fn is_stable_key(key: &str) -> bool {
         || key.starts_with("hotkey.")
 }
 
-fn temp_path(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.tmp", path.display()))
-}
-
 fn invalid<T>(message: &'static str) -> FlameResult<T> {
     Err(FlameError::new(ErrorCode::InvalidArgument, message))
 }
@@ -1278,9 +1276,7 @@ mod tests {
         for line in lines {
             let line = line.as_ref();
             assert_eq!(
-                load(&format!("revision=2\n{line}\n"))
-                    .expect_err(line)
-                    .code,
+                load(&format!("revision=2\n{line}\n")).expect_err(line).code,
                 ErrorCode::InvalidArgument,
                 "{line} must be rejected"
             );
@@ -1300,24 +1296,21 @@ mod tests {
 
     #[test]
     fn unset_icon_theme_defaults_to_plaguesur_and_writes_nothing() {
-        let parsed = load("revision=2\n")
-            .expect("valid snapshot");
+        let parsed = load("revision=2\n").expect("valid snapshot");
         assert_eq!(parsed.icon_theme, "PlagueSur");
         assert!(!ConfigStore::serialize(&parsed).contains("iconTheme"));
     }
 
     #[test]
     fn legacy_explicit_mcmojave_icon_theme_is_kept_verbatim() {
-        let parsed = load("revision=2\niconTheme=McMojave-circle\n")
-            .expect("legacy icon theme");
+        let parsed = load("revision=2\niconTheme=McMojave-circle\n").expect("legacy icon theme");
         assert_eq!(parsed.icon_theme, "McMojave-circle");
         assert!(ConfigStore::serialize(&parsed).contains("iconTheme=McMojave-circle\n"));
     }
 
     #[test]
     fn explicit_icon_theme_is_kept_and_written() {
-        let parsed = load("revision=2\niconTheme=*:-HighContrast\n")
-            .expect("explicit icon theme");
+        let parsed = load("revision=2\niconTheme=*:-HighContrast\n").expect("explicit icon theme");
         assert_eq!(parsed.icon_theme, "*:-HighContrast");
         let text = assert_round_trip(&parsed);
         assert!(text.contains("iconTheme=*:-HighContrast\n"));
@@ -1325,8 +1318,7 @@ mod tests {
 
     #[test]
     fn appearance_snapshot_round_trip_defaults_to_dark() {
-        let parsed = load("revision=2\n")
-            .expect("valid snapshot");
+        let parsed = load("revision=2\n").expect("valid snapshot");
         assert_eq!(parsed.appearance, AppearanceMode::Dark);
         let text = ConfigStore::serialize(&ProductSettings::default());
         assert!(text.contains("appearance=dark\n"));
@@ -1346,8 +1338,7 @@ mod tests {
 
     #[test]
     fn parser_preserves_unknown_compatible_keys() {
-        let parsed = load("revision=2\nfutureFeature=value\n")
-            .expect("valid future key");
+        let parsed = load("revision=2\nfutureFeature=value\n").expect("valid future key");
         assert_eq!(
             parsed.unknown_keys.get("futureFeature"),
             Some(&"value".to_owned())
@@ -1366,6 +1357,39 @@ mod tests {
                 .code,
             ErrorCode::StaleRevision
         );
+    }
+
+    #[test]
+    fn five_percent_scales_persist_without_quantization() {
+        for percent in (100..=200).step_by(5) {
+            let mut settings = ProductSettings::default();
+            settings
+                .per_output_scale
+                .insert("eDP-1".to_owned(), percent);
+            settings.validate().expect("valid five-percent scale");
+            let saved = ConfigStore::serialize(&settings);
+            assert!(saved.contains(&format!("scale.eDP-1={percent}\n")));
+            let parsed = load(&saved).expect("saved scale is readable");
+            assert_eq!(parsed.per_output_scale.get("eDP-1"), Some(&percent));
+        }
+        for percent in [99, 101, 104, 106, 133, 199, 201] {
+            let mut settings = ProductSettings::default();
+            settings
+                .per_output_scale
+                .insert("eDP-1".to_owned(), percent);
+            assert!(settings.validate().is_err(), "{percent} cannot persist");
+        }
+    }
+
+    #[test]
+    fn cursor_shadow_defaults_to_true_and_round_trips() {
+        let defaults = ProductSettings::default();
+        assert!(defaults.cursor_shadow);
+        let mut disabled = defaults;
+        disabled.cursor_shadow = false;
+        let saved = ConfigStore::serialize(&disabled);
+        assert!(saved.contains("cursorShadow=false\n"));
+        assert!(!load(&saved).expect("reload cursorShadow").cursor_shadow);
     }
 
     #[test]
@@ -1406,16 +1430,15 @@ mod tests {
 
     #[test]
     fn background_modes_migrate_from_legacy_values_when_keys_are_absent() {
-        let legacy_wallpaper = load("revision=2\nwallpaper=/home/u/a.png\n")
-            .expect("legacy wallpaper");
+        let legacy_wallpaper =
+            load("revision=2\nwallpaper=/home/u/a.png\n").expect("legacy wallpaper");
         assert_eq!(legacy_wallpaper.wallpaper_mode, BackgroundMode::Custom);
         let empty_wallpaper = load("revision=2\n").expect("empty wallpaper");
         assert_eq!(empty_wallpaper.wallpaper_mode, BackgroundMode::Default);
-        let custom_lock = load("revision=2\nlockBackgroundImage=/home/u/bg.png\n")
-            .expect("custom lock");
+        let custom_lock =
+            load("revision=2\nlockBackgroundImage=/home/u/bg.png\n").expect("custom lock");
         assert_eq!(custom_lock.lock_background_mode, BackgroundMode::Custom);
-        let solid_lock = load("revision=2\nlockBackgroundColor=#102030\n")
-            .expect("solid lock");
+        let solid_lock = load("revision=2\nlockBackgroundColor=#102030\n").expect("solid lock");
         assert_eq!(solid_lock.lock_background_mode, BackgroundMode::Solid);
         let default_lock = load("revision=2\n").expect("default lock");
         assert_eq!(default_lock.lock_background_mode, BackgroundMode::Default);
@@ -1424,10 +1447,10 @@ mod tests {
     #[test]
     fn explicit_background_mode_wins_over_saved_path_and_keeps_it() {
         let parsed = load(
-                "revision=2\nwallpaperMode=default\nwallpaper=/home/u/a.png\n\
+            "revision=2\nwallpaperMode=default\nwallpaper=/home/u/a.png\n\
                  lockBackgroundMode=solid\nlockBackgroundImage=/home/u/bg.png\n",
-            )
-            .expect("explicit modes");
+        )
+        .expect("explicit modes");
         assert_eq!(parsed.wallpaper_mode, BackgroundMode::Default);
         assert_eq!(parsed.wallpaper, "/home/u/a.png");
         assert_eq!(parsed.lock_background_mode, BackgroundMode::Solid);
@@ -1436,7 +1459,11 @@ mod tests {
 
     #[test]
     fn background_modes_round_trip_and_clear_differs_from_default() {
-        for mode in [BackgroundMode::Default, BackgroundMode::Solid, BackgroundMode::Custom] {
+        for mode in [
+            BackgroundMode::Default,
+            BackgroundMode::Solid,
+            BackgroundMode::Custom,
+        ] {
             let mut snapshot = ProductSettings::default();
             snapshot.revision = 9;
             snapshot.wallpaper = "/home/u/a.png".to_owned();
@@ -1484,18 +1511,16 @@ mod tests {
 
     #[test]
     fn lock_background_blur_and_dim_legacy_file_loads_defaults() {
-        let parsed = load("revision=1\nlockBackgroundColor=#102030\n")
-            .expect("legacy lock file");
+        let parsed = load("revision=1\nlockBackgroundColor=#102030\n").expect("legacy lock file");
         assert_eq!(parsed.lock_background_blur_percent, 40);
         assert_eq!(parsed.lock_background_dim_percent, 25);
     }
 
     #[test]
     fn lock_background_blur_and_dim_round_trip_bounds() {
-        let parsed = load(
-                "revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n",
-            )
-            .expect("bounds are valid");
+        let parsed =
+            load("revision=2\nlockBackgroundBlurPercent=100\nlockBackgroundDimPercent=80\n")
+                .expect("bounds are valid");
         assert_eq!(parsed.lock_background_blur_percent, 100);
         assert_eq!(parsed.lock_background_dim_percent, 80);
         let text = assert_round_trip(&parsed);
@@ -1537,11 +1562,11 @@ mod tests {
     #[test]
     fn lock_screen_round_trips_non_default_values() {
         let parsed = load(
-                "revision=2\nlockBackgroundColor=#102030\nlockBackgroundImage=/usr/share/bg.png\n\
+            "revision=2\nlockBackgroundColor=#102030\nlockBackgroundImage=/usr/share/bg.png\n\
                  lockClockFormat=12h\nlockShowDate=false\nlockShowUsername=0\n\
                  lockTimeoutMinutes=240\nlockOnSuspend=false\n",
-            )
-            .expect("valid lock settings");
+        )
+        .expect("valid lock settings");
         assert_eq!(parsed.lock_background_color, "#102030");
         assert_eq!(parsed.lock_background_image, "/usr/share/bg.png");
         assert_eq!(parsed.lock_clock_format, LockClockFormat::Twelve);
@@ -1575,8 +1600,7 @@ mod tests {
 
     #[test]
     fn lock_timeout_zero_means_never_and_is_accepted() {
-        let parsed = load("revision=2\nlockTimeoutMinutes=0\n")
-            .expect("zero timeout is never");
+        let parsed = load("revision=2\nlockTimeoutMinutes=0\n").expect("zero timeout is never");
         assert_eq!(parsed.lock_timeout_minutes, 0);
     }
 
@@ -1605,11 +1629,11 @@ mod tests {
     #[test]
     fn taskbar_style_and_blur_round_trip_and_opaque_has_no_radius() {
         let parsed = load(
-                "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
+            "revision=2\ntaskbarStyle=classic\ntaskbarFloatingMargin=32\n\
                  taskbarFloatingRadius=0\nsurfaceBlurPercent=100\nsurfaceOpacity=100\n\
                  startMenuBlurPercent=0\nstartMenuOpacity=50\n",
-            )
-            .expect("valid taskbar settings");
+        )
+        .expect("valid taskbar settings");
         assert_eq!(parsed.taskbar_style, TaskbarStyle::Classic);
         assert_eq!(parsed.taskbar_floating_margin, 32);
         assert_eq!(parsed.taskbar_floating_radius, 0);
@@ -1668,11 +1692,11 @@ mod tests {
     #[test]
     fn screensaver_round_trips_non_default_values() {
         let parsed = load(
-                "revision=2\nscreensaverMode=none\nscreensaverAfterLockMinutes=0\n\
+            "revision=2\nscreensaverMode=none\nscreensaverAfterLockMinutes=0\n\
                  screensaverNumRibbons=12\nscreensaverRibbonWidthTenths=280\n\
                  screensaverSpanMonitors=true\nscreensaverDisplayOffMinutes=240\n",
-            )
-            .expect("valid screensaver settings");
+        )
+        .expect("valid screensaver settings");
         assert_eq!(
             parsed.screensaver(),
             ScreensaverSettings {
@@ -1717,6 +1741,32 @@ mod tests {
     }
 
     #[test]
+    fn persisted_settings_are_exactly_the_serialized_bytes() {
+        let dir = std::env::temp_dir().join(format!("flamewm-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        let path = dir.join("settings.conf");
+        let mut settings = ProductSettings::default();
+        settings.revision = 9;
+        settings
+            .unknown_keys
+            .insert("extension.key".into(), "value".into());
+        let expected = ConfigStore::serialize(&settings);
+
+        ConfigStore::persist(&path, &settings).expect("persist settings");
+
+        assert_eq!(std::fs::read(path).unwrap(), expected.as_bytes());
+    }
+
+    #[test]
+    fn older_settings_without_new_fields_keep_defaults() {
+        let settings = load("revision=4\naccent=#112233\n").expect("legacy settings");
+        assert_eq!(settings.revision, 4);
+        assert_eq!(settings.accent, "#112233");
+        assert!(settings.cursor_shadow);
+    }
+
+    #[test]
     fn new_appearance_keys_default_and_stay_unwritten_when_unchanged() {
         let defaults = ProductSettings::default();
         assert_eq!(defaults.start_menu_color, "#191b1d");
@@ -1756,9 +1806,9 @@ mod tests {
         // Old files carry titlebarColor; even an invalid value must not error or touch surface*.
         for value in ["#A0B0C0", "#12345"] {
             let legacy = load(&format!(
-                    "revision=3\ntitlebarColor={value}\nsurfaceColor=#445566\n"
-                ))
-                .expect("legacy titlebarColor tolerated");
+                "revision=3\ntitlebarColor={value}\nsurfaceColor=#445566\n"
+            ))
+            .expect("legacy titlebarColor tolerated");
             assert_eq!(legacy.surface_color, "#445566");
             assert_eq!(
                 legacy.surface_opacity,
@@ -1800,10 +1850,7 @@ mod tests {
         let serialized = ConfigStore::serialize(&parsed);
         assert!(serialized.contains("animationsEnabled=false\n"));
         assert!(serialized.contains("futureFeature=kept\n"));
-        assert_eq!(
-            load(&serialized).expect("round trip"),
-            parsed
-        );
+        assert_eq!(load(&serialized).expect("round trip"), parsed);
     }
 
     #[test]
@@ -1814,29 +1861,27 @@ mod tests {
         assert_eq!(defaults.surface_blur_percent, 80);
         assert!(!ConfigStore::serialize(&defaults).contains("surface"));
 
-        let legacy = load(
-                "revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n",
-            )
-            .expect("legacy taskbar surface");
+        let legacy =
+            load("revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n")
+                .expect("legacy taskbar surface");
         assert_eq!(legacy.surface_color, "#112233");
         assert_eq!(legacy.surface_opacity, 70);
         assert_eq!(legacy.surface_blur_percent, 30);
         assert_eq!(legacy.taskbar_color, "#112233");
 
-        let explicit = load(
-                "revision=3\nsurfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
-            )
-            .expect("explicit surface");
+        let explicit =
+            load("revision=3\nsurfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n")
+                .expect("explicit surface");
         assert_eq!(explicit.surface_color, "#445566");
         assert_eq!(explicit.surface_opacity, 10);
         assert_eq!(explicit.surface_blur_percent, 5);
 
         // Legacy taskbar* keys alongside surface* are tolerated on read and ignored for surface values.
         let tolerated = load(
-                "revision=3\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n\
+            "revision=3\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n\
                  surfaceColor=#445566\nsurfaceOpacity=10\nsurfaceBlurPercent=5\n",
-            )
-            .expect("legacy taskbar keys tolerated");
+        )
+        .expect("legacy taskbar keys tolerated");
         assert_eq!(tolerated.surface_color, "#445566");
         assert_eq!(tolerated.surface_opacity, 10);
         assert_eq!(tolerated.surface_blur_percent, 5);
@@ -1849,8 +1894,9 @@ mod tests {
         assert_eq!(backdrop.blur_percent, 5);
 
         // Legacy keys are read but never written; the surface pair carries the value forward.
-        let migrated = load("revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n")
-            .expect("legacy taskbar surface");
+        let migrated =
+            load("revision=2\ntaskbarColor=#112233\ntaskbarOpacity=70\ntaskbarBlurPercent=30\n")
+                .expect("legacy taskbar surface");
         let text = ConfigStore::serialize(&migrated);
         assert!(!text.contains("taskbarColor"));
         assert!(!text.contains("taskbarOpacity"));
@@ -1860,55 +1906,36 @@ mod tests {
         assert!(text.contains("surfaceBlurPercent=30\n"));
         assert!(stable_setting("taskbarOpacity").is_none());
 
-        let round = load(&ConfigStore::serialize(&explicit))
-            .expect("round trip");
+        let round = load(&ConfigStore::serialize(&explicit)).expect("round trip");
         assert_eq!(round, explicit);
-        assert!(
-            load("revision=4\nsurfaceOpacity=101\n")
-                .is_err()
-        );
-        assert!(
-            load("revision=4\nsurfaceColor=red\n")
-                .is_err()
-        );
-        assert!(
-            load("revision=4\nsurfaceBlurPercent=101\n")
-                .is_err()
-        );
+        assert!(load("revision=4\nsurfaceOpacity=101\n").is_err());
+        assert!(load("revision=4\nsurfaceColor=red\n").is_err());
+        assert!(load("revision=4\nsurfaceBlurPercent=101\n").is_err());
     }
 
     #[test]
     fn decoration_ios_parses_as_rounded_and_squared_is_accepted() {
-        let ios = load("revision=2\ndecoration=ios\n")
-            .expect("legacy ios");
+        let ios = load("revision=2\ndecoration=ios\n").expect("legacy ios");
         assert_eq!(ios.decoration, "rounded");
-        let squared = load("revision=2\ndecoration=squared\n")
-            .expect("squared");
+        let squared = load("revision=2\ndecoration=squared\n").expect("squared");
         assert_eq!(squared.decoration, "squared");
-        assert!(
-            load("revision=2\ndecoration=neon\n")
-                .is_err()
-        );
+        assert!(load("revision=2\ndecoration=neon\n").is_err());
     }
 
     #[test]
     fn floating_margin_defaults_to_four_and_stored_value_is_kept() {
         assert_eq!(
-            load("revision=2\n")
-                .expect("unset")
-                .taskbar_floating_margin,
+            load("revision=2\n").expect("unset").taskbar_floating_margin,
             4
         );
-        let legacy = load("revision=2\ntaskbarFloatingMargin=8\n")
-            .expect("stored 8");
+        let legacy = load("revision=2\ntaskbarFloatingMargin=8\n").expect("stored 8");
         assert_eq!(legacy.taskbar_floating_margin, 8);
     }
 
     #[test]
     fn legacy_titlebar_button_styles_map_to_one_shape_and_are_never_written() {
         let parse = |body: &str| {
-            load(&format!("revision=2\n{body}\n"))
-                .expect("legacy titlebar styles parse")
+            load(&format!("revision=2\n{body}\n")).expect("legacy titlebar styles parse")
         };
         let all_square = "titlebarMinimizeStyle=square\ntitlebarMaximizeStyle=square\n\
             titlebarCloseStyle=square";
@@ -1923,7 +1950,10 @@ mod tests {
             parse("titlebarCloseStyle=square\ntitlebarMinimizeStyle=circle").titlebar_button_style,
             "circle"
         );
-        assert_eq!(parse("titlebarCloseStyle=square").titlebar_button_style, "square");
+        assert_eq!(
+            parse("titlebarCloseStyle=square").titlebar_button_style,
+            "square"
+        );
         assert_eq!(
             parse("titlebarButtonStyle=circle\ntitlebarCloseStyle=square").titlebar_button_style,
             "circle"
@@ -1975,15 +2005,13 @@ mod tests {
         assert!(text.contains("stickyNotesEnabled=0\n"));
         assert!(text.contains("animationsEnabled=false\n"));
         assert!(text.find("fontBold=") < text.find("animationsEnabled="));
-        let reparsed = load(&text)
-            .expect("round trip");
+        let reparsed = load(&text).expect("round trip");
         assert_eq!(reparsed, settings);
     }
 
     #[test]
     fn legacy_slide_up_migrates_to_slide_and_stays_unwritten_at_default() {
-        let parsed = load("revision=2\nstartAnimation=slide-up\n")
-            .expect("legacy alias");
+        let parsed = load("revision=2\nstartAnimation=slide-up\n").expect("legacy alias");
         assert_eq!(parsed.start_animation, AnimationStyle::Slide);
         assert_eq!(
             Slot::to_value(&parsed.start_animation),
@@ -2047,18 +2075,15 @@ mod tests {
             settings.minimize_animation_style(),
             AnimationStyle::MagicLamp
         );
-        assert_eq!(
-            settings.maximize_animation_style(),
-            AnimationStyle::None
-        );
-        assert_eq!(
-            settings.window_open_animation_style(),
-            AnimationStyle::None
-        );
+        assert_eq!(settings.maximize_animation_style(), AnimationStyle::None);
+        assert_eq!(settings.window_open_animation_style(), AnimationStyle::None);
 
         settings.window_open_animation = AnimationStyle::Scale;
         settings.window_open_animation_enabled = true;
-        assert_eq!(settings.window_open_animation_style(), AnimationStyle::Scale);
+        assert_eq!(
+            settings.window_open_animation_style(),
+            AnimationStyle::Scale
+        );
 
         settings.start_animation_enabled = false;
         settings.minimize_animation_enabled = false;
@@ -2116,10 +2141,7 @@ mod tests {
         assert!(serialized.contains("minimizeAnimation=none\n"));
         assert!(!serialized.contains("windowOpenAnimationEnabled="));
         assert!(serialized.contains("windowCloseAnimation=none\n"));
-        assert_eq!(
-            load(&serialized).expect("round trip"),
-            parsed
-        );
+        assert_eq!(load(&serialized).expect("round trip"), parsed);
 
         let mut enabled = parsed;
         enabled.window_open_animation_enabled = true;
@@ -2158,11 +2180,11 @@ mod tests {
     #[test]
     fn new_customization_keys_round_trip_when_set() {
         let parsed = load(
-                "revision=2\nwallpaperFit=tile\ncursorSize=64\ntaskbarClockFormat=12h\n\
+            "revision=2\nwallpaperFit=tile\ncursorSize=64\ntaskbarClockFormat=12h\n\
                  taskbarShowSeconds=true\ntaskbarShowDate=false\nsnapPreviewEnabled=0\n\
                  focusFollowsMouse=yes\n",
-            )
-            .expect("valid customization settings");
+        )
+        .expect("valid customization settings");
         assert_eq!(parsed.wallpaper_fit, WallpaperFit::Tile);
         assert_eq!(parsed.cursor_size, 64);
         assert_eq!(parsed.taskbar_clock_format, ClockFormat::Twelve);
@@ -2213,10 +2235,22 @@ mod tests {
 
     #[test]
     fn time_zone_names_accept_iana_shapes_and_reject_paths() {
-        for ok in ["UTC", "Europe/Berlin", "America/Argentina/Buenos_Aires", "Etc/GMT+3"] {
+        for ok in [
+            "UTC",
+            "Europe/Berlin",
+            "America/Argentina/Buenos_Aires",
+            "Etc/GMT+3",
+        ] {
             assert!(super::is_valid_time_zone_name(ok), "{ok}");
         }
-        for bad in ["", "/etc/localtime", "../etc/passwd", "Europe/../UTC", "a b", "x\ny"] {
+        for bad in [
+            "",
+            "/etc/localtime",
+            "../etc/passwd",
+            "Europe/../UTC",
+            "a b",
+            "x\ny",
+        ] {
             assert!(!super::is_valid_time_zone_name(bad), "{bad:?}");
         }
         assert!(load("revision=2\nautoTimeZone=../../etc\n").is_err());
@@ -2247,19 +2281,21 @@ mod tests {
     fn weather_keys_are_typed_stable_rows_and_round_trip() {
         let location = "51.5\t-0.12\tGB\tLondon";
         let parsed = load(&format!(
-                "revision=2\nweatherEnabled=true\nweatherUnits=fahrenheit\nweatherLocation={location}\n"
-            ))
-            .expect("valid weather settings");
+            "revision=2\nweatherEnabled=true\nweatherUnits=fahrenheit\nweatherLocation={location}\n"
+        ))
+        .expect("valid weather settings");
         assert!(parsed.weather_enabled);
         assert_eq!(parsed.weather_units, "fahrenheit");
         assert_eq!(parsed.weather_location, location);
-        assert!(parsed.unknown_keys.is_empty(), "weather keys must not fall into unknown_keys");
+        assert!(
+            parsed.unknown_keys.is_empty(),
+            "weather keys must not fall into unknown_keys"
+        );
         let text = assert_round_trip(&parsed);
         // Default-on weather is not written; an explicit off must survive a round trip.
         assert!(!text.contains("weatherEnabled"));
         assert!(text.contains("weatherUnits=fahrenheit\n"));
-        let off = load("revision=2\nweatherEnabled=false\n")
-            .expect("explicit off");
+        let off = load("revision=2\nweatherEnabled=false\n").expect("explicit off");
         assert!(!off.weather_enabled);
         assert!(ConfigStore::serialize(&off).contains("weatherEnabled=false\n"));
 
@@ -2308,12 +2344,12 @@ mod tests {
     #[test]
     fn taskbar_widget_keys_round_trip_off_and_on_defaults() {
         let parsed = load(
-                "revision=2\ntaskbarShowWeather=false\ntaskbarShowVolume=false\n\
+            "revision=2\ntaskbarShowWeather=false\ntaskbarShowVolume=false\n\
                  taskbarShowNetwork=false\ntaskbarShowBattery=false\n\
                  taskbarShowClock=false\ntaskbarShowWorkspaces=false\n\
                  taskbarBatteryOnlyWhenRelevant=true\n",
-            )
-            .expect("valid taskbar widget settings");
+        )
+        .expect("valid taskbar widget settings");
         assert!(!parsed.taskbar_show_weather);
         assert!(!parsed.taskbar_show_volume);
         assert!(!parsed.taskbar_show_network);
@@ -2342,10 +2378,9 @@ mod tests {
                 .code,
             ErrorCode::InvalidArgument
         );
-        let parsed = load(
-                "revision=2\naccent=#EF4048\ntaskbarShowBattery=false\nfutureFeature=kept\n",
-            )
-            .expect("mixed file");
+        let parsed =
+            load("revision=2\naccent=#EF4048\ntaskbarShowBattery=false\nfutureFeature=kept\n")
+                .expect("mixed file");
         assert_eq!(parsed.accent, "#EF4048");
         assert!(!parsed.taskbar_show_battery);
         assert!(parsed.taskbar_show_clock);
@@ -2357,8 +2392,8 @@ mod tests {
 
     #[test]
     fn legacy_file_without_taskbar_widget_keys_loads_defaults() {
-        let parsed = load("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
-            .expect("legacy taskbar file");
+        let parsed =
+            load("revision=1\naccent=#EF4048\ntaskbarHeight=44\n").expect("legacy taskbar file");
         assert!(parsed.taskbar_show_weather);
         assert!(parsed.taskbar_show_volume);
         assert!(parsed.taskbar_show_network);
@@ -2370,8 +2405,7 @@ mod tests {
 
     #[test]
     fn legacy_file_without_customization_keys_loads_defaults() {
-        let parsed = load("revision=1\naccent=#EF4048\ntaskbarHeight=44\n")
-            .expect("legacy file");
+        let parsed = load("revision=1\naccent=#EF4048\ntaskbarHeight=44\n").expect("legacy file");
         assert_eq!(parsed.wallpaper_fit, WallpaperFit::Fill);
         assert_eq!(parsed.cursor_size, 24);
         assert_eq!(parsed.taskbar_clock_format, ClockFormat::TwentyFour);
@@ -2385,11 +2419,7 @@ mod tests {
         settings.focus_follows_mouse = true;
         let text = ConfigStore::serialize(&settings);
         assert!(text.contains("focusFollowsMouse=true\n"));
-        assert!(
-            load(&text)
-                .expect("round trip")
-                .focus_follows_mouse
-        );
+        assert!(load(&text).expect("round trip").focus_follows_mouse);
     }
 
     #[test]

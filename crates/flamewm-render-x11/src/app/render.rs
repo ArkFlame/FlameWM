@@ -23,6 +23,79 @@ fn scroll_fingerprint(document: &RuntimeDocument) -> u64 {
 }
 
 impl X11App {
+    /// Soft alpha shadow uses the canonical Xft glyph coverage once, the shared
+    /// bounded Gaussian blur, then a transient premultiplied ARGB32 XRender blit.
+    fn paint_text_shadow(
+        &mut self,
+        x: f32,
+        baseline: f32,
+        color: Color,
+        size: f32,
+        weight: u16,
+        radius: f32,
+        text: &str,
+        family: &str,
+    ) -> Result<bool, String> {
+        if self.xrender.is_none() || self.xft.is_none() {
+            return Ok(false);
+        }
+        let pad = (radius * 3.0).ceil() as u32 + 4;
+        let mask = {
+            let xft = self.xft.as_mut().expect("checked Xft");
+            unsafe { xft.set_preferred_family(family) };
+            unsafe { xft.text_alpha_mask(size, weight, text, pad) }
+        };
+        let Ok((w, h, mask)) = mask else {
+            return Ok(false);
+        };
+        let mut rgba = vec![0_u8; w as usize * h as usize * 4];
+        for (out, coverage) in rgba.chunks_exact_mut(4).zip(mask) {
+            out.copy_from_slice(&[
+                color.r,
+                color.g,
+                color.b,
+                ((u16::from(coverage) * u16::from(color.a) + 127) / 255) as u8,
+            ]);
+        }
+        flamewm_image_core::blur::gaussian_blur_rgba(&mut rgba, w, h, radius)
+            .map_err(|e| format!("text shadow blur: {e:?}"))?;
+        let dx = x.round() as i32 - pad as i32 - 4;
+        let dy = baseline.round() as i32 - pad as i32 - size.ceil() as i32;
+        // The XRender target does not inherit the GC clip stack. Enforce each
+        // retained clip on the alpha mask before uploading it.
+        for yy in 0..h as usize {
+            for xx in 0..w as usize {
+                let gx = dx + xx as i32;
+                let gy = dy + yy as i32;
+                if self.clip_stack.iter().any(|clip| {
+                    gx < clip.x.floor() as i32
+                        || gy < clip.y.floor() as i32
+                        || gx >= (clip.x + clip.width).ceil() as i32
+                        || gy >= (clip.y + clip.height).ceil() as i32
+                }) {
+                    rgba[(yy * w as usize + xx) * 4 + 3] = 0;
+                }
+            }
+        }
+        let Some(visual) = match_argb32_visual(self.display, self.screen) else {
+            return Ok(false);
+        };
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let (pixmap, bytes) = self.alloc_pixmap(root, w, h, 32)?;
+        let result = (|| {
+            let argb = crate::native::image::scale_and_premultiply(&rgba, w, h, w, h);
+            unsafe { self.upload_argb32_words(pixmap, visual, &argb, w, h)? };
+            if let Some(render) = self.xrender.as_mut() {
+                unsafe { render.blit_argb32_over(pixmap, dx, dy, w, h)? };
+            }
+            Ok::<_, String>(())
+        })();
+        self.free_pixmap_tracked(pixmap, bytes);
+        result.map(|()| true)
+    }
+}
+
+impl X11App {
     /// Intersect the clip stack and apply via XSetClipRectangles on the GC.
     /// Empty stack clears the clip.
     unsafe fn apply_clip_stack(&mut self) {
@@ -406,8 +479,13 @@ impl X11App {
     /// Rounded popup mask intersected with `clip` (window-local). Used while a slide keeps the
     /// popup on the screen side of the panel edge; the base mask is restored with
     /// `refresh_shape_mask` once the slide lands.
-    pub(crate) unsafe fn refresh_shape_mask_clipped(&self, document: &RuntimeDocument, clip: ClipRect) {
-        let (Some(cached), Some(bridge)) = (self.cached_paint.as_ref(), self.xshape.as_ref()) else {
+    pub(crate) unsafe fn refresh_shape_mask_clipped(
+        &self,
+        document: &RuntimeDocument,
+        clip: ClipRect,
+    ) {
+        let (Some(cached), Some(bridge)) = (self.cached_paint.as_ref(), self.xshape.as_ref())
+        else {
             return;
         };
         let backdrop_radius = backdrop_corner_radius_px(document, self.width, self.height);
@@ -488,7 +566,11 @@ impl X11App {
                 let radius = *radius * scale;
                 if let Some(xrender) = self.xrender.as_mut() {
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
-                    unsafe { crate::xrender_aa::stroke_rounded_rect(xrender, rect, radius, width, *color)? };
+                    unsafe {
+                        crate::xrender_aa::stroke_rounded_rect(
+                            xrender, rect, radius, width, *color,
+                        )?
+                    };
                     return Ok(());
                 }
                 if self.alpha_mode != SurfaceAlphaMode::OpaqueFallback && color.a < 255 {
@@ -623,6 +705,43 @@ impl X11App {
                     )
                 };
             }
+            PaintCommand::TextShadow {
+                x,
+                y,
+                color,
+                size,
+                weight,
+                blur_radius,
+                text,
+            } => {
+                let x = *x * scale;
+                let y = *y * scale;
+                let size = *size * scale;
+                let radius = (*blur_radius * scale).clamp(0.0, 8.0);
+                // Xft/XRender may not be available on minimal X servers; an offset
+                // glyph is the compatibility fallback, not the primary blur path.
+                if !self.paint_text_shadow(
+                    x,
+                    y,
+                    *color,
+                    size,
+                    *weight,
+                    radius,
+                    text,
+                    document.ui_font_family(),
+                )? {
+                    // Preserve the legacy offset glyph if Xft A8 or XRender is unavailable.
+                    let fallback = PaintCommand::Text {
+                        x: x / scale,
+                        y: y / scale,
+                        color: *color,
+                        size: size / scale,
+                        weight: *weight,
+                        text: text.clone(),
+                    };
+                    unsafe { self.paint(&fallback, document, scale)? };
+                }
+            }
             PaintCommand::Text {
                 x,
                 y,
@@ -742,9 +861,15 @@ mod tests {
         let clip = (0, 0, 40, 10);
         let settled = popup_mask_spans(&[], 40, 20, 1.0, Some(8));
         let slide = clip_spans(&settled, clip);
-        assert_eq!(slide, clip_spans(&popup_mask_spans(&[], 40, 20, 1.0, Some(8)), clip));
+        assert_eq!(
+            slide,
+            clip_spans(&popup_mask_spans(&[], 40, 20, 1.0, Some(8)), clip)
+        );
         let (top_start, top_end) = row_span(&slide, 0);
-        assert!(top_start > 0 && top_end < 40, "slide corners must stay transparent");
+        assert!(
+            top_start > 0 && top_end < 40,
+            "slide corners must stay transparent"
+        );
         assert_eq!(row_span(&slide, 5), (0, 40));
     }
 

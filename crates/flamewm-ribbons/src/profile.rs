@@ -94,7 +94,10 @@ mod tests {
         assert_eq!(profile(0.0, 5.0), 1.0, "0.76+0.26+0.075 clamps to 1");
         let (_, core_at_0) = glow_terms(0.0);
         assert!((core_at_0 - 1.0).abs() < 1e-12);
-        assert!(glow_terms(24.0).0 < 3e-3, "cut-off radius 4.9w is negligible");
+        assert!(
+            glow_terms(24.0).0 < 3e-3,
+            "cut-off radius 4.9w is negligible"
+        );
     }
 
     #[test]
