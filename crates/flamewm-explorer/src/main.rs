@@ -13,7 +13,8 @@ use std::rc::Rc;
 use std::sync::mpsc::{self,Receiver,Sender};
 use std::time::{Duration,Instant};
 
-use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,SortBy,PAGE_ROWS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places,transfer_batch,transfer_drop_batch};
+use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,SortBy,PAGE_ROWS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
+use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
 use theme::ExplorerTheme;
 use flamewm_control_core::{ControlRequest,ControlResponse};
 use flamewm_control_dbus::{ControlClient,ControlSignal,ControlSignalClient};
@@ -49,11 +50,12 @@ impl RowDrag {
 
 enum WorkerJob {
     Scan {generation:u64,path:PathBuf,hidden:bool,sort:SortBy},
-    Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool},
-    Drop {sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool},
+    Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,cancel:CancellationToken},
+    Drop {sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool,cancel:CancellationToken},
     Trash {paths:Vec<PathBuf>},
     Create {directory:PathBuf},
     Rename {from:PathBuf,to:PathBuf},
+    Undo,
 }
 enum ChooserJob {
     Discover { request: u64, path: PathBuf },
@@ -97,7 +99,7 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
     for job in rx {
         match job {
             WorkerJob::Scan{..}=>{},
-            WorkerJob::Transfer{sources,directory,move_it}=>{
+            WorkerJob::Transfer{sources,directory,move_it,cancel}=>{
                 let mut accumulated=0_u64;
                 let mut last_progress=Instant::now();
                 let mut progress=|size:u64|{
@@ -107,13 +109,14 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                         last_progress=Instant::now();
                     }
                 };
-                let report=transfer_batch(&sources,&directory,move_it,&mut progress);
+                let mut report=jobs::transfer_batch_with(&sources,&directory,move_it,Conflict::KeepBoth,&cancel,&mut progress);
+                jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted {
                     report,action:if move_it {"Moved"}else{"Copied"},
                     cut_sources:move_it.then_some(sources),
                 });
             }
-            WorkerJob::Drop{sources,directory,force_copy}=>{
+            WorkerJob::Drop{sources,directory,force_copy,cancel}=>{
                 let mut accumulated=0_u64;
                 let mut last_progress=Instant::now();
                 let mut progress=|size:u64|{
@@ -123,7 +126,8 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                         last_progress=Instant::now();
                     }
                 };
-                let report=transfer_drop_batch(&sources,&directory,force_copy,&mut progress);
+                let mut report=jobs::transfer_drop_batch_with(&sources,&directory,force_copy,&cancel,&mut progress);
+                jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted {
                     report,action:"Transferred",cut_sources:None,
                 });
@@ -136,22 +140,41 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                 let mut report=BatchReport::default();
                 for path in &paths {
                     let outcome=if let Some(uid)=uid {
-                        Trash::move_to_trash(path,&home,&data,uid).map(|_|())
+                        Trash::move_to_trash(path,&home,&data,uid)
+                            .map(|item|Undo::Trashed{original:item.original,stored:item.stored,info:item.info})
                             .map_err(|e|std::io::Error::other(e.to_string()))
                     } else {
                         Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"cannot determine current user"))
                     };
-                    report.record(path,outcome);
+                    match outcome {
+                        Ok(undo)=>{report.completed+=1;report.undo.push(undo);},
+                        Err(error)=>report.record(path,Err(error)),
+                    }
                 }
+                jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted{report,action:"Trashed",cut_sources:None});
             }
             WorkerJob::Create{directory}=>{
                 let done=create_new_folder(&directory);
+                if let Ok(path)=&done {jobs::record([Undo::Created{path:path.clone()}]);}
                 send_wake(&mut wake,&result,WorkerResult::Completed(done.map(|path|format!("Created {}",path.display())).map_err(|e|e.to_string())));
             }
             WorkerJob::Rename{from,to}=>{
                 let done=flamewm_desktop_core::file_actions::rename_entry_no_replace(&from,&to);
+                if done.is_ok() {jobs::record([Undo::Moved{from:from.clone(),to:to.clone()}]);}
                 send_wake(&mut wake,&result,WorkerResult::Completed(done.map(|_|"Renamed".to_owned()).map_err(|e|e.to_string())));
+            }
+            WorkerJob::Undo=>{
+                let mut journal=jobs::journal().lock().unwrap_or_else(|poison|poison.into_inner());
+                let done=match journal.take_last() {
+                    None=>Err("Nothing to undo".to_owned()),
+                    Some(entry)=>match jobs::undo(&entry) {
+                        Ok(())=>Ok("Undone".to_owned()),
+                        Err(error)=>{journal.restore(entry);Err(format!("Undo failed: {error}"))},
+                    },
+                };
+                drop(journal);
+                send_wake(&mut wake,&result,WorkerResult::Completed(done));
             }
         }
     }
@@ -165,11 +188,11 @@ struct ExplorerApp {
     context:Option<(f32,f32)>, edit:Option<EditMode>, buffer:String, theme:ExplorerTheme,
     last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
-    row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>,
+    row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, cancel:CancellationToken,
 }
 impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
-        Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:places(&home_dir()),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None}
+        Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:places(&home_dir()),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new()}
     }
     fn scan(&mut self) {
         self.row_drag=None;
@@ -220,7 +243,7 @@ impl ExplorerApp {
         if self.busy {
             self.model.status="File operation already in progress".into();
         } else if self.tx.send(WorkerJob::Drop {
-            sources,directory:destination,force_copy:e.ctrl_down(),
+            sources,directory:destination,force_copy:e.ctrl_down(),cancel:self.cancel.clone(),
         }).is_ok() {
             self.busy=true;
             self.progress=Some(0);
@@ -253,7 +276,7 @@ impl ExplorerApp {
         self.progress=Some(0);
         self.activity=None;
         self.model.status=format!("{} {} item(s)…",if move_it{"Moving"}else{"Copying"},sources.len());
-        if self.tx.send(WorkerJob::Transfer{sources,directory,move_it}).is_err() {
+        if self.tx.send(WorkerJob::Transfer{sources,directory,move_it,cancel:self.cancel.clone()}).is_err() {
             self.progress=None;
             self.model.status="Transfer worker unavailable".into();
         } else {self.busy=true;}
@@ -330,6 +353,11 @@ impl ExplorerApp {
             Ok(_)=>self.model.status="Opened Ark compression dialog".into(),
             Err(e)=>self.model.status=format!("Ark unavailable: {e}"),
         }
+    }
+    fn undo_last(&mut self) {
+        if self.busy {self.model.status="File operation already in progress".into();return;}
+        if self.tx.send(WorkerJob::Undo).is_ok() {self.busy=true;self.model.status="Undoing…".into();}
+        else {self.model.status="File worker unavailable".into();}
     }
     fn action_menu(&mut self,cmd:&str) {
         if self.busy && ["paste","duplicate","trash","newfolder","rename"].contains(&cmd) {
@@ -568,7 +596,7 @@ impl ExplorerApp {
             "f2"=>self.action_menu("rename"),
             "delete"=>self.action_menu("trash"),
             "backspace"=>{if self.model.tab_mut().up(){self.scan();}},
-            "escape"=>{self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
+            "escape"=>{if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
             "return"|"enter"=>if let Some(path)=self.selected(){self.open(&path)},
             "left" if alt=>{if self.model.tab_mut().back(){self.scan();}},
             "right" if alt=>{if self.model.tab_mut().forward(){self.scan();}},
@@ -582,6 +610,7 @@ impl ExplorerApp {
             "c" if ctrl=>self.action_menu("copy"),
             "x" if ctrl=>self.action_menu("cut"),
             "v" if ctrl=>self.action_menu("paste"),
+            "z" if ctrl=>self.undo_last(),
             "up"=>self.step_selection(-1,shift),
             "down"=>self.step_selection(1,shift),
             _=>{}
@@ -616,6 +645,7 @@ impl ExplorerApp {
             WorkerResult::Progress(bytes)=>{self.progress=Some(bytes);},
             WorkerResult::BatchCompleted{report,action,cut_sources}=>{
                 self.busy=false;
+                self.cancel=CancellationToken::new();
                 if let Some(sources)=cut_sources.as_ref() {
                     if self.model.clipboard.as_ref().is_some_and(|(paths,cut)| *cut && paths==sources) {
                         // For a partial move, keep only the failed sources for a safe retry.

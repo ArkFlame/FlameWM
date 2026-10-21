@@ -2,11 +2,22 @@
 //! Filesystem work must be performed by the worker; the UI thread only projects snapshots.
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, Read, Write};
-use std::os::unix::fs::symlink;
+use std::io::{self, Write};
+
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::os::unix::fs::symlink;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod archive;
+pub mod places;
+pub mod properties;
+pub mod refresh;
+pub mod search;
+pub mod trash;
+pub mod view;
+
+pub mod jobs;
 pub const PAGE_ROWS: usize = 22;
 pub const MAX_LISTED_ENTRIES: usize = 100_000;
 
@@ -24,14 +35,7 @@ pub struct Entry {
 impl Entry {
     pub fn size_label(&self) -> String {
         if self.directory { return "Folder".into(); }
-        let mut n = self.size as f64;
-        let mut unit = "B";
-        for candidate in ["KiB", "MiB", "GiB", "TiB"] {
-            if n < 1024.0 { break; }
-            n /= 1024.0;
-            unit = candidate;
-        }
-        if unit == "B" { format!("{} B", self.size) } else { format!("{n:.1} {unit}") }
+        view::human_size(self.size)
     }
     pub fn modified_label(&self) -> String {
         self.modified.and_then(|m| m.duration_since(UNIX_EPOCH).ok())
@@ -268,7 +272,6 @@ fn unescape_uri(raw:&str)->Option<PathBuf>{
     }
     String::from_utf8(result).ok().map(PathBuf::from)
 }
-fn unescape_mount(text:&str) -> String { text.replace("\\040"," ").replace("\\011","\t").replace("\\012","\n").replace("\\134","\\") }
 pub fn places(home:&Path) -> Vec<Place> {
     let mut places=vec![Place{name:"Home".into(),path:home.to_path_buf(),removable:false}];
     for (id,name,dir) in [("DESKTOP","Desktop","Desktop"),("DOCUMENTS","Documents","Documents"),("DOWNLOAD","Downloads","Downloads"),("MUSIC","Music","Music"),("PICTURES","Pictures","Pictures"),("VIDEOS","Videos","Videos")] {
@@ -285,73 +288,20 @@ pub fn places(home:&Path) -> Vec<Place> {
             }
         }
     }
-    let mut seen=HashSet::new();
     if let Ok(contents)=fs::read_to_string("/proc/self/mountinfo") {
-        for line in contents.lines() {
-            let fields=line.split_whitespace().collect::<Vec<_>>();
-            let Some(mount)=fields.get(4) else {continue};
-            let mount=unescape_mount(mount);
-            if !(mount.starts_with("/media/") || mount.starts_with("/run/media/") || mount.starts_with("/mnt/")) || !seen.insert(mount.clone()) {continue;}
-            let path=PathBuf::from(&mount); if path.is_dir() {
-                places.push(Place{name:path.file_name().unwrap_or_default().to_string_lossy().into_owned(),path,removable:true});
+        for device in places::parse_mountinfo(&contents) {
+            if device.mount_point.is_dir() {
+                let name=places::sanitize_label(&device.mount_point.file_name().unwrap_or_default().to_string_lossy());
+                places.push(Place{name,path:device.mount_point,removable:true});
             }
         }
     }
     places
 }
 
-/// No traversal into symlinked directories; never overwrite an existing entry.
-/// Progress is emitted per completed regular file so the UI does not need to rescan.
+/// Crash-safe copy owned by `jobs`; never overwrites an existing entry.
 pub fn copy_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(from)?;
-    if metadata.file_type().is_symlink() {
-        return symlink(fs::read_link(from)?, to);
-    }
-    if metadata.is_dir() {
-        if to.starts_with(from) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "cannot copy a directory into itself"));
-        }
-        // Reject symlink aliases of descendants before creating output. Checking only
-        // lexical path prefixes misses /tmp/alias -> /tmp/source/subdirectory.
-        if let (Ok(source), Some(parent)) = (fs::canonicalize(from), to.parent()) {
-            if let Ok(destination_parent) = fs::canonicalize(parent) {
-                if destination_parent.starts_with(source) {
-                    return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                        "cannot copy a directory into itself through a symlink"));
-                }
-            }
-        }
-        fs::create_dir(to)?;
-        let result = (|| {
-            for child in fs::read_dir(from)? {
-                let child = child?;
-                copy_entry(&child.path(), &to.join(child.file_name()), report)?;
-            }
-            Ok(())
-        })();
-        if result.is_err() { let _ = fs::remove_dir_all(to); }
-        return result;
-    }
-    if !metadata.is_file() {
-        return Err(io::Error::new(io::ErrorKind::Unsupported,"not a regular file"));
-    }
-    let mut input = fs::File::open(from)?;
-    let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)?;
-    let result = (|| {
-        let mut buffer = [0_u8; 65_536];
-        loop {
-            let len = input.read(&mut buffer)?;
-            if len == 0 { break; }
-            output.write_all(&buffer[..len])?;
-            report(len as u64);
-        }
-        output.sync_all()
-    })();
-    if result.is_err() {
-        drop(output);
-        let _ = fs::remove_file(to);
-    }
-    result
+    jobs::copy_publish(from, to, false, &jobs::CancellationToken::new(), report)
 }
 pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
     let name = from.file_name().unwrap_or_default().to_string_lossy();
@@ -370,6 +320,9 @@ pub struct BatchReport {
     pub failed: usize,
     pub first_error: Option<String>,
     pub failed_sources: Vec<PathBuf>,
+    pub skipped: usize,
+    pub cancelled: bool,
+    pub undo: Vec<jobs::Undo>,
 }
 impl BatchReport {
     pub fn record(&mut self, source:&Path, result:io::Result<()>) {
@@ -387,8 +340,17 @@ impl BatchReport {
         self.failed+=other.failed;
         if self.first_error.is_none() {self.first_error=other.first_error;}
         self.failed_sources.extend(other.failed_sources);
+        self.skipped+=other.skipped;
+        self.cancelled|=other.cancelled;
+        self.undo.extend(other.undo);
     }
     pub fn message(&self, verb:&str)->String {
+        let mut text=self.summary(verb);
+        if self.skipped>0 {text.push_str(&format!(", {} skipped",self.skipped));}
+        if self.cancelled {text=format!("Cancelled: {text}");}
+        text
+    }
+    fn summary(&self, verb:&str)->String {
         if self.failed==0 { format!("{verb}: {} item(s)",self.completed) }
         else {format!("{verb}: {} succeeded, {} failed — {}",self.completed,self.failed,self.first_error.as_deref().unwrap_or("unknown error"))}
     }
@@ -412,25 +374,7 @@ pub fn validate_transfer_destination(source:&Path, directory:&Path) -> io::Resul
 }
 
 pub fn transfer_batch(sources:&[PathBuf], directory:&Path, move_it:bool, report:&mut impl FnMut(u64)) -> BatchReport {
-    let mut outcome=BatchReport::default();
-    for source in sources {
-        let result=if move_it && source.parent()==Some(directory) {
-            Err(io::Error::new(io::ErrorKind::InvalidInput,"source already in destination folder"))
-        } else {
-            validate_transfer_destination(source,directory).and_then(|()| {
-                let dest=destination_for(source,directory);
-                if dest.as_path()==source.as_path() {
-                    Err(io::Error::new(io::ErrorKind::InvalidInput,"cannot overwrite source"))
-                } else if move_it {
-                    move_entry(source,&dest,report)
-                } else {
-                    copy_entry(source,&dest,report)
-                }
-            })
-        };
-        outcome.record(source,result);
-    }
-    outcome
+    jobs::transfer_batch_with(sources, directory, move_it, jobs::Conflict::KeepBoth, &jobs::CancellationToken::new(), report)
 }
 
 /// A drop follows the file-manager convention: move within one filesystem,
@@ -442,38 +386,13 @@ pub fn drop_moves(force_copy:bool, source_dev:u64, destination_dev:u64)->bool {
 
 pub fn transfer_drop_batch(sources:&[PathBuf], directory:&Path, force_copy:bool,
     report:&mut impl FnMut(u64)) -> BatchReport {
-    use std::os::unix::fs::MetadataExt;
-    let destination_device=fs::metadata(directory).ok().map(|metadata|metadata.dev());
-    let mut result=BatchReport::default();
-    for source in sources {
-        let source_device=fs::symlink_metadata(source).ok().map(|metadata|metadata.dev());
-        let should_move=source_device.zip(destination_device)
-            .is_some_and(|(src,dst)|drop_moves(force_copy,src,dst));
-        result.append(transfer_batch(std::slice::from_ref(source),directory,should_move,report));
-    }
-    result
+    jobs::transfer_drop_batch_with(sources, directory, force_copy, &jobs::CancellationToken::new(), report)
 }
 
+/// Move owned by `jobs`: no-replace rename, verified cross-device copy fallback.
 pub fn move_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::Result<()> {
-    // Same mechanism as desktop-core: Linux renameat2(NOREPLACE) prevents overwriting
-    // a path created after a prior existence check. EXDEV falls back to safe copy.
-    match rustix::fs::renameat_with(
-        rustix::fs::CWD, from, rustix::fs::CWD, to, rustix::fs::RenameFlags::NOREPLACE,
-    ) {
-        Ok(()) => Ok(()),
-        Err(rustix::io::Errno::XDEV) => {
-            copy_entry(from, to, report)?;
-            let meta = fs::symlink_metadata(from)?;
-            if meta.is_dir() && !meta.file_type().is_symlink() {
-                fs::remove_dir_all(from)
-            } else {
-                fs::remove_file(from)
-            }
-        }
-        Err(error) => Err(io::Error::from_raw_os_error(error.raw_os_error())),
-    }
+    jobs::move_publish(from, to, false, &jobs::CancellationToken::new(), report)
 }
-/// Home-relative display is cosmetic: navigation always retains an absolute PathBuf.
 pub fn display_location(path:&Path, home:&Path)->String {
     if path==home {return "~".into();}
     if let Ok(rest)=path.strip_prefix(home) {return format!("~/{}",rest.display());}

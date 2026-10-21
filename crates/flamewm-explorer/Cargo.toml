@@ -17,6 +17,7 @@ flamewm-desktop-core = { path = "../flamewm-desktop-core" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
 flamewm-reactor = { path = "../flamewm-reactor" }
+inotify = { workspace = true }
 rustix = { workspace = true }
 
 [build-dependencies]
