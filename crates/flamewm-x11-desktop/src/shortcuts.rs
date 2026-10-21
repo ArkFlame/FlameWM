@@ -73,6 +73,26 @@ const KEYSYM_NAMES: &[(&str, u32)] = &[
     ("XF86AudioLowerVolume", 0x1008_ff11),
     ("XF86AudioMute", 0x1008_ff12),
     ("XF86AudioRaiseVolume", 0x1008_ff13),
+    ("XF86HomePage", 0x1008_ff18),
+    ("XF86WWW", 0x1008_ff2e),
+    ("XF86Search", 0x1008_ff1b),
+    ("XF86Mail", 0x1008_ff19),
+    ("XF86Calculator", 0x1008_ff1d),
+    ("XF86Explorer", 0x1008_ff5d),
+    ("XF86Favorites", 0x1008_ff30),
+    ("XF86MyComputer", 0x1008_ff33),
+    ("XF86Tools", 0x1008_ff81),
+    ("XF86ScreenSaver", 0x1008_ff2d),
+    ("XF86Sleep", 0x1008_ff2f),
+    ("XF86AudioPlay", 0x1008_ff14),
+    ("XF86AudioStop", 0x1008_ff15),
+    ("XF86AudioPrev", 0x1008_ff16),
+    ("XF86AudioNext", 0x1008_ff17),
+    ("XF86MonBrightnessUp", 0x1008_ff02),
+    ("XF86MonBrightnessDown", 0x1008_ff03),
+    ("XF86Back", 0x1008_ff26),
+    ("XF86Forward", 0x1008_ff27),
+    ("XF86Refresh", 0x1008_ff29),
 ];
 
 /// Resolves a keysym name (case-insensitive) or a single ASCII letter/digit.
@@ -87,6 +107,11 @@ pub fn keysym_for_name(name: &str) -> Option<u32> {
         .iter()
         .find(|(known, _)| known.eq_ignore_ascii_case(name))
         .map(|(_, keysym)| *keysym)
+        .or_else(|| {
+            // Round-trips keys the capture UI has no name for: `Keysym(0x1008ff18)`.
+            let hex = name.strip_prefix("Keysym(0x")?.strip_suffix(')')?;
+            u32::from_str_radix(hex, 16).ok().filter(|k| *k != 0)
+        })
 }
 
 /// Maps a modifier token to its X modifier bit, or `None` when the token is

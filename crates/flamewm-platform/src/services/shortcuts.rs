@@ -145,12 +145,6 @@ impl ShortcutService {
         action: &str,
         expected_revision: u64,
     ) -> FlameResult<u64> {
-        if let Some(active) = &self.capture {
-            return Err(FlameError::new(
-                ErrorCode::Busy,
-                format!("hotkey capture already active for {}", active.action),
-            ));
-        }
         self.require_revision(expected_revision)?;
         if self.registry.binding(action).is_none() {
             return Err(FlameError::new(
@@ -158,7 +152,11 @@ impl ShortcutService {
                 "shortcut action is unknown",
             ));
         }
-        Self::stage_and_commit(port, &BTreeMap::new())?;
+        // A held lease (stale after a Settings crash, or a re-armed row) is superseded: the grab
+        // set is already empty, so only the first lease needs to suspend the grabs.
+        if self.capture.is_none() {
+            Self::stage_and_commit(port, &BTreeMap::new())?;
+        }
         let id = self.next_lease;
         self.next_lease = self.next_lease.saturating_add(1);
         self.capture = Some(CaptureLease {
@@ -370,19 +368,20 @@ mod capture_lease_tests {
     }
 
     #[test]
-    fn duplicate_begin_is_refused_and_first_lease_keeps_suspension() {
+    fn second_begin_supersedes_the_first_lease_and_keeps_suspension() {
         let (mut service, mut port) = started();
         let first = service
             .begin_capture(&mut port, ACTION_TOGGLE_START_MENU, revision(&service))
             .expect("first lease");
-        let error = service
+        let second = service
             .begin_capture(&mut port, ACTION_WINDOW_MAXIMIZE, revision(&service))
-            .expect_err("duplicate lease");
-        assert_eq!(error.code, ErrorCode::Busy);
+            .expect("second lease supersedes the first");
         assert!(port.live.is_empty());
-        service
-            .end_capture(&mut port, first)
-            .expect("original lease still ends");
+        assert_eq!(
+            service.end_capture(&mut port, first).unwrap_err().code,
+            ErrorCode::Conflict
+        );
+        service.end_capture(&mut port, second).expect("new lease ends");
     }
 
     #[test]

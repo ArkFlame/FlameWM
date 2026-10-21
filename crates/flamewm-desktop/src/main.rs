@@ -740,13 +740,9 @@ fn main() -> Result<(), String> {
             move |event, document| {
                 let state_cell = &event_cell;
                 let mut state = state_cell.borrow_mut();
-                refresh_settings_projection(document, &mut state)?;
-                refresh_icon_theme(document, &mut state)?;
-                refresh_workspace_projection(document, &mut state)?;
-                refresh_if_changed(document, &mut state)?;
-                apply_pending_icon_results(document, &mut state)?;
-                sync_conversion_preview(document, &mut state)?;
-                sticky::poll_persist(document, &mut state)?;
+                if let Err(error) = refresh_all(document, &mut state) {
+                    eprintln!("desktop: refresh failed (continuing): {error}");
+                }
                 let result = match event {
                     UiControllerEvent::Action(action) => {
                         handle_event(action, document, &mut state, mutation_dispatcher.as_ref())
@@ -754,7 +750,11 @@ fn main() -> Result<(), String> {
                     UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state),
                 };
                 event_watch.set(menus_open(&state.menu_rects));
-                result
+                // A failed handler must not tear down the loop: the desktop would stop answering clicks.
+                if let Err(error) = result {
+                    eprintln!("desktop: event handler failed (continuing): {error}");
+                }
+                Ok(())
             }
         },
         {
@@ -803,13 +803,9 @@ fn main() -> Result<(), String> {
                 let mut state = state_cell.borrow_mut();
                 reactor_watch.set(menus_open(&state.menu_rects));
                 let _completed_workspace_present = state.workspace_present_span.take();
-                refresh_settings_projection(document, &mut state)?;
-                refresh_icon_theme(document, &mut state)?;
-                refresh_workspace_projection(document, &mut state)?;
-                refresh_if_changed(document, &mut state)?;
-                apply_pending_icon_results(document, &mut state)?;
-                sync_conversion_preview(document, &mut state)?;
-                sticky::poll_persist(document, &mut state)?;
+                if let Err(error) = refresh_all(document, &mut state) {
+                    eprintln!("desktop: refresh failed (continuing): {error}");
+                }
                 let result = sticky::flush_persist_if_due(document, &mut state);
                 match result {
                     Ok(()) => {
@@ -1099,6 +1095,17 @@ fn refresh_icon_theme(
     sync_document(document, state)
 }
 
+/// Per-turn refresh of every projection; the first failure stops the pass, never the desktop.
+fn refresh_all(document: &mut impl UiDocumentAccess, state: &mut DesktopState) -> Result<(), String> {
+    refresh_settings_projection(document, state)?;
+    refresh_icon_theme(document, state)?;
+    refresh_workspace_projection(document, state)?;
+    refresh_if_changed(document, state)?;
+    apply_pending_icon_results(document, state)?;
+    sync_conversion_preview(document, state)?;
+    sticky::poll_persist(document, state)
+}
+
 fn refresh_settings_projection(
     document: &mut impl UiDocumentAccess,
     state: &mut DesktopState,
@@ -1222,7 +1229,7 @@ fn resolve_output_layout(
     OutputId,
 ) {
     let outputs = control_client()
-        .and_then(|client| match client.call(&ControlRequest::GetDisplays) {
+        .and_then(|client| match client.call_with_timeout(&ControlRequest::GetDisplays, std::time::Duration::from_secs(2)) {
             Ok(ControlResponse::Displays(snapshot)) => Ok(snapshot
                 .outputs
                 .into_iter()
@@ -1419,7 +1426,7 @@ fn projected_cells(state: &DesktopState) -> Vec<(OutputId, Cell)> {
 
 fn panel_geometries() -> Result<Vec<(OutputId, Rect)>, String> {
     let client = ControlClient::connect(BusKind::Session).map_err(|error| format!("{error:?}"))?;
-    match client.call(&ControlRequest::GetPanels) {
+    match client.call_with_timeout(&ControlRequest::GetPanels, std::time::Duration::from_secs(2)) {
         Ok(ControlResponse::Panels(snapshot)) => Ok(snapshot
             .panels
             .into_iter()

@@ -160,11 +160,9 @@ impl ShortcutRegistry {
         let Some(normalized) = checked_binding(action, raw)? else {
             return self.clear(action);
         };
-        if let Some(conflict) = self.conflict_for(action, &normalized) {
-            return Err(FlameError::new(
-                ErrorCode::Conflict,
-                format!("shortcut conflicts with {conflict}"),
-            ));
+        // The key moves to `action`: a binding owns one key, so the previous owner is unassigned.
+        while let Some(previous) = self.conflict_for(action, &normalized) {
+            self.bindings.insert(previous, KeyBinding::unassigned());
         }
         self.bindings
             .insert(action.to_owned(), KeyBinding::assigned(normalized));
@@ -186,16 +184,11 @@ impl ShortcutRegistry {
             candidate.insert(action.to_owned(), binding);
         }
 
-        let mut seen = BTreeMap::<String, String>::new();
-        for (action, binding) in &candidate {
-            let Some(value) = binding.0.as_ref() else {
-                continue;
-            };
-            if let Some(conflict) = seen.insert(value.to_ascii_lowercase(), action.clone()) {
-                return Err(FlameError::new(
-                    ErrorCode::Conflict,
-                    format!("shortcut conflicts with {conflict}"),
-                ));
+        // Duplicates never fail the set: the first action (registry order) keeps the key.
+        let mut seen = std::collections::BTreeSet::new();
+        for binding in candidate.values_mut() {
+            if binding.0.as_ref().is_some_and(|v| !seen.insert(v.to_ascii_lowercase())) {
+                *binding = KeyBinding::unassigned();
             }
         }
 
@@ -296,14 +289,19 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_binding_is_rejected_without_changing_existing_binding() {
+    fn duplicate_binding_moves_the_key_to_the_new_action() {
         let mut registry = ShortcutRegistry::default();
-        let before = registry.binding(ACTION_WORKSPACE_RIGHT).cloned();
-        let error = registry
+        registry
             .set(ACTION_WORKSPACE_RIGHT, "Ctrl+Super+Left")
-            .expect_err("duplicate must fail");
-        assert_eq!(error.code, ErrorCode::Conflict);
-        assert_eq!(registry.binding(ACTION_WORKSPACE_RIGHT).cloned(), before);
+            .expect("duplicate takes the key over");
+        assert_eq!(
+            registry.binding(ACTION_WORKSPACE_RIGHT),
+            Some(&KeyBinding::assigned("Ctrl+Super+Left"))
+        );
+        assert_eq!(
+            registry.binding(ACTION_WORKSPACE_LEFT),
+            Some(&KeyBinding::unassigned())
+        );
     }
 
     #[test]
@@ -314,10 +312,13 @@ mod tests {
             Some(&KeyBinding::assigned("Super+L"))
         );
         assert!(ACTIONS.contains(&ACTION_SESSION_LOCK));
-        let error = registry
+        registry
             .set(ACTION_WINDOW_CLOSE, "super+l")
-            .expect_err("Super+L is taken by the lock action");
-        assert_eq!(error.code, ErrorCode::Conflict);
+            .expect("Super+L moves from the lock action");
+        assert_eq!(
+            registry.binding(ACTION_SESSION_LOCK),
+            Some(&KeyBinding::unassigned())
+        );
         registry
             .set(ACTION_SESSION_LOCK, "Ctrl+Super+K")
             .expect("lock can be rebound");
