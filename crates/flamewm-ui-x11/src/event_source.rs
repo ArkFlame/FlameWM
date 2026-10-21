@@ -63,12 +63,32 @@ where
 pub fn run_surface_runtime_with_reactor_access<F, T>(
     runtime: &mut SurfaceRuntime,
     reactor: &mut Reactor,
-    mut on_event: F,
-    mut on_tick: T,
+    on_event: F,
+    on_tick: T,
 ) -> Result<(), UiBackendError>
 where
     F: FnMut(SurfaceEvent, &mut SurfaceRuntime) -> Result<(), UiBackendError>,
     T: FnMut(&mut SurfaceRuntime) -> Result<(), UiBackendError>,
+{
+    run_surface_runtime_until(runtime, reactor, on_event, on_tick, |runtime| {
+        runtime.has_surfaces()
+    })
+}
+
+/// Same loop as [`run_surface_runtime_with_reactor_access`], but the loop stops when
+/// `keep_running` returns false instead of when no surfaces remain. Hosts that create
+/// surfaces lazily must use this: with zero surfaces the default predicate exits at once.
+pub fn run_surface_runtime_until<F, T, K>(
+    runtime: &mut SurfaceRuntime,
+    reactor: &mut Reactor,
+    mut on_event: F,
+    mut on_tick: T,
+    mut keep_running: K,
+) -> Result<(), UiBackendError>
+where
+    F: FnMut(SurfaceEvent, &mut SurfaceRuntime) -> Result<(), UiBackendError>,
+    T: FnMut(&mut SurfaceRuntime) -> Result<(), UiBackendError>,
+    K: FnMut(&SurfaceRuntime) -> bool,
 {
     loop {
         let (events, drained) = runtime
@@ -84,14 +104,14 @@ where
                 runtime,
             )?;
         }
-        if !runtime.controller.has_surfaces() {
+        if !keep_running(runtime) {
             break;
         }
         on_tick(runtime)?;
-        if drained > 0 && runtime.controller.has_surfaces() {
+        if drained > 0 && runtime.has_surfaces() {
             runtime.redraw_dirty()?;
         }
-        if !runtime.controller.has_surfaces() {
+        if !keep_running(runtime) {
             break;
         }
     }
@@ -106,6 +126,20 @@ mod tests {
         let _ = super::run_surface_runtime_with_reactor::<
             fn(super::SurfaceEvent),
             fn() -> Result<(), String>,
+        >;
+    }
+
+    #[test]
+    fn surface_runtime_until_runner_keeps_lazy_hosts_alive_without_surfaces() {
+        // Zero surfaces is a valid idle state for lazily created hosts; the
+        // until-runner must accept an explicit keep-running predicate.
+        let _ = super::run_surface_runtime_until::<
+            fn(
+                super::SurfaceEvent,
+                &mut super::SurfaceRuntime,
+            ) -> Result<(), super::UiBackendError>,
+            fn(&mut super::SurfaceRuntime) -> Result<(), super::UiBackendError>,
+            fn(&super::SurfaceRuntime) -> bool,
         >;
     }
 

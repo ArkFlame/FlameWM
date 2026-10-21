@@ -510,7 +510,10 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
     let tick_state = std::rc::Rc::clone(&state);
     let tick_input = Arc::clone(&input);
     let search_wake = reactor.wake_deadline();
-    let run_result = flamewm_ui_x11::run_surface_runtime_with_reactor_access(
+    // Surfaces are created lazily on OPEN, so zero surfaces is the normal idle
+    // state: keep running until shutdown was requested and surfaces are torn down.
+    let keep_state = std::rc::Rc::clone(&state);
+    let run_result = flamewm_ui_x11::run_surface_runtime_until(
         &mut runtime,
         &mut reactor,
         move |event, runtime| {
@@ -591,6 +594,7 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
             }
             Ok(())
         },
+        move |runtime| !keep_state.borrow().shutdown || runtime.has_surfaces(),
     )
     .map_err(|error| HostError::Ui(format!("surface runtime: {error:?}")));
     // Final profiler window on clean exit: flush the cadence bucket even

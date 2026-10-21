@@ -122,6 +122,11 @@ pub struct SurfaceRuntime {
 }
 
 impl SurfaceRuntime {
+    /// True while at least one surface is registered with the controller.
+    pub fn has_surfaces(&self) -> bool {
+        self.controller.has_surfaces()
+    }
+
     pub fn new() -> Result<Self, UiBackendError> {
         Ok(Self {
             controller: SurfaceController::new().map_err(UiBackendError::Renderer)?,

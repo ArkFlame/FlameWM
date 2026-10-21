@@ -13,7 +13,8 @@ mod template;
 pub mod test_support;
 
 pub use event_source::{
-    pump_events, run_surface_runtime_with_reactor, run_surface_runtime_with_reactor_access,
+    pump_events, run_surface_runtime_until, run_surface_runtime_with_reactor,
+    run_surface_runtime_with_reactor_access,
 };
 pub use flamewm_render_x11::{
     DockEdge, GeometryTrace, RawPress, RawPressWatch, WindowGeometry, WindowGeometrySlot,
