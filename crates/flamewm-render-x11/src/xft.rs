@@ -285,7 +285,7 @@ impl XftBackend {
         Ok(())
     }
 
-    /// Render a bounded antialiased A8 glyph coverage mask, once per retained paint.
+    /// Render a bounded antialiased A8 glyph coverage mask into `mask` (reused capacity), once per retained paint.
     /// A real alpha mask is blurred by the shared image engine; never overlay shifted glyphs.
     /// # Safety
     /// This backend must hold the live X display, font and Xft library.
@@ -295,7 +295,8 @@ impl XftBackend {
         weight: u16,
         text: &str,
         pad: u32,
-    ) -> Result<(u32, u32, Vec<u8>), String> {
+        mask: &mut Vec<u8>,
+    ) -> Result<(u32, u32), String> {
         let create_alpha = self
             .api
             .draw_create_alpha
@@ -375,11 +376,12 @@ impl XftBackend {
                             row_bytes * height as usize,
                         )
                     };
-                    let mut mask = vec![0; width as usize * height as usize];
+                    mask.clear();
+                    mask.resize(width as usize * height as usize, 0);
                     for (y, row) in mask.chunks_exact_mut(width as usize).enumerate() {
                         row.copy_from_slice(&data[y * row_bytes..y * row_bytes + width as usize]);
                     }
-                    Ok((width, height, mask))
+                    Ok((width, height))
                 })();
                 unsafe { XDestroyImage(image) };
                 result

@@ -1,8 +1,20 @@
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use flamewm_render_core::RuntimeDocument;
 use flamewm_ui_core::style::UiLayer;
 
 pub struct UiDocument {
     pub(crate) document: RuntimeDocument,
+    /// Last whole-document layout, reused by `layout_box_by_id` while the
+    /// document revision and viewport are unchanged.
+    layout_memo: RefCell<Option<LayoutMemo>>,
+}
+
+struct LayoutMemo {
+    revision: u64,
+    viewport: (f32, f32),
+    layout: flamewm_render_core::LayoutResult,
 }
 
 pub struct UiDocumentView<'a> {
@@ -38,6 +50,26 @@ pub trait UiDocumentAccess {
     fn text(&mut self, id: &str, text: String) -> Result<(), String>;
     fn image_rgb8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String>;
     fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String>;
+    /// Like `image_rgba8`, but the document keeps `pixels` by shared handle instead of copying them.
+    fn image_rgba8_shared(
+        &mut self,
+        id: &str,
+        source: String,
+        width: u32,
+        height: u32,
+        pixels: Arc<Vec<u8>>,
+    ) -> Result<(), String> {
+        let pixels = Vec::clone(&pixels);
+        self.image_rgba8(
+            id,
+            RuntimeImage {
+                source,
+                width,
+                height,
+                pixels,
+            },
+        )
+    }
     /// Restores the node's compiled (packaged) image. Documents without image overrides ignore it.
     fn image_reset(&mut self, id: &str) -> Result<(), String> {
         let _ = id;
@@ -100,13 +132,25 @@ impl UiDocument {
     /// id is absent from the template.
     pub fn layout_box_by_id(&self, id: &str, viewport: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
         let index = self.document.node_by_id(id)?;
-        let layout = flamewm_render_core::LayoutEngine::compute(
-            &self.document,
-            viewport.0,
-            viewport.1,
-            flamewm_render_core::InteractionState::default(),
-        );
-        let rect = layout.boxes.get(index as usize)?.rect;
+        let revision = self.document.revision();
+        let mut memo = self.layout_memo.borrow_mut();
+        let fresh = memo
+            .as_ref()
+            .is_some_and(|memo| memo.revision == revision && memo.viewport == viewport);
+        if !fresh {
+            let layout = flamewm_render_core::LayoutEngine::compute(
+                &self.document,
+                viewport.0,
+                viewport.1,
+                flamewm_render_core::InteractionState::default(),
+            );
+            *memo = Some(LayoutMemo {
+                revision,
+                viewport,
+                layout,
+            });
+        }
+        let rect = memo.as_ref()?.layout.boxes.get(index as usize)?.rect;
         Some((rect.x, rect.y, rect.width, rect.height))
     }
 
@@ -207,6 +251,17 @@ macro_rules! document_access_methods {
 
         fn image_rgba8(&mut self, id: &str, image: RuntimeImage) -> Result<(), String> {
             replace_rgba8(&mut self.document, id, image)
+        }
+
+        fn image_rgba8_shared(
+            &mut self,
+            id: &str,
+            source: String,
+            width: u32,
+            height: u32,
+            pixels: Arc<Vec<u8>>,
+        ) -> Result<(), String> {
+            replace_rgba8_shared(&mut self.document, id, source, width, height, pixels)
         }
 
         fn image_reset(&mut self, id: &str) -> Result<(), String> {
@@ -346,18 +401,33 @@ fn set_toggle(
     document.set_position_px(knob_id, left as f32, 2.0)
 }
 
+fn replace_rgba8_shared(
+    document: &mut RuntimeDocument,
+    id: &str,
+    source: String,
+    width: u32,
+    height: u32,
+    pixels: Arc<Vec<u8>>,
+) -> Result<(), String> {
+    validate_dimensions(width, height, pixels.len())?;
+    document.replace_image_for_node_shared(id, source, width, height, pixels)
+}
+
 fn validate_rgba8(image: &RuntimeImage) -> Result<(), String> {
-    if image.width == 0 || image.height == 0 {
+    validate_dimensions(image.width, image.height, image.pixels.len())
+}
+
+fn validate_dimensions(width: u32, height: u32, len: usize) -> Result<(), String> {
+    if width == 0 || height == 0 {
         return Err("runtime image dimensions must be non-zero".to_string());
     }
-    let expected = (image.width as usize)
-        .checked_mul(image.height as usize)
+    let expected = (width as usize)
+        .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or_else(|| "runtime image dimensions overflow".to_string())?;
-    if image.pixels.len() != expected {
+    if len != expected {
         return Err(format!(
-            "runtime image has {} bytes; expected {expected} (straight RGBA8)",
-            image.pixels.len()
+            "runtime image has {len} bytes; expected {expected} (straight RGBA8)"
         ));
     }
     Ok(())
@@ -398,9 +468,11 @@ pub fn rounded_rect_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32
         .collect()
 }
 
-pub fn decode_document(bytes: &[u8]) -> Result<UiDocument, String> {
+/// Decodes an embedded `.rwr` document; image pixels stay borrowed from `bytes`.
+pub fn decode_document(bytes: &'static [u8]) -> Result<UiDocument, String> {
     Ok(UiDocument {
-        document: RuntimeDocument::new(flamewm_render_core::decode(bytes)?)?,
+        document: RuntimeDocument::new(flamewm_render_core::decode_static(bytes)?)?,
+        layout_memo: RefCell::new(None),
     })
 }
 
@@ -431,9 +503,9 @@ mod tests {
             parent: None,
             first_child: None,
             next_sibling: None,
-            id: id.to_string(),
-            action: String::new(),
-            text: String::new(),
+            id: id.to_string().into(),
+            action: std::borrow::Cow::Borrowed(""),
+            text: std::borrow::Cow::Borrowed(""),
             image: None,
             style: Style::default(),
             hover_style: None,
@@ -455,12 +527,13 @@ mod tests {
                 nodes,
             })
             .expect("fixture validates"),
+            layout_memo: RefCell::new(None),
         }
     }
 
     fn px(source: &str, pixels: [u8; 4]) -> RuntimeImage {
         RuntimeImage {
-            source: source.to_string(),
+            source: source.to_string().into(),
             width: 1,
             height: 1,
             pixels: pixels.to_vec(),
@@ -473,10 +546,10 @@ mod tests {
 
     fn image_node_doc() -> UiDocument {
         let asset = ImageAsset {
-            source: "old".to_string(),
+            source: "old".to_string().into(),
             width: 1,
             height: 1,
-            pixels: vec![0, 0, 0, 255],
+            pixels: vec![0, 0, 0, 255].into(),
         };
         let node = CompiledNode {
             image: Some(0),
@@ -503,7 +576,7 @@ mod tests {
             .image_rgba8(
                 "icon",
                 RuntimeImage {
-                    source: "bad".to_string(),
+                    source: "bad".to_string().into(),
                     width: 1,
                     height: 1,
                     pixels: vec![1, 2, 3],
@@ -525,10 +598,10 @@ mod tests {
 
     fn shared_placeholder_doc() -> UiDocument {
         let asset = ImageAsset {
-            source: "shared".to_string(),
+            source: "shared".to_string().into(),
             width: 1,
             height: 1,
-            pixels: vec![9, 9, 9, 255],
+            pixels: vec![9, 9, 9, 255].into(),
         };
         let placeholder = |id: &str, parent: Option<u32>, next: Option<u32>| CompiledNode {
             parent,
@@ -650,7 +723,7 @@ mod tests {
     fn el_color(id: &str, parent: Option<u32>, color: flamewm_render_core::Color) -> CompiledNode {
         CompiledNode {
             parent,
-            action: "a".to_string(),
+            action: "a".to_string().into(),
             style: Style {
                 background: ColorValue::Literal(color),
                 ..Style::default()
@@ -739,6 +812,32 @@ mod tests {
     }
 
     #[test]
+    fn layout_box_by_id_memo_follows_document_revision() {
+        let sized = CompiledNode {
+            parent: Some(0),
+            style: Style {
+                width: flamewm_render_core::Length::Px(50.0),
+                height: flamewm_render_core::Length::Px(20.0),
+                ..Style::default()
+            },
+            ..node("box", NodeKind::Element)
+        };
+        let root = CompiledNode {
+            first_child: Some(1),
+            ..node("root", NodeKind::Element)
+        };
+        let mut doc = make_doc(Vec::new(), Vec::new(), vec![root, sized]);
+        let before = doc
+            .layout_box_by_id("box", (200.0, 200.0))
+            .expect("box");
+        assert_eq!(doc.layout_box_by_id("box", (200.0, 200.0)), Some(before));
+        doc.size("box", 33.0, 17.0).expect("size projection");
+        let after = doc.layout_box_by_id("box", (200.0, 200.0)).expect("box");
+        assert_ne!(Some(after), Some(before));
+        assert_eq!((after.2, after.3), (33.0, 17.0));
+    }
+
+    #[test]
     fn font_family_projection_reaches_runtime_document() {
         let mut doc = image_node_doc();
         doc.font_family("Noto Sans".to_string())
@@ -753,7 +852,7 @@ mod tests {
         let mut doc = make_doc(
             Vec::new(),
             vec![ColorVariable {
-                name: "--accent".to_string(),
+                name: "--accent".to_string().into(),
                 default,
             }],
             vec![el_color("root", None, default)],

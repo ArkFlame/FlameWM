@@ -500,7 +500,7 @@ impl WarpOverlay {
         let scale = (rect.width / f64::from(self.capture.width.max(1)))
             .min(rect.height / f64::from(self.capture.height.max(1)));
         let radius = (f64::from(self.corner_radius) * scale).round().max(0.0) as u32;
-        let mut spans = Vec::new();
+        let mut spans = Vec::with_capacity(h as usize);
         for (row, start, end) in rounded_mask_spans(w, h, radius) {
             let yy = i64::from(y) + i64::from(row);
             let xx = i64::from(x) + i64::from(start);
@@ -561,17 +561,17 @@ impl WarpOverlay {
             .min(f64::from(height) / f64::from(self.capture.height.max(1)));
         let radius = (f64::from(self.corner_radius) * ratio).round() as u32;
         let corners = rounded_mask_spans(width, height, radius);
-        rows.into_iter()
-            .enumerate()
-            .filter_map(|(y, row)| {
-                let (left, right) = row?;
-                let local_row = y.checked_sub(top)?;
-                let (_, clip_start, clip_end) = *corners.get(local_row)?;
-                let a = left.max(min_x + clip_start);
-                let b = right.min(min_x + clip_end);
-                (b > a).then_some((y as u32, a, b))
-            })
-            .collect()
+        // At most one span per corner row, so the bound is exact enough to avoid regrowth.
+        let mut spans = Vec::with_capacity(corners.len());
+        spans.extend(rows.into_iter().enumerate().filter_map(|(y, row)| {
+            let (left, right) = row?;
+            let local_row = y.checked_sub(top)?;
+            let (_, clip_start, clip_end) = *corners.get(local_row)?;
+            let a = left.max(min_x + clip_start);
+            let b = right.min(min_x + clip_end);
+            (b > a).then_some((y as u32, a, b))
+        }));
+        spans
     }
 
     /// Draws the effect at `progress` and maps the window on first call.

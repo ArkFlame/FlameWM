@@ -40,6 +40,18 @@ const TASK_SLOT_COUNT: usize = 8;
 /// Bar height in CSS px used when the panel snapshot carries no logical size.
 /// Matches the `.taskbar` height in ui/shell/flamewm.css.
 const TASKBAR_DEFAULT_HEIGHT: f32 = 44.0;
+/// Logical edge of a taskbar task icon, before the output's shell scale.
+const TASK_ICON_LOGICAL_PX: f32 = 25.0;
+
+/// Taskbar task icon raster edge in device pixels. The icon node is laid out
+/// in logical px and scaled by the panel's UI scale, so requesting only 25 px
+/// upscales it blurrily on HiDPI outputs; requesting the scaled edge matches
+/// how desktop entries request icons.
+pub fn task_icon_px(output: Option<&flamewm_api::display::OutputSnapshot>) -> u32 {
+    let scale =
+        crate::runtime::panel_ui_scale(output.map_or(100, |output| output.shell_scale_percent));
+    (TASK_ICON_LOGICAL_PX * scale).round() as u32
+}
 
 /// Maps the panel's logical (settings) height to the CSS height of the bar.
 /// A zero logical size falls back to the stylesheet default so 100% output
@@ -376,7 +388,8 @@ pub fn project_panel(
                 .map(|application| application.name.as_str())
                 .filter(|name| !name.is_empty())
                 .unwrap_or(state.app_id.as_str());
-            let icon = resolve_icon(icon_resolver, &state.icon_name, IconSize::new(25, 25))?;
+            let px = task_icon_px(view.output);
+            let icon = resolve_icon(icon_resolver, &state.icon_name, IconSize::new(px, px))?;
             document.image_rgb8(&icon_id, icon)?;
             document.text(&label_id, label.to_owned())?;
             document.visible(&line_id, state.running)?;
@@ -1457,6 +1470,15 @@ mod panel_record_tests {
             modes: Vec::new(),
             shell_scale_percent: scale,
         }
+    }
+
+    #[test]
+    fn task_icon_request_scales_with_output_shell_scale() {
+        assert_eq!(task_icon_px(None), 25);
+        assert_eq!(task_icon_px(Some(&output("a", 0, 100))), 25);
+        assert_eq!(task_icon_px(Some(&output("a", 0, 125))), 31);
+        assert_eq!(task_icon_px(Some(&output("a", 0, 150))), 38);
+        assert_eq!(task_icon_px(Some(&output("a", 0, 200))), 50);
     }
 
     fn panel(id: &str, x: i32) -> flamewm_api::panels::PanelSnapshot {

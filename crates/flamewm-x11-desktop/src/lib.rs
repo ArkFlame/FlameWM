@@ -29,6 +29,8 @@ use flamewm_applications::ApplicationCatalog;
 use shared::PendingMode;
 use x11rb::CURRENT_TIME;
 use x11rb::connection::Connection;
+use x11rb::cookie::Cookie;
+use x11rb::errors::ConnectionError;
 use x11rb::protocol::randr::{self, ConnectionExt as RandrConnectionExt};
 use x11rb::protocol::xproto::{self, Atom, AtomEnum, ConnectionExt, Window};
 use x11rb::rust_connection::RustConnection;
@@ -185,18 +187,35 @@ impl X11Desktop {
             .map_err(io_error)?
             .value)
     }
-    fn descendants(&self, parent: Window, windows: &mut Vec<Window>) -> FlameResult<()> {
-        let tree = self
-            .conn
-            .query_tree(parent)
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?;
-        for window in tree.children {
-            windows.push(window);
-            self.descendants(window, windows)?;
+    /// Returns `(window, parent)` for every descendant of the root in DFS
+    /// preorder. Each tree level sends all `QueryTree` requests before reading
+    /// any reply, so the walk costs one round trip per level, not per window.
+    fn managed_tree(&self) -> FlameResult<Vec<(Window, Window)>> {
+        let mut children: BTreeMap<Window, Vec<Window>> = BTreeMap::new();
+        let mut level = vec![self.root];
+        while !level.is_empty() {
+            let cookies = level
+                .iter()
+                .map(|&parent| self.conn.query_tree(parent))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(io_error)?;
+            let mut next = Vec::new();
+            for (parent, cookie) in level.iter().zip(cookies) {
+                // A child destroyed mid-walk fails its own query; it has no children
+                // left to list, so drop it instead of failing the whole snapshot.
+                let tree = match cookie.reply() {
+                    Ok(tree) => tree,
+                    Err(_) if *parent != self.root => continue,
+                    Err(error) => return Err(io_error(error)),
+                };
+                next.extend_from_slice(&tree.children);
+                children.insert(*parent, tree.children);
+            }
+            level = next;
         }
-        Ok(())
+        let mut out = Vec::new();
+        push_preorder(&children, self.root, &mut out);
+        Ok(out)
     }
     pub fn minimize_message(window: Window) -> (Window, &'static str, [u32; 5]) {
         (window, "WM_CHANGE_STATE", [ICONIC_STATE, 0, 0, 0, 0])
@@ -214,10 +233,9 @@ impl X11Desktop {
                 "X11 backend has no matching window generation",
             ));
         }
-        let mut windows = Vec::new();
-        self.descendants(self.root, &mut windows)?;
-        windows
+        self.managed_tree()?
             .into_iter()
+            .map(|(window, _)| window)
             .find(|&window| u64::from(window) == reference.id)
             .ok_or_else(|| FlameError::not_found("window is not managed by X server"))
     }
@@ -234,8 +252,210 @@ impl X11Desktop {
             action,
         )
     }
+    fn window_atoms(&self) -> WindowAtoms {
+        WindowAtoms {
+            active_window: self.atom("_NET_ACTIVE_WINDOW"),
+            wm_class: self.atom("WM_CLASS"),
+            net_wm_name: self.atom("_NET_WM_NAME"),
+            net_wm_state: self.atom("_NET_WM_STATE"),
+            net_wm_desktop: self.atom("_NET_WM_DESKTOP"),
+            state_fullscreen: self.atom("_NET_WM_STATE_FULLSCREEN"),
+            state_hidden: self.atom("_NET_WM_STATE_HIDDEN"),
+            state_max_vert: self.atom("_NET_WM_STATE_MAXIMIZED_VERT"),
+            state_max_horz: self.atom("_NET_WM_STATE_MAXIMIZED_HORZ"),
+            state_sticky: self.atom("_NET_WM_STATE_STICKY"),
+        }
+    }
+    fn frame(&self, atoms: &WindowAtoms) -> FlameResult<Frame> {
+        let active = self
+            .conn
+            .get_property(
+                false,
+                self.root,
+                atoms.active_window,
+                AtomEnum::ANY,
+                0,
+                u32::MAX,
+            )
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?
+            .value32()
+            .and_then(|mut values| values.next());
+        Ok(Frame {
+            workspace: self.workspace_snapshot()?,
+            display: self.display_snapshot()?,
+            active,
+        })
+    }
+    /// Sends every request for one window without waiting for replies.
+    /// `parent` comes from the tree walk, so geometry can be requested now.
+    fn send_window_reads(
+        &self,
+        window: Window,
+        parent: Window,
+        atoms: &WindowAtoms,
+    ) -> WindowReads<'_> {
+        let geometry_target = if parent != self.root { parent } else { window };
+        let property = |atom: Atom| {
+            self.conn
+                .get_property(false, window, atom, AtomEnum::ANY, 0, u32::MAX)
+        };
+        WindowReads {
+            window,
+            class: property(atoms.wm_class),
+            net_name: property(atoms.net_wm_name),
+            states: property(atoms.net_wm_state),
+            desktop: property(atoms.net_wm_desktop),
+            geometry: self.conn.get_geometry(geometry_target),
+        }
+    }
+    /// Collects one window's replies. Returns the snapshot and whether the
+    /// window has a class or name (the `snapshot` filter).
+    fn finish_window(
+        &self,
+        reads: WindowReads<'_>,
+        atoms: &WindowAtoms,
+        frame: &Frame,
+        reference: WindowRef,
+    ) -> FlameResult<(flamewm_api::window::WindowSnapshot, bool)> {
+        let window = reads.window;
+        let class_bytes = reads
+            .class
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?
+            .value;
+        let name_reply = reads
+            .net_name
+            .map_err(io_error)
+            .and_then(|cookie| cookie.reply().map_err(io_error));
+        let (title, name_named) = match name_reply {
+            Ok(reply) => (shared::text_from_bytes(&reply.value), !reply.value.is_empty()),
+            Err(_) => (self.text(window, "WM_NAME")?, false),
+        };
+        let named = !class_bytes.is_empty() || name_named;
+        let class = shared::text_from_bytes(&class_bytes)
+            .split('\0')
+            .nth(1)
+            .unwrap_or_default()
+            .to_owned();
+        let states = reads
+            .states
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?;
+        let (mut fullscreen, mut hidden, mut max_vert, mut max_horz, mut sticky) =
+            (false, false, false, false, false);
+        for state in states.value32().into_iter().flatten() {
+            fullscreen |= state == atoms.state_fullscreen;
+            hidden |= state == atoms.state_hidden;
+            max_vert |= state == atoms.state_max_vert;
+            max_horz |= state == atoms.state_max_horz;
+            sticky |= state == atoms.state_sticky;
+        }
+        let desktop = reads
+            .desktop
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?
+            .value32()
+            .and_then(|mut values| values.next())
+            .unwrap_or(0);
+        let geometry = reads
+            .geometry
+            .map_err(io_error)?
+            .reply()
+            .map_err(io_error)?;
+        let state = if fullscreen {
+            flamewm_api::window::WindowState::Fullscreen
+        } else if hidden {
+            flamewm_api::window::WindowState::Minimized
+        } else if max_vert && max_horz {
+            flamewm_api::window::WindowState::Maximized
+        } else {
+            flamewm_api::window::WindowState::Normal
+        };
+        let output = frame
+            .display
+            .outputs
+            .iter()
+            .find(|output| {
+                output.geometry.contains(Point::new(
+                    i32::from(geometry.x) + i32::from(geometry.width) / 2,
+                    i32::from(geometry.y) + i32::from(geometry.height) / 2,
+                ))
+            })
+            .map(|output| output.id.clone())
+            .unwrap_or_else(|| OutputId::new("default"));
+        let outer_geometry = Rect::new(
+            i32::from(geometry.x),
+            i32::from(geometry.y),
+            i32::from(geometry.width),
+            i32::from(geometry.height),
+        );
+        let snapshot = flamewm_api::window::WindowSnapshot {
+            reference,
+            title,
+            app_id: DesktopAppId::new(class),
+            outer_geometry,
+            restore_geometry: outer_geometry,
+            state,
+            sticky,
+            focused: frame.active == Some(window),
+            workspace: WorkspaceRef::new(desktop as i32, frame.workspace.revision),
+            output,
+            state_generation: 0,
+        };
+        Ok((snapshot, named))
+    }
     fn text(&self, window: Window, name: &str) -> FlameResult<String> {
         Ok(shared::text_from_bytes(&self.property_bytes(window, name)?))
+    }
+}
+
+/// Atoms used by per-window reads, resolved once per snapshot or `get`.
+#[derive(Clone, Copy)]
+struct WindowAtoms {
+    active_window: Atom,
+    wm_class: Atom,
+    net_wm_name: Atom,
+    net_wm_state: Atom,
+    net_wm_desktop: Atom,
+    state_fullscreen: Atom,
+    state_hidden: Atom,
+    state_max_vert: Atom,
+    state_max_horz: Atom,
+    state_sticky: Atom,
+}
+
+/// Root-scoped state shared by every window in one snapshot.
+struct Frame {
+    workspace: WorkspaceSnapshot,
+    display: DisplaySnapshot,
+    active: Option<Window>,
+}
+
+/// In-flight property and geometry requests for one window. Send errors are
+/// kept and reported when the reply is collected, matching the old per-call
+/// `?` semantics.
+struct WindowReads<'a> {
+    window: Window,
+    class: Result<Cookie<'a, RustConnection, xproto::GetPropertyReply>, ConnectionError>,
+    net_name: Result<Cookie<'a, RustConnection, xproto::GetPropertyReply>, ConnectionError>,
+    states: Result<Cookie<'a, RustConnection, xproto::GetPropertyReply>, ConnectionError>,
+    desktop: Result<Cookie<'a, RustConnection, xproto::GetPropertyReply>, ConnectionError>,
+    geometry: Result<Cookie<'a, RustConnection, xproto::GetGeometryReply>, ConnectionError>,
+}
+
+fn push_preorder(
+    children: &BTreeMap<Window, Vec<Window>>,
+    parent: Window,
+    out: &mut Vec<(Window, Window)>,
+) {
+    for &child in children.get(&parent).into_iter().flatten() {
+        out.push((child, parent));
+        push_preorder(children, child, out);
     }
 }
 
@@ -724,92 +944,31 @@ impl WindowPort for X11Desktop {
             .map_err(io_error)?
             .reply()
             .map_err(io_error)?;
-        let geometry_target = if tree.parent != self.root {
-            tree.parent
-        } else {
-            window
-        };
-        let geometry = self
-            .conn
-            .get_geometry(geometry_target)
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?;
-        let states = self.property32(window, "_NET_WM_STATE")?;
-        let desktop = self
-            .property32(window, "_NET_WM_DESKTOP")?
-            .first()
-            .copied()
-            .unwrap_or(0);
-        let workspace = self.workspace_snapshot()?;
-        let output = self
-            .display_snapshot()?
-            .outputs
-            .into_iter()
-            .find(|output| {
-                output.geometry.contains(Point::new(
-                    i32::from(geometry.x) + i32::from(geometry.width) / 2,
-                    i32::from(geometry.y) + i32::from(geometry.height) / 2,
-                ))
-            })
-            .map(|output| output.id)
-            .unwrap_or_else(|| OutputId::new("default"));
-        let title = self
-            .text(window, "_NET_WM_NAME")
-            .or_else(|_| self.text(window, "WM_NAME"))?;
-        let class = self
-            .text(window, "WM_CLASS")?
-            .split('\0')
-            .nth(1)
-            .unwrap_or_default()
-            .to_owned();
-        let has = |name: &str| states.contains(&self.atom(name));
-        let state = if has("_NET_WM_STATE_FULLSCREEN") {
-            flamewm_api::window::WindowState::Fullscreen
-        } else if has("_NET_WM_STATE_HIDDEN") {
-            flamewm_api::window::WindowState::Minimized
-        } else if has("_NET_WM_STATE_MAXIMIZED_VERT") && has("_NET_WM_STATE_MAXIMIZED_HORZ") {
-            flamewm_api::window::WindowState::Maximized
-        } else {
-            flamewm_api::window::WindowState::Normal
-        };
-        let outer_geometry = Rect::new(
-            i32::from(geometry.x),
-            i32::from(geometry.y),
-            i32::from(geometry.width),
-            i32::from(geometry.height),
-        );
-        Ok(flamewm_api::window::WindowSnapshot {
-            reference,
-            title,
-            app_id: DesktopAppId::new(class),
-            outer_geometry,
-            restore_geometry: outer_geometry,
-            state,
-            sticky: has("_NET_WM_STATE_STICKY"),
-            focused: self
-                .property32(self.root, "_NET_ACTIVE_WINDOW")?
-                .first()
-                .copied()
-                == Some(window),
-            workspace: WorkspaceRef::new(desktop as i32, workspace.revision),
-            output,
-            state_generation: 0,
-        })
+        let atoms = self.window_atoms();
+        let reads = self.send_window_reads(window, tree.parent, &atoms);
+        let frame = self.frame(&atoms)?;
+        Ok(self.finish_window(reads, &atoms, &frame, reference)?.0)
     }
     fn snapshot(&self) -> FlameResult<Vec<flamewm_api::window::WindowSnapshot>> {
-        let mut windows = Vec::new();
-        self.descendants(self.root, &mut windows)?;
-        Ok(windows
+        let tree = self.managed_tree()?;
+        let atoms = self.window_atoms();
+        let reads: Vec<WindowReads<'_>> = tree
+            .iter()
+            .map(|&(window, parent)| self.send_window_reads(window, parent, &atoms))
+            .collect();
+        // A failed shared read drops every window, as the per-window `get` did.
+        let Ok(frame) = self.frame(&atoms) else {
+            return Ok(Vec::new());
+        };
+        Ok(reads
             .into_iter()
-            .filter(|&window| {
-                self.property_bytes(window, "WM_CLASS")
-                    .is_ok_and(|v| !v.is_empty())
-                    || self
-                        .property_bytes(window, "_NET_WM_NAME")
-                        .is_ok_and(|v| !v.is_empty())
+            .filter_map(|reads| {
+                let reference = WindowRef::new(u64::from(reads.window), 0);
+                self.finish_window(reads, &atoms, &frame, reference)
+                    .ok()
+                    .filter(|(_, named)| *named)
+                    .map(|(window, _)| window)
             })
-            .filter_map(|window| self.get(WindowRef::new(u64::from(window), 0)).ok())
             .collect())
     }
     fn activate(&mut self, w: WindowRef) -> FlameResult<()> {
@@ -1214,6 +1373,22 @@ impl DisplayPort for X11Desktop {
             ));
         }
         self.flush()
+    }
+}
+
+#[cfg(test)]
+mod window_walk_tests {
+    use super::*;
+
+    #[test]
+    fn preorder_keeps_depth_first_sibling_order() {
+        let mut children = BTreeMap::new();
+        children.insert(1, vec![2, 3]);
+        children.insert(2, vec![4]);
+        children.insert(3, Vec::new());
+        let mut out = Vec::new();
+        push_preorder(&children, 1, &mut out);
+        assert_eq!(out, vec![(2, 1), (4, 2), (3, 1)]);
     }
 }
 

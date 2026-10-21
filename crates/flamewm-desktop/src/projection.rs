@@ -10,10 +10,10 @@ use flamewm_ui_core::context_menu::{menu_surface, surface_fill};
 use flamewm_ui_core::style::UiLayer;
 use flamewm_ui_x11::{RuntimeImage, UiColor, UiDocumentAccess};
 
-use crate::wallpaper_loader::WallpaperPresentation;
+use crate::wallpaper_loader::{WallpaperPresentation, WallpaperRaster};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Mirror of the shared icon theme generation for [`ParallelIconService::icon_key`],
 /// which stays a static constructor for its existing callers. Written only by
@@ -109,7 +109,7 @@ struct WallpaperStamp {
 /// not an image so a later image re-sends.
 static WALLPAPER_STAMP: Mutex<Option<WallpaperStamp>> = Mutex::new(None);
 
-fn wallpaper_stamp(raster: &Rgba8Raster) -> WallpaperStamp {
+fn wallpaper_stamp(raster: &WallpaperRaster) -> WallpaperStamp {
     WallpaperStamp {
         source: raster.source.clone(),
         width: raster.width,
@@ -120,7 +120,7 @@ fn wallpaper_stamp(raster: &Rgba8Raster) -> WallpaperStamp {
 }
 
 /// Compares a cached stamp against `raster` without allocating.
-fn wallpaper_matches(stamp: &WallpaperStamp, raster: &Rgba8Raster) -> bool {
+fn wallpaper_matches(stamp: &WallpaperStamp, raster: &WallpaperRaster) -> bool {
     stamp.source == raster.source
         && stamp.width == raster.width
         && stamp.height == raster.height
@@ -133,7 +133,7 @@ fn wallpaper_matches(stamp: &WallpaperStamp, raster: &Rgba8Raster) -> bool {
 fn project_wallpaper_image(
     document: &mut impl UiDocumentAccess,
     cache: &mut Option<WallpaperStamp>,
-    raster: &Rgba8Raster,
+    raster: &WallpaperRaster,
 ) -> Result<(), String> {
     if cache
         .as_ref()
@@ -141,14 +141,12 @@ fn project_wallpaper_image(
     {
         return Ok(());
     }
-    document.image_rgba8(
+    document.image_rgba8_shared(
         "desktop-wallpaper-selection",
-        RuntimeImage {
-            source: raster.source.clone(),
-            width: raster.width,
-            height: raster.height,
-            pixels: raster.pixels.clone(),
-        },
+        raster.source.clone(),
+        raster.width,
+        raster.height,
+        Arc::clone(&raster.pixels),
     )?;
     *cache = Some(wallpaper_stamp(raster));
     Ok(())
@@ -427,7 +425,7 @@ impl ParallelIconService {
         self.service
             .drain_ready()
             .into_iter()
-            .map(|result| (result.key, result.result.ok()))
+            .map(|result| (std::sync::Arc::unwrap_or_clone(result.key), result.result.ok()))
             .collect()
     }
 
@@ -508,15 +506,6 @@ fn fade_ghost_pixels(pixels: &mut [u8]) {
     }
 }
 
-pub fn project_drag_ghost_icon(
-    document: &mut impl UiDocumentAccess,
-    icons: &mut ParallelIconService,
-    kind: DesktopItemKind,
-    icon_override: Option<&str>,
-) -> Result<(), String> {
-    project_drag_ghost_icon_scaled(document, icons, kind, icon_override, 100)
-}
-
 pub fn project_drag_ghost_icon_scaled(
     document: &mut impl UiDocumentAccess,
     icons: &mut ParallelIconService,
@@ -539,16 +528,6 @@ pub fn project_drag_ghost_icon_scaled(
         icons.request_high(key);
     }
     Ok(())
-}
-
-/// A prediction is an in-memory presentation only. It is not a DesktopItem,
-/// does not watch temporary files and cannot be selected or opened.
-pub fn project_conversion_preview_icon(
-    document: &mut impl UiDocumentAccess,
-    icons: &mut ParallelIconService,
-    output: &std::path::Path,
-) -> Result<(), String> {
-    project_conversion_preview_icon_scaled(document, icons, output, 100)
 }
 
 pub fn project_conversion_preview_icon_scaled(
@@ -1149,13 +1128,11 @@ mod tests {
 
     #[test]
     fn default_and_custom_image_presentations_project_independent_of_setting_text() {
-        let image = WallpaperPresentation::Image(Rgba8Raster {
+        let image = WallpaperPresentation::Image(WallpaperRaster {
             source: "packaged/default.webp".to_owned(),
             width: 1,
             height: 1,
-            pixels: vec![0, 0, 0, 255],
-            origin: flamewm_integrations_linux::icons::IconOrigin::PackagedFlame,
-            fallback_reason: None,
+            pixels: Arc::new(vec![0, 0, 0, 255]),
         });
         for wallpaper in [
             None,
@@ -1212,6 +1189,7 @@ mod tests {
     #[derive(Default)]
     struct WallpaperImageProbe {
         sent: Vec<Vec<u8>>,
+        shared: Vec<Arc<Vec<u8>>>,
         fail_next: bool,
     }
 
@@ -1222,6 +1200,21 @@ mod tests {
                 return Err("rejected".to_owned());
             }
             self.sent.push(image.pixels);
+            Ok(())
+        }
+        fn image_rgba8_shared(
+            &mut self,
+            _: &str,
+            _: String,
+            _: u32,
+            _: u32,
+            pixels: Arc<Vec<u8>>,
+        ) -> Result<(), String> {
+            if std::mem::take(&mut self.fail_next) {
+                return Err("rejected".to_owned());
+            }
+            self.sent.push(pixels.as_ref().clone());
+            self.shared.push(pixels);
             Ok(())
         }
         fn visible(&mut self, _: &str, _: bool) -> Result<(), String> {
@@ -1235,14 +1228,12 @@ mod tests {
         }
     }
 
-    fn wallpaper_raster(fill: u8) -> Rgba8Raster {
-        Rgba8Raster {
+    fn wallpaper_raster(fill: u8) -> WallpaperRaster {
+        WallpaperRaster {
             source: "custom.webp".to_owned(),
             width: 1,
             height: 1,
-            pixels: vec![fill, fill, fill, 255],
-            origin: flamewm_integrations_linux::icons::IconOrigin::PackagedFlame,
-            fallback_reason: None,
+            pixels: Arc::new(vec![fill, fill, fill, 255]),
         }
     }
 
@@ -1256,6 +1247,10 @@ mod tests {
 
         project_wallpaper_image(&mut probe, &mut cache, &first).expect("first projection");
         assert_eq!(probe.sent, vec![vec![10, 10, 10, 255]]);
+        assert!(
+            Arc::ptr_eq(&probe.shared[0], &first.pixels),
+            "projection must hand over the loader buffer, not a copy"
+        );
 
         // Same loader raster: no image write, document keeps the prior pixels.
         project_wallpaper_image(&mut probe, &mut cache, &first).expect("unchanged projection");
@@ -1275,8 +1270,8 @@ mod tests {
         let raster = wallpaper_raster(42);
         let mut cache = None;
         let mut probe = WallpaperImageProbe {
-            sent: Vec::new(),
             fail_next: true,
+            ..WallpaperImageProbe::default()
         };
         assert!(project_wallpaper_image(&mut probe, &mut cache, &raster).is_err());
         project_wallpaper_image(&mut probe, &mut cache, &raster).expect("retry");

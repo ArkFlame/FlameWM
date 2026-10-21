@@ -50,6 +50,7 @@ pub fn rounded_mask_spans(width: u32, height: u32, radius: u32) -> Vec<(u32, u32
 /// Bounding rectangles for a frame outer: a single rect unless `floating`
 /// (skin radius), otherwise the canonical rounded row spans.
 #[must_use]
+#[cfg(test)]
 pub fn bounding_rectangles(outer: Rect, floating: bool, style: DecorationStyle) -> Vec<Rectangle> {
     bounding_rectangles_with_titlebar(
         outer,

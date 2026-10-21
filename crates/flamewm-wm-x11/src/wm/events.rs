@@ -305,18 +305,19 @@ impl<'a, C: Connection> Wm<'a, C> {
             {
                 // Our own metadata publish echoes back here; only a value that
                 // differs from what we wrote is a real external change.
-                let count = self.read_first_cardinal(window, self.atoms.net_number_of_desktops);
-                let names = self
+                // Pipelined: both root reads are sent before either reply is awaited.
+                let count_cookie = self
                     .conn
-                    .get_property(
-                        false,
-                        window,
-                        self.atoms.net_desktop_names,
-                        AtomEnum::ANY,
-                        0,
-                        u32::MAX,
-                    )
-                    .ok()
+                    .get_property(false, window, self.atoms.net_number_of_desktops, AtomEnum::ANY, 0, 1)
+                    .ok();
+                let names_cookie = self
+                    .conn
+                    .get_property(false, window, self.atoms.net_desktop_names, AtomEnum::ANY, 0, u32::MAX)
+                    .ok();
+                let count = count_cookie
+                    .and_then(|cookie| cookie.reply().ok())
+                    .and_then(|reply| reply.value32().and_then(|mut values| values.next()));
+                let names = names_cookie
                     .and_then(|cookie| cookie.reply().ok())
                     .map(|reply| reply.value)
                     .unwrap_or_default();
@@ -376,7 +377,7 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .round() as i32;
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.title_text_width = width;
-                    client.title = title;
+                    client.title = title.into();
                 }
                 self.mark_windows();
                 self.paint_chrome(client_id)?;
@@ -392,8 +393,8 @@ impl<'a, C: Connection> Wm<'a, C> {
             self.icon_requests
                 .retain(|_, requesters| !requesters.is_empty());
             if let Some(client) = self.clients.get_mut(&client_id) {
-                client.wm_instance = wm_instance;
-                client.wm_class = wm_class;
+                client.wm_instance = wm_instance.into();
+                client.wm_class = wm_class.into();
                 client.icon = icon;
                 client.icon_fallback = fallback;
                 client.icon_request_token = self.next_client_lifetime;

@@ -4,6 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use flamewm_api::session::SessionCapabilities;
@@ -25,27 +26,48 @@ const ICON_CACHE_BYTE_BUDGET: usize = 8 * 1024 * 1024;
 
 pub type IconCacheKey = (String, u32, u32);
 
+/// Decoded icon raster. The pixel buffer is shared: the cache and every
+/// document showing the icon hold one allocation, so a hit clones an `Arc`.
+#[derive(Clone)]
+pub struct IconRaster {
+    pub source: String,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<Vec<u8>>,
+}
+
+impl From<RuntimeImage> for IconRaster {
+    fn from(image: RuntimeImage) -> Self {
+        Self {
+            source: image.source,
+            width: image.width,
+            height: image.height,
+            pixels: Arc::new(image.pixels),
+        }
+    }
+}
+
+type SizeKey = (u32, u32);
+
 struct IconCacheEntry {
-    image: RuntimeImage,
+    raster: IconRaster,
     /// Stamp of the most recent insert/get; matches this entry's newest `order` record.
     stamp: u64,
 }
 
-/// LRU via lazy recency records: `order` holds `(key, stamp)` pairs pushed on
-/// every insert/get. A record is live only if its stamp equals the entry's
-/// current stamp; stale records are skipped on eviction and compacted away
-/// once they outnumber live entries, keeping every operation amortized O(1).
+/// LRU via lazy recency records: `order` holds `(name, size, stamp)` triples
+/// pushed on every insert/get. A record is live only if its stamp equals the
+/// entry's current stamp; stale records are skipped on eviction and compacted
+/// away once they outnumber live entries, keeping every operation amortized O(1).
+/// Entries nest by name so lookups borrow `&str` without allocating.
 struct IconCache {
     entry_budget: usize,
     byte_budget: usize,
     bytes: usize,
+    len: usize,
     clock: u64,
-    entries: HashMap<IconCacheKey, IconCacheEntry>,
-    order: VecDeque<(IconCacheKey, u64)>,
-}
-
-fn image_bytes(image: &RuntimeImage) -> usize {
-    image.pixels.len()
+    entries: HashMap<Arc<str>, HashMap<SizeKey, IconCacheEntry>>,
+    order: VecDeque<(Arc<str>, SizeKey, u64)>,
 }
 
 impl IconCache {
@@ -58,6 +80,7 @@ impl IconCache {
             entry_budget: entry_budget.max(1),
             byte_budget,
             bytes: 0,
+            len: 0,
             clock: 0,
             entries: HashMap::new(),
             order: VecDeque::new(),
@@ -73,66 +96,89 @@ impl IconCache {
         self.entries.clear();
         self.order.clear();
         self.bytes = 0;
+        self.len = 0;
     }
 
-    fn remove(&mut self, key: &IconCacheKey) {
-        if let Some(entry) = self.entries.remove(key) {
-            self.bytes -= image_bytes(&entry.image);
+    fn is_live(&self, name: &str, size: SizeKey, stamp: u64) -> bool {
+        self.entries
+            .get(name)
+            .and_then(|sizes| sizes.get(&size))
+            .is_some_and(|entry| entry.stamp == stamp)
+    }
+
+    fn remove(&mut self, name: &str, size: SizeKey) {
+        let Some(sizes) = self.entries.get_mut(name) else {
+            return;
+        };
+        if let Some(entry) = sizes.remove(&size) {
+            self.bytes -= entry.raster.pixels.len();
+            self.len -= 1;
+        }
+        if sizes.is_empty() {
+            self.entries.remove(name);
         }
     }
 
     /// Membership test that does not touch LRU recency.
     #[cfg(test)]
-    fn contains(&self, key: &IconCacheKey) -> bool {
-        self.entries.contains_key(key)
+    fn contains(&self, name: &str, size: SizeKey) -> bool {
+        self.entries
+            .get(name)
+            .is_some_and(|sizes| sizes.contains_key(&size))
     }
 
-    fn get(&mut self, key: &IconCacheKey) -> Option<RuntimeImage> {
+    fn get(&mut self, name: &str, size: SizeKey) -> Option<IconRaster> {
         let stamp = self.next_stamp();
-        let entry = self.entries.get_mut(key)?;
+        let key = self.entries.get_key_value(name)?.0.clone();
+        let entry = self.entries.get_mut(name)?.get_mut(&size)?;
         entry.stamp = stamp;
-        let image = entry.image.clone();
-        self.order.push_back((key.clone(), stamp));
+        let raster = entry.raster.clone();
+        self.order.push_back((key, size, stamp));
         self.compact_order();
-        Some(image)
+        Some(raster)
     }
 
-    fn insert(&mut self, key: IconCacheKey, image: RuntimeImage) {
-        self.remove(&key);
-        let size = image_bytes(&image);
-        if size > self.byte_budget {
+    fn insert(&mut self, name: &str, size: SizeKey, raster: IconRaster) {
+        self.remove(name, size);
+        let bytes = raster.pixels.len();
+        if bytes > self.byte_budget {
             // An oversized raster is never retained; evicting others for it
             // would only churn the cache.
             return;
         }
-        while self.entries.len() >= self.entry_budget || self.bytes + size > self.byte_budget {
-            let Some((oldest, stamp)) = self.order.pop_front() else {
+        while self.len >= self.entry_budget || self.bytes + bytes > self.byte_budget {
+            let Some((old_name, old_size, stamp)) = self.order.pop_front() else {
                 break;
             };
-            if self
-                .entries
-                .get(&oldest)
-                .is_some_and(|entry| entry.stamp == stamp)
-            {
-                self.remove(&oldest);
+            if self.is_live(&old_name, old_size, stamp) {
+                self.remove(&old_name, old_size);
             }
         }
         let stamp = self.next_stamp();
-        self.bytes += size;
-        self.order.push_back((key.clone(), stamp));
-        self.entries.insert(key, IconCacheEntry { image, stamp });
+        let key: Arc<str> = Arc::from(name);
+        self.bytes += bytes;
+        self.len += 1;
+        self.order.push_back((key.clone(), size, stamp));
+        self.entries
+            .entry(key)
+            .or_default()
+            .insert(size, IconCacheEntry { raster, stamp });
         self.compact_order();
     }
 
     /// Drops stale recency records once they dominate, bounding `order` to
     /// roughly twice the live entry count.
     fn compact_order(&mut self) {
-        if self.order.len() <= 2 * self.entries.len() + 16 {
+        if self.order.len() <= 2 * self.len + 16 {
             return;
         }
         let entries = &self.entries;
-        self.order
-            .retain(|(key, stamp)| entries.get(key).is_some_and(|entry| entry.stamp == *stamp));
+        self.order.retain(|(name, size, stamp)| {
+            entries
+                .get(&**name)
+                .and_then(|sizes| sizes.get(size))
+                .is_some_and(|entry| entry.stamp == *stamp)
+        });
     }
 }
 
@@ -205,8 +251,13 @@ pub struct IconBinding {
     pub view_epoch: u64,
 }
 
-fn bindings() -> &'static std::sync::Mutex<HashMap<IconTarget, IconBinding>> {
-    static B: OnceLock<std::sync::Mutex<HashMap<IconTarget, IconBinding>>> = OnceLock::new();
+/// Bindings are keyed by target and raster edge: per-output panels share one
+/// target id but may request different edges (HiDPI mix), and each must keep
+/// its own exact-size binding instead of overwriting the other's.
+type BindingKey = (IconTarget, u32);
+
+fn bindings() -> &'static std::sync::Mutex<HashMap<BindingKey, IconBinding>> {
+    static B: OnceLock<std::sync::Mutex<HashMap<BindingKey, IconBinding>>> = OnceLock::new();
     B.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
@@ -247,7 +298,7 @@ fn record_binding(target: IconTarget, name: &str, w: u32, h: u32, generation: u6
         view_epoch: epoch_for_target(target),
     };
     if let Ok(mut bindings) = bindings().lock() {
-        bindings.insert(target, binding);
+        bindings.insert((target, w), binding);
     }
 }
 
@@ -266,7 +317,7 @@ pub fn apply_icon_result(
     w: u32,
     h: u32,
     generation: u64,
-    image: RuntimeImage,
+    raster: impl Into<IconRaster>,
 ) -> Result<bool, String> {
     if !target_in_range(target) {
         return Ok(false);
@@ -280,14 +331,29 @@ pub fn apply_icon_result(
     let matches = bindings()
         .lock()
         .ok()
-        .and_then(|bindings| bindings.get(&target).cloned())
+        .and_then(|bindings| bindings.get(&(target, w)).cloned())
         .is_some_and(|current| current == expected);
     if !matches {
         stale_counter().increment();
         return Ok(false);
     }
-    document.image_rgb8(&icon_node_id_for_target(target), image)?;
+    paint_raster(document, &icon_node_id_for_target(target), raster.into())?;
     Ok(true)
+}
+
+/// Hands the shared pixel buffer to the document; no per-document copy.
+fn paint_raster(
+    document: &mut impl UiDocumentAccess,
+    id: &str,
+    raster: IconRaster,
+) -> Result<(), String> {
+    document.image_rgba8_shared(
+        id,
+        raster.source,
+        raster.width,
+        raster.height,
+        raster.pixels,
+    )
 }
 
 /// Repaints one target's node from the view-independent cache when its live
@@ -297,6 +363,7 @@ pub fn apply_icon_result(
 pub fn apply_cached_binding(
     document: &mut impl UiDocumentAccess,
     target: IconTarget,
+    edge: u32,
 ) -> Result<bool, String> {
     if !target_in_range(target) {
         return Ok(false);
@@ -304,14 +371,14 @@ pub fn apply_cached_binding(
     let bound = bindings()
         .lock()
         .ok()
-        .and_then(|bindings| bindings.get(&target).map(|binding| binding.key.clone()));
+        .and_then(|bindings| bindings.get(&(target, edge)).map(|binding| binding.key.clone()));
     let Some((name, w, h)) = bound else {
         return Ok(false);
     };
-    let Some(image) = cached_image(&name, w, h) else {
+    let Some(raster) = cached_image(&name, w, h) else {
         return Ok(false);
     };
-    document.image_rgb8(&icon_node_id_for_target(target), image)?;
+    paint_raster(document, &icon_node_id_for_target(target), raster)?;
     Ok(true)
 }
 
@@ -350,20 +417,20 @@ impl StartViewNote {
     }
 }
 
-fn cached_image(name: &str, w: u32, h: u32) -> Option<RuntimeImage> {
-    icon_cache().lock().ok()?.get(&(name.to_owned(), w, h))
+fn cached_image(name: &str, w: u32, h: u32) -> Option<IconRaster> {
+    icon_cache().lock().ok()?.get(name, (w, h))
 }
 
 #[cfg(test)]
 fn cached_contains(name: &str, w: u32, h: u32) -> bool {
     icon_cache()
         .lock()
-        .is_ok_and(|cache| cache.contains(&(name.to_owned(), w, h)))
+        .is_ok_and(|cache| cache.contains(name, (w, h)))
 }
 
-pub fn note_icon_result(name: &str, w: u32, h: u32, image: RuntimeImage) {
+pub fn note_icon_result(name: &str, w: u32, h: u32, raster: impl Into<IconRaster>) {
     if let Ok(mut cache) = icon_cache().lock() {
-        cache.insert((name.to_owned(), w, h), image);
+        cache.insert(name, (w, h), raster.into());
     }
     result_counter().increment();
 }
@@ -412,7 +479,7 @@ fn schedule_visible(
     h: u32,
 ) -> Result<(), String> {
     if let Some(hit) = cached_image(name, w, h) {
-        document.image_rgb8(icon_id, hit)?;
+        paint_raster(document, icon_id, hit)?;
         // The node now shows this key: bind it so a late completion for an
         // earlier key cannot overwrite it.
         if let Some(loader) = loader.as_deref_mut() {
@@ -698,14 +765,15 @@ pub fn project_task_slots_async(
                 .filter(|name| !name.is_empty())
                 .unwrap_or(state.app_id.as_str());
             document.text(&label_id, label.to_owned())?;
+            let px = crate::projection::task_icon_px(view.output);
             schedule_visible(
                 document,
                 &icon_id,
                 &mut loader.as_deref_mut(),
                 IconTarget::TaskSlot(index as u8),
                 &task_icon_name(icon_cache, state, &snapshot.applications),
-                25,
-                25,
+                px,
+                px,
             )?;
             document.visible(&line_id, state.running)?;
             document.background_clear(&slot_id)?;
@@ -1077,6 +1145,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn task_slot_bindings_keep_one_edge_per_output_scale() {
+        let _guard = icon_test_lock().lock();
+        test_reset_icon_bindings();
+        let mut doc = FakeDoc::default();
+        // Two outputs share TaskSlot(0) but project different icon edges.
+        test_record_binding(IconTarget::TaskSlot(0), "app", 25, 25, 1);
+        test_record_binding(IconTarget::TaskSlot(0), "app", 31, 31, 1);
+        let at_25 = apply_icon_result(
+            &mut doc,
+            IconTarget::TaskSlot(0),
+            "app",
+            25,
+            25,
+            1,
+            sized_test_image("a", 25),
+        )
+        .expect("edge 25 ok");
+        let at_31 = apply_icon_result(
+            &mut doc,
+            IconTarget::TaskSlot(0),
+            "app",
+            31,
+            31,
+            1,
+            sized_test_image("a", 31),
+        )
+        .expect("edge 31 ok");
+        assert!(at_25 && at_31, "both edges keep their own binding");
+        assert_eq!(doc.images.len(), 2);
+    }
+
+    #[test]
     fn icon_ready_after_epoch_bump_repaints_bound_node() {
         let _guard = icon_test_lock().lock();
         test_reset_icon_bindings();
@@ -1098,7 +1198,7 @@ pub(crate) mod tests {
         assert!(!completed, "epoch bump stales the late completion");
         assert!(doc.images.is_empty());
         let repainted =
-            apply_cached_binding(&mut doc, IconTarget::TaskSlot(1)).expect("cached repaint ok");
+            apply_cached_binding(&mut doc, IconTarget::TaskSlot(1), 25).expect("cached repaint ok");
         assert!(repainted, "cached raster for the bound key must repaint");
         assert_eq!(doc.images, vec!["task-slot-2-icon".to_owned()]);
     }
@@ -1683,14 +1783,35 @@ pub(crate) mod tests {
         let first = ("first".to_owned(), 1, 1);
         let second = ("second".to_owned(), 1, 1);
         let third = ("third".to_owned(), 1, 1);
-        cache.insert(first.clone(), test_image("first"));
-        cache.insert(second.clone(), test_image("second"));
-        assert_eq!(cache.get(&first).expect("first cache hit").source, "first");
-        cache.insert(third.clone(), test_image("third"));
+        cache.insert(&first.0, (first.1, first.2), test_image("first").into());
+        cache.insert(&second.0, (second.1, second.2), test_image("second").into());
+        assert_eq!(
+            cache
+                .get(&first.0, (first.1, first.2))
+                .expect("first cache hit")
+                .source,
+            "first"
+        );
+        cache.insert(&third.0, (third.1, third.2), test_image("third").into());
 
-        assert!(cache.get(&second).is_none(), "least-recent entry evicted");
-        assert_eq!(cache.get(&first).expect("first retained").source, "first");
-        assert_eq!(cache.get(&third).expect("third retained").source, "third");
+        assert!(
+            cache.get(&second.0, (second.1, second.2)).is_none(),
+            "least-recent entry evicted"
+        );
+        assert_eq!(
+            cache
+                .get(&first.0, (first.1, first.2))
+                .expect("first retained")
+                .source,
+            "first"
+        );
+        assert_eq!(
+            cache
+                .get(&third.0, (third.1, third.2))
+                .expect("third retained")
+                .source,
+            "third"
+        );
     }
 
     fn sized_test_image(source: &str, side: u32) -> RuntimeImage {
@@ -1708,16 +1829,19 @@ pub(crate) mod tests {
         let first = ("first".to_owned(), 1, 1);
         let second = ("second".to_owned(), 1, 1);
         let third = ("third".to_owned(), 1, 1);
-        cache.insert(first.clone(), test_image("first"));
-        cache.insert(second.clone(), test_image("second"));
-        assert!(cache.contains(&first));
-        assert!(!cache.contains(&third));
-        cache.insert(third.clone(), test_image("third"));
+        cache.insert(&first.0, (first.1, first.2), test_image("first").into());
+        cache.insert(&second.0, (second.1, second.2), test_image("second").into());
+        assert!(cache.contains(&first.0, (first.1, first.2)));
+        assert!(!cache.contains(&third.0, (third.1, third.2)));
+        cache.insert(&third.0, (third.1, third.2), test_image("third").into());
 
         // `first` was only probed, so it stays the least-recent entry.
-        assert!(!cache.contains(&first), "contains must not refresh recency");
-        assert!(cache.contains(&second));
-        assert!(cache.contains(&third));
+        assert!(
+            !cache.contains(&first.0, (first.1, first.2)),
+            "contains must not refresh recency"
+        );
+        assert!(cache.contains(&second.0, (second.1, second.2)));
+        assert!(cache.contains(&third.0, (third.1, third.2)));
     }
 
     #[test]
@@ -1728,18 +1852,21 @@ pub(crate) mod tests {
             .map(|name| ((*name).to_owned(), 1, 1))
             .collect();
         for key in &keys {
-            cache.insert(key.clone(), test_image(&key.0));
+            cache.insert(&key.0, (key.1, key.2), test_image(&key.0).into());
         }
         // Hammer one key so stale recency records pile up and get compacted.
         for _ in 0..100 {
-            assert!(cache.get(&keys[0]).is_some());
+            assert!(cache.get(&keys[0].0, (keys[0].1, keys[0].2)).is_some());
         }
-        assert!(cache.order.len() <= 2 * cache.entries.len() + 16 + 1);
+        assert!(cache.order.len() <= 2 * cache.len + 16 + 1);
         // Recency now: b (oldest), c, a. Next insert evicts b.
-        cache.insert(("d".to_owned(), 1, 1), test_image("d"));
-        assert!(!cache.contains(&keys[1]), "least-recent live entry evicted");
-        assert!(cache.contains(&keys[0]));
-        assert!(cache.contains(&keys[2]));
+        cache.insert("d", (1, 1), test_image("d").into());
+        assert!(
+            !cache.contains(&keys[1].0, (keys[1].1, keys[1].2)),
+            "least-recent live entry evicted"
+        );
+        assert!(cache.contains(&keys[0].0, (keys[0].1, keys[0].2)));
+        assert!(cache.contains(&keys[2].0, (keys[2].1, keys[2].2)));
         assert_eq!(cache.bytes, 3 * 4);
     }
 
@@ -1750,13 +1877,22 @@ pub(crate) mod tests {
         let first = ("first".to_owned(), 1, 1);
         let second = ("second".to_owned(), 1, 1);
         let third = ("third".to_owned(), 1, 1);
-        cache.insert(first.clone(), test_image("first"));
-        cache.insert(second.clone(), test_image("second"));
-        cache.insert(third.clone(), test_image("third"));
+        cache.insert(&first.0, (first.1, first.2), test_image("first").into());
+        cache.insert(&second.0, (second.1, second.2), test_image("second").into());
+        cache.insert(&third.0, (third.1, third.2), test_image("third").into());
 
-        assert!(cache.get(&first).is_none(), "oldest evicted by bytes");
-        assert!(cache.get(&second).is_some(), "second retained");
-        assert!(cache.get(&third).is_some(), "third retained");
+        assert!(
+            cache.get(&first.0, (first.1, first.2)).is_none(),
+            "oldest evicted by bytes"
+        );
+        assert!(
+            cache.get(&second.0, (second.1, second.2)).is_some(),
+            "second retained"
+        );
+        assert!(
+            cache.get(&third.0, (third.1, third.2)).is_some(),
+            "third retained"
+        );
         assert!(cache.bytes <= 8, "cache stays under byte budget");
     }
 
@@ -1765,12 +1901,19 @@ pub(crate) mod tests {
         let mut cache = IconCache::with_budgets(10, 8);
         let small = ("small".to_owned(), 1, 1);
         let huge = ("huge".to_owned(), 3, 3);
-        cache.insert(small.clone(), test_image("small"));
-        cache.insert(huge.clone(), sized_test_image("huge", 3));
+        cache.insert(&small.0, (small.1, small.2), test_image("small").into());
+        cache.insert(
+            &huge.0,
+            (huge.1, huge.2),
+            sized_test_image("huge", 3).into(),
+        );
 
-        assert!(cache.get(&huge).is_none(), "oversized entry not retained");
         assert!(
-            cache.get(&small).is_some(),
+            cache.get(&huge.0, (huge.1, huge.2)).is_none(),
+            "oversized entry not retained"
+        );
+        assert!(
+            cache.get(&small.0, (small.1, small.2)).is_some(),
             "oversized insert evicts nothing"
         );
         assert!(cache.bytes <= 8, "cache stays under byte budget");

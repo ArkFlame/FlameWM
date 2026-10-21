@@ -1,8 +1,24 @@
-use super::primitives::scale_rect;
+use super::primitives::{scale_rect, snap_device_rect};
 use super::*;
 use crate::external_drawable::match_argb32_visual;
 use crate::native::coverage::{build_coverage, build_coverage_scaled};
 use crate::xshape::ClipRect;
+use flamewm_image_core::blur::BlurScratch;
+
+/// Per-thread shadow work buffers. The display thread is the only shadow painter,
+/// so every text shadow reuses the blur scratch and staging buffers instead of
+/// reallocating them per paint.
+#[derive(Default)]
+struct ShadowScratch {
+    blur: BlurScratch,
+    rgba: Vec<u8>,
+    argb: Vec<u32>,
+    mask: Vec<u8>,
+}
+
+thread_local! {
+    static SHADOW_SCRATCH: std::cell::RefCell<ShadowScratch> = std::cell::RefCell::default();
+}
 
 /// Fingerprint of retained scroll state for the paint cache key.
 /// Revision alone is not enough: scroll writes are light-touch.
@@ -40,16 +56,20 @@ impl X11App {
             return Ok(false);
         }
         let pad = (radius * 3.0).ceil() as u32 + 4;
-        let mask = {
+        let mut scratch = SHADOW_SCRATCH.take();
+        let dims = {
             let xft = self.xft.as_mut().expect("checked Xft");
             unsafe { xft.set_preferred_family(family) };
-            unsafe { xft.text_alpha_mask(size, weight, text, pad) }
+            unsafe { xft.text_alpha_mask(size, weight, text, pad, &mut scratch.mask) }
         };
-        let Ok((w, h, mask)) = mask else {
+        let Ok((w, h)) = dims else {
+            SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
             return Ok(false);
         };
-        let mut rgba = vec![0_u8; w as usize * h as usize * 4];
-        for (out, coverage) in rgba.chunks_exact_mut(4).zip(mask) {
+        let ShadowScratch { blur, rgba, argb, mask } = &mut scratch;
+        rgba.clear();
+        rgba.resize(w as usize * h as usize * 4, 0);
+        for (out, &coverage) in rgba.chunks_exact_mut(4).zip(mask.iter()) {
             out.copy_from_slice(&[
                 color.r,
                 color.g,
@@ -57,22 +77,26 @@ impl X11App {
                 ((u16::from(coverage) * u16::from(color.a) + 127) / 255) as u8,
             ]);
         }
-        flamewm_image_core::blur::gaussian_blur_rgba(&mut rgba, w, h, radius)
+        flamewm_image_core::blur::gaussian_blur_rgba_with(blur, rgba, w, h, radius)
             .map_err(|e| format!("text shadow blur: {e:?}"))?;
         let dx = x.round() as i32 - pad as i32 - 4;
         let dy = baseline.round() as i32 - pad as i32 - size.ceil() as i32;
-        // The XRender target does not inherit the GC clip stack. Enforce each
-        // retained clip on the alpha mask before uploading it.
+        // The XRender target does not inherit the GC clip stack. Keep only the
+        // pixels inside every retained clip (intersection of the clip bounds),
+        // zeroing the rest of the alpha mask before uploading it.
+        let (mut min_x, mut min_y) = (i32::MIN, i32::MIN);
+        let (mut max_x, mut max_y) = (i32::MAX, i32::MAX);
+        for clip in &self.clip_stack {
+            min_x = min_x.max(clip.x.floor() as i32);
+            min_y = min_y.max(clip.y.floor() as i32);
+            max_x = max_x.min((clip.x + clip.width).ceil() as i32);
+            max_y = max_y.min((clip.y + clip.height).ceil() as i32);
+        }
         for yy in 0..h as usize {
             for xx in 0..w as usize {
                 let gx = dx + xx as i32;
                 let gy = dy + yy as i32;
-                if self.clip_stack.iter().any(|clip| {
-                    gx < clip.x.floor() as i32
-                        || gy < clip.y.floor() as i32
-                        || gx >= (clip.x + clip.width).ceil() as i32
-                        || gy >= (clip.y + clip.height).ceil() as i32
-                }) {
+                if gx < min_x || gy < min_y || gx >= max_x || gy >= max_y {
                     rgba[(yy * w as usize + xx) * 4 + 3] = 0;
                 }
             }
@@ -80,17 +104,18 @@ impl X11App {
         let Some(visual) = match_argb32_visual(self.display, self.screen) else {
             return Ok(false);
         };
+        crate::native::image::scale_and_premultiply_into(argb, rgba, w, h, w, h);
         let root = unsafe { XRootWindow(self.display, self.screen) };
         let (pixmap, bytes) = self.alloc_pixmap(root, w, h, 32)?;
         let result = (|| {
-            let argb = crate::native::image::scale_and_premultiply(&rgba, w, h, w, h);
-            unsafe { self.upload_argb32_words(pixmap, visual, &argb, w, h)? };
+            unsafe { self.upload_argb32_words(pixmap, visual, argb, w, h)? };
             if let Some(render) = self.xrender.as_mut() {
                 unsafe { render.blit_argb32_over(pixmap, dx, dy, w, h)? };
             }
             Ok::<_, String>(())
         })();
         self.free_pixmap_tracked(pixmap, bytes);
+        SHADOW_SCRATCH.with(|slot| slot.replace(scratch));
         result.map(|()| true)
     }
 }
@@ -598,7 +623,7 @@ impl X11App {
                 treatment,
                 tint,
             } => {
-                let rect = scale_rect(*rect, scale);
+                let (dx, dy, width, height) = snap_device_rect(*rect, scale);
                 let Some((compiled_asset, src_w, src_h, _, pixels)) =
                     document.image_for_node(*node)
                 else {
@@ -610,8 +635,6 @@ impl X11App {
                     *revision, expected_revision,
                     "stale image paint command for node {node}"
                 );
-                let width = rect.width.round().max(1.0) as u32;
-                let height = rect.height.round().max(1.0) as u32;
                 // SAFETY: image_pixmap uses the app's initialized X11 resources and cache.
                 let cached = unsafe {
                     self.image_pixmap(
@@ -627,8 +650,6 @@ impl X11App {
                         *tint,
                     )?
                 };
-                let dx = rect.x.round() as i32;
-                let dy = rect.y.round() as i32;
                 // Canonical scene target: XRender/Xft paint onto the scene
                 // backbuffer; composited path uses PictOpOver with true alpha.
                 if let Some(xrender) = self.xrender.as_mut() {

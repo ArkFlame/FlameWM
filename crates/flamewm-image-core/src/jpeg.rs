@@ -8,7 +8,7 @@ use std::io::Cursor;
 use zune_jpeg::JpegDecoder;
 use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
 
-use crate::{RgbaImage, check_size_limits};
+use crate::{RgbaImage, check_size_limits, expand_rgb_to_rgba_in_place};
 
 /// Decodes a baseline or extended-sequential JPEG at natural size.
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
@@ -32,8 +32,16 @@ pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
             info.components
         ));
     }
-    let rgb = decoder.decode().map_err(|error| error.to_string())?;
-    RgbaImage::from_rgb8_opaque(width, height, &rgb)
+    // Expand the decoder's RGB buffer in place instead of copying into a second
+    // full-size RGBA buffer while the RGB one is still alive.
+    let mut pixels = decoder.decode().map_err(|error| error.to_string())?;
+    let count = width as usize * height as usize;
+    if pixels.len() != count * 3 {
+        return Err("JPEG pixel buffer does not match its dimensions".to_string());
+    }
+    pixels.resize(count * 4, 0);
+    expand_rgb_to_rgba_in_place(&mut pixels, count);
+    RgbaImage::from_rgba8(width, height, pixels)
         .ok_or_else(|| "JPEG pixel buffer does not match its dimensions".to_string())
 }
 

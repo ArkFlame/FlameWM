@@ -15,7 +15,6 @@ use super::model::FrameControl;
 /// Canonical title typeface (skin `Typography::RWR_0_0_9`).
 pub const TITLE_FONT_FAMILY: &str = Typography::RWR_0_0_9.family;
 /// Canonical title size: 12px semibold.
-pub const TITLE_FONT_SIZE_PX: f32 = 12.0;
 /// Canonical title weight: semibold / 600.
 pub const TITLE_FONT_WEIGHT: i32 = 600;
 
@@ -59,6 +58,7 @@ pub struct ChromeScene {
 /// Only a `floating` window gets the rounded mask.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn plan_scene(
     frame_w: u32,
     frame_h: u32,

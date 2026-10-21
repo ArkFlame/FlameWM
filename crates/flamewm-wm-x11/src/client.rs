@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use x11rb::protocol::xproto::Window;
 
 use crate::chrome::IconImage;
@@ -22,7 +24,7 @@ pub struct ManagedClient {
     /// authoritative.
     pub outer: Rect,
     pub workspace: usize,
-    pub title: String,
+    pub title: Arc<str>,
     pub title_text_width: i32,
     /// Cached `_NET_WM_ICON` selection (largest valid image), alpha preserved.
     /// Falls back to the catalog `Icon=` raster (converted to `IconImage`)
@@ -39,8 +41,8 @@ pub struct ManagedClient {
     /// NUL-separated token) and class (second token). Paint never performs
     /// an X round-trip for these; the `_NET_WM_ICON` property path refreshes
     /// them alongside the icon.
-    pub wm_instance: String,
-    pub wm_class: String,
+    pub wm_instance: Arc<str>,
+    pub wm_class: Arc<str>,
     pub transient_for: Option<Window>,
     pub minimized: bool,
     pub sticky: bool,
@@ -150,14 +152,14 @@ mod tests {
             hints: ClientSizeHints::default(),
             outer: root_to_rect(start),
             workspace: 0,
-            title: String::new(),
+            title: Arc::from(""),
             title_text_width: 0,
             icon: None,
             icon_fallback: None,
             icon_request_token: 0,
             catalog_icon_key: None,
-            wm_instance: String::new(),
-            wm_class: String::new(),
+            wm_instance: Arc::from(""),
+            wm_class: Arc::from(""),
             transient_for: None,
             minimized: false,
             sticky: false,

@@ -6,7 +6,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder, Window,
+    AtomEnum, ConnectionExt as _, ImageFormat, ImageOrder, Window,
 };
 
 pub type Result<T> = std::result::Result<T, String>;

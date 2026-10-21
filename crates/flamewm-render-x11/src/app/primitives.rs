@@ -116,3 +116,52 @@ pub(crate) fn scale_rect(rect: Rect, scale: f32) -> Rect {
         height: rect.height * scale,
     }
 }
+
+/// Device-pixel box for a logical rect. The origin and far edge are each rounded once
+/// in device space, so neighbouring edges agree and the size is their difference, not a
+/// separately rounded width that can drift from the origin. Size is at least one pixel.
+pub(crate) fn snap_device_rect(rect: Rect, scale: f32) -> (i32, i32, u32, u32) {
+    let x0 = (rect.x * scale).round();
+    let y0 = (rect.y * scale).round();
+    let x1 = ((rect.x + rect.width) * scale).round();
+    let y1 = ((rect.y + rect.height) * scale).round();
+    let width = (x1 - x0).max(1.0) as u32;
+    let height = (y1 - y0).max(1.0) as u32;
+    (x0 as i32, y0 as i32, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snap_rounds_far_edge_in_device_space() {
+        // Separate rounding gives origin 16 and width round(1.5) = 2 (far edge 18);
+        // the far edge at round(17.1) = 17 gives a 1 px box that ends where it should.
+        let rect = Rect {
+            x: 10.4,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        assert_eq!(snap_device_rect(rect, 1.5), (16, 0, 1, 2));
+    }
+
+    #[test]
+    fn snap_is_identity_at_unit_scale_and_clamps_to_one_pixel() {
+        let rect = Rect {
+            x: 3.0,
+            y: 4.0,
+            width: 5.0,
+            height: 6.0,
+        };
+        assert_eq!(snap_device_rect(rect, 1.0), (3, 4, 5, 6));
+        let tiny = Rect {
+            x: 2.2,
+            y: 2.2,
+            width: 0.1,
+            height: 0.1,
+        };
+        assert_eq!(snap_device_rect(tiny, 1.0), (2, 2, 1, 1));
+    }
+}

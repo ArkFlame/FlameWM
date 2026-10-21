@@ -136,7 +136,7 @@ fn fire_node<F>(
 where
     F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
 {
-    let name = document.document.nodes[node as usize].action.as_str();
+    let name: &str = &document.document.nodes[node as usize].action;
     if name.is_empty() {
         return Ok(false);
     }
@@ -597,7 +597,7 @@ impl X11App {
                     if button.button == 1 {
                         if let Some(index) = hit {
                             let now = button.time as u64;
-                            let name = document.document.nodes[index as usize].action.as_str();
+                            let name: &str = &document.document.nodes[index as usize].action;
                             let is_title_move =
                                 name.starts_with("window.") && name.ends_with(".move");
                             let double_title = is_title_move
@@ -662,8 +662,8 @@ impl X11App {
                         // "slider." capture the press as a slider drag; pointer
                         // geometry comes from the retained layout box.
                         if let Some(index) = hit {
-                            let press_action =
-                                document.document.nodes[index as usize].action.as_str();
+                            let press_action: &str =
+                                &document.document.nodes[index as usize].action;
                             if press_action.starts_with("range.")
                                 || press_action.starts_with("slider.")
                             {

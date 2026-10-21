@@ -1,4 +1,5 @@
 use crate::model::*;
+use std::borrow::Cow;
 
 // One table per wire enum: the tag bytes live here once, for both directions.
 trait Wire: Sized {
@@ -81,14 +82,23 @@ pub fn encode(document: &CompiledDocument) -> Result<Vec<u8>, String> {
         writer.string(&node.text)?;
         writer.opt_u16(node.image);
         writer.style(&node.style);
-        writer.opt_style(node.hover_style.as_ref());
-        writer.opt_style(node.active_style.as_ref());
+        writer.opt_style(node.hover_style.as_deref());
+        writer.opt_style(node.active_style.as_deref());
     }
 
     Ok(writer.bytes)
 }
 
 pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
+    decode_with(bytes, None)
+}
+
+/// Like [`decode`], but image pixels borrow from `bytes` instead of being copied to the heap.
+pub fn decode_static(bytes: &'static [u8]) -> Result<CompiledDocument, String> {
+    decode_with(bytes, Some(bytes))
+}
+
+fn decode_with(bytes: &[u8], borrow: Option<&'static [u8]>) -> Result<CompiledDocument, String> {
     let mut reader = Reader { bytes, cursor: 0 };
     let magic = reader.take(4)?;
     if magic != FORMAT_MAGIC {
@@ -132,14 +142,14 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
     let mut variables = Vec::with_capacity(variable_count);
     for _ in 0..variable_count {
         variables.push(ColorVariable {
-            name: reader.string()?,
+            name: reader.string(borrow)?,
             default: reader.color()?,
         });
     }
 
     let mut assets = Vec::with_capacity(asset_count);
     for _ in 0..asset_count {
-        let source = reader.string()?;
+        let source = reader.string(borrow)?;
         let width = reader.u32()?;
         let height = reader.u32()?;
         let byte_count = reader.u32()? as usize;
@@ -153,15 +163,18 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
                 "compiled image has {byte_count} bytes; expected {expected}"
             ));
         }
-        let raw = reader.take(byte_count)?.to_vec();
+        let start = reader.cursor;
+        let raw = reader.take(byte_count)?;
         let pixels = if bytes_per_pixel == 3 {
             let mut rgba = Vec::with_capacity(raw.len() / 3 * 4);
             for rgb in raw.chunks_exact(3) {
                 rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
-            rgba
+            Cow::Owned(rgba)
+        } else if let Some(static_bytes) = borrow {
+            Cow::Borrowed(&static_bytes[start..start + byte_count])
         } else {
-            raw
+            Cow::Owned(raw.to_vec())
         };
         assets.push(ImageAsset {
             source,
@@ -177,13 +190,13 @@ pub fn decode(bytes: &[u8]) -> Result<CompiledDocument, String> {
         let parent = reader.opt_u32()?;
         let first_child = reader.opt_u32()?;
         let next_sibling = reader.opt_u32()?;
-        let id = reader.string()?;
-        let action = reader.string()?;
-        let text = reader.string()?;
+        let id = reader.string(borrow)?;
+        let action = reader.string(borrow)?;
+        let text = reader.string(borrow)?;
         let image = reader.opt_u16()?;
         let style = reader.style_versioned(version)?;
-        let hover_style = reader.opt_style(version)?;
-        let active_style = reader.opt_style(version)?;
+        let hover_style = reader.opt_style(version)?.map(Box::new);
+        let active_style = reader.opt_style(version)?.map(Box::new);
         nodes.push(CompiledNode {
             kind,
             parent,
@@ -398,11 +411,22 @@ impl<'a> Reader<'a> {
         let value = self.u32()?;
         Ok((value != u32::MAX).then_some(value))
     }
-    fn string(&mut self) -> Result<String, String> {
+    /// Borrows from the embedded bytes when `borrow` is set (the `decode_static` path).
+    fn string(&mut self, borrow: Option<&'static [u8]>) -> Result<Cow<'static, str>, String> {
         let len = self.u32()? as usize;
+        let start = self.cursor;
         let bytes = self.take(len)?;
-        String::from_utf8(bytes.to_vec())
-            .map_err(|_| "compiled document contains invalid UTF-8".to_string())
+        let invalid = || "compiled document contains invalid UTF-8".to_string();
+        Ok(match borrow {
+            Some(static_bytes) => Cow::Borrowed(
+                std::str::from_utf8(&static_bytes[start..start + len]).map_err(|_| invalid())?,
+            ),
+            None => Cow::Owned(
+                std::str::from_utf8(bytes)
+                    .map_err(|_| invalid())?
+                    .to_string(),
+            ),
+        })
     }
     fn tag<T: Wire>(&mut self) -> Result<T, String> {
         let value = self.u8()?;
@@ -559,7 +583,7 @@ mod tests {
                 source: "pixel.ppm".into(),
                 width: 1,
                 height: 1,
-                pixels: vec![255, 0, 0, 255],
+                pixels: vec![255, 0, 0, 255].into(),
             }],
             nodes: vec![CompiledNode {
                 kind: NodeKind::Element,
@@ -567,8 +591,8 @@ mod tests {
                 first_child: None,
                 next_sibling: None,
                 id: "root".into(),
-                action: String::new(),
-                text: String::new(),
+                action: Cow::Borrowed(""),
+                text: Cow::Borrowed(""),
                 image: None,
                 style: Style::default(),
                 hover_style: None,
@@ -578,6 +602,40 @@ mod tests {
         let bytes = encode(&document).unwrap();
         let decoded = decode(&bytes).unwrap();
         assert_eq!(decoded, document);
+    }
+
+    #[test]
+    fn decode_static_borrows_pixels_and_matches_decode() {
+        let document = CompiledDocument {
+            source_fingerprint: 7,
+            root: 0,
+            variables: Vec::new(),
+            assets: vec![ImageAsset {
+                source: "pixel.png".into(),
+                width: 1,
+                height: 1,
+                pixels: vec![1, 2, 3, 4].into(),
+            }],
+            nodes: vec![CompiledNode {
+                kind: NodeKind::Image,
+                parent: None,
+                first_child: None,
+                next_sibling: None,
+                id: Cow::Borrowed(""),
+                action: Cow::Borrowed(""),
+                text: Cow::Borrowed(""),
+                image: Some(0),
+                style: Style::default(),
+                hover_style: None,
+                active_style: None,
+            }],
+        };
+        let bytes: &'static [u8] = Box::leak(encode(&document).unwrap().into_boxed_slice());
+        let borrowed = decode_static(bytes).unwrap();
+        assert!(matches!(borrowed.assets[0].pixels, Cow::Borrowed(_)));
+        assert!(matches!(borrowed.assets[0].source, Cow::Borrowed(_)));
+        assert_eq!(borrowed, decode(bytes).unwrap());
+        assert_eq!(borrowed, document);
     }
 
     #[test]
@@ -660,9 +718,9 @@ mod tests {
                 parent: None,
                 first_child: None,
                 next_sibling: None,
-                id: String::new(),
-                action: String::new(),
-                text: String::new(),
+                id: Cow::Borrowed(""),
+                action: Cow::Borrowed(""),
+                text: Cow::Borrowed(""),
                 image: None,
                 style,
                 hover_style: None,

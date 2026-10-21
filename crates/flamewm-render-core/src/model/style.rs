@@ -254,9 +254,7 @@ impl Default for Style {
 impl RuntimeDocument {
     pub fn set_color_variable(&mut self, name: &str, color: Color) -> Result<(), String> {
         let index = self
-            .variable_index
-            .get(name)
-            .copied()
+            .variable_by_name(name)
             .ok_or_else(|| format!("no color variable named '{name}'"))?;
         if self.variable_values[index as usize] != color {
             self.variable_values[index as usize] = color;
@@ -491,7 +489,7 @@ impl RuntimeDocument {
         self.text_overrides
             .get(&index)
             .map(String::as_str)
-            .unwrap_or_else(|| self.document.nodes[index as usize].text.as_str())
+            .unwrap_or_else(|| &*self.document.nodes[index as usize].text)
     }
 
     pub fn resolve_color(&self, value: ColorValue) -> Color {

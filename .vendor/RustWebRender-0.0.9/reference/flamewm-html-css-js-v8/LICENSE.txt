@@ -1,7 +1,0 @@
-Prototype-specific HTML/CSS/JavaScript code in this archive is provided for the user's FlameWM project use.
-
-The FlameWM artwork in `assets/flamewm.png` and `assets/flamewm-icon.svg` is project-provided artwork.
-
-Selected KDE Breeze Icons 6.29.0 SVG assets are redistributed under their upstream terms. The supplied upstream `COPYING-ICONS`, `COPYING.LIB`, and `README.md` are retained in `assets/breeze/` and govern those assets where applicable.
-
-No IBM Plex font binary is redistributed by this archive.

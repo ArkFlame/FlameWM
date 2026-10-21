@@ -6,9 +6,9 @@ fn fixture_node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> Com
         parent: None,
         first_child: None,
         next_sibling: None,
-        id: id.to_string(),
-        action: String::new(),
-        text: text.to_string(),
+        id: id.to_string().into(),
+        action: std::borrow::Cow::Borrowed(""),
+        text: text.to_string().into(),
         image,
         style: Style::default(),
         hover_style: None,
@@ -18,10 +18,10 @@ fn fixture_node(kind: NodeKind, id: &str, text: &str, image: Option<u16>) -> Com
 
 fn image_asset(source: &str, width: u32, height: u32, pixels: Vec<u8>) -> ImageAsset {
     ImageAsset {
-        source: source.to_string(),
+        source: source.to_string().into(),
         width,
         height,
-        pixels,
+        pixels: pixels.into(),
     }
 }
 
@@ -49,7 +49,7 @@ mod ui_scale_tests {
                 },
                 CompiledNode {
                     parent: Some(0),
-                    action: "activate".to_string(),
+                    action: "activate".to_string().into(),
                     style: Style {
                         width: Length::Px(40.0),
                         height: Length::Px(20.0),
@@ -222,7 +222,9 @@ mod ui_scale_tests {
             &document,
             &layout,
             InteractionState::default(),
-        ).iter().all(|command| !matches!(command,
+        )
+        .iter()
+        .all(|command| !matches!(command,
             crate::paint::PaintCommand::FillRect { rect, .. } if *rect == layout.boxes[1].rect
         )));
     }
@@ -267,7 +269,7 @@ mod image_replace_tests {
         let entry = doc.node_image_override(0).expect("override stored");
         assert_eq!(entry.source, "new");
         assert_eq!((entry.width, entry.height), (1, 1));
-        assert_eq!(entry.rgba8, vec![1, 2, 3, 200]);
+        assert_eq!(*entry.rgba8, vec![1, 2, 3, 200]);
         assert_eq!(doc.image_revision_for_node(0), 1);
         assert_eq!(doc.image_revision(0), 0);
     }
@@ -298,14 +300,12 @@ mod image_replace_tests {
     #[test]
     fn zero_dims_err() {
         let mut doc = image_doc();
-        assert!(
-            doc.replace_image_for_node("icon", "x".to_string(), 0, 1, vec![0, 0, 0, 255])
-                .is_err()
-        );
-        assert!(
-            doc.replace_image_for_node("icon", "x".to_string(), 1, 0, Vec::new())
-                .is_err()
-        );
+        assert!(doc
+            .replace_image_for_node("icon", "x".to_string(), 0, 1, vec![0, 0, 0, 255])
+            .is_err());
+        assert!(doc
+            .replace_image_for_node("icon", "x".to_string(), 1, 0, Vec::new())
+            .is_err());
         assert!(doc.node_image_override(0).is_none());
     }
 
@@ -322,10 +322,9 @@ mod image_replace_tests {
     #[test]
     fn unknown_id_errs() {
         let mut doc = image_doc();
-        assert!(
-            doc.replace_image_for_node("missing", "x".to_string(), 1, 1, vec![0, 0, 0, 255])
-                .is_err()
-        );
+        assert!(doc
+            .replace_image_for_node("missing", "x".to_string(), 1, 1, vec![0, 0, 0, 255])
+            .is_err());
     }
 
     #[test]
@@ -590,16 +589,75 @@ mod geometry_mutation_tests {
             .unwrap();
         assert_eq!(document.revision(), revision);
         assert_eq!(document.peek_damage(), SurfaceDamage::None);
-        assert!(
-            document
-                .set_position_px("desktop-drag-ghost", f32::NAN, 0.0)
-                .is_err()
-        );
-        assert!(
-            document
-                .set_size_px("desktop-drag-ghost", -1.0, 0.0)
-                .is_err()
-        );
+        assert!(document
+            .set_position_px("desktop-drag-ghost", f32::NAN, 0.0)
+            .is_err());
+        assert!(document
+            .set_size_px("desktop-drag-ghost", -1.0, 0.0)
+            .is_err());
         assert_eq!(document.revision(), revision);
+    }
+}
+
+#[cfg(test)]
+mod lookup_index_tests {
+    use super::*;
+
+    #[test]
+    fn node_by_id_finds_every_named_node_and_rejects_unknown_ids() {
+        let nodes = ["zeta", "alpha", "", "mid"]
+            .iter()
+            .map(|id| fixture_node(NodeKind::Element, id, "", None))
+            .collect();
+        let document = fixture_document(nodes, Vec::new());
+        assert_eq!(document.node_by_id("zeta"), Some(0));
+        assert_eq!(document.node_by_id("alpha"), Some(1));
+        assert_eq!(document.node_by_id("mid"), Some(3));
+        assert_eq!(document.node_by_id(""), None);
+        assert_eq!(document.node_by_id("missing"), None);
+    }
+
+    #[test]
+    fn duplicate_runtime_ids_are_rejected() {
+        let document = CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: Vec::new(),
+            assets: Vec::new(),
+            nodes: vec![
+                fixture_node(NodeKind::Element, "a", "", None),
+                fixture_node(NodeKind::Element, "b", "", None),
+                fixture_node(NodeKind::Element, "a", "", None),
+            ],
+        };
+        assert_eq!(
+            RuntimeDocument::new(document).unwrap_err(),
+            "duplicate runtime id 'a'"
+        );
+    }
+
+    #[test]
+    fn duplicate_variable_names_resolve_to_last_definition() {
+        let variable = |name: &str| ColorVariable {
+            name: name.to_string().into(),
+            default: Color::BLACK,
+        };
+        let document = CompiledDocument {
+            source_fingerprint: 0,
+            root: 0,
+            variables: vec![variable("--x"), variable("--y"), variable("--x")],
+            assets: Vec::new(),
+            nodes: vec![fixture_node(NodeKind::Element, "root", "", None)],
+        };
+        let mut runtime = RuntimeDocument::new(document).unwrap();
+        assert_eq!(runtime.variable_by_name("--x"), Some(2));
+        assert_eq!(runtime.variable_by_name("--y"), Some(1));
+        assert_eq!(runtime.variable_by_name("--z"), None);
+        assert_eq!(runtime.variable_by_name(""), None);
+        runtime
+            .set_color_variable("--x", Color::TRANSPARENT)
+            .unwrap();
+        assert_eq!(runtime.variable_values[2], Color::TRANSPARENT);
+        assert_eq!(runtime.variable_values[0], Color::BLACK);
     }
 }

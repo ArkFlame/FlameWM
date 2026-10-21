@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use flamewm_api::Rect;
 
@@ -83,13 +83,16 @@ impl SelectionModel {
     }
 
     #[must_use]
-    pub fn hit_test(&self, item_rects: &BTreeMap<String, Rect>) -> BTreeSet<String> {
+    pub fn hit_test<'a>(
+        &self,
+        item_rects: impl IntoIterator<Item = (&'a str, Rect)>,
+    ) -> BTreeSet<String> {
         let Some(rubber) = self.rubber else {
             return BTreeSet::new();
         };
         item_rects
-            .iter()
-            .filter_map(|(id, rect)| rect.intersects(rubber).then_some(id.clone()))
+            .into_iter()
+            .filter_map(|(id, rect)| rect.intersects(rubber).then(|| id.to_owned()))
             .collect()
     }
 }
@@ -146,8 +149,8 @@ mod tests {
     fn rubber_band_uses_rectangle_intersection_not_origin_only() {
         let mut selection = SelectionModel::default();
         selection.set_rubber(Rect::new(50, 50, 20, 20));
-        let rects = BTreeMap::from([("a".to_owned(), Rect::new(40, 40, 15, 15))]);
-        assert!(selection.hit_test(&rects).contains("a"));
+        let rects = [("a", Rect::new(40, 40, 15, 15))];
+        assert!(selection.hit_test(rects).contains("a"));
     }
 
     #[test]

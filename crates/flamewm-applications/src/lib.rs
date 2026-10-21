@@ -247,22 +247,16 @@ impl ApplicationCatalog {
         &self,
         identity: &WindowApplicationIdentity,
     ) -> Option<&DesktopEntry> {
-        let candidates: Vec<String> = [
+        let candidates = [
             identity.wm_instance.as_str(),
             identity.wm_class.as_str(),
             identity.executable_basename.as_str(),
         ]
-        .into_iter()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.to_ascii_lowercase())
-        .collect();
-        if candidates.is_empty() {
-            return None;
-        }
+        .map(|value| (!value.trim().is_empty()).then(|| value.to_ascii_lowercase()));
         // Priorities: StartupWMClass, then desktop-file id stem (e.g. "firefox" from
         // "org.mozilla.firefox.desktop"), then Exec basename; all exact, case-insensitive.
         for index_map in [&self.by_wm_class, &self.by_stem, &self.by_exec] {
-            for needle in &candidates {
+            for needle in candidates.iter().flatten() {
                 if let Some(index) = index_map.get(needle) {
                     return self.applications.get(*index);
                 }
@@ -718,10 +712,6 @@ fn spawn_with_startup(
 /// handle does not help because callers discard it. `SIGCHLD = SIG_IGN` would
 /// reap globally and disturb the WM's own children. One blocked-in-`waitpid`
 /// thread per launched application exits as soon as that application exits.
-fn spawn_reaped(command: &mut Command) -> FlameResult<u32> {
-    spawn_reaped_with_id(command, None)
-}
-
 fn spawn_reaped_with_id(command: &mut Command, startup_id: Option<String>) -> FlameResult<u32> {
     let mut child = command.spawn().map_err(|error| {
         FlameError::new(ErrorCode::IoFailure, format!("launch application: {error}"))
@@ -982,7 +972,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn spawned_application_is_reaped_after_exit() {
-        let pid = spawn_reaped(&mut Command::new("true")).unwrap();
+        let pid = spawn_reaped_with_id(&mut Command::new("true"), None).unwrap();
         let proc_entry = PathBuf::from(format!("/proc/{pid}"));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         // A zombie keeps /proc/<pid> alive; reaping removes it.

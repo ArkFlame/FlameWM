@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
-use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Instant;
 
@@ -1383,7 +1383,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 match &item.preview {
                     Some(image) => {
                         document.visible(&preview, true)?;
-                        document.image_rgba8(&preview, image.clone())?;
+                        document.image_rgba8_shared(
+                            &preview,
+                            image.source.clone(),
+                            image.width,
+                            image.height,
+                            Arc::clone(&image.pixels),
+                        )?;
                     }
                     None => document.visible(&preview, false)?,
                 }
@@ -2423,7 +2429,13 @@ impl<T: ControlTransport> SettingsApplication<T> {
                     let preview = self.themes.selected_preview(kind, &value);
                     document.visible("icon-theme-selected-preview", preview.is_some())?;
                     if let Some(image) = preview {
-                        document.image_rgba8("icon-theme-selected-preview", image.clone())?;
+                        document.image_rgba8_shared(
+                            "icon-theme-selected-preview",
+                            image.source.clone(),
+                            image.width,
+                            image.height,
+                            Arc::clone(&image.pixels),
+                        )?;
                     }
                 }
             }

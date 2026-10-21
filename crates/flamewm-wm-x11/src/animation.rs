@@ -414,41 +414,44 @@ pub fn is_unpainted_client_capture(
 /// starts on a later Expose once the capture is non-blank. Arming never delays the map.
 #[derive(Debug, Default)]
 pub struct OpenGate {
-    /// Remaining capture attempts per armed client.
-    armed: HashMap<u32, u8>,
+    /// `(client, remaining capture attempts)`. Holds a handful of entries at most, so a
+    /// linear `Vec` beats a hash map here.
+    armed: Vec<(u32, u8)>,
 }
 
 impl OpenGate {
     pub fn arm(&mut self, client: u32) {
-        self.armed.insert(client, OPEN_CAPTURE_ATTEMPTS);
+        self.clear(client);
+        self.armed.push((client, OPEN_CAPTURE_ATTEMPTS));
     }
 
     #[must_use]
     pub fn is_armed(&self, client: u32) -> bool {
-        self.armed.contains_key(&client)
+        self.armed.iter().any(|(c, _)| *c == client)
     }
 
     /// Records one capture attempt. Returns `true` when the capture is usable; the client is
     /// then disarmed and the caller starts the effect. A blank capture spends one attempt, and
     /// the last one disarms without starting, so a window that never paints is not retried.
     pub fn attempt(&mut self, client: u32, blank: bool) -> bool {
-        let Some(left) = self.armed.get_mut(&client) else {
+        let Some(index) = self.armed.iter().position(|(c, _)| *c == client) else {
             return false;
         };
         if !blank {
-            self.armed.remove(&client);
+            self.armed.swap_remove(index);
             return true;
         }
+        let left = &mut self.armed[index].1;
         *left -= 1;
         if *left == 0 {
-            self.armed.remove(&client);
+            self.armed.swap_remove(index);
         }
         false
     }
 
     /// Drops the pending effect for `client` (input to it, unmap, or destroy).
     pub fn clear(&mut self, client: u32) {
-        self.armed.remove(&client);
+        self.armed.retain(|(c, _)| *c != client);
     }
 }
 
@@ -459,33 +462,33 @@ pub const LINGER_MS: u64 = 250;
 /// Finished overlays held above a remapped window until a deadline. Pure: callers inject `now`.
 #[derive(Debug)]
 pub struct Linger<T> {
-    held: HashMap<u32, (T, Instant)>,
+    /// `(client, value, deadline)`; a handful of live overlays at most.
+    held: Vec<(u32, T, Instant)>,
 }
 
 impl<T> Default for Linger<T> {
     fn default() -> Self {
-        Self {
-            held: HashMap::new(),
-        }
+        Self { held: Vec::new() }
     }
 }
 
 impl<T> Linger<T> {
     /// Holds `value` for `client` until `now` plus [`LINGER_MS`], replacing any earlier hold.
     pub fn hold(&mut self, client: u32, value: T, now: Instant) {
+        self.remove(client);
         self.held
-            .insert(client, (value, now + Duration::from_millis(LINGER_MS)));
+            .push((client, value, now + Duration::from_millis(LINGER_MS)));
     }
 
     /// Drops the hold for `client` at once (input to it, unmap, or destroy).
     pub fn remove(&mut self, client: u32) {
-        self.held.remove(&client);
+        self.held.retain(|(c, _, _)| *c != client);
     }
 
     /// Drops every hold whose deadline is at or before `now` and returns those clients.
     pub fn expire(&mut self, now: Instant) -> Vec<u32> {
         let mut expired = Vec::new();
-        self.held.retain(|client, (_, deadline)| {
+        self.held.retain(|(client, _, deadline)| {
             let live = now < *deadline;
             if !live {
                 expired.push(*client);

@@ -1338,14 +1338,29 @@ impl ShellLoop {
         // the same task model and image key.
         let mut need_panel = false;
         let mut need_submenu = false;
+        let panel_edges: Vec<(flamewm_ui_x11::SurfaceHandle, u32)> = {
+            let snapshot = self.shell.snapshot();
+            self.surfaces
+                .panel_outputs()
+                .into_iter()
+                .map(|(handle, output_id)| {
+                    let output = snapshot
+                        .displays
+                        .outputs
+                        .iter()
+                        .find(|output| output.id == output_id);
+                    (handle, projection::task_icon_px(output))
+                })
+                .collect()
+        };
         for res in results {
             let Some(raster) = res.raster else { continue };
-            let image = flamewm_ui_x11::RuntimeImage {
+            let image = async_projection::IconRaster::from(flamewm_ui_x11::RuntimeImage {
                 source: raster.source.clone(),
                 width: raster.width,
                 height: raster.height,
                 pixels: raster.pixels,
-            };
+            });
             async_projection::note_icon_result(
                 &res.name,
                 raster.width,
@@ -1371,13 +1386,20 @@ impl ShellLoop {
             };
             match surface {
                 DependentSurface::Panel => {
-                    for handle in self.surfaces.panel_handles() {
+                    // Each panel projects its own icon edge; only panels at
+                    // this result's edge may take it (no cross-scale paint).
+                    for (handle, edge) in &panel_edges {
+                        if *edge != res.width {
+                            continue;
+                        }
                         let applied =
-                            runtime.with_document(handle, |document| match apply(document)? {
+                            runtime.with_document(*handle, |document| match apply(document)? {
                                 true => Ok(true),
-                                false => {
-                                    async_projection::apply_cached_binding(document, res.target)
-                                }
+                                false => async_projection::apply_cached_binding(
+                                    document,
+                                    res.target,
+                                    *edge,
+                                ),
                             });
                         if matches!(applied, Ok(true)) {
                             need_panel = true;

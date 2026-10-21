@@ -21,6 +21,7 @@ use super::model::ResizeEdges;
 /// Frozen defaults (J06).
 pub const TITLEBAR_H: i32 = 31;
 /// Three buttons of 38px.
+#[cfg(test)]
 pub const CONTROLS_WIDTH: i32 = 114;
 /// Single button width.
 pub const BUTTON_WIDTH: i32 = 38;

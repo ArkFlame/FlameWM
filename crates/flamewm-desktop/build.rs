@@ -96,7 +96,7 @@ fn main() {
         .document
         .nodes
         .iter()
-        .map(|node| node.id.as_str())
+        .map(|node| &*node.id)
         .collect::<Vec<_>>();
     validate_compiled_desktop_nodes(&compiled_ids);
     let bytes = encode(&output.document).expect("encode desktop UI");
@@ -106,7 +106,7 @@ fn main() {
     let decoded_ids = decoded
         .nodes
         .iter()
-        .map(|node| node.id.as_str())
+        .map(|node| &*node.id)
         .collect::<Vec<_>>();
     validate_compiled_desktop_nodes(&decoded_ids);
     fs::write(out.join("flamewm-desktop.rwr"), bytes).expect("write validated desktop UI");

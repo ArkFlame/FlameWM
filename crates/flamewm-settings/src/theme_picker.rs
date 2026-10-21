@@ -4,6 +4,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -17,7 +18,6 @@ use flamewm_integrations_linux::themes::import::{
 };
 use flamewm_integrations_linux::themes::{ThemeCatalog, ThemeKind};
 use flamewm_session_core::{CursorThemeFamily, cursor_theme_family};
-use flamewm_ui_x11::RuntimeImage;
 
 use crate::file_chooser::publish_background_completion;
 
@@ -82,12 +82,22 @@ impl PickerKind {
     }
 }
 
+/// A rasterized thumbnail. Pixels are shared so each document refresh hands
+/// the UI a handle instead of copying the buffer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewImage {
+    pub source: String,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<Vec<u8>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ThemeItem {
     /// Stable theme directory name; this is what the setting stores.
     pub id: String,
     pub name: String,
-    pub preview: Option<RuntimeImage>,
+    pub preview: Option<PreviewImage>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -109,7 +119,7 @@ impl ThemeRegistry {
     /// themes return `None` so the UI can show its static fallback placeholder.
     /// Replacing this registry after an off-thread scan also replaces the cache;
     /// changes to the setting require only a new lookup, never a disk read.
-    pub fn selected_preview(&self, kind: PickerKind, value: &str) -> Option<&RuntimeImage> {
+    pub fn selected_preview(&self, kind: PickerKind, value: &str) -> Option<&PreviewImage> {
         let id = if value.is_empty() && kind == PickerKind::Icon {
             BUNDLED_ICON_THEMES[0]
         } else {
@@ -242,7 +252,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> ThemeRegistry {
     registry
 }
 
-fn icon_preview(theme: &str, data_dirs: &[PathBuf]) -> Option<RuntimeImage> {
+fn icon_preview(theme: &str, data_dirs: &[PathBuf]) -> Option<PreviewImage> {
     let index = IconLookupIndex::build(&[theme.to_owned()], data_dirs, 0);
     let (candidates, _) = index.lookup(ICON_PREVIEW_NAME, ICON_PREVIEW_PX);
     let size = IconSize::new(ICON_PREVIEW_PX, ICON_PREVIEW_PX);
@@ -252,21 +262,21 @@ fn icon_preview(theme: &str, data_dirs: &[PathBuf]) -> Option<RuntimeImage> {
         .map(raster_image)
 }
 
-fn raster_image(raster: Rgba8Raster) -> RuntimeImage {
-    RuntimeImage {
+fn raster_image(raster: Rgba8Raster) -> PreviewImage {
+    PreviewImage {
         source: raster.source,
         width: raster.width,
         height: raster.height,
-        pixels: raster.pixels,
+        pixels: Arc::new(raster.pixels),
     }
 }
 
-fn cursor_image(preview: CursorPreview) -> RuntimeImage {
-    RuntimeImage {
+fn cursor_image(preview: CursorPreview) -> PreviewImage {
+    PreviewImage {
         source: "left_ptr".to_owned(),
         width: preview.width,
         height: preview.height,
-        pixels: preview.rgba,
+        pixels: Arc::new(preview.rgba),
     }
 }
 
@@ -510,11 +520,11 @@ mod tests {
 
     #[test]
     fn selected_preview_borrows_cached_thumbnail_or_returns_placeholder() {
-        let image = RuntimeImage {
+        let image = PreviewImage {
             source: "folder".to_owned(),
             width: 1,
             height: 1,
-            pixels: vec![30, 40, 50, 255],
+            pixels: Arc::new(vec![30, 40, 50, 255]),
         };
         let mut registry = ThemeRegistry {
             icon: vec![ThemeItem {
@@ -550,11 +560,11 @@ mod tests {
     #[test]
     fn cursor_picker_includes_all_installed_themes_with_previews() {
         let with_preview = |id: &str, name: &str| ThemeItem {
-            preview: Some(RuntimeImage {
+            preview: Some(PreviewImage {
                 source: "left_ptr".to_owned(),
                 width: 1,
                 height: 1,
-                pixels: vec![255, 255, 255, 255],
+                pixels: Arc::new(vec![255, 255, 255, 255]),
             }),
             ..item(id, name)
         };
@@ -672,6 +682,6 @@ mod tests {
             rgba: vec![1, 2, 3, 255, 4, 5, 6, 0],
         });
         assert_eq!((image.width, image.height), (2, 1));
-        assert_eq!(image.pixels, vec![1, 2, 3, 255, 4, 5, 6, 0]);
+        assert_eq!(*image.pixels, vec![1, 2, 3, 255, 4, 5, 6, 0]);
     }
 }

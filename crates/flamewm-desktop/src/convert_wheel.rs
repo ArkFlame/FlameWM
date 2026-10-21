@@ -30,30 +30,27 @@ pub fn sector_at(x: f32, y: f32) -> Option<usize> {
     (distance.abs() <= HALF_ARC).then_some(sector)
 }
 
-/// Eight alpha masks, generated once from the canonical polar hit test.
-/// A hover only tints/copies a 328x328 mask instead of running thousands of
-/// trigonometric hit tests on every pointer-sector transition.
-static SECTOR_MASKS: OnceLock<[Vec<u8>; 8]> = OnceLock::new();
+const NO_SECTOR: u8 = u8::MAX;
 
-fn sector_masks() -> &'static [Vec<u8>; 8] {
-    SECTOR_MASKS.get_or_init(|| {
-        let mut masks = std::array::from_fn(|_| vec![0; (WHEEL_SIZE * WHEEL_SIZE) as usize]);
+/// Per pixel, the sector hit by each of the four antialiasing subsamples (or `NO_SECTOR`).
+/// Retaining 4 bytes per pixel instead of eight 8-bit masks halves the idle footprint; the
+/// alpha of a sector is recovered exactly as `hits * 23` (= `hits * 92 / 4`).
+static SECTOR_SAMPLES: OnceLock<Vec<[u8; 4]>> = OnceLock::new();
+
+fn sector_samples() -> &'static [[u8; 4]] {
+    SECTOR_SAMPLES.get_or_init(|| {
+        let mut samples = Vec::with_capacity((WHEEL_SIZE * WHEEL_SIZE) as usize);
         for y in 0..WHEEL_SIZE {
             for x in 0..WHEEL_SIZE {
-                let mut coverage = [0u8; 8];
                 // Four subsamples give antialiased rounded arc edges.
-                for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                    if let Some(sector) = sector_at(x as f32 + ox, y as f32 + oy) {
-                        coverage[sector] += 1;
-                    }
-                }
-                let at = (y * WHEEL_SIZE + x) as usize;
-                for (sector, count) in coverage.into_iter().enumerate() {
-                    masks[sector][at] = (u16::from(count) * 92 / 4) as u8;
-                }
+                samples.push(
+                    [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)].map(|(ox, oy)| {
+                        sector_at(x as f32 + ox, y as f32 + oy).map_or(NO_SECTOR, |s| s as u8)
+                    }),
+                );
             }
         }
-        masks
+        samples
     })
 }
 
@@ -61,12 +58,14 @@ fn sector_masks() -> &'static [Vec<u8>; 8] {
 /// RGB is the live Settings accent; straight alpha has antialiased edges.
 pub fn highlight_pixels(sector: usize, accent: [u8; 3]) -> Vec<u8> {
     let mut pixels = vec![0; (WHEEL_SIZE * WHEEL_SIZE * 4) as usize];
-    if let Some(alpha) = sector_masks().get(sector) {
-        for (out, value) in pixels.chunks_exact_mut(4).zip(alpha) {
-            if *value != 0 {
-                out[..3].copy_from_slice(&accent);
-                out[3] = *value;
-            }
+    if sector >= 8 {
+        return pixels;
+    }
+    for (out, hits) in pixels.chunks_exact_mut(4).zip(sector_samples()) {
+        let count = hits.iter().filter(|hit| usize::from(**hit) == sector).count();
+        if count != 0 {
+            out[..3].copy_from_slice(&accent);
+            out[3] = (count * 23) as u8;
         }
     }
     pixels

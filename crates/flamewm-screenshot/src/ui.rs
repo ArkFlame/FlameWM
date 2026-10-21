@@ -2,7 +2,7 @@
 //! screen rereads, repaint loops, compositing, and capture-of-overlay artifacts.
 
 use crate::capture::{Image, Rect, Result, decode_ximage_owned};
-use x11rb::connection::{Connection, RequestConnection};
+use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     ChangeGCAux, ConnectionExt as _, CoordMode, CreateGCAux, CreateWindowAux, EventMask, GrabMode,

@@ -14,12 +14,21 @@ use crate::wallpaper_fit;
 use flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH;
 use flamewm_image_core::{RgbaImage, wallpaper::BACKGROUND};
 
+/// Decoded wallpaper pixels. The buffer is shared with the UI document so only one copy is retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WallpaperRaster {
+    pub source: String,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<Vec<u8>>,
+}
+
 /// The desktop's empty wallpaper selection is an intentional presentation, not a failed load.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum WallpaperPresentation {
     #[default]
     DefaultBlackWatermark,
-    Image(Rgba8Raster),
+    Image(WallpaperRaster),
     /// Flat `wallpaperMode=solid` fill; no decode and no worker round trip.
     Solid([u8; 3]),
 }
@@ -172,16 +181,6 @@ impl WallpaperLoader {
         })
     }
 
-    /// Replaces the pending request. At most one request waits for the worker. `fit` places the
-    /// decoded image on the root-sized canvas; a fit change re-renders even for the same path.
-    pub fn request(
-        &mut self,
-        path: impl Into<PathBuf>,
-        fit: WallpaperFit,
-    ) -> Result<u64, LoaderClosed> {
-        self.request_layout(path, fit, &[], true)
-    }
-
     /// Requests either a separately fitted copy on each output or one shared root canvas.
     pub fn request_layout(
         &mut self,
@@ -254,7 +253,12 @@ impl WallpaperLoader {
             LoadResult::Image(image) => {
                 self.state = WallpaperState {
                     generation,
-                    presentation: WallpaperPresentation::Image(image),
+                    presentation: WallpaperPresentation::Image(WallpaperRaster {
+                        source: image.source,
+                        width: image.width,
+                        height: image.height,
+                        pixels: Arc::new(image.pixels),
+                    }),
                     diagnostic: None,
                 };
                 PollOutcome::Applied { generation }
@@ -778,16 +782,16 @@ mod tests {
         let mut loader =
             WallpaperLoader::new(1, 1, packaged_root()).expect("start wallpaper loader");
         let first_generation = loader
-            .request(&first, WallpaperFit::Fill)
+            .request_layout(&first, WallpaperFit::Fill, &[], true)
             .expect("request first wallpaper");
         let second_generation = loader
-            .request(&second, WallpaperFit::Fill)
+            .request_layout(&second, WallpaperFit::Fill, &[], true)
             .expect("request second wallpaper");
         assert!(second_generation > first_generation);
         wait_for(&mut loader, second_generation);
         assert_eq!(loader.state().generation, second_generation);
         match &loader.state().presentation {
-            WallpaperPresentation::Image(image) => assert_eq!(image.pixels, [0, 255, 0, 255]),
+            WallpaperPresentation::Image(image) => assert_eq!(*image.pixels, [0, 255, 0, 255]),
             WallpaperPresentation::DefaultBlackWatermark | WallpaperPresentation::Solid(_) => {
                 panic!("latest image was not applied")
             }
@@ -820,12 +824,12 @@ mod tests {
         let mut loader =
             WallpaperLoader::new(1, 1, packaged_root()).expect("start wallpaper loader");
         let valid_generation = loader
-            .request(&valid, WallpaperFit::Fill)
+            .request_layout(&valid, WallpaperFit::Fill, &[], true)
             .expect("request valid wallpaper");
         wait_applied(&mut loader, valid_generation);
         let previous = loader.state().presentation.clone();
         let failed_generation = loader
-            .request(&missing, WallpaperFit::Fill)
+            .request_layout(&missing, WallpaperFit::Fill, &[], true)
             .expect("request failed wallpaper");
         wait_failed(&mut loader, failed_generation);
         assert_eq!(loader.state().presentation, previous);
@@ -840,14 +844,14 @@ mod tests {
         let root = packaged_fixture_root("empty-and-unsupported-root");
         let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper loader");
         let empty_generation = loader
-            .request("", WallpaperFit::Fill)
+            .request_layout("", WallpaperFit::Fill, &[], true)
             .expect("request default wallpaper");
         wait_applied(&mut loader, empty_generation);
         assert_image_presented(&loader);
         let unsupported = temp_path("jpg");
         fs::write(&unsupported, b"not a supported wallpaper").expect("write unsupported file");
         let failed_generation = loader
-            .request(&unsupported, WallpaperFit::Fill)
+            .request_layout(&unsupported, WallpaperFit::Fill, &[], true)
             .expect("request unsupported wallpaper");
         wait_failed(&mut loader, failed_generation);
         assert_image_presented(&loader);
@@ -862,7 +866,7 @@ mod tests {
         let default_path = root.join(DEFAULT_WALLPAPER_PATH);
         let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper worker");
         let default_generation = loader
-            .request("", WallpaperFit::Fill)
+            .request_layout("", WallpaperFit::Fill, &[], true)
             .expect("request packaged default");
         wait_applied(&mut loader, default_generation);
         let packaged = loader.state().presentation.clone();
@@ -876,7 +880,7 @@ mod tests {
         fs::write(&custom, include_bytes!("testdata/wallpaper-test.webp"))
             .expect("write custom WebP fixture");
         let custom_generation = loader
-            .request(&custom, WallpaperFit::Fill)
+            .request_layout(&custom, WallpaperFit::Fill, &[], true)
             .expect("request custom WebP");
         wait_applied(&mut loader, custom_generation);
         assert!(matches!(
@@ -886,7 +890,7 @@ mod tests {
         ));
 
         let reset_generation = loader
-            .request("", WallpaperFit::Fill)
+            .request_layout("", WallpaperFit::Fill, &[], true)
             .expect("reset to packaged default");
         wait_applied(&mut loader, reset_generation);
         assert_eq!(loader.state().presentation, packaged);
@@ -904,7 +908,7 @@ mod tests {
         fs::write(&path, b"P6\n2 1\n255\n\x09\x09\x09\x07\x07\x07").expect("write 2x1 PPM");
         let mut loader = WallpaperLoader::new(4, 2, packaged_root()).expect("start loader");
         let center = loader
-            .request(&path, WallpaperFit::Center)
+            .request_layout(&path, WallpaperFit::Center, &[], true)
             .expect("request centered");
         wait_applied(&mut loader, center);
         let WallpaperPresentation::Image(centered) = loader.state().presentation.clone() else {
@@ -918,7 +922,7 @@ mod tests {
         assert_eq!(&centered.pixels[16..24], &[0, 0, 0, 255, 0, 0, 0, 255]);
 
         let stretch = loader
-            .request(&path, WallpaperFit::Stretch)
+            .request_layout(&path, WallpaperFit::Stretch, &[], true)
             .expect("request stretched");
         wait_applied(&mut loader, stretch);
         let WallpaperPresentation::Image(stretched) = &loader.state().presentation else {
@@ -935,7 +939,7 @@ mod tests {
         let root = temp_path("missing-packaged-root");
         let mut loader = WallpaperLoader::new(1, 1, &root).expect("start wallpaper worker");
         let generation = loader
-            .request("", WallpaperFit::Fill)
+            .request_layout("", WallpaperFit::Fill, &[], true)
             .expect("request packaged default");
         wait_failed(&mut loader, generation);
         let diagnostic = loader.state().diagnostic.as_ref().expect("load diagnostic");

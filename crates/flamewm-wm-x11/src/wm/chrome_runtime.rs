@@ -3,17 +3,20 @@
 //! round-trips, catalog, and decode work; paint consumes cached rasters only
 //! via the `with_icon`/`render` path. No icon I/O during paint.
 
+use std::sync::Arc;
+
 use crate::chrome::IconImage;
 use crate::frame::chrome::{ChromeScene, plan_scene_with_titlebar, render, with_icon};
 use crate::frame::model::FrameControl;
 use flamewm_skin::recipes::decoration::ChromeTokens;
 
-/// Cached identity inputs owned outside paint (manage/property paths).
+/// Cached identity inputs owned outside paint (manage/property paths). `Arc<str>` makes the
+/// per-paint handoff a refcount bump instead of three `String` allocations.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChromeIdentity {
-    pub title: String,
-    pub wm_instance: String,
-    pub wm_class: String,
+    pub title: Arc<str>,
+    pub wm_instance: Arc<str>,
+    pub wm_class: Arc<str>,
 }
 
 /// State inputs that invalidate the cached scene when they change.
@@ -112,9 +115,9 @@ mod tests {
 
     fn identity() -> ChromeIdentity {
         ChromeIdentity {
-            title: "xterm".to_owned(),
-            wm_instance: "xterm".to_owned(),
-            wm_class: "XTerm".to_owned(),
+            title: Arc::from("xterm"),
+            wm_instance: Arc::from("xterm"),
+            wm_class: Arc::from("XTerm"),
         }
     }
 

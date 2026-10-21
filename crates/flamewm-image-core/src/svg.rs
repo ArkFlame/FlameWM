@@ -1,6 +1,6 @@
 //! SVG decode via resvg/usvg + tiny-skia. Alpha is preserved.
 
-use crate::{RgbaImage, SvgColorScheme, check_size_limits, unpremultiply_swapped_to_rgba};
+use crate::{RgbaImage, SvgColorScheme, check_size_limits, unpremultiply_swapped_in_place};
 
 /// Returns true when the SVG references a themeable color scheme.
 #[must_use]
@@ -121,7 +121,8 @@ fn render_inner(
     if pixmap.width() != width || pixmap.height() != height {
         return Err("raster dimensions do not match request".to_string());
     }
-    let pixels = unpremultiply_swapped_to_rgba(pixmap.data());
+    let mut pixels = pixmap.take();
+    unpremultiply_swapped_in_place(&mut pixels);
     RgbaImage::from_rgba8(width, height, pixels)
         .ok_or_else(|| "requested dimensions overflow".to_string())
 }

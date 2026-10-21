@@ -171,24 +171,56 @@ impl X11Desktop {
         Ok(self.fetch_property(window, name)?.value)
     }
     fn managed_windows(&self) -> FlameResult<Vec<Window>> {
-        let support_window = self
-            .property32(self.root, "_NET_SUPPORTING_WM_CHECK")?
-            .first()
-            .copied();
-        Ok(self
-            .property32(self.root, "_NET_CLIENT_LIST")?
+        // Pipelined: both root reads are sent before either reply is awaited.
+        let support_cookie = self
+            .conn
+            .get_property(false, self.root, self.atom("_NET_SUPPORTING_WM_CHECK"), AtomEnum::ANY, 0, u32::MAX)
+            .map_err(io_error)?;
+        let list_cookie = self
+            .conn
+            .get_property(false, self.root, self.atom("_NET_CLIENT_LIST"), AtomEnum::ANY, 0, u32::MAX)
+            .map_err(io_error)?;
+        let support_window = support_cookie
+            .reply()
+            .map_err(io_error)?
+            .value32()
+            .and_then(|mut values| values.next());
+        let clients: Vec<Window> = list_cookie
+            .reply()
+            .map_err(io_error)?
+            .value32()
+            .map_or_else(Vec::new, Iterator::collect);
+        let candidates: Vec<Window> = clients
             .into_iter()
-            .map(|window| window as Window)
             .filter(|&window| Some(window) != support_window)
-            .filter(|&window| {
-                let is_dock = self
-                    .property32(window, "_NET_WM_WINDOW_TYPE")
-                    .is_ok_and(|types| types.contains(&self.atom("_NET_WM_WINDOW_TYPE_DOCK")));
+            .collect();
+        // Send every per-window type read before waiting on any reply, so the
+        // dock check costs one round trip total instead of one per client.
+        let type_atom = self.atom("_NET_WM_WINDOW_TYPE");
+        let dock_atom = self.atom("_NET_WM_WINDOW_TYPE_DOCK");
+        let type_cookies: Vec<_> = candidates
+            .iter()
+            .map(|&window| {
+                self.conn
+                    .get_property(false, window, type_atom, AtomEnum::ANY, 0, u32::MAX)
+                    .ok()
+            })
+            .collect();
+        Ok(candidates
+            .into_iter()
+            .zip(type_cookies)
+            .filter_map(|(window, cookie)| {
+                let is_dock = cookie
+                    .and_then(|cookie| cookie.reply().ok())
+                    .map_or_else(Vec::new, |reply| {
+                        reply.value32().map_or_else(Vec::new, Iterator::collect)
+                    })
+                    .contains(&dock_atom);
                 // Identity is advisory, not a liveness gate: a freshly
                 // mapped client may not have set WM_CLASS/_NET_WM_NAME yet,
                 // and a dead window must not linger. Liveness is proven by
                 // the window still existing on the server.
-                !is_dock && self.conn.get_geometry(window).is_ok()
+                (!is_dock && self.conn.get_geometry(window).is_ok()).then_some(window)
             })
             .collect())
     }
@@ -240,9 +272,6 @@ impl X11Desktop {
             atom,
             action,
         )
-    }
-    fn text(&self, window: Window, name: &str) -> FlameResult<String> {
-        Ok(shared::text_from_bytes(&self.property_bytes(window, name)?))
     }
     fn root_size(&self) -> Size {
         let root = &self.conn.setup().roots[self.screen];
@@ -332,42 +361,52 @@ fn output_for_window_rect(outputs: &[OutputSnapshot], rect: Rect) -> Option<Outp
     })
 }
 
-impl WindowPort for X11Desktop {
-    fn get(&self, reference: WindowRef) -> FlameResult<flamewm_api::window::WindowSnapshot> {
-        let window = self.check_window(reference)?;
-        let parent = self
-            .conn
-            .query_tree(window)
-            .map_err(io_error)?
-            .reply()
-            .map_err(io_error)?
-            .parent;
+impl X11Desktop {
+    /// Reads one managed window's snapshot. The caller supplies the root-level
+    /// context (display, workspace, focused window) so a full snapshot reads it once.
+    /// Independent property requests are sent before the first reply is awaited.
+    fn snapshot_window(
+        &self,
+        window: Window,
+        display: &DisplaySnapshot,
+        workspace: &WorkspaceSnapshot,
+        active: Option<Window>,
+    ) -> FlameResult<flamewm_api::window::WindowSnapshot> {
+        let tree_cookie = self.conn.query_tree(window).map_err(io_error)?;
+        let states_cookie = self.conn.get_property(false, window, self.atom("_NET_WM_STATE"), AtomEnum::ANY, 0, u32::MAX).map_err(io_error)?;
+        let desktop_cookie = self.conn.get_property(false, window, self.atom("_NET_WM_DESKTOP"), AtomEnum::ANY, 0, u32::MAX).map_err(io_error)?;
+        let name_cookie = self.conn.get_property(false, window, self.atom("_NET_WM_NAME"), AtomEnum::ANY, 0, u32::MAX).ok();
+        let class_cookie = self.conn.get_property(false, window, self.atom("WM_CLASS"), AtomEnum::ANY, 0, u32::MAX).map_err(io_error)?;
+        let parent = tree_cookie.reply().map_err(io_error)?.parent;
         let geometry_window = if parent != self.root { parent } else { window };
-        let geometry = self
-            .conn
-            .get_geometry(geometry_window)
-            .map_err(io_error)?
+        let geometry_cookie = self.conn.get_geometry(geometry_window).map_err(io_error)?;
+        let states: Vec<u32> = states_cookie
             .reply()
-            .map_err(io_error)?;
-        let states = self.property32(window, "_NET_WM_STATE")?;
-        let desktop = self
-            .property32(window, "_NET_WM_DESKTOP")?
-            .first()
-            .copied()
+            .map_err(io_error)?
+            .value32()
+            .map_or_else(Vec::new, Iterator::collect);
+        let desktop = desktop_cookie
+            .reply()
+            .map_err(io_error)?
+            .value32()
+            .and_then(|mut values| values.next())
             .unwrap_or(0);
-        let workspace = self.workspace_snapshot()?;
+        let title_bytes = match name_cookie.and_then(|cookie| cookie.reply().ok()) {
+            Some(reply) => reply.value,
+            None => self.property_bytes(window, "WM_NAME")?,
+        };
+        let title = shared::text_from_bytes(&title_bytes);
+        let wm_class_bytes = class_cookie.reply().map_err(io_error)?.value;
+        let (wm_instance, wm_class) = parse_wm_class(&wm_class_bytes);
+        let geometry = geometry_cookie.reply().map_err(io_error)?;
         let outer = Rect::new(
             i32::from(geometry.x),
             i32::from(geometry.y),
             i32::from(geometry.width),
             i32::from(geometry.height),
         );
-        let output = output_for_window_rect(&self.display_snapshot()?.outputs, outer)
+        let output = output_for_window_rect(&display.outputs, outer)
             .unwrap_or_else(|| OutputId::new("default"));
-        let title = self
-            .text(window, "_NET_WM_NAME")
-            .or_else(|_| self.text(window, "WM_NAME"))?;
-        let (wm_instance, wm_class) = parse_wm_class(&self.property_bytes(window, "WM_CLASS")?);
         let has = |name: &str| states.contains(&self.atom(name));
         let state = if has("_NET_WM_STATE_FULLSCREEN") {
             flamewm_api::window::WindowState::Fullscreen
@@ -386,21 +425,39 @@ impl WindowPort for X11Desktop {
             restore_geometry: outer,
             state,
             sticky: has("_NET_WM_STATE_STICKY"),
-            focused: self
-                .property32(self.root, "_NET_ACTIVE_WINDOW")?
-                .first()
-                .copied()
-                == Some(window),
+            focused: active == Some(window),
             workspace: WorkspaceRef::new(signed(desktop) as i32, workspace.revision),
             output,
             state_generation: self.generation_of(window),
         })
     }
+}
+
+impl WindowPort for X11Desktop {
+    fn get(&self, reference: WindowRef) -> FlameResult<flamewm_api::window::WindowSnapshot> {
+        let window = self.check_window(reference)?;
+        let display = self.display_snapshot()?;
+        let workspace = self.workspace_snapshot()?;
+        let active = self.property32(self.root, "_NET_ACTIVE_WINDOW")?.first().copied();
+        self.snapshot_window(window, &display, &workspace, active)
+    }
     fn snapshot(&self) -> FlameResult<Vec<flamewm_api::window::WindowSnapshot>> {
-        Ok(self
-            .managed_windows()?
+        let windows = self.managed_windows()?;
+        // Root-level context is read once per snapshot, not once per window (the old
+        // per-window get() re-scanned managed_windows and re-read the root each time).
+        let (Ok(display), Ok(workspace), Ok(active)) = (
+            self.display_snapshot(),
+            self.workspace_snapshot(),
+            self.property32(self.root, "_NET_ACTIVE_WINDOW"),
+        ) else {
+            return Ok(Vec::new());
+        };
+        let active = active.first().copied();
+        Ok(windows
             .into_iter()
-            .filter_map(|window| self.get(WindowRef::new(u64::from(window), 0)).ok())
+            .filter_map(|window| {
+                self.snapshot_window(window, &display, &workspace, active).ok()
+            })
             .collect())
     }
     fn activate(&mut self, w: WindowRef) -> FlameResult<()> {

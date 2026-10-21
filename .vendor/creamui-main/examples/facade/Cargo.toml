@@ -1,8 +1,0 @@
-[package]
-name = "facade"
-publish = false
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-creamui = { workspace = true, features = ["jsx"] }

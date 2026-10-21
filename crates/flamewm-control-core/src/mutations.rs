@@ -183,14 +183,16 @@ impl ControlMutationQueue {
         let _ = lock_unpoisoned(&self.wake_reader).read(&mut discard);
     }
 
-    /// Submit a mutation; explicit `Busy` when the pending queue is full.
+    /// Submit a mutation; explicit `Busy` when pending plus undrained results fill capacity.
     /// High-value requests are never silently dropped: the caller owns retry.
     pub fn submit(&self, lane: MutationLane, request: ControlRequest) -> Result<u64, ControlError> {
         let mut inner = self.lock();
         if inner.closed {
             return Err(busy("mutation queue is shut down"));
         }
-        if inner.pending.len() >= inner.capacity {
+        // Undrained results count against capacity too, so a reactor that stops
+        // draining cannot grow `results` without bound (at most one job is in flight).
+        if inner.pending.len() + inner.results.len() >= inner.capacity {
             return Err(busy("mutation queue is full"));
         }
         let id = inner.next_id;
@@ -413,6 +415,24 @@ mod tests {
         );
         let result = queue.try_recv_result().expect("drain");
         assert_eq!(result.id, id);
+    }
+
+    #[test]
+    fn undrained_results_count_against_capacity() {
+        let queue = test_queue(1);
+        queue
+            .submit(MutationLane::System, ControlRequest::Ping)
+            .expect("first fits");
+        let pending = queue.take_pending().expect("pending");
+        execute_inline(&queue, pending);
+        let error = queue
+            .submit(MutationLane::System, ControlRequest::Ping)
+            .expect_err("undrained result must hold capacity");
+        assert_eq!(error.code, ErrorCode::Busy);
+        queue.try_recv_result().expect("drain");
+        queue
+            .submit(MutationLane::System, ControlRequest::Ping)
+            .expect("drained queue accepts again");
     }
 
     #[test]

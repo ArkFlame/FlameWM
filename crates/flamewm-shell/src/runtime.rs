@@ -2440,7 +2440,7 @@ pub fn retained_source_rect(
 
 fn create_surface(
     runtime: &mut SurfaceRuntime,
-    bytes: &[u8],
+    bytes: &'static [u8],
     config: SurfaceConfig,
 ) -> Result<SurfaceHandle, String> {
     let document = decode_document(bytes)?;
@@ -2478,7 +2478,7 @@ fn checked_size(value: i32) -> Result<u32, String> {
 /// Document UI scale for the panel surface. Must match the physical thickness
 /// rule in `flamewm_platform::panel` (supported scales only; others fall back
 /// to 100%) so the CSS-sized bar fills the whole panel window.
-fn panel_ui_scale(scale_percent: u16) -> f32 {
+pub(crate) fn panel_ui_scale(scale_percent: u16) -> f32 {
     let percent = if (100..=200).contains(&scale_percent) && scale_percent % 5 == 0 {
         scale_percent
     } else {

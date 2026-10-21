@@ -1,5 +1,7 @@
 use super::*;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeKind {
@@ -14,29 +16,31 @@ pub struct CompiledNode {
     pub parent: Option<u32>,
     pub first_child: Option<u32>,
     pub next_sibling: Option<u32>,
-    pub id: String,
-    pub action: String,
-    pub text: String,
+    pub id: Cow<'static, str>,
+    pub action: Cow<'static, str>,
+    pub text: Cow<'static, str>,
     pub image: Option<u16>,
     pub style: Style,
-    pub hover_style: Option<Style>,
-    pub active_style: Option<Style>,
+    /// Boxed: most nodes have no interaction styles, so keeping them inline bloats every node.
+    pub hover_style: Option<Box<Style>>,
+    pub active_style: Option<Box<Style>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColorVariable {
-    pub name: String,
+    pub name: Cow<'static, str>,
     pub default: Color,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageAsset {
-    pub source: String,
+    pub source: Cow<'static, str>,
     pub width: u32,
     pub height: u32,
     /// Straight (non-premultiplied) RGBA8 pixels in row-major order.
     /// Opaque PPM build inputs convert to alpha=255 at compile time.
-    pub pixels: Vec<u8>,
+    /// Borrowed from the embedded document bytes when decoded with `decode_static`.
+    pub pixels: Cow<'static, [u8]>,
 }
 
 impl ImageAsset {
@@ -140,7 +144,7 @@ pub struct RuntimeImageOverride {
     pub source: String,
     pub width: u32,
     pub height: u32,
-    pub rgba8: Vec<u8>,
+    pub rgba8: Arc<Vec<u8>>,
     pub revision: u64,
 }
 
@@ -159,8 +163,10 @@ pub struct RuntimeDocument {
     pub(super) scroll_offsets: HashMap<u32, ScrollState>,
     pub(super) pending_damage: SurfaceDamage,
     pub(super) revision: u64,
-    pub(super) id_index: HashMap<String, u32>,
-    pub(super) variable_index: HashMap<String, u16>,
+    /// Node indices with non-empty ids, sorted by id. Keys live in `nodes`, not duplicated here.
+    pub(super) id_index: Vec<u32>,
+    /// Variable indices sorted by (name, index). Keys live in `document.variables`.
+    pub(super) variable_index: Vec<u16>,
     pub(super) ui_font_family: String,
     pub(super) ui_font_size_offset: f32,
     pub(super) ui_font_bold: bool,
@@ -170,18 +176,32 @@ pub struct RuntimeDocument {
 impl RuntimeDocument {
     pub fn new(document: CompiledDocument) -> Result<Self, String> {
         document.validate()?;
-        let mut id_index = HashMap::new();
-        for (index, node) in document.nodes.iter().enumerate() {
-            if !node.id.is_empty() && id_index.insert(node.id.clone(), index as u32).is_some() {
-                return Err(format!("duplicate runtime id '{}'", node.id));
-            }
-        }
-        let variable_index = document
-            .variables
-            .iter()
-            .enumerate()
-            .map(|(index, variable)| (variable.name.clone(), index as u16))
+        let nodes = &document.nodes;
+        let mut id_index: Vec<u32> = (0..nodes.len() as u32)
+            .filter(|&index| !nodes[index as usize].id.is_empty())
             .collect();
+        id_index.sort_by(|&a, &b| {
+            (*nodes[a as usize].id)
+                .cmp(&*nodes[b as usize].id)
+                .then(a.cmp(&b))
+        });
+        if let Some(pair) = id_index
+            .windows(2)
+            .find(|pair| nodes[pair[0] as usize].id == nodes[pair[1] as usize].id)
+        {
+            return Err(format!(
+                "duplicate runtime id '{}'",
+                nodes[pair[1] as usize].id
+            ));
+        }
+        id_index.shrink_to_fit();
+        let variables = &document.variables;
+        let mut variable_index: Vec<u16> = (0..variables.len() as u16).collect();
+        variable_index.sort_by(|&a, &b| {
+            (*variables[a as usize].name)
+                .cmp(&*variables[b as usize].name)
+                .then(a.cmp(&b))
+        });
         let variable_values = document
             .variables
             .iter()
@@ -226,7 +246,19 @@ impl RuntimeDocument {
 
 impl RuntimeDocument {
     pub fn node_by_id(&self, id: &str) -> Option<u32> {
-        self.id_index.get(id).copied()
+        self.id_index
+            .binary_search_by(|&index| (*self.document.nodes[index as usize].id).cmp(id))
+            .ok()
+            .map(|position| self.id_index[position])
+    }
+
+    /// Last variable with `name` wins, matching the previous map-insert semantics.
+    pub(super) fn variable_by_name(&self, name: &str) -> Option<u16> {
+        let end = self
+            .variable_index
+            .partition_point(|&index| (*self.document.variables[index as usize].name) <= *name);
+        let last = *self.variable_index.get(end.checked_sub(1)?)?;
+        (*self.document.variables[last as usize].name == *name).then_some(last)
     }
 
     pub(crate) fn require_node(&self, id: &str) -> Result<u32, String> {
@@ -249,9 +281,10 @@ impl RuntimeDocument {
             first
         };
         let text = text.into();
-        let current = self
+        let current: &str = self
             .text_overrides
             .get(&target)
+            .map(String::as_str)
             .unwrap_or(&self.document.nodes[target as usize].text);
         if *current == text {
             return Ok(());
@@ -282,6 +315,18 @@ impl RuntimeDocument {
         width: u32,
         height: u32,
         rgba8: Vec<u8>,
+    ) -> Result<(), String> {
+        self.replace_image_for_node_shared(node_id, source, width, height, Arc::new(rgba8))
+    }
+
+    /// Like [`Self::replace_image_for_node`], but stores a caller-held shared buffer without copying it.
+    pub fn replace_image_for_node_shared(
+        &mut self,
+        node_id: &str,
+        source: String,
+        width: u32,
+        height: u32,
+        rgba8: Arc<Vec<u8>>,
     ) -> Result<(), String> {
         let index = self.require_node(node_id)?;
         let node = &self.document.nodes[index as usize];
@@ -362,8 +407,8 @@ impl RuntimeDocument {
             Some(asset_id),
             asset.width,
             asset.height,
-            asset.source.as_str(),
-            asset.pixels.as_slice(),
+            &*asset.source,
+            &asset.pixels,
         ))
     }
 

@@ -370,7 +370,7 @@ pub fn run_quick_control_host() -> Result<(), HostError> {
     drop(client);
     let mut runtime = SurfaceRuntime::new()
         .map_err(|error| HostError::Ui(format!("create UI runtime: {error:?}")))?;
-    let surfaces = HelperSurfaces::create(&mut runtime).map_err(HostError::Ui)?;
+    let surfaces = HelperSurfaces::new();
     let dispatcher = match flamewm_control_dbus::MutationDispatcher::start(BusKind::Session, 64) {
         Ok(dispatcher) => Some(dispatcher),
         Err(error) => {
@@ -816,12 +816,11 @@ fn tick_host(
         } else {
             guard.system_reprojection_pending = false;
             let open = guard.surfaces.open;
-            open.map(|kind| {
-                (
-                    guard.surfaces.surface_for(kind),
-                    guard.snapshot.clone(),
-                    kind,
-                )
+            open.and_then(|kind| {
+                guard
+                    .surfaces
+                    .handle(kind)
+                    .map(|surface| (surface, guard.snapshot.clone(), kind))
             })
         }
     };
@@ -965,7 +964,9 @@ fn open_request(
             request.kind, request.anchor, request.work_area, request.panel_edge,
         )
     });
-    let surface = surfaces.surface_for(request.kind);
+    let surface = surfaces
+        .ensure(runtime, request.kind)
+        .map_err(OpenFailure::refused)?;
     let project_start = std::time::Instant::now();
     let _project = crate::runtime::shell_span("shell.quick.project").start();
     project_snapshot(runtime, surface, snapshot, request.kind).map_err(OpenFailure::refused)?;
@@ -1270,7 +1271,7 @@ pub fn route_helper_event(
             }
         }
     }
-    let open_surface = surfaces.open.map(|kind| surfaces.surface_for(kind));
+    let open_surface = surfaces.open.and_then(|kind| surfaces.handle(kind));
     let inside_active = match open_surface {
         Some(handle) => event.surface == handle || event.action.inside,
         None => event.action.inside,
@@ -1675,42 +1676,58 @@ pub fn take_close_target(open: Option<QuickControlKind>) -> Option<QuickControlK
 }
 
 pub struct HelperSurfaces {
-    pub audio: SurfaceHandle,
-    pub network: SurfaceHandle,
-    pub calendar: SurfaceHandle,
-    pub battery: SurfaceHandle,
-    pub weather: SurfaceHandle,
+    /// One lazily created surface per kind (see [`Self::slot`]). A surface is
+    /// created on its first open and kept until shutdown: close only unmaps,
+    /// and destroying a live display surface defers native library unloads.
+    handles: [Option<SurfaceHandle>; 5],
     pub open: Option<QuickControlKind>,
     /// Slide armed for the open popup; `Some` closes it through `hide` (slide-out).
     pub slide: Option<SlideConfig>,
 }
 
 impl HelperSurfaces {
-    pub fn create(runtime: &mut SurfaceRuntime) -> Result<Self, String> {
-        let audio = create_surface(runtime, AUDIO_ARTIFACT, AUDIO_POPUP_TITLE)?;
-        let network = create_surface(runtime, NETWORK_ARTIFACT, NETWORK_POPUP_TITLE)?;
-        let calendar = create_surface(runtime, CALENDAR_ARTIFACT, CALENDAR_POPUP_TITLE)?;
-        let battery = create_surface(runtime, BATTERY_ARTIFACT, BATTERY_POPUP_TITLE)?;
-        let weather = create_surface(runtime, WEATHER_ARTIFACT, WEATHER_POPUP_TITLE)?;
-        Ok(Self {
-            audio,
-            network,
-            calendar,
-            battery,
-            weather,
+    pub fn new() -> Self {
+        Self {
+            handles: [None; 5],
             open: None,
             slide: None,
-        })
+        }
     }
 
-    pub fn surface_for(&self, kind: QuickControlKind) -> SurfaceHandle {
+    fn slot(kind: QuickControlKind) -> usize {
         match kind {
-            QuickControlKind::Audio => self.audio,
-            QuickControlKind::Network => self.network,
-            QuickControlKind::Calendar => self.calendar,
-            QuickControlKind::Battery => self.battery,
-            QuickControlKind::Weather => self.weather,
+            QuickControlKind::Audio => 0,
+            QuickControlKind::Network => 1,
+            QuickControlKind::Calendar => 2,
+            QuickControlKind::Battery => 3,
+            QuickControlKind::Weather => 4,
         }
+    }
+
+    /// Existing surface for `kind`, if it has been created.
+    pub fn handle(&self, kind: QuickControlKind) -> Option<SurfaceHandle> {
+        self.handles[Self::slot(kind)]
+    }
+
+    /// Surface for `kind`, decoding its document and creating it on first use.
+    pub fn ensure(
+        &mut self,
+        runtime: &mut SurfaceRuntime,
+        kind: QuickControlKind,
+    ) -> Result<SurfaceHandle, String> {
+        if let Some(handle) = self.handle(kind) {
+            return Ok(handle);
+        }
+        let (bytes, title) = match kind {
+            QuickControlKind::Audio => (AUDIO_ARTIFACT, AUDIO_POPUP_TITLE),
+            QuickControlKind::Network => (NETWORK_ARTIFACT, NETWORK_POPUP_TITLE),
+            QuickControlKind::Calendar => (CALENDAR_ARTIFACT, CALENDAR_POPUP_TITLE),
+            QuickControlKind::Battery => (BATTERY_ARTIFACT, BATTERY_POPUP_TITLE),
+            QuickControlKind::Weather => (WEATHER_ARTIFACT, WEATHER_POPUP_TITLE),
+        };
+        let handle = create_surface(runtime, bytes, title)?;
+        self.handles[Self::slot(kind)] = Some(handle);
+        Ok(handle)
     }
 
     /// Close only the currently open surface (open=kind). No-op when none
@@ -1720,7 +1737,7 @@ impl HelperSurfaces {
     /// or None when nothing is open (zero close calls). Keeps the
     /// close-one/close-none contract testable without an X11 runtime.
     pub fn close_handle(&mut self) -> Option<SurfaceHandle> {
-        take_close_target(self.open.take()).map(|kind| self.surface_for(kind))
+        take_close_target(self.open.take()).and_then(|kind| self.handle(kind))
     }
 
     pub fn close(&mut self, runtime: &mut SurfaceRuntime) {
@@ -1744,13 +1761,7 @@ impl HelperSurfaces {
                 first_error = Some(UiBackendError::Renderer(error.to_string()));
             }
         }
-        for surface in [
-            self.audio,
-            self.network,
-            self.calendar,
-            self.battery,
-            self.weather,
-        ] {
+        for surface in self.handles.iter_mut().filter_map(Option::take) {
             if let Err(error) = runtime.destroy(surface) {
                 eprintln!(
                     "flamewm-quick-control: surface destroy during shutdown failed: {error:?}"
@@ -1766,7 +1777,7 @@ impl HelperSurfaces {
 
 fn create_surface(
     runtime: &mut SurfaceRuntime,
-    bytes: &[u8],
+    bytes: &'static [u8],
     title: &str,
 ) -> Result<SurfaceHandle, String> {
     let document = decode_document(bytes)?;
@@ -2230,6 +2241,21 @@ mod tests {
         };
         assert_eq!(placement.rect.x, 10);
         assert_eq!(placement.measure_elapsed, Duration::from_millis(2));
+    }
+
+    #[test]
+    fn helper_surfaces_start_without_handles_and_close_nothing() {
+        let mut surfaces = HelperSurfaces::new();
+        for kind in [
+            QuickControlKind::Audio,
+            QuickControlKind::Network,
+            QuickControlKind::Calendar,
+            QuickControlKind::Battery,
+            QuickControlKind::Weather,
+        ] {
+            assert_eq!(surfaces.handle(kind), None, "{kind:?} must start uncreated");
+        }
+        assert_eq!(surfaces.close_handle(), None);
     }
 
     #[test]

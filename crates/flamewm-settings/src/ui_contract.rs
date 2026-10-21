@@ -448,7 +448,7 @@ fn settings_sync_projects_live_font_defaults_and_scale_slider_value() {
     settings
         .values
         .insert("fontBold".into(), SettingValue::Boolean(true));
-    let mut app = application(settings, display_fixtures().remove(0));
+    let app = application(settings, display_fixtures().remove(0));
     let mut document = StrictDocument::new();
     app.sync(&mut document).expect("settings sync");
 

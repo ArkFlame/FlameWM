@@ -1,6 +1,6 @@
 //! PNG decode via tiny-skia. Alpha is preserved.
 
-use crate::{RgbaImage, unpremultiply_swapped_to_rgba};
+use crate::{RgbaImage, unpremultiply_swapped_in_place};
 
 /// Decodes PNG at natural size, preserving alpha.
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
@@ -10,7 +10,8 @@ pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
     }
     let width = source.width();
     let height = source.height();
-    let pixels = unpremultiply_swapped_to_rgba(source.data());
+    let mut pixels = source.take();
+    unpremultiply_swapped_in_place(&mut pixels);
     RgbaImage::from_rgba8(width, height, pixels)
         .ok_or_else(|| "PNG dimensions overflow".to_string())
 }

@@ -34,7 +34,7 @@ pub struct IconJob {
 
 #[derive(Clone, Debug)]
 pub struct IconResult {
-    pub key: IconKey,
+    pub key: Arc<IconKey>,
     pub result: Result<Rgba8Raster, IconError>,
     /// Worker completion envelope timestamp. `drain_ready`/`take_ready`
     /// record `icon.result.wake_to_apply` from this instant to apply.
@@ -79,14 +79,14 @@ impl IconResolve for IconResolver {
 struct Queue {
     high: VecDeque<Queued>,
     low: VecDeque<Queued>,
-    pending: HashSet<IconKey>,
+    pending: HashSet<Arc<IconKey>>,
     capacity: usize,
     stopped: bool,
 }
 
 #[derive(Clone, Debug)]
 struct Queued {
-    key: IconKey,
+    key: Arc<IconKey>,
     submitted_at: std::time::Instant,
 }
 
@@ -115,8 +115,8 @@ impl Queue {
             }
         }
         let priority = job.priority;
-        let key = job.key;
-        self.pending.insert(key.clone());
+        let key = Arc::new(job.key);
+        self.pending.insert(Arc::clone(&key));
         let queued = Queued {
             key,
             submitted_at: std::time::Instant::now(),
@@ -511,12 +511,12 @@ impl<R: IconResolve> IconService<R> {
 /// kept in step on every insert and remove so eviction never rescans the map.
 #[derive(Default)]
 struct ResultCache {
-    entries: HashMap<IconKey, Result<Rgba8Raster, IconError>>,
+    entries: HashMap<Arc<IconKey>, Result<Rgba8Raster, IconError>>,
     bytes: usize,
 }
 
 impl ResultCache {
-    fn insert(&mut self, key: IconKey, value: Result<Rgba8Raster, IconError>) {
+    fn insert(&mut self, key: Arc<IconKey>, value: Result<Rgba8Raster, IconError>) {
         self.bytes += result_memory(&value);
         if let Some(replaced) = self.entries.insert(key, value) {
             self.bytes -= result_memory(&replaced);
@@ -740,7 +740,7 @@ fn worker_loop<R: IconResolve>(
         // worker already completed it (still forwards so waiter observes it).
         enum Next {
             Cached(IconResult),
-            Resolve(IconKey),
+            Resolve(Arc<IconKey>),
         }
         let next: Option<Next> = {
             let mut queue = shared.queue.lock().expect("icon queue poisoned");
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(service.submit(job.clone()), Ok(IconSubmit::Enqueued));
         assert_eq!(service.submit(job), Ok(IconSubmit::Coalesced));
         let result = service.take_ready().expect("one completed result");
-        assert_eq!(result.key, key("same"));
+        assert_eq!(*result.key, key("same"));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -1313,7 +1313,7 @@ mod tests {
 
         let service = IconService::new(1, 8, || FakeResolver(Arc::new(AtomicUsize::new(0))));
         let finish_raster = |name: String, pixels: usize| IconResult {
-            key: key(&name),
+            key: Arc::new(key(&name)),
             result: Ok(Rgba8Raster {
                 source: name,
                 width: 1,

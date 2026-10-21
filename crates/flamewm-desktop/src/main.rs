@@ -1380,13 +1380,16 @@ fn pointer_point_for_grid(point: Point, grid: GridConfig) -> Point {
     )
 }
 
-fn projected_cells(state: &DesktopState) -> BTreeMap<String, (OutputId, Cell)> {
-    let mut result = BTreeMap::new();
+/// Projected `(output, cell)` for every model item, aligned by index with
+/// `state.model.items()` (so `cells[i]` belongs to the i-th item).
+fn projected_cells(state: &DesktopState) -> Vec<(OutputId, Cell)> {
+    let items: Vec<_> = state.model.items().collect();
+    let mut result: Vec<Option<(OutputId, Cell)>> = vec![None; items.len()];
     let mut occupied = BTreeMap::<OutputId, BTreeSet<Cell>>::new();
-    for item in state
-        .model
-        .items()
-        .filter(|item| state.output_grids.contains_key(&item.output))
+    for (slot, item) in items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| state.output_grids.contains_key(&item.output))
     {
         let grid = grid_for_output(state, &item.output);
         let cell = grid.clamp_cell(item.cell);
@@ -1394,21 +1397,24 @@ fn projected_cells(state: &DesktopState) -> BTreeMap<String, (OutputId, Cell)> {
             .entry(item.output.clone())
             .or_default()
             .insert(cell);
-        result.insert(item.id.clone(), (item.output.clone(), cell));
+        result[slot] = Some((item.output.clone(), cell));
     }
     let fallback = state.default_output.clone();
     let grid = grid_for_output(state, &fallback);
-    for item in state
-        .model
-        .items()
-        .filter(|item| !state.output_grids.contains_key(&item.output))
+    for (slot, _) in items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| !state.output_grids.contains_key(&item.output))
     {
         let cells = occupied.entry(fallback.clone()).or_default();
         let cell = flamewm_desktop_core::model::first_free(cells, grid);
         cells.insert(cell);
-        result.insert(item.id.clone(), (fallback.clone(), cell));
+        result[slot] = Some((fallback.clone(), cell));
     }
     result
+        .into_iter()
+        .map(|entry| entry.expect("every model item is projected"))
+        .collect()
 }
 
 fn panel_geometries() -> Result<Vec<(OutputId, Rect)>, String> {
@@ -1592,7 +1598,7 @@ fn sync_document(
     for index in 0..SLOT_COUNT {
         let item = items.get(index).copied();
         if let Some(item) = item {
-            let (output, cell) = &cells[&item.id];
+            let (output, cell) = &cells[index];
             let output_grid = grid_for_output(state, output);
             let point = output_grid.cell_to_pixel(*cell);
             let kind = item.kind;
@@ -2142,12 +2148,12 @@ fn handle_item(
                 .items()
                 .enumerate()
                 .filter(|(_, candidate)| state.selection.selected().contains(&candidate.id))
-                .map(|(_, candidate)| OriginalItem {
+                .map(|(slot, candidate)| OriginalItem {
                     id: candidate.id.clone(),
                     path: candidate.path.clone(),
                     output: candidate.output.clone(),
                     cell: candidate.cell,
-                    drag_cell: projected[&candidate.id].1,
+                    drag_cell: projected[slot].1,
                 })
                 .collect();
             state.item_drag = Some(ItemDrag {
@@ -2183,7 +2189,7 @@ fn handle_item(
             // Threshold transition: capture icon+label once, then project the
             // ghost; canonical desktop-item-N nodes stay untouched.
             if state.drag_ghost.is_none() {
-                let (output, cell) = projected_cells(state)[&item_id].clone();
+                let (output, cell) = projected_cells(state)[index].clone();
                 let origin = grid_for_output(state, &output).cell_to_pixel(cell);
                 state.drag_ghost = Some(DragGhost {
                     output,
@@ -2549,9 +2555,10 @@ fn sync_rename_editor(
     let anchor = state
         .model
         .items()
-        .find(|item| item.id == rename.item_id)
-        .map(|item| {
-            let (output, cell) = &cells[&item.id];
+        .enumerate()
+        .find(|(_, item)| item.id == rename.item_id)
+        .map(|(slot, _)| {
+            let (output, cell) = &cells[slot];
             grid_for_output(state, output).cell_to_pixel(*cell)
         })
         .unwrap_or(state.grid.work_area.origin());
@@ -3201,27 +3208,6 @@ fn show_drag_ghost(
     Ok(())
 }
 
-fn split_label_lines(label: &str) -> (String, String) {
-    let mut words = label.split_whitespace();
-    let mut line1 = String::new();
-    let mut line2 = String::new();
-    for word in words.by_ref() {
-        if line1.len() + word.len() + usize::from(!line1.is_empty()) <= 12 {
-            if !line1.is_empty() {
-                line1.push(' ');
-            }
-            line1.push_str(word);
-        } else {
-            line2 = std::iter::once(word)
-                .chain(words)
-                .collect::<Vec<_>>()
-                .join(" ");
-            break;
-        }
-    }
-    (line1, line2)
-}
-
 fn sync_drag_ghost(
     document: &mut impl UiDocumentAccess,
     state: &DesktopState,
@@ -3229,10 +3215,21 @@ fn sync_drag_ghost(
     let ghost = state.drag_ghost.as_ref().filter(|ghost| ghost.visible);
     document.visible("desktop-drag-ghost", ghost.is_some())?;
     if let Some(ghost) = ghost {
-        for (index, item) in state.model.items().take(SLOT_COUNT).enumerate() {
-            if ghost.source_ids.contains(&item.id) {
-                document.visible(&format!("desktop-item-{index}"), false)?;
-            }
+        set_drag_sources_visible(document, state, &ghost.source_ids, false)?;
+    }
+    Ok(())
+}
+
+/// Hides or restores the tiles that are being dragged, keyed by item id.
+fn set_drag_sources_visible(
+    document: &mut impl UiDocumentAccess,
+    state: &DesktopState,
+    source_ids: &[String],
+    visible: bool,
+) -> Result<(), String> {
+    for (index, item) in state.model.items().take(SLOT_COUNT).enumerate() {
+        if source_ids.contains(&item.id) {
+            document.visible(&format!("desktop-item-{index}"), visible)?;
         }
     }
     Ok(())
@@ -3243,11 +3240,7 @@ fn hide_drag_ghost(
     state: &mut DesktopState,
 ) -> Result<(), String> {
     if let Some(ghost) = state.drag_ghost.take() {
-        for (index, item) in state.model.items().take(SLOT_COUNT).enumerate() {
-            if ghost.source_ids.contains(&item.id) {
-                document.visible(&format!("desktop-item-{index}"), true)?;
-            }
-        }
+        set_drag_sources_visible(document, state, &ghost.source_ids, true)?;
     }
     // Best effort: count node may not exist in the compiled
     // document; the ghost id itself is authoritative for visibility.
@@ -3317,8 +3310,9 @@ fn commit_item_drag(
         let occupied = state
             .model
             .items()
-            .filter(|item| !selected_ids.contains(item.id.as_str()))
-            .filter(|item| {
+            .enumerate()
+            .filter(|(_, item)| !selected_ids.contains(item.id.as_str()))
+            .filter(|(_, item)| {
                 let item_output = if state.output_grids.contains_key(&item.output) {
                     &item.output
                 } else {
@@ -3326,7 +3320,7 @@ fn commit_item_drag(
                 };
                 item_output == &output
             })
-            .map(|item| projected[&item.id].1)
+            .map(|(slot, _)| projected[slot].1)
             .collect::<BTreeSet<_>>();
         match group_drag_transaction(&selected, &occupied, delta, grid_for_output(state, &output)) {
             Ok(output_updates) => updates.extend(output_updates),
@@ -3387,20 +3381,15 @@ fn update_selection_from_rubber(state: &mut DesktopState) {
         return;
     };
     let cells = projected_cells(state);
-    let item_rects = state
-        .model
-        .items()
-        .map(|item| {
-            let (output, cell) = &cells[&item.id];
-            let grid = grid_for_output(state, output);
-            let point = grid.cell_to_pixel(*cell);
-            (
-                item.id.clone(),
-                Rect::new(point.x, point.y, grid.cell_width, grid.cell_height),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let selected = state.selection.hit_test(&item_rects);
+    let item_rects = state.model.items().zip(&cells).map(|(item, (output, cell))| {
+        let grid = grid_for_output(state, output);
+        let point = grid.cell_to_pixel(*cell);
+        (
+            item.id.as_str(),
+            Rect::new(point.x, point.y, grid.cell_width, grid.cell_height),
+        )
+    });
+    let selected = state.selection.hit_test(item_rects);
     state.selection.clear();
     for id in selected {
         state.selection.select(id);

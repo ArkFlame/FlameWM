@@ -146,7 +146,10 @@ fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<Stri
     }
     let variables: Vec<ColorVariable> = values
         .into_iter()
-        .map(|(name, default)| ColorVariable { name, default })
+        .map(|(name, default)| ColorVariable {
+            name: name.into(),
+            default,
+        })
         .collect();
     if variables.len() > u16::MAX as usize {
         return Err("too many CSS custom properties".to_string());
@@ -154,7 +157,7 @@ fn collect_variables(rules: &[Rule]) -> Result<(Vec<ColorVariable>, HashMap<Stri
     let variable_map = variables
         .iter()
         .enumerate()
-        .map(|(index, variable)| (variable.name.clone(), index as u16))
+        .map(|(index, variable)| (variable.name.to_string(), index as u16))
         .collect();
     Ok((variables, variable_map))
 }
@@ -189,9 +192,9 @@ impl<'a> Compiler<'a> {
                 parent,
                 first_child: None,
                 next_sibling: None,
-                id: String::new(),
-                action: String::new(),
-                text: source.text,
+                id: std::borrow::Cow::Borrowed(""),
+                action: std::borrow::Cow::Borrowed(""),
+                text: source.text.into(),
                 image: None,
                 style,
                 hover_style: None,
@@ -222,13 +225,13 @@ impl<'a> Compiler<'a> {
             parent,
             first_child: None,
             next_sibling: None,
-            id,
-            action,
-            text: String::new(),
+            id: id.into(),
+            action: action.into(),
+            text: std::borrow::Cow::Borrowed(""),
             image,
             style: base.clone(),
-            hover_style,
-            active_style,
+            hover_style: hover_style.map(Box::new),
+            active_style: active_style.map(Box::new),
         });
 
         let mut first_child = None;
@@ -310,10 +313,10 @@ impl<'a> Compiler<'a> {
         }
         let index = self.assets.len() as u16;
         self.assets.push(ImageAsset {
-            source: src.to_string(),
+            source: src.to_string().into(),
             width: image.width,
             height: image.height,
-            pixels,
+            pixels: pixels.into(),
         });
         self.asset_index.insert(src.to_string(), index);
         Ok(index)

@@ -200,34 +200,48 @@ pub fn decode_bytes_at(
     }
 }
 
-/// Converts tiny-skia premultiplied pixel bytes to straight RGBA8.
+/// Converts tiny-skia premultiplied pixel bytes to straight RGBA8 in place.
 ///
 /// tiny-skia pixmaps are RGBA-ordered (data[0]->R, data[1]->G, data[2]->B)
 /// with premultiplied color channels. Fully transparent pixels stay
-/// (0,0,0,0); no color-key substitution.
-#[must_use]
-pub fn unpremultiply_swapped_to_rgba(premultiplied: &[u8]) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity(premultiplied.len());
-    for rgba in premultiplied.chunks_exact(4) {
+/// (0,0,0,0); no color-key substitution. Working in place avoids a second
+/// full-size buffer for every decoded PNG and SVG raster.
+pub fn unpremultiply_swapped_in_place(pixels: &mut [u8]) {
+    for rgba in pixels.chunks_exact_mut(4) {
         let a = u16::from(rgba[3]);
         if a == 0 {
-            pixels.extend_from_slice(&[0, 0, 0, 0]);
+            rgba.copy_from_slice(&[0, 0, 0, 0]);
             continue;
         }
         let straight = |c: u8| ((u16::from(c) * 255 + a / 2) / a).min(255) as u8;
-        pixels.extend_from_slice(&[
-            straight(rgba[0]),
-            straight(rgba[1]),
-            straight(rgba[2]),
-            a as u8,
-        ]);
+        rgba[0] = straight(rgba[0]);
+        rgba[1] = straight(rgba[1]);
+        rgba[2] = straight(rgba[2]);
     }
-    pixels
+}
+
+/// Expands `count` packed RGB pixels at the front of `pixels` to RGBA with alpha 255.
+/// Walks backwards: each destination pixel starts at or after its source, and later
+/// destinations never overwrite source bytes that are still unread.
+pub(crate) fn expand_rgb_to_rgba_in_place(pixels: &mut [u8], count: usize) {
+    for index in (0..count).rev() {
+        let (src, dst) = (index * 3, index * 4);
+        let rgb = [pixels[src], pixels[src + 1], pixels[src + 2]];
+        pixels[dst..dst + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expands_rgb_in_place_with_opaque_alpha() {
+        let mut pixels = vec![0u8; 4 * 3];
+        pixels[..9].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expand_rgb_to_rgba_in_place(&mut pixels, 3);
+        assert_eq!(pixels, [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255]);
+    }
 
     #[test]
     fn dimensions_have_no_arbitrary_cap_but_reject_zero_and_overflow() {
@@ -275,13 +289,11 @@ mod tests {
 
     #[test]
     fn unpremultiply_handles_transparent_and_opaque() {
-        assert_eq!(
-            unpremultiply_swapped_to_rgba(&[10, 20, 30, 0]),
-            vec![0, 0, 0, 0]
-        );
-        assert_eq!(
-            unpremultiply_swapped_to_rgba(&[10, 20, 30, 255]),
-            vec![10, 20, 30, 255]
-        );
+        let mut transparent = [10, 20, 30, 0];
+        unpremultiply_swapped_in_place(&mut transparent);
+        assert_eq!(transparent, [0, 0, 0, 0]);
+        let mut opaque = [10, 20, 30, 255];
+        unpremultiply_swapped_in_place(&mut opaque);
+        assert_eq!(opaque, [10, 20, 30, 255]);
     }
 }

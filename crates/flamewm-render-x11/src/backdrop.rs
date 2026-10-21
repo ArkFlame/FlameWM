@@ -246,6 +246,12 @@ pub fn capture_is_ready(rgba: &[u8]) -> bool {
     pixels.any(|pixel| pixel != first)
 }
 
+thread_local! {
+    /// Blur work buffers shared by every snapshot blur on the display thread.
+    static BLUR_SCRATCH: std::cell::RefCell<flamewm_image_core::blur::BlurScratch> =
+        std::cell::RefCell::default();
+}
+
 /// Opaque ARGB32 words (0xFFRRGGBB) for a straight RGBA8 snapshot, blurred per
 /// [`blur_radius_px`]. Takes ownership so the blur runs in place without a copy.
 /// Blur failure keeps the unblurred pixels.
@@ -259,9 +265,16 @@ pub fn blurred_argb_words(
 ) -> Vec<u32> {
     let radius = blur_radius_px(opacity_percent, blur_percent);
     if radius > 0.0 {
-        if let Err(error) =
-            flamewm_image_core::blur::gaussian_blur_rgba(&mut rgba, width, height, radius)
-        {
+        let blurred = BLUR_SCRATCH.with(|scratch| {
+            flamewm_image_core::blur::gaussian_blur_rgba_with(
+                &mut scratch.borrow_mut(),
+                &mut rgba,
+                width,
+                height,
+                radius,
+            )
+        });
+        if let Err(error) = blurred {
             eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
         }
     }

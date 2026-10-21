@@ -242,11 +242,11 @@ pub(crate) unsafe fn fill_rounded_rect(
     Ok(())
 }
 
-/// Anti-aliased replacement for `XRenderBackend::stroke_rounded_rect`.
+/// Anti-aliased rounded-rect stroke for the XRender backend.
 ///
 /// # Safety
 ///
-/// Same contract as `XRenderBackend::stroke_rounded_rect`.
+/// `backend` must hold live Xlib/XRender handles for its display.
 pub(crate) unsafe fn stroke_rounded_rect(
     backend: &mut XRenderBackend,
     rect: Rect,

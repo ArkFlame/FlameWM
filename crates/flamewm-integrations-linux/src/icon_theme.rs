@@ -88,15 +88,18 @@ pub struct IconThemeIndex {
 /// use [`IconThemeCaches::stats`] / `memory_estimate_bytes`.
 #[derive(Clone, Debug, Default)]
 pub struct IconThemeCaches {
-    exists: HashMap<(PathBuf, u64), bool>,
+    /// Generation -> path -> exists. Nested so lookups borrow `&Path` with no allocation.
+    exists: HashMap<u64, HashMap<PathBuf, bool>>,
+    exists_len: usize,
     hits: u64,
     misses: u64,
 }
 
+const EXISTS_CAP: usize = 4096;
+
 impl IconThemeCaches {
     fn exists(&mut self, path: &Path, generation: u64) -> Option<bool> {
-        let key = (path.to_path_buf(), generation);
-        if let Some(hit) = self.exists.get(&key) {
+        if let Some(hit) = self.exists.get(&generation).and_then(|m| m.get(path)) {
             self.hits += 1;
             return Some(*hit);
         }
@@ -109,12 +112,39 @@ impl IconThemeCaches {
     }
 
     pub(crate) fn store_exists(&mut self, path: &Path, generation: u64, exists: bool) {
-        bound_insert(
-            &mut self.exists,
-            (path.to_path_buf(), generation),
-            exists,
-            4096,
-        );
+        if let Some(slot) = self
+            .exists
+            .get_mut(&generation)
+            .and_then(|m| m.get_mut(path))
+        {
+            *slot = exists;
+            return;
+        }
+        if self.exists_len >= EXISTS_CAP {
+            self.evict_one_exists();
+        }
+        self.exists
+            .entry(generation)
+            .or_default()
+            .insert(path.to_path_buf(), exists);
+        self.exists_len += 1;
+    }
+
+    /// Drops one arbitrary entry (same policy as the former flat `bound_insert`).
+    fn evict_one_exists(&mut self) {
+        let Some(generation) = self.exists.keys().next().copied() else {
+            return;
+        };
+        let Some(inner) = self.exists.get_mut(&generation) else {
+            return;
+        };
+        if let Some(path) = inner.keys().next().cloned() {
+            inner.remove(&path);
+            self.exists_len -= 1;
+        }
+        if inner.is_empty() {
+            self.exists.remove(&generation);
+        }
     }
 
     /// (hits, misses) across exists lookups.
@@ -125,25 +155,23 @@ impl IconThemeCaches {
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.exists.len()
+        self.exists_len
     }
 
     #[must_use]
     pub fn memory_estimate_bytes(&self) -> usize {
         self.exists
-            .keys()
-            .map(|(path, _)| path.as_os_str().len() + 16)
+            .values()
+            .flat_map(|m| m.keys())
+            .map(|path| path.as_os_str().len() + 16)
             .sum()
     }
 
     fn clear_generation(&mut self) {
         // Generations are key-scoped so no clear is required; this hook keeps
         // the bound small if a host cycles generations rapidly.
-        while self.len() > 4096 {
-            let Some(first) = self.exists.keys().next().cloned() else {
-                break;
-            };
-            self.exists.remove(&first);
+        while self.len() > EXISTS_CAP {
+            self.evict_one_exists();
         }
     }
 
@@ -152,20 +180,50 @@ impl IconThemeCaches {
     }
 }
 
-fn bound_insert<K: std::hash::Hash + Eq + Clone, V>(
-    map: &mut HashMap<K, V>,
-    key: K,
-    value: V,
-    cap: usize,
-) {
-    if map.len() >= cap && !map.contains_key(&key) {
-        // Bounded: drop an arbitrary entry rather than growing without limit.
-        if let Some(first) = map.keys().next().cloned() {
-            map.remove(&first);
-        }
-    }
-    map.insert(key, value);
+/// Name memo keyed `name -> physical -> paths`. The nested layout lets lookups
+/// borrow `&str` (no per-call `String` key); `len` counts `(name, physical)` pairs.
+#[derive(Debug, Default)]
+struct NameMemo {
+    by_name: HashMap<String, HashMap<u32, Vec<PathBuf>>>,
+    len: usize,
 }
+
+impl NameMemo {
+    fn get(&self, name: &str, physical: u32) -> Option<&Vec<PathBuf>> {
+        self.by_name.get(name)?.get(&physical)
+    }
+
+    /// Same policy as `bound_insert`: at capacity, drop one arbitrary pair first.
+    fn insert(&mut self, name: &str, physical: u32, paths: Vec<PathBuf>, cap: usize) {
+        if let Some(slot) = self
+            .by_name
+            .get_mut(name)
+            .and_then(|m| m.get_mut(&physical))
+        {
+            *slot = paths;
+            return;
+        }
+        if self.len >= cap {
+            if let Some(outer) = self.by_name.keys().next().cloned() {
+                if let Some(inner) = self.by_name.get_mut(&outer) {
+                    if let Some(first) = inner.keys().next().copied() {
+                        inner.remove(&first);
+                        self.len -= 1;
+                    }
+                    if inner.is_empty() {
+                        self.by_name.remove(&outer);
+                    }
+                }
+            }
+        }
+        self.by_name
+            .entry(name.to_owned())
+            .or_default()
+            .insert(physical, paths);
+        self.len += 1;
+    }
+}
+
 
 impl IconThemeIndex {
     #[must_use]
@@ -772,7 +830,7 @@ pub struct IconLookupIndex {
     /// Build inputs needed for atomic rebuild on invalidation.
     pub theme_names: Vec<String>,
     pub data_dirs: Vec<PathBuf>,
-    memo: std::sync::Mutex<HashMap<(String, u32), Vec<PathBuf>>>,
+    memo: std::sync::Mutex<NameMemo>,
     /// Cap for the name memo (bounded legacy fallback below counts too).
     pub memo_cap: usize,
     hits: std::sync::atomic::AtomicU64,
@@ -838,7 +896,7 @@ impl IconLookupIndex {
             last_mtime_check: std::sync::Mutex::new(None),
             theme_names,
             data_dirs,
-            memo: std::sync::Mutex::new(HashMap::new()),
+            memo: std::sync::Mutex::new(NameMemo::default()),
             memo_cap: 2048,
             hits: std::sync::atomic::AtomicU64::new(0),
             misses: std::sync::atomic::AtomicU64::new(0),
@@ -1122,16 +1180,11 @@ impl IconLookupIndex {
 
     #[must_use]
     pub fn memo_len(&self) -> usize {
-        self.memo.lock().map(|m| m.len()).unwrap_or(0)
+        self.memo.lock().map(|m| m.len).unwrap_or(0)
     }
 
     fn memo_get(&self, name: &str, physical: u32) -> Option<Vec<PathBuf>> {
-        let hit = self
-            .memo
-            .lock()
-            .ok()?
-            .get(&(name.to_owned(), physical))
-            .cloned();
+        let hit = self.memo.lock().ok()?.get(name, physical).cloned();
         if hit.is_some() {
             self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         } else {
@@ -1143,7 +1196,7 @@ impl IconLookupIndex {
 
     fn memo_store(&self, name: &str, physical: u32, paths: Vec<PathBuf>) {
         if let Ok(mut memo) = self.memo.lock() {
-            bound_insert(&mut memo, (name.to_owned(), physical), paths, self.memo_cap);
+            memo.insert(name, physical, paths, self.memo_cap);
         }
     }
 
@@ -1233,6 +1286,38 @@ mod tests {
             parse_ini_value(gtk, "Settings", "gtk-icon-theme-name").as_deref(),
             Some("Adwaita")
         );
+    }
+
+    #[test]
+    fn exists_cache_is_generation_scoped_and_bounded() {
+        let mut caches = IconThemeCaches::default();
+        let path = Path::new("/icons/a.png");
+        assert_eq!(caches.cached_exists(path, 1), None);
+        caches.store_exists(path, 1, true);
+        assert_eq!(caches.cached_exists(path, 1), Some(true));
+        assert_eq!(caches.cached_exists(path, 2), None);
+        caches.store_exists(path, 2, false);
+        assert_eq!(caches.cached_exists(path, 2), Some(false));
+        assert_eq!(caches.len(), 2);
+        for i in 0..(EXISTS_CAP + 10) {
+            let p = PathBuf::from(format!("/icons/{i}.png"));
+            caches.store_exists(&p, 3, true);
+        }
+        assert!(caches.len() <= EXISTS_CAP);
+        assert_eq!(caches.len(), caches.exists.values().map(HashMap::len).sum());
+    }
+
+    #[test]
+    fn name_memo_is_bounded_by_pair_count() {
+        let mut memo = NameMemo::default();
+        for i in 0..5u32 {
+            memo.insert("apps", i, vec![PathBuf::from("x")], 3);
+        }
+        assert_eq!(memo.len, 3);
+        assert!(memo.get("apps", 4).is_some());
+        memo.insert("apps", 4, vec![PathBuf::from("y")], 3);
+        assert_eq!(memo.len, 3);
+        assert_eq!(memo.get("apps", 4), Some(&vec![PathBuf::from("y")]));
     }
 
     #[test]

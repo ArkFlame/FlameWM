@@ -4,7 +4,7 @@ pub mod model;
 pub mod paint;
 pub mod text_layout;
 
-pub use codec::{decode, encode};
+pub use codec::{decode, decode_static, encode};
 pub use layout::{IntrinsicMeasureError, IntrinsicSize, LayoutBox, LayoutEngine, LayoutResult};
 pub use model::*;
 pub use paint::{

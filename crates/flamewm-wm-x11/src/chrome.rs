@@ -215,27 +215,30 @@ pub struct ControlGlyphKey {
     pub look: ControlLook,
 }
 
-impl ControlGlyphKey {
-    #[must_use]
-    pub fn new(role: ControlRole, edge: u32, material: ControlMaterial) -> Self {
-        Self {
-            role,
-            edge,
-            material,
-            look: ControlLook::default(),
-        }
-    }
-}
-
 /// Process-global bounded glyph raster cache (WM loop is single-threaded;
 /// mutex guards cross-call sharing, never held across X calls).
 const CONTROL_GLYPH_CACHE_CAPACITY: usize = 32;
 
-fn control_glyph_cache()
--> &'static Mutex<HashMap<ControlGlyphKey, Arc<flamewm_image_core::RgbaImage>>> {
-    static CACHE: OnceLock<Mutex<HashMap<ControlGlyphKey, Arc<flamewm_image_core::RgbaImage>>>> =
-        OnceLock::new();
+type ControlGlyphCache = Mutex<HashMap<ControlGlyphKey, Arc<flamewm_image_core::RgbaImage>>>;
+
+fn control_glyph_cache() -> &'static ControlGlyphCache {
+    static CACHE: OnceLock<ControlGlyphCache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Bounded cache insert: a full cache is cleared before the new entry lands.
+fn bounded_insert<K: Eq + std::hash::Hash, V>(
+    cache: &Mutex<HashMap<K, V>>,
+    capacity: usize,
+    key: K,
+    value: V,
+) {
+    if let Ok(mut cache) = cache.lock() {
+        if cache.len() >= capacity {
+            cache.clear();
+        }
+        cache.insert(key, value);
+    }
 }
 
 /// Render one control glyph raster with its per-material semantic color
@@ -265,8 +268,10 @@ pub fn control_glyph_raster_shared(
         return None;
     }
     let key = ControlGlyphKey {
+        role,
+        edge,
+        material,
         look,
-        ..ControlGlyphKey::new(role, edge, material)
     };
     if let Ok(cache) = control_glyph_cache().lock() {
         if let Some(cached) = cache.get(&key) {
@@ -304,12 +309,12 @@ pub fn control_glyph_raster_shared(
         }
     }
     let raster = Arc::new(raster);
-    if let Ok(mut cache) = control_glyph_cache().lock() {
-        if cache.len() >= CONTROL_GLYPH_CACHE_CAPACITY {
-            cache.clear();
-        }
-        cache.insert(key, Arc::clone(&raster));
-    }
+    bounded_insert(
+        control_glyph_cache(),
+        CONTROL_GLYPH_CACHE_CAPACITY,
+        key,
+        Arc::clone(&raster),
+    );
     Some(raster)
 }
 
@@ -482,6 +487,7 @@ pub fn icon_slot_for(titlebar_height: u16) -> u16 {
 
 /// Title baseline (Xft device pixels) for the configured titlebar height.
 #[must_use]
+#[cfg(test)]
 pub fn title_baseline(titlebar_height: u16) -> f32 {
     f32::from(titlebar_height.saturating_sub(11).max(11))
 }
@@ -501,6 +507,7 @@ pub struct ControlBlit {
 
 /// Resolve default-size control glyphs; hover/pressed never move the hit targets.
 #[must_use]
+#[cfg(test)]
 pub fn control_blits_for(
     frame_width: u32,
     maximized: bool,
@@ -683,23 +690,26 @@ fn control_mask(key: ControlMaskKey) -> Arc<Vec<u8>> {
         }
     }
     let mask = Arc::new(alpha);
-    if let Ok(mut cache) = control_mask_cache().lock() {
-        if cache.len() >= CONTROL_MASK_CACHE_CAPACITY {
-            cache.clear();
-        }
-        cache.insert(key, Arc::clone(&mask));
-    }
+    bounded_insert(
+        control_mask_cache(),
+        CONTROL_MASK_CACHE_CAPACITY,
+        key,
+        Arc::clone(&mask),
+    );
     mask
 }
 
 /// Frame-local fill geometry, with its coverage in an immutable cached mask.
 #[derive(Debug, Clone)]
 pub struct ControlBackplate {
+    /// Test-only: production paint reads geometry and coverage, not the plan's control/corners.
+    #[cfg(test)]
     pub control: crate::frame::model::FrameControl,
     pub x: i32,
     pub y: i32,
     pub width: u16,
     pub height: u16,
+    #[cfg(test)]
     pub corners: ControlCorners,
     pub rgb: [u8; 3],
     pub coverage: Arc<Vec<u8>>,
@@ -782,11 +792,13 @@ pub fn control_backplates_for(
             },
         );
         plates.push(ControlBackplate {
+            #[cfg(test)]
             control,
             x: rect.x,
             y: 0,
             width,
             height: titlebar_height,
+            #[cfg(test)]
             corners,
             rgb: [
                 scheme.background[0],
@@ -842,11 +854,6 @@ pub fn composite_control_backplates(
 /// `center_title_x` contract: desired `(W - tw) / 2` clamped into the free
 /// region between the left-occupied icon slot and the right-occupied
 /// 114px control strip, padded by skin `TITLE_PAD`.
-#[must_use]
-pub fn live_title_x(frame_width: u32, title_width: i32) -> f32 {
-    live_title_x_for_height(frame_width, title_width, WINDOW_CHROME.metrics.titlebar)
-}
-
 #[must_use]
 pub fn live_title_x_for_height(frame_width: u32, title_width: i32, titlebar_h: u16) -> f32 {
     use crate::frame::layout::controls_width_for_titlebar;

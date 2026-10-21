@@ -233,29 +233,42 @@ fn capture_clipped(
         height: ch,
         pixels,
     } = capture_drawable_rect(display, window, (vx, vy, vw, vh)).ok()?;
-    let full = embed_subrect(width, height, (vx as u32, vy as u32), (cw, ch), pixels)?;
-    rgba_to_argb_owned(width, height, full).ok()
+    embed_subrect_argb(width, height, (vx as u32, vy as u32), (cw, ch), &pixels)
 }
 
-/// Places a `cw x ch` RGBA capture at `(vx, vy)` inside a zeroed `width x height` frame.
-/// A capture that already covers the whole frame is returned without copying.
-fn embed_subrect(
+/// Places a `cw x ch` straight RGBA capture at `(vx, vy)` inside a `width x height`
+/// premultiplied ARGB frame. Only the captured sub-rect is converted; the rest is zero,
+/// which is transparent in premultiplied form. No intermediate full-frame RGBA buffer.
+fn embed_subrect_argb(
     width: u32,
     height: u32,
     (vx, vy): (u32, u32),
     (cw, ch): (u32, u32),
-    pixels: Vec<u8>,
-) -> Option<Vec<u8>> {
-    if (vx, vy) == (0, 0) && (cw, ch) == (width, height) {
-        return Some(pixels);
+    pixels: &[u8],
+) -> Option<CapturedImage> {
+    check_capture_size(width, height).ok()?;
+    let row_bytes = cw as usize * 4;
+    if pixels.len() != row_bytes * ch as usize {
+        return None;
     }
-    let mut full = vec![0u8; width as usize * height as usize * 4];
-    for row in 0..ch as usize {
-        let src = row * cw as usize * 4;
-        let dst = ((vy as usize + row) * width as usize + vx as usize) * 4;
-        full[dst..dst + cw as usize * 4].copy_from_slice(pixels.get(src..src + cw as usize * 4)?);
+    let mut argb = vec![0u8; width as usize * height as usize * 4];
+    for (row, src) in pixels.chunks_exact(row_bytes).enumerate() {
+        let dst_at = ((vy as usize + row) * width as usize + vx as usize) * 4;
+        let dst = argb.get_mut(dst_at..dst_at + row_bytes)?;
+        for (out, px) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            let a = px[3];
+            let packed = (u32::from(a) << 24)
+                | (premultiply(px[0], a) << 16)
+                | (premultiply(px[1], a) << 8)
+                | premultiply(px[2], a);
+            out.copy_from_slice(&packed.to_ne_bytes());
+        }
     }
-    Some(full)
+    Some(CapturedImage {
+        width,
+        height,
+        argb,
+    })
 }
 
 /// Uploads `capture` into a new depth-32 pixmap on the default screen.
@@ -424,34 +437,28 @@ mod tests {
     }
 
     #[test]
-    fn embed_subrect_full_frame_fast_path_matches_copy() {
+    fn embed_subrect_full_frame_matches_full_convert() {
         let (width, height) = (5u32, 3u32);
         let frame: Vec<u8> = (0..(width * height * 4))
             .map(|i| (i * 7 % 251) as u8)
             .collect();
-        // Slow path oracle: the zeroed-frame copy, applied to a full-frame capture.
-        let mut slow = vec![0u8; frame.len()];
-        for row in 0..height as usize {
-            let at = row * width as usize * 4;
-            slow[at..at + width as usize * 4].copy_from_slice(&frame[at..at + width as usize * 4]);
-        }
-        let fast = embed_subrect(width, height, (0, 0), (width, height), frame.clone())
+        let fast = embed_subrect_argb(width, height, (0, 0), (width, height), &frame)
             .expect("full frame");
-        assert_eq!(fast, slow);
-        assert_eq!(fast, frame);
+        assert_eq!(fast.argb, rgba_to_argb(width, height, &frame).unwrap().argb);
     }
 
     #[test]
-    fn embed_subrect_partial_matches_zeroed_frame_copy() {
-        // 2x2 capture placed at (1, 1) inside a 4x3 frame; the rest stays zero.
+    fn embed_subrect_partial_matches_zeroed_frame_convert() {
+        // 2x2 capture placed at (1, 1) inside a 4x3 frame; the rest stays transparent.
         let capture = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let out = embed_subrect(4, 3, (1, 1), (2, 2), capture).expect("in range");
-        assert_eq!(out.len(), 4 * 3 * 4);
-        assert_eq!(&out[..20], &[0u8; 20]);
-        assert_eq!(&out[20..28], &[1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(&out[36..44], &[9, 10, 11, 12, 13, 14, 15, 16]);
-        assert_eq!(&out[44..], &[0u8; 4]);
-        assert!(embed_subrect(4, 3, (1, 1), (2, 2), vec![0; 4]).is_none());
+        let mut zeroed = vec![0u8; 4 * 3 * 4];
+        for row in 0..2usize {
+            let dst = ((1 + row) * 4 + 1) * 4;
+            zeroed[dst..dst + 8].copy_from_slice(&capture[row * 8..row * 8 + 8]);
+        }
+        let out = embed_subrect_argb(4, 3, (1, 1), (2, 2), &capture).expect("in range");
+        assert_eq!(out.argb, rgba_to_argb(4, 3, &zeroed).unwrap().argb);
+        assert!(embed_subrect_argb(4, 3, (1, 1), (2, 2), &[0; 4]).is_none());
     }
 
     #[test]
