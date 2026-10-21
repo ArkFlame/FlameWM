@@ -1,0 +1,56 @@
+
+:root { --accent:#ef4048; --surface:#202326; --card:#232629; --line:#3a3f45; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#aeb4bb; --accent-soft:#ef404830; }
+* { box-sizing:border-box; }
+html { width:100%; height:100%; }
+body { width:100%; height:100%; margin:0; color:var(--text); background:var(--surface); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
+button { background:transparent; color:var(--text); cursor:default; font-size:13px; }
+button:hover { background:#333840; }
+button:active { background:#424950; }
+.top { width:100%; flex-grow:0; display:flex; flex-direction:column; background:var(--surface); }
+.toolbar { width:100%; height:48px; padding:6px 12px; display:flex; align-items:center; gap:5px; }
+.nav { width:38px; height:34px; border-radius:6px; font-size:17px; }
+.address { height:34px; flex-grow:1; min-width:100px; padding:0 12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; background:#15181b; border:1px solid #51575f; border-radius:5px; }
+.address:hover { border-color:var(--accent); }
+.tabs { display:flex; align-items:center; height:36px;  padding-left:12px; gap:2px; }
+.tab { min-width:96px; max-width:164px; height:31px; padding:0 10px; white-space:nowrap; overflow:hidden; background:#252a2f; border-radius:6px; }
+.tab-add,.tab-close { height:30px; width:32px; }
+.main { flex-grow:1; display:flex; min-height:0; overflow:hidden; }
+.places { flex-grow:0; width:204px; padding:12px 4px; display:flex; flex-direction:column; gap:2px; overflow:hidden; background:var(--sidebar);  }
+.section { height:26px; padding-left:13px; color:var(--muted); font-size:11px; }
+.place { width:100%; height:32px; padding:0 14px;  display:flex; align-items:center; overflow:hidden; white-space:nowrap; border-radius:4px; }
+.files { flex-grow:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
+.columns { width:100%; height:30px; flex-grow:0; display:flex; align-items:center;  background:#25282c; }
+.columns button { height:29px; color:#dce0e4;  padding-left:12px;  }
+.col-name { flex-grow:1; }.col-size { width:125px; }.col-mod { width:128px; }
+.entries { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.entry { width:100%; height:26px; min-height:26px; display:flex; align-items:center;   overflow:hidden; }
+.entry:hover { background:var(--accent-soft); }
+.cell-name { flex-grow:1; min-width:0; padding-left:12px; white-space:nowrap; overflow:hidden; }
+.cell-size { width:125px; min-width:125px; color:#bbc1c8; white-space:nowrap; overflow:hidden; }
+.cell-mod { width:128px; min-width:128px; color:#bbc1c8; white-space:nowrap; overflow:hidden; }
+.file-pager { height:32px; display:flex; align-items:center; justify-content:space-between;  padding:0 12px; }
+.file-pager button { height:29px; min-width:70px; }
+.status { height:28px; flex-grow:0; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 12px;  color:#c8cdd2; font-size:11px; }
+.context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:#232629; border:1px solid #51565c; border-radius:11px; }
+.menu-row { width:198px; height:31px;  padding-left:11px; border-radius:3px; }
+.menu-row:hover { background:var(--accent-soft); }
+
+.progress-popup { position:absolute; bottom:45px; right:18px; width:290px; height:108px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--card); display:flex; flex-direction:column; gap:11px; }
+.progress-title { color:var(--text); font-size:14px; }
+.progress-track { width:262px; height:7px; background:var(--sidebar); border-radius:4px; }
+.progress-indeterminate { width:104px; height:7px; background:var(--accent); border-radius:4px; }
+
+/* One canvas: quiet Finder-style selection and no extra chrome when unused. */
+.selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
+
+/* Native modal chooser: no new configuration or external GTK dialog. */
+.openwith-dialog { position:absolute; left:320px; top:108px; width:440px; height:466px; background:var(--card); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
+.openwith-header { height:77px; padding:14px 16px; display:flex; flex-direction:column; gap:5px; background:var(--surface); }
+.openwith-title { font-size:16px; color:var(--text); }
+.openwith-hint { font-size:11px; color:var(--muted); }
+.openwith-apps { height:252px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; }
+.openwith-choice { width:100%; height:37px; padding-left:12px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; border-radius:5px; }
+.openwith-pages { height:35px; display:flex; align-items:center; justify-content:space-between; padding:0 14px; }
+.openwith-actions { height:85px; padding:9px 12px; display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+.openwith-small { height:31px; padding:0 11px; border-radius:6px; }
+.openwith-primary { height:31px; padding:0 12px; border-radius:6px; color:var(--text); background:var(--accent); }

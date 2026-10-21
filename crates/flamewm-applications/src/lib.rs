@@ -118,7 +118,7 @@ impl DesktopEntry {
     }
 
     pub fn from_file_with_id(path: &Path, id: DesktopAppId) -> FlameResult<Option<Self>> {
-        parse_desktop_entry(path, id)
+        parse_desktop_entry(path, id, false)
     }
 
     #[must_use]
@@ -166,7 +166,17 @@ impl ApplicationCatalog {
         Self::from_dirs(&xdg_application_dirs())
     }
 
+    /// MIME choosers must also see NoDisplay and other-desktop handlers.
+    /// This does not expose those entries in Start or the application menu.
+    pub fn discover_file_handlers() -> FlameResult<Self> {
+        Self::from_dirs_with_visibility(&xdg_application_dirs(), true)
+    }
+
     pub fn from_dirs(dirs: &[PathBuf]) -> FlameResult<Self> {
+        Self::from_dirs_with_visibility(dirs, false)
+    }
+
+    fn from_dirs_with_visibility(dirs: &[PathBuf], handlers: bool) -> FlameResult<Self> {
         let mut entries = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         for dir in dirs {
@@ -181,7 +191,7 @@ impl ApplicationCatalog {
                 if !seen.insert(id.clone()) {
                     continue;
                 }
-                if let Some(entry) = parse_desktop_entry(&path, id)? {
+                if let Some(entry) = parse_desktop_entry(&path, id, handlers)? {
                     entries.push(entry);
                 }
             }
@@ -767,7 +777,11 @@ fn desktop_id(root: &Path, path: &Path) -> DesktopAppId {
     DesktopAppId::new(rel)
 }
 
-fn parse_desktop_entry(path: &Path, id: DesktopAppId) -> FlameResult<Option<DesktopEntry>> {
+fn parse_desktop_entry(
+    path: &Path,
+    id: DesktopAppId,
+    handlers: bool,
+) -> FlameResult<Option<DesktopEntry>> {
     let text = fs::read_to_string(path).map_err(|error| {
         FlameError::new(ErrorCode::IoFailure, format!("read desktop entry: {error}"))
     })?;
@@ -788,11 +802,13 @@ fn parse_desktop_entry(path: &Path, id: DesktopAppId) -> FlameResult<Option<Desk
     }
     if values.get("Type").map_or("Application", String::as_str) != "Application"
         || is_true(values.get("Hidden"))
-        || is_true(values.get("NoDisplay"))
+        || (!handlers && is_true(values.get("NoDisplay")))
     {
         return Ok(None);
     }
-    if !desktop_environment_matches(&values) || !try_exec_is_available(values.get("TryExec")) {
+    if (!handlers && !desktop_environment_matches(&values))
+        || !try_exec_is_available(values.get("TryExec"))
+    {
         return Ok(None);
     }
     let Some(exec) = values.get("Exec") else {

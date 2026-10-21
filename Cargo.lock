@@ -273,6 +273,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-explorer"
+version = "0.1.1"
+dependencies = [
+ "flamewm-api",
+ "flamewm-applications",
+ "flamewm-control-core",
+ "flamewm-control-dbus",
+ "flamewm-dbus-reactor",
+ "flamewm-desktop-core",
+ "flamewm-reactor",
+ "flamewm-render-compiler",
+ "flamewm-ui-core",
+ "flamewm-ui-x11",
+ "rustix",
+]
+
+[[package]]
 name = "flamewm-image-core"
 version = "0.1.1"
 dependencies = [

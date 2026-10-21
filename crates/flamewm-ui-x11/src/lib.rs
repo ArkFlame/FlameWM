@@ -52,9 +52,20 @@ pub struct UiActionEvent {
     pub phase: UiActionPhase,
     pub inside: bool,
     pub button: u32,
+    pub modifiers: u32,
     pub x: f32,
     pub y: f32,
     pub text: Option<String>,
+}
+
+impl UiActionEvent {
+    pub const fn ctrl_down(&self) -> bool {
+        self.modifiers & (1 << 2) != 0
+    }
+
+    pub const fn shift_down(&self) -> bool {
+        self.modifiers & (1 << 0) != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +144,7 @@ fn action_event(action: &flamewm_render_core::ActionEvent) -> UiActionEvent {
         },
         inside: action.inside,
         button: action.button,
+        modifiers: action.modifiers,
         x: action.x,
         y: action.y,
         text: action.text.clone(),
@@ -270,6 +282,25 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ui_action_modifiers_copy_event_state_through() {
+        let core = flamewm_render_core::ActionEvent {
+            action: "explorer.row.0".into(),
+            phase: flamewm_render_core::ActionPhase::Release,
+            button: 1,
+            modifiers: (1 << 0) | (1 << 2),
+            x: 10.0,
+            y: 25.0,
+            inside: true,
+            time_ms: 0,
+            text: None,
+        };
+        let action = super::action_event(&core);
+        assert!(action.ctrl_down());
+        assert!(action.shift_down());
+        assert!(!super::UiActionEvent { modifiers: 0, ..action.clone() }.ctrl_down());
+    }
+
     #[test]
     fn readable_fd_seam_is_a_reactor_source_not_a_timer() {
         let source = include_str!("lib.rs");

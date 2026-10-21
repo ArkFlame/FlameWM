@@ -252,6 +252,10 @@ fn mime_defaults(mut defaults: BTreeMap<String, String>, data_dirs: &[PathBuf]) 
             defaults.remove(mime);
         }
     }
+    // Explorer is the session default; an explicit user mimeapps.list choice still wins.
+    if desktop_id_installed(data_dirs, "flamewm-explorer.desktop") {
+        defaults.insert("inode/directory".to_owned(), "flamewm-explorer.desktop;".to_owned());
+    }
     let mut text = String::from(
         "# Generated fallback. User ~/.config/mimeapps.list always has precedence.\n[Default Applications]\n",
     );

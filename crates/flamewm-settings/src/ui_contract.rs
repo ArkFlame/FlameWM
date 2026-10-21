@@ -253,6 +253,7 @@ fn release(action: &str) -> UiActionEvent {
         phase: UiActionPhase::Release,
         inside: true,
         button: 1,
+        modifiers: 0,
         x: 0.0,
         y: 0.0,
         text: None,

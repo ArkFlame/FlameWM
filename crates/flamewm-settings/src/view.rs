@@ -41,6 +41,7 @@ mod tests {
         "surface-blur-value",
         "surface-opacity-value",
         "start-icon-value",
+        "file-manager-value",
         "taskbar-floating-margin-value",
         "taskbar-floating-radius-value",
         "wallpaper-fit-value",

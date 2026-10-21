@@ -1,3 +1,4 @@
+mod file_manager;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -462,6 +463,7 @@ impl AppearanceTab {
 /// Every control action the Settings markup may emit. Parsing is pure, so the
 /// markup coverage test can check each `data-action` without side effects.
 enum SettingsAction {
+    FileManagerCycle,
     Page(SettingsPage),
     AccentSwatch(&'static str),
     /// Shows one Appearance sub-page from the nav.
@@ -595,6 +597,7 @@ pub struct SettingsApplication<T: ControlTransport> {
     scale_drag: Option<(OutputId, u64, u16)>,
     /// Arrow keys affect scale only after the slider is focused by pointer.
     scale_slider_focused: bool,
+    file_manager_label: String,
 }
 
 impl<T: ControlTransport> SettingsApplication<T> {
@@ -618,6 +621,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
             monitor_drag: None,
             scale_drag: None,
             scale_slider_focused: false,
+            file_manager_label: "FlameWM Explorer".into(),
         }
     }
 
@@ -636,6 +640,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
 
     pub fn refresh(&mut self, document: &mut impl UiDocumentAccess) -> Result<(), String> {
         self.client.refresh_all().map_err(control_error)?;
+        self.file_manager_label = file_manager::current();
         self.sync_cursor_theme();
         self.reconcile_pages();
         self.sync(document)
@@ -1035,6 +1040,9 @@ impl<T: ControlTransport> SettingsApplication<T> {
             }
         }
         match action {
+            SettingsAction::FileManagerCycle => {
+                self.file_manager_label = file_manager::toggle()?;
+            }
             SettingsAction::NativeKeyEvent => {}
             SettingsAction::ColorPickerOpen(key) => {
                 self.color_picker = Some(ColorPicker {
@@ -2440,6 +2448,7 @@ impl<T: ControlTransport> SettingsApplication<T> {
                 }
             }
         }
+        document.text("file-manager-value", self.file_manager_label.clone())?;
         if let Some(value) = percent("surfaceOpacity") {
             document.text("surface-opacity-value", format!("{value}%"))?;
         }
@@ -3216,6 +3225,9 @@ const TOGGLE_KEYS: [&str; 26] = [
 
 /// Parses one `data-action` value. Unknown IDs are errors, never silent no-ops.
 fn parse_action(action: &str) -> Result<SettingsAction, String> {
+    if action == "settings.default-file-manager.cycle" {
+        return Ok(SettingsAction::FileManagerCycle);
+    }
     if action.starts_with("keyboard.") {
         return Ok(SettingsAction::NativeKeyEvent);
     }

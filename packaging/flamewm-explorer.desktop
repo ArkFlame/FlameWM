@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Explorer
+GenericName=File Manager
+Comment=Browse and manage files in FlameWM
+Exec=flamewm-explorer %f
+TryExec=flamewm-explorer
+Icon=system-file-manager
+Terminal=false
+StartupNotify=true
+StartupWMClass=flamewm-explorer
+Categories=System;FileManager;Utility;
+MimeType=inode/directory;
+Keywords=files;folders;explorer;

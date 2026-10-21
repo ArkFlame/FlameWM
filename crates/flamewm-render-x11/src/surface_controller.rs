@@ -61,6 +61,7 @@ pub fn outside_release_event(
             action: OUTSIDE_RELEASE_ACTION.to_string(),
             phase: ActionPhase::Release,
             button,
+            modifiers: 0,
             x,
             y,
             inside: false,

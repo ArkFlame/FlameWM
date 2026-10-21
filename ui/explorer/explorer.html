@@ -1,0 +1,110 @@
+<!doctype html><html><head><meta charset="utf-8"><title>FlameWM Explorer</title><link rel="stylesheet" href="explorer.css"></head>
+<body id="explorer">
+<div id="top" class="top">
+  <div class="toolbar">
+    <button class="nav" id="nav-back" data-action="explorer.back">&#8249;</button>
+    <button class="nav" id="nav-forward" data-action="explorer.forward">&#8250;</button>
+    <button class="nav" id="nav-up" data-action="explorer.up">&#8593;</button>
+    <button class="nav" id="nav-refresh" data-action="explorer.reload">&#8635;</button>
+    <button id="address" class="address" data-action="explorer.address">/home</button>
+    <button class="nav" id="search-toggle" data-action="explorer.search">Search</button>
+    <button class="nav" data-action="explorer.menu">&#8943;</button>
+  </div>
+  <div class="tabs" id="tabs">
+    <button id="tab-0" class="tab" data-action="explorer.tab.0">Home</button>
+    <button id="tab-1" class="tab" data-action="explorer.tab.1">Home</button>
+    <button id="tab-2" class="tab" data-action="explorer.tab.2">Home</button>
+    <button id="tab-3" class="tab" data-action="explorer.tab.3">Home</button>
+    <button id="tab-4" class="tab" data-action="explorer.tab.4">Home</button>
+    <button class="tab-add" data-action="explorer.tab.new">+</button><button class="tab-close" data-action="explorer.tab.close">&#215;</button>
+  </div>
+</div>
+<div class="main">
+ <nav class="places"><div class="section">PLACES</div>
+   <button id="place-0" class="place" data-action="explorer.place.0"><span id="place-label-0">Home</span></button>
+   <button id="place-1" class="place" data-action="explorer.place.1"><span id="place-label-1">Home</span></button>
+   <button id="place-2" class="place" data-action="explorer.place.2"><span id="place-label-2">Home</span></button>
+   <button id="place-3" class="place" data-action="explorer.place.3"><span id="place-label-3">Home</span></button>
+   <button id="place-4" class="place" data-action="explorer.place.4"><span id="place-label-4">Home</span></button>
+   <button id="place-5" class="place" data-action="explorer.place.5"><span id="place-label-5">Home</span></button>
+   <button id="place-6" class="place" data-action="explorer.place.6"><span id="place-label-6">Home</span></button>
+   <button id="place-7" class="place" data-action="explorer.place.7"><span id="place-label-7">Home</span></button>
+   <button id="place-8" class="place" data-action="explorer.place.8"><span id="place-label-8">Home</span></button>
+   <button id="place-9" class="place" data-action="explorer.place.9"><span id="place-label-9">Home</span></button>
+   <button id="place-10" class="place" data-action="explorer.place.10"><span id="place-label-10">Home</span></button>
+   <button id="place-11" class="place" data-action="explorer.place.11"><span id="place-label-11">Home</span></button>
+   <button id="place-12" class="place" data-action="explorer.place.12"><span id="place-label-12">Home</span></button>
+   <button id="place-13" class="place" data-action="explorer.place.13"><span id="place-label-13">Home</span></button>
+   <button id="place-14" class="place" data-action="explorer.place.14"><span id="place-label-14">Home</span></button>
+ </nav>
+ <main class="files"><div class="columns"><button class="col-name" data-action="explorer.sort.name">Name</button><button class="col-size" data-action="explorer.sort.size">Size</button><button class="col-mod" data-action="explorer.sort.modified">Modified</button></div><div class="entries" data-action="explorer.surface">
+  <button id="row-0" class="entry" data-action="explorer.row.0"><span id="name-0" class="cell-name">Folder</span><span id="size-0" class="cell-size">Folder</span><span id="modified-0" class="cell-mod">&#8212;</span></button>
+  <button id="row-1" class="entry" data-action="explorer.row.1"><span id="name-1" class="cell-name">Folder</span><span id="size-1" class="cell-size">Folder</span><span id="modified-1" class="cell-mod">&#8212;</span></button>
+  <button id="row-2" class="entry" data-action="explorer.row.2"><span id="name-2" class="cell-name">Folder</span><span id="size-2" class="cell-size">Folder</span><span id="modified-2" class="cell-mod">&#8212;</span></button>
+  <button id="row-3" class="entry" data-action="explorer.row.3"><span id="name-3" class="cell-name">Folder</span><span id="size-3" class="cell-size">Folder</span><span id="modified-3" class="cell-mod">&#8212;</span></button>
+  <button id="row-4" class="entry" data-action="explorer.row.4"><span id="name-4" class="cell-name">Folder</span><span id="size-4" class="cell-size">Folder</span><span id="modified-4" class="cell-mod">&#8212;</span></button>
+  <button id="row-5" class="entry" data-action="explorer.row.5"><span id="name-5" class="cell-name">Folder</span><span id="size-5" class="cell-size">Folder</span><span id="modified-5" class="cell-mod">&#8212;</span></button>
+  <button id="row-6" class="entry" data-action="explorer.row.6"><span id="name-6" class="cell-name">Folder</span><span id="size-6" class="cell-size">Folder</span><span id="modified-6" class="cell-mod">&#8212;</span></button>
+  <button id="row-7" class="entry" data-action="explorer.row.7"><span id="name-7" class="cell-name">Folder</span><span id="size-7" class="cell-size">Folder</span><span id="modified-7" class="cell-mod">&#8212;</span></button>
+  <button id="row-8" class="entry" data-action="explorer.row.8"><span id="name-8" class="cell-name">Folder</span><span id="size-8" class="cell-size">Folder</span><span id="modified-8" class="cell-mod">&#8212;</span></button>
+  <button id="row-9" class="entry" data-action="explorer.row.9"><span id="name-9" class="cell-name">Folder</span><span id="size-9" class="cell-size">Folder</span><span id="modified-9" class="cell-mod">&#8212;</span></button>
+  <button id="row-10" class="entry" data-action="explorer.row.10"><span id="name-10" class="cell-name">Folder</span><span id="size-10" class="cell-size">Folder</span><span id="modified-10" class="cell-mod">&#8212;</span></button>
+  <button id="row-11" class="entry" data-action="explorer.row.11"><span id="name-11" class="cell-name">Folder</span><span id="size-11" class="cell-size">Folder</span><span id="modified-11" class="cell-mod">&#8212;</span></button>
+  <button id="row-12" class="entry" data-action="explorer.row.12"><span id="name-12" class="cell-name">Folder</span><span id="size-12" class="cell-size">Folder</span><span id="modified-12" class="cell-mod">&#8212;</span></button>
+  <button id="row-13" class="entry" data-action="explorer.row.13"><span id="name-13" class="cell-name">Folder</span><span id="size-13" class="cell-size">Folder</span><span id="modified-13" class="cell-mod">&#8212;</span></button>
+  <button id="row-14" class="entry" data-action="explorer.row.14"><span id="name-14" class="cell-name">Folder</span><span id="size-14" class="cell-size">Folder</span><span id="modified-14" class="cell-mod">&#8212;</span></button>
+  <button id="row-15" class="entry" data-action="explorer.row.15"><span id="name-15" class="cell-name">Folder</span><span id="size-15" class="cell-size">Folder</span><span id="modified-15" class="cell-mod">&#8212;</span></button>
+  <button id="row-16" class="entry" data-action="explorer.row.16"><span id="name-16" class="cell-name">Folder</span><span id="size-16" class="cell-size">Folder</span><span id="modified-16" class="cell-mod">&#8212;</span></button>
+  <button id="row-17" class="entry" data-action="explorer.row.17"><span id="name-17" class="cell-name">Folder</span><span id="size-17" class="cell-size">Folder</span><span id="modified-17" class="cell-mod">&#8212;</span></button>
+  <button id="row-18" class="entry" data-action="explorer.row.18"><span id="name-18" class="cell-name">Folder</span><span id="size-18" class="cell-size">Folder</span><span id="modified-18" class="cell-mod">&#8212;</span></button>
+  <button id="row-19" class="entry" data-action="explorer.row.19"><span id="name-19" class="cell-name">Folder</span><span id="size-19" class="cell-size">Folder</span><span id="modified-19" class="cell-mod">&#8212;</span></button>
+  <button id="row-20" class="entry" data-action="explorer.row.20"><span id="name-20" class="cell-name">Folder</span><span id="size-20" class="cell-size">Folder</span><span id="modified-20" class="cell-mod">&#8212;</span></button>
+  <button id="row-21" class="entry" data-action="explorer.row.21"><span id="name-21" class="cell-name">Folder</span><span id="size-21" class="cell-size">Folder</span><span id="modified-21" class="cell-mod">&#8212;</span></button>
+ </div><div id="file-pager" class="file-pager"><button data-action="explorer.page.prev">&#8249; Previous</button><div id="page-label">1 / 1</div><button data-action="explorer.page.next">Next &#8250;</button></div></main>
+</div>
+<div id="selection-rectangle" class="selection-rectangle" data-action="explorer.surface" hidden></div>
+<div id="progress-popup" class="progress-popup" hidden><div class="progress-title">Transferring files</div><div id="progress-popup-copy">Starting…</div><div class="progress-track"><div class="progress-indeterminate"></div></div></div>
+<div class="status"><div id="status-message">Loading</div><div id="job-progress">&#8203;</div><div id="status-count">&#8203;</div></div>
+<div id="context-popup" class="context" hidden>
+   <button id="menu-open" class="menu-row" data-action="explorer.menu.open">Open</button>
+   <button id="menu-openwith" class="menu-row" data-action="explorer.menu.openwith">Open With</button>
+   <button id="menu-cut" class="menu-row" data-action="explorer.menu.cut">Cut</button>
+   <button id="menu-copy" class="menu-row" data-action="explorer.menu.copy">Copy</button>
+   <button id="menu-paste" class="menu-row" data-action="explorer.menu.paste">Paste</button>
+   <button id="menu-rename" class="menu-row" data-action="explorer.menu.rename">Rename</button>
+   <button id="menu-duplicate" class="menu-row" data-action="explorer.menu.duplicate">Duplicate</button>
+   <button id="menu-newfolder" class="menu-row" data-action="explorer.menu.newfolder">New Folder</button>
+   <button id="menu-bookmark" class="menu-row" data-action="explorer.menu.bookmark">Add Folder to Places</button>
+   <button id="menu-trash" class="menu-row" data-action="explorer.menu.trash">Move to Trash</button>
+   <button id="menu-properties" class="menu-row" data-action="explorer.menu.properties">Properties</button>
+   <button id="menu-terminal" class="menu-row" data-action="explorer.menu.terminal">Open Terminal Here</button>
+   <button id="menu-compress" class="menu-row" data-action="explorer.menu.compress">Compress with Ark…</button>
+   <button id="menu-extract" class="menu-row" data-action="explorer.menu.extract">Extract with Ark…</button>
+   <button id="menu-newtab" class="menu-row" data-action="explorer.menu.newtab">New Tab</button>
+</div>
+<div id="openwith-dialog" class="openwith-dialog" hidden>
+  <div id="openwith-toolbar" class="openwith-header">
+    <div id="openwith-title" class="openwith-title">Open with</div>
+    <div id="openwith-mime" class="openwith-hint">Installed applications</div>
+  </div>
+  <div class="openwith-apps">
+    <button id="openwith-choice-0" class="openwith-choice" data-action="explorer.chooser.choice.0">Application</button>
+    <button id="openwith-choice-1" class="openwith-choice" data-action="explorer.chooser.choice.1">Application</button>
+    <button id="openwith-choice-2" class="openwith-choice" data-action="explorer.chooser.choice.2">Application</button>
+    <button id="openwith-choice-3" class="openwith-choice" data-action="explorer.chooser.choice.3">Application</button>
+    <button id="openwith-choice-4" class="openwith-choice" data-action="explorer.chooser.choice.4">Application</button>
+    <button id="openwith-choice-5" class="openwith-choice" data-action="explorer.chooser.choice.5">Application</button>
+  </div>
+  <div class="openwith-pages">
+    <button id="openwith-prev" class="openwith-small" data-action="explorer.chooser.prev">Previous</button>
+    <div id="openwith-page" class="openwith-hint">1 / 1</div>
+    <button id="openwith-next" class="openwith-small" data-action="explorer.chooser.next">Next</button>
+  </div>
+  <div class="openwith-actions">
+    <button id="openwith-all" class="openwith-small" data-action="explorer.chooser.all">All apps</button>
+    <button class="openwith-small" data-action="explorer.chooser.cancel">Cancel</button>
+    <button id="openwith-once" class="openwith-small" data-action="explorer.chooser.open">Just once</button>
+    <button id="openwith-always" class="openwith-primary" data-action="explorer.chooser.always">Always use</button>
+  </div>
+</div>
+</body></html>

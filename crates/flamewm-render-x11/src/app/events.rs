@@ -178,11 +178,13 @@ fn action_event(
     inside: bool,
     time_ms: u64,
     text: Option<String>,
+    modifiers: u32,
 ) -> ActionEvent {
     ActionEvent {
         action: String::new(),
         phase,
         button,
+        modifiers,
         x: x as f32 / scale,
         y: y as f32 / scale,
         inside,
@@ -247,6 +249,7 @@ where
         true,
         key.time as u64,
         Some(payload),
+        key.state,
     );
     let result = fire_static(on_action, document, buffers, TYPED_KEY_ACTION, &mut event);
     buffers.payload = event.text.take().unwrap_or_default();
@@ -397,6 +400,7 @@ impl X11App {
                             hover == Some(drag_index),
                             motion.time as u64,
                             Some(text),
+                            motion.state,
                         );
                         if fire_node(on_action, document, &mut buffers, drag_index, &mut event)? {
                             self.mark_full();
@@ -418,6 +422,7 @@ impl X11App {
                             hover == Some(index),
                             motion.time as u64,
                             None,
+                            motion.state,
                         );
                         if fire_node(on_action, document, &mut buffers, index, &mut event)?
                             || changed
@@ -439,6 +444,7 @@ impl X11App {
                                 true,
                                 motion.time as u64,
                                 None,
+                                motion.state,
                             );
                             fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
@@ -507,6 +513,7 @@ impl X11App {
                             true,
                             key.time as u64,
                             None,
+                            key.state,
                         );
                         fire_static(on_action, document, &mut buffers, action, &mut event)?;
                         self.mark_full();
@@ -520,6 +527,7 @@ impl X11App {
                                 true,
                                 key.time as u64,
                                 Some(text),
+                                key.state,
                             );
                             fire_static(
                                 on_action,
@@ -555,6 +563,7 @@ impl X11App {
                                 true,
                                 key.time as u64,
                                 None,
+                                key.state,
                             );
                             fire_static(
                                 on_action,
@@ -607,6 +616,7 @@ impl X11App {
                             true,
                             button.time as u64,
                             Some(format!("{dx},{dy}")),
+                            button.state,
                         );
                         fire_static(on_action, document, &mut buffers, "scroll", &mut event)?;
                         self.mark_full();
@@ -646,6 +656,7 @@ impl X11App {
                                         true,
                                         button.time as u64,
                                         None,
+                                        button.state,
                                     );
                                     fire_static(
                                         on_action,
@@ -678,6 +689,7 @@ impl X11App {
                                 true,
                                 button.time as u64,
                                 None,
+                                button.state,
                             );
                             fire_node(on_action, document, &mut buffers, index, &mut event)?;
                         }
@@ -727,6 +739,7 @@ impl X11App {
                                 true,
                                 button.time as u64,
                                 Some(text),
+                                button.state,
                             );
                             fire_node(on_action, document, &mut buffers, drag_index, &mut event)?;
                         }
@@ -749,6 +762,7 @@ impl X11App {
                             hit == Some(index),
                             button.time as u64,
                             None,
+                            button.state,
                         );
                         fire_node(on_action, document, &mut buffers, index, &mut event)?;
                     }

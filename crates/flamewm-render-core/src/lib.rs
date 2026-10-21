@@ -26,6 +26,9 @@ pub struct ActionEvent {
     pub action: String,
     pub phase: ActionPhase,
     pub button: u32,
+    /// Raw X11 modifier mask captured on the event (Shift=bit 0, Control=bit 2).
+    /// This is event-time state, not a keyboard-state guess from a prior frame.
+    pub modifiers: u32,
     pub x: f32,
     pub y: f32,
     pub inside: bool,

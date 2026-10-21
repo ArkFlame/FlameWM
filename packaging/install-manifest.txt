@@ -5,6 +5,7 @@
 .target/release/flamewm-shell            usr/bin/flamewm-shell
 .target/release/flamewm-settings         usr/bin/flamewm-settings
 .target/release/flamewm-screenshot       usr/bin/flamewm-screenshot
+.target/release/flamewm-explorer         usr/bin/flamewm-explorer
 .target/release/flamewm-render-x11       usr/bin/flamewm-render-x11
 .target/release/flamewm-render-compile   usr/bin/flamewm-render-compile
 .target/release/flamewm-render-inspect   usr/bin/flamewm-render-inspect
@@ -20,6 +21,7 @@ assets/themes/icons/PlagueSur            usr/share/icons/PlagueSur/
 assets/themes/icons/Fluent               usr/share/icons/Fluent/
 packaging/flamewm.desktop                usr/share/applications/flamewm.desktop
 packaging/flamewm-screenshot.desktop      usr/share/applications/flamewm-screenshot.desktop
+packaging/flamewm-explorer.desktop        usr/share/applications/flamewm-explorer.desktop
 packaging/flamewm-session.desktop        usr/share/xsessions/flamewm.desktop
 packaging/menus/flamewm-applications.menu  etc/xdg/menus/flamewm-applications.menu
 packaging/notifications/dunstrc          usr/share/flamewm/dunstrc
