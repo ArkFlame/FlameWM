@@ -37,7 +37,7 @@
    <button id="place-13" class="place" data-action="explorer.place.13"><span id="place-label-13">Home</span></button>
    <button id="place-14" class="place" data-action="explorer.place.14"><span id="place-label-14">Home</span></button>
  </nav>
- <main class="files"><div class="columns"><button class="col-name" data-action="explorer.sort.name">Name</button><button class="col-size" data-action="explorer.sort.size">Size</button><button class="col-mod" data-action="explorer.sort.modified">Modified</button></div><div class="entries" data-action="explorer.surface">
+ <main class="files"><div class="columns"><button id="col-name" class="col-name" data-action="explorer.sort.name">Name</button><button id="col-size" class="col-size" data-action="explorer.sort.size">Size</button><button id="col-mod" class="col-mod" data-action="explorer.sort.modified">Modified</button></div><div class="entries" data-action="explorer.surface">
   <button id="row-0" class="entry" data-action="explorer.row.0"><span id="name-0" class="cell-name">Folder</span><span id="size-0" class="cell-size">Folder</span><span id="modified-0" class="cell-mod">&#8212;</span></button>
   <button id="row-1" class="entry" data-action="explorer.row.1"><span id="name-1" class="cell-name">Folder</span><span id="size-1" class="cell-size">Folder</span><span id="modified-1" class="cell-mod">&#8212;</span></button>
   <button id="row-2" class="entry" data-action="explorer.row.2"><span id="name-2" class="cell-name">Folder</span><span id="size-2" class="cell-size">Folder</span><span id="modified-2" class="cell-mod">&#8212;</span></button>
@@ -63,7 +63,7 @@
  </div><div id="file-pager" class="file-pager"><button data-action="explorer.page.prev">&#8249; Previous</button><div id="page-label">1 / 1</div><button data-action="explorer.page.next">Next &#8250;</button></div></main>
 </div>
 <div id="selection-rectangle" class="selection-rectangle" data-action="explorer.surface" hidden></div>
-<div id="progress-popup" class="progress-popup" hidden><div class="progress-title">Transferring files</div><div id="progress-popup-copy">Starting…</div><div class="progress-track"><div class="progress-indeterminate"></div></div></div>
+<div id="progress-popup" class="progress-popup" hidden><div class="progress-title">Transferring files</div><div id="progress-popup-copy">Starting…</div><div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div><button id="progress-cancel" class="progress-cancel" data-action="explorer.cancel">Cancel</button></div>
 <div class="status"><div id="status-message">Loading</div><div id="job-progress">&#8203;</div><div id="status-count">&#8203;</div></div>
 <div id="context-popup" class="context" hidden>
    <button id="menu-open" class="menu-row" data-action="explorer.menu.open">Open</button>
@@ -81,6 +81,26 @@
    <button id="menu-compress" class="menu-row" data-action="explorer.menu.compress">Compress with Ark…</button>
    <button id="menu-extract" class="menu-row" data-action="explorer.menu.extract">Extract with Ark…</button>
    <button id="menu-newtab" class="menu-row" data-action="explorer.menu.newtab">New Tab</button>
+   <button id="menu-opencontaining" class="menu-row" data-action="explorer.menu.opencontaining">Show in Folder</button>
+   <button id="menu-restore" class="menu-row" data-action="explorer.menu.restore">Put Back</button>
+   <button id="menu-emptytrash" class="menu-row" data-action="explorer.menu.emptytrash">Empty Trash…</button>
+   <button id="menu-placerename" class="menu-row" data-action="explorer.menu.placerename">Rename Place…</button>
+   <button id="menu-placeremove" class="menu-row" data-action="explorer.menu.placeremove">Remove from Places</button>
+   <button id="menu-unmount" class="menu-row" data-action="explorer.menu.unmount">Unmount</button>
+   <button id="menu-eject" class="menu-row" data-action="explorer.menu.eject">Eject</button>
+</div>
+<div id="dialog" class="dialog" hidden>
+  <div id="dialog-title" class="dialog-title">Confirm</div>
+  <div id="dialog-line-0" class="dialog-line"></div>
+  <div id="dialog-line-1" class="dialog-line"></div>
+  <div id="dialog-line-2" class="dialog-line"></div>
+  <div id="dialog-line-3" class="dialog-line"></div>
+  <div class="dialog-actions">
+    <button id="dialog-b1" class="dialog-button" data-action="explorer.dialog.primary">OK</button>
+    <button id="dialog-b2" class="dialog-button" data-action="explorer.dialog.secondary">Keep Both</button>
+    <button id="dialog-b3" class="dialog-button" data-action="explorer.dialog.tertiary">Replace</button>
+    <button id="dialog-b4" class="dialog-button" data-action="explorer.dialog.cancel">Cancel</button>
+  </div>
 </div>
 <div id="openwith-dialog" class="openwith-dialog" hidden>
   <div id="openwith-toolbar" class="openwith-header">

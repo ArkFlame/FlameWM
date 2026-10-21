@@ -14,6 +14,10 @@ use std::sync::mpsc::{self,Receiver,Sender};
 use std::time::{Duration,Instant};
 
 use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,SortBy,PAGE_ROWS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
+use flamewm_explorer::view::{self,Column,ColumnSort,ViewMode};
+use flamewm_explorer::{archive,properties,refresh::DirWatch,search::SearchWorker,trash,places as bookmarks};
+use std::sync::atomic::{AtomicBool,Ordering};
+use std::sync::Arc;
 use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
 use theme::ExplorerTheme;
 use flamewm_control_core::{ControlRequest,ControlResponse};
@@ -24,13 +28,23 @@ use flamewm_desktop_core::{file_actions::create_new_folder,trash::Trash};
 use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDocumentAccess,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
-const MENU_ITEMS: [&str;15]=["open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab"];
+const MENU_ITEMS: [&str;22]=["open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject"];
+/// Home, six user folders and System come before user bookmarks in `places()`.
+const BUILTIN_PLACES:usize=8;
 const TOOLBAR_HEIGHT:f32=48.0;
 const TABBAR_HEIGHT:f32=36.0;
 const COLUMNS_HEIGHT:f32=30.0;
 const FILE_ROW_HEIGHT:f32=26.0;
 const FILE_LIST_LEFT:f32=204.0;
 const DRAG_THRESHOLD_PX:f32=7.0;
+const WINDOW_WIDTH:u32=1060;
+const WINDOW_HEIGHT:u32=720;
+const ICON_COLUMNS:usize=4;
+const ICON_WIDTH:f32=200.0;
+const ICON_HEIGHT:f32=28.0;
+const ICON_GAP:f32=8.0;
+/// Typing pauses longer than this start a fresh type-ahead prefix.
+const TYPEAHEAD_RESET:Duration=Duration::from_millis(800);
 
 /// A pressed file row can become a drag only after measurable pointer motion.
 /// Release outside a folder cancels without changing files or the clipboard.
@@ -50,9 +64,12 @@ impl RowDrag {
 
 enum WorkerJob {
     Scan {generation:u64,path:PathBuf,hidden:bool,sort:SortBy},
-    Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,cancel:CancellationToken},
+    Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict,cancel:CancellationToken},
     Drop {sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool,cancel:CancellationToken},
     Trash {paths:Vec<PathBuf>},
+    Delete {paths:Vec<PathBuf>},
+    EmptyTrash {base:PathBuf},
+    Restore {base:PathBuf,stored:PathBuf},
     Create {directory:PathBuf},
     Rename {from:PathBuf,to:PathBuf},
     Undo,
@@ -78,6 +95,13 @@ fn chooser_worker(rx: Receiver<ChooserJob>, result: Sender<WorkerResult>, mut wa
 enum WorkerResult {
     Scanned {generation:u64,path:PathBuf,entries:std::io::Result<Vec<Entry>>},
     Progress(u64),
+    Total(u64),
+    /// Recursive size of a folder shown in Properties; `path` identifies the dialog it belongs to.
+    SizeReady {path:PathBuf,bytes:std::io::Result<u64>},
+    /// Search worker has a new poll result; the app drains it on the UI thread.
+    SearchTick,
+    /// Directory watcher saw a change in the listed folder.
+    DirChanged,
     ChooserReady { request: u64, chooser: Result<OpenWithChooser, String> },
     DefaultSaved(Result<(), String>),
     BatchCompleted {report:BatchReport,action:&'static str,cut_sources:Option<Vec<PathBuf>>},
@@ -99,7 +123,9 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
     for job in rx {
         match job {
             WorkerJob::Scan{..}=>{},
-            WorkerJob::Transfer{sources,directory,move_it,cancel}=>{
+            WorkerJob::Transfer{sources,directory,move_it,conflict,cancel}=>{
+                let total=jobs::count_sources(&sources,&cancel).bytes;
+                send_wake(&mut wake,&result,WorkerResult::Total(total));
                 let mut accumulated=0_u64;
                 let mut last_progress=Instant::now();
                 let mut progress=|size:u64|{
@@ -109,7 +135,7 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                         last_progress=Instant::now();
                     }
                 };
-                let mut report=jobs::transfer_batch_with(&sources,&directory,move_it,Conflict::KeepBoth,&cancel,&mut progress);
+                let mut report=jobs::transfer_batch_with(&sources,&directory,move_it,conflict,&cancel,&mut progress);
                 jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted {
                     report,action:if move_it {"Moved"}else{"Copied"},
@@ -117,6 +143,7 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                 });
             }
             WorkerJob::Drop{sources,directory,force_copy,cancel}=>{
+                send_wake(&mut wake,&result,WorkerResult::Total(jobs::count_sources(&sources,&cancel).bytes));
                 let mut accumulated=0_u64;
                 let mut last_progress=Instant::now();
                 let mut progress=|size:u64|{
@@ -154,6 +181,32 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                 jobs::record(report.undo.drain(..));
                 send_wake(&mut wake,&result,WorkerResult::BatchCompleted{report,action:"Trashed",cut_sources:None});
             }
+            WorkerJob::Delete{paths}=>{
+                // Permanent delete is only reached after the user confirms; nothing is journaled.
+                let mut report=BatchReport::default();
+                for path in &paths {
+                    let meta=fs::symlink_metadata(path);
+                    let removed=meta.and_then(|m|if m.is_dir() {fs::remove_dir_all(path)} else {fs::remove_file(path)});
+                    report.record(path,removed);
+                }
+                send_wake(&mut wake,&result,WorkerResult::BatchCompleted{report,action:"Deleted",cut_sources:None});
+            }
+            WorkerJob::EmptyTrash{base}=>{
+                let mut report=BatchReport::default();
+                for entry in trash::list(&base).unwrap_or_default() {
+                    let removed=[&entry.stored,&entry.info].iter().try_for_each(|p|fs::remove_file(p).or_else(|_|fs::remove_dir_all(p)));
+                    report.record(&entry.stored,removed);
+                }
+                send_wake(&mut wake,&result,WorkerResult::BatchCompleted{report,action:"Emptied Trash",cut_sources:None});
+            }
+            WorkerJob::Restore{base,stored}=>{
+                let found=trash::list(&base).unwrap_or_default().into_iter().find(|e|e.stored==stored);
+                let done=match found {
+                    Some(entry)=>trash::restore(&entry).map(|dest|format!("Restored to {}",dest.display())).map_err(|e|e.to_string()),
+                    None=>Err("Item is no longer in the Trash".to_owned()),
+                };
+                send_wake(&mut wake,&result,WorkerResult::Completed(done));
+            }
             WorkerJob::Create{directory}=>{
                 let done=create_new_folder(&directory);
                 if let Ok(path)=&done {jobs::record([Undo::Created{path:path.clone()}]);}
@@ -179,8 +232,20 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
         }
     }
 }
+/// Work that waits for a dialog answer before it touches files.
+enum Pending {
+    Delete(Vec<PathBuf>),
+    EmptyTrash(PathBuf),
+    Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict},
+}
+/// One modal at a time. Buttons map to fixed slots: primary, secondary, tertiary, cancel.
+enum Dialog {
+    Properties {props:properties::Properties, size:Option<u64>, cancel:Arc<AtomicBool>},
+    Conflicts {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,count:usize},
+    Confirm {text:String, pending:Pending},
+}
 #[derive(Clone,Copy)]
-enum EditMode { Path, Search, Rename }
+enum EditMode { Path, Search, Rename, PlaceName, Mode }
 struct ExplorerApp {
     model:Explorer, tx:Sender<WorkerJob>, scan_tx:Sender<WorkerJob>,
     chooser_tx:Sender<ChooserJob>, chooser:Option<OpenWithChooser>,
@@ -189,35 +254,126 @@ struct ExplorerApp {
     last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, cancel:CancellationToken,
+    view:ViewMode, column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
+    dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64,
+    search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>,
+    context_place:Option<usize>, progress_total:u64, trash_base:PathBuf,
+    /// Wake channel for background threads (watcher, search, size). Set once in `run`.
+    events:Option<(Sender<WorkerResult>,UnixStream)>,
 }
 impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
-        Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:places(&home_dir()),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new()}
+        let home=home_dir();
+        let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),view:ViewMode::Details,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,events:None};
+        app.reload_places();
+        app
+    }
+    /// Built-in and bookmark places, plus the Trash folder just before mounted devices.
+    fn reload_places(&mut self) {
+        let home=home_dir();
+        let mut list=places(&home);
+        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false};
+        let at=list.iter().position(|p|p.removable).unwrap_or(list.len());
+        list.insert(at,trash);
+        self.places=list;
+    }
+    fn clear_search(&mut self) {
+        self.search_rows=None;
+        if let Some(search)=self.search.as_mut() {search.cancel();}
+    }
+    fn start_search(&mut self,query:String) {
+        if query.trim().is_empty() {self.clear_search();self.model.status="Search cleared".into();return;}
+        let root=self.model.tab().path().to_path_buf();
+        let hidden=self.model.hidden;
+        let started=self.search.as_mut().map(|search|search.start(root,query,hidden));
+        match started {
+            Some(Ok(id))=>{self.search_id=id;self.search_rows=None;self.model.status="Searching…".into();},
+            Some(Err(error))=>self.model.status=format!("Search unavailable: {error}"),
+            None=>self.model.status="Search worker unavailable".into(),
+        }
+    }
+    fn take_search_results(&mut self) {
+        let Some(result)=self.search.as_mut().and_then(|search|search.poll()) else {return};
+        if result.id!=self.search_id {return;}
+        let rows=result.outcome.hits.into_iter().map(|hit|Entry{path:hit.path,name:hit.name,directory:hit.directory,symlink:false,size:0,modified:None}).collect::<Vec<_>>();
+        self.model.status=format!("{} result(s){}",rows.len(),if result.outcome.truncated {" (truncated)"} else {""});
+        self.search_rows=Some(rows);
+    }
+    /// Entries shown in the file pane: search results replace the folder listing while active.
+    fn visible_entries(&self)->Vec<&Entry> {
+        if let Some(rows)=self.search_rows.as_ref() {return rows.iter().take(PAGE_ROWS).collect();}
+        let tab=self.model.tab();
+        let page=tab.page.min(tab.filtered_count().saturating_sub(1)/PAGE_ROWS);
+        tab.visible_page_at(page)
+    }
+    fn sort_by(&mut self,column:Column) {
+        self.column_sort=self.column_sort.click(column);
+        view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);
+    }
+    /// Type-ahead moves the selection to the first visible name starting with the typed prefix.
+    fn typeahead(&mut self,text:&str) {
+        let now=Instant::now();
+        if self.typed_at.is_none_or(|at|now.duration_since(at)>TYPEAHEAD_RESET) {self.typed.clear();}
+        self.typed.push_str(text);
+        self.typed_at=Some(now);
+        let tab=self.model.tab();
+        let names=(0..tab.filtered_count()).filter_map(|i|tab.visible_nth(i).map(|e|e.name.clone())).collect::<Vec<_>>();
+        let refs=names.iter().map(String::as_str).collect::<Vec<_>>();
+        let from=self.selected().as_ref().and_then(|p|tab.visible_index_of(p)).unwrap_or(0);
+        if let Some(index)=view::typeahead_match(&refs,&self.typed,from) {
+            let path=tab.visible_nth(index).expect("index from typeahead").path.clone();
+            let tab=self.model.tab_mut();
+            tab.select_one(path);
+            tab.page=index/PAGE_ROWS;
+        }
     }
     fn scan(&mut self) {
         self.row_drag=None;
         self.drop_folder=None;
         self.activity=None;
+        self.request_listing();
+    }
+    /// Lists the current folder without clearing transient feedback (used by live refresh).
+    fn request_listing(&mut self) {
         let generation=self.model.next_generation();
         let path=self.model.tab().path().to_path_buf();
+        if self.watched.as_ref()!=Some(&path) {
+            self.watched=Some(path.clone());
+            self.watch=self.events.as_ref().and_then(|(tx,wake)|{
+                let (tx,wake)=(tx.clone(),wake.try_clone().ok()?);
+                DirWatch::spawn(&path,move||{if tx.send(WorkerResult::DirChanged).is_ok() {let _=(&wake).write_all(&[1]);}}).ok()
+            });
+        }
         self.model.status="Loading directory…".into();
         if self.scan_tx.send(WorkerJob::Scan{generation,path,hidden:self.model.hidden,sort:self.model.sort}).is_err() {
             self.model.status="File worker unavailable".into();
         }
     }
     fn navigate(&mut self,path:PathBuf) {
-        if path.is_dir() {self.model.tab_mut().visit(path);self.scan();} else {self.model.status="Directory does not exist".into();}
+        if path.is_dir() {self.clear_search();self.model.tab_mut().visit(path);self.scan();} else {self.model.status="Directory does not exist".into();}
         self.context=None;
     }
     fn chosen(&self,slot:usize) -> Option<&Entry> {
-        let tab=self.model.tab();
-        tab.visible_nth(tab.page.saturating_mul(PAGE_ROWS)+slot)
+        self.visible_entries().get(slot).copied()
+    }
+    /// Window-space rectangle of one file slot. Details and Compact are list rows; Icons is a grid.
+    fn cell_rect(&self,slot:usize)->(f32,f32,f32,f32) {
+        let list_top=TOOLBAR_HEIGHT+if self.model.tabs.len()>1 {TABBAR_HEIGHT} else {0.0}+COLUMNS_HEIGHT;
+        if self.view==ViewMode::Icons {
+            let column=(slot%ICON_COLUMNS) as f32;
+            let row=(slot/ICON_COLUMNS) as f32;
+            return (FILE_LIST_LEFT+ICON_GAP+column*(ICON_WIDTH+ICON_GAP),list_top+ICON_GAP+row*(ICON_HEIGHT+ICON_GAP),ICON_WIDTH,ICON_HEIGHT);
+        }
+        (FILE_LIST_LEFT,list_top+FILE_ROW_HEIGHT*slot as f32,WINDOW_WIDTH as f32-FILE_LIST_LEFT,FILE_ROW_HEIGHT)
     }
     fn selected(&self) -> Option<PathBuf> {self.model.tab().selected.clone()}
     /// Drop coordinates belong to the Explorer surface. Only visible folder rows
     /// inside the file pane are eligible; no guessed external-window targets.
     fn folder_at(&self,x:f32,y:f32)->Option<PathBuf> {
-        if !x.is_finite() || !y.is_finite() || !(FILE_LIST_LEFT..1060.0).contains(&x) {return None;}
+        // Icon-grid cells are not rows, so only the list layouts map pointer y to a slot.
+        if self.view==ViewMode::Icons || !x.is_finite() || !y.is_finite() || !(FILE_LIST_LEFT..WINDOW_WIDTH as f32).contains(&x) {return None;}
         let top=TOOLBAR_HEIGHT+if self.model.tabs.len()>1 {TABBAR_HEIGHT}else{0.0}+COLUMNS_HEIGHT;
         if y<top || y>=top+FILE_ROW_HEIGHT*PAGE_ROWS as f32 {return None;}
         let slot=((y-top)/FILE_ROW_HEIGHT) as usize;
@@ -273,10 +429,16 @@ impl ExplorerApp {
     fn start_transfer_to(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool) {
         if self.busy {self.model.status="File operation already in progress".into();return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
+        // Existing names need one answer for the whole batch; the default keeps both.
+        let count=sources.iter().filter(|s|s.file_name().is_some_and(|n|fs::symlink_metadata(directory.join(n)).is_ok())).count();
+        if count>0 {self.dialog=Some(Dialog::Conflicts{sources,directory,move_it,count});return;}
+        self.send_transfer(sources,directory,move_it,Conflict::KeepBoth);
+    }
+    fn send_transfer(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict) {
         self.progress=Some(0);
         self.activity=None;
         self.model.status=format!("{} {} item(s)…",if move_it{"Moving"}else{"Copying"},sources.len());
-        if self.tx.send(WorkerJob::Transfer{sources,directory,move_it,cancel:self.cancel.clone()}).is_err() {
+        if self.tx.send(WorkerJob::Transfer{sources,directory,move_it,conflict,cancel:self.cancel.clone()}).is_err() {
             self.progress=None;
             self.model.status="Transfer worker unavailable".into();
         } else {self.busy=true;}
@@ -402,13 +564,142 @@ impl ExplorerApp {
             },
             "newtab"=>if self.model.tabs.len()<5 {self.model.new_tab();self.scan();},
             "bookmark"=>{let path=self.model.tab().path().to_path_buf();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.places=places(&home_dir());self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
-            "properties"=>if let Some(path)=selected {match fs::symlink_metadata(&path) {
-                Ok(m)=>self.model.status=format!("{} · {} bytes · permissions {:o}",path.display(),m.len(),std::os::unix::fs::PermissionsExt::mode(&m.permissions())&0o777),
-                Err(e)=>self.model.status=format!("Properties: {e}")
-            }},
+            "properties"=>if let Some(path)=selected {self.open_properties(path)},
+            "opencontaining"=>if let Some(path)=selected {self.open_containing(path)},
+            "restore"=>if let Some(path)=selected {
+                if self.tx.send(WorkerJob::Restore{base:self.trash_base.clone(),stored:path}).is_ok() {
+                    self.busy=true;self.model.status="Restoring…".into();
+                }
+            },
+            "emptytrash"=>self.dialog=Some(Dialog::Confirm{
+                text:"Permanently empty the Trash? This cannot be undone.".into(),
+                pending:Pending::EmptyTrash(self.trash_base.clone()),
+            }),
+            "placerename"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)) {
+                self.edit=Some(EditMode::PlaceName);self.buffer=place.name.clone();
+            },
+            "placeremove"=>if let Some(path)=self.context_place_path() {self.mutate_bookmark(&path,|items,index|bookmarks::remove(items,index).is_some());},
+            "unmount"|"eject"=>if let Some(path)=self.context_place_path() {self.device_action(cmd,&path);},
             _=>{}
         }
         self.context=None;
+        self.context_place=None;
+    }
+    fn context_place_path(&self)->Option<PathBuf> {
+        self.context_place.and_then(|i|self.places.get(i)).map(|p|p.path.clone())
+    }
+    fn is_bookmark(&self,index:usize)->bool {
+        self.places.get(index).is_some_and(|p|!p.removable && index>=BUILTIN_PLACES && p.path!=self.trash_base.join("files"))
+    }
+    /// Edits the GTK bookmarks file atomically; the sidebar is rebuilt from the saved file.
+    fn mutate_bookmark(&mut self,path:&Path,edit:impl FnOnce(&mut Vec<bookmarks::Bookmark>,usize)->bool) {
+        let config=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home_dir().join(".config"));
+        let file=bookmarks::bookmarks_file(&config);
+        let mut items=bookmarks::load_bookmarks(&file);
+        let Some(index)=items.iter().position(|b|b.path==path) else {self.model.status="Bookmark not found".into();return;};
+        if !edit(&mut items,index) {return;}
+        match bookmarks::save_bookmarks(&file,&items) {
+            Ok(())=>{self.reload_places();self.model.status="Places updated".into();},
+            Err(error)=>self.model.status=format!("Places not saved: {error}"),
+        }
+    }
+    /// Unmount or eject a mounted removable device found through mountinfo.
+    fn device_action(&mut self,verb:&str,mount_point:&Path) {
+        let source=fs::read_to_string("/proc/self/mountinfo").ok()
+            .and_then(|text|bookmarks::parse_mountinfo(&text).into_iter().find(|d|d.mount_point==mount_point).map(|d|d.source));
+        let Some(source)=source else {self.model.status="Device is no longer mounted".into();self.reload_places();return;};
+        match bookmarks::udisks_action(verb,&source) {
+            Ok(_)=>{self.model.status=format!("{} {}",if verb=="eject"{"Ejected"}else{"Unmounted"},mount_point.display());self.reload_places();},
+            Err(error)=>self.model.status=format!("{verb} failed: {error}"),
+        }
+    }
+    fn open_containing(&mut self,path:PathBuf) {
+        let Some(parent)=path.parent().map(Path::to_path_buf) else {return};
+        self.clear_search();
+        self.navigate(parent);
+        self.model.tab_mut().select_one(path);
+    }
+    fn open_properties(&mut self,path:PathBuf) {
+        let props=match properties::read(&path) {
+            Ok(props)=>props,
+            Err(error)=>{self.model.status=format!("Properties: {error}");return;},
+        };
+        let cancel=Arc::new(AtomicBool::new(false));
+        let is_dir=fs::symlink_metadata(&path).is_ok_and(|m|m.is_dir());
+        let size=(!is_dir).then_some(props.size);
+        if is_dir {
+            // Recursive size runs on its own thread so the UI and file worker stay responsive.
+            let events=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?)));
+            if let Some((tx,mut wake))=events {
+                let (flag,target)=(Arc::clone(&cancel),path.clone());
+                std::thread::spawn(move||{
+                    let bytes=properties::recursive_size(&target,&flag);
+                    if tx.send(WorkerResult::SizeReady{path:target,bytes}).is_ok() {let _=wake.write_all(&[1]);}
+                });
+            }
+        }
+        self.context=None;
+        self.dialog=Some(Dialog::Properties{props,size,cancel});
+    }
+    fn confirm_delete(&mut self) {
+        let paths=self.selected_files();
+        if paths.is_empty() {return;}
+        self.context=None;
+        self.dialog=Some(Dialog::Confirm{
+            text:format!("Permanently delete {} item(s)? This cannot be undone.",paths.len()),
+            pending:Pending::Delete(paths),
+        });
+    }
+    /// Button slots: primary, secondary, tertiary, cancel. Each dialog kind decides what they mean.
+    fn dialog_action(&mut self,slot:&str) {
+        // Permissions are edited in the address field; Enter applies, Escape cancels that edit only.
+        if let (Some(Dialog::Properties{props,..}),"primary")=(self.dialog.as_ref(),slot) {
+            self.buffer=format!("{:o}",props.mode&0o7777);
+            self.edit=Some(EditMode::Mode);
+            return;
+        }
+        let Some(dialog)=self.dialog.take() else {return};
+        match (dialog,slot) {
+            (Dialog::Properties{cancel,..},_)=>cancel.store(true,Ordering::SeqCst),
+            (Dialog::Confirm{pending,..},"primary")=>self.run_pending(pending),
+            (Dialog::Confirm{..},_)=>{},
+            (Dialog::Conflicts{sources,directory,move_it,..},"primary")=>self.send_transfer(sources,directory,move_it,Conflict::Skip),
+            (Dialog::Conflicts{sources,directory,move_it,..},"secondary")=>self.send_transfer(sources,directory,move_it,Conflict::KeepBoth),
+            (Dialog::Conflicts{sources,directory,move_it,count},"tertiary")=>{
+                self.dialog=Some(Dialog::Confirm{
+                    text:format!("Replace {count} existing item(s)? Replaced items are not recoverable."),
+                    pending:Pending::Transfer{sources,directory,move_it,conflict:Conflict::Replace},
+                });
+            },
+            (Dialog::Conflicts{..},_)=>{},
+        }
+    }
+    fn run_pending(&mut self,pending:Pending) {
+        match pending {
+            Pending::Delete(paths)=>{
+                if self.tx.send(WorkerJob::Delete{paths}).is_ok() {self.busy=true;self.model.status="Deleting…".into();}
+            },
+            Pending::EmptyTrash(base)=>{
+                if self.tx.send(WorkerJob::EmptyTrash{base}).is_ok() {self.busy=true;self.model.status="Emptying Trash…".into();}
+            },
+            Pending::Transfer{sources,directory,move_it,conflict}=>self.send_transfer(sources,directory,move_it,conflict),
+        }
+    }
+    /// Applies a permission string entered in the Properties address field.
+    fn apply_mode(&mut self,text:&str) {
+        let Some(Dialog::Properties{props,..})=self.dialog.as_ref() else {return};
+        let path=props.path.clone();
+        let result=properties::parse_mode(text).and_then(|mode|properties::set_mode(&path,mode).map_err(|e|e.to_string()));
+        match result {
+            Ok(())=>{
+                if let Some(Dialog::Properties{props,..})=self.dialog.as_mut() {
+                    if let Ok(fresh)=properties::read(&path) {*props=fresh;}
+                }
+                self.model.status="Permissions changed".into();
+                self.scan();
+            },
+            Err(error)=>self.model.status=format!("Permissions not changed: {error}"),
+        }
     }
     fn event(&mut self,e:&UiActionEvent) {
         let action=e.action.as_str();
@@ -417,6 +708,13 @@ impl ExplorerApp {
                 if let Some(action)=action.strip_prefix("explorer.chooser.") {
                     self.chooser_action(action);
                 }
+            }
+            return;
+        }
+        // Dialogs are modal: only their own buttons and the progress Cancel react.
+        if self.dialog.is_some() {
+            if let Some(slot)=action.strip_prefix("explorer.dialog.") {
+                if e.phase==UiActionPhase::Release && e.inside {self.dialog_action(slot);}
             }
             return;
         }
@@ -449,7 +747,7 @@ impl ExplorerApp {
                 self.rubber=None;
             } else {
                 match e.phase {
-                    UiActionPhase::Press if e.button==1 && e.inside => {
+                    UiActionPhase::Press if e.button==1 && e.inside && self.view!=ViewMode::Icons => {
                         self.context=None;
                         self.rubber=Some(((e.x,e.y),(e.x,e.y)));
                     },
@@ -485,6 +783,7 @@ impl ExplorerApp {
                     }
                     self.last_click=None;
                     self.context_on_entry=true;
+                    self.context_place=None;
                     self.context=Some((e.x,e.y));
                 } else if e.button == 1 && e.shift_down() {
                     // Shift selects a contiguous range using the existing anchor.
@@ -508,7 +807,13 @@ impl ExplorerApp {
             return;
         }
         if let Some(slot)=action.strip_prefix("explorer.place.").and_then(|v|v.parse::<usize>().ok()) {
-            if let Some(place)=self.places.get(slot) {self.navigate(place.path.clone());} return;
+            if e.button==3 {
+                // Right-click on a sidebar item opens the place menu instead of navigating.
+                self.context_on_entry=false;
+                self.context_place=Some(slot);
+                self.context=Some((e.x,e.y));
+            } else if let Some(place)=self.places.get(slot) {self.navigate(place.path.clone());}
+            return;
         }
         if let Some(slot)=action.strip_prefix("explorer.tab.").and_then(|v|v.parse::<usize>().ok()) {
             if self.model.switch_tab(slot) {self.scan();} return;
@@ -525,10 +830,11 @@ impl ExplorerApp {
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
             "explorer.page.prev"=>{let tab=self.model.tab_mut();tab.page=tab.page.saturating_sub(1);},
             "explorer.page.next"=>{let tab=self.model.tab_mut();tab.page=(tab.page+1).min(tab.page_count()-1);},
-            "explorer.sort.name"=>{self.model.sort=SortBy::Name;self.scan();},
-            "explorer.sort.size"=>{self.model.sort=SortBy::Size;self.scan();},
-            "explorer.sort.modified"=>{self.model.sort=SortBy::Modified;self.scan();},
+            "explorer.sort.name"=>self.sort_by(Column::Name),
+            "explorer.sort.size"=>self.sort_by(Column::Size),
+            "explorer.sort.modified"=>self.sort_by(Column::Modified),
             "explorer.menu"=>{self.context_on_entry=false;self.context=Some((725.0,53.0));},
+            "explorer.cancel"=>if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();},
             _=>{}
         }
     }
@@ -569,7 +875,13 @@ impl ExplorerApp {
                         },
                         Err(reason)=>self.model.status=reason,
                     },
-                    EditMode::Search=>{let tab=self.model.tab_mut();tab.search=content;tab.page=0;},
+                    EditMode::Search=>self.start_search(content),
+                    EditMode::Mode=>self.apply_mode(&content),
+                    EditMode::PlaceName=>{
+                        let path=self.context_place_path();
+                        self.context_place=None;
+                        if let Some(path)=path {self.mutate_bookmark(&path,|items,index|bookmarks::rename(items,index,&content));}
+                    },
                     EditMode::Rename=>if let Some(path)=self.selected() {
                         match flamewm_desktop_core::file_actions::validate_rename_name(&content) {
                             Ok(name)=>{
@@ -591,12 +903,27 @@ impl ExplorerApp {
             if let Some(text)=&key.text {if !ctrl && !alt && !text.chars().any(char::is_control) {self.buffer.push_str(text);}}
             return;
         }
+        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && !alt && t.chars().count()==1 && !t.chars().any(char::is_control)) {
+            self.typeahead(text);
+            return;
+        }
+        // Dialogs swallow keys; Enter confirms the primary button and Escape cancels.
+        if self.dialog.is_some() {
+            match name.as_str() {
+                "escape"=>self.dialog_action("cancel"),
+                "return"|"enter"=>self.dialog_action("primary"),
+                _=>{},
+            }
+            return;
+        }
         match name.as_str() {
             "f5"=>self.scan(),
             "f2"=>self.action_menu("rename"),
+            "delete" if shift=>self.confirm_delete(),
             "delete"=>self.action_menu("trash"),
+            "return"|"enter" if alt=>if let Some(path)=self.selected(){self.open_properties(path)},
             "backspace"=>{if self.model.tab_mut().up(){self.scan();}},
-            "escape"=>{if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
+            "escape"=>{if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();return;}if self.search_rows.is_some() {self.clear_search();self.model.status="Search cleared".into();return;}self.context=None;self.rubber=None;self.row_drag=None;self.drop_folder=None;self.last_click=None;self.model.tab_mut().clear_selection();},
             "return"|"enter"=>if let Some(path)=self.selected(){self.open(&path)},
             "left" if alt=>{if self.model.tab_mut().back(){self.scan();}},
             "right" if alt=>{if self.model.tab_mut().forward(){self.scan();}},
@@ -605,6 +932,7 @@ impl ExplorerApp {
             "t" if ctrl=>{if self.model.tabs.len()<5{self.model.new_tab();self.scan();}},
             "w" if ctrl=>{self.model.close_tab();self.scan();},
             "h" if ctrl=>{self.model.hidden=!self.model.hidden;self.scan();},
+            "1"|"2"|"3" if ctrl=>self.view=ViewMode::from_shortcut(name.as_bytes()[0]-b'0').unwrap_or(self.view),
             "a" if ctrl=>self.model.tab_mut().select_all_filtered(),
             "space"|" " if ctrl=>if let Some(path)=self.selected() {self.model.tab_mut().toggle_selection(path)},
             "c" if ctrl=>self.action_menu("copy"),
@@ -641,8 +969,30 @@ impl ExplorerApp {
             WorkerResult::DefaultSaved(outcome)=>{
                 if let Err(error)=outcome {self.model.status=format!("MIME default was not saved: {error}");}
             },
-            WorkerResult::Scanned{generation,path,entries}=>{self.model.apply_listing(generation,&path,entries);},
+            WorkerResult::Scanned{generation,path,entries}=>{
+                let vanished=entries.is_err() && !path.exists();
+                if self.model.apply_listing(generation,&path,entries) {
+                    view::sort_entries(&mut self.model.tab_mut().entries,self.column_sort);
+                }
+                // A removed device or folder falls back to Home with a visible notice.
+                if vanished && path==*self.model.tab().path() {
+                    let home=home_dir();
+                    self.activity=Some(format!("{} is no longer available; opened Home",path.display()));
+                    self.model.tab_mut().visit(home);
+                    self.scan();
+                }
+            },
+            WorkerResult::DirChanged=>{
+                if !self.busy && self.dialog.is_none() {self.request_listing();}
+            },
+            WorkerResult::SearchTick=>self.take_search_results(),
+            WorkerResult::SizeReady{path,bytes}=>{
+                if let Some(Dialog::Properties{props,size,..})=self.dialog.as_mut() {
+                    if props.path==path {*size=Some(bytes.unwrap_or(0));}
+                }
+            },
             WorkerResult::Progress(bytes)=>{self.progress=Some(bytes);},
+            WorkerResult::Total(bytes)=>{self.progress_total=bytes;},
             WorkerResult::BatchCompleted{report,action,cut_sources}=>{
                 self.busy=false;
                 self.cancel=CancellationToken::new();
@@ -683,7 +1033,7 @@ impl ExplorerApp {
     fn project(&self, doc:&mut impl UiDocumentAccess)->Result<(),String>{
         self.theme.project(doc)?;
         let tab=self.model.tab();
-        let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Search)=>format!("Search: {}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),None=>display_location(tab.path(),&home_dir())};
+        let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Search)=>format!("Search: {}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),Some(EditMode::Mode)=>format!("Permissions: {}|",self.buffer),Some(EditMode::PlaceName)=>format!("Place name: {}|",self.buffer),None=>display_location(tab.path(),&home_dir())};
         doc.text("address",address)?;
         doc.foreground("nav-back",if tab.can_back(){WHITE}else{MUTED})?;
         doc.foreground("nav-forward",if tab.can_forward(){WHITE}else{MUTED})?;
@@ -709,15 +1059,30 @@ impl ExplorerApp {
         }
         let count=tab.filtered_count();
         let page=tab.page.min(count.saturating_sub(1)/PAGE_ROWS);
-        let entries=tab.visible_page_at(page);
+        let entries=self.visible_entries();
+        // Only Details shows size and modified columns; Compact and Icons show names.
+        let details=self.view==ViewMode::Details;
+        let arrow=|column:Column,label:&str|if self.column_sort.column==column {
+            format!("{label} {}",if self.column_sort.descending{"▾"}else{"▴"})
+        } else {label.to_owned()};
+        doc.text("col-name",arrow(Column::Name,"Name"))?;
+        doc.text("col-size",arrow(Column::Size,"Size"))?;
+        doc.text("col-mod",arrow(Column::Modified,"Modified"))?;
+        doc.visible("col-size",details)?;
+        doc.visible("col-mod",details)?;
         for slot in 0..PAGE_ROWS {
             let row=format!("row-{slot}");
             if let Some(entry)=entries.get(slot) {
                 doc.visible(&row,true)?;
+                let (left,top,width,height)=self.cell_rect(slot);
+                doc.position(&row,left,top)?;
+                doc.size(&row,width,height)?;
                 let name=if entry.directory{format!("▸  {}",entry.name)}else{format!("    {}",entry.name)};
                 doc.text(&format!("name-{slot}"),name)?;
                 doc.text(&format!("size-{slot}"),entry.size_label())?;
                 doc.text(&format!("modified-{slot}"),entry.modified_label())?;
+                doc.visible(&format!("size-{slot}"),details)?;
+                doc.visible(&format!("modified-{slot}"),details)?;
                 doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
                     self.theme.selected()
                 } else if tab.selected_paths.contains(&entry.path){self.theme.selected()}
@@ -741,26 +1106,49 @@ impl ExplorerApp {
             } else {"Drag onto a folder to move · Hold Ctrl to copy".into()}
         } else {self.activity.as_ref().unwrap_or(&self.model.status).clone()};
         doc.text("status-message",status)?;
-        let selected_count=tab.selected_paths.len();
-        doc.text("status-count",if selected_count>0 {format!("{selected_count} selected · {} items",tab.entries.len())}
-            else {format!("{} folders, {} files",tab.entries.iter().filter(|e|e.directory).count(),tab.entries.iter().filter(|e|!e.directory).count())})?;
-        doc.text("job-progress",self.progress.map(|n|format!("Transferred {n} bytes…")).unwrap_or_default())?;
+        let selected_bytes=tab.entries.iter().filter(|e|tab.selected_paths.contains(&e.path)).map(|e|e.size).sum::<u64>();
+        doc.text("status-count",view::status_text(tab.selected_paths.len(),selected_bytes,tab.entries.len(),view::free_space(tab.path())))?;
+        // Determinate when the worker counted the batch; otherwise the fill stays empty.
+        let total=self.progress_total;
+        let done=self.progress.unwrap_or(0);
+        let fraction=if total>0 {(done as f32/total as f32).min(1.0)} else {0.0};
+        let progress_text=match self.progress {
+            Some(_) if total>0 =>format!("{} of {}",view::human_size(done.min(total)),view::human_size(total)),
+            Some(_) =>format!("{} transferred",view::human_size(done)),
+            None=>String::new(),
+        };
+        doc.text("job-progress",progress_text.clone())?;
         doc.visible("progress-popup",self.progress.is_some())?;
-        doc.text("progress-popup-copy",self.progress.map(|n|format!("Transferred {n} bytes")).unwrap_or_default())?;
+        doc.text("progress-popup-copy",progress_text)?;
+        doc.size("progress-fill",262.0*fraction,7.0)?;
         doc.visible("context-popup",self.context.is_some() && !self.chooser_loading && self.chooser.is_none())?;
         self.project_chooser(doc)?;
+        self.project_dialog(doc)?;
         let selected_path=self.selected();
         let mut visible_rows=0;
         let many=self.model.tab().selected_paths.len()>1;
+        let in_trash=tab.path()==self.trash_base.join("files").as_path();
+        let searching=self.search_rows.is_some();
         for item in MENU_ITEMS {
-            let enabled=match item {
+            let enabled=if self.context_place.is_some() {
+                // Sidebar menu: bookmarks can be renamed or removed, mounted devices unmounted or ejected.
+                match item {
+                    "placerename"|"placeremove"=>self.context_place.is_some_and(|i|self.is_bookmark(i)),
+                    "unmount"|"eject"=>self.context_place.is_some_and(|i|self.places.get(i).is_some_and(|p|p.removable)),
+                    _=>false,
+                }
+            } else {match item {
                 "terminal"|"newtab"|"newfolder"|"bookmark"=>true,
                 "paste"=>self.model.clipboard.is_some(),
-                "extract"=>self.context_on_entry && !many && selected_path.as_deref().is_some_and(is_archive),
-                "compress"|"copy"|"cut"|"trash"|"duplicate"=>self.context_on_entry && selected_path.is_some(),
+                "emptytrash"=>in_trash,
+                "extract"=>self.ark && self.context_on_entry && !many && selected_path.as_deref().is_some_and(is_archive),
+                "compress"=>self.ark && self.context_on_entry && selected_path.is_some(),
+                "copy"|"cut"|"trash"|"duplicate"=>self.context_on_entry && selected_path.is_some(),
                 "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected_path.is_some(),
-                _=>self.context_on_entry && selected_path.is_some(),
-            };
+                "opencontaining"=>searching && self.context_on_entry && !many && selected_path.is_some(),
+                "restore"=>in_trash && self.context_on_entry && selected_path.is_some(),
+                _=>false,
+            }};
             doc.visible(&format!("menu-{item}"),enabled)?;
             if enabled {visible_rows+=1;}
         }
@@ -768,7 +1156,49 @@ impl ExplorerApp {
             // Shared desktop context-menu metrics; hidden actions consume no space.
             let metrics=flamewm_ui_core::context_menu::MenuMetrics::canonical();
             let height=visible_rows as f32*metrics.row_height as f32+2.0*metrics.padding as f32;
-            doc.position("context-popup",x.min(1060.0-210.0).max(0.0),y.min(720.0-height).max(0.0))?;
+            doc.position("context-popup",x.min(WINDOW_WIDTH as f32-210.0).max(0.0),y.min(WINDOW_HEIGHT as f32-height).max(0.0))?;
+        }
+        Ok(())
+    }
+    /// One shared modal: four text lines and four fixed-slot buttons, labelled per dialog kind.
+    fn project_dialog(&self, doc:&mut impl UiDocumentAccess)->Result<(),String> {
+        let Some(dialog)=self.dialog.as_ref() else {
+            doc.visible("dialog",false)?;
+            return Ok(());
+        };
+        doc.visible("dialog",true)?;
+        doc.background("dialog",self.theme.card())?;
+        let (title,lines,buttons):(String,Vec<String>,[Option<&str>;4])=match dialog {
+            Dialog::Properties{props,size,..}=>(
+                props.path.file_name().unwrap_or(props.path.as_os_str()).to_string_lossy().into_owned(),
+                vec![
+                    props.path.display().to_string(),
+                    format!("Size: {}",size.map_or("calculating…".to_owned(),view::human_size)),
+                    format!("Permissions: {}",properties::mode_string(props.mode)),
+                    format!("Owner: uid {} · group {}",props.uid,props.gid),
+                ],
+                [Some("Edit Permissions"),None,None,Some("Close")],
+            ),
+            Dialog::Conflicts{count,..}=>(
+                "Items already exist".into(),
+                vec![
+                    format!("{count} item(s) already exist in this folder."),
+                    "Skip leaves the existing items unchanged.".into(),
+                    "Keep Both adds a numbered copy beside them.".into(),
+                    "Replace removes the existing items after confirmation.".into(),
+                ],
+                [Some("Skip"),Some("Keep Both"),Some("Replace…"),Some("Cancel")],
+            ),
+            Dialog::Confirm{text,..}=>("Confirm".into(),vec![text.clone()],[Some("Confirm"),None,None,Some("Cancel")]),
+        };
+        doc.text("dialog-title",title)?;
+        for (i,line) in (0..4).zip(lines.into_iter().chain(std::iter::repeat(String::new()))) {
+            doc.text(&format!("dialog-line-{i}"),line)?;
+        }
+        for (i,label) in buttons.iter().enumerate() {
+            let id=format!("dialog-b{}",i+1);
+            doc.visible(&id,label.is_some())?;
+            if let Some(label)=label {doc.text(&id,(*label).to_owned())?;}
         }
         Ok(())
     }
@@ -841,9 +1271,18 @@ fn run()->Result<(),String>{
         .map_err(|e|e.to_string())?;
     let scan_results=result_tx.clone();
     std::thread::Builder::new().name("flamewm-explorer-scan".into()).spawn(move||scan_worker(scans,scan_results,scan_wake)).map_err(|e|e.to_string())?;
+    // Background threads (search, watcher, recursive size) wake the UI through the same socket.
+    let app_events=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
+    let (search_tx,search_wake)=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
+    let search=SearchWorker::spawn(move||{if search_tx.send(WorkerResult::SearchTick).is_ok() {let _=(&search_wake).write_all(&[1]);}}).map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
-    app.borrow_mut().theme=initial_theme();
+    {
+        let mut app=app.borrow_mut();
+        app.events=Some(app_events);
+        app.search=Some(search);
+        app.theme=initial_theme();
+    }
     app.borrow_mut().scan();
     let mut doc=decode_document(UI)?;
     app.borrow().project(&mut doc)?;
@@ -863,7 +1302,7 @@ fn run()->Result<(),String>{
     });
     run_with_controller_events_role_and_two_readable_fds(
         doc,
-        UiWindowConfig{width:1060,height:720,x:80,y:65,title:"FlameWM Explorer".into(),identity:None},
+        UiWindowConfig{width:WINDOW_WIDTH,height:WINDOW_HEIGHT,x:80,y:65,title:"FlameWM Explorer".into(),identity:None},
         UiWindowRole::Normal,fd,
         move||{
             let mut bytes=[0_u8;1024];
@@ -909,5 +1348,32 @@ mod internal_drag_tests {
         assert!(app.folder_at(150.0,80.0).is_none());
         assert!(app.folder_at(230.0,45.0).is_none());
         assert_eq!(app.folder_at(230.0,TOOLBAR_HEIGHT+COLUMNS_HEIGHT+1.0),Some(dir));
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    fn app(view:ViewMode) -> ExplorerApp {
+        let (tx,_rx)=mpsc::channel();
+        let (scan_tx,_scan_rx)=mpsc::channel();
+        let (chooser_tx,_chooser_rx)=mpsc::channel();
+        let mut app=ExplorerApp::new(PathBuf::from("/"),tx,scan_tx,chooser_tx);
+        app.view=view;
+        app
+    }
+    #[test]
+    fn icon_grid_wraps_after_four_cells_and_list_rows_stack() {
+        let icons=app(ViewMode::Icons);
+        let (x0,y0,_,_)=icons.cell_rect(0);
+        let (x4,y4,_,_)=icons.cell_rect(4);
+        assert_eq!(x4,x0);
+        assert!(y4>y0);
+        assert!(icons.cell_rect(3).0>x0);
+        let list=app(ViewMode::Compact);
+        let (_,a,_,h)=list.cell_rect(0);
+        let (_,b,_,_)=list.cell_rect(1);
+        assert_eq!(b-a,FILE_ROW_HEIGHT);
+        assert_eq!(h,FILE_ROW_HEIGHT);
     }
 }

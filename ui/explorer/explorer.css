@@ -23,7 +23,8 @@ button:active { background:#424950; }
 .columns button { height:29px; color:#dce0e4;  padding-left:12px;  }
 .col-name { flex-grow:1; }.col-size { width:125px; }.col-mod { width:128px; }
 .entries { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
-.entry { width:100%; height:26px; min-height:26px; display:flex; align-items:center;   overflow:hidden; }
+/* Rows are placed by absolute geometry (list rows or icon-grid cells), so one pool serves every view. */
+.entry { position:absolute; height:26px; display:flex; align-items:center; overflow:hidden; border-radius:4px; }
 .entry:hover { background:var(--accent-soft); }
 .cell-name { flex-grow:1; min-width:0; padding-left:12px; white-space:nowrap; overflow:hidden; }
 .cell-size { width:125px; min-width:125px; color:#bbc1c8; white-space:nowrap; overflow:hidden; }
@@ -35,10 +36,19 @@ button:active { background:#424950; }
 .menu-row { width:198px; height:31px;  padding-left:11px; border-radius:3px; }
 .menu-row:hover { background:var(--accent-soft); }
 
-.progress-popup { position:absolute; bottom:45px; right:18px; width:290px; height:108px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--card); display:flex; flex-direction:column; gap:11px; }
+.progress-popup { position:absolute; bottom:45px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--card); display:flex; flex-direction:column; gap:11px; }
 .progress-title { color:var(--text); font-size:14px; }
 .progress-track { width:262px; height:7px; background:var(--sidebar); border-radius:4px; }
-.progress-indeterminate { width:104px; height:7px; background:var(--accent); border-radius:4px; }
+.progress-fill { width:0px; height:7px; background:var(--accent); border-radius:4px; }
+.progress-cancel { width:80px; height:28px; border-radius:6px; }
+
+/* Shared modal for Properties, conflicts and confirmations. */
+.dialog { position:absolute; left:300px; top:150px; width:460px; padding:16px; display:flex; flex-direction:column; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.dialog-title { font-size:16px; color:var(--text); }
+.dialog-line { font-size:12px; color:var(--muted); }
+.dialog-actions { display:flex; justify-content:flex-end; gap:6px; padding-top:8px; }
+.dialog-button { height:31px; padding:0 12px; border-radius:6px; }
+.dialog-button:hover { background:var(--accent-soft); }
 
 /* One canvas: quiet Finder-style selection and no extra chrome when unused. */
 .selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
