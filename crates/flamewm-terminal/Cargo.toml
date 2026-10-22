@@ -1,0 +1,32 @@
+[package]
+name = "flamewm-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM native terminal emulator"
+
+# No unsafe: the PTY uses rustix's safe pty API and the controlling terminal comes from util-linux `setsid -c`.
+[dependencies]
+flamewm-api = { path = "../flamewm-api" }
+flamewm-clipboard = { path = "../flamewm-clipboard" }
+flamewm-control-core = { path = "../flamewm-control-core" }
+flamewm-control-dbus = { path = "../flamewm-control-dbus" }
+flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
+flamewm-ui-core = { path = "../flamewm-ui-core" }
+flamewm-ui-x11 = { path = "../flamewm-ui-x11" }
+rustix = { workspace = true, features = ["pty", "termios"] }
+
+[build-dependencies]
+flamewm-render-compiler = { path = "../flamewm-render-compiler" }
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "flamewm-terminal"
+path = "src/main.rs"

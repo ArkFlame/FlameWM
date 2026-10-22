@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FlameWM Terminal
+Comment=Terminal emulator for FlameWM
+Exec=flamewm-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=flamewm-terminal
