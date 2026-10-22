@@ -8,6 +8,7 @@ pub mod pool;
 pub mod pty;
 pub mod screen;
 pub mod session;
+pub mod suggest;
 pub mod settings;
 pub mod store;
 pub mod theme;

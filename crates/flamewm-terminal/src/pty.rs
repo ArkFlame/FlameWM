@@ -71,6 +71,12 @@ impl PtyProcess {
         Ok(Self { child, master, writer, reader: Some(reader) })
     }
 
+    /// Whether the line discipline is canonical. Shell line editors clear ICANON while they read keys at the prompt, so
+    /// a set flag means a program reads cooked lines (sudo, cat, a REPL) rather than the prompt. Errors count as canonical.
+    pub fn canonical(&self) -> bool {
+        rustix::termios::tcgetattr(&self.master).map_or(true, |attrs| attrs.local_modes.contains(rustix::termios::LocalModes::ICANON))
+    }
+
     /// The master read side, owned by the reader thread. Returns `None` after the first call.
     pub fn take_reader(&mut self) -> Option<File> {
         self.reader.take()

@@ -16,9 +16,10 @@ use crate::settings::{self, Command, SettingsView};
 use crate::store::{FOLLOW_FLAMEWM, TerminalConfig, ThemeStore};
 use crate::theme;
 use crate::themes::{Palette, Theme};
-use crate::glyphs::Arm;
+use crate::glyphs::{Arm, blend};
 use crate::view::{GridOptions, Run, Span, grid_runs, text_run};
-use crate::screen::CursorShape;
+use crate::screen::{CursorShape, char_width};
+use crate::suggest::{History, LineInput};
 
 /// Cell pitch as a fraction of the font size for the bundled monospace face (advance and line height).
 const CELL_WIDTH_RATIO: f32 = 0.6;
@@ -32,6 +33,8 @@ pub struct Tab {
     pub session: Session,
     /// Name set with Rename Tab; wins over the title the shell sets.
     pub title: Option<String>,
+    /// The line typed at this tab's prompt, for suggestions and the history record.
+    pub input: LineInput,
 }
 
 /// Inline tab rename in progress: the tab index and the text typed so far.
@@ -104,6 +107,8 @@ pub struct App {
     /// Open context menu: window row and column of its top-left cell.
     pub menu: Option<(usize, usize)>,
     pub rename: Option<Rename>,
+    /// Global "most used" command store, shared with other terminal windows through its file.
+    pub history: History,
     /// Startup banner shown above the first tab until its output scrolls.
     banner: bool,
     /// Text typed on the shell line, from the keys sent to the PTY. Enter on `/theme` opens the theme menu instead.
@@ -153,6 +158,7 @@ impl App {
             ui: crate::ui::UiCache::default(),
             menu: None,
             rename: None,
+            history: History::open_default(),
             banner: false,
             input_line: String::new(),
             window,
@@ -216,7 +222,7 @@ impl App {
         let session = Session::start(id, &launch, self.pty_size(), self.config.scrollback, self.events.clone(), wake)?;
         // The banner belongs to the first tab only.
         self.banner = self.tabs.is_empty();
-        self.tabs.push(Tab { id, session, title: None });
+        self.tabs.push(Tab { id, session, title: None, input: LineInput::default() });
         self.active = self.tabs.len() - 1;
         self.view_offset = 0;
         self.selection = None;
@@ -371,6 +377,9 @@ impl App {
         if text.is_empty() {
             return;
         }
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.input.paste(&text);
+        }
         let bracketed = self.tabs.get(self.active).is_some_and(|tab| tab.session.screen.bracketed_paste);
         let mut bytes = Vec::new();
         if bracketed {
@@ -443,6 +452,7 @@ impl App {
                 return;
             }
             self.track_input_line(event);
+            let bytes = self.track_key(event, bytes);
             self.send_to_active(bytes);
         }
     }
@@ -466,6 +476,64 @@ impl App {
                 _ => self.input_line.clear(),
             },
         }
+    }
+
+    /// Keeps the tab's typed line in step with the keys the child receives. Tab or Right at the end of a suggested
+    /// line sends the suggestion's suffix instead of the key. Enter records the line when the shell is at its prompt.
+    fn track_key(&mut self, event: &UiKeyEvent, bytes: Vec<u8>) -> Vec<u8> {
+        self.history.refresh();
+        let name = event.key.to_ascii_lowercase();
+        let mods = Mods::from_names(event.modifiers.iter());
+        if !mods.ctrl && !mods.alt && !mods.shift && matches!(name.as_str(), "tab" | "right") {
+            if let Some(suffix) = self.ghost().map(str::to_owned) {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.input.insert_str(&suffix);
+                }
+                return suffix.into_bytes();
+            }
+        }
+        let at_prompt = self.at_prompt();
+        let Some(tab) = self.tabs.get_mut(self.active) else { return bytes };
+        if let Some(line) = tab.input.key(&name, mods, event.text.as_deref()) {
+            if at_prompt {
+                let _ = self.history.record(&line);
+            }
+        }
+        bytes
+    }
+
+    /// Suffix of the typed line that the most used command completes. Drawn only at the shell prompt, on the live
+    /// grid, with no menu or rename open and the line exact with the cursor at its end.
+    fn ghost(&self) -> Option<&str> {
+        let tab = self.tabs.get(self.active)?;
+        if self.view_offset != 0 || !matches!(self.view, View::Terminal) || self.menu.is_some() || self.rename.is_some() {
+            return None;
+        }
+        if !tab.input.is_ready() || !self.at_prompt() {
+            return None;
+        }
+        self.history.suggest(&tab.input.text())
+    }
+
+    /// The shell reads keys at its prompt: no full-screen program, and the line discipline is not canonical.
+    fn at_prompt(&self) -> bool {
+        self.tabs.get(self.active).is_some_and(|tab| !tab.session.screen.alt_active() && !tab.session.pty.canonical())
+    }
+
+    /// Draws the suggestion after the cursor cell, 40% of the way from the foreground colour to the background.
+    fn draw_ghost(&self, rows: &mut [Vec<Run>], suffix: &str) {
+        let Some(tab) = self.tabs.get(self.active) else { return };
+        let (row, col) = tab.session.screen.cursor();
+        let start = col + 1;
+        let text: String = suffix.chars().take_while(|&c| char_width(c) == 1).take(self.cols.saturating_sub(start)).collect();
+        if text.is_empty() {
+            return;
+        }
+        let Some(line) = rows.get_mut(1 + self.banner_rows() + row) else { return };
+        let fg = blend(self.palette.foreground, self.palette.background, 2, 5);
+        let cells = text.chars().count();
+        let runs = std::mem::take(line);
+        *line = overlay(runs, start, cells, text_run(start, &text, fg, None, false));
     }
 
     /// The banner goes once the shell output scrolls or reaches the rows the banner covers.
@@ -707,6 +775,9 @@ impl App {
                 grid.truncate(self.grid_rows - banner);
                 rows.extend(self.banner_lines_for(banner));
                 rows.extend(grid);
+                if let Some(suffix) = self.ghost() {
+                    self.draw_ghost(&mut rows, suffix);
+                }
                 if let Some((row, col)) = self.menu {
                     self.draw_menu(&mut rows, row, col);
                 }
