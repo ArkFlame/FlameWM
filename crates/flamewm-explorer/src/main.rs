@@ -38,7 +38,7 @@ use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDoc
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
 /// Menu commands that also work in remote folders; every other command is refused there until its remote path exists.
 const REMOTE_ACTIONS: [&str;3]=["open","showtype","hidden"];
-const MENU_ITEMS: [&str;24]=["showtype","open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
+const MENU_ITEMS: [&str;25]=["connect","showtype","open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
 /// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
 const SIDEBAR_SLOTS:usize=32;
 // Canonical geometry: paint (project) and hit-testing (cell_rect, folder_at, select bands) all derive from these.
@@ -1004,6 +1004,7 @@ impl ExplorerApp {
                 self.edit=Some(EditMode::PlaceName);self.buffer=place.name.clone();
             },
             "placeremove"=>if let Some(path)=self.context_place_path() {self.mutate_bookmark(&path,|items,index|bookmarks::remove(items,index).is_some());},
+            "connect"=>{self.edit=Some(EditMode::Path);self.buffer="sftp://".into();self.model.status="Type sftp://user@host/path, fish://user@host/path or ssh://user@host and press Enter".into();},
             "hidden"=>self.toggle_hidden(),
             "showtype"=>self.toggle_show_type(),
                 "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
@@ -1647,6 +1648,7 @@ impl ExplorerApp {
         };
         doc.text("search-text",search)?;
         doc.visible("search-clear",self.search_rows.is_some())?;
+        doc.text("menu-connect-label","Connect to Server…".to_string())?;
         doc.text("menu-hidden-label",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
         doc.text("menu-showtype-label",format!("Show Type Column: {}",if self.show_type {"On"} else {"Off"}))?;
         doc.foreground("nav-back",if tab.can_back(){WHITE}else{self.theme.muted()})?;
@@ -1816,7 +1818,7 @@ impl ExplorerApp {
                 "open"|"openwith"|"rename"|"properties"=>self.context_on_entry && !many && selected_path.is_some(),
                 "opencontaining"=>searching && self.context_on_entry && !many && selected_path.is_some(),
                 "restore"=>in_trash && self.context_on_entry && selected_path.is_some(),
-                "hidden"|"showtype"=>self.menu_overflow,
+                "hidden"|"showtype"|"connect"=>self.menu_overflow,
                 _=>false,
             }};
             doc.visible(&format!("menu-{item}"),enabled)?;
