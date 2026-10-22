@@ -638,7 +638,8 @@ impl App {
                     _ => self.drag_anchor = Some((abs_row, col)),
                 }
             }
-            UiActionPhase::Press if event.button == 2 => self.paste_primary(),
+            // The renderer only fires Press for button 1; buttons 2 and 3 are delivered on Release.
+            UiActionPhase::Release if event.button == 2 => self.paste_primary(),
             UiActionPhase::Motion | UiActionPhase::Hover if self.drag_anchor.is_some() => {
                 if let Some(anchor) = self.drag_anchor {
                     self.selection = Some(Span::normalised(anchor, (abs_row, col)));
