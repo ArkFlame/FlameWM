@@ -429,6 +429,24 @@ pub fn destination_for(from: &Path, directory: &Path) -> PathBuf {
     }
     directory.join(format!("{name} (overflow)"))
 }
+/// Duplicate target: `name (copy).ext`, then `name (copy 2).ext`, never the source name itself.
+pub fn duplicate_destination(from: &Path, directory: &Path) -> PathBuf {
+    let name = from.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let (stem, ext) = match from.extension() {
+        Some(ext) if from.is_file() => {
+            let stem = from.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            (stem, format!(".{}", ext.to_string_lossy()))
+        }
+        _ => (name, String::new()),
+    };
+    let first = directory.join(format!("{stem} (copy){ext}"));
+    if fs::symlink_metadata(&first).is_err() { return first; }
+    for index in 2..=10_000 {
+        let target = directory.join(format!("{stem} (copy {index}){ext}"));
+        if fs::symlink_metadata(&target).is_err() { return target; }
+    }
+    directory.join(format!("{stem} (copy overflow){ext}"))
+}
 /// Summary of a batch operation; errors remain visible even when other items succeed.
 #[derive(Debug,Default,PartialEq,Eq)]
 pub struct BatchReport {
@@ -841,5 +859,23 @@ mod tests {
         let without_pins: Vec<Place> = places.iter().filter(|p| p.group != PlaceGroup::Pinned).cloned().collect();
         assert!(!sidebar_rows(&without_pins).contains(&SidebarRow::Heading("Pinned Folders")));
         assert!(sidebar_rows(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod duplicate_naming_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_names_are_fresh_copies() {
+        let dir = std::env::temp_dir().join(format!("flamewm-dup-names-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("note.txt");
+        fs::write(&src, "x").unwrap();
+        assert_eq!(duplicate_destination(&src, &dir), dir.join("note (copy).txt"));
+        fs::write(dir.join("note (copy).txt"), "y").unwrap();
+        assert_eq!(duplicate_destination(&src, &dir), dir.join("note (copy 2).txt"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

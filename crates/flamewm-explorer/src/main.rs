@@ -131,7 +131,7 @@ fn chooser_worker(rx: Receiver<ChooserJob>, result: Sender<WorkerResult>, mut wa
     for job in rx {
         match job {
             ChooserJob::Discover { request, path } => {
-                let chooser = mime::discover(path);
+                let chooser = mime::discover(path, &packaged_root());
                 send_wake(&mut wake, &result, WorkerResult::ChooserReady { request, chooser });
             }
             ChooserJob::SetDefault { mime, desktop_id } => {
@@ -767,6 +767,18 @@ impl ExplorerApp {
         let directory=self.model.tab().path().to_path_buf();
         self.start_transfer_to(sources,directory,move_it);
     }
+    /// Duplicate: copy each source beside itself as `name (copy)`; no conflict prompt, since the name is always fresh.
+    fn start_duplicate(&mut self,sources:Vec<PathBuf>) {
+        if self.busy {self.model.status="File operation already in progress".into();return;}
+        if sources.is_empty() {self.model.status="Select files first".into();return;}
+        let directory=self.model.tab().path().to_path_buf();
+        let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
+        match ops::validate(ops::Kind::Copy,&source_facts(&sources),Some(&directory),writable) {
+            Verdict::Run(sources)=>self.send_transfer(sources,directory,false,Conflict::Duplicate),
+            Verdict::NoOp=>{},
+            Verdict::Refuse(message)=>self.model.status=message.into(),
+        }
+    }
     fn start_transfer_to(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool) {
         if self.busy {self.model.status="File operation already in progress".into();return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
@@ -942,7 +954,7 @@ impl ExplorerApp {
                 }
             },
             "paste"=>self.request_paste(),
-            "duplicate"=>self.start_transfer(paths,false),
+            "duplicate"=>self.start_duplicate(paths),
             "newfolder"=>{
                 let directory=self.model.tab().path().to_path_buf();
                 if self.tx.send(WorkerJob::Create{directory}).is_ok() {
@@ -1937,7 +1949,17 @@ impl ExplorerApp {
                 if let Some((index,choice))=choices.get(slot) {
                     doc.visible(&id,true)?;
                     let suffix=if choice.is_default {" · Default"} else if !choice.associated {" · Other app"} else {""};
-                    doc.text(&id,format!("{}{suffix}",choice.entry.name()))?;
+                    doc.text(&format!("openwith-label-{slot}"),format!("{}{suffix}",choice.entry.name()))?;
+                    let icon_id=format!("openwith-icon-{slot}");
+                    match choice.icon.as_ref() {
+                        Some(icon)=>{
+                            // Rows bind their icon by application id, so a slot reused for another app rebinds on change.
+                            let source=format!("explorer-app-icon-{}",choice.entry.id().as_str());
+                            doc.image_rgba8_shared(&icon_id,source,icon.width,icon.height,Arc::clone(&icon.pixels))?;
+                            doc.visible(&icon_id,true)?;
+                        }
+                        None=>doc.visible(&icon_id,false)?,
+                    }
                     doc.background(&id,if chooser.selected==Some(*index){self.theme.selected()}else{self.theme.card()})?;
                 }else{doc.visible(&id,false)?;}
             }

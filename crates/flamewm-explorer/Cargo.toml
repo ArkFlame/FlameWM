@@ -16,6 +16,7 @@ flamewm-control-dbus = { path = "../flamewm-control-dbus" }
 flamewm-dbus-reactor = { path = "../flamewm-dbus-reactor" }
 flamewm-desktop-core = { path = "../flamewm-desktop-core" }
 flamewm-image-core = { path = "../flamewm-image-core" }
+flamewm-integrations-linux = { path = "../flamewm-integrations-linux" }
 flamewm-profiler = { path = "../flamewm-profiler" }
 flamewm-ui-core = { path = "../flamewm-ui-core" }
 flamewm-ui-x11 = { path = "../flamewm-ui-x11" }

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rustix::fs::{renameat_with, RenameFlags, CWD};
 use rustix::io::Errno;
 
-use crate::{destination_for, validate_transfer_destination, BatchReport};
+use crate::{destination_for, duplicate_destination, validate_transfer_destination, BatchReport};
 
 const CHUNK: usize = 65_536;
 /// Guards against huge or deeply nested trees while counting on the worker.
@@ -61,6 +61,8 @@ pub struct Progress {
 pub enum Conflict {
     #[default]
     KeepBoth,
+    /// Duplicate: always a fresh `name (copy)` beside the source, never a conflict prompt.
+    Duplicate,
     Skip,
     Replace,
     Cancel,
@@ -330,9 +332,12 @@ fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Confli
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source has no file name"))?;
     let mut dest = directory.join(name);
     let mut replace = false;
-    if fs::symlink_metadata(&dest).is_ok() {
+    if conflict == Conflict::Duplicate {
+        dest = duplicate_destination(source, directory);
+    } else if fs::symlink_metadata(&dest).is_ok() {
         match conflict {
             Conflict::KeepBoth => dest = destination_for(source, directory),
+            Conflict::Duplicate => unreachable!("handled above"),
             Conflict::Skip => return Ok(Step::Skipped),
             Conflict::Replace => replace = true,
             Conflict::Cancel => { cancel.cancel(); return Err(cancelled()); }

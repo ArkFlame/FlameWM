@@ -6,15 +6,29 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use flamewm_api::applications::ApplicationLaunchOptions;
+use std::sync::Arc;
+
 use flamewm_applications::{ApplicationCatalog, DesktopEntry};
+use flamewm_integrations_linux::icons::{IconResolver, IconSize};
 
 pub const CHOICE_ROWS: usize = 6;
+
+/// Straight RGBA8 application icon for one chooser row, decoded on the discovery worker.
+#[derive(Clone, Debug)]
+pub struct ChoiceIcon {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<Vec<u8>>,
+}
+
+pub const CHOICE_ICON_SIZE: u32 = 20;
 
 #[derive(Clone, Debug)]
 pub struct AppChoice {
     pub entry: DesktopEntry,
     pub associated: bool,
     pub is_default: bool,
+    pub icon: Option<ChoiceIcon>,
 }
 
 #[derive(Debug)]
@@ -210,7 +224,18 @@ fn xdg_query(args: &[&std::ffi::OsStr]) -> Result<String, String> {
         .map_err(|error| format!("invalid xdg-mime output: {error}"))
 }
 
-pub fn discover(path: PathBuf) -> Result<OpenWithChooser, String> {
+/// Application icon raster for a chooser row. Brand marks and misses yield `None`, so the row stays text-only.
+fn choice_icon(resolver: &mut IconResolver, name: &str) -> Option<ChoiceIcon> {
+    if name.is_empty() { return None; }
+    let size = IconSize::new(CHOICE_ICON_SIZE, CHOICE_ICON_SIZE);
+    let raster = resolver.prepare_name(name, size).ok()?;
+    if raster.source.ends_with("flamewm-icon.svg") || raster.source.ends_with("flamewm-start.svg") {
+        return None;
+    }
+    Some(ChoiceIcon { width: raster.width, height: raster.height, pixels: Arc::new(raster.pixels) })
+}
+
+pub fn discover(path: PathBuf, packaged_root: &Path) -> Result<OpenWithChooser, String> {
     use std::ffi::OsStr;
     let mime = xdg_query(&[OsStr::new("query"), OsStr::new("filetype"), path.as_os_str()])?;
     if mime.is_empty() { return Err("Cannot determine file MIME type".into()); }
@@ -221,6 +246,7 @@ pub fn discover(path: PathBuf) -> Result<OpenWithChooser, String> {
     let order = associated_ids(catalog.entries(), &mime, &association_layers());
     let positions = order.into_iter().enumerate()
         .map(|(index, id)| (id, index)).collect::<HashMap<_, _>>();
+    let mut icons = IconResolver::from_environment_with_theme(packaged_root, 0, None);
     let mut apps = catalog.entries().iter().map(|entry| {
         // An explicit user-selected default should remain visible even when the
         // third-party launcher omitted MimeType= (xdg-mime only writes defaults).
@@ -229,6 +255,7 @@ pub fn discover(path: PathBuf) -> Result<OpenWithChooser, String> {
         AppChoice {
             associated,
             is_default,
+            icon: choice_icon(&mut icons, entry.icon()),
             entry: entry.clone(),
         }
     }).collect::<Vec<_>>();
