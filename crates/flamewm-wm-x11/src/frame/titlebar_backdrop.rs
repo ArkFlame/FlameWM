@@ -393,22 +393,61 @@ fn slice_region(
     out
 }
 
-/// `w x h` crop at `origin` out of a blurred region, edge-clamped: pixels outside the region
-/// repeat its nearest edge pixel. Never fails, so a resize past the blurred extent still paints.
+/// `w x h` crop at `origin` out of a blurred region. Pixels outside the region reflect back
+/// across its nearest edge (mirror tiling), so a titlebar grown past the blurred extent continues
+/// the existing blur with no seam, and a left/top grow reflects the leading edge.
 fn slice_region_clamped(blurred: &Blurred, origin: (i32, i32), w: u32, h: u32) -> Vec<u8> {
-    let (rw, rh) = (blurred.region_w as i32, blurred.region_h as i32);
-    let ox = origin.0 - blurred.cell.0;
-    let oy = origin.1 - blurred.cell.1;
+    let (rw, rh) = (i64::from(blurred.region_w), i64::from(blurred.region_h));
+    let ox = i64::from(origin.0 - blurred.cell.0);
+    let oy = i64::from(origin.1 - blurred.cell.1);
     let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-    for row in 0..h as i32 {
-        let sy = (oy + row).clamp(0, rh - 1) as usize;
-        for col in 0..w as i32 {
-            let sx = (ox + col).clamp(0, rw - 1) as usize;
+    for row in 0..i64::from(h) {
+        let sy = flamewm_render_x11::backdrop::mirror_index(oy + row, 0, rh);
+        for col in 0..i64::from(w) {
+            let sx = flamewm_render_x11::backdrop::mirror_index(ox + col, 0, rw);
             let at = (sy * rw as usize + sx) * 4;
             out.extend_from_slice(&blurred.region[at..at + 4]);
         }
     }
     out
+}
+
+#[cfg(test)]
+mod mirror_clamp_tests {
+    use super::*;
+
+    fn blurred_2x1() -> Blurred {
+        // 2-wide, 1-high region: [A, B] with cell origin (0, 0).
+        Blurred {
+            key: (0, 0, 2, 1, 0, 0),
+            cell: (0, 0),
+            region: vec![10, 0, 0, 255, 20, 0, 0, 255],
+            region_w: 2,
+            region_h: 1,
+        }
+    }
+
+    #[test]
+    fn grow_right_past_region_mirrors_the_right_edge() {
+        // Columns 0..4 at origin 0 -> A, B, B, A (reflected), no repeated-edge plateau.
+        let out = slice_region_clamped(&blurred_2x1(), (0, 0), 4, 1);
+        let reds: Vec<u8> = out.chunks_exact(4).map(|px| px[0]).collect();
+        assert_eq!(reds, vec![10, 20, 20, 10]);
+    }
+
+    #[test]
+    fn grow_left_before_region_mirrors_the_leading_edge() {
+        // Origin one pixel left of the region: column -1 reflects column 0.
+        let out = slice_region_clamped(&blurred_2x1(), (-1, 0), 3, 1);
+        let reds: Vec<u8> = out.chunks_exact(4).map(|px| px[0]).collect();
+        assert_eq!(reds, vec![10, 10, 20]);
+    }
+
+    #[test]
+    fn inside_region_is_an_exact_crop() {
+        let out = slice_region_clamped(&blurred_2x1(), (0, 0), 2, 1);
+        assert_eq!(out, blurred_2x1().region);
+    }
 }
 
 /// `w x h` region at `origin`, Gaussian-blurred with `radius` using a padded gather so the blur
