@@ -199,6 +199,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flamewm-clipboard"
+version = "0.1.1"
+dependencies = [
+ "x11rb",
+]
+
+[[package]]
 name = "flamewm-control-core"
 version = "0.1.1"
 dependencies = [
