@@ -30,7 +30,7 @@ use flamewm_control_dbus::{ControlClient,ControlSignal,ControlSignalClient};
 use flamewm_dbus_reactor::BusKind;
 use flamewm_api::settings::SettingsSnapshot;
 use flamewm_desktop_core::{file_actions::create_new_folder,trash::Trash};
-use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDocumentAccess,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
+use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDocumentAccess,UiDragEvent,UiKeyEvent,UiKeyPhase,UiWakeDrain,UiWindowConfig,UiWindowRole,run_with_controller_events_role_and_two_readable_fds,decode_document};
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
 const MENU_ITEMS: [&str;24]=["showtype","open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
@@ -331,8 +331,10 @@ struct ExplorerApp {
     context:Option<(f32,f32)>, edit:Option<EditMode>, buffer:String, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
-    row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, cancel:CancellationToken,
+    row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>, cancel:CancellationToken,
     menu_overflow:bool, glide:RowGlide, scroll_origin:usize, scroll_ticking:bool,
+    /// The window origin or its end-of-glide position changed since the last full projection.
+    list_dirty:bool,
     /// Resize coalescing (one relayout per interval) and whether its trailing-edge timer is already queued.
     resize_gate:ResizeGate, resize_flush_scheduled:bool,
     /// Header columns: fixed widths for Modified, Size and Type, and whether the Type column is shown.
@@ -354,7 +356,7 @@ impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None};
         app.reload_places();
         app
@@ -459,6 +461,7 @@ impl ExplorerApp {
             let step=origin as isize-self.scroll_origin as isize;
             self.glide.origin_moved(step,Instant::now(),rows);
             self.scroll_origin=origin;
+            self.list_dirty=true;
         }
         if self.glide.is_animating(Instant::now()) {self.schedule_scroll_tick();}
     }
@@ -467,9 +470,10 @@ impl ExplorerApp {
         self.scroll_ticking=true;
         self.spawn_background(||{std::thread::sleep(SCROLL_FRAME);WorkerResult::ScrollTick});
     }
+    /// One frame of the glide. The frame that finds the glide finished marks the list dirty so its rest position is projected.
     fn step_scroll(&mut self) {
         self.scroll_ticking=false;
-        if self.glide.is_animating(Instant::now()) {self.schedule_scroll_tick();}
+        if self.glide.is_animating(Instant::now()) {self.schedule_scroll_tick();} else {self.list_dirty=true;}
     }
     /// Current preferences, as persisted. Every setting writes the whole file so none can drop another.
     fn current_prefs(&self)->prefs::Prefs {
@@ -571,6 +575,28 @@ impl ExplorerApp {
         let slot=((y-top)/ROW_HEIGHT) as usize;
         self.chosen(slot).filter(|entry|entry.directory).map(|entry|entry.path.clone())
     }
+    /// The files a row drag carries: the whole selection when the pressed row is part of it.
+    fn dragged_sources(&self,source:&Path)->Vec<PathBuf> {
+        if self.model.tab().selected_paths.contains(source) {self.selected_files()} else {vec![source.to_path_buf()]}
+    }
+    /// Files dropped from another application copy into the current folder. XDND only offers copy here.
+    fn external_drop(&mut self,paths:Vec<PathBuf>) {
+        let destination=self.model.tab().path().to_path_buf();
+        if flamewm_explorer::drop_is_noop(&paths,&destination) {
+            self.model.status="Drop cancelled (nothing to copy)".into();
+        } else if self.busy {
+            self.model.status="File operation already in progress".into();
+        } else if self.tx.send(WorkerJob::Drop {
+            sources:paths,directory:destination,force_copy:true,cancel:self.cancel.clone(),
+        }).is_ok() {
+            self.busy=true;
+            self.progress=Some(0);
+            self.activity=None;
+            self.model.status="Copying dropped items…".into();
+        } else {
+            self.model.status="Transfer worker unavailable".into();
+        }
+    }
     fn finish_row_drag(&mut self,e:&UiActionEvent)->bool {
         let Some(drag)=self.row_drag.take() else {return false;};
         self.drop_folder=None;
@@ -581,11 +607,7 @@ impl ExplorerApp {
             self.model.status="Drop cancelled (choose a folder)".into();
             return true;
         };
-        let sources=if self.model.tab().selected_paths.contains(&drag.source) {
-            self.selected_files()
-        } else {
-            vec![drag.source]
-        };
+        let sources=self.dragged_sources(&drag.source);
         if flamewm_explorer::drop_is_noop(&sources,&destination) {
             self.model.status="Drop cancelled (nothing to move)".into();
             return true;
@@ -1049,7 +1071,13 @@ impl ExplorerApp {
                 },
                 UiActionPhase::Motion => {
                     let active=self.row_drag.as_mut().is_some_and(|drag|drag.motion(e.x,e.y));
-                    if active {
+                    let outside=!(0.0..self.window.0).contains(&e.x)||!(0.0..self.window.1).contains(&e.y);                    if active && outside {
+                        // Leaving the window turns the row drag into an XDND drag of the same files.
+                        if let Some(drag)=self.row_drag.take() {
+                            self.drop_folder=None;
+                            self.file_drag_out=Some(self.dragged_sources(&drag.source));
+                        }
+                    } else if active {
                         self.drop_folder=self.folder_at(e.x,e.y);
                     }
                     return;
@@ -1484,43 +1512,10 @@ impl ExplorerApp {
             doc.visible(&format!("sort-{key}-asc"),active&&!self.column_sort.descending)?;
             doc.visible(&format!("sort-{key}-desc"),active&&self.column_sort.descending)?;
         }
-        // List rows glide: slot k draws window row k-1 at its eased offset; the outer slots are off-window until they settle.
+        self.project_rows(doc,true)?;
+        // Scrollbar: drawn only while some entries are outside the window; thumb size and position follow the window.
         let rows=self.visible_rows();
         let origin=self.origin(rows);
-        let top=list_top(self.model.tabs.len()>1);
-        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
-        let glide=self.glide.offset(Instant::now());
-        for slot in 0..ROW_SLOTS {
-            let row=format!("row-{slot}");
-            let index=flamewm_explorer::row_slot_index(origin,slot);
-            let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
-            let entry=if slot<=rows+1 {self.entry_at(index)} else {None};
-            if let (Some(entry),true)=(entry,y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5) {
-                doc.visible(&row,true)?;
-                doc.position(&row,SIDEBAR_WIDTH,y)?;
-                doc.size(&row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
-                doc.text(&format!("name-{slot}"),entry.name.clone())?;
-                doc.text(&format!("size-{slot}"),entry.size_label())?;
-                doc.text(&format!("modified-{slot}"),entry.modified_label())?;
-                doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
-                doc.size(&format!("modified-{slot}"),self.widths.modified,ROW_HEIGHT)?;
-                doc.size(&format!("size-{slot}"),self.widths.size,ROW_HEIGHT)?;
-                doc.size(&format!("kind-{slot}"),self.widths.kind,ROW_HEIGHT)?;
-                doc.visible(&format!("kind-{slot}"),kind_shown)?;
-                // Dot files show the dimmed name twin (`name-dim-*`, CSS colour). Foreground overrides cannot reach a
-                // text child, and the icon raster is shared, so the icon stays full strength.
-                let dim=entry.name.starts_with('.');
-                doc.visible(&format!("name-{slot}"),!dim)?;
-                doc.visible(&format!("name-dim-{slot}"),dim)?;
-                doc.text(&format!("name-dim-{slot}"),entry.name.clone())?;
-                self.project_row_icon(doc,slot,entry)?;
-                doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
-                    self.theme.selected()
-                } else if tab.selected_paths.contains(&entry.path){self.theme.selected()}
-                    else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
-            } else {doc.visible(&row,false)?;}
-        }
-        // Scrollbar: drawn only while some entries are outside the window; thumb size and position follow the window.
         let (track_top,track_h)=self.scrollbar_track();
         let track_x=self.window.0-SCROLLBAR_TRACK_WIDTH;
         match scroll::thumb_geometry(track_h,self.scroll_total(),rows,origin) {
@@ -1616,6 +1611,52 @@ impl ExplorerApp {
     }
     /// One shared modal: four text lines and four fixed-slot buttons, labelled per dialog kind.
     /// Shows the row's decoded thumbnail, or the type icon until it is ready. A slot is rebound only when its image id changes.
+    /// List rows glide: slot k draws window row k-1 at its eased offset; the outer slots are off-window until they settle.
+    /// A glide frame (`full == false`) only moves rows and toggles their visibility: the origin is unchanged, so each
+    /// slot keeps the text, icon and background of the last full projection.
+    fn project_rows(&self, doc:&mut impl UiDocumentAccess, full:bool)->Result<(),String> {
+        let tab=self.model.tab();
+        let kind_shown=self.show_type;
+        let rows=self.visible_rows();
+        let origin=self.origin(rows);
+        let top=list_top(self.model.tabs.len()>1);
+        let bottom=self.window.1-STATUS_STRIP_HEIGHT;
+        let glide=self.glide.offset(Instant::now());
+        for slot in 0..ROW_SLOTS {
+            let row=format!("row-{slot}");
+            let index=flamewm_explorer::row_slot_index(origin,slot);
+            let y=top+(slot as f32-1.0+glide)*ROW_HEIGHT;
+            let entry=if slot<=rows+1 {self.entry_at(index)} else {None};
+            let in_view=y>=top-0.5&&y+ROW_HEIGHT<=bottom+0.5;
+            if let Some(entry)=entry {
+                // Contents are set even off-view, so a row that glides into view later already shows its entry.
+                doc.visible(&row,in_view)?;
+                doc.position(&row,SIDEBAR_WIDTH,y)?;
+                if !full {continue;}
+                doc.size(&row,self.window.0-SIDEBAR_WIDTH,ROW_HEIGHT)?;
+                doc.text(&format!("name-{slot}"),entry.name.clone())?;
+                doc.text(&format!("size-{slot}"),entry.size_label())?;
+                doc.text(&format!("modified-{slot}"),entry.modified_label())?;
+                doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
+                doc.size(&format!("modified-{slot}"),self.widths.modified,ROW_HEIGHT)?;
+                doc.size(&format!("size-{slot}"),self.widths.size,ROW_HEIGHT)?;
+                doc.size(&format!("kind-{slot}"),self.widths.kind,ROW_HEIGHT)?;
+                doc.visible(&format!("kind-{slot}"),kind_shown)?;
+                // Dot files show the dimmed name twin (`name-dim-*`, CSS colour). Foreground overrides cannot reach a
+                // text child, and the icon raster is shared, so the icon stays full strength.
+                let dim=entry.name.starts_with('.');
+                doc.visible(&format!("name-{slot}"),!dim)?;
+                doc.visible(&format!("name-dim-{slot}"),dim)?;
+                doc.text(&format!("name-dim-{slot}"),entry.name.clone())?;
+                self.project_row_icon(doc,slot,entry)?;
+                doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
+                    self.theme.selected()
+                } else if tab.selected_paths.contains(&entry.path){self.theme.selected()}
+                    else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
+            } else {doc.visible(&row,false)?;}
+        }
+        Ok(())
+    }
     fn project_row_icon(&self, doc:&mut impl UiDocumentAccess, slot:usize, entry:&Entry)->Result<(),String> {
         let mut bound=self.thumb_bound.borrow_mut();
         match self.row_thumbnail(entry) {
@@ -1805,7 +1846,7 @@ fn run()->Result<(),String>{
     app.borrow_mut().scan();
     // Present-but-unmounted devices arrive from lsblk on a worker; without this they only show after a reload.
     app.borrow().refresh_devices();
-    let mut doc=decode_document(UI)?;
+    let mut doc=decode_document(UI)?.with_file_drop_target();
     // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
     if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
     app.borrow().project(&mut doc)?;
@@ -1843,16 +1884,28 @@ fn run()->Result<(),String>{
                 _=>"explorer.event.other",
             });
             match event {
-                UiControllerEvent::Action(action)=>{app.event(action);app.sync_scroll();},
+                UiControllerEvent::Action(action)=>{
+                    app.event(action);
+                    app.sync_scroll();
+                    // A wheel notch during a glide only moves the target: the next frame tick projects the burst, so
+                    // N notches cost one relayout per frame instead of N.
+                    if action.action=="scroll" && app.glide.is_animating(Instant::now()) {return Ok(());}
+                },
                 UiControllerEvent::Key(key)=>{app.key(key);app.sync_scroll();},
                 // Settled client size: sizes, scroll window and rows all follow from `window` in project.
                 UiControllerEvent::Resized{width,height}=>{
                     // Held sizes are projected by the trailing ResizeFlush wake, not on every event.
                     if !app.resize(*width,*height) {return Ok(());}
                 },
-                // Other controller events (drag) do not change the list layout.
+                UiControllerEvent::Drag(UiDragEvent::Drop{paths,..})=>app.external_drop(paths.clone()),
+                // Enter/over/leave do not change the list layout.
                 _=>{},
             }
+            // A row dragged out of the window starts the XDND drag here, once the event is handled.
+            if let Some(paths)=app.file_drag_out.take() {
+                if let Err(error)=document.begin_file_drag(paths) {app.model.status=error;}
+            }
+            app.list_dirty=false;
             app.project(document)
         },
         move |document|{
@@ -1860,13 +1913,14 @@ fn run()->Result<(),String>{
             let snapshot_changed=match wake_snapshots.borrow_mut().take(){Some(snapshot)=>{app.theme=ExplorerTheme::from_snapshot(&snapshot);true},None=>false};
             // Every X wake (a pure window move included) lands here. Project only when something this
             // closure owns changed: a worker message, a settings snapshot, the list origin, or a running glide.
-            let origin=app.scroll_origin;
             let mut changed=snapshot_changed;
             while let Ok(message)=results.try_recv(){app.wake(message);changed=true;}
             app.sync_scroll();
-            changed|=app.scroll_origin!=origin||app.glide.is_animating(Instant::now());
-            if !changed {return Ok(());}
-            app.project(document)
+            changed|=std::mem::take(&mut app.list_dirty);
+            if changed {return app.project(document);}
+            // A glide frame moves the rows only: no text, icon or chrome relayout.
+            if app.glide.is_animating(Instant::now()) {return app.project_rows(document,false);}
+            Ok(())
         },
     )
 }

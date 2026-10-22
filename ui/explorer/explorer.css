@@ -16,7 +16,7 @@ button:active { background:var(--hover); }
 .tool-sep { width:1px; height:20px; flex-grow:0; background:var(--line); margin:0 4px; }
 .field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:var(--card); border:1px solid var(--line); justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
 .field:hover { border-color:var(--accent); background:var(--hover); }
-.address { flex-grow:1; min-width:120px; }
+.address { flex-grow:1; width:0; min-width:120px; }
 .search { width:230px; flex-grow:0; color:var(--muted); }
 .search-clear { width:22px; height:22px; flex-grow:0; border-radius:11px; color:var(--text); font-size:15px; }
 .field-ico { width:16px; height:16px; flex-grow:0; }
