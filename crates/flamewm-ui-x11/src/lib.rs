@@ -36,6 +36,7 @@ pub use template::{
 };
 
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 
 use calloop::Interest;
 use flamewm_reactor::{FdAction, Reactor};
@@ -91,10 +92,32 @@ pub enum UiActionPhase {
     Release,
 }
 
+/// Files dragged over, or dropped on, an XDND-enabled window. Positions are window-relative
+/// logical px. `Enter`/`Over` carry no paths: the data is only converted on drop.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UiDragEvent {
+    Enter { x: f32, y: f32 },
+    Over { x: f32, y: f32 },
+    Leave,
+    Drop {
+        x: f32,
+        y: f32,
+        paths: Vec<PathBuf>,
+        action: UiDragAction,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiDragAction {
+    Copy,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiControllerEvent {
     Action(UiActionEvent),
     Key(UiKeyEvent),
+    /// XDND drop-target traffic (only for windows opted in with `with_file_drop_target`).
+    Drag(UiDragEvent),
     /// The window's client size settled (logical px). Emitted once per settled size.
     Resized {
         width: u32,
@@ -105,7 +128,28 @@ pub enum UiControllerEvent {
 const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
 const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
 
+fn drag_event(event: &flamewm_render_core::ActionEvent) -> Option<UiDragEvent> {
+    let (x, y) = (event.x, event.y);
+    Some(match event.action.as_str() {
+        flamewm_render_x11::FILE_DRAG_ENTER_ACTION => UiDragEvent::Enter { x, y },
+        flamewm_render_x11::FILE_DRAG_OVER_ACTION => UiDragEvent::Over { x, y },
+        flamewm_render_x11::FILE_DRAG_LEAVE_ACTION => UiDragEvent::Leave,
+        flamewm_render_x11::FILE_DRAG_DROP_ACTION => UiDragEvent::Drop {
+            x,
+            y,
+            paths: flamewm_render_x11::parse_uri_list(
+                event.text.as_deref().unwrap_or("").as_bytes(),
+            ),
+            action: UiDragAction::Copy,
+        },
+        _ => return None,
+    })
+}
+
 fn controller_event(event: &flamewm_render_core::ActionEvent) -> UiControllerEvent {
+    if let Some(drag) = drag_event(event) {
+        return UiControllerEvent::Drag(drag);
+    }
     if event.action == flamewm_render_x11::WINDOW_RESIZE_ACTION {
         return UiControllerEvent::Resized {
             width: event.x.round().max(1.0) as u32,
@@ -189,6 +233,7 @@ fn x11_config(config: UiWindowConfig, role: UiWindowRole) -> flamewm_render_x11:
         title: config.title,
         identity: config.identity,
         backdrop: None,
+        file_drag: None,
         role: match role {
             UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
             UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
@@ -220,8 +265,14 @@ where
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
     let backdrop = document.window_backdrop;
+    let file_drag = document
+        .file_drop_target
+        .then(flamewm_render_x11::FileDragSlot::default);
     let mut x11 = x11_config(config, role);
     x11.backdrop = backdrop;
+    x11.file_drag = file_drag.clone();
+    let press_drag = file_drag.clone();
+    let reactor_drag = file_drag.clone();
     flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
         document.document,
         x11,
@@ -231,10 +282,29 @@ where
         move |event, document| {
             let flamewm_render_core::ControllerEvent::Action(action) = event;
             let event = controller_event(action);
-            on_event(&event, &mut UiDocumentView { document })
+            on_event(
+                &event,
+                &mut UiDocumentView {
+                    document,
+                    file_drag: file_drag.clone(),
+                },
+            )
         },
-        move |press, document| on_press(press, &mut UiDocumentView { document }),
-        move |document| on_reactor(&mut UiDocumentView { document }),
+        move |press, document| {
+            on_press(
+                press,
+                &mut UiDocumentView {
+                    document,
+                    file_drag: press_drag.clone(),
+                },
+            )
+        },
+        move |document| {
+            on_reactor(&mut UiDocumentView {
+                document,
+                file_drag: reactor_drag.clone(),
+            })
+        },
     )
 }
 

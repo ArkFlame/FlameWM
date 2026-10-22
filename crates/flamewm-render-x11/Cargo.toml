@@ -23,3 +23,6 @@ path = "src/bin/flamewm-render-x11.rs"
 [lints.rust]
 unsafe_code = "allow"
 unsafe_op_in_unsafe_fn = "deny"
+
+[dev-dependencies]
+x11rb = { workspace = true, features = ["xtest"] }

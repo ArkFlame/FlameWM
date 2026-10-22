@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use super::input::apply_wheel_scroll;
 use super::*;
 use crate::WindowGeometrySlot;
+use super::xdnd::SELECTION_NOTIFY;
 use crate::runtime::{RawPress, RawPressWatch};
 use crate::xinput::{GENERIC_EVENT, generic_cookie};
 
@@ -776,10 +777,16 @@ impl X11App {
                     self.interaction.hover = hover;
                     self.update_cursor(document, hover);
                 }
+                SELECTION_NOTIFY => {
+                    // SAFETY: The discriminator identifies a SelectionNotify on this display.
+                    unsafe { self.handle_xdnd_selection_notify(&event, document, on_action)? };
+                }
                 CLIENT_MESSAGE => {
                     // SAFETY: The discriminator identifies XClientMessageEvent in this arm.
                     let client = unsafe { event.xclient };
-                    if self.wm_delete != 0
+                    // SAFETY: The client message is a live XClientMessageEvent on this display.
+                    let xdnd = unsafe { self.handle_xdnd_message(&client, document, on_action)? };
+                    if !xdnd && self.wm_delete != 0
                         && client.format == 32
                         // SAFETY: XClientMessageEvent format 32 selects the initialized long data
                         // representation used by the WM_DELETE protocol.
@@ -864,6 +871,8 @@ impl X11App {
             // SAFETY: The caller owns the live X11 display and app resources.
             unsafe { self.event_loop(document, on_action)? };
             self.single_event = false;
+            // A UI request made while handling that event starts its modal XDND drag here.
+            unsafe { self.start_pending_file_drag() };
             // The event may have opened a menu: arm before the next wake.
             unsafe { self.sync_raw_press_observer(press_watch) };
             unsafe { self.deliver_raw_presses(document, on_press)? };

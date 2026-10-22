@@ -34,6 +34,7 @@ use cursor_theme::{SurfaceCursor, share_surface_cursor};
 
 mod color;
 mod cursor;
+mod xdnd;
 mod cursor_theme;
 mod events;
 mod geometry;
@@ -202,6 +203,8 @@ pub(crate) struct X11App {
     pub(crate) press_selection: RawPressSelection,
     press_observed: bool,
     raw_presses: Vec<RawPress>,
+    /// XDND state; `Some` only for windows created with `X11Config::file_drag`.
+    pub(crate) xdnd: Option<xdnd::XdndState>,
 }
 impl X11App {
     /// # Safety
@@ -446,6 +449,10 @@ impl X11App {
                 XSetWMProtocols(display, window, &mut protocol, 1);
             }
         }
+        let xdnd = config
+            .file_drag
+            .clone()
+            .map(|slot| unsafe { xdnd::XdndState::setup(display, window, slot) });
 
         let mut cursors = HashMap::new();
         for kind in [
@@ -581,6 +588,7 @@ impl X11App {
             press_selection: RawPressSelection::new(unsafe { xi_raw_press_opcode(display) }),
             press_observed: false,
             raw_presses: Vec::new(),
+            xdnd,
         })
     }
 

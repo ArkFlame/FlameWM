@@ -775,6 +775,7 @@ fn main() -> Result<(), String> {
                     }
                     UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state),
                     UiControllerEvent::Resized { .. } => Ok(()),
+                    UiControllerEvent::Drag(_) => Ok(()),
                 };
                 event_watch.set(menus_open(&state.menu_rects));
                 // A failed handler must not tear down the loop: the desktop would stop answering clicks.
@@ -2327,6 +2328,9 @@ fn open_item_inner(state: &DesktopState, kind: DesktopItemKind, path: &Path) -> 
                 .launch(&ApplicationLaunchOptions::default())
                 .map(|_| ())
                 .map_err(|error| format!("{error:?}"))
+        }
+        LauncherOpen::RegularFile if kind == DesktopItemKind::Directory => {
+            flamewm_applications::open_directory(path).map_err(|error| format!("{error:?}"))
         }
         LauncherOpen::RegularFile => flamewm_applications::open_target(path.as_os_str())
             .map_err(|error| format!("{error:?}")),

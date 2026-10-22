@@ -299,6 +299,7 @@ dependencies = [
  "flamewm-control-dbus",
  "flamewm-dbus-reactor",
  "flamewm-desktop-core",
+ "flamewm-image-core",
  "flamewm-reactor",
  "flamewm-render-compiler",
  "flamewm-ui-core",
@@ -400,6 +401,7 @@ dependencies = [
  "flamewm-profiler",
  "flamewm-reactor",
  "flamewm-render-core",
+ "x11rb",
 ]
 
 [[package]]

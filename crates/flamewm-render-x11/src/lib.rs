@@ -27,6 +27,7 @@ use flamewm_render_core::RuntimeDocument;
 pub use flamewm_render_core::{ActionEvent, ActionPhase, ControllerEvent};
 
 mod app;
+mod xdnd;
 mod config;
 mod external_decoration;
 mod external_drawable;
@@ -38,6 +39,7 @@ mod surface_controller;
 
 use app::X11App;
 pub use config::*;
+pub use xdnd::{encode_uri_list, parse_uri_list};
 pub use external_decoration::{
     ExternalDecorationRenderer, apply_cursor_shadow, apply_cursor_theme,
 };

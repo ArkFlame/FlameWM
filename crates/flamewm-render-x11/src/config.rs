@@ -11,11 +11,26 @@ pub struct X11Config {
     pub identity: Option<X11WindowIdentity>,
     /// Whole-window pseudo-transparency (None = no window snapshot).
     pub backdrop: Option<crate::backdrop::WindowBackdrop>,
+    /// XDND opt-in. `Some` advertises XdndAware and enables file drop-target and drag-source
+    /// handling; the slot carries an outgoing drag request from the UI to the event loop.
+    pub file_drag: Option<FileDragSlot>,
 }
 
 /// Reserved action name for a settled window size. The event carries the size in `x` (width)
 /// and `y` (height), logical px. Delivered once per settled size, never per intermediate step.
 pub const WINDOW_RESIZE_ACTION: &str = "__flamewm.window.resize";
+
+/// Reserved action names for XDND drop-target events. `x`/`y` carry the window-relative
+/// pointer position. The drop payload is percent-encoded `text/uri-list` in `text`.
+pub const FILE_DRAG_ENTER_ACTION: &str = "__flamewm.window.drag.enter";
+pub const FILE_DRAG_OVER_ACTION: &str = "__flamewm.window.drag.over";
+pub const FILE_DRAG_LEAVE_ACTION: &str = "__flamewm.window.drag.leave";
+pub const FILE_DRAG_DROP_ACTION: &str = "__flamewm.window.drag.drop";
+
+/// Outgoing file-drag request: written by the UI, taken by the X11 event loop after the event
+/// that requested it. `Some(paths)` starts a modal XDND drag with absolute `paths`.
+pub type FileDragSlot =
+    std::rc::Rc<std::cell::RefCell<Option<Vec<std::path::PathBuf>>>>;
 
 /// ICCCM WM_CLASS pair (instance, class) plus EWMH UTF-8 name is taken from the title.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -425,6 +440,7 @@ impl Default for X11Config {
             role: X11WindowRole::Normal,
             identity: None,
             backdrop: None,
+            file_drag: None,
         }
     }
 }
@@ -440,6 +456,7 @@ impl From<SurfaceConfig> for X11Config {
             role: config.role.into(),
             identity: None,
             backdrop: None,
+            file_drag: None,
         }
     }
 }

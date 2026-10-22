@@ -11,6 +11,8 @@ pub struct UiDocument {
     layout_memo: RefCell<Option<LayoutMemo>>,
     /// Whole-window pseudo-transparency, consumed when the window is created.
     pub(crate) window_backdrop: Option<flamewm_render_x11::backdrop::WindowBackdrop>,
+    /// Opt-in XDND (drop target + drag source) for the window created from this document.
+    pub(crate) file_drop_target: bool,
 }
 
 struct LayoutMemo {
@@ -21,6 +23,24 @@ struct LayoutMemo {
 
 pub struct UiDocumentView<'a> {
     pub(crate) document: &'a mut RuntimeDocument,
+    /// Outgoing-drag request slot; `None` for windows without XDND.
+    pub(crate) file_drag: Option<flamewm_render_x11::FileDragSlot>,
+}
+
+impl UiDocumentView<'_> {
+    /// Starts a modal XDND drag of `paths` (absolute local files) from this window. The drag
+    /// runs after the current event is handled and blocks the window until it ends.
+    /// Requires a window opted in with `UiDocument::with_file_drop_target`.
+    pub fn begin_file_drag(&mut self, paths: Vec<std::path::PathBuf>) -> Result<(), String> {
+        let Some(slot) = self.file_drag.as_ref() else {
+            return Err("window was not opened with file drop support".into());
+        };
+        if paths.is_empty() || !paths.iter().all(|path| path.is_absolute()) {
+            return Err("file drag needs a non-empty list of absolute paths".into());
+        }
+        *slot.borrow_mut() = Some(paths);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +142,15 @@ pub trait UiDocumentAccess {
 }
 
 impl UiDocument {
+    /// Opts the window into XDND: it advertises `XdndAware`, reports files dropped from other
+    /// applications as `UiControllerEvent::Drag`, and can start outgoing file drags with
+    /// `UiDocumentView::begin_file_drag`. Windows without this are unaffected.
+    #[must_use]
+    pub fn with_file_drop_target(mut self) -> Self {
+        self.file_drop_target = true;
+        self
+    }
+
     /// Lays the wallpaper under the whole window (blurred per `blur_percent`) so translucent
     /// fills (`surfaceOpacity` < 100) show the desktop behind a Normal window. Opaque specs
     /// install nothing. Capture failure keeps the straight-colour fallback.
@@ -488,6 +517,7 @@ pub fn decode_document(bytes: &'static [u8]) -> Result<UiDocument, String> {
         document: RuntimeDocument::new(flamewm_render_core::decode_static(bytes)?)?,
         layout_memo: RefCell::new(None),
         window_backdrop: None,
+        file_drop_target: false,
     })
 }
 
@@ -544,6 +574,7 @@ mod tests {
             .expect("fixture validates"),
             layout_memo: RefCell::new(None),
             window_backdrop: None,
+            file_drop_target: false,
         }
     }
 

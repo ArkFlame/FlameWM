@@ -475,7 +475,11 @@ impl SurfaceRuntime {
         apply: impl FnOnce(&mut UiDocumentView<'_>) -> Result<R, String>,
     ) -> Result<R, UiBackendError> {
         let document = self.document_mut(surface)?;
-        apply(&mut UiDocumentView { document }).map_err(UiBackendError::Document)
+        apply(&mut UiDocumentView {
+            document,
+            file_drag: None,
+        })
+        .map_err(UiBackendError::Document)
     }
 
     pub(crate) fn document_mut(
