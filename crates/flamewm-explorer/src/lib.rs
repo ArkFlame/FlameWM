@@ -597,6 +597,36 @@ mod tests {
         assert_eq!(tab.visible_window(rows).len(),10);
         assert_eq!(tab.visible_window(rows)[0].name,"item-090");
     }
+    #[test] fn list_starts_at_top_and_resize_reclamps_without_blank_space() {
+        let mut tab=Tab::new(PathBuf::from("/tmp"));
+        tab.loading=false;
+        let item=|n:usize| Entry {
+            path:PathBuf::from(format!("/tmp/f{n:02}")), name:format!("f{n:02}"),
+            directory:false,symlink:false,size:0,modified:None,
+        };
+        tab.entries=(0..19).map(item).collect();
+        // A fresh tab starts at the top, and so does a window that fits every row.
+        assert_eq!(tab.scroll,0);
+        assert_eq!(tab.window_start(13),0);
+        assert_eq!(tab.visible_window(30).len(),19);
+        assert_eq!(tab.visible_window(30)[0].name,"f00");
+        // Scroll to the bottom of a 13-row window, then grow and shrink the window.
+        tab.scroll_by(1000,13);
+        assert_eq!(tab.window_start(13),6);
+        // Growing past the list re-clamps to the top: no blank rows below the list.
+        assert_eq!(tab.window_start(30),0);
+        assert_eq!(tab.visible_window(30)[0].name,"f00");
+        // Shrinking keeps the bottom row visible without leaving gaps.
+        tab.scroll_by(1000,5);
+        assert_eq!(tab.scroll,14);
+        assert_eq!(tab.visible_window(5)[0].name,"f14");
+        assert_eq!(tab.visible_window(5).len(),5);
+        // A stale large offset that is larger than the list re-clamps when a window is shown again.
+        tab.scroll=500;
+        assert_eq!(tab.window_start(13),6);
+        assert_eq!(tab.visible_window(13).len(),13);
+        assert_eq!(tab.visible_window(13)[0].name,"f06");
+    }
     #[test] fn stale_worker_reply_is_discarded() {
         let mut model=Explorer::new(PathBuf::from("/tmp"));let old=model.generation;model.next_generation();
         assert!(!model.apply_listing(old,Path::new("/tmp"),Ok(Vec::new())));
