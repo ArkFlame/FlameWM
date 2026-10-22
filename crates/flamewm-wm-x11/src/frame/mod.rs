@@ -9,4 +9,5 @@ pub mod layout;
 pub mod model;
 pub mod resources;
 pub mod session;
+pub mod shadow;
 pub mod titlebar_backdrop;

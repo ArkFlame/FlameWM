@@ -996,6 +996,10 @@ pub fn chrome_tokens_from_settings(snapshot: &SettingsSnapshot) -> ChromeTokens 
             wallpaper_source_from_settings(snapshot),
         ),
         buttons: [button("Minimize"), button("Maximize"), button("Close")],
+        window_shadows: !matches!(
+            snapshot.values.get("windowShadows"),
+            Some(SettingValue::Boolean(false))
+        ),
     }
 }
 

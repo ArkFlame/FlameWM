@@ -1317,6 +1317,7 @@ where
         );
         emit_resize_summary();
         emit_move_summary();
+        wm.reconcile_frame_shadows()?;
         // Flush once per reactor turn.
         conn.flush()?;
         // Blocking wait: woken by X, provider, audio, or profiler sources.
@@ -1491,6 +1492,8 @@ pub(crate) struct Wm<'a, C: Connection> {
     chrome_runtimes: HashMap<Window, chrome_runtime::ChromeRuntime>,
     /// Live skin chrome tokens (settings-derived); changes repaint all frames.
     decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens,
+    /// Shadow strips per floating frame (`wm/shadow.rs`).
+    frame_shadows: HashMap<Window, shadow::FrameShadow>,
     changes: WmChangeSet,
     /// Bare-Super tap state; see `SuperTap`. Start toggles only through it.
     super_tap: SuperTap,
@@ -1557,6 +1560,7 @@ mod overlay;
 mod paint;
 mod pointer;
 mod publish;
+mod shadow;
 mod transition;
 mod window_ops;
 mod workspace;
@@ -1663,6 +1667,7 @@ impl<'a, C: Connection> Wm<'a, C> {
             snap_preview: SnapPreviewSurface::new(),
             chrome_runtimes: HashMap::new(),
             decoration_tokens: flamewm_skin::recipes::decoration::ChromeTokens::default(),
+            frame_shadows: HashMap::new(),
             changes: WmChangeSet::default(),
             super_tap: SuperTap::default(),
             pointer_ingress_probe: PointerIngressProbe::default(),
