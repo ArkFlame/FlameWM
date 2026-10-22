@@ -12,6 +12,7 @@ use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
 
 use super::X11App;
+use super::window_backdrop::{MirrorFill, MirrorKey};
 
 /// Debug trace for backdrop painting, enabled by `FLAMEWM_DEBUG_BACKDROP=1` (stderr).
 /// The message is built only when tracing is enabled, so disabled tracing allocates nothing.
@@ -100,6 +101,9 @@ impl X11App {
     /// from where it sits in root coordinates, so the grown strip continues the existing content
     /// instead of showing the cleared (black) scene.
     ///
+    /// The mirrored pixmap is cached for one (scene size, snapshot origin) key. A repaint with the
+    /// same key blits the cached pixmap; only a new key recomputes and uploads it.
+    ///
     /// # Safety
     ///
     /// Must run on the app's display thread.
@@ -110,30 +114,53 @@ impl X11App {
             XTranslateCoordinates(self.display, self.window, root, 0, 0, &mut rx, &mut ry, &mut child)
         };
         let (width, height) = (self.width, self.height);
-        let words = {
-            let Some(captured) = self.window_backdrop.as_ref().and_then(|s| s.captured.as_ref())
-            else {
-                return Ok(());
-            };
-            let origin = (
-                i64::from(captured.root.0) - i64::from(rx),
-                i64::from(captured.root.1) - i64::from(ry),
-            );
-            crate::backdrop::mirror_extend_argb(
-                &captured.words,
-                captured.width,
-                captured.height,
-                (width, height),
-                origin,
-            )
+        let Some(captured_root) = self
+            .window_backdrop
+            .as_ref()
+            .and_then(|s| s.captured.as_ref())
+            .map(|captured| captured.root)
+        else {
+            return Ok(());
         };
-        let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
-        let result = match self.xrender.as_mut() {
+        let key = MirrorKey {
+            width,
+            height,
+            origin: (
+                i64::from(captured_root.0) - i64::from(rx),
+                i64::from(captured_root.1) - i64::from(ry),
+            ),
+        };
+        let cached = self
+            .window_backdrop
+            .as_ref()
+            .and_then(|s| s.mirror.as_ref())
+            .filter(|fill| fill.key == key)
+            .map(|fill| fill.pixmap);
+        let pixmap = match cached {
+            Some(pixmap) => pixmap,
+            None => {
+                let words = {
+                    let Some(captured) = self.window_backdrop.as_ref().and_then(|s| s.captured.as_ref())
+                    else {
+                        return Ok(());
+                    };
+                    crate::backdrop::mirror_extend_argb(
+                        &captured.words,
+                        captured.width,
+                        captured.height,
+                        (width, height),
+                        key.origin,
+                    )
+                };
+                let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
+                self.store_mirror_fill(MirrorFill { key, pixmap });
+                pixmap
+            }
+        };
+        match self.xrender.as_mut() {
             Some(xrender) => unsafe { xrender.blit_argb32_over(pixmap, 0, 0, width, height) },
             None => Ok(()),
-        };
-        unsafe { XFreePixmap(self.display, pixmap) };
-        result
+        }
     }
 
     /// Lays the retained backdrop over the freshly cleared scene (opaque OVER copy), so the

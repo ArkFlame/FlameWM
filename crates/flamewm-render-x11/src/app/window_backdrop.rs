@@ -36,6 +36,8 @@ pub(crate) struct WindowBackdropState {
     /// Last blurred snapshot and the root origin it was captured at. A resized window mirror-extends
     /// it into the grown area until the settled capture replaces it.
     pub(crate) captured: Option<CapturedSnapshot>,
+    /// Mirror-extended fill of `captured` for the last (size, origin); reused while it matches.
+    pub(crate) mirror: Option<MirrorFill>,
 }
 
 /// Blurred ARGB snapshot as uploaded, with the root position of its top-left pixel.
@@ -47,6 +49,22 @@ pub(crate) struct CapturedSnapshot {
     pub(crate) root: (i32, i32),
 }
 
+/// Scene size and snapshot origin (snapshot root position minus the window's root position)
+/// that a mirrored fill was computed for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MirrorKey {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) origin: (i64, i64),
+}
+
+/// Cached mirrored fill: the pixmap is `key`-sized and holds `mirror_extend_argb` of the snapshot.
+#[derive(Debug)]
+pub(crate) struct MirrorFill {
+    pub(crate) key: MirrorKey,
+    pub(crate) pixmap: Pixmap,
+}
+
 impl WindowBackdropState {
     pub(crate) fn new(spec: WindowBackdrop) -> Self {
         Self {
@@ -55,6 +73,7 @@ impl WindowBackdropState {
             canvas: None,
             stale: true,
             captured: None,
+            mirror: None,
         }
     }
 }
@@ -191,6 +210,8 @@ impl X11App {
                 root: (rx, ry),
             });
         }
+        // The cached mirror was made from the previous snapshot.
+        self.drop_mirror_fill();
         let upload_span = flamewm_profiler::start("render.backdrop.upload");
         let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
         drop(upload_span);
@@ -211,6 +232,30 @@ impl X11App {
     pub(crate) fn clear_window_backdrop(&mut self) {
         if let Some(old) = self.window_backdrop_pixmap.take() {
             unsafe { XFreePixmap(self.display, old.pixmap) };
+        }
+        self.drop_mirror_fill();
+    }
+
+    /// Retains `fill` as the cached mirror, freeing the pixmap it replaces.
+    pub(crate) fn store_mirror_fill(&mut self, fill: MirrorFill) {
+        let display = self.display;
+        match self.window_backdrop.as_mut() {
+            Some(state) => {
+                if let Some(old) = state.mirror.replace(fill) {
+                    unsafe { XFreePixmap(display, old.pixmap) };
+                }
+            }
+            None => {
+                unsafe { XFreePixmap(display, fill.pixmap) };
+            }
+        }
+    }
+
+    /// Frees the cached mirrored fill, if any.
+    pub(crate) fn drop_mirror_fill(&mut self) {
+        let display = self.display;
+        if let Some(old) = self.window_backdrop.as_mut().and_then(|s| s.mirror.take()) {
+            unsafe { XFreePixmap(display, old.pixmap) };
         }
     }
 }
