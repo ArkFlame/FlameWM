@@ -115,8 +115,8 @@ if [[ "$BUILD" == 1 ]]; then
   # restores source mtimes older than the previous build. Verify the path crate
   # and invalidate only its release cache on a source-content change.
   python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
-  echo "[1/5] Building FlameWM WM + desktop + shell + settings + X11 canary"
-  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-x11-canary
+  echo "[1/5] Building FlameWM WM + desktop + shell + settings + Explorer + X11 canary"
+  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-x11-canary
 elif [[ "$BUILD" != 0 ]]; then
   echo "FLAMEWM_XEPHYR_BUILD must be 0 or 1" >&2; exit 2
 fi
@@ -540,6 +540,37 @@ nested_env(){
       ${GTK_THEME:+GTK_THEME="$GTK_THEME"} ${QT_STYLE_OVERRIDE:+QT_STYLE_OVERRIDE="$QT_STYLE_OVERRIDE"} "$@"
   fi
 }
+
+# Nested children must never reach the host Wayland compositor, host GL, or host
+# GTK/Qt portal and platform backends: force X11/XCB and software GL. Exported
+# here so session-mode children inherit them too (nested_env covers direct mode).
+unset WAYLAND_DISPLAY WAYLAND_SOCKET
+export GDK_BACKEND=x11 GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG,}no-portals" GTK_USE_PORTAL=0
+export QT_QPA_PLATFORM=xcb QT_XCB_GL_INTEGRATION=none QT_QUICK_BACKEND=software QT_NO_XDG_DESKTOP_PORTAL=1
+export LIBGL_ALWAYS_SOFTWARE=1
+# Private XDG homes for nested apps: host ~/.config and ~/.local/share are not
+# written or used for defaults. FlameWM config stays in the host profile path.
+export FLAMEWM_CONFIG_DIR="${FLAMEWM_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/flamewm}"
+host_data_home="${XDG_DATA_HOME:-${HOME:-/nonexistent}/.local/share}"
+NESTED_XDG_ROOT="$LOG_DIR/xdg"
+export XDG_CONFIG_HOME="$NESTED_XDG_ROOT/config" XDG_DATA_HOME="$NESTED_XDG_ROOT/data"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME/applications"
+# Cursor and icon lookups keep the host icon themes through a read-only link.
+if [[ -d "$host_data_home/icons" && ! -e "$XDG_DATA_HOME/icons" ]]; then
+  ln -s "$host_data_home/icons" "$XDG_DATA_HOME/icons"
+fi
+# Folder opens and the start menu use the nested Explorer entry, derived from
+# the packaged desktop file with the resolved binary path.
+explorer_bin="$ROOT/.target/release/flamewm-explorer"
+[[ -x "$explorer_bin" ]] || explorer_bin="$(command -v flamewm-explorer || true)"
+if [[ -n "$explorer_bin" && -x "$explorer_bin" ]]; then
+  sed -e "s|^Exec=flamewm-explorer|Exec=$explorer_bin|" -e "s|^TryExec=flamewm-explorer|TryExec=$explorer_bin|" \
+    "$ROOT/packaging/flamewm-explorer.desktop" >"$XDG_DATA_HOME/applications/flamewm-explorer.desktop"
+  # Folders resolve to Explorer only; Dolphin and other folder handlers are removed for nested apps.
+  printf '[Default Applications]\ninode/directory=flamewm-explorer.desktop\n\n[Added Associations]\ninode/directory=flamewm-explorer.desktop;\n\n[Removed Associations]\ninode/directory=org.kde.dolphin.desktop;\n' >"$XDG_CONFIG_HOME/mimeapps.list"
+else
+  echo "[xephyr] flamewm-explorer not found; nested folder opens use the system handler" >&2
+fi
 
 echo "[2/5] Starting Xephyr $nested ($SCREEN)"
 Xephyr "$nested" -screen "$SCREEN" -dpi 96 -ac -br -noreset -nolisten tcp -extension GLX -dumb -sw-cursor >"$xephyr_log" 2>&1 &

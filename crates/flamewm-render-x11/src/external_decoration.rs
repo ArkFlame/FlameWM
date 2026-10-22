@@ -506,6 +506,8 @@ struct CursorThemeRegistry {
     /// registers, so an unset session theme still reloads on the first change.
     applied: Option<String>,
     shadow_applied: bool,
+    /// Last shadow value attempted and not yet applied (suppresses per-publish retries).
+    shadow_attempted: Option<bool>,
 }
 
 impl CursorThemeRegistry {
@@ -523,10 +525,18 @@ impl CursorThemeRegistry {
         self.owners.push(Rc::downgrade(owner));
     }
 
+    /// A failing request is attempted once per value: settings publish on every
+    /// WM event, and retrying a full Xcursor reload each time stalls the pointer.
+    /// A new value, or a successful theme change, re-arms the attempt.
     fn apply_shadow(&mut self, enabled: bool) -> Vec<String> {
         if self.shadow_applied == enabled {
+            self.shadow_attempted = None;
             return Vec::new();
         }
+        if self.shadow_attempted == Some(enabled) {
+            return Vec::new();
+        }
+        self.shadow_attempted = Some(enabled);
         self.owners.retain(|owner| owner.strong_count() > 0);
         let mut errors = Vec::new();
         for owner in self.owners.iter().filter_map(Weak::upgrade) {
@@ -557,6 +567,7 @@ impl CursorThemeRegistry {
         }
         if errors.is_empty() {
             self.applied = Some(resolved.to_owned());
+            self.shadow_attempted = None;
         }
         errors
     }
@@ -587,6 +598,8 @@ mod tests {
     struct FakeOwner {
         reloads: Vec<String>,
         fail: bool,
+        shadow_calls: usize,
+        fail_shadow: bool,
     }
 
     impl CursorThemeOwner for FakeOwner {
@@ -598,6 +611,33 @@ mod tests {
                 Ok(())
             }
         }
+        fn set_cursor_shadow(&mut self, _enabled: bool) -> Result<(), String> {
+            self.shadow_calls += 1;
+            if self.fail_shadow {
+                Err("shadow reload failed".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn failed_shadow_request_is_not_retried_on_every_publish() {
+        let mut registry = CursorThemeRegistry::default();
+        let owner = fake(false);
+        owner.borrow_mut().fail_shadow = true;
+        registry.register(&as_owner(&owner), None);
+
+        assert_eq!(registry.apply_shadow(true).len(), 1);
+        for _ in 0..3 {
+            assert!(registry.apply_shadow(true).is_empty());
+        }
+        assert_eq!(owner.borrow().shadow_calls, 1);
+
+        owner.borrow_mut().fail_shadow = false;
+        assert!(registry.apply_shadow(false).is_empty());
+        assert!(registry.apply_shadow(true).is_empty());
+        assert_eq!(owner.borrow().shadow_calls, 2);
     }
 
     fn fake(fail: bool) -> Rc<RefCell<FakeOwner>> {

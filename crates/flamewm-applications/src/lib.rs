@@ -469,10 +469,37 @@ pub fn preferred_file_opener(
     ("xdg-open", &[])
 }
 
+/// Window in which an identical `open_target` request is treated as a repeat.
+const REPEAT_OPEN_WINDOW: std::time::Duration = std::time::Duration::from_millis(1000);
+/// Most recent `open_target` request, for the repeat guard.
+static LAST_OPEN: std::sync::Mutex<Option<(std::ffi::OsString, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// True when `target` equals the previous request and arrived within the window.
+fn is_repeat_open(
+    last: Option<(&std::ffi::OsStr, std::time::Instant)>,
+    target: &std::ffi::OsStr,
+    now: std::time::Instant,
+) -> bool {
+    last.is_some_and(|(previous, at)| {
+        previous == target && now.saturating_duration_since(at) < REPEAT_OPEN_WINDOW
+    })
+}
+
 /// Launch a file/URI with the available desktop association provider. The
 /// target is one argv entry (paths with whitespace and non-UTF8 bytes are safe).
 /// Child processes are reaped by the application's existing canonical launcher.
+/// An identical target repeated inside `REPEAT_OPEN_WINDOW` is dropped, so a
+/// handler that re-enters the opener cannot storm the session with spawns.
 pub fn open_target(target: &std::ffi::OsStr) -> FlameResult<()> {
+    let now = std::time::Instant::now();
+    {
+        let mut last = LAST_OPEN.lock().unwrap_or_else(|poison| poison.into_inner());
+        if is_repeat_open(last.as_ref().map(|(t, at)| (t.as_os_str(), *at)), target, now) {
+            return Ok(());
+        }
+        *last = Some((target.to_os_string(), now));
+    }
     let (program, prefix) = preferred_file_opener(|name| {
         let Some(path) = std::env::var_os("PATH") else {
             return false;
@@ -1377,6 +1404,35 @@ mod desktop_label_metadata_tests {
         std::fs::write(&file,"[Other]\nName=Wrong\n[Desktop Entry]\nName=Correct\n[Desktop Action More]\nName=Not the icon name\n").unwrap();
         assert_eq!(desktop_file_display_name(&file).as_deref(), Some("Correct"));
         std::fs::remove_file(file).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod repeat_open_guard_tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn identical_target_inside_window_is_a_repeat() {
+        let start = Instant::now();
+        let folder = OsStr::new("/home/u/Documents");
+        let soon = start + Duration::from_millis(200);
+        assert!(is_repeat_open(Some((folder, start)), folder, soon));
+    }
+
+    #[test]
+    fn identical_target_after_window_or_different_target_is_allowed() {
+        let start = Instant::now();
+        let folder = OsStr::new("/home/u/Documents");
+        let later = start + REPEAT_OPEN_WINDOW;
+        assert!(!is_repeat_open(Some((folder, start)), folder, later));
+        assert!(!is_repeat_open(
+            Some((folder, start)),
+            OsStr::new("/home/u/Music"),
+            start
+        ));
+        assert!(!is_repeat_open(None, folder, start));
     }
 }
 
