@@ -7,7 +7,6 @@
 //! entries that appear during the call are reported, and a failed call leaves its output in
 //! place for the user to see.
 
-use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -15,7 +14,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use flamewm_ui_x11::{valid_bus_name, valid_object_path};
+use flamewm_ui_x11::{safe_file_name, valid_bus_name, valid_object_path};
 
 pub const ARK_INTERFACE: &str = "org.kde.ark.DndExtract";
 pub const ARK_METHOD: &str = "extractSelectedFilesTo";
@@ -129,33 +128,76 @@ pub fn run_with_timeout(
     }
 }
 
-fn entry_names(dir: &Path) -> BTreeSet<String> {
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .collect()
-        })
-        .unwrap_or_default()
+/// Name in `dir` that is not taken yet: `name`, then `name (2)`, `name (3)`, ...
+pub fn free_name(dir: &Path, name: &str) -> String {
+    if !dir.join(name).exists() {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(index) if index > 0 => (&name[..index], &name[index..]),
+        _ => (name, ""),
+    };
+    (2..)
+        .map(|n| format!("{stem} ({n}){ext}"))
+        .find(|candidate| !dir.join(candidate).exists())
+        .unwrap_or_else(|| name.to_string())
 }
 
-/// Synchronous extraction body. Pure enough to test with a fake program via `run_with_timeout`.
-fn extract_blocking(
-    program: &str,
-    service: &str,
-    path: &str,
-    dest: &Path,
-) -> Result<ExtractReport, ExtractError> {
-    let args = gdbus_args(service, path, dest)?;
-    let before = entry_names(dest);
-    let (ok, message) = run_with_timeout(program, &args, EXTRACT_TIMEOUT)?;
-    let created: Vec<String> = entry_names(dest).difference(&before).cloned().collect();
-    if ok {
-        Ok(ExtractReport { created })
-    } else {
-        Err(ExtractError::Failed(message))
+fn nonce() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Moves each top-level entry of `stage` into `dest` under a free name. Never overwrites.
+fn commit(stage: &Path, dest: &Path) -> Result<ExtractReport, ExtractError> {
+    let entries = std::fs::read_dir(stage)
+        .map_err(|error| ExtractError::Failed(format!("reading staging: {error}")))?;
+    let mut created = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !safe_file_name(&name) {
+            continue;
+        }
+        let final_name = free_name(dest, &name);
+        std::fs::rename(entry.path(), dest.join(&final_name))
+            .map_err(|error| ExtractError::Failed(format!("moving {name}: {error}")))?;
+        created.push(final_name);
     }
+    created.sort();
+    Ok(ExtractReport { created })
+}
+
+/// Runs `extract` into a private staging directory inside `dest`, then commits the result.
+/// The staging directory is always removed, so a failed or timed-out extraction leaves no
+/// partial output behind; entries already in `dest` are never touched.
+pub fn stage_and_commit(
+    dest: &Path,
+    extract: impl FnOnce(&Path) -> Result<(), ExtractError>,
+) -> Result<ExtractReport, ExtractError> {
+    let stage = dest.join(format!(".flamewm-ark-{}-{}", std::process::id(), nonce()));
+    std::fs::create_dir(&stage)
+        .map_err(|error| ExtractError::Spawn(format!("staging directory: {error}")))?;
+    let result = extract(&stage).and_then(|()| commit(&stage, dest));
+    let _ = std::fs::remove_dir_all(&stage);
+    result
+}
+
+/// Synchronous extraction body: validated request, staged through `gdbus`.
+fn extract_blocking(service: &str, path: &str, dest: &Path) -> Result<ExtractReport, ExtractError> {
+    validate_request(service, path, dest)?;
+    stage_and_commit(dest, |stage| {
+        let args = gdbus_args(service, path, stage)?;
+        let (ok, message) = run_with_timeout("gdbus", &args, EXTRACT_TIMEOUT)?;
+        if ok {
+            Ok(())
+        } else {
+            Err(ExtractError::Failed(message))
+        }
+    })
 }
 
 /// Starts an extraction on a worker thread. Validation happens first and synchronously, so an
@@ -175,7 +217,7 @@ pub fn spawn_ark_extract(
         .name("flamewm-ark-extract".into())
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                extract_blocking("gdbus", &service, &path, &dest)
+                extract_blocking(&service, &path, &dest)
             }))
             .unwrap_or(Err(ExtractError::Panicked));
             let _ = tx.send(outcome);
@@ -251,22 +293,48 @@ mod tests {
     }
 
     #[test]
-    fn extraction_reports_only_new_entries_and_failures_keep_output() {
-        let dir = temp_dir("report");
-        std::fs::write(dir.join("existing.txt"), b"keep").expect("seed");
-        // Fake gdbus: writes one new file into the destination (last argument) and succeeds.
-        let args = vec![
-            "-c".into(),
-            "touch \"$1/new.txt\"".into(),
-            "fake".into(),
-            dir.to_string_lossy().into_owned(),
-        ];
-        let before = entry_names(&dir);
-        let (ok, _) = run_with_timeout("sh", &args, Duration::from_secs(2)).expect("fake run");
-        assert!(ok);
-        let created: Vec<String> = entry_names(&dir).difference(&before).cloned().collect();
-        assert_eq!(created, vec!["new.txt".to_string()]);
-        assert!(dir.join("existing.txt").exists(), "existing entries are never removed");
+    fn commit_moves_into_destination_without_overwriting() {
+        let dir = temp_dir("commit");
+        std::fs::write(dir.join("new.txt"), b"keep").expect("seed");
+        let report = stage_and_commit(&dir, |stage| {
+            std::fs::write(stage.join("new.txt"), b"extracted").map_err(|e| ExtractError::Failed(e.to_string()))?;
+            std::fs::create_dir(stage.join("folder")).map_err(|e| ExtractError::Failed(e.to_string()))?;
+            Ok(())
+        })
+        .expect("commit");
+        assert_eq!(report.created, vec!["folder".to_string(), "new (2).txt".to_string()]);
+        assert_eq!(std::fs::read(dir.join("new.txt")).expect("existing"), b"keep");
+        assert_eq!(std::fs::read(dir.join("new (2).txt")).expect("moved"), b"extracted");
+        assert!(dir.join("folder").is_dir());
+        let leftovers: Vec<_> = std::fs::read_dir(&dir).expect("list").flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".flamewm-ark")).collect();
+        assert!(leftovers.is_empty(), "staging directory is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_extraction_removes_partial_output_and_keeps_destination() {
+        let dir = temp_dir("partial");
+        std::fs::write(dir.join("keep.txt"), b"x").expect("seed");
+        let result = stage_and_commit(&dir, |stage| {
+            std::fs::write(stage.join("partial.bin"), b"half").map_err(|e| ExtractError::Failed(e.to_string()))?;
+            Err(ExtractError::Failed("boom".into()))
+        });
+        assert_eq!(result, Err(ExtractError::Failed("boom".into())));
+        let names: Vec<String> = std::fs::read_dir(&dir).expect("list").flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec!["keep.txt".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn free_name_adds_counter_before_extension() {
+        let dir = temp_dir("names");
+        assert_eq!(free_name(&dir, "a.txt"), "a.txt");
+        std::fs::write(dir.join("a.txt"), b"").expect("seed");
+        std::fs::write(dir.join("a (2).txt"), b"").expect("seed");
+        assert_eq!(free_name(&dir, "a.txt"), "a (3).txt");
+        assert_eq!(free_name(&dir, ".hidden"), ".hidden");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -350,12 +350,40 @@ impl X11App {
         }
     }
 
-    /// Handles one XDND ClientMessage addressed to this window. Returns `false` for other messages.
+    /// `handle_xdnd_message` with panics contained: a panic resets the XDND session and the event loop
+    /// continues. Errors and `Ok` results pass through unchanged.
     ///
     /// # Safety
     ///
     /// Must run on the thread that owns the live display.
     pub(crate) unsafe fn handle_xdnd_message<F>(
+        &mut self,
+        client: &XClientMessageEvent,
+        document: &mut RuntimeDocument,
+        on_action: &mut F,
+    ) -> Result<bool, String>
+    where
+        F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+    {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: forwarded from the caller.
+            unsafe { self.handle_xdnd_message_inner(client, document, on_action) }
+        }));
+        outcome.unwrap_or_else(|_| {
+            eprintln!("FLAMEWM_XDND_PANIC contained in handle_xdnd_message; drop session reset");
+            if let Some(state) = self.xdnd.as_mut() {
+                state.target = DropTarget::default();
+            }
+            Ok(true)
+        })
+    }
+
+    /// Handles one XDND ClientMessage addressed to this window. Returns `false` for other messages.
+    ///
+    /// # Safety
+    ///
+    /// Must run on the thread that owns the live display.
+    unsafe fn handle_xdnd_message_inner<F>(
         &mut self,
         client: &XClientMessageEvent,
         document: &mut RuntimeDocument,
@@ -425,12 +453,40 @@ impl X11App {
         }
     }
 
-    /// Completes a pending drop when the converted `XdndSelection` arrives.
+    /// `handle_xdnd_selection_notify` with panics contained: a panic resets the XDND session and the event loop
+    /// continues. Errors and `Ok` results pass through unchanged.
     ///
     /// # Safety
     ///
     /// `event` must be a SelectionNotify XEvent read from this app's display.
     pub(crate) unsafe fn handle_xdnd_selection_notify<F>(
+        &mut self,
+        event: &XEvent,
+        document: &mut RuntimeDocument,
+        on_action: &mut F,
+    ) -> Result<bool, String>
+    where
+        F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
+    {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: forwarded from the caller.
+            unsafe { self.handle_xdnd_selection_notify_inner(event, document, on_action) }
+        }));
+        outcome.unwrap_or_else(|_| {
+            eprintln!("FLAMEWM_XDND_PANIC contained in handle_xdnd_selection_notify; drop session reset");
+            if let Some(state) = self.xdnd.as_mut() {
+                state.target = DropTarget::default();
+            }
+            Ok(true)
+        })
+    }
+
+    /// Completes a pending drop when the converted `XdndSelection` arrives.
+    ///
+    /// # Safety
+    ///
+    /// `event` must be a SelectionNotify XEvent read from this app's display.
+    unsafe fn handle_xdnd_selection_notify_inner<F>(
         &mut self,
         event: &XEvent,
         document: &mut RuntimeDocument,
