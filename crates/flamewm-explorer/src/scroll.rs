@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 /// Length of one glide. Every wheel step restarts it from the displayed position, so a burst settles this long after its last step.
-pub const GLIDE_DURATION: Duration = Duration::from_millis(120);
+pub const GLIDE_DURATION: Duration = Duration::from_millis(70);
 /// Interval at which the window size is applied while a resize drag is in progress (trailing edge always applies).
 pub const RESIZE_INTERVAL: Duration = Duration::from_millis(250);
 /// Smallest scrollbar thumb, in pixels.
