@@ -105,7 +105,7 @@ button:active { background:var(--hover); }
 .openwith-apps { height:252px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; overflow:hidden; }
 .openwith-choice { justify-content:flex-start; width:100%; height:37px; padding-left:12px; gap:10px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; border-radius:5px; }
 .openwith-icon { width:20px; height:20px; flex-grow:0; }
-.openwith-label { min-width:0; overflow:hidden; }
+.openwith-label { flex-grow:1; min-width:0; overflow:hidden; }
 .openwith-pages { height:35px; display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:0 14px; }
 .openwith-actions { height:85px; padding:9px 12px; display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:6px; }
 .openwith-small { height:31px; padding:0 11px; border-radius:6px; }

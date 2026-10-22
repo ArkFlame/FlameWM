@@ -397,7 +397,7 @@ struct ExplorerApp {
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>,
     /// Ark drag-out extractions in flight; polled from the event loop.
     ark_extracts: Vec<std::sync::mpsc::Receiver<Result<flamewm_explorer::dndext::ExtractReport, flamewm_explorer::dndext::ExtractError>>>, cancel:CancellationToken,
-    menu_overflow:bool, glide:RowGlide, scroll_origin:usize, scroll_ticking:bool,
+    menu_overflow:bool, context_scroll:usize, glide:RowGlide, scroll_origin:usize, scroll_ticking:bool,
     /// The window origin or its end-of-glide position changed since the last full projection.
     list_dirty:bool,
     /// Resize coalescing (one relayout per interval) and whether its trailing-edge timer is already queued.
@@ -428,7 +428,7 @@ impl ExplorerApp {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
-            ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
+            ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,context_scroll:0,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
@@ -1470,6 +1470,12 @@ impl ExplorerApp {
             }
             return;
         }
+        // An open context menu takes the wheel so rows that do not fit the window can be reached.
+        if action=="scroll" && self.context.is_some() {
+            let dy=e.text.as_deref().and_then(|t|t.split_once(',')).and_then(|(_,dy)|dy.parse::<f32>().ok()).unwrap_or(0.0);
+            if dy>0.0 {self.context_scroll+=1;} else if dy<0.0 {self.context_scroll=self.context_scroll.saturating_sub(1);}
+            return;
+        }
         // Inline renames commit when the pointer goes down elsewhere; the overflow button handles its own toggle.
         if e.phase==UiActionPhase::Press && !action.starts_with("explorer.menu") {
             if matches!(self.edit,Some(EditMode::Rename|EditMode::PlaceName)) {
@@ -1519,7 +1525,7 @@ impl ExplorerApp {
         if action=="explorer.surface" {
             if e.button==3 && e.phase==UiActionPhase::Release && e.inside {
                 self.context_on_entry=false;
-                self.context=Some((e.x,e.y));self.menu_overflow=false;
+                self.context=Some((e.x,e.y));self.menu_overflow=false;self.context_scroll=0;
                 self.rubber=None;
             } else {
                 match e.phase {
@@ -1562,7 +1568,7 @@ impl ExplorerApp {
                     self.last_click=None;
                     self.context_on_entry=true;
                     self.context_place=None;
-                    self.context=Some((e.x,e.y));self.menu_overflow=false;
+                    self.context=Some((e.x,e.y));self.menu_overflow=false;self.context_scroll=0;
                 } else if e.button == 1 && e.shift_down() {
                     // Shift selects a contiguous range using the existing anchor.
                     // Ctrl+Shift adds that range to the current selection.
@@ -1591,7 +1597,7 @@ impl ExplorerApp {
                     // Right-click on a sidebar item opens the place menu instead of navigating.
                     self.context_on_entry=false;
                     self.context_place=Some(index);
-                    self.context=Some((e.x,e.y));self.menu_overflow=false;
+                    self.context=Some((e.x,e.y));self.menu_overflow=false;self.context_scroll=0;
                 } else {self.activate_place(index);}
             }
             return;
@@ -1610,9 +1616,9 @@ impl ExplorerApp {
             "explorer.up"=>{if self.model.tab_mut().up(){self.scan();}},
             "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
             "explorer.hidden"=>self.toggle_hidden(),
-            "explorer.search"=>{let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);},
+            "explorer.search"=>{if !matches!(self.edit,Some(EditMode::Search)){let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);}},
             "explorer.search.clear"=>{self.edit=None;self.clear_search();self.search_text.clear();self.model.status="Search cleared".into();},
-            "explorer.address"=>{let text=self.model.tab().path().to_string_lossy().into_owned();self.begin_edit(EditMode::Path,text,None);},
+            "explorer.address"=>{if !matches!(self.edit,Some(EditMode::Path)){let text=self.model.tab().path().to_string_lossy().into_owned();self.begin_edit(EditMode::Path,text,None);}},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
             "explorer.sort.name"=>self.sort_by(Column::Name),
@@ -1622,13 +1628,23 @@ impl ExplorerApp {
             "explorer.menu"=>{
                 // The overflow button toggles: a second click on it closes the menu.
                 if self.context.is_some() && self.menu_overflow {self.context=None;self.menu_overflow=false;}
-                else {self.context_on_entry=false;self.menu_overflow=true;self.context=Some((self.window.0-8.0,53.0));}
+                else {self.context_on_entry=false;self.menu_overflow=true;self.context_scroll=0;self.context=Some((self.window.0-8.0,53.0));}
             },
             "explorer.cancel"=>if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();},
             _=>{}
         }
     }
     fn key(&mut self,key:&UiKeyEvent) {
+        self.key_inner(key);
+        self.write_debug_field();
+    }
+    /// Debug-only read-back: FLAMEWM_EXPLORER_DEBUG_FIELD=<file> receives the active field's length and text after each key.
+    fn write_debug_field(&self) {
+        let Some(path)=std::env::var_os("FLAMEWM_EXPLORER_DEBUG_FIELD") else {return};
+        let mode=match self.edit {Some(EditMode::Path)=>"path",Some(EditMode::Search)=>"search",Some(_)=>"other",None=>"none"};
+        let _=std::fs::write(path,format!("{}\n{}\n{}",self.field.text.chars().count(),mode,self.field.text));
+    }
+    fn key_inner(&mut self,key:&UiKeyEvent) {
         if key.phase!=UiKeyPhase::Press {return;}
         let name=key.key.to_lowercase();
         if self.chooser_loading || self.chooser.is_some() {
@@ -1650,7 +1666,9 @@ impl ExplorerApp {
         let ctrl=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("ctrl")||m.eq_ignore_ascii_case("control"));
         let alt=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("alt"));
         let shift=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("shift"));
-        if let Some(edit)=self.edit {
+        if let Some(edit)=self.edit.filter(|_|self.dialog.is_none()) {
+            // Escape closes an open menu first and keeps the edit focused; a second Escape ends the edit.
+            if name=="escape" && self.context.is_some() {self.context=None;self.menu_overflow=false;self.context_place=None;return;}
             if name=="escape" {self.edit=None;self.rename_target=None;self.context_place=None;return;}
             if name=="return"||name=="enter" {
                 let content=std::mem::take(&mut self.field.text);self.field.set(String::new());self.edit=None;
@@ -2037,7 +2055,7 @@ impl ExplorerApp {
         self.project_chooser(doc)?;
         self.project_dialog(doc)?;
         let selected_path=self.selected();
-        let mut visible_rows=0;
+        let mut shown:Vec<&str>=Vec::new();
         let many=self.model.tab().selected_paths.len()>1;
         let in_trash=tab.path()==self.trash_base.join("files").as_path();
         let searching=self.search_rows.is_some();
@@ -2067,12 +2085,18 @@ impl ExplorerApp {
                 _=>false,
             }};
             doc.visible(&format!("menu-{item}"),enabled)?;
-            if enabled {visible_rows+=1;}
+            if enabled {shown.push(item);}
         }
         if let Some((x,y))=self.context {
             // Shared desktop context-menu metrics; hidden actions consume no space.
             let metrics=flamewm_ui_core::context_menu::MenuMetrics::canonical();
-            let height=visible_rows as f32*metrics.row_height as f32+2.0*metrics.padding as f32;
+            let row_h=metrics.row_height as f32;
+            let pad=metrics.padding as f32;
+            // Rows that fit the window; a taller menu shows a window-sized slice that the wheel moves through.
+            let fit=(((self.window.1-2.0*pad)/row_h).floor().max(0.0) as usize).min(shown.len());
+            let first=self.context_scroll.min(shown.len()-fit);
+            for (index,item) in shown.iter().enumerate() {doc.visible(&format!("menu-{item}"),index>=first && index<first+fit)?;}
+            let height=fit as f32*row_h+2.0*pad;
             // The overflow menu hangs from the right edge of its button; other menus open at the pointer.
             let left=if self.menu_overflow {x-210.0} else {x};
             doc.position("context-popup",left.min(self.window.0-210.0).max(0.0),y.min(self.window.1-height).max(0.0))?;
