@@ -36,6 +36,20 @@ pub fn list(path: &str) -> String {
     format!("LC_ALL=C ls -lAn --time-style=+%s -- {}", path_arg(path))
 }
 
+/// Record separator that ends the symlink prefix of [`list_with_links`]. Its output is `name\0...` then `\x1e\n`.
+pub const LINK_MARK: &str = "\x1e";
+
+/// One round trip: NUL-separated names of symlinks that point at a directory, then [`LINK_MARK`] and a newline,
+/// then the normal `ls` listing. `find` runs first, so the prefix is complete before any entry row arrives.
+#[must_use]
+pub fn list_with_links(path: &str) -> String {
+    let p = path_arg(path);
+    format!(
+        "find {p} -mindepth 1 -maxdepth 1 -type l -exec test -d {{}} \\; -printf '%f\\0' 2>/dev/null; \
+         printf '\\036\\n'; LC_ALL=C ls -lAn --time-style=+%s -- {p}"
+    )
+}
+
 #[must_use]
 pub fn stat(path: &str) -> String {
     format!("LC_ALL=C ls -lAnd --time-style=+%s -- {}", path_arg(path))

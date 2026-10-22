@@ -239,3 +239,21 @@ fn smb_and_ftp_are_typed_unsupported() {
     let url = Url::parse("smb://server/share").unwrap();
     assert!(matches!(rfs.stat(&url).wait(), Err(Error::UnsupportedProtocol("smb"))));
 }
+
+#[test]
+fn symlinks_to_directories_list_as_directories_and_others_stay_links() {
+    let dir = workdir("symlinks");
+    fs::create_dir_all(dir.join("real dir")).unwrap();
+    fs::write(dir.join("file.txt"), b"data").unwrap();
+    std::os::unix::fs::symlink("real dir", dir.join("dir link")).unwrap();
+    std::os::unix::fs::symlink("file.txt", dir.join("file link")).unwrap();
+    std::os::unix::fs::symlink("missing", dir.join("dangling")).unwrap();
+    let rfs = client(&dir);
+    let rows = list_all(&rfs, &local_url(&dir)).unwrap();
+    let kind = |name: &str| rows.iter().find(|e| e.name == name).unwrap_or_else(|| panic!("{name} listed")).kind;
+    assert_eq!(kind("dir link"), Kind::Dir);
+    assert_eq!(kind("real dir"), Kind::Dir);
+    assert_eq!(kind("file link"), Kind::Symlink);
+    assert_eq!(kind("dangling"), Kind::Symlink);
+    assert_eq!(kind("file.txt"), Kind::File);
+}

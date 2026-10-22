@@ -8,9 +8,365 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use flamewm_remote_fs::{Entry as RemoteEntry, Error, Kind, Url};
+use std::fs;
+use std::io;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 
-use crate::Entry;
+use flamewm_remote_fs::{Cancel as RemoteCancel, Entry as RemoteEntry, Error, Kind, RemoteFs, TransferEvent, Url};
+
+use crate::jobs::CancellationToken;
+use crate::{destination_for, BatchReport, Entry};
+
+/// Names tried before a copy or new folder gives up on finding a free name.
+const MAX_NAMES: usize = 100;
+
+/// The blocking remote calls the file worker makes. `RemoteFs` implements it through its replies; tests use a fake.
+pub trait RemoteOps {
+    fn stat(&self, url: &Url) -> Result<RemoteEntry, Error>;
+    fn mkdir(&self, url: &Url) -> Result<(), Error>;
+    fn rename(&self, from: &Url, to: &Url) -> Result<(), Error>;
+    fn remove(&self, url: &Url, recursive: bool) -> Result<(), Error>;
+    /// Starts a download; the receiver ends with `TransferEvent::Done` or `Failed`.
+    fn download(&self, url: &Url, local: &Path, cancel: &RemoteCancel) -> Receiver<TransferEvent>;
+    fn upload(&self, local: &Path, url: &Url, cancel: &RemoteCancel) -> Receiver<TransferEvent>;
+}
+
+impl RemoteOps for RemoteFs {
+    fn stat(&self, url: &Url) -> Result<RemoteEntry, Error> {
+        RemoteFs::stat(self, url).wait()
+    }
+    fn mkdir(&self, url: &Url) -> Result<(), Error> {
+        RemoteFs::mkdir(self, url).wait()
+    }
+    fn rename(&self, from: &Url, to: &Url) -> Result<(), Error> {
+        RemoteFs::rename(self, from, to).wait()
+    }
+    fn remove(&self, url: &Url, recursive: bool) -> Result<(), Error> {
+        RemoteFs::remove(self, url, recursive).wait()
+    }
+    fn download(&self, url: &Url, local: &Path, cancel: &RemoteCancel) -> Receiver<TransferEvent> {
+        RemoteFs::download(self, url, local, cancel)
+    }
+    fn upload(&self, local: &Path, url: &Url, cancel: &RemoteCancel) -> Receiver<TransferEvent> {
+        RemoteFs::upload(self, local, url, cancel)
+    }
+}
+
+/// Creates `New Folder`, or `New Folder N` for the first free N, inside `parent`. Returns the created name.
+pub fn new_folder(fs: &impl RemoteOps, parent: &Url) -> Result<String, Error> {
+    for n in 1..=MAX_NAMES {
+        let name = if n == 1 { "New Folder".to_owned() } else { format!("New Folder {n}") };
+        match fs.mkdir(&parent.join(&name)) {
+            Ok(()) => return Ok(name),
+            Err(Error::AlreadyExists(_)) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(Error::AlreadyExists(format!("no free folder name under {}", parent.file_name())))
+}
+
+/// Recursive delete of each URL. Per-item failures are recorded and the batch continues.
+pub fn delete_items(fs: &impl RemoteOps, urls: &[Url]) -> BatchReport {
+    let mut report = BatchReport::default();
+    for url in urls {
+        let path = to_path(url);
+        let outcome = fs.remove(url, true).map_err(|error| io::Error::other(describe(&error)));
+        report.record(&path, outcome);
+    }
+    report
+}
+
+/// Progress for a copy batch: the planned byte total once, then absolute bytes done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyEvent {
+    Total(u64),
+    Progress(u64),
+}
+
+/// Renames within one remote folder or moves within one host. Never overwrites (the server refuses).
+pub fn rename_item(fs: &impl RemoteOps, from: &Url, to: &Url) -> Result<(), Error> {
+    fs.rename(from, to)
+}
+
+/// Copies files in either direction between this machine and a remote folder. Folders, and copies between
+/// two remote folders, fail per item. Cancelling stops before the next item and removes partial output.
+pub fn copy_items(fs: &impl RemoteOps, sources: &[PathBuf], directory: &Path, cancel: &CancellationToken,
+    events: &mut impl FnMut(CopyEvent)) -> BatchReport {
+    let mut report = BatchReport::default();
+    events(CopyEvent::Total(sources.iter().map(|source| size_of(fs, source)).sum()));
+    let mut base = 0_u64;
+    for source in sources {
+        if cancel.is_cancelled() {
+            report.cancelled = true;
+            break;
+        }
+        match copy_one(fs, source, directory, cancel, base, &mut |bytes| events(CopyEvent::Progress(bytes))) {
+            Ok(bytes) => {
+                base += bytes;
+                report.record(source, Ok(()));
+            }
+            Err(CopyError::Remote(Error::Cancelled)) => {
+                report.cancelled = true;
+                break;
+            }
+            Err(error) => report.record(source, Err(io::Error::other(error.to_string()))),
+        }
+    }
+    report
+}
+
+fn size_of(fs: &impl RemoteOps, source: &Path) -> u64 {
+    match url_of(source) {
+        Some(url) => fs.stat(&url).map_or(0, |entry| entry.size),
+        None => fs::metadata(source).map_or(0, |meta| if meta.is_file() { meta.len() } else { 0 }),
+    }
+}
+
+/// Why one copy item failed: a refusal this module chose, or an error from the remote host.
+#[derive(Debug)]
+pub enum CopyError {
+    Refused(&'static str),
+    Remote(Error),
+}
+
+impl From<Error> for CopyError {
+    fn from(error: Error) -> Self {
+        CopyError::Remote(error)
+    }
+}
+
+impl std::fmt::Display for CopyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CopyError::Refused(reason) => f.write_str(reason),
+            CopyError::Remote(error) => f.write_str(&describe(error)),
+        }
+    }
+}
+
+fn copy_one(fs: &impl RemoteOps, source: &Path, directory: &Path, cancel: &CancellationToken,
+    base: u64, progress: &mut impl FnMut(u64)) -> Result<u64, CopyError> {
+    let name = source.file_name().and_then(|n| n.to_str()).ok_or(CopyError::Refused("source has no name"))?;
+    let cancel_remote = RemoteCancel::new();
+    match (url_of(source), url_of(directory)) {
+        (None, Some(folder)) => {
+            let is_file = fs::metadata(source).map_or(false, |meta| meta.is_file());
+            if !is_file {
+                return Err(CopyError::Refused("folders cannot be copied to remote folders yet"));
+            }
+            let target = free_remote_name(fs, &folder, name)?;
+            Ok(drive(fs.upload(source, &target, &cancel_remote), cancel, &cancel_remote, base, progress)?)
+        }
+        (Some(from), None) => {
+            if fs.stat(&from)?.kind == Kind::Dir {
+                return Err(CopyError::Refused("folders cannot be copied from remote folders yet"));
+            }
+            let target = destination_for(&to_path(&from), directory);
+            Ok(drive(fs.download(&from, &target, &cancel_remote), cancel, &cancel_remote, base, progress)?)
+        }
+        (Some(_), Some(_)) => Err(CopyError::Refused("copying between two remote folders is not supported yet")),
+        (None, None) => Err(CopyError::Refused("neither side is a remote folder")),
+    }
+}
+
+fn free_remote_name(fs: &impl RemoteOps, folder: &Url, name: &str) -> Result<Url, Error> {
+    for n in 1..=MAX_NAMES {
+        let candidate = if n == 1 { name.to_owned() } else { format!("{name} ({n})") };
+        let url = folder.join(&candidate);
+        match fs.stat(&url) {
+            Ok(_) => continue,
+            Err(Error::NotFound(_)) => return Ok(url),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(Error::AlreadyExists(format!("no free name for {name}")))
+}
+
+/// Waits for one transfer, forwarding progress and turning a local cancel into a remote cancel.
+fn drive(events: Receiver<TransferEvent>, cancel: &CancellationToken, remote_cancel: &RemoteCancel, base: u64,
+    progress: &mut impl FnMut(u64)) -> Result<u64, Error> {
+    loop {
+        match events.recv_timeout(Duration::from_millis(50)) {
+            Ok(TransferEvent::Progress { done, .. }) => progress(base + done),
+            Ok(TransferEvent::Done { bytes }) => {
+                progress(base + bytes);
+                return Ok(bytes);
+            }
+            Ok(TransferEvent::Failed(error)) => return Err(error),
+            Err(RecvTimeoutError::Timeout) => {
+                if cancel.is_cancelled() {
+                    remote_cancel.cancel();
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => return Err(Error::Io("transfer ended unexpectedly".into())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod ops_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc::channel;
+
+    /// In-memory stand-in for the remote host. Transfers write local files with fixed contents.
+    #[derive(Default)]
+    struct FakeRemote {
+        existing: RefCell<HashSet<String>>,
+        dirs: RefCell<HashSet<String>>,
+        uploads: RefCell<HashMap<String, Vec<u8>>>,
+        removed: RefCell<Vec<String>>,
+    }
+
+    impl FakeRemote {
+        fn with(urls: &[Url]) -> Self {
+            let fake = Self::default();
+            for url in urls {
+                fake.existing.borrow_mut().insert(url.to_string());
+            }
+            fake
+        }
+    }
+
+    impl RemoteOps for FakeRemote {
+        fn stat(&self, url: &Url) -> Result<RemoteEntry, Error> {
+            let key = url.to_string();
+            if !self.existing.borrow().contains(&key) {
+                return Err(Error::NotFound(key));
+            }
+            let kind = if self.dirs.borrow().contains(&key) { Kind::Dir } else { Kind::File };
+            Ok(RemoteEntry { name: url.file_name().into(), kind, size: 4, mtime: 0, mode: 0o644, link_target: None })
+        }
+        fn mkdir(&self, url: &Url) -> Result<(), Error> {
+            let key = url.to_string();
+            if !self.existing.borrow_mut().insert(key.clone()) {
+                return Err(Error::AlreadyExists(key));
+            }
+            self.dirs.borrow_mut().insert(key);
+            Ok(())
+        }
+        fn rename(&self, from: &Url, to: &Url) -> Result<(), Error> {
+            if !self.existing.borrow().contains(&from.to_string()) {
+                return Err(Error::NotFound(from.to_string()));
+            }
+            if self.existing.borrow().contains(&to.to_string()) {
+                return Err(Error::AlreadyExists(to.to_string()));
+            }
+            Ok(())
+        }
+        fn remove(&self, url: &Url, _recursive: bool) -> Result<(), Error> {
+            self.removed.borrow_mut().push(url.to_string());
+            if self.existing.borrow_mut().remove(&url.to_string()) { Ok(()) } else { Err(Error::NotFound(url.to_string())) }
+        }
+        fn download(&self, _url: &Url, local: &Path, cancel: &RemoteCancel) -> Receiver<TransferEvent> {
+            let (tx, rx) = channel();
+            if cancel.is_cancelled() {
+                let _ = tx.send(TransferEvent::Failed(Error::Cancelled));
+            } else {
+                fs::write(local, b"data").unwrap();
+                let _ = tx.send(TransferEvent::Progress { done: 4, total: Some(4) });
+                let _ = tx.send(TransferEvent::Done { bytes: 4 });
+            }
+            rx
+        }
+        fn upload(&self, local: &Path, url: &Url, _cancel: &RemoteCancel) -> Receiver<TransferEvent> {
+            let (tx, rx) = channel();
+            let bytes = fs::read(local).unwrap();
+            let len = bytes.len() as u64;
+            self.uploads.borrow_mut().insert(url.to_string(), bytes);
+            self.existing.borrow_mut().insert(url.to_string());
+            let _ = tx.send(TransferEvent::Done { bytes: len });
+            rx
+        }
+    }
+
+    fn url(text: &str) -> Url {
+        Url::parse(text).unwrap()
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("flamewm-remote-ops-{tag}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn new_folder_skips_taken_names() {
+        let parent = url("sftp://u@h/srv");
+        let fake = FakeRemote::with(&[parent.join("New Folder")]);
+        assert_eq!(new_folder(&fake, &parent).unwrap(), "New Folder 2");
+        assert!(fake.dirs.borrow().contains(&parent.join("New Folder 2").to_string()));
+    }
+
+    #[test]
+    fn delete_reports_each_item_and_keeps_going_after_failures() {
+        let fake = FakeRemote::with(&[url("sftp://u@h/srv/a")]);
+        let report = delete_items(&fake, &[url("sftp://u@h/srv/missing"), url("sftp://u@h/srv/a")]);
+        assert_eq!((report.completed, report.failed), (1, 1));
+        assert_eq!(report.failed_sources, vec![to_path(&url("sftp://u@h/srv/missing"))]);
+        assert_eq!(fake.removed.borrow().len(), 2);
+    }
+
+    #[test]
+    fn download_copies_into_a_fresh_local_name_and_reports_progress() {
+        let dir = scratch("download");
+        let fake = FakeRemote::with(&[url("sftp://u@h/srv/file.txt")]);
+        fs::write(dir.join("file.txt"), b"local old").unwrap();
+        let source = to_path(&url("sftp://u@h/srv/file.txt"));
+        let cancel = CancellationToken::new();
+        let mut seen = Vec::new();
+        let report = copy_items(&fake, &[source], &dir, &cancel, &mut |event| seen.push(event));
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert_eq!(fs::read(dir.join("file.txt")).unwrap(), b"local old");
+        assert_eq!(fs::read(dir.join("file.txt (2)")).unwrap(), b"data");
+        assert_eq!(seen.first(), Some(&CopyEvent::Total(4)));
+        assert_eq!(seen.last(), Some(&CopyEvent::Progress(4)));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn upload_uses_a_free_remote_name_and_refuses_folders() {
+        let dir = scratch("upload");
+        fs::write(dir.join("note.txt"), b"hello").unwrap();
+        fs::create_dir(dir.join("folder")).unwrap();
+        let fake = FakeRemote::with(&[url("sftp://u@h/srv/note.txt")]);
+        let renamed = url("sftp://u@h/srv").join("note.txt (2)").to_string();
+        let destination = to_path(&url("sftp://u@h/srv"));
+        let sources = vec![dir.join("note.txt"), dir.join("folder")];
+        let report = copy_items(&fake, &sources, &destination, &CancellationToken::new(), &mut |_| {});
+        assert_eq!((report.completed, report.failed), (1, 1), "{report:?}");
+        assert_eq!(fake.uploads.borrow().get(&renamed).map(Vec::as_slice), Some(&b"hello"[..]));
+        assert!(report.first_error.unwrap().contains("folders cannot be copied"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cancelled_batch_starts_no_further_items() {
+        let dir = scratch("cancel");
+        fs::write(dir.join("a"), b"a").unwrap();
+        fs::write(dir.join("b"), b"b").unwrap();
+        let fake = FakeRemote::default();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let report = copy_items(&fake, &[dir.join("a"), dir.join("b")], &to_path(&url("sftp://u@h/srv")), &cancel,
+            &mut |_| {});
+        assert!(report.cancelled);
+        assert_eq!((report.completed, report.failed), (0, 0));
+        assert!(fake.uploads.borrow().is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn copy_between_two_remote_folders_is_refused_per_item() {
+        let fake = FakeRemote::with(&[url("sftp://u@h/srv/x")]);
+        let report = copy_items(&fake, &[to_path(&url("sftp://u@h/srv/x"))], &to_path(&url("sftp://u@h/other")),
+            &CancellationToken::new(), &mut |_| {});
+        assert_eq!(report.failed, 1);
+        assert!(report.first_error.unwrap().contains("between two remote folders"));
+    }
+}
 
 /// Recent remote locations kept in `explorer.toml`.
 pub const RECENT_LIMIT: usize = 8;
@@ -39,8 +395,8 @@ pub fn to_path(url: &Url) -> PathBuf {
     PathBuf::from(url.to_string())
 }
 
-/// Explorer entry for a remote child of `dir`. Symlinks are listed as files: `ls -l` does not say whether
-/// the target is a directory, so the explorer does not follow them.
+/// Explorer entry for a remote child of `dir`. Symlinks to directories arrive as `Kind::Dir` (resolved by
+/// `flamewm-remote-fs`); other symlinks stay symlinks.
 pub fn entry_of(dir: &Url, item: &RemoteEntry) -> Entry {
     Entry {
         path: to_path(&dir.join(&item.name)),

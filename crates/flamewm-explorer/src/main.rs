@@ -25,8 +25,8 @@ use flamewm_explorer::{archive,properties,refresh::DirWatch,search::{SearchEvent
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::Arc;
 use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
-use flamewm_explorer::remote;
-use flamewm_remote_fs::{Cancel as RemoteCancel,Config as RemoteConfig,ListEvent,RemoteFs,TransferEvent,Url as RemoteUrl};
+use flamewm_explorer::remote::{self,CopyEvent};
+use flamewm_remote_fs::{Cancel as RemoteCancel,Config as RemoteConfig,Error as RemoteError,HostKeyPrompt,ListEvent,RemoteFs,TransferEvent,Url as RemoteUrl};
 use theme::ExplorerTheme;
 use flamewm_control_core::{ControlRequest,ControlResponse};
 use flamewm_control_dbus::{ControlClient,ControlSignal,ControlSignalClient};
@@ -37,7 +37,7 @@ use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDoc
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
 /// Menu commands that also work in remote folders; every other command is refused there until its remote path exists.
-const REMOTE_ACTIONS: [&str;3]=["open","showtype","hidden"];
+const REMOTE_ACTIONS: [&str;7]=["open","showtype","hidden","copy","paste","rename","newfolder"];
 const MENU_ITEMS: [&str;25]=["connect","showtype","open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject","hidden"];
 /// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
 const SIDEBAR_SLOTS:usize=32;
@@ -122,6 +122,14 @@ enum WorkerJob {
     Rename {from:PathBuf,to:PathBuf},
     Undo,
     Redo,
+    /// Work on a remote folder. Blocking ssh calls run here, never on the UI thread.
+    Remote {fs:RemoteFs,op:RemoteOp},
+}
+enum RemoteOp {
+    NewFolder {parent:RemoteUrl},
+    Rename {from:RemoteUrl,to:RemoteUrl},
+    Delete {urls:Vec<RemoteUrl>},
+    Copy {sources:Vec<PathBuf>,directory:PathBuf,cancel:CancellationToken},
 }
 enum ChooserJob {
     Discover { request: u64, path: PathBuf },
@@ -175,6 +183,40 @@ enum WorkerResult {
     RemoteDone {generation:u64,path:PathBuf,failure:Option<String>},
     /// Remote file downloaded to the cache (`Ok`) or failed (`Err`).
     RemoteDownloaded(Result<PathBuf,String>),
+    /// The listing needs the user first: an unknown host key or a failed sign-in.
+    RemoteBlocked {generation:u64,path:PathBuf,error:RemoteError},
+    /// Host key fetched for the trust dialog; `Err` is worded for the status strip.
+    HostKeyProbed {url:RemoteUrl,result:Result<HostKeyPrompt,String>},
+    /// Outcome of appending the confirmed host key to known_hosts.
+    HostKeyTrusted {url:RemoteUrl,result:Result<(),String>},
+}
+/// Runs one remote operation on the file worker and reports it through the same result paths as local work.
+fn remote_job(fs:&RemoteFs,op:RemoteOp,wake:&mut UnixStream,result:&Sender<WorkerResult>) {
+    match op {
+        RemoteOp::NewFolder{parent}=>{
+            let done=remote::new_folder(fs,&parent).map(|name|format!("Created {name}")).map_err(|e|remote::describe(&e));
+            send_wake(wake,result,WorkerResult::Completed(done));
+        },
+        RemoteOp::Rename{from,to}=>{
+            let done=remote::rename_item(fs,&from,&to).map(|()|"Renamed".to_owned()).map_err(|e|remote::describe(&e));
+            send_wake(wake,result,WorkerResult::Completed(done));
+        },
+        RemoteOp::Delete{urls}=>{
+            let report=remote::delete_items(fs,&urls);
+            send_wake(wake,result,WorkerResult::BatchCompleted{report,action:"Deleted",cut_sources:None});
+        },
+        RemoteOp::Copy{sources,directory,cancel}=>{
+            let mut last_progress=Instant::now();
+            let report=remote::copy_items(fs,&sources,&directory,&cancel,&mut |event|match event {
+                CopyEvent::Total(bytes)=>send_wake(wake,result,WorkerResult::Total(bytes)),
+                CopyEvent::Progress(bytes)=>if last_progress.elapsed()>=Duration::from_millis(100) {
+                    send_wake(wake,result,WorkerResult::Progress(bytes));
+                    last_progress=Instant::now();
+                },
+            });
+            send_wake(wake,result,WorkerResult::BatchCompleted{report,action:"Copied",cut_sources:None});
+        },
+    }
 }
 /// Decodes queued image keys one at a time; the UI reads results from the cache, never waits on this thread.
 fn thumb_worker(rx:Receiver<ThumbKey>, result:Sender<WorkerResult>, mut wake:UnixStream) {
@@ -318,6 +360,7 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                 let done=history_step(false,&mut trash_one);
                 send_wake(&mut wake,&result,WorkerResult::Completed(done));
             }
+            WorkerJob::Remote{fs,op}=>remote_job(&fs,op,&mut wake,&result),
         }
     }
 }
@@ -327,12 +370,16 @@ enum Pending {
     Trash(Vec<PathBuf>),
     EmptyTrash(PathBuf),
     Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict},
+    RemoteDelete(Vec<PathBuf>),
 }
 /// One modal at a time. Buttons map to fixed slots: primary, secondary, tertiary, cancel.
 enum Dialog {
     Properties {props:properties::Properties, size:Option<u64>, cancel:Arc<AtomicBool>},
     Conflicts {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,count:usize},
     Confirm {title:String, lines:Vec<String>, pending:Pending},
+    /// Unknown host key: `prompt` is `None` while the key is being fetched.
+    HostKey {url:RemoteUrl, prompt:Option<HostKeyPrompt>},
+    AuthFailed {url:RemoteUrl, password_possible:bool},
 }
 #[derive(Clone,Copy)]
 enum EditMode { Path, Search, Rename, PlaceName, Mode }
@@ -675,7 +722,8 @@ impl ExplorerApp {
     }
     fn external_drop(&mut self,paths:Vec<PathBuf>) {
         if remote::is_remote(self.model.tab().path()) {
-            self.model.status="Drops into remote folders are not available yet".into();
+            let destination=self.model.tab().path().to_path_buf();
+            self.start_remote_copy(paths,destination);
             return;
         }
         let destination=self.model.tab().path().to_path_buf();
@@ -699,7 +747,15 @@ impl ExplorerApp {
         self.drop_folder=None;
         if !drag.dragging {return false;}
         if remote::is_remote(&drag.source) || remote::is_remote(self.model.tab().path()) || self.folder_at(e.x,e.y).is_some_and(|folder|remote::is_remote(&folder)) {
-            self.model.status="Moves involving remote folders are not available yet".into();
+            // Remote drags copy (no moves); the drop folder may be local or remote.
+            let Some(destination)=self.folder_at(e.x,e.y) else {
+                self.model.status="Drop cancelled (choose a folder)".into();
+                return true;
+            };
+            let sources:Vec<PathBuf>=self.dragged_sources(&drag.source).into_iter().filter(|s|s.parent()!=Some(destination.as_path())).collect();
+            self.last_click=None;
+            self.context=None;
+            self.start_remote_copy(sources,destination);
             return true;
         }
         self.last_click=None;
@@ -730,6 +786,44 @@ impl ExplorerApp {
             self.model.status="Transfer worker unavailable".into();
         }
         true
+    }
+    /// Unknown host key: fetch the key for the trust dialog. Failed sign-in: retry dialog. Others: status only.
+    fn remote_blocked(&mut self,path:PathBuf,error:RemoteError) {
+        let Some(url)=remote::url_of(&path) else {return};
+        match &error {
+            RemoteError::HostKeyUnknown{..}=>{
+                self.model.status="Checking the server's host key…".into();
+                self.dialog=Some(Dialog::HostKey{url:url.clone(),prompt:None});
+                let Some((tx,mut wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
+                    self.dialog=None;
+                    self.model.status="Host key check needs the event loop".into();
+                    return;
+                };
+                let fs=self.remote.clone();
+                std::thread::spawn(move||{
+                    let result=fs.probe_host_key(&url).wait().map_err(|e|remote::describe(&e));
+                    if tx.send(WorkerResult::HostKeyProbed{url,result}).is_ok() {let _=wake.write_all(&[1]);}
+                });
+            },
+            RemoteError::AuthFailed{password_possible,..}=>{
+                self.model.status=remote::describe(&error);
+                self.dialog=Some(Dialog::AuthFailed{url,password_possible:*password_possible});
+            },
+            other=>self.model.status=remote::describe(other),
+        }
+    }
+    /// Appends the user-confirmed key to known_hosts on a thread (the file write and the check never run on the UI thread).
+    fn save_host_key(&mut self,url:RemoteUrl,prompt:HostKeyPrompt) {
+        let Some((tx,mut wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
+            self.model.status="Host key save needs the event loop".into();
+            return;
+        };
+        self.model.status="Saving host key…".into();
+        let fs=self.remote.clone();
+        std::thread::spawn(move||{
+            let result=fs.trust_host_key(&prompt).wait().map_err(|e|remote::describe(&e));
+            if tx.send(WorkerResult::HostKeyTrusted{url,result}).is_ok() {let _=wake.write_all(&[1]);}
+        });
     }
     fn open(&mut self, path:&Path) {
         if let Some(url)=remote::url_of(path) {
@@ -771,6 +865,7 @@ impl ExplorerApp {
     fn start_duplicate(&mut self,sources:Vec<PathBuf>) {
         if self.busy {self.model.status="File operation already in progress".into();return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
+        if sources.iter().any(|s|remote::is_remote(s)) {self.model.status="Duplicate is not available in remote folders yet".into();return;}
         let directory=self.model.tab().path().to_path_buf();
         let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
         match ops::validate(ops::Kind::Copy,&source_facts(&sources),Some(&directory),writable) {
@@ -782,6 +877,12 @@ impl ExplorerApp {
     fn start_transfer_to(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool) {
         if self.busy {self.model.status="File operation already in progress".into();return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
+        // Local-to-remote and remote-to-local transfers copy through the remote worker; they never reach std::fs.
+        if remote::is_remote(&directory) || sources.iter().any(|s|remote::is_remote(s)) {
+            if move_it {self.model.status="Moving to or from remote folders is not available yet; copy instead".into();return;}
+            self.start_remote_copy(sources,directory);
+            return;
+        }
         let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
         let kind=if move_it {ops::Kind::Move} else {ops::Kind::Copy};
         // Redundant transfers (move into its own folder, missing sources) are dropped without a popup.
@@ -808,6 +909,31 @@ impl ExplorerApp {
             self.progress=None;
             self.model.status="Transfer worker unavailable".into();
         } else {self.busy=true;}
+    }
+    /// Queues a remote operation on the file worker. Shares the busy flag with local file work.
+    fn send_remote(&mut self,op:RemoteOp,status:&str)->bool {
+        if self.busy {self.model.status="File operation already in progress".into();return false;}
+        if self.tx.send(WorkerJob::Remote{fs:self.remote.clone(),op}).is_ok() {
+            self.busy=true;
+            self.model.status=status.into();
+            true
+        } else {
+            self.model.status="File worker unavailable".into();
+            false
+        }
+    }
+    /// Copies local and remote files into `directory` (a local or remote folder). Copy only: no moves.
+    fn start_remote_copy(&mut self,sources:Vec<PathBuf>,directory:PathBuf) {
+        if sources.is_empty() {self.model.status="Nothing to copy".into();return;}
+        let count=sources.len();
+        let op=RemoteOp::Copy{sources,directory,cancel:self.cancel.clone()};
+        if self.send_remote(op,&format!("Copying {count} item(s)…")) {
+            self.progress=Some(0);
+            self.activity=None;
+        }
+    }
+    fn tab_shows(&self,url:&RemoteUrl)->bool {
+        remote::url_of(self.model.tab().path()).is_some_and(|tab|tab.to_string()==url.to_string())
     }
     fn selected_files(&self)->Vec<PathBuf> {self.model.tab().ordered_selection()}
     fn request_open_with(&mut self, path:PathBuf) {
@@ -968,10 +1094,14 @@ impl ExplorerApp {
             "paste"=>self.request_paste(),
             "duplicate"=>self.start_duplicate(paths),
             "newfolder"=>{
-                let directory=self.model.tab().path().to_path_buf();
-                if self.tx.send(WorkerJob::Create{directory}).is_ok() {
-                    self.busy=true;self.model.status="Creating folder…".into();
-                }else{self.model.status="File worker unavailable".into();}
+                if let Some(parent)=remote::url_of(self.model.tab().path()) {
+                    self.send_remote(RemoteOp::NewFolder{parent},"Creating folder…");
+                } else {
+                    let directory=self.model.tab().path().to_path_buf();
+                    if self.tx.send(WorkerJob::Create{directory}).is_ok() {
+                        self.busy=true;self.model.status="Creating folder…".into();
+                    }else{self.model.status="File worker unavailable".into();}
+                }
             },
             "rename"=>if let Some(path)=selected {self.edit=Some(EditMode::Rename);self.buffer=path.file_name().unwrap_or_default().to_string_lossy().into_owned();},
             "trash"=>self.request_trash(paths),
@@ -1084,11 +1214,22 @@ impl ExplorerApp {
     fn confirm_delete(&mut self) {
         let paths=self.selected_files();
         self.context=None;
+        if paths.iter().any(|p|remote::is_remote(p)) {self.confirm_remote_delete(paths);return;}
         match ops::validate(ops::Kind::Delete,&source_facts(&paths),None,true) {
             Verdict::Run(paths)=>{let location=parent_dir(&paths);self.confirm_items("Delete permanently?",&paths,&location,Pending::Delete(paths.clone()));},
             Verdict::NoOp=>{},
             Verdict::Refuse(message)=>self.model.status=message.into(),
         }
+    }
+    /// Same Confirm dialog as local deletes: item name and the remote folder, then a recursive remote remove.
+    fn confirm_remote_delete(&mut self,paths:Vec<PathBuf>) {
+        if paths.is_empty() {return;}
+        let name=match paths.as_slice() {
+            [only]=>only.file_name().unwrap_or(only.as_os_str()).to_string_lossy().into_owned(),
+            many=>format!("{} items",many.len()),
+        };
+        let location=paths.first().and_then(|p|remote::url_of(p)).and_then(|url|url.parent()).map(|parent|remote::display_text(&parent)).unwrap_or_default();
+        self.dialog=Some(Dialog::Confirm{title:"Delete permanently?".into(),lines:vec![name,location],pending:Pending::RemoteDelete(paths)});
     }
     fn request_trash(&mut self,paths:Vec<PathBuf>) {
         self.context=None;
@@ -1120,6 +1261,10 @@ impl ExplorerApp {
             (Dialog::Properties{cancel,..},_)=>cancel.store(true,Ordering::SeqCst),
             (Dialog::Confirm{pending,..},"primary")=>self.run_pending(pending),
             (Dialog::Confirm{..},_)=>{},
+            (Dialog::HostKey{url,prompt:Some(prompt)},"primary")=>self.save_host_key(url,prompt),
+            (Dialog::HostKey{..},_)=>{},
+            (Dialog::AuthFailed{url,..},"primary")=>if self.tab_shows(&url) {self.scan();},
+            (Dialog::AuthFailed{..},_)=>{},
             (Dialog::Conflicts{sources,directory,move_it,..},"primary")=>self.send_transfer(sources,directory,move_it,Conflict::Skip),
             (Dialog::Conflicts{sources,directory,move_it,..},"secondary")=>self.send_transfer(sources,directory,move_it,Conflict::KeepBoth),
             (Dialog::Conflicts{sources,directory,move_it,count},"tertiary")=>{
@@ -1146,6 +1291,10 @@ impl ExplorerApp {
                 if self.tx.send(WorkerJob::EmptyTrash{base}).is_ok() {self.busy=true;self.model.status="Emptying Trash…".into();}
             },
             Pending::Transfer{sources,directory,move_it,conflict}=>self.send_transfer(sources,directory,move_it,conflict),
+            Pending::RemoteDelete(paths)=>{
+                let urls:Vec<RemoteUrl>=paths.iter().filter_map(|p|remote::url_of(p)).collect();
+                if !urls.is_empty() {self.send_remote(RemoteOp::Delete{urls},"Deleting…");}
+            },
         }
     }
     /// Applies a permission string entered in the Properties address field.
@@ -1441,10 +1590,17 @@ impl ExplorerApp {
                             Ok(name)=>{
                                 if self.busy {self.model.status="File operation already in progress".into();}
                                 else {
-                                    let to=path.with_file_name(name);
-                                    if self.tx.send(WorkerJob::Rename{from:path,to}).is_ok() {
-                                        self.busy=true;self.model.status="Renaming…".into();
-                                    }else{self.model.status="File worker unavailable".into();}
+                                    if let Some(from)=remote::url_of(&path) {
+                                        match from.parent() {
+                                            Some(parent)=>{let to=parent.join(&name);self.send_remote(RemoteOp::Rename{from,to},"Renaming…");},
+                                            None=>self.model.status="Cannot rename this folder".into(),
+                                        }
+                                    } else {
+                                        let to=path.with_file_name(name);
+                                        if self.tx.send(WorkerJob::Rename{from:path,to}).is_ok() {
+                                            self.busy=true;self.model.status="Renaming…".into();
+                                        }else{self.model.status="File worker unavailable".into();}
+                                    }
                                 }
                             },
                             Err(e)=>self.model.status=e.to_string(),
@@ -1564,6 +1720,25 @@ impl ExplorerApp {
                         },
                     }
                 }
+            },
+            WorkerResult::RemoteBlocked{generation,path,error}=>{
+                if self.model.finish_listing(generation,&path) {self.remote_blocked(path,error);}
+            },
+            WorkerResult::HostKeyProbed{url,result}=>match result {
+                Ok(prompt)=>if let Some(Dialog::HostKey{url:open,prompt:slot})=self.dialog.as_mut() {
+                    if open.to_string()==url.to_string() {*slot=Some(prompt);}
+                },
+                Err(message)=>{
+                    if matches!(self.dialog,Some(Dialog::HostKey{..})) {self.dialog=None;}
+                    self.model.status=message;
+                },
+            },
+            WorkerResult::HostKeyTrusted{url,result}=>match result {
+                Ok(())=>{
+                    self.model.status="Host key saved; connecting…".into();
+                    if self.tab_shows(&url) {self.scan();}
+                },
+                Err(message)=>self.model.status=message,
             },
             WorkerResult::RemoteDownloaded(result)=>match result {
                 Ok(local)=>self.open(&local),
@@ -1947,6 +2122,33 @@ impl ExplorerApp {
                 [Some("Skip"),Some("Keep Both"),Some("Replace…"),Some("Cancel")],
             ),
             Dialog::Confirm{title,lines,..}=>(title.clone(),lines.clone(),[Some("OK"),None,None,Some("Cancel")]),
+            Dialog::HostKey{url,prompt}=>match prompt {
+                Some(key)=>(
+                    "Trust this server?".into(),
+                    vec![
+                        format!("{} ({})",remote::display_text(url),key.key_type),
+                        format!("Fingerprint {}",key.fingerprint_sha256),
+                        "Compare it with the server's real fingerprint before trusting.".into(),
+                        "Trusting saves the key to ~/.ssh/known_hosts.".into(),
+                    ],
+                    [Some("Trust Key"),None,None,Some("Cancel")],
+                ),
+                None=>(
+                    "Checking host key".into(),
+                    vec![format!("Fetching the host key for {}…",remote::display_text(url)),String::new(),String::new(),String::new()],
+                    [None,None,None,Some("Cancel")],
+                ),
+            },
+            Dialog::AuthFailed{url,password_possible}=>(
+                "Sign-in failed".into(),
+                vec![
+                    format!("The server did not accept a key for {}.",remote::display_text(url)),
+                    "Add a key to ~/.ssh or load an ssh agent, then retry.".into(),
+                    if *password_possible {"The server wants a password, which FlameWM does not ask for.".into()} else {String::new()},
+                    String::new(),
+                ],
+                [Some("Retry"),None,None,Some("Close")],
+            ),
         };
         doc.text("dialog-title",title)?;
         for (i,line) in (0..4).zip(lines.into_iter().chain(std::iter::repeat(String::new()))) {
@@ -2245,7 +2447,11 @@ fn forward_listing(generation:u64,path:PathBuf,url:RemoteUrl,events:Receiver<Lis
                 },
                 Ok(ListEvent::Failed(flamewm_remote_fs::Error::Cancelled))=>return,
                 Ok(ListEvent::Failed(error))=>{
-                    send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some(remote::describe(&error))});
+                    if matches!(error,flamewm_remote_fs::Error::HostKeyUnknown{..}|flamewm_remote_fs::Error::AuthFailed{..}) {
+                        send_wake(&mut wake,&tx,WorkerResult::RemoteBlocked{generation,path:path.clone(),error});
+                    } else {
+                        send_wake(&mut wake,&tx,WorkerResult::RemoteDone{generation,path:path.clone(),failure:Some(remote::describe(&error))});
+                    }
                     return;
                 },
                 Err(_)=>{

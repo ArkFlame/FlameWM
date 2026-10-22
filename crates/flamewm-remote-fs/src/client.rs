@@ -4,7 +4,8 @@
 
 use crate::cache::ListCache;
 use crate::cancel::Cancel;
-use crate::entry::{Entry, parse_ls_numeric};
+use crate::entry::{Entry, Kind, parse_ls_numeric};
+use std::collections::HashSet;
 use crate::pool::Pool;
 use crate::shell;
 use crate::transport::{ConnKey, ReadEvent, SshConnector, Transport, classify, ensure_private_dir, POLL};
@@ -108,6 +109,8 @@ pub(crate) struct Shared {
 
 type Job = Box<dyn FnOnce(&Shared) + Send>;
 
+/// Cheap handle to the shared worker pool; clones may move to any thread.
+#[derive(Clone)]
 pub struct RemoteFs {
     tx: Sender<Job>,
 }
@@ -352,12 +355,14 @@ fn list_job(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) {
 fn list_stream(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) -> Result<Vec<Entry>, Error> {
     let key = ensure(sh, url)?;
     let path = url.remote_path();
-    let mut proc = sh.transport.spawn(&key, &shell::list(&path), false)?;
+    let mut proc = sh.transport.spawn(&key, &shell::list_with_links(&path), false)?;
     let mut all = Vec::new();
     let mut page = Vec::new();
     let mut carry: Vec<u8> = Vec::new();
     let mut limit = FIRST_PAGE;
     let mut last = Instant::now();
+    // Symlink names that point at directories; known once the prefix before the ls rows has arrived.
+    let mut links: Option<HashSet<String>> = None;
     loop {
         if cancel.is_cancelled() {
             proc.kill();
@@ -367,11 +372,15 @@ fn list_stream(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) 
             ReadEvent::Data(d) => {
                 last = Instant::now();
                 carry.extend_from_slice(&d);
+                if links.is_none() {
+                    links = split_link_prefix(&mut carry);
+                }
+                let Some(known) = links.as_ref() else { continue };
                 while let Some(pos) = carry.iter().position(|&b| b == b'\n') {
                     let line = String::from_utf8_lossy(&carry[..pos]).into_owned();
                     carry.drain(..=pos);
                     if let Some(e) = parse_listing_line(&line) {
-                        page.push(e);
+                        page.push(mark_link_dir(e, known));
                     }
                     // Check per line: one read may carry many rows, and the first page must stay small.
                     if page.len() >= limit {
@@ -390,9 +399,11 @@ fn list_stream(sh: &Shared, url: &Url, cancel: &Cancel, tx: &Sender<ListEvent>) 
             ReadEvent::Eof => break,
         }
     }
-    if !carry.is_empty() {
-        if let Some(e) = parse_listing_line(&String::from_utf8_lossy(&carry)) {
-            page.push(e);
+    // No prefix marker means the remote shell skipped the link probe; list the rows without link resolution.
+    let known = links.unwrap_or_default();
+    for line in carry.split(|&b| b == b'\n') {
+        if let Some(e) = parse_listing_line(&String::from_utf8_lossy(line)) {
+            page.push(mark_link_dir(e, &known));
         }
     }
     let (status, stderr) = proc.finish();
@@ -415,6 +426,28 @@ fn parse_listing_line(line: &str) -> Option<Entry> {
         return None;
     }
     parse_ls_numeric(line)
+}
+
+/// Splits the link prefix off `carry` (names up to [`shell::LINK_MARK`] followed by a newline).
+/// Returns `None` while the marker has not arrived; `carry` is untouched then.
+fn split_link_prefix(carry: &mut Vec<u8>) -> Option<HashSet<String>> {
+    let mark = [shell::LINK_MARK.as_bytes()[0], b'\n'];
+    let pos = carry.windows(2).position(|w| w == mark)?;
+    let names = carry[..pos]
+        .split(|&b| b == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .collect();
+    carry.drain(..pos + 2);
+    Some(names)
+}
+
+/// A symlink whose target is a directory lists as a directory, so the explorer opens it.
+fn mark_link_dir(mut entry: Entry, dir_links: &HashSet<String>) -> Entry {
+    if entry.kind == Kind::Symlink && dir_links.contains(&entry.name) {
+        entry.kind = Kind::Dir;
+    }
+    entry
 }
 
 fn download_job(sh: &Shared, url: &Url, local: &Path, cancel: &Cancel, tx: &Sender<TransferEvent>) -> Result<u64, Error> {
@@ -583,4 +616,37 @@ fn trust_host_key(prompt: &HostKeyPrompt) -> Result<(), Error> {
     let mut f = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(&path)?;
     writeln!(f, "{}", prompt.known_hosts_line.trim_end())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_prefix_splits_names_before_the_marker_and_keeps_rows() {
+        let mut carry = b"dirlink\0other link\0\x1e\n-rw-r--r-- 1 0 0 3 1700000000 file\n".to_vec();
+        let names = split_link_prefix(&mut carry).expect("marker present");
+        assert_eq!(names, HashSet::from(["dirlink".to_string(), "other link".to_string()]));
+        assert_eq!(carry, b"-rw-r--r-- 1 0 0 3 1700000000 file\n");
+    }
+
+    #[test]
+    fn link_prefix_waits_for_the_marker() {
+        let mut partial = b"dirlink\0\x1e".to_vec();
+        assert!(split_link_prefix(&mut partial).is_none());
+        assert_eq!(partial, b"dirlink\0\x1e");
+        let mut empty_prefix = b"\x1e\nrow".to_vec();
+        assert_eq!(split_link_prefix(&mut empty_prefix), Some(HashSet::new()));
+    }
+
+    #[test]
+    fn only_symlinks_named_in_the_prefix_become_directories() {
+        let names = HashSet::from(["sub".to_string()]);
+        let link = Entry { name: "sub".into(), kind: Kind::Symlink, size: 4, mtime: 0, mode: 0o777, link_target: Some("real".into()) };
+        assert_eq!(mark_link_dir(link.clone(), &names).kind, Kind::Dir);
+        let other = Entry { name: "other".into(), ..link.clone() };
+        assert_eq!(mark_link_dir(other, &names).kind, Kind::Symlink);
+        let file = Entry { name: "sub".into(), kind: Kind::File, ..link };
+        assert_eq!(mark_link_dir(file, &names).kind, Kind::File);
+    }
 }
