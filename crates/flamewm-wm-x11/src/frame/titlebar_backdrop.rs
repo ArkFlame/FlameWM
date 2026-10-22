@@ -40,10 +40,12 @@ const DRAG_MASK_BAND_Y: u32 = 160;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WallpaperSource {
     Solid([u8; 3]),
-    /// Empty `path` is the bundled default wallpaper.
+    /// Empty `path` is the bundled default wallpaper. `outputs` (root `x, y, w, h`) lays the
+    /// wallpaper out per output as the desktop does; empty is one wallpaper over the whole root.
     Image {
         path: String,
         fit: WallpaperFit,
+        outputs: Vec<(i32, i32, u32, u32)>,
     },
 }
 
@@ -150,16 +152,64 @@ struct State {
     /// Decoded natural wallpaper image for the masked drag path, kept per file so a drag start
     /// does not decode the wallpaper again. Dropped when the wallpaper source changes.
     natural: Option<(PathBuf, RgbaImage)>,
+    /// Output rects (root `x, y, w, h`) published by the WM.
+    outputs: Vec<(i32, i32, u32, u32)>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
+/// Drops every composed or cached wallpaper pixel and bumps the generation.
+fn reset_wallpaper_caches(state: &mut State) {
+    state.generation = state.generation.wrapping_add(1);
+    state.canvas = None;
+    state.cache.clear();
+    state.retained = None;
+}
+
+/// Layout the wallpaper is composed for: one copy per WM output, as the desktop draws it, or one
+/// wallpaper over the root when `shareWallpaper` is on (read from the live settings sync).
+fn effective_layout(state: &State) -> Vec<(i32, i32, u32, u32)> {
+    if crate::live_settings::share_wallpaper() {
+        Vec::new()
+    } else {
+        state.outputs.clone()
+    }
+}
+
+/// Publish the WM output rects (root coordinates). Caches are reset only when the layout changes.
+pub fn set_wallpaper_outputs(outputs: &[(i32, i32, u32, u32)]) {
+    let Ok(mut guard) = STATE.lock() else {
+        return;
+    };
+    let state = guard.get_or_insert_with(State::default);
+    if state.outputs == outputs {
+        return;
+    }
+    state.outputs = outputs.to_vec();
+    let layout = effective_layout(state);
+    let changed = match state.source.as_mut() {
+        Some(WallpaperSource::Image {
+            outputs: current, ..
+        }) if *current != layout => {
+            *current = layout;
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        reset_wallpaper_caches(state);
+    }
+}
+
 /// Publish the wallpaper source; returns the backdrop generation (bumped on change).
-pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
+pub fn set_wallpaper_source(mut source: WallpaperSource) -> u32 {
     let Ok(mut guard) = STATE.lock() else {
         return 0;
     };
     let state = guard.get_or_insert_with(State::default);
+    if let WallpaperSource::Image { outputs, .. } = &mut source {
+        *outputs = effective_layout(state);
+    }
     if state.source.as_ref() != Some(&source) {
         state.source = Some(source);
         state.generation = state.generation.wrapping_add(1);
@@ -615,7 +665,7 @@ fn mask_pixels(
     has_capture: bool,
 ) -> Vec<u8> {
     if has_capture {
-        if let Some(WallpaperSource::Image { path, fit }) = source {
+        if let Some(WallpaperSource::Image { path, fit, outputs }) = source {
             let file = wallpaper_file(path);
             if natural.as_ref().is_none_or(|(kept, _)| *kept != file) {
                 *natural = wallpaper::decode_file(&file)
@@ -624,7 +674,7 @@ fn mask_pixels(
             }
             if let Some(pixels) = natural
                 .as_ref()
-                .and_then(|(_, image)| masked_from_natural(image, *fit, mask, root))
+                .and_then(|(_, image)| masked_from_natural(image, *fit, outputs, mask, root))
             {
                 return pixels;
             }
@@ -635,10 +685,11 @@ fn mask_pixels(
 
 /// Root-relative `mask` pixels from the decoded `natural` image, edge-clamped exactly as
 /// [`wallpaper_rect`] clamps the root canvas. Only the clamped span is composed, via
-/// [`wallpaper::compose_region`]. `None` for an empty mask or root, or a refused composition.
+/// [`wallpaper::compose_outputs_region`]. `None` for an empty mask or root, or a refused composition.
 fn masked_from_natural(
     natural: &RgbaImage,
     fit: WallpaperFit,
+    outputs: &[(i32, i32, u32, u32)],
     mask: (i32, i32, u32, u32),
     root: (u32, u32),
 ) -> Option<Vec<u8>> {
@@ -650,7 +701,7 @@ fn masked_from_natural(
     let (x0, x1) = (clamp(x, root.0), clamp(x + w as i32 - 1, root.0));
     let (y0, y1) = (clamp(y, root.1), clamp(y + h as i32 - 1, root.1));
     let (sw, sh) = ((x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32);
-    let span = wallpaper::compose_region(natural, root.0, root.1, fit, (x0, y0, sw, sh))?;
+    let span = wallpaper::compose_outputs_region(natural, root, outputs, fit, (x0, y0, sw, sh))?;
     let mut out = Vec::with_capacity(w as usize * h as usize * 4);
     for row in 0..h as i32 {
         let sy = (clamp(y + row, root.1) - y0) as usize;
@@ -681,11 +732,11 @@ fn canvas_image<'a>(
     canvas: &'a mut Option<((u32, u32), Option<RgbaImage>)>,
     root: (u32, u32),
 ) -> Option<&'a RgbaImage> {
-    let Some(WallpaperSource::Image { path, fit }) = source else {
+    let Some(WallpaperSource::Image { path, fit, outputs }) = source else {
         return None;
     };
     if canvas.as_ref().map(|(size, _)| *size) != Some(root) {
-        *canvas = Some((root, compose_canvas(path, *fit, root)));
+        *canvas = Some((root, compose_canvas(path, *fit, outputs, root)));
     }
     canvas.as_ref().and_then(|(_, image)| image.as_ref())
 }
@@ -863,12 +914,17 @@ fn wallpaper_file(path: &str) -> PathBuf {
     }
 }
 
-fn compose_canvas(path: &str, fit: WallpaperFit, root: (u32, u32)) -> Option<RgbaImage> {
+fn compose_canvas(
+    path: &str,
+    fit: WallpaperFit,
+    outputs: &[(i32, i32, u32, u32)],
+    root: (u32, u32),
+) -> Option<RgbaImage> {
     let file = wallpaper_file(path);
     let composed = wallpaper::decode_file(&file)
         .map_err(|error| error.to_string())
         .and_then(|natural| {
-            wallpaper::compose(&natural, root.0, root.1, fit)
+            wallpaper::compose_outputs_region(&natural, root, outputs, fit, (0, 0, root.0, root.1))
                 .ok_or_else(|| "wallpaper has no composable size".to_string())
         });
     match composed {
@@ -912,6 +968,7 @@ mod tests {
         let source = WallpaperSource::Image {
             path: path.to_string_lossy().into_owned(),
             fit: WallpaperFit::Fill,
+            outputs: Vec::new(),
         };
         (
             State {
@@ -928,6 +985,7 @@ mod tests {
             source: Some(WallpaperSource::Image {
                 path: "/nonexistent/flamewm-test-wallpaper.png".to_owned(),
                 fit: WallpaperFit::Fill,
+                outputs: Vec::new(),
             }),
             ..State::default()
         }
@@ -1090,6 +1148,7 @@ mod tests {
         let image_source = WallpaperSource::Image {
             path: String::new(),
             fit: WallpaperFit::Fill,
+            outputs: Vec::new(),
         };
         let mut failed = Some(((2, 1), None));
         let base = wallpaper_base(Some(&image_source), &mut failed, (2, 1));
@@ -1466,6 +1525,7 @@ mod tests {
             source: Some(WallpaperSource::Image {
                 path: "/nonexistent/flamewm-test.png".into(),
                 fit: WallpaperFit::Fill,
+                outputs: Vec::new(),
             }),
             ..State::default()
         };
@@ -1602,11 +1662,12 @@ mod tests {
                 let source = WallpaperSource::Image {
                     path: "unused".to_owned(),
                     fit,
+                    outputs: Vec::new(),
                 };
                 for mask in MASKS {
                     let mut canvas = Some((root, Some(canvas_image.clone())));
                     let old = wallpaper_rect(Some(&source), &mut canvas, mask, root);
-                    let new = masked_from_natural(&natural, fit, mask, root);
+                    let new = masked_from_natural(&natural, fit, &[], mask, root);
                     assert_eq!(new, Some(old), "root {root:?} {fit:?} mask {mask:?}");
                 }
             }
@@ -1635,6 +1696,7 @@ mod tests {
                 let source = WallpaperSource::Image {
                     path: file.clone(),
                     fit,
+                    outputs: Vec::new(),
                 };
                 for mask in MASKS {
                     let mut old_canvas = None;
@@ -1692,5 +1754,56 @@ mod drag_cell_tests {
     fn negative_origins_map_to_floor_cells() {
         assert_eq!(drag_cell((-1, -1)), (-512, -32));
         assert_eq!(drag_cell((-512, -32)), (-512, -32));
+    }
+}
+
+#[cfg(test)]
+mod per_output_tests {
+    use super::*;
+
+    /// Two outputs of different sizes, side by side in root space: 8x4 at 0,0 and 6x5 at 8,0.
+    /// The desktop draws one wallpaper copy per output, so the root canvas must hold each copy at
+    /// its own offset, not one wallpaper fitted to the whole root.
+    #[test]
+    fn root_canvas_holds_one_wallpaper_copy_per_output() {
+        let path = std::env::temp_dir().join(format!("flamewm-outputs-{}.ppm", std::process::id()));
+        let mut bytes = b"P6\n7 5\n255\n".to_vec();
+        for y in 0..5u8 {
+            for x in 0..7u8 {
+                bytes.extend([x * 30, y * 50, 7]);
+            }
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let file = path.to_string_lossy().into_owned();
+        let natural = wallpaper::decode_file(&path).unwrap();
+
+        let source = WallpaperSource::Image {
+            path: file,
+            fit: WallpaperFit::Fill,
+            outputs: vec![(0, 0, 8, 4), (8, 0, 6, 5)],
+        };
+        let mut canvas = None;
+        let image = canvas_image(Some(&source), &mut canvas, (14, 5)).expect("canvas composes");
+        assert_eq!((image.width, image.height), (14, 5));
+
+        let left = wallpaper::compose(&natural, 8, 4, WallpaperFit::Fill).unwrap();
+        let right = wallpaper::compose(&natural, 6, 5, WallpaperFit::Fill).unwrap();
+        let at = |img: &RgbaImage, x: u32, y: u32| {
+            let i = (y * img.width + x) as usize * 4;
+            img.pixels[i..i + 4].to_vec()
+        };
+        for y in 0..4 {
+            for x in 0..8 {
+                assert_eq!(at(&image, x, y), at(&left, x, y), "left output ({x},{y})");
+            }
+        }
+        for y in 0..5 {
+            for x in 0..6 {
+                assert_eq!(at(&image, 8 + x, y), at(&right, x, y), "right output ({x},{y})");
+            }
+        }
+        let one_root = wallpaper::compose(&natural, 14, 5, WallpaperFit::Fill).unwrap();
+        assert_ne!(image.pixels, one_root.pixels, "one root-wide wallpaper is the old layout");
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -18,6 +18,8 @@ static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_E
 static FOCUS_FOLLOWS_MOUSE: AtomicBool = AtomicBool::new(DEFAULT_FOCUS_FOLLOWS_MOUSE);
 static SHOW_CONTENT_WHILE_DRAGGING: AtomicBool =
     AtomicBool::new(DEFAULT_SHOW_CONTENT_WHILE_DRAGGING);
+/// `shareWallpaper`: one wallpaper spans the outputs instead of one copy per output.
+static SHARE_WALLPAPER: AtomicBool = AtomicBool::new(false);
 /// Live `accent` packed as `0x00RRGGBB`.
 static ACCENT_RGB: AtomicU32 = AtomicU32::new(pack_rgb(DEFAULT_ACCENT_RGB));
 
@@ -75,6 +77,10 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     SNAP_PREVIEW_ENABLED.store(snap_preview, Ordering::Relaxed);
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
     SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
+    SHARE_WALLPAPER.store(
+        boolean_setting(snapshot, "shareWallpaper", false),
+        Ordering::Relaxed,
+    );
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
     flamewm_applications::terminal::set_configured_terminal(&terminal_from_snapshot(snapshot));
 }
@@ -91,6 +97,11 @@ pub(crate) fn snap_preview_enabled() -> bool {
 
 pub(crate) fn focus_follows_mouse() -> bool {
     FOCUS_FOLLOWS_MOUSE.load(Ordering::Relaxed)
+}
+
+/// `shareWallpaper` (default `false`): whether the desktop shares one wallpaper over all outputs.
+pub(crate) fn share_wallpaper() -> bool {
+    SHARE_WALLPAPER.load(Ordering::Relaxed)
 }
 
 /// `false` (default) draws an outline during interactive move/resize.
