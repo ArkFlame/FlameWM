@@ -535,6 +535,7 @@ pub fn move_entry(from: &Path, to: &Path, report: &mut impl FnMut(u64)) -> io::R
     jobs::move_publish(from, to, false, &jobs::CancellationToken::new(), report)
 }
 pub fn display_location(path:&Path, home:&Path)->String {
+    if let Some(url)=remote::url_of(path) {return remote::display_text(&url);}
     if path==home {return "~".into();}
     if let Ok(rest)=path.strip_prefix(home) {return format!("~/{}",rest.display());}
     path.display().to_string()
@@ -607,6 +608,10 @@ mod tests {
         assert_eq!(display_location(home,home),"~");
         assert_eq!(display_location(&home.join("Documents"),home),"~/Documents");
         assert_eq!(display_location(Path::new("/etc"),home),"/etc");
+        let remote_home=remote::to_path(&flamewm_remote_fs::Url::parse("sftp://ubuntu@play.arkflame.com/home/ubuntu").unwrap());
+        assert_eq!(display_location(&remote_home,home),"sftp://ubuntu@play.arkflame.com/home/ubuntu");
+        let custom=remote::to_path(&flamewm_remote_fs::Url::parse("ssh://u@h:2222/srv").unwrap());
+        assert_eq!(display_location(&custom,home),"ssh://u@h:2222/srv");
         assert!(matches!(parse_address("~",home),Ok(AddressTarget::Local(p)) if p==home));
         assert!(matches!(parse_address("sftp://host/home/demo",home),Ok(AddressTarget::Remote(_))));
         assert!(matches!(parse_address("fish://host/~/x",home),Ok(AddressTarget::Remote(_))));

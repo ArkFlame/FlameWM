@@ -71,6 +71,20 @@ pub fn describe(error: &Error) -> String {
     }
 }
 
+/// Human-facing URL text: the canonical form without a default port (`sftp://u@h/x`, not `:22`).
+/// Canonical text stays unchanged for recents and cache keys.
+pub fn display_text(url: &Url) -> String {
+    // sftp, ssh and fish all default to port 22 (`Url::parse` fills it in).
+    const DEFAULT_PORT: &str = ":22";
+    let text = url.to_string();
+    let Some(start) = text.find("://").map(|i| i + 3) else { return text };
+    let end = text[start..].find('/').map_or(text.len(), |i| start + i);
+    match text[start..end].strip_suffix(DEFAULT_PORT) {
+        Some(host) => format!("{}{}{}", &text[..start], host, &text[end..]),
+        None => text,
+    }
+}
+
 /// Local cache for files opened from remote locations.
 pub fn cache_root() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
