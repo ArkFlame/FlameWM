@@ -86,6 +86,9 @@ impl X11App {
             )
         };
         let rect = (rx, ry, self.width, self.height);
+        // Compose only the root-visible part; the window may be dragged partly off the root.
+        // Off-root pixels replicate the nearest wallpaper edge (never an opaque black slot).
+        let anchor = crate::backdrop::root_anchor_rect(rect, (root_w, root_h));
         let state = self
             .window_backdrop
             .as_mut()
@@ -100,16 +103,21 @@ impl X11App {
             .as_ref()
             .ok_or("window backdrop: wallpaper missing")?;
         let snapshot =
-            flamewm_image_core::wallpaper::compose_region(natural, root_w, root_h, fit, rect)
+            flamewm_image_core::wallpaper::compose_region(natural, root_w, root_h, fit, anchor)
                 .ok_or("window backdrop: wallpaper region unavailable")?;
-        let words = blurred_argb_words(
+        let shift = (
+            i64::from(rx) - i64::from(anchor.0),
+            i64::from(ry) - i64::from(anchor.1),
+        );
+        let (width, height) = (self.width, self.height);
+        let pixels = crate::backdrop::edge_extend_rgba(
+            &snapshot.pixels,
             snapshot.width,
             snapshot.height,
-            snapshot.pixels,
-            0,
-            state.spec.blur_percent,
+            shift,
+            (width, height),
         );
-        let (width, height) = (snapshot.width, snapshot.height);
+        let words = blurred_argb_words(width, height, pixels, 0, state.spec.blur_percent);
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
         }

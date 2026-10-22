@@ -524,3 +524,104 @@ mod window_backdrop_tests {
         assert!(words.iter().all(|w| w >> 24 == 0xff));
     }
 }
+
+/// Root-space rect the wallpaper is actually composed from: the intersection of `rect` with
+/// the root bounds, or a 1x1 anchor at the nearest root pixel when `rect` lies fully outside.
+/// The result is always non-empty and inside the root, so the compose never misses.
+#[must_use]
+pub fn root_anchor_rect(rect: (i32, i32, u32, u32), root: (u32, u32)) -> (i32, i32, u32, u32) {
+    let (rx, ry, w, h) = (i64::from(rect.0), i64::from(rect.1), i64::from(rect.2), i64::from(rect.3));
+    let (root_w, root_h) = (i64::from(root.0.max(1)), i64::from(root.1.max(1)));
+    let (x0, y0) = (rx.max(0), ry.max(0));
+    let (x1, y1) = ((rx + w).min(root_w), (ry + h).min(root_h));
+    if x0 < x1 && y0 < y1 {
+        return (x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32);
+    }
+    let (ax, ay) = (rx.clamp(0, root_w - 1), ry.clamp(0, root_h - 1));
+    (ax as i32, ay as i32, 1, 1)
+}
+
+/// Fills a `win_w`x`win_h` RGBA buffer from `src` (`src_w`x`src_h`). Window pixel `(i, j)` reads
+/// source pixel `(i + shift.0, j + shift.1)`, clamped to the source edge, so out-of-source
+/// regions replicate the nearest wallpaper edge and never come out as opaque black.
+#[must_use]
+pub fn edge_extend_rgba(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    shift: (i64, i64),
+    win: (u32, u32),
+) -> Vec<u8> {
+    let (sw, sh) = (i64::from(src_w.max(1)), i64::from(src_h.max(1)));
+    let mut out = vec![0u8; win.0 as usize * win.1 as usize * 4];
+    if src.len() < (sw * sh * 4) as usize {
+        return out;
+    }
+    for (j, row) in out.chunks_exact_mut(win.0 as usize * 4).enumerate() {
+        let sy = (j as i64 + shift.1).clamp(0, sh - 1) as usize;
+        let src_row = &src[sy * sw as usize * 4..(sy + 1) * sw as usize * 4];
+        for (i, px) in row.chunks_exact_mut(4).enumerate() {
+            let sx = (i as i64 + shift.0).clamp(0, sw - 1) as usize;
+            px.copy_from_slice(&src_row[sx * 4..sx * 4 + 4]);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod edge_extend_tests {
+    use super::*;
+
+    #[test]
+    fn anchor_is_intersection_for_partially_outside_rect() {
+        assert_eq!(root_anchor_rect((-100, 50, 300, 200), (1350, 641)), (0, 50, 200, 200));
+        assert_eq!(root_anchor_rect((1200, 600, 300, 200), (1350, 641)), (1200, 600, 150, 41));
+    }
+
+    #[test]
+    fn anchor_is_full_rect_when_inside_root() {
+        assert_eq!(root_anchor_rect((10, 20, 30, 40), (1350, 641)), (10, 20, 30, 40));
+    }
+
+    #[test]
+    fn anchor_clamps_fully_outside_rect_to_nearest_root_pixel() {
+        assert_eq!(root_anchor_rect((-500, 10, 100, 100), (1350, 641)), (0, 10, 1, 1));
+        assert_eq!(root_anchor_rect((2000, 900, 100, 100), (1350, 641)), (1349, 640, 1, 1));
+        assert_eq!(root_anchor_rect((-50, -50, 10, 10), (1350, 641)), (0, 0, 1, 1));
+    }
+
+    #[test]
+    fn anchor_never_empty_for_zero_root() {
+        assert_eq!(root_anchor_rect((5, 5, 10, 10), (0, 0)), (0, 0, 1, 1));
+    }
+
+    #[test]
+    fn edge_extend_replicates_source_edges_outside_region() {
+        // 2x2 source, pixel value = (x, y, 0, 255).
+        let src: Vec<u8> = (0..4)
+            .flat_map(|i: u8| [i % 2 + 10, i / 2 + 20, 0, 255])
+            .collect();
+        // Window 4x3 whose (0,0) is one pixel left/above the source origin.
+        let out = edge_extend_rgba(&src, 2, 2, (-1, -1), (4, 3));
+        let px = |x: usize, y: usize| &out[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+        assert_eq!(px(0, 0), &[10, 20, 0, 255]); // clamped to source (0,0)
+        assert_eq!(px(1, 1), &[10, 20, 0, 255]); // source (0,0)
+        assert_eq!(px(3, 2), &[11, 21, 0, 255]); // clamped to source (1,1)
+        assert!(out.chunks_exact(4).all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn edge_extend_fully_outside_window_is_single_colour_not_black() {
+        let src = vec![9u8, 8, 7, 255];
+        let anchor = root_anchor_rect((-300, -300, 64, 64), (1350, 641));
+        let shift = (-300 - i64::from(anchor.0), -300 - i64::from(anchor.1));
+        let out = edge_extend_rgba(&src, 1, 1, shift, (64, 64));
+        assert!(out.chunks_exact(4).all(|p| p == [9, 8, 7, 255]));
+    }
+
+    #[test]
+    fn edge_extend_rejects_short_source_without_panicking() {
+        let out = edge_extend_rgba(&[1, 2], 2, 2, (0, 0), (2, 2));
+        assert_eq!(out.len(), 16);
+    }
+}

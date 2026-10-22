@@ -29,7 +29,8 @@ pub const CACHE_BYTE_BUDGET: usize = 4 * 1024 * 1024;
 pub const FALLBACK_BACKDROP: [u8; 3] = [0x1b, 0x1e, 0x20];
 /// Grid cell edge for the drag blur. A region blurred for a cell covers it plus this much slack
 /// to the right and bottom, so every origin inside the cell crops from one blur.
-const DRAG_SLACK: u32 = 32;
+const DRAG_SLACK_X: u32 = 512;
+const DRAG_SLACK_Y: u32 = 32;
 
 /// Wallpaper the desktop owner paints, as named by the settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,8 +315,8 @@ fn titlebar_in(
                 blurred.key = key;
             }
         } else {
-            let region_w = width + DRAG_SLACK;
-            let region_h = height + DRAG_SLACK;
+            let region_w = width + DRAG_SLACK_X;
+            let region_h = height + DRAG_SLACK_Y;
             let region = blur_region(
                 &mut drag.scratch,
                 &drag.snapshot,
@@ -336,7 +337,7 @@ fn titlebar_in(
         let blurred = drag.blurred.as_ref()?;
         let crop = slice_region(
             &blurred.region,
-            width + DRAG_SLACK,
+            width + DRAG_SLACK_X,
             origin,
             cell,
             width,
@@ -354,7 +355,7 @@ fn titlebar_in(
     }
     let crop = slice_region(
         &kept.region,
-        width + DRAG_SLACK,
+        width + DRAG_SLACK_X,
         origin,
         kept.cell,
         width,
@@ -365,10 +366,10 @@ fn titlebar_in(
 
 /// Grid cell (top-left) of the [`DRAG_SLACK`]-sized cell containing `origin`.
 fn drag_cell(origin: (i32, i32)) -> (i32, i32) {
-    let slack = DRAG_SLACK as i32;
+    let (slack_x, slack_y) = (DRAG_SLACK_X as i32, DRAG_SLACK_Y as i32);
     (
-        origin.0.div_euclid(slack) * slack,
-        origin.1.div_euclid(slack) * slack,
+        origin.0.div_euclid(slack_x) * slack_x,
+        origin.1.div_euclid(slack_y) * slack_y,
     )
 }
 
@@ -457,12 +458,12 @@ fn blur_crop(
         scratch,
         snapshot,
         cell,
-        w + DRAG_SLACK,
-        h + DRAG_SLACK,
+        w + DRAG_SLACK_X,
+        h + DRAG_SLACK_Y,
         radius,
         &mut crop,
     );
-    slice_region(&region, w + DRAG_SLACK, origin, cell, w, h)
+    slice_region(&region, w + DRAG_SLACK_X, origin, cell, w, h)
 }
 
 fn build_drag(
@@ -1159,7 +1160,7 @@ mod tests {
         let mut saw_large_radius = false;
         for blur_percent in [30u8, 100] {
             let radius = blur_radius_px(opacity_percent(alpha), blur_percent);
-            saw_large_radius |= radius > DRAG_SLACK as f32 / 2.0;
+            saw_large_radius |= radius > DRAG_SLACK_Y as f32 / 2.0;
             for origin in [
                 (3, 3),
                 (10, 3),
@@ -1199,10 +1200,16 @@ mod tests {
                 .map(|b| &b.region),
             before.as_ref().map(|b| &b.region)
         );
+        // Horizontal cells are DRAG_SLACK_X wide: x=33 is still the first cell.
         titlebar_in(&mut state, 5, (33, 17), (w, h), rgb, alpha, 30).unwrap();
         assert_eq!(
             state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell,
-            (32, 0)
+            (0, 0)
+        );
+        titlebar_in(&mut state, 5, (DRAG_SLACK_X as i32 + 1, 17), (w, h), rgb, alpha, 30).unwrap();
+        assert_eq!(
+            state.drag.as_ref().unwrap().blurred.as_ref().unwrap().cell,
+            (DRAG_SLACK_X as i32, 0)
         );
     }
 
@@ -1536,5 +1543,32 @@ mod tests {
             "captured drag composes only the mask"
         );
         std::fs::remove_file(&path).ok();
+    }
+}
+
+#[cfg(test)]
+mod drag_cell_tests {
+    use super::*;
+
+    #[test]
+    fn sideways_drag_stays_in_one_blur_cell() {
+        // A 300 px horizontal move from x=100 keeps one cell: no blur recompute per step.
+        let cell = drag_cell((100, 40));
+        for x in (100..=400).step_by(10) {
+            assert_eq!(drag_cell((x, 40)), cell, "x={x}");
+        }
+        assert_eq!(cell, (0, 32));
+    }
+
+    #[test]
+    fn cell_changes_past_horizontal_slack_and_vertical_slack() {
+        assert_ne!(drag_cell((511, 0)), drag_cell((512, 0)));
+        assert_ne!(drag_cell((0, 31)), drag_cell((0, 32)));
+    }
+
+    #[test]
+    fn negative_origins_map_to_floor_cells() {
+        assert_eq!(drag_cell((-1, -1)), (-512, -32));
+        assert_eq!(drag_cell((-512, -32)), (-512, -32));
     }
 }

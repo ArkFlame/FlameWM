@@ -249,7 +249,11 @@ fn titlebar_fill_pixels(
     if !needs_drag_backdrop(scene.bg_alpha) {
         return flat_pixels(scene.frame_w, height, scene.bg, scene.bg_alpha);
     }
-    match renderer.frame_root_geometry(frame_xid) {
+    let geometry_guard = flamewm_profiler::start("wm.chrome.fill.root_geometry");
+    let root_geometry = renderer.frame_root_geometry(frame_xid);
+    drop(geometry_guard);
+    let _drag_guard = flamewm_profiler::start("wm.chrome.fill.drag_pixels");
+    match root_geometry {
         Some((origin, root)) => drag_titlebar_pixels(
             frame_xid,
             origin,
@@ -302,6 +306,7 @@ pub fn render(
     // no XRender, so hosts without it paint the same fill.
     let fill_result = {
         let _guard = flamewm_profiler::start("wm.chrome.render.fill");
+        let pixels_guard = flamewm_profiler::start("wm.chrome.render.fill.pixels");
         let mut pixels = titlebar_fill_pixels(renderer, frame_xid, scene, titlebar_h as u32);
         let plates = crate::chrome::control_backplates_for(
             scene.frame_w,
@@ -317,6 +322,8 @@ pub fn render(
             scene.titlebar_height,
             &plates,
         );
+        drop(pixels_guard);
+        let _blit_guard = flamewm_profiler::start("wm.chrome.render.fill.blit");
         renderer.blit_rgba(
             &pixels,
             scene.frame_w,

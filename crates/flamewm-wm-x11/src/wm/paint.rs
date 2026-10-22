@@ -200,7 +200,10 @@ impl<'a, C: Connection> Wm<'a, C> {
         runtime.scene_for(&identity, chrome_state, icon);
         // The renderer reads the frame origin on its own Xlib connection; sync so the
         // queued MoveFrameRoot on self.conn is applied before the backdrop samples it.
-        self.conn.sync()?;
+        {
+            let _sync_guard = flamewm_profiler::start("wm.chrome.sync");
+            self.conn.sync()?;
+        }
         if let Some(renderer) = self.renderer.as_ref() {
             let mut renderer = renderer.borrow_mut();
             if let Err(error) = runtime.paint_cached(&mut renderer, u64::from(frame)) {
