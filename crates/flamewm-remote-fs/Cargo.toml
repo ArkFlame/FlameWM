@@ -1,0 +1,13 @@
+[package]
+name = "flamewm-remote-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FlameWM remote filesystem client (sftp, fish, ssh) over multiplexed system OpenSSH"
+
+[dependencies]
+
+[lints]
+workspace = true
