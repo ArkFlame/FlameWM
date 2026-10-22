@@ -371,6 +371,8 @@ enum Pending {
     EmptyTrash(PathBuf),
     Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict},
     RemoteDelete(Vec<PathBuf>),
+    Drop{sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool},
+    RemoteCopy{sources:Vec<PathBuf>,directory:PathBuf},
 }
 /// One modal at a time. Buttons map to fixed slots: primary, secondary, tertiary, cancel.
 enum Dialog {
@@ -389,7 +391,7 @@ struct ExplorerApp {
     // Row thumbnails: the cache and the image id each row slot currently shows. `project` takes `&self`, hence the cells.
     thumbs:RefCell<Thumbnails>, thumb_tx:Option<Sender<ThumbKey>>, thumb_bound:RefCell<[Option<u64>;ROW_SLOTS]>,
     chooser_loading:bool, chooser_request:u64, places:Vec<Place>,
-    context:Option<(f32,f32)>, edit:Option<EditMode>, buffer:String, theme:ExplorerTheme, window:(f32,f32),
+    context:Option<(f32,f32)>, edit:Option<EditMode>, field:flamewm_explorer::TextField, rename_target:Option<PathBuf>, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>,
@@ -425,19 +427,115 @@ impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,field:flamewm_explorer::TextField::default(),rename_target:None,theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
             ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
     }
+    /// Starts a text edit. `select` marks a char range that the next typed character replaces.
+    fn begin_edit(&mut self,mode:EditMode,text:String,select:Option<(usize,usize)>) {
+        self.edit=Some(mode);
+        match select {
+            Some(range)=>self.field.set_selected(text,range),
+            None=>self.field.set(text),
+        }
+    }
+    /// Applies a finished text edit: address, search, permissions, place name or file rename.
+    fn commit_edit(&mut self,edit:EditMode,content:&str) {
+        match edit {
+            EditMode::Path=>match parse_address(content,&home_dir()) {
+                Ok(AddressTarget::Local(path))=>self.navigate(path),
+                Ok(AddressTarget::Remote(url))=>self.navigate(remote::to_path(&url)),
+                Ok(AddressTarget::ExternalUri(uri))=>{
+                    match Command::new("xdg-open").arg(&uri).spawn() {
+                        Ok(_)=>self.model.status="Remote URL passed to the installed system handler".into(),
+                        Err(e)=>self.model.status=format!("Remote handler unavailable: {e}"),
+                    }
+                },
+                Err(reason)=>self.model.status=reason,
+            },
+            EditMode::Search=>self.start_search(content.to_owned()),
+            EditMode::Mode=>self.apply_mode(content),
+            EditMode::PlaceName=>{
+                self.context_place=None;
+                if let Some(path)=self.rename_target.take() {self.mutate_bookmark(&path,|items,index|bookmarks::rename(items,index,content));}
+            },
+            EditMode::Rename=>{
+                if let Some(path)=self.rename_target.take() {self.commit_rename(path,content);}
+            },
+        }
+    }
+    /// Validates the typed name, then renames `path` through the remote client or the local file worker.
+    fn commit_rename(&mut self,path:PathBuf,content:&str) {
+        match flamewm_desktop_core::file_actions::validate_rename_name(content) {
+            Ok(name)=>{
+                if path.file_name().map(|n|n.to_string_lossy().into_owned())==Some(name.to_string()) {return;}
+                if self.busy {self.model.status="File operation already in progress".into();return;}
+                if let Some(from)=remote::url_of(&path) {
+                    match from.parent() {
+                        Some(parent)=>{let to=parent.join(&name);self.send_remote(RemoteOp::Rename{from,to},"Renaming…");},
+                        None=>self.model.status="Cannot rename this folder".into(),
+                    }
+                } else {
+                    let to=path.with_file_name(name);
+                    if self.tx.send(WorkerJob::Rename{from:path,to}).is_ok() {
+                        self.busy=true;self.model.status="Renaming…".into();
+                    }else{self.model.status="File worker unavailable".into();}
+                }
+            },
+            Err(e)=>self.model.status=e.to_string(),
+        }
+    }
+    /// The single selected folder entry, when the context menu is on an entry.
+    fn selected_folder(&self)->Option<PathBuf> {
+        if self.model.tab().selected_paths.len()!=1 {return None;}
+        let path=self.selected()?;
+        self.model.tab().entries.iter().any(|entry|entry.path==path && entry.directory).then_some(path)
+    }
+    /// Folder that Open Terminal Here and Add Folder to Places act on: a right-clicked folder, else the current folder.
+    fn target_directory(&self)->PathBuf {
+        if self.context_on_entry {if let Some(folder)=self.selected_folder() {return folder;}}
+        self.model.tab().path().to_path_buf()
+    }
+    /// Clamps a rubber-band point into the file list: right of the sidebar, below the header, above the status strip.
+    fn clamp_to_list(&self,x:f32,y:f32)->(f32,f32) {
+        let top=list_top(self.model.tabs.len()>1);
+        let bottom=(self.window.1-STATUS_STRIP_HEIGHT).max(top);
+        (x.clamp(SIDEBAR_WIDTH,self.window.0.max(SIDEBAR_WIDTH)),y.clamp(top,bottom))
+    }
+    /// Folder drops (row drags and external drops) confirm first, with the same validator and dialog as paste.
+    fn confirm_drop(&mut self,sources:Vec<PathBuf>,directory:PathBuf,force_copy:bool) {
+        if self.busy {self.model.status="File operation already in progress".into();return;}
+        let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
+        let kind=if force_copy {ops::Kind::Copy} else {ops::Kind::Move};
+        let sources=match ops::validate(kind,&source_facts(&sources),Some(&directory),writable) {
+            Verdict::Run(sources)=>sources,
+            Verdict::NoOp=>{self.model.status=(if force_copy {"Drop cancelled (nothing to copy)"} else {"Drop cancelled (nothing to move)"}).into();return;},
+            Verdict::Refuse(message)=>{self.model.status=message.into();return;},
+        };
+        let title=match (force_copy,sources.len()) {(true,1)=>"Copy file?",(true,_)=>"Copy items?",(false,1)=>"Move file?",(false,_)=>"Move items?"};
+        let location=directory.clone();
+        self.confirm_items(title,&sources,&location,Pending::Drop{sources:sources.clone(),directory,force_copy});
+    }
+    /// Remote copies from drags or drops confirm first; the remote worker copies on OK.
+    fn confirm_remote_copy(&mut self,sources:Vec<PathBuf>,directory:PathBuf) {
+        if sources.is_empty() {self.model.status="Nothing to copy".into();return;}
+        let name=match sources.as_slice() {
+            [only]=>only.file_name().unwrap_or(only.as_os_str()).to_string_lossy().into_owned(),
+            many=>format!("{} items",many.len()),
+        };
+        let location=remote::url_of(&directory).map(|url|remote::display_text(&url)).unwrap_or_else(||ops::display_location(&directory,&home_dir()));
+        let title=if sources.len()==1 {"Copy file?"} else {"Copy items?"};
+        self.dialog=Some(Dialog::Confirm{title:title.into(),lines:vec![name,location],pending:Pending::RemoteCopy{sources,directory}});
+    }
     /// Built-in and bookmark places, plus the Trash folder just before mounted devices.
     fn reload_places(&mut self) {
         let home=home_dir();
         let mut list=places(&home,&self.unmounted);
-        // Trash sits at the end of the Favorites group, as in the mock.
-        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false,group:PlaceGroup::Favorites,icon:"trash",device:None};
-        let at=list.iter().rposition(|p|p.group==PlaceGroup::Favorites).map_or(0,|i|i+1);
+        // Trash sits at the end of the Places group, as in the mock.
+        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false,group:PlaceGroup::Places,icon:"trash",device:None};
+        let at=list.iter().rposition(|p|p.group==PlaceGroup::Places).map_or(0,|i|i+1);
         list.insert(at,trash);
         self.places=list;
     }
@@ -721,26 +819,9 @@ impl ExplorerApp {
         self.model.status="Extracting from Ark…".into();
     }
     fn external_drop(&mut self,paths:Vec<PathBuf>) {
-        if remote::is_remote(self.model.tab().path()) {
-            let destination=self.model.tab().path().to_path_buf();
-            self.start_remote_copy(paths,destination);
-            return;
-        }
         let destination=self.model.tab().path().to_path_buf();
-        if flamewm_explorer::drop_is_noop(&paths,&destination) {
-            self.model.status="Drop cancelled (nothing to copy)".into();
-        } else if self.busy {
-            self.model.status="File operation already in progress".into();
-        } else if self.tx.send(WorkerJob::Drop {
-            sources:paths,directory:destination,force_copy:true,cancel:self.cancel.clone(),
-        }).is_ok() {
-            self.busy=true;
-            self.progress=Some(0);
-            self.activity=None;
-            self.model.status="Copying dropped items…".into();
-        } else {
-            self.model.status="Transfer worker unavailable".into();
-        }
+        if remote::is_remote(&destination) {self.confirm_remote_copy(paths,destination);}
+        else {self.confirm_drop(paths,destination,true);}
     }
     fn finish_row_drag(&mut self,e:&UiActionEvent)->bool {
         let Some(drag)=self.row_drag.take() else {return false;};
@@ -755,7 +836,7 @@ impl ExplorerApp {
             let sources:Vec<PathBuf>=self.dragged_sources(&drag.source).into_iter().filter(|s|s.parent()!=Some(destination.as_path())).collect();
             self.last_click=None;
             self.context=None;
-            self.start_remote_copy(sources,destination);
+            self.confirm_remote_copy(sources,destination);
             return true;
         }
         self.last_click=None;
@@ -765,26 +846,8 @@ impl ExplorerApp {
             return true;
         };
         let sources=self.dragged_sources(&drag.source);
-        if flamewm_explorer::drop_is_noop(&sources,&destination) {
-            self.model.status="Drop cancelled (nothing to move)".into();
-            return true;
-        }
-        // Mixed selections: items already in the destination stay where they are.
-        let sources:Vec<PathBuf>=sources.into_iter().filter(|source|source.parent()!=Some(destination.as_path())).collect();
         // Control modifies the operation at release time, exactly like file managers.
-        // Worker validates real/canonical paths before touching files.
-        if self.busy {
-            self.model.status="File operation already in progress".into();
-        } else if self.tx.send(WorkerJob::Drop {
-            sources,directory:destination,force_copy:e.ctrl_down(),cancel:self.cancel.clone(),
-        }).is_ok() {
-            self.busy=true;
-            self.progress=Some(0);
-            self.activity=None;
-            self.model.status="Transferring dropped items…".into();
-        } else {
-            self.model.status="Transfer worker unavailable".into();
-        }
+        self.confirm_drop(sources,destination,e.ctrl_down());
         true
     }
     /// Unknown host key: fetch the key for the trust dialog. Failed sign-in: retry dialog. Others: status only.
@@ -983,8 +1046,7 @@ impl ExplorerApp {
             }
         }
     }
-    fn spawn_terminal(&mut self) {
-        let directory=self.model.tab().path().to_path_buf();
+    fn spawn_terminal(&mut self,directory:PathBuf) {
         // FlameWM's own terminal first (next to this binary, else on PATH); the system terminal is the fallback.
         if let Some(binary)=flamewm_terminal_binary() {
             self.model.status=match Command::new(&binary).arg("--working-directory").arg(&directory).spawn() {
@@ -1103,9 +1165,16 @@ impl ExplorerApp {
                     }else{self.model.status="File worker unavailable".into();}
                 }
             },
-            "rename"=>if let Some(path)=selected {self.edit=Some(EditMode::Rename);self.buffer=path.file_name().unwrap_or_default().to_string_lossy().into_owned();},
+            "rename"=>if let Some(path)=selected {
+                // Inline rename: the name cell becomes the field, with the stem selected (folders select all).
+                let name=path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let folder=self.model.tab().entries.iter().any(|entry|entry.path==path && entry.directory);
+                let select=flamewm_explorer::rename_selection(&name,folder);
+                self.rename_target=Some(path);
+                self.begin_edit(EditMode::Rename,name,Some(select));
+            },
             "trash"=>self.request_trash(paths),
-            "terminal"=>self.spawn_terminal(),
+            "terminal"=>{let directory=self.target_directory();self.spawn_terminal(directory);},
             "compress"=>self.compress_selected(),
             "extract"=>if let Some(path)=selected.as_deref() {
                 // Ark opens a destination dialog; no implicit overwrites in Explorer.
@@ -1113,11 +1182,11 @@ impl ExplorerApp {
             },
             "newtab"=>if self.model.tabs.len()<5 {
                 // From the sidebar menu the new tab opens that place; from a file or background menu it repeats the folder.
-                let target=self.context_place_path();
+                let target=self.context_place_path().or_else(||if self.context_on_entry {self.selected_folder()} else {None});
                 self.model.new_tab();self.scan();
                 if let Some(path)=target {self.navigate(path);}
             },
-            "bookmark"=>{let path=self.model.tab().path().to_path_buf();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
+            "bookmark"=>{let path=self.target_directory();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
             "properties"=>if let Some(path)=self.context_place_path().or(selected) {self.open_properties(path)},
             "opencontaining"=>if let Some(path)=selected {self.open_containing(path)},
             "restore"=>if let Some(path)=selected {
@@ -1130,11 +1199,13 @@ impl ExplorerApp {
                 lines:vec!["Permanently empty the Trash? This cannot be undone.".into()],
                 pending:Pending::EmptyTrash(self.trash_base.clone()),
             }),
-            "placerename"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)) {
-                self.edit=Some(EditMode::PlaceName);self.buffer=place.name.clone();
+            "placerename"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
+                let len=place.name.chars().count();
+                self.rename_target=Some(place.path.clone());
+                self.begin_edit(EditMode::PlaceName,place.name.clone(),Some((0,len)));
             },
             "placeremove"=>if let Some(path)=self.context_place_path() {self.mutate_bookmark(&path,|items,index|bookmarks::remove(items,index).is_some());},
-            "connect"=>{self.edit=Some(EditMode::Path);self.buffer="sftp://".into();self.model.status="Type sftp://user@host/path, fish://user@host/path or ssh://user@host and press Enter".into();},
+            "connect"=>{self.begin_edit(EditMode::Path,"sftp://".into(),None);self.model.status="Type sftp://user@host/path, fish://user@host/path or ssh://user@host and press Enter".into();},
             "hidden"=>self.toggle_hidden(),
             "showtype"=>self.toggle_show_type(),
                 "unmount"|"eject"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)).cloned() {
@@ -1252,7 +1323,7 @@ impl ExplorerApp {
     fn dialog_action(&mut self,slot:&str) {
         // Permissions are edited in the address field; Enter applies, Escape cancels that edit only.
         if let (Some(Dialog::Properties{props,..}),"primary")=(self.dialog.as_ref(),slot) {
-            self.buffer=format!("{:o}",props.mode&0o7777);
+            self.field.set(format!("{:o}",props.mode&0o7777));
             self.edit=Some(EditMode::Mode);
             return;
         }
@@ -1291,6 +1362,14 @@ impl ExplorerApp {
                 if self.tx.send(WorkerJob::EmptyTrash{base}).is_ok() {self.busy=true;self.model.status="Emptying Trash…".into();}
             },
             Pending::Transfer{sources,directory,move_it,conflict}=>self.send_transfer(sources,directory,move_it,conflict),
+            Pending::Drop{sources,directory,force_copy}=>{
+                if self.busy {self.model.status="File operation already in progress".into();return;}
+                let text=if force_copy {"Copying dropped items…"} else {"Transferring dropped items…"};
+                if self.tx.send(WorkerJob::Drop{sources,directory,force_copy,cancel:self.cancel.clone()}).is_ok() {
+                    self.busy=true;self.progress=Some(0);self.activity=None;self.model.status=text.into();
+                } else {self.model.status="Transfer worker unavailable".into();}
+            },
+            Pending::RemoteCopy{sources,directory}=>self.start_remote_copy(sources,directory),
             Pending::RemoteDelete(paths)=>{
                 let urls:Vec<RemoteUrl>=paths.iter().filter_map(|p|remote::url_of(p)).collect();
                 if !urls.is_empty() {self.send_remote(RemoteOp::Delete{urls},"Deleting…");}
@@ -1397,6 +1476,15 @@ impl ExplorerApp {
             }
             return;
         }
+        // Inline renames commit when the pointer goes down elsewhere; the overflow button handles its own toggle.
+        if e.phase==UiActionPhase::Press && !action.starts_with("explorer.menu") {
+            if matches!(self.edit,Some(EditMode::Rename|EditMode::PlaceName)) {
+                let content=self.field.text.clone();self.field.set(String::new());
+                if let Some(edit)=self.edit.take() {self.commit_edit(edit,&content);}
+            }
+            // Pressing anywhere outside an open menu closes it.
+            if self.context.is_some() {self.context=None;self.menu_overflow=false;self.context_place=None;}
+        }
         if let Some(slot)=action.strip_prefix("explorer.row.").and_then(|v|v.parse::<usize>().ok()) {
             match e.phase {
                 UiActionPhase::Press if e.button==1 && e.inside && !e.shift_down()
@@ -1441,12 +1529,14 @@ impl ExplorerApp {
                 self.rubber=None;
             } else {
                 match e.phase {
-                    UiActionPhase::Press if e.button==1 && e.inside => {
+                    UiActionPhase::Press if e.button==1 && e.inside && (SIDEBAR_WIDTH..).contains(&e.x) => {
                         self.context=None;
-                        self.rubber=Some(((e.x,e.y),(e.x,e.y)));
+                        let p=self.clamp_to_list(e.x,e.y);
+                        self.rubber=Some((p,p));
                     },
                     UiActionPhase::Motion => if let Some((start,_))=self.rubber {
-                        self.rubber=Some((start,(e.x,e.y)));
+                        let p=self.clamp_to_list(e.x,e.y);
+                        self.rubber=Some((start,p));
                     },
                     UiActionPhase::Release => {
                         if let Some(((x0,y0),(x1,y1)))=self.rubber.take() {
@@ -1526,16 +1616,20 @@ impl ExplorerApp {
             "explorer.up"=>{if self.model.tab_mut().up(){self.scan();}},
             "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
             "explorer.hidden"=>self.toggle_hidden(),
-            "explorer.search"=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
+            "explorer.search"=>{let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);},
             "explorer.search.clear"=>{self.edit=None;self.clear_search();self.search_text.clear();self.model.status="Search cleared".into();},
-            "explorer.address"=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
+            "explorer.address"=>{let text=self.model.tab().path().to_string_lossy().into_owned();self.begin_edit(EditMode::Path,text,None);},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
             "explorer.sort.name"=>self.sort_by(Column::Name),
             "explorer.sort.size"=>self.sort_by(Column::Size),
             "explorer.sort.modified"=>self.sort_by(Column::Modified),
             "explorer.sort.kind"=>self.sort_by(Column::Type),
-            "explorer.menu"=>{self.context_on_entry=false;self.menu_overflow=true;self.context=Some((self.window.0-8.0,53.0));},
+            "explorer.menu"=>{
+                // The overflow button toggles: a second click on it closes the menu.
+                if self.context.is_some() && self.menu_overflow {self.context=None;self.menu_overflow=false;}
+                else {self.context_on_entry=false;self.menu_overflow=true;self.context=Some((self.window.0-8.0,53.0));}
+            },
             "explorer.cancel"=>if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();},
             _=>{}
         }
@@ -1563,54 +1657,22 @@ impl ExplorerApp {
         let alt=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("alt"));
         let shift=key.modifiers.iter().any(|m|m.eq_ignore_ascii_case("shift"));
         if let Some(edit)=self.edit {
-            if name=="escape" {self.edit=None;return;}
+            if name=="escape" {self.edit=None;self.rename_target=None;self.context_place=None;return;}
             if name=="return"||name=="enter" {
-                let content=std::mem::take(&mut self.buffer);self.edit=None;
-                match edit {
-                    EditMode::Path=>match parse_address(&content,&home_dir()) {
-                        Ok(AddressTarget::Local(path))=>self.navigate(path),
-                        Ok(AddressTarget::Remote(url))=>self.navigate(remote::to_path(&url)),
-                        Ok(AddressTarget::ExternalUri(uri))=>{
-                            match Command::new("xdg-open").arg(&uri).spawn() {
-                                Ok(_)=>self.model.status="Remote URL passed to the installed system handler".into(),
-                                Err(e)=>self.model.status=format!("Remote handler unavailable: {e}"),
-                            }
-                        },
-                        Err(reason)=>self.model.status=reason,
-                    },
-                    EditMode::Search=>self.start_search(content),
-                    EditMode::Mode=>self.apply_mode(&content),
-                    EditMode::PlaceName=>{
-                        let path=self.context_place_path();
-                        self.context_place=None;
-                        if let Some(path)=path {self.mutate_bookmark(&path,|items,index|bookmarks::rename(items,index,&content));}
-                    },
-                    EditMode::Rename=>if let Some(path)=self.selected() {
-                        match flamewm_desktop_core::file_actions::validate_rename_name(&content) {
-                            Ok(name)=>{
-                                if self.busy {self.model.status="File operation already in progress".into();}
-                                else {
-                                    if let Some(from)=remote::url_of(&path) {
-                                        match from.parent() {
-                                            Some(parent)=>{let to=parent.join(&name);self.send_remote(RemoteOp::Rename{from,to},"Renaming…");},
-                                            None=>self.model.status="Cannot rename this folder".into(),
-                                        }
-                                    } else {
-                                        let to=path.with_file_name(name);
-                                        if self.tx.send(WorkerJob::Rename{from:path,to}).is_ok() {
-                                            self.busy=true;self.model.status="Renaming…".into();
-                                        }else{self.model.status="File worker unavailable".into();}
-                                    }
-                                }
-                            },
-                            Err(e)=>self.model.status=e.to_string(),
-                        }
-                    },
-                }
+                let content=std::mem::take(&mut self.field.text);self.field.set(String::new());self.edit=None;
+                self.commit_edit(edit,&content);
                 return;
             }
-            if name=="backspace" {self.buffer.pop();return;}
-            if let Some(text)=&key.text {if !ctrl && !alt && !text.chars().any(char::is_control) {self.buffer.push_str(text);}}
+            if ctrl && name=="a" {self.field.select_all();return;}
+            match name.as_str() {
+                "backspace"=>self.field.backspace(),
+                "delete"=>self.field.delete(),
+                "left"=>{let to=self.field.caret.saturating_sub(1);self.field.move_caret(to);},
+                "right"=>{let to=self.field.caret+1;self.field.move_caret(to);},
+                "keysym(0xff50)"=>self.field.move_caret(0),
+                "keysym(0xff57)"=>self.field.move_caret(usize::MAX),
+                _=>if let Some(text)=&key.text {if !ctrl && !alt && !text.chars().any(char::is_control) {self.field.insert(text);}},
+            }
             return;
         }
         if let Some(text)=key.text.as_deref().filter(|t|!ctrl && !alt && t.chars().count()==1 && !t.chars().any(char::is_control)) {
@@ -1629,7 +1691,7 @@ impl ExplorerApp {
         match name.as_str() {
             "f5"=>self.scan(),
             "f2"=>self.action_menu("rename"),
-            "delete" if shift=>self.confirm_delete(),
+            "delete" if shift || remote::is_remote(self.model.tab().path())=>self.confirm_delete(),
             "delete"=>self.action_menu("trash"),
             "return"|"enter" if alt=>if let Some(path)=self.selected(){self.open_properties(path)},
             "backspace"=>{if self.model.tab_mut().up(){self.scan();}},
@@ -1637,8 +1699,8 @@ impl ExplorerApp {
             "return"|"enter"=>if let Some(path)=self.selected(){self.open(&path)},
             "left" if alt=>{if self.model.tab_mut().back(){self.scan();}},
             "right" if alt=>{if self.model.tab_mut().forward(){self.scan();}},
-            "l" if ctrl=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
-            "f" if ctrl=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
+            "l" if ctrl=>{let text=self.model.tab().path().to_string_lossy().into_owned();self.begin_edit(EditMode::Path,text,None);},
+            "f" if ctrl=>{let text=self.model.tab().search.clone();self.begin_edit(EditMode::Search,text,None);},
             "t" if ctrl=>{if self.model.tabs.len()<5{self.model.new_tab();self.scan();}},
             "w" if ctrl=>{self.model.close_tab();self.scan();},
             "h" if ctrl=>self.toggle_hidden(),
@@ -1726,7 +1788,7 @@ impl ExplorerApp {
             },
             WorkerResult::HostKeyProbed{url,result}=>match result {
                 Ok(prompt)=>if let Some(Dialog::HostKey{url:open,prompt:slot})=self.dialog.as_mut() {
-                    if open.to_string()==url.to_string() {*slot=Some(prompt);}
+                    if open.to_string()==url.to_string() {*slot=Some(prompt);self.model.status="Host key received: compare the fingerprint before trusting".into();}
                 },
                 Err(message)=>{
                     if matches!(self.dialog,Some(Dialog::HostKey{..})) {self.dialog=None;}
@@ -1813,15 +1875,17 @@ impl ExplorerApp {
         self.theme.project(doc)?;
         let tab=self.model.tab();
         // The path bar always shows the folder; search text belongs to the search field only.
-        let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),Some(EditMode::Mode)=>format!("Permissions: {}|",self.buffer),Some(EditMode::PlaceName)=>format!("Place name: {}|",self.buffer),_=>display_location(tab.path(),&home_dir())};
+        let address=match self.edit {Some(EditMode::Path)=>self.field.display(),Some(EditMode::Mode)=>format!("Permissions: {}|",self.field.text),_=>display_location(tab.path(),&home_dir())};
         doc.text("address-text",address)?;
+        doc.background("address-text",if matches!(self.edit,Some(EditMode::Path)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
         // The field shows only the query: a plain placeholder when empty, and the clear button while a search is active.
         let search=match self.edit {
-            Some(EditMode::Search)=>format!("{}|",self.buffer),
+            Some(EditMode::Search)=>self.field.display(),
             _ if self.search_rows.is_some()=>self.search_text.clone(),
             _=>"Search".to_owned(),
         };
         doc.text("search-text",search)?;
+        doc.background("search-text",if matches!(self.edit,Some(EditMode::Search)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
         doc.visible("search-clear",self.search_rows.is_some())?;
         doc.text("menu-connect-label","Connect to Server…".to_string())?;
         doc.text("menu-hidden-label",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
@@ -1858,7 +1922,9 @@ impl ExplorerApp {
                     doc.visible(&format!("prow-{slot}"),true)?;
                     doc.visible(&format!("place-{slot}"),true)?;
                     for kind in PLACE_ICONS {doc.visible(&format!("pico-{slot}-{kind}"),kind==place.icon)?;}
-                    doc.text(&format!("place-label-{slot}"),place.name.clone())?;
+                    // Inline place rename: the label becomes the field.
+                    let label=if matches!(self.edit,Some(EditMode::PlaceName)) && self.rename_target.as_ref()==Some(&place.path) {self.field.display()} else {place.name.clone()};
+                    doc.text(&format!("place-label-{slot}"),label)?;
                     doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {self.theme.muted()} else {WHITE})?;
                     doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.clear()})?;
                     // Device rows get a Dolphin-style button: eject while mounted, mount while not.
@@ -1984,7 +2050,9 @@ impl ExplorerApp {
                     _=>false,
                 }
             } else {match item {
-                "terminal"|"newtab"|"newfolder"|"bookmark"=>true,
+                // Folder-only actions: a file entry offers none; a folder entry offers its own; the background offers the current folder.
+                "newfolder"=>!self.context_on_entry,
+                "terminal"|"bookmark"|"newtab"=>!self.context_on_entry || self.selected_folder().is_some(),
                 "paste"=>true,
                 "emptytrash"=>in_trash,
                 "extract"=>self.ark && self.context_on_entry && !many && selected_path.as_deref().is_some_and(is_archive),
@@ -2048,6 +2116,13 @@ impl ExplorerApp {
                 doc.visible(&format!("name-{slot}"),!dim)?;
                 doc.visible(&format!("name-dim-{slot}"),dim)?;
                 doc.text(&format!("name-dim-{slot}"),entry.name.clone())?;
+                // Inline rename: the name cell shows the field with its caret; a selected stem is highlighted.
+                if matches!(self.edit,Some(EditMode::Rename)) && self.rename_target.as_ref()==Some(&entry.path) {
+                    doc.visible(&format!("name-{slot}"),true)?;
+                    doc.visible(&format!("name-dim-{slot}"),false)?;
+                    doc.text(&format!("name-{slot}"),self.field.display())?;
+                    doc.background(&format!("name-{slot}"),if self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
+                } else {doc.background(&format!("name-{slot}"),self.theme.clear())?;}
                 self.project_row_icon(doc,slot,entry)?;
                 doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
                     self.theme.selected()

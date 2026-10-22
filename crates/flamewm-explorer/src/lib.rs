@@ -266,11 +266,11 @@ impl Explorer {
 }
 /// Sidebar section a place belongs to. Sections render in declaration order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PlaceGroup { Favorites, Devices, Network, Pinned }
+pub enum PlaceGroup { Places, Devices, Network, Pinned }
 
 impl PlaceGroup {
     pub fn heading(self) -> &'static str {
-        match self { Self::Favorites => "Favorites", Self::Devices => "Devices", Self::Network => "Network", Self::Pinned => "Pinned Folders" }
+        match self { Self::Places => "Places", Self::Devices => "Devices", Self::Network => "Network", Self::Pinned => "Pinned Folders" }
     }
 }
 
@@ -297,7 +297,7 @@ pub enum SidebarRow { Heading(&'static str), Place(usize) }
 /// Groups places into sidebar rows. A heading is emitted only for a non-empty group.
 pub fn sidebar_rows(places:&[Place]) -> Vec<SidebarRow> {
     let mut rows=Vec::with_capacity(places.len()+3);
-    for group in [PlaceGroup::Favorites,PlaceGroup::Devices,PlaceGroup::Network,PlaceGroup::Pinned] {
+    for group in [PlaceGroup::Places,PlaceGroup::Devices,PlaceGroup::Network,PlaceGroup::Pinned] {
         let members:Vec<usize>=places.iter().enumerate().filter(|(_,p)|p.group==group).map(|(i,_)|i).collect();
         if members.is_empty() {continue;}
         rows.push(SidebarRow::Heading(group.heading()));
@@ -346,7 +346,7 @@ fn unescape_uri(raw:&str)->Option<PathBuf>{
     String::from_utf8(result).ok().map(PathBuf::from)
 }
 fn favorite(name:&str,path:PathBuf,icon:&'static str)->Place {
-    Place{name:name.into(),path,removable:false,group:PlaceGroup::Favorites,icon,device:None}
+    Place{name:name.into(),path,removable:false,group:PlaceGroup::Places,icon,device:None}
 }
 /// Sidebar places: built-in folders, bookmarks, mounted removable media (from mountinfo) and
 /// removable block devices that are present but not mounted (from `lsblk`, passed in by the caller).
@@ -844,15 +844,15 @@ mod tests {
     fn sidebar_rows_group_places_and_hide_empty_headings() {
         let place = |name: &str, group: PlaceGroup| Place { name: name.into(), path: PathBuf::from("/x"), removable: false, group, icon: "folder", device: None };
         let places = vec![
-            place("Home", PlaceGroup::Favorites),
-            place("Docs", PlaceGroup::Favorites),
+            place("Home", PlaceGroup::Places),
+            place("Docs", PlaceGroup::Places),
             place("Local Disk", PlaceGroup::Devices),
             place("Work", PlaceGroup::Pinned),
         ];
         assert_eq!(
             sidebar_rows(&places),
             vec![
-                SidebarRow::Heading("Favorites"),
+                SidebarRow::Heading("Places"),
                 SidebarRow::Place(0),
                 SidebarRow::Place(1),
                 SidebarRow::Heading("Devices"),
@@ -882,5 +882,160 @@ mod duplicate_naming_tests {
         fs::write(dir.join("note (copy).txt"), "y").unwrap();
         assert_eq!(duplicate_destination(&src, &dir), dir.join("note (copy 2).txt"));
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Caret and selection for the one active text edit (path bar, search, inline rename, place rename).
+/// Indexes are char positions. A selection is replaced by the next typed character.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextField {
+    pub text: String,
+    pub caret: usize,
+    pub selection: Option<(usize, usize)>,
+}
+
+impl TextField {
+    /// Replaces the text; the caret goes to the end and nothing is selected.
+    pub fn set(&mut self, text: String) {
+        self.caret = text.chars().count();
+        self.text = text;
+        self.selection = None;
+    }
+    /// Replaces the text and selects the char range `select`; the caret sits at its end.
+    pub fn set_selected(&mut self, text: String, select: (usize, usize)) {
+        self.set(text);
+        self.selection = Some(select);
+        self.caret = select.1.min(self.len());
+    }
+    /// Ctrl+A: everything selected, caret at the end.
+    pub fn select_all(&mut self) {
+        let end = self.len();
+        self.selection = Some((0, end));
+        self.caret = end;
+    }
+    pub fn has_selection(&self) -> bool {
+        self.selection.is_some_and(|(a, b)| a != b)
+    }
+    pub fn insert(&mut self, text: &str) {
+        self.remove_selection();
+        let at = self.byte_at(self.caret);
+        self.text.insert_str(at, text);
+        self.caret += text.chars().count();
+    }
+    pub fn backspace(&mut self) {
+        if self.remove_selection() || self.caret == 0 {
+            return;
+        }
+        let (from, to) = (self.byte_at(self.caret - 1), self.byte_at(self.caret));
+        self.text.replace_range(from..to, "");
+        self.caret -= 1;
+    }
+    pub fn delete(&mut self) {
+        if self.remove_selection() {
+            return;
+        }
+        let (from, to) = (self.byte_at(self.caret), self.byte_at(self.caret + 1));
+        if from < to {
+            self.text.replace_range(from..to, "");
+        }
+    }
+    /// Moves the caret (clamped to the text) and drops any selection.
+    pub fn move_caret(&mut self, to: usize) {
+        self.selection = None;
+        self.caret = to.min(self.len());
+    }
+    /// The text with a `|` at the caret.
+    pub fn display(&self) -> String {
+        let at = self.byte_at(self.caret);
+        format!("{}|{}", &self.text[..at], &self.text[at..])
+    }
+    fn len(&self) -> usize {
+        self.text.chars().count()
+    }
+    fn byte_at(&self, char_index: usize) -> usize {
+        self.text.char_indices().nth(char_index).map_or(self.text.len(), |(i, _)| i)
+    }
+    /// Removes the selected range. Returns true when a selection existed.
+    fn remove_selection(&mut self) -> bool {
+        let Some((a, b)) = self.selection.take() else {
+            return false;
+        };
+        let (lo, hi) = (a.min(b).min(self.len()), a.max(b).min(self.len()));
+        let (from, to) = (self.byte_at(lo), self.byte_at(hi));
+        self.text.replace_range(from..to, "");
+        self.caret = lo;
+        true
+    }
+}
+
+/// Windows-style rename selection in chars: a file selects its stem so typing keeps the extension.
+/// Folders, names without an extension and dot-files select everything.
+pub fn rename_selection(name: &str, folder: bool) -> (usize, usize) {
+    let total = name.chars().count();
+    match name.rfind('.') {
+        Some(dot) if !folder && dot > 0 => (0, name[..dot].chars().count()),
+        _ => (0, total),
+    }
+}
+
+#[cfg(test)]
+mod text_field_tests {
+    use super::*;
+
+    #[test]
+    fn typing_replaces_a_selection_and_keeps_the_rest() {
+        let mut field = TextField::default();
+        field.set_selected("report.pdf".into(), rename_selection("report.pdf", false));
+        field.insert("final");
+        assert_eq!(field.text, "final.pdf");
+        assert_eq!(field.caret, 5);
+        assert!(!field.has_selection());
+    }
+
+    #[test]
+    fn select_all_then_type_replaces_everything() {
+        let mut field = TextField::default();
+        field.set("/home/u/docs".into());
+        field.select_all();
+        assert!(field.has_selection());
+        field.insert("/tmp");
+        assert_eq!(field.text, "/tmp");
+        assert_eq!(field.display(), "/tmp|");
+    }
+
+    #[test]
+    fn backspace_and_delete_work_on_chars_not_bytes() {
+        let mut field = TextField::default();
+        field.set("aé日b".into());
+        field.move_caret(2);
+        field.backspace();
+        assert_eq!(field.text, "a日b");
+        assert_eq!(field.caret, 1);
+        field.delete();
+        assert_eq!(field.text, "ab");
+        field.backspace();
+        field.backspace();
+        assert_eq!(field.text, "b");
+        assert_eq!(field.caret, 0);
+    }
+
+    #[test]
+    fn caret_moves_clamp_and_display_marks_position() {
+        let mut field = TextField::default();
+        field.set("abc".into());
+        field.move_caret(1);
+        field.insert("X");
+        assert_eq!(field.display(), "aX|bc");
+        field.move_caret(usize::MAX);
+        assert_eq!(field.caret, 4);
+    }
+
+    #[test]
+    fn rename_selection_picks_stem_for_files_only() {
+        assert_eq!(rename_selection("archive.tar.gz", false), (0, 11));
+        assert_eq!(rename_selection("notes", false), (0, 5));
+        assert_eq!(rename_selection(".bashrc", false), (0, 7));
+        assert_eq!(rename_selection("photos.2024", true), (0, 11));
+        assert_eq!(rename_selection("é.txt", false), (0, 1));
     }
 }
