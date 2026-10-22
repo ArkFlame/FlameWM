@@ -818,8 +818,9 @@ impl ExplorerApp {
         self.ark_extracts.push(flamewm_explorer::dndext::spawn_ark_extract(service,path,destination));
         self.model.status="Extracting from Ark…".into();
     }
-    fn external_drop(&mut self,paths:Vec<PathBuf>) {
-        let destination=self.model.tab().path().to_path_buf();
+    /// External drop: a folder row under the pointer receives the files; anywhere else means the current folder.
+    fn external_drop(&mut self,paths:Vec<PathBuf>,x:f32,y:f32) {
+        let destination=self.folder_at(x,y).unwrap_or_else(||self.model.tab().path().to_path_buf());
         if remote::is_remote(&destination) {self.confirm_remote_copy(paths,destination);}
         else {self.confirm_drop(paths,destination,true);}
     }
@@ -1046,23 +1047,16 @@ impl ExplorerApp {
             }
         }
     }
+    /// Opens the configured terminal (FlameWM Terminal by default) in `directory`. Only FlameWM Terminal takes
+    /// `--working-directory`; other emulators get the directory as their working directory and no command.
     fn spawn_terminal(&mut self,directory:PathBuf) {
-        // FlameWM's own terminal first (next to this binary, else on PATH); the system terminal is the fallback.
-        if let Some(binary)=flamewm_terminal_binary() {
-            self.model.status=match Command::new(&binary).arg("--working-directory").arg(&directory).spawn() {
-                Ok(_)=>"Opened FlameWM Terminal".into(),
-                Err(e)=>format!("Terminal failed: {e}"),
-            };
-            return;
-        }
-        for program in ["x-terminal-emulator","konsole","xfce4-terminal","xterm"] {
-            match Command::new(program).current_dir(&directory).spawn() {
-                Ok(_)=>return,
-                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>continue,
-                Err(e)=>{self.model.status=format!("Terminal failed: {e}");return;},
-            }
-        }
-        self.model.status="No terminal emulator installed".into();
+        let program=flamewm_applications::terminal::terminal_program();
+        let mut argv=flamewm_applications::terminal::terminal_command(&program,&[],Some(&directory));
+        if argv.len()>1 && matches!(argv.last().map(String::as_str),Some("-e"|"--")) {argv.pop();}
+        self.model.status=match Command::new(&argv[0]).args(&argv[1..]).current_dir(&directory).spawn() {
+            Ok(_)=>"Opened terminal".into(),
+            Err(e)=>format!("Terminal failed: {e}"),
+        };
     }
     fn spawn_ark(&mut self, args:&[&str], path:&Path) {
         match Command::new("ark").args(args).arg(path).spawn() {
@@ -1963,7 +1957,12 @@ impl ExplorerApp {
         }
         // The engine has no flex-shrink, so a tall sidebar would push the status strip out of the window.
         // The body gets an explicit height: window minus toolbar/tabs, the two 1px hairlines and the status strip.
-        doc.size("body-area",self.window.0,(self.window.1-header_top(tab_strip)-2.0-STATUS_STRIP_HEIGHT).max(0.0))?;
+        // The root follows the settled window size too: a stale root height would keep the status strip below the window.
+        doc.size("explorer",self.window.0,self.window.1)?;
+        let body_h=(self.window.1-header_top(tab_strip)-2.0-STATUS_STRIP_HEIGHT).max(0.0);
+        doc.size("body-area",self.window.0,body_h)?;
+        // The sidebar is a row child that would otherwise keep its content height and paint over the status strip.
+        doc.size("places",SIDEBAR_WIDTH,body_h)?;
         // Sort direction is a drawn triangle per column; only the active column shows one.
         for (column,key) in [(Column::Name,"name"),(Column::Modified,"mod"),(Column::Size,"size"),(Column::Type,"kind")] {
             let active=self.column_sort.column==column;
@@ -2411,7 +2410,7 @@ fn run()->Result<(),String>{
                     if !app.resize(*width,*height) {return Ok(());}
                 },
                 UiControllerEvent::Drag(UiDragEvent::Drop{payload:flamewm_ui_x11::DropPayload::ArkExtract{service,path},..})=>app.ark_drop(service.clone(),path.clone()),
-                UiControllerEvent::Drag(UiDragEvent::Drop{paths,..})=>app.external_drop(paths.clone()),
+                UiControllerEvent::Drag(UiDragEvent::Drop{paths,x,y,..})=>app.external_drop(paths.clone(),*x,*y),
                 // Enter/over/leave do not change the list layout.
                 _=>{},
             }
@@ -2557,10 +2556,3 @@ fn forward_download(local:PathBuf,transfers:Receiver<TransferEvent>,tx:Sender<Wo
     send_wake(&mut wake,&tx,WorkerResult::RemoteDownloaded(result));
 }
 
-/// `flamewm-terminal` beside this executable, else the first match on PATH.
-fn flamewm_terminal_binary()->Option<PathBuf>{
-    let sibling=std::env::current_exe().ok().and_then(|exe|exe.parent().map(|dir|dir.join("flamewm-terminal")));
-    sibling.filter(|path|path.is_file()).or_else(||{
-        std::env::var_os("PATH")?.to_string_lossy().split(':').map(|dir|Path::new(dir).join("flamewm-terminal")).find(|path|path.is_file())
-    })
-}
