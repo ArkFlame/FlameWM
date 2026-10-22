@@ -61,7 +61,7 @@ impl X11App {
     /// # Safety
     ///
     /// The app's display must be live and this app must own its drawables.
-    unsafe fn upload_argb_pixmap(
+    pub(crate) unsafe fn upload_argb_pixmap(
         &mut self,
         argb: &[u32],
         width: u32,
@@ -103,7 +103,7 @@ impl X11App {
     ///
     /// Must run on the app's display thread after `clear_scene`.
     pub(crate) unsafe fn paint_surface_backdrop(&mut self) -> Result<(), String> {
-        let Some(backdrop) = self.surface_backdrop else {
+        let Some(backdrop) = self.surface_backdrop.or(self.window_backdrop_pixmap) else {
             trace_paint(|| "no-backdrop".to_string());
             return Ok(());
         };

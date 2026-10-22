@@ -440,6 +440,13 @@ pub fn drop_moves(force_copy:bool, source_dev:u64, destination_dev:u64)->bool {
     !force_copy && source_dev==destination_dev
 }
 
+/// A drop does nothing when it would not change the file system: the target is one of the dragged items,
+/// lies inside one of them (a folder into itself), or is the folder the items already live in (no copy, no "name (1)").
+pub fn drop_is_noop(sources:&[PathBuf], target:&Path)->bool {
+    sources.iter().any(|source| target==source.as_path() || target.starts_with(source))
+        || (!sources.is_empty() && sources.iter().all(|source| source.parent()==Some(target)))
+}
+
 pub fn transfer_drop_batch(sources:&[PathBuf], directory:&Path, force_copy:bool,
     report:&mut impl FnMut(u64)) -> BatchReport {
     jobs::transfer_drop_batch_with(sources, directory, force_copy, &jobs::CancellationToken::new(), report)
@@ -680,6 +687,22 @@ mod tests {
         assert!(model.apply_listing(generation,Path::new("/tmp"),Ok(vec![])));
         assert!(model.tab().selected_paths.is_empty());
         assert!(model.tab().selected.is_none());
+    }
+    #[test] fn drop_noop_rules_cover_self_descendant_and_same_folder() {
+        let folder=PathBuf::from("/home/u/projects/app");
+        let file=PathBuf::from("/home/u/docs/a.txt");
+        // Dropping onto a dragged item, or a folder into itself or its own descendant, is a no-op.
+        assert!(drop_is_noop(std::slice::from_ref(&folder),&folder));
+        assert!(drop_is_noop(std::slice::from_ref(&folder),&folder.join("src")));
+        assert!(drop_is_noop(&[file.clone(),folder.clone()],&folder));
+        // Dropping into the folder the items already live in is a no-op (no copy, no "name (1)").
+        assert!(drop_is_noop(std::slice::from_ref(&file),Path::new("/home/u/docs")));
+        assert!(drop_is_noop(&[file.clone(),PathBuf::from("/home/u/docs/b.txt")],Path::new("/home/u/docs")));
+        // A sibling folder, a different folder, or a prefix-named sibling is a real drop.
+        assert!(!drop_is_noop(std::slice::from_ref(&file),&folder));
+        assert!(!drop_is_noop(std::slice::from_ref(&folder),Path::new("/home/u/projects/app-old")));
+        assert!(!drop_is_noop(std::slice::from_ref(&file),Path::new("/home/u/docs/sub")));
+        assert!(!drop_is_noop(&[],Path::new("/home/u/docs")));
     }
     #[test] fn drop_policy_moves_on_same_device_copies_cross_device_and_respects_ctrl() {
         assert!(drop_moves(false,100,100));

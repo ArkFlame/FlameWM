@@ -9,6 +9,8 @@ pub struct UiDocument {
     /// Last whole-document layout, reused by `layout_box_by_id` while the
     /// document revision and viewport are unchanged.
     layout_memo: RefCell<Option<LayoutMemo>>,
+    /// Whole-window pseudo-transparency, consumed when the window is created.
+    pub(crate) window_backdrop: Option<flamewm_render_x11::backdrop::WindowBackdrop>,
 }
 
 struct LayoutMemo {
@@ -120,6 +122,18 @@ pub trait UiDocumentAccess {
 }
 
 impl UiDocument {
+    /// Lays the wallpaper under the whole window (blurred per `blur_percent`) so translucent
+    /// fills (`surfaceOpacity` < 100) show the desktop behind a Normal window. Opaque specs
+    /// install nothing. Capture failure keeps the straight-colour fallback.
+    #[must_use]
+    pub fn with_window_backdrop(
+        mut self,
+        backdrop: flamewm_render_x11::backdrop::WindowBackdrop,
+    ) -> Self {
+        self.window_backdrop = backdrop.is_translucent().then_some(backdrop);
+        self
+    }
+
     /// Whether an ID exists in the decoded retained UI scene (no layout or mutation).
     #[must_use]
     pub fn has_node(&self, id: &str) -> bool {
@@ -473,6 +487,7 @@ pub fn decode_document(bytes: &'static [u8]) -> Result<UiDocument, String> {
     Ok(UiDocument {
         document: RuntimeDocument::new(flamewm_render_core::decode_static(bytes)?)?,
         layout_memo: RefCell::new(None),
+        window_backdrop: None,
     })
 }
 
@@ -528,6 +543,7 @@ mod tests {
             })
             .expect("fixture validates"),
             layout_memo: RefCell::new(None),
+            window_backdrop: None,
         }
     }
 
@@ -594,6 +610,31 @@ mod tests {
         let (_, _, _, _, pixels) = doc.document.image_for_node(0).expect("override present");
         assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
         assert!(doc.document.document.assets[0].is_fully_opaque());
+    }
+
+    #[test]
+    fn window_backdrop_is_kept_only_for_translucent_specs() {
+        use flamewm_render_x11::backdrop::WindowBackdrop;
+        let spec = |opacity_percent| WindowBackdrop {
+            wallpaper: String::new(),
+            fit: "fill".to_string(),
+            packaged_root: std::path::PathBuf::new(),
+            opacity_percent,
+            blur_percent: 40,
+        };
+        assert!(shared_placeholder_doc().window_backdrop.is_none());
+        assert!(
+            shared_placeholder_doc()
+                .with_window_backdrop(spec(100))
+                .window_backdrop
+                .is_none()
+        );
+        assert!(
+            shared_placeholder_doc()
+                .with_window_backdrop(spec(50))
+                .window_backdrop
+                .is_some()
+        );
     }
 
     fn shared_placeholder_doc() -> UiDocument {
@@ -827,9 +868,7 @@ mod tests {
             ..node("root", NodeKind::Element)
         };
         let mut doc = make_doc(Vec::new(), Vec::new(), vec![root, sized]);
-        let before = doc
-            .layout_box_by_id("box", (200.0, 200.0))
-            .expect("box");
+        let before = doc.layout_box_by_id("box", (200.0, 200.0)).expect("box");
         assert_eq!(doc.layout_box_by_id("box", (200.0, 200.0)), Some(before));
         doc.size("box", 33.0, 17.0).expect("size projection");
         let after = doc.layout_box_by_id("box", (200.0, 200.0)).expect("box");

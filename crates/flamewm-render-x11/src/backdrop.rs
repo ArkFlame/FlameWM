@@ -283,6 +283,58 @@ pub fn blurred_argb_words(
         .collect()
 }
 
+/// Window-level pseudo-transparency for a Normal window (for example the explorer): the
+/// wallpaper under the whole window, blurred per `blur_percent`, is laid under the window's
+/// translucent fills. Wallpaper pixels come from the shared wallpaper owner, never a root read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowBackdrop {
+    /// `wallpaper` setting. Empty selects the packaged default wallpaper.
+    pub wallpaper: String,
+    /// `wallpaperFit` setting text, parsed by `flamewm_image_core::wallpaper::parse`.
+    pub fit: String,
+    /// Packaged asset root that the default wallpaper resolves against.
+    pub packaged_root: std::path::PathBuf,
+    /// Surface opacity percent. 100 is opaque and installs no backdrop.
+    pub opacity_percent: u8,
+    /// Blur percent applied to the snapshot (`blur_radius_px` policy).
+    pub blur_percent: u8,
+}
+
+impl WindowBackdrop {
+    /// Whether translucent fills need a backdrop at all.
+    #[must_use]
+    pub fn is_translucent(&self) -> bool {
+        self.opacity_percent < 100
+    }
+}
+
+/// Wallpaper file for a `wallpaper` setting value (empty means the packaged default).
+#[must_use]
+pub fn wallpaper_file(wallpaper: &str, packaged_root: &std::path::Path) -> std::path::PathBuf {
+    if wallpaper.trim().is_empty() {
+        packaged_root.join(flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH)
+    } else {
+        std::path::PathBuf::from(wallpaper)
+    }
+}
+
+/// Whether the window snapshot must be recaptured now.
+/// A move keeps the window size, so it recaptures at once. A size change (interactive resize)
+/// keeps the stale snapshot out of the scene (paint skips a size mismatch) and waits until no
+/// X events are queued, so only the settled size pays for a capture.
+#[must_use]
+pub fn recapture_due(
+    snapshot_size: Option<(u32, u32)>,
+    window_size: (u32, u32),
+    events_queued: bool,
+) -> bool {
+    match snapshot_size {
+        None => true,
+        Some(size) if size == window_size => true,
+        Some(_) => !events_queued,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +465,62 @@ mod tests {
     fn capture_rejects_empty_rect_without_x() {
         assert!(capture_drawable_rect(std::ptr::null_mut(), 0, (0, 0, 0, 10)).is_err());
         assert!(capture_drawable_rect(std::ptr::null_mut(), 0, (0, 0, 10, 10)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod window_backdrop_tests {
+    use super::*;
+
+    #[test]
+    fn empty_wallpaper_setting_selects_packaged_default() {
+        let root = std::path::Path::new("/pkg");
+        assert_eq!(
+            wallpaper_file("  ", root),
+            root.join(flamewm_image_core::wallpaper::DEFAULT_WALLPAPER_PATH)
+        );
+        assert_eq!(
+            wallpaper_file("/home/u/bg.png", root),
+            std::path::PathBuf::from("/home/u/bg.png")
+        );
+    }
+
+    #[test]
+    fn only_translucent_opacity_needs_a_backdrop() {
+        let mut spec = WindowBackdrop {
+            wallpaper: String::new(),
+            fit: String::new(),
+            packaged_root: std::path::PathBuf::new(),
+            opacity_percent: 100,
+            blur_percent: 40,
+        };
+        assert!(!spec.is_translucent());
+        spec.opacity_percent = 99;
+        assert!(spec.is_translucent());
+    }
+
+    #[test]
+    fn recapture_policy_moves_immediately_and_freezes_resize_until_settled() {
+        assert!(recapture_due(None, (800, 600), true));
+        assert!(
+            recapture_due(Some((800, 600)), (800, 600), true),
+            "move recaptures"
+        );
+        assert!(
+            !recapture_due(Some((800, 600)), (900, 600), true),
+            "resize frozen while queued"
+        );
+        assert!(
+            recapture_due(Some((800, 600)), (900, 600), false),
+            "settled resize captures"
+        );
+    }
+
+    #[test]
+    fn blurred_window_snapshot_is_opaque_argb() {
+        let rgba = [0x40, 0x80, 0xc0, 0xff].repeat(4 * 3);
+        let words = blurred_argb_words(4, 3, rgba, 0, 50);
+        assert_eq!(words.len(), 12);
+        assert!(words.iter().all(|w| w >> 24 == 0xff));
     }
 }

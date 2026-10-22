@@ -1,27 +1,28 @@
-/* --accent and --accent-soft are compile-time placeholders only (neutral grey, the WM's pre-snapshot value). theme.rs overwrites them
-   from the live FlameWM settings snapshot before the first paint, so no accent literal is painted from this file. */
-:root { --accent:#7f878e; --accent-soft:#7f878e30; --surface:#202326; --card:#272a2e; --line:#363b41; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#9ca3ab; }
+/* Colour variables are placeholders only: theme.rs overwrites every one from the live FlameWM settings snapshot before the
+   first paint. The root fills once with the surface; panels draw nothing or a white wash, so no grey literal is painted. */
+:root { --accent:#00000000; --accent-soft:#00000030; --card:#00000000; --line:#00000000; --hover:#00000000; --menu:#00000000; --sidebar:#00000000; --text:#f1f2f3; --muted:#f1f2f3; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
-body { width:100%; height:100%; margin:0; color:var(--text); background:var(--surface); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
+body { width:100%; height:100%; margin:0; color:var(--text); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
 button { background:transparent; color:var(--text); cursor:default; font-size:13px; border-width:0px; padding:0px; display:flex; align-items:center; justify-content:center; }
-button:hover { background:#33383f; }
-button:active { background:#424950; }
+button:hover { background:var(--hover); }
+button:active { background:var(--hover); }
 
 /* Flow chrome: fixed heights so the list geometry in main.rs matches exactly. */
-.toolbar { width:100%; height:45px; flex-grow:0; padding:0 10px; display:flex; flex-direction:row; align-items:center; gap:6px; background:var(--surface); }
+.toolbar { width:100%; height:45px; flex-grow:0; padding:0 10px; display:flex; flex-direction:row; align-items:center; gap:6px; }
 .tool { height:30px; min-width:30px; padding:0 7px; border-radius:6px; }
-.tool:hover { background:#353a41; }
+.tool:hover { background:var(--hover); }
 .tool-ico { width:16px; height:16px; flex-grow:0; }
 .tool-sep { width:1px; height:20px; flex-grow:0; background:var(--line); margin:0 4px; }
-.field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:#2a2e33; border:1px solid #3d434b; justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
-.field:hover { border-color:var(--accent); background:#2a2e33; }
+.field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:var(--card); border:1px solid var(--line); justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
+.field:hover { border-color:var(--accent); background:var(--hover); }
 .address { flex-grow:1; min-width:120px; }
-.search { width:230px; flex-grow:0; color:#9ca3ab; }
+.search { width:230px; flex-grow:0; color:var(--muted); }
+.search-clear { width:22px; height:22px; flex-grow:0; border-radius:11px; color:var(--text); font-size:15px; }
 .field-ico { width:16px; height:16px; flex-grow:0; }
 .field-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; font-size:13px; }
-.tabs { width:100%; height:36px; flex-grow:0; display:flex; flex-direction:row; align-items:center; padding-left:10px; gap:2px; background:var(--surface); }
-.tab { min-width:96px; max-width:164px; height:28px; padding:0 10px; white-space:nowrap; overflow:hidden; background:#252a2f; border-radius:6px; }
+.tabs { width:100%; height:36px; flex-grow:0; display:flex; flex-direction:row; align-items:center; padding-left:10px; gap:2px; }
+.tab { min-width:96px; max-width:164px; height:28px; padding:0 10px; white-space:nowrap; overflow:hidden; background:var(--card); border-radius:6px; }
 .tab-add,.tab-close { height:28px; width:30px; }
 .body { width:100%; flex-grow:1; min-height:0; display:flex; flex-direction:row; overflow:hidden; }
 .places { flex-grow:0; width:201px; padding:8px 8px; display:flex; flex-direction:column; gap:1px; overflow:hidden; background:var(--sidebar); }
@@ -39,51 +40,51 @@ button:active { background:#424950; }
 .files { flex-grow:1; min-width:0; }
 
 /* Column header and rows are absolute siblings of body, so their coordinates are window coordinates. */
-.columns { position:absolute; left:201px; top:81px; width:200px; height:29px; display:flex; flex-direction:row; align-items:center; background:#23262a; overflow:hidden; }
+.columns { position:absolute; left:201px; top:81px; width:200px; height:29px; display:flex; flex-direction:row; align-items:center; background:var(--card); overflow:hidden; }
 .entry { justify-content:flex-start; position:absolute; height:35px; display:flex; flex-direction:row; align-items:center; overflow:hidden; border-radius:0px; }
 .entry:hover { background:var(--accent-soft); }
-.head { color:#c9ced4; font-size:12px; }
+.head { color:var(--text); font-size:12px; }
 .cell-name { flex-grow:1; min-width:0; padding-left:14px; display:flex; flex-direction:row; align-items:center; gap:12px; white-space:nowrap; overflow:hidden; }
 .row-ico { width:18px; height:18px; flex-grow:0; }
 .name-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
 /* Dot-file names: a static dim colour, shown instead of .name-text (see main.rs row projection). */
-.name-dim { color:#767d84; }
-.cell-mod { width:120px; min-width:120px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
-.cell-size { width:100px; min-width:100px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
-.cell-kind { width:130px; min-width:130px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
+.name-dim { color:var(--muted); }
+.cell-mod { width:120px; min-width:120px; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.cell-size { width:100px; min-width:100px; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.cell-kind { width:130px; min-width:130px; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
 
 /* Status strip: item count, activity message, free space and a usage bar in the accent colour. */
-.status { width:100%; height:31px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 14px; background:var(--surface); color:#c3c9cf; font-size:12px; }
+.status { width:100%; height:31px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 14px; color:var(--text); font-size:12px; }
 .status-count { white-space:nowrap; overflow:hidden; flex-grow:0; }
-.status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; color:#aeb5bd; }
-.status-free { white-space:nowrap; overflow:hidden; flex-grow:0; color:#c3c9cf; }
+.status-message { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; color:var(--muted); }
+.status-free { white-space:nowrap; overflow:hidden; flex-grow:0; color:var(--text); }
 .job-progress { white-space:nowrap; overflow:hidden; }
-.usage-track { width:114px; height:4px; flex-grow:0; background:#3a3f46; border-radius:2px; }
+.usage-track { width:114px; height:4px; flex-grow:0; background:var(--card); border-radius:2px; }
 .usage-fill { width:0px; height:4px; background:var(--accent); border-radius:2px; }
 
-.context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:var(--surface); border:1px solid #51565c; border-radius:11px; }
+.context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:var(--menu); border:1px solid var(--hover); border-radius:11px; }
 .menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; border-radius:3px; }
-.menu-row:hover { background:var(--accent-soft); }
+.menu-row:hover { background:var(--hover); }
 
-.progress-popup { position:absolute; bottom:42px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--card); display:flex; flex-direction:column; gap:11px; }
+.progress-popup { position:absolute; bottom:42px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--menu); display:flex; flex-direction:column; gap:11px; }
 .progress-title { color:var(--text); font-size:14px; }
-.progress-track { width:262px; height:7px; background:var(--sidebar); border-radius:4px; }
+.progress-track { width:262px; height:7px; background:var(--card); border-radius:4px; }
 .progress-fill { width:0px; height:7px; background:var(--accent); border-radius:4px; }
 .progress-cancel { width:80px; height:28px; border-radius:6px; }
 
 /* Shared modal for Properties, conflicts and confirmations. */
-.dialog { position:absolute; left:300px; top:150px; width:460px; padding:16px; display:flex; flex-direction:column; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.dialog { position:absolute; left:300px; top:150px; width:460px; padding:16px; display:flex; flex-direction:column; gap:8px; background:var(--menu); border:1px solid var(--line); border-radius:10px; }
 .dialog-title { font-size:16px; color:var(--text); }
 .dialog-line { font-size:12px; color:var(--muted); }
 .dialog-actions { display:flex; flex-direction:row; justify-content:flex-end; gap:6px; padding-top:8px; }
 .dialog-button { height:31px; padding:0 12px; border-radius:6px; }
-.dialog-button:hover { background:var(--accent-soft); }
+.dialog-button:hover { background:var(--hover); }
 
 .selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
 
 /* Native modal chooser: no new configuration or external GTK dialog. */
-.openwith-dialog { position:absolute; left:320px; top:108px; width:440px; height:466px; background:var(--card); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
-.openwith-header { height:77px; padding:14px 16px; display:flex; flex-direction:column; gap:5px; background:var(--surface); }
+.openwith-dialog { position:absolute; left:320px; top:108px; width:440px; height:466px; background:var(--menu); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
+.openwith-header { height:77px; padding:14px 16px; display:flex; flex-direction:column; gap:5px; }
 .openwith-title { font-size:16px; color:var(--text); }
 .openwith-hint { font-size:11px; color:var(--muted); }
 .openwith-apps { height:252px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; }

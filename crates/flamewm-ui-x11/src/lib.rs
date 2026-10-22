@@ -95,12 +95,23 @@ pub enum UiActionPhase {
 pub enum UiControllerEvent {
     Action(UiActionEvent),
     Key(UiKeyEvent),
+    /// The window's client size settled (logical px). Emitted once per settled size.
+    Resized {
+        width: u32,
+        height: u32,
+    },
 }
 
 const TYPED_KEY_ACTION: &str = "__flamewm.ui.key";
 const KEY_PAYLOAD_SEPARATOR: char = '\u{1f}';
 
 fn controller_event(event: &flamewm_render_core::ActionEvent) -> UiControllerEvent {
+    if event.action == flamewm_render_x11::WINDOW_RESIZE_ACTION {
+        return UiControllerEvent::Resized {
+            width: event.x.round().max(1.0) as u32,
+            height: event.y.round().max(1.0) as u32,
+        };
+    }
     if event.action == TYPED_KEY_ACTION {
         if let Some(payload) = event.text.as_deref() {
             let mut fields = payload.splitn(3, KEY_PAYLOAD_SEPARATOR);
@@ -177,6 +188,7 @@ fn x11_config(config: UiWindowConfig, role: UiWindowRole) -> flamewm_render_x11:
         y: config.y,
         title: config.title,
         identity: config.identity,
+        backdrop: None,
         role: match role {
             UiWindowRole::Normal => flamewm_render_x11::X11WindowRole::Normal,
             UiWindowRole::Desktop => flamewm_render_x11::X11WindowRole::Desktop,
@@ -207,9 +219,12 @@ where
     P: for<'a> FnMut(&RawPress, &mut UiDocumentView<'a>) -> Result<(), String>,
     R: for<'a> FnMut(&mut UiDocumentView<'a>) -> Result<(), String>,
 {
+    let backdrop = document.window_backdrop;
+    let mut x11 = x11_config(config, role);
+    x11.backdrop = backdrop;
     flamewm_render_x11::run_with_controller_events_with_reactor_geometry(
         document.document,
-        x11_config(config, role),
+        x11,
         reactor,
         geometry,
         press_watch,
@@ -284,6 +299,29 @@ where
 #[cfg(test)]
 mod tests {
     #[test]
+    fn settled_window_size_maps_to_resized_event_not_action() {
+        let resize = flamewm_render_core::ActionEvent {
+            action: flamewm_render_x11::WINDOW_RESIZE_ACTION.into(),
+            phase: flamewm_render_core::ActionPhase::Release,
+            button: 0,
+            modifiers: 0,
+            x: 1024.0,
+            y: 0.0,
+            inside: true,
+            time_ms: 0,
+            text: None,
+        };
+        assert_eq!(
+            super::controller_event(&resize),
+            super::UiControllerEvent::Resized {
+                width: 1024,
+                height: 1
+            },
+            "a zero height clamps to 1 so the window never reports an empty size"
+        );
+    }
+
+    #[test]
     fn ui_action_modifiers_copy_event_state_through() {
         let core = flamewm_render_core::ActionEvent {
             action: "explorer.row.0".into(),
@@ -299,7 +337,13 @@ mod tests {
         let action = super::action_event(&core);
         assert!(action.ctrl_down());
         assert!(action.shift_down());
-        assert!(!super::UiActionEvent { modifiers: 0, ..action.clone() }.ctrl_down());
+        assert!(
+            !super::UiActionEvent {
+                modifiers: 0,
+                ..action.clone()
+            }
+            .ctrl_down()
+        );
     }
 
     #[test]

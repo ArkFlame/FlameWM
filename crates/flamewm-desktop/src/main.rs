@@ -774,6 +774,7 @@ fn main() -> Result<(), String> {
                         handle_event(action, document, &mut state, mutation_dispatcher.as_ref())
                     }
                     UiControllerEvent::Key(key) => handle_desktop_key(key, document, &mut state),
+                    UiControllerEvent::Resized { .. } => Ok(()),
                 };
                 event_watch.set(menus_open(&state.menu_rects));
                 // A failed handler must not tear down the loop: the desktop would stop answering clicks.

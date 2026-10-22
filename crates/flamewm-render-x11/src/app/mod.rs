@@ -46,6 +46,7 @@ mod raw_press;
 mod render;
 mod scroll;
 mod surface_backdrop;
+mod window_backdrop;
 
 pub(crate) use input::{pointer_button_from_raw, slider_value_from_pointer, wheel_scroll_delta};
 
@@ -183,6 +184,11 @@ pub(crate) struct X11App {
     pub(crate) retired_backbuffer: Option<(Pixmap, usize)>,
     /// Pseudo-transparency snapshot laid under translucent fills (None = transparent clear).
     pub(crate) surface_backdrop: Option<surface_backdrop::SurfaceBackdrop>,
+    /// Whole-window wallpaper snapshot for a Normal window with translucent fills.
+    pub(crate) window_backdrop_pixmap: Option<surface_backdrop::SurfaceBackdrop>,
+    pub(crate) window_backdrop: Option<window_backdrop::WindowBackdropState>,
+    /// Latest client size from ConfigureNotify, reported once the X queue drains.
+    pub(crate) pending_window_resize: Option<(u32, u32)>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
     pub(crate) pointer_button: Option<u32>,
     pub(crate) pointer_grabbed: bool,
@@ -558,6 +564,12 @@ impl X11App {
             background_bound: 0,
             retired_backbuffer: None,
             surface_backdrop: None,
+            window_backdrop_pixmap: None,
+            pending_window_resize: None,
+            window_backdrop: config
+                .backdrop
+                .clone()
+                .map(window_backdrop::WindowBackdropState::new),
             node_backdrops: Default::default(),
             pointer_button: None,
             pointer_grabbed: false,
@@ -910,6 +922,7 @@ impl Drop for X11App {
         // its dynamic handles alive through XCloseDisplay.
         let _deferred = unsafe { self.take_deferred_native_libraries() };
         self.clear_surface_backdrop();
+        self.clear_window_backdrop();
         self.clear_node_backdrops();
         unsafe {
             if self.pointer_grabbed {

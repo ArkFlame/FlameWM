@@ -15,7 +15,7 @@ use std::time::{Duration,Instant};
 
 use flamewm_explorer::{prefs,AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort};
-use flamewm_explorer::{archive,properties,refresh::DirWatch,search::SearchWorker,trash,places as bookmarks};
+use flamewm_explorer::{archive,properties,refresh::DirWatch,search::{SearchEvent,SearchWorker},trash,places as bookmarks};
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::Arc;
 use flamewm_explorer::jobs::{self,CancellationToken,Conflict,Undo};
@@ -106,6 +106,7 @@ enum WorkerJob {
     Create {directory:PathBuf},
     Rename {from:PathBuf,to:PathBuf},
     Undo,
+    Redo,
 }
 enum ChooserJob {
     Discover { request: u64, path: PathBuf },
@@ -158,6 +159,34 @@ fn scan_worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:Uni
         }
     }
 }
+/// Moves one path to the user's Trash and returns the restorable journal entry.
+fn trash_one(path:&Path)->std::io::Result<Undo> {
+    let home=home_dir();
+    let data=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share"));
+    let uid=fs::read_to_string("/proc/self/status").ok()
+        .and_then(|s|flamewm_desktop_core::trash::current_uid_from_proc(&s))
+        .ok_or_else(||std::io::Error::new(std::io::ErrorKind::PermissionDenied,"cannot determine current user"))?;
+    Trash::move_to_trash(path,&home,&data,uid)
+        .map(|item|Undo::Trashed{original:item.original,stored:item.stored,info:item.info})
+        .map_err(|e|std::io::Error::other(e.to_string()))
+}
+/// Undo (`undoing`) or redo the newest entry of the bounded history and report it in status text.
+fn history_step(undoing:bool,trash:&mut dyn FnMut(&Path)->std::io::Result<Undo>)->Result<String,String> {
+    let mut journal=jobs::journal().lock().unwrap_or_else(|poison|poison.into_inner());
+    if undoing {
+        let Some(entry)=journal.take_last() else {return Err("Nothing to undo".to_owned());};
+        match jobs::undo_with(&entry,trash) {
+            Ok(())=>{let text=format!("Undid: {}",jobs::describe(&entry));journal.push_redo(entry);Ok(text)},
+            Err(error)=>{journal.restore(entry);Err(format!("Undo failed: {error}"))},
+        }
+    } else {
+        let Some(entry)=journal.take_redo() else {return Err("Nothing to redo".to_owned());};
+        match jobs::redo_with(&entry,trash) {
+            Ok(next)=>{let text=format!("Redid: {}",jobs::describe(&next));journal.push_undo(next);Ok(text)},
+            Err(error)=>{journal.push_redo(entry);Err(format!("Redo failed: {error}"))},
+        }
+    }
+}
 fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStream) {
     for job in rx {
         match job {
@@ -199,20 +228,9 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                 });
             }
             WorkerJob::Trash{paths}=>{
-                let home=home_dir();
-                let data=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share"));
-                let uid=fs::read_to_string("/proc/self/status").ok()
-                    .and_then(|s|flamewm_desktop_core::trash::current_uid_from_proc(&s));
                 let mut report=BatchReport::default();
                 for path in &paths {
-                    let outcome=if let Some(uid)=uid {
-                        Trash::move_to_trash(path,&home,&data,uid)
-                            .map(|item|Undo::Trashed{original:item.original,stored:item.stored,info:item.info})
-                            .map_err(|e|std::io::Error::other(e.to_string()))
-                    } else {
-                        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"cannot determine current user"))
-                    };
-                    match outcome {
+                    match trash_one(path) {
                         Ok(undo)=>{report.completed+=1;report.undo.push(undo);},
                         Err(error)=>report.record(path,Err(error)),
                     }
@@ -257,15 +275,11 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
                 send_wake(&mut wake,&result,WorkerResult::Completed(done.map(|_|"Renamed".to_owned()).map_err(|e|e.to_string())));
             }
             WorkerJob::Undo=>{
-                let mut journal=jobs::journal().lock().unwrap_or_else(|poison|poison.into_inner());
-                let done=match journal.take_last() {
-                    None=>Err("Nothing to undo".to_owned()),
-                    Some(entry)=>match jobs::undo(&entry) {
-                        Ok(())=>Ok("Undone".to_owned()),
-                        Err(error)=>{journal.restore(entry);Err(format!("Undo failed: {error}"))},
-                    },
-                };
-                drop(journal);
+                let done=history_step(true,&mut trash_one);
+                send_wake(&mut wake,&result,WorkerResult::Completed(done));
+            }
+            WorkerJob::Redo=>{
+                let done=history_step(false,&mut trash_one);
                 send_wake(&mut wake,&result,WorkerResult::Completed(done));
             }
         }
@@ -295,7 +309,7 @@ struct ExplorerApp {
     row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, cancel:CancellationToken,
     menu_overflow:bool, scroll_offset:f32, scroll_origin:usize, scroll_ticking:bool,
     column_sort:ColumnSort, typed:String, typed_at:Option<Instant>,
-    dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64,
+    dialog:Option<Dialog>, ark:bool, search:Option<SearchWorker>, search_id:u64, search_text:String,
     search_rows:Option<Vec<Entry>>, watch:Option<DirWatch>, watched:Option<PathBuf>,
     context_place:Option<usize>, progress_total:u64, trash_base:PathBuf,
     /// Removable filesystems that are present but unmounted; merged into the sidebar's Devices group.
@@ -308,7 +322,7 @@ impl ExplorerApp {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
         let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,cancel:CancellationToken::new(),menu_overflow:false,scroll_offset:0.0,scroll_origin:0,scroll_ticking:false,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
-            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None};
+            dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None};
         app.reload_places();
         app
     }
@@ -339,19 +353,31 @@ impl ExplorerApp {
         if query.trim().is_empty() {self.clear_search();self.model.status="Search cleared".into();return;}
         let root=self.model.tab().path().to_path_buf();
         let hidden=self.model.hidden;
+        let query_text=query.clone();
         let started=self.search.as_mut().map(|search|search.start(root,query,hidden));
         match started {
-            Some(Ok(id))=>{self.search_id=id;self.search_rows=None;self.model.status="Searching…".into();},
+            Some(Ok(id))=>{self.search_id=id;self.search_text=query_text;self.search_rows=Some(Vec::new());self.model.status="Searching…".into();},
             Some(Err(error))=>self.model.status=format!("Search unavailable: {error}"),
             None=>self.model.status="Search worker unavailable".into(),
         }
     }
     fn take_search_results(&mut self) {
-        let Some(result)=self.search.as_mut().and_then(|search|search.poll()) else {return};
-        if result.id!=self.search_id {return;}
-        let rows=result.outcome.hits.into_iter().map(|hit|Entry{path:hit.path,name:hit.name,directory:hit.directory,symlink:false,size:0,modified:None}).collect::<Vec<_>>();
-        self.model.status=format!("{} result(s){}",rows.len(),if result.outcome.truncated {" (truncated)"} else {""});
-        self.search_rows=Some(rows);
+        let Some(search)=self.search.as_mut() else {return};
+        let events=search.poll();
+        for event in events {
+            match event {
+                SearchEvent::Batch{hits,..}=>{
+                    let rows=self.search_rows.get_or_insert_with(Vec::new);
+                    rows.extend(hits.into_iter().map(|hit|Entry{path:hit.path,name:hit.name,directory:hit.directory,symlink:false,size:0,modified:None}));
+                    self.model.status=format!("Searching… {} found",rows.len());
+                },
+                SearchEvent::Done{truncated,cancelled,..}=>{
+                    if cancelled {continue;}
+                    let count=self.search_rows.as_ref().map_or(0,Vec::len);
+                    self.model.status=format!("{count} result(s){}",if truncated {" (truncated)"} else {""});
+                },
+            }
+        }
     }
     /// Entries shown in the file pane: search results replace the folder listing while active.
     /// First window row: the search-result window when searching, else the folder window.
@@ -370,6 +396,12 @@ impl ExplorerApp {
     }
     /// Tracks the window origin after every input or wake. A small step glides from the old position;
     /// a folder change or a jump larger than the window snaps.
+    /// Settled client size from the WM. Columns, rows and the body follow `window` in `project`; the scroll
+    /// origin is re-clamped here so the visible window never starts past the last row.
+    fn resize(&mut self,width:u32,height:u32) {
+        self.window=(width.max(1) as f32,height.max(1) as f32);
+        self.sync_scroll();
+    }
     fn sync_scroll(&mut self) {
         let origin=self.origin(self.visible_rows());
         if origin!=self.scroll_origin {
@@ -487,6 +519,12 @@ impl ExplorerApp {
         } else {
             vec![drag.source]
         };
+        if flamewm_explorer::drop_is_noop(&sources,&destination) {
+            self.model.status="Drop cancelled (nothing to move)".into();
+            return true;
+        }
+        // Mixed selections: items already in the destination stay where they are.
+        let sources:Vec<PathBuf>=sources.into_iter().filter(|source|source.parent()!=Some(destination.as_path())).collect();
         // Control modifies the operation at release time, exactly like file managers.
         // Worker validates real/canonical paths before touching files.
         if self.busy {
@@ -609,9 +647,11 @@ impl ExplorerApp {
             Err(e)=>self.model.status=format!("Ark unavailable: {e}"),
         }
     }
-    fn undo_last(&mut self) {
+    /// Ctrl+Z (`undoing`) and Ctrl+Shift+Z / Ctrl+Y redo, run on the file worker so the UI never blocks.
+    fn history_last(&mut self,undoing:bool) {
         if self.busy {self.model.status="File operation already in progress".into();return;}
-        if self.tx.send(WorkerJob::Undo).is_ok() {self.busy=true;self.model.status="Undoing…".into();}
+        let job=if undoing {WorkerJob::Undo} else {WorkerJob::Redo};
+        if self.tx.send(job).is_ok() {self.busy=true;self.model.status=if undoing {"Undoing…"} else {"Redoing…"}.into();}
         else {self.model.status="File worker unavailable".into();}
     }
     fn action_menu(&mut self,cmd:&str) {
@@ -948,6 +988,7 @@ impl ExplorerApp {
             "explorer.reload"=>{self.reload_places();self.refresh_devices();self.scan();},
             "explorer.hidden"=>self.toggle_hidden(),
             "explorer.search"=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
+            "explorer.search.clear"=>{self.edit=None;self.clear_search();self.search_text.clear();self.model.status="Search cleared".into();},
             "explorer.address"=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
             "explorer.tab.close"=>{self.model.close_tab();self.scan();},
@@ -1059,7 +1100,9 @@ impl ExplorerApp {
             "c" if ctrl=>self.action_menu("copy"),
             "x" if ctrl=>self.action_menu("cut"),
             "v" if ctrl=>self.action_menu("paste"),
-            "z" if ctrl=>self.undo_last(),
+            "z" if ctrl&&shift=>self.history_last(false),
+            "z" if ctrl=>self.history_last(true),
+            "y" if ctrl=>self.history_last(false),
             "up"=>self.step_selection(-1,shift),
             "down"=>self.step_selection(1,shift),
             // PageUp, PageDown, Home and End have no named keysym in the UI key table, so they arrive as Keysym(0x...).
@@ -1178,12 +1221,17 @@ impl ExplorerApp {
         // The path bar always shows the folder; search text belongs to the search field only.
         let address=match self.edit {Some(EditMode::Path)=>format!("{}|",self.buffer),Some(EditMode::Rename)=>format!("Rename: {}|",self.buffer),Some(EditMode::Mode)=>format!("Permissions: {}|",self.buffer),Some(EditMode::PlaceName)=>format!("Place name: {}|",self.buffer),_=>display_location(tab.path(),&home_dir())};
         doc.text("address-text",address)?;
-        let folder=if tab.path()==home_dir().as_path() {"Home".to_owned()} else {tab.path().file_name().unwrap_or_default().to_string_lossy().into_owned()};
-        let search=match self.edit {Some(EditMode::Search)=>format!("Search: {}|",self.buffer),_=>format!("Search {folder}")};
+        // The field shows only the query: a plain placeholder when empty, and the clear button while a search is active.
+        let search=match self.edit {
+            Some(EditMode::Search)=>format!("{}|",self.buffer),
+            _ if self.search_rows.is_some()=>self.search_text.clone(),
+            _=>"Search".to_owned(),
+        };
         doc.text("search-text",search)?;
+        doc.visible("search-clear",self.search_rows.is_some())?;
         doc.text("menu-hidden",format!("Show Hidden Files: {}",if self.model.hidden {"On"} else {"Off"}))?;
-        doc.foreground("nav-back",if tab.can_back(){WHITE}else{MUTED})?;
-        doc.foreground("nav-forward",if tab.can_forward(){WHITE}else{MUTED})?;
+        doc.foreground("nav-back",if tab.can_back(){WHITE}else{self.theme.muted()})?;
+        doc.foreground("nav-forward",if tab.can_forward(){WHITE}else{self.theme.muted()})?;
         // Native Finder-style chrome: a single tab has no visible tab strip.
         let tab_strip=self.model.tabs.len()>1;
         doc.visible("tabs",tab_strip)?;
@@ -1215,8 +1263,8 @@ impl ExplorerApp {
                     doc.visible(&format!("place-{slot}"),true)?;
                     for kind in PLACE_ICONS {doc.visible(&format!("pico-{slot}-{kind}"),kind==place.icon)?;}
                     doc.text(&format!("place-label-{slot}"),place.name.clone())?;
-                    doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {MUTED} else {WHITE})?;
-                    doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.sidebar()})?;
+                    doc.foreground(&format!("place-label-{slot}"),if unmounted && place.device.is_some() {self.theme.muted()} else {WHITE})?;
+                    doc.background(&format!("place-{slot}"),if selected {self.theme.selected()} else {self.theme.clear()})?;
                     // Device rows get a Dolphin-style button: eject while mounted, mount while not.
                     let device=place.device.is_some();
                     doc.visible(&format!("pact-{slot}"),device)?;
@@ -1273,7 +1321,7 @@ impl ExplorerApp {
                 doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
                     self.theme.selected()
                 } else if tab.selected_paths.contains(&entry.path){self.theme.selected()}
-                    else if index%2==0{self.theme.surface()}else{self.theme.row_alternate()})?;
+                    else if index%2==0{self.theme.clear()}else{self.theme.row_alternate()})?;
             } else {doc.visible(&row,false)?;}
         }
         if let Some(((x0,y0),(x1,y1)))=self.rubber {
@@ -1360,7 +1408,7 @@ impl ExplorerApp {
             return Ok(());
         };
         doc.visible("dialog",true)?;
-        doc.background("dialog",self.theme.card())?;
+        doc.background("dialog",self.theme.menu())?;
         let (title,lines,buttons):(String,Vec<String>,[Option<&str>;4])=match dialog {
             Dialog::Properties{props,size,..}=>(
                 props.path.file_name().unwrap_or(props.path.as_os_str()).to_string_lossy().into_owned(),
@@ -1399,8 +1447,8 @@ impl ExplorerApp {
         let showing=self.chooser_loading || self.chooser.is_some();
         doc.visible("openwith-dialog",showing)?;
         if !showing{return Ok(());}
-        doc.background("openwith-dialog",self.theme.card())?;
-        doc.background("openwith-toolbar",self.theme.surface())?;
+        doc.background("openwith-dialog",self.theme.menu())?;
+        doc.background("openwith-toolbar",self.theme.card())?;
         if let Some(chooser)=self.chooser.as_ref() {
             let filename=chooser.path.file_name().unwrap_or_default().to_string_lossy();
             doc.text("openwith-title",format!("Open {filename} with"))?;
@@ -1434,14 +1482,23 @@ impl ExplorerApp {
     }
 }
 const WHITE:UiColor=UiColor{r:240,g:242,b:245,a:255};
-const MUTED:UiColor=UiColor{r:120,g:125,b:133,a:255};
 
-fn initial_theme()->ExplorerTheme {
-    let Ok(client)=ControlClient::connect(BusKind::Session) else {return ExplorerTheme::default()};
+/// Live settings at startup; `None` when the control service is unavailable (defaults apply).
+fn initial_settings()->Option<SettingsSnapshot> {
+    let client=ControlClient::connect(BusKind::Session).ok()?;
     match client.call_with_timeout(&ControlRequest::GetSettings,Duration::from_millis(300)) {
-        Ok(ControlResponse::Settings(snapshot))=>ExplorerTheme::from_snapshot(&snapshot),
-        _=>ExplorerTheme::default(),
+        Ok(ControlResponse::Settings(snapshot))=>Some(snapshot),
+        _=>None,
     }
+}
+/// Packaged asset root for the default wallpaper: the installed share directory, else the source tree (same rule as the desktop).
+fn packaged_root()->PathBuf {
+    let source=Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
+    let installed=std::env::current_exe().ok().and_then(|exe|{
+        let bin=exe.parent()?;let usr=bin.parent()?;
+        (bin.file_name()?=="bin"&&usr.file_name()?=="usr").then(||usr.join("share/flamewm"))
+    });
+    installed.filter(|root|root.join("assets").is_dir()).unwrap_or(source)
 }
 fn main(){if let Err(error)=run(){eprintln!("flamewm-explorer: {error}");std::process::exit(1);}}
 fn run()->Result<(),String>{
@@ -1471,18 +1528,23 @@ fn run()->Result<(),String>{
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
     let (window_w,window_h,window_y)=window_frame(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
+    let backdrop:Option<flamewm_ui_x11::backdrop::WindowBackdrop>;
     {
         let mut app=app.borrow_mut();
         app.window=(window_w as f32,window_h as f32);
         app.events=Some(app_events);
         app.search=Some(search);
-        app.theme=initial_theme();
+        let settings=initial_settings();
+        app.theme=settings.as_ref().map_or_else(ExplorerTheme::default,ExplorerTheme::from_snapshot);
+        backdrop=settings.as_ref().map(|snapshot|theme::window_backdrop(snapshot,&packaged_root()));
         app.model.hidden=prefs::load(&prefs::config_dir()).show_hidden;
     }
     app.borrow_mut().scan();
     // Present-but-unmounted devices arrive from lsblk on a worker; without this they only show after a reload.
     app.borrow().refresh_devices();
     let mut doc=decode_document(UI)?;
+    // Translucent surfaces show the blurred wallpaper through the window; opaque (100%) installs nothing.
+    if let Some(spec)=backdrop {doc=doc.with_window_backdrop(spec);}
     app.borrow().project(&mut doc)?;
     let event_app=Rc::clone(&app);
     let wake_app=Rc::clone(&app);
@@ -1511,7 +1573,12 @@ fn run()->Result<(),String>{
         },notifications,
         move |event,document|{
             let mut app=event_app.borrow_mut();
-            match event {UiControllerEvent::Action(action)=>{app.event(action);app.sync_scroll();},UiControllerEvent::Key(key)=>{app.key(key);app.sync_scroll();}}
+            match event {
+                UiControllerEvent::Action(action)=>{app.event(action);app.sync_scroll();},
+                UiControllerEvent::Key(key)=>{app.key(key);app.sync_scroll();},
+                // Settled client size: sizes, scroll window and rows all follow from `window` in project.
+                UiControllerEvent::Resized{width,height}=>app.resize(*width,*height),
+            }
             app.project(document)
         },
         move |document|{

@@ -9,7 +9,13 @@ pub struct X11Config {
     pub role: X11WindowRole,
     /// Optional ICCCM WM_CLASS identity. `None` leaves WM_CLASS unset.
     pub identity: Option<X11WindowIdentity>,
+    /// Whole-window pseudo-transparency (None = no window snapshot).
+    pub backdrop: Option<crate::backdrop::WindowBackdrop>,
 }
+
+/// Reserved action name for a settled window size. The event carries the size in `x` (width)
+/// and `y` (height), logical px. Delivered once per settled size, never per intermediate step.
+pub const WINDOW_RESIZE_ACTION: &str = "__flamewm.window.resize";
 
 /// ICCCM WM_CLASS pair (instance, class) plus EWMH UTF-8 name is taken from the title.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -418,6 +424,7 @@ impl Default for X11Config {
             title: "FlameWM Render 0.0.9".to_string(),
             role: X11WindowRole::Normal,
             identity: None,
+            backdrop: None,
         }
     }
 }
@@ -432,6 +439,7 @@ impl From<SurfaceConfig> for X11Config {
             title: config.title,
             role: config.role.into(),
             identity: None,
+            backdrop: None,
         }
     }
 }

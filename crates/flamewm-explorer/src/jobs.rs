@@ -18,7 +18,7 @@ const CHUNK: usize = 65_536;
 /// Guards against huge or deeply nested trees while counting on the worker.
 pub const MAX_COUNT_ITEMS: u64 = 1_000_000;
 pub const MAX_COUNT_DEPTH: usize = 128;
-const MAX_UNDO: usize = 100;
+const MAX_UNDO: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct JobId(pub u64);
@@ -72,20 +72,46 @@ pub enum Undo {
     Moved { from: PathBuf, to: PathBuf },
     Created { path: PathBuf },
     Trashed { original: PathBuf, stored: PathBuf, info: PathBuf },
+    /// A copy: undo trashes `to`; redo copies `from` to `to` again.
+    Copied { from: PathBuf, to: PathBuf },
 }
 
+/// Bounded undo and redo stacks. A new operation clears redo; undo and redo move entries between the stacks.
 #[derive(Debug, Default)]
-pub struct Journal { entries: Vec<Undo> }
+pub struct Journal { entries: Vec<Undo>, redo: Vec<Undo> }
 impl Journal {
     pub fn record(&mut self, entries: impl IntoIterator<Item = Undo>) {
+        self.redo.clear();
+        self.push_undo_entries(entries);
+    }
+    fn push_undo_entries(&mut self, entries: impl IntoIterator<Item = Undo>) {
         self.entries.extend(entries);
         let excess = self.entries.len().saturating_sub(MAX_UNDO);
         self.entries.drain(..excess);
     }
     pub fn take_last(&mut self) -> Option<Undo> { self.entries.pop() }
     pub fn restore(&mut self, entry: Undo) { self.entries.push(entry); }
+    /// Keeps an entry produced by a redo, without clearing the redo stack.
+    pub fn push_undo(&mut self, entry: Undo) { self.push_undo_entries([entry]); }
+    pub fn push_redo(&mut self, entry: Undo) {
+        self.redo.push(entry);
+        let excess = self.redo.len().saturating_sub(MAX_UNDO);
+        self.redo.drain(..excess);
+    }
+    pub fn take_redo(&mut self) -> Option<Undo> { self.redo.pop() }
     pub fn len(&self) -> usize { self.entries.len() }
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+}
+
+/// Short noun phrase for status text, for example "move of report.pdf".
+pub fn describe(entry: &Undo) -> String {
+    let name = |path: &Path| path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    match entry {
+        Undo::Moved { to, .. } => format!("move of {}", name(to)),
+        Undo::Created { path } => format!("new folder {}", name(path)),
+        Undo::Trashed { original, .. } => format!("trash of {}", name(original)),
+        Undo::Copied { to, .. } => format!("copy {}", name(to)),
+    }
 }
 
 pub fn journal() -> &'static Mutex<Journal> {
@@ -99,6 +125,11 @@ pub fn record(entries: impl IntoIterator<Item = Undo>) {
 
 /// Reverse one journal entry. Every reversal refuses to overwrite.
 pub fn undo(entry: &Undo) -> io::Result<()> {
+    undo_with(entry, &mut |_| Err(io::Error::other("no Trash available")))
+}
+
+/// Reverse one journal entry. `trash` moves a path to the Trash and returns the restorable entry (used for copies).
+pub fn undo_with(entry: &Undo, trash: &mut dyn FnMut(&Path) -> io::Result<Undo>) -> io::Result<()> {
     match entry {
         Undo::Moved { from, to } => rename_into(to, from, false),
         Undo::Created { path } => fs::remove_dir(path),
@@ -106,6 +137,19 @@ pub fn undo(entry: &Undo) -> io::Result<()> {
             rename_into(stored, original, false)?;
             let _ = fs::remove_file(info);
             Ok(())
+        }
+        Undo::Copied { to, .. } => trash(to).map(drop),
+    }
+}
+
+/// Re-applies an undone entry. Returns the entry to keep on the undo stack (a trashed item gets a new Trash record).
+pub fn redo_with(entry: &Undo, trash: &mut dyn FnMut(&Path) -> io::Result<Undo>) -> io::Result<Undo> {
+    match entry {
+        Undo::Moved { from, to } => rename_into(from, to, false).map(|()| entry.clone()),
+        Undo::Created { path } => fs::create_dir(path).map(|()| entry.clone()),
+        Undo::Trashed { original, .. } => trash(original),
+        Undo::Copied { from, to } => {
+            copy_publish(from, to, false, &CancellationToken::new(), &mut |_| {}).map(|()| entry.clone())
         }
     }
 }
@@ -302,7 +346,7 @@ fn transfer_one(source: &Path, directory: &Path, move_it: bool, conflict: Confli
         Ok(Step::Done(Some(Undo::Moved { from: source.to_path_buf(), to: dest })))
     } else {
         copy_publish(source, &dest, replace, cancel, report)?;
-        Ok(Step::Done(None))
+        Ok(Step::Done(Some(Undo::Copied { from: source.to_path_buf(), to: dest })))
     }
 }
 
@@ -526,6 +570,50 @@ mod tests {
         undo(&entry).unwrap();
         assert_eq!(fs::read(src.join("a")).unwrap(), b"moving");
         assert!(!dst.join("a (2)").exists());
+    }
+
+    #[test]
+    fn copy_undo_trashes_and_redo_copies_again_with_bounded_history() {
+        let scratch = Scratch::new("history");
+        let src = scratch.path().join("src.txt");
+        fs::write(&src, b"data").unwrap();
+        let dest_dir = scratch.path().join("dest");
+        fs::create_dir(&dest_dir).unwrap();
+        // Stand-in for the Trash: moves the path aside and reports it restorable.
+        let trash_dir = scratch.path().join("trash");
+        fs::create_dir(&trash_dir).unwrap();
+        let mut fake_trash = |path: &Path| -> io::Result<Undo> {
+            let stored = trash_dir.join(path.file_name().unwrap());
+            fs::rename(path, &stored)?;
+            Ok(Undo::Trashed { original: path.to_path_buf(), stored, info: trash_dir.join("info") })
+        };
+        let report = transfer_batch_with(std::slice::from_ref(&src), &dest_dir, false, Conflict::KeepBoth,
+            &CancellationToken::new(), &mut |_| {});
+        let copy = dest_dir.join("src.txt");
+        assert_eq!(report.undo, vec![Undo::Copied { from: src.clone(), to: copy.clone() }]);
+
+        let mut journal = Journal::default();
+        journal.record(report.undo.clone());
+        // Undo trashes the copy and keeps the original.
+        let entry = journal.take_last().unwrap();
+        undo_with(&entry, &mut fake_trash).unwrap();
+        assert!(!copy.exists() && src.exists());
+        journal.push_redo(entry);
+        // Redo copies it back from the source.
+        let entry = journal.take_redo().unwrap();
+        let next = redo_with(&entry, &mut fake_trash).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), b"data");
+        assert_eq!(next, entry);
+        journal.push_undo(next);
+        assert_eq!(journal.len(), 1);
+        assert!(journal.take_redo().is_none());
+        // A new operation drops the redo history; the undo stack is capped.
+        journal.push_redo(Undo::Created { path: scratch.path().join("gone") });
+        journal.record([Undo::Created { path: scratch.path().join("new") }]);
+        assert!(journal.take_redo().is_none());
+        journal.record((0..MAX_UNDO + 10).map(|n| Undo::Created { path: scratch.path().join(n.to_string()) }));
+        assert_eq!(journal.len(), MAX_UNDO);
+        assert_eq!(describe(&Undo::Copied { from: src, to: copy }), "copy src.txt");
     }
 
     #[test]

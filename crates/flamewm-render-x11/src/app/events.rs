@@ -332,9 +332,14 @@ impl X11App {
                     let configure = unsafe { event.xconfigure };
                     let width = configure.width.max(1) as u32;
                     let height = configure.height.max(1) as u32;
+                    if self.window_backdrop.is_some() {
+                        self.mark_window_backdrop_stale();
+                        self.mark_full();
+                    }
                     if width != self.width || height != self.height {
                         self.width = width;
                         self.height = height;
+                        self.pending_window_resize = Some((width, height));
                         // SAFETY: The display, window, and retained backbuffer belong to this app.
                         unsafe { self.recreate_backbuffer()? };
                         self.mark_full();
@@ -789,6 +794,24 @@ impl X11App {
             // Damage marks above merge (max coverage); Expose presented
             // directly. single_event returns after that single paint.
             unsafe { self.redraw_if_dirty(document)? };
+            // Size reports coalesce: the latest settled size is delivered once the queue is empty.
+            if self.pending_window_resize.is_some()
+                && unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0
+                && let Some((width, height)) = self.pending_window_resize.take()
+            {
+                let resize = ActionEvent {
+                    action: WINDOW_RESIZE_ACTION.to_string(),
+                    phase: flamewm_render_core::ActionPhase::Release,
+                    button: 0,
+                    modifiers: 0,
+                    x: width as f32,
+                    y: height as f32,
+                    inside: true,
+                    time_ms: 0,
+                    text: None,
+                };
+                on_action(&resize, document)?;
+            }
             if self.single_event {
                 return Ok(());
             }

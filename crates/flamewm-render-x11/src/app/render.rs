@@ -233,6 +233,8 @@ impl X11App {
         }
         drop(paint_guard);
         let _present_guard = flamewm_profiler::start("render.present");
+        // SAFETY: redraw runs on the display thread; the snapshot is laid after the clear below.
+        unsafe { self.refresh_window_backdrop() };
         {
             let _clear_guard = flamewm_profiler::start("render.clear");
             self.clear_scene()?;

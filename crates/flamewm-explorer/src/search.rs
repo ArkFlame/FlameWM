@@ -1,13 +1,18 @@
-//! Recursive filename search. Pure walker plus a single cancellable worker thread.
-//! The walker never follows symlinks, is bounded by hit count and visited entries, and checks a cancel flag.
+//! Recursive filename search. A parallel walker runs on a small thread pool inside one worker thread,
+//! streams hits to the UI in batches, and is cancelled per job. Symlinks are never traversed.
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// Walker threads per search job.
+const MAX_THREADS: usize = 4;
+/// Hits sent to the UI per batch.
+const BATCH: usize = 64;
 
 pub const MAX_HITS: usize = 2_000;
 pub const MAX_VISITS: usize = 200_000;
@@ -36,52 +41,112 @@ pub fn name_matches(name: &str, query: &str) -> bool {
     !query.is_empty() && name.to_lowercase().contains(&query.to_lowercase())
 }
 
-/// Breadth-first walk from `root`. Symlinks are reported but never traversed.
-pub fn search_tree(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool) -> SearchOutcome {
+/// Shared directory queue: `active` counts directories being read, so idle threads wait for them to publish subdirectories.
+struct Queue {
+    dirs: VecDeque<PathBuf>,
+    active: usize,
+}
+
+/// Parallel breadth-first walk from `root`. Symlinks are reported but never traversed.
+/// Hits reach `sink` in batches from any walker thread. Returns `(truncated, cancelled)`.
+fn walk(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool, threads: usize,
+    sink: &(dyn Fn(Vec<SearchHit>) + Sync)) -> (bool, bool) {
     let query: String = query.trim().chars().take(MAX_QUERY_CHARS).collect();
-    let mut outcome = SearchOutcome::default();
     if query.is_empty() {
-        return outcome;
+        return (false, false);
     }
-    let mut queue = VecDeque::from([root.to_path_buf()]);
-    let mut visits = 0_usize;
-    while let Some(dir) = queue.pop_front() {
-        if cancel.load(Ordering::Relaxed) {
-            outcome.cancelled = true;
-            return outcome;
-        }
-        let Ok(read) = fs::read_dir(&dir) else { continue };
-        for item in read {
-            let Ok(item) = item else { continue };
-            visits += 1;
-            if visits > MAX_VISITS {
-                outcome.truncated = true;
-                return outcome;
-            }
-            if visits % 512 == 0 && cancel.load(Ordering::Relaxed) {
-                outcome.cancelled = true;
-                return outcome;
-            }
-            let name = item.file_name().to_string_lossy().into_owned();
-            if !show_hidden && name.starts_with('.') {
-                continue;
-            }
-            let path = item.path();
-            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
-            let directory = meta.is_dir();
-            if name_matches(&name, &query) {
-                if outcome.hits.len() >= MAX_HITS {
-                    outcome.truncated = true;
-                    return outcome;
+    let queue = Mutex::new(Queue { dirs: VecDeque::from([root.to_path_buf()]), active: 0 });
+    let ready = Condvar::new();
+    let visits = AtomicUsize::new(0);
+    let hits = AtomicUsize::new(0);
+    let truncated = AtomicBool::new(false);
+    let stop = || cancel.load(Ordering::Relaxed) || truncated.load(Ordering::Relaxed);
+    thread::scope(|scope| {
+        for _ in 0..threads.max(1) {
+            scope.spawn(|| {
+                let mut batch = Vec::new();
+                loop {
+                    let dir = {
+                        let mut state = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+                        loop {
+                            if stop() {
+                                state.dirs.clear();
+                                break None;
+                            }
+                            if let Some(dir) = state.dirs.pop_front() {
+                                state.active += 1;
+                                break Some(dir);
+                            }
+                            if state.active == 0 {
+                                break None;
+                            }
+                            state = ready.wait(state).unwrap_or_else(|poison| poison.into_inner());
+                        }
+                    };
+                    let Some(dir) = dir else {
+                        ready.notify_all();
+                        break;
+                    };
+                    let mut subdirs = Vec::new();
+                    if let Ok(read) = fs::read_dir(&dir) {
+                        for item in read {
+                            if stop() {
+                                break;
+                            }
+                            let Ok(item) = item else { continue };
+                            if visits.fetch_add(1, Ordering::Relaxed) + 1 > MAX_VISITS {
+                                truncated.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            let name = item.file_name().to_string_lossy().into_owned();
+                            if !show_hidden && name.starts_with('.') {
+                                continue;
+                            }
+                            let path = item.path();
+                            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+                            let directory = meta.is_dir();
+                            if name_matches(&name, &query) {
+                                if hits.fetch_add(1, Ordering::Relaxed) >= MAX_HITS {
+                                    truncated.store(true, Ordering::Relaxed);
+                                    break;
+                                }
+                                batch.push(SearchHit { parent: dir.clone(), path: path.clone(), name, directory });
+                                if batch.len() >= BATCH {
+                                    sink(std::mem::take(&mut batch));
+                                }
+                            }
+                            if directory {
+                                subdirs.push(path);
+                            }
+                        }
+                    }
+                    {
+                        let mut state = queue.lock().unwrap_or_else(|poison| poison.into_inner());
+                        state.dirs.extend(subdirs);
+                        state.active -= 1;
+                    }
+                    ready.notify_all();
                 }
-                outcome.hits.push(SearchHit { parent: dir.clone(), path: path.clone(), name, directory });
-            }
-            if directory {
-                queue.push_back(path);
-            }
+                if !batch.is_empty() {
+                    sink(batch);
+                }
+            });
         }
+    });
+    (truncated.load(Ordering::Relaxed), cancel.load(Ordering::Relaxed))
+}
+
+/// Synchronous search built on the parallel walker (tests and one-shot callers).
+pub fn search_tree(root: &Path, query: &str, show_hidden: bool, cancel: &AtomicBool) -> SearchOutcome {
+    let collected = Mutex::new(Vec::new());
+    let (truncated, cancelled) = walk(root, query, show_hidden, cancel, MAX_THREADS, &|batch| {
+        collected.lock().unwrap_or_else(|poison| poison.into_inner()).extend(batch);
+    });
+    SearchOutcome {
+        hits: collected.into_inner().unwrap_or_else(|poison| poison.into_inner()),
+        truncated,
+        cancelled,
     }
-    outcome
 }
 
 /// Pure debounce: a request is due once `DEBOUNCE` has elapsed since the last keystroke.
@@ -102,72 +167,84 @@ impl Debounce {
     }
 }
 
-pub struct SearchJob {
-    pub id: u64,
-    pub root: PathBuf,
-    pub query: String,
-    pub show_hidden: bool,
+struct SearchJob {
+    id: u64,
+    root: PathBuf,
+    query: String,
+    show_hidden: bool,
+    cancel: Arc<AtomicBool>,
 }
 
-pub struct SearchResult {
-    pub id: u64,
-    pub query: String,
-    pub outcome: SearchOutcome,
+/// Streamed progress of the active search job. `Done` ends it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SearchEvent {
+    Batch { id: u64, hits: Vec<SearchHit> },
+    Done { id: u64, truncated: bool, cancelled: bool },
 }
 
-/// One worker thread. Starting a new job cancels the previous one; stale results are filtered by `id`.
+/// One worker thread that runs each job's parallel walk. Starting or cancelling a job sets its cancel flag;
+/// events from stale jobs are filtered by `id` in `poll`.
 pub struct SearchWorker {
     jobs: Sender<SearchJob>,
-    results: Receiver<SearchResult>,
-    cancel: Arc<AtomicBool>,
+    events: Receiver<SearchEvent>,
+    current: Option<Arc<AtomicBool>>,
     next_id: u64,
 }
 
 impl SearchWorker {
-    pub fn spawn(wake: impl Fn() + Send + 'static) -> std::io::Result<Self> {
+    /// `wake` is called from walker threads after each batch, so it must be cheap and thread-safe.
+    pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> std::io::Result<Self> {
         let (jobs_tx, jobs_rx) = mpsc::channel::<SearchJob>();
-        let (results_tx, results_rx) = mpsc::channel::<SearchResult>();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = Arc::clone(&cancel);
+        let (events_tx, events_rx) = mpsc::channel::<SearchEvent>();
         thread::Builder::new().name("explorer-search".into()).spawn(move || {
             while let Ok(job) = jobs_rx.recv() {
-                worker_cancel.store(false, Ordering::Relaxed);
-                let outcome = search_tree(&job.root, &job.query, job.show_hidden, &worker_cancel);
-                if results_tx.send(SearchResult { id: job.id, query: job.query, outcome }).is_err() {
+                let id = job.id;
+                let batches = events_tx.clone();
+                let sink = |hits: Vec<SearchHit>| {
+                    if batches.send(SearchEvent::Batch { id, hits }).is_ok() {
+                        wake();
+                    }
+                };
+                let (truncated, cancelled) =
+                    walk(&job.root, &job.query, job.show_hidden, &job.cancel, MAX_THREADS, &sink);
+                if events_tx.send(SearchEvent::Done { id, truncated, cancelled }).is_err() {
                     break;
                 }
                 wake();
             }
         })?;
-        Ok(Self { jobs: jobs_tx, results: results_rx, cancel, next_id: 0 })
+        Ok(Self { jobs: jobs_tx, events: events_rx, current: None, next_id: 0 })
     }
 
     /// Cancels any running search and queues a new one. Returns the job id.
     pub fn start(&mut self, root: PathBuf, query: String, show_hidden: bool) -> Result<u64, String> {
-        self.cancel.store(true, Ordering::Relaxed);
-        self.next_id += 1;
+        self.cancel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.current = Some(Arc::clone(&cancel));
         let id = self.next_id;
         self.jobs
-            .send(SearchJob { id, root, query, show_hidden })
+            .send(SearchJob { id, root, query, show_hidden, cancel })
             .map(|()| id)
             .map_err(|_| "Search worker unavailable".to_owned())
     }
 
-    /// Cancels the running search and marks it stale so its result is ignored.
+    /// Cancels the running search and marks it stale so its events are ignored.
     pub fn cancel(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(flag) = self.current.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
         self.next_id += 1;
     }
 
-    /// Returns the newest result for the active job, dropping stale ones.
-    pub fn poll(&mut self) -> Option<SearchResult> {
-        let mut latest = None;
-        while let Ok(result) = self.results.try_recv() {
-            if result.id == self.next_id {
-                latest = Some(result);
-            }
-        }
-        latest
+    /// Drains events for the active job; events of stale jobs are dropped.
+    pub fn poll(&mut self) -> Vec<SearchEvent> {
+        let active = self.next_id;
+        self.events
+            .try_iter()
+            .filter(|event| match event {
+                SearchEvent::Batch { id, .. } | SearchEvent::Done { id, .. } => *id == active,
+            })
+            .collect()
     }
 }
 
@@ -242,15 +319,26 @@ mod tests {
         worker.start(root.clone(), "zzz-none".into(), false).unwrap();
         let id = worker.start(root.clone(), "notes".into(), false).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let result = loop {
-            if let Some(result) = worker.poll() {
-                break result;
+        let mut hits = 0;
+        let mut done = false;
+        while !done {
+            for event in worker.poll() {
+                match event {
+                    SearchEvent::Batch { id: got, hits: batch } => {
+                        assert_eq!(got, id, "only the latest job may report");
+                        hits += batch.len();
+                    }
+                    SearchEvent::Done { id: got, cancelled, .. } => {
+                        assert_eq!(got, id);
+                        assert!(!cancelled);
+                        done = true;
+                    }
+                }
             }
             assert!(Instant::now() < deadline, "search worker timed out");
             thread::sleep(Duration::from_millis(5));
-        };
-        assert_eq!(result.id, id);
-        assert_eq!(result.outcome.hits.len(), 1);
+        }
+        assert_eq!(hits, 1);
         let _ = fs::remove_dir_all(&root);
     }
 }
