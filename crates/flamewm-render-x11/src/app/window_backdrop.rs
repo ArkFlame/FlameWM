@@ -82,6 +82,8 @@ pub(crate) struct WindowBackdropState {
     desktop: Option<RgbaImage>,
     /// The root changed since `desktop` was read (a move or resize happened).
     pub(crate) desktop_stale: bool,
+    /// Root read blurred once (root width, root height, ARGB words), cropped per move.
+    blurred_root: Option<(u32, u32, Vec<u32>)>,
     /// When the root was last read (either variant); spaces reads by `CAPTURE_QUIET`.
     pub(crate) last_readback: Option<Instant>,
     pub(crate) stale: bool,
@@ -125,6 +127,7 @@ impl WindowBackdropState {
             canvas: None,
             desktop: None,
             desktop_stale: true,
+            blurred_root: None,
             last_readback: None,
             stale: true,
             captured: None,
@@ -236,36 +239,57 @@ impl X11App {
             }
             .ok();
             if let Some(state) = self.window_backdrop.as_mut() {
+                // The root is blurred once per read, so a move only crops the blurred root.
+                let blur_percent = state.spec.blur_percent;
+                state.blurred_root = desktop.as_ref().map(|root| {
+                    let pixels = root.pixels.clone();
+                    let words =
+                        blurred_argb_words(root.width, root.height, pixels, 0, blur_percent);
+                    (root.width, root.height, words)
+                });
                 state.desktop = desktop;
                 state.desktop_stale = false;
                 state.last_readback = Some(Instant::now());
             }
         }
+        let (width, height) = (self.width, self.height);
         let state = self
             .window_backdrop
             .as_mut()
             .ok_or("window backdrop: no spec")?;
-        let snapshot = match state.desktop.as_ref() {
-            Some(desktop) => {
-                crop_rgba(desktop, anchor).ok_or("window backdrop: root region unavailable")?
-            }
-            None => wallpaper_region(state, (root_w, root_h), anchor)?,
+        let blurred_fits = state
+            .blurred_root
+            .as_ref()
+            .is_some_and(|(w, h, _)| (*w, *h) == (root_w, root_h));
+        let words = if blurred_fits {
+            let (_, _, blurred) = state.blurred_root.as_ref().expect("checked above");
+            let blur_span = flamewm_profiler::start("render.backdrop.crop");
+            let words = crop_words_clamped(blurred, (root_w, root_h), (rx, ry), (width, height));
+            drop(blur_span);
+            words
+        } else {
+            let snapshot = match state.desktop.as_ref() {
+                Some(desktop) => {
+                    crop_rgba(desktop, anchor).ok_or("window backdrop: root region unavailable")?
+                }
+                None => wallpaper_region(state, (root_w, root_h), anchor)?,
+            };
+            let shift = (
+                i64::from(rx) - i64::from(anchor.0),
+                i64::from(ry) - i64::from(anchor.1),
+            );
+            let pixels = crate::backdrop::edge_extend_rgba(
+                &snapshot.pixels,
+                snapshot.width,
+                snapshot.height,
+                shift,
+                (width, height),
+            );
+            let blur_span = flamewm_profiler::start("render.backdrop.blur");
+            let words = blurred_argb_words(width, height, pixels, 0, state.spec.blur_percent);
+            drop(blur_span);
+            words
         };
-        let shift = (
-            i64::from(rx) - i64::from(anchor.0),
-            i64::from(ry) - i64::from(anchor.1),
-        );
-        let (width, height) = (self.width, self.height);
-        let pixels = crate::backdrop::edge_extend_rgba(
-            &snapshot.pixels,
-            snapshot.width,
-            snapshot.height,
-            shift,
-            (width, height),
-        );
-        let blur_span = flamewm_profiler::start("render.backdrop.blur");
-        let words = blurred_argb_words(width, height, pixels, 0, state.spec.blur_percent);
-        drop(blur_span);
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
         }
@@ -436,6 +460,7 @@ impl X11App {
         }
         if let Some(state) = self.window_backdrop.as_mut() {
             state.desktop = None;
+            state.blurred_root = None;
         }
         self.drop_mirror_fill();
     }
@@ -502,6 +527,31 @@ fn wallpaper_region(
         .ok_or_else(|| "window backdrop: wallpaper region unavailable".to_string())
 }
 
+/// Crops a root-sized ARGB word image at `origin` to `size`. Pixels off the root replicate the
+/// nearest root edge, as `edge_extend_rgba` does for the uncached path.
+fn crop_words_clamped(
+    words: &[u32],
+    root: (u32, u32),
+    origin: (i32, i32),
+    size: (u32, u32),
+) -> Vec<u32> {
+    if root.0 == 0 || root.1 == 0 {
+        return Vec::new();
+    }
+    let (rw, rh) = (i64::from(root.0), i64::from(root.1));
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let mut out = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let sy = (i64::from(origin.1) + y as i64).clamp(0, rh - 1) as usize;
+        let row = &words[sy * root.0 as usize..][..root.0 as usize];
+        for x in 0..w {
+            let sx = (i64::from(origin.0) + x as i64).clamp(0, rw - 1) as usize;
+            out.push(row[sx]);
+        }
+    }
+    out
+}
+
 /// Crop `rect` out of a root-sized RGBA image; `None` when the rect leaves the image.
 fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage> {
     let (x, y, w, h) = rect;
@@ -545,6 +595,16 @@ mod tests {
             desktop_readback_due(true, true, true),
             "settled after a move: read once"
         );
+    }
+
+    #[test]
+    fn blurred_root_crop_replicates_the_root_edge_off_root() {
+        // 4x3 root, pixel value = y*4 + x.
+        let root: Vec<u32> = (0..12).collect();
+        let crop = crop_words_clamped(&root, (4, 3), (-1, 1), (3, 2));
+        // Row y=1 and y=2 starting at x=-1: x=-1 clamps to column 0.
+        assert_eq!(crop, vec![4, 4, 5, 8, 8, 9]);
+        assert!(crop_words_clamped(&root, (0, 0), (0, 0), (2, 2)).is_empty());
     }
 
     #[test]
