@@ -394,7 +394,8 @@ fn unmounted_filesystem(node: &Json) -> Option<BlockDevice> {
         return None;
     }
     let label = node.get("label").and_then(Json::text).map(sanitize_label).filter(|l| !l.is_empty());
-    Some(BlockDevice { device, label: label.unwrap_or_else(|| name.to_owned()) })
+    // Dolphin-style fallback when the filesystem has no label.
+    Some(BlockDevice { device, label: label.unwrap_or_else(|| format!("Removable Device ({name})")) })
 }
 
 /// Runs `lsblk` and returns unmounted removable filesystems. A missing or failing lsblk yields no devices.
@@ -521,6 +522,15 @@ mod tests {
     }
 
     #[test]
+    fn unlabelled_removable_filesystem_gets_dolphin_style_name() {
+        let json = r#"{"blockdevices":[{"name":"sdb","rm":true,"hotplug":true,"fstype":null,"mountpoint":null,"label":null,"children":[{"name":"sdb1","rm":true,"fstype":"vfat","mountpoint":null,"label":null}]}]}"#;
+        let devices = parse_lsblk(json);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device, "/dev/sdb1");
+        assert_eq!(devices[0].label, "Removable Device (sdb1)");
+    }
+
+    #[test]
     fn lsblk_json_lists_only_unmounted_removable_filesystems() {
         let sample = r#"{"blockdevices": [
             {"name":"sda","rm":false,"hotplug":false,"fstype":null,"mountpoint":null,"label":null,
@@ -538,7 +548,7 @@ mod tests {
             parse_lsblk(sample),
             vec![
                 BlockDevice { device: "/dev/sdb2".into(), label: "Stick é".into() },
-                BlockDevice { device: "/dev/sdc".into(), label: "sdc".into() },
+                BlockDevice { device: "/dev/sdc".into(), label: "Removable Device (sdc)".into() },
                 BlockDevice { device: "/dev/sde".into(), label: "Camera".into() },
             ]
         );

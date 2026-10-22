@@ -51,9 +51,19 @@ const ROW_ICONS:[&str;4]=["folder","pdf","source","file"];
 /// Width of the status-strip usage track (`.usage-track` in explorer.css).
 const USAGE_TRACK_WIDTH:f32=114.0;
 
-/// Window size: the maximum size, clamped to 90% of the root so small screens still fit.
-fn window_size(root:(u32,u32))->(u32,u32) {
-    (WINDOW_WIDTH.min((u64::from(root.0)*9/10) as u32).max(1),WINDOW_HEIGHT.min((u64::from(root.1)*9/10) as u32).max(1))
+/// Height kept free at the bottom of the screen for the taskbar panel.
+const TASKBAR_RESERVE:u32=56;
+/// Top edge of the window when there is room for it.
+const WINDOW_TOP:u32=65;
+/// Window size and top edge: the maximum size, clamped to 90% of the work area (root minus taskbar) so small screens fit.
+/// The window never extends into the taskbar, so the status strip stays visible.
+fn window_frame(root:(u32,u32))->(u32,u32,i32) {
+    let work_w=root.0;
+    let work_h=root.1.saturating_sub(TASKBAR_RESERVE);
+    let w=WINDOW_WIDTH.min((u64::from(work_w)*9/10) as u32).max(1);
+    let h=WINDOW_HEIGHT.min((u64::from(work_h)*9/10) as u32).max(1);
+    let y=WINDOW_TOP.min(work_h.saturating_sub(h));
+    (w,h,y as i32)
 }
 /// Top of the column header: below the toolbar and, with more than one tab, the tab strip.
 fn header_top(tab_strip:bool)->f32 {TOOLBAR_HEIGHT+if tab_strip {TABBAR_HEIGHT} else {0.0}}
@@ -1412,7 +1422,7 @@ fn run()->Result<(),String>{
     let (search_tx,search_wake)=(result_tx.clone(),writer.try_clone().map_err(|e|e.to_string())?);
     let search=SearchWorker::spawn(move||{if search_tx.send(WorkerResult::SearchTick).is_ok() {let _=(&search_wake).write_all(&[1]);}}).map_err(|e|e.to_string())?;
     std::thread::Builder::new().name("flamewm-explorer-io".into()).spawn(move||worker(jobs,result_tx,writer)).map_err(|e|e.to_string())?;
-    let (window_w,window_h)=window_size(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
+    let (window_w,window_h,window_y)=window_frame(flamewm_ui_x11::root_geometry().unwrap_or((u32::MAX,u32::MAX)));
     let app=Rc::new(RefCell::new(ExplorerApp::new(directory,tx,scan_tx,chooser_tx)));
     {
         let mut app=app.borrow_mut();
@@ -1440,7 +1450,10 @@ fn run()->Result<(),String>{
     });
     run_with_controller_events_role_and_two_readable_fds(
         doc,
-        UiWindowConfig{width:window_w,height:window_h,x:80,y:65,title:"FlameWM Explorer".into(),identity:None},
+        UiWindowConfig{width:window_w,height:window_h,x:80,y:window_y,title:"FlameWM Explorer".into(),identity:Some(flamewm_ui_x11::X11WindowIdentity{
+            // Matches flamewm-explorer.desktop (StartupWMClass) so the taskbar resolves the app icon.
+            instance:"flamewm-explorer".to_owned(),class:"flamewm-explorer".to_owned(),
+        })},
         UiWindowRole::Normal,fd,
         move||{
             let mut bytes=[0_u8;1024];
@@ -1489,6 +1502,20 @@ mod internal_drag_tests {
     }
 }
 
+#[cfg(test)]
+mod window_frame_tests {
+    use super::*;
+
+    #[test]
+    fn window_stays_above_taskbar_reserve() {
+        for root in [(1350,641),(1600,900),(1920,1080),(800,600)] {
+            let (w,h,y)=window_frame(root);
+            assert!(y>=0 && (y as u32)+h<=root.1-TASKBAR_RESERVE, "root {root:?} window {w}x{h} at {y}");
+            assert!(w<=root.0);
+        }
+        assert_eq!(window_frame((1920,1080)),(1250,740,65));
+    }
+}
 #[cfg(test)]
 mod layout_tests {
     use super::*;
