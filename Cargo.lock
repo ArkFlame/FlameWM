@@ -276,6 +276,7 @@ name = "flamewm-desktop-core"
 version = "0.1.1"
 dependencies = [
  "flamewm-api",
+ "flamewm-applications",
  "flamewm-ui-core",
  "rustix",
 ]
@@ -300,6 +301,7 @@ dependencies = [
  "flamewm-dbus-reactor",
  "flamewm-desktop-core",
  "flamewm-image-core",
+ "flamewm-integrations-linux",
  "flamewm-profiler",
  "flamewm-reactor",
  "flamewm-remote-fs",

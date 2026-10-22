@@ -70,14 +70,10 @@ pub fn desktop_settings() -> CommandIntent {
 
 pub const DEFAULT_TERMINAL: &str = "x-terminal-emulator";
 
-/// Terminal program without shell evaluation: `$TERMINAL` or compiled default.
+/// Terminal program without shell evaluation: FlameWM Terminal first (see `flamewm_applications::terminal`).
 #[must_use]
 pub fn terminal_program() -> String {
-    std::env::var("TERMINAL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_TERMINAL.to_owned())
+    flamewm_applications::terminal::terminal_program()
 }
 
 /// Entry context rows. Trash exposes Empty Trash only; normal entries expose
