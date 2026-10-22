@@ -11,11 +11,14 @@ use std::time::SystemTime;
 
 pub mod archive;
 pub mod clipboard;
+pub mod columns;
 pub mod places;
 pub mod prefs;
 pub mod properties;
 pub mod refresh;
+pub mod scroll;
 pub mod search;
+pub mod thumbs;
 pub mod trash;
 pub mod view;
 
@@ -243,11 +246,11 @@ impl Explorer {
 }
 /// Sidebar section a place belongs to. Sections render in declaration order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PlaceGroup { Favorites, Devices, Pinned }
+pub enum PlaceGroup { Favorites, Devices, Network, Pinned }
 
 impl PlaceGroup {
     pub fn heading(self) -> &'static str {
-        match self { Self::Favorites => "Favorites", Self::Devices => "Devices", Self::Pinned => "Pinned Folders" }
+        match self { Self::Favorites => "Favorites", Self::Devices => "Devices", Self::Network => "Network", Self::Pinned => "Pinned Folders" }
     }
 }
 
@@ -274,7 +277,7 @@ pub enum SidebarRow { Heading(&'static str), Place(usize) }
 /// Groups places into sidebar rows. A heading is emitted only for a non-empty group.
 pub fn sidebar_rows(places:&[Place]) -> Vec<SidebarRow> {
     let mut rows=Vec::with_capacity(places.len()+3);
-    for group in [PlaceGroup::Favorites,PlaceGroup::Devices,PlaceGroup::Pinned] {
+    for group in [PlaceGroup::Favorites,PlaceGroup::Devices,PlaceGroup::Network,PlaceGroup::Pinned] {
         let members:Vec<usize>=places.iter().enumerate().filter(|(_,p)|p.group==group).map(|(i,_)|i).collect();
         if members.is_empty() {continue;}
         rows.push(SidebarRow::Heading(group.heading()));
@@ -354,7 +357,37 @@ pub fn places(home:&Path,unmounted:&[places::BlockDevice]) -> Vec<Place> {
         }
     }
     places.extend(unmounted.iter().map(unmounted_place));
+    // Network mounts come from the same mountinfo snapshot; the group stays hidden when nothing is mounted.
+    if let Ok(contents)=fs::read_to_string("/proc/self/mountinfo") {
+        places.extend(network_places(&contents,&places::gvfs_root()));
+    }
     places
+}
+
+/// Network locations from mountinfo text: cifs/nfs/sshfs/WebDAV mounts, and each share under the GVFS FUSE root.
+pub fn network_places(mountinfo:&str,gvfs_root:&Path)->Vec<Place> {
+    let mut out=Vec::new();
+    for mount in places::parse_network_mounts(mountinfo) {
+        if mount.fstype==places::GVFS_FSTYPE {
+            if mount.mount_point==gvfs_root {
+                for share in places::gvfs_shares(gvfs_root) {
+                    let folder=share.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    let name=places::gvfs_label(&folder);
+                    if !name.is_empty() {out.push(network_place(name,share));}
+                }
+            }
+            continue;
+        }
+        if !mount.mount_point.is_dir() {continue;}
+        let name=places::sanitize_label(&mount.mount_point.file_name().unwrap_or_default().to_string_lossy());
+        if !name.is_empty() {out.push(network_place(name,mount.mount_point));}
+    }
+    out
+}
+
+fn network_place(name:String,path:PathBuf)->Place {
+    // No network-specific glyph ships in the template yet, so the drive icon stands in.
+    Place{name,path,removable:false,group:PlaceGroup::Network,icon:"drive",device:None}
 }
 
 /// Sidebar row for a present but unmounted removable filesystem: no path, so `mounted()` is false.

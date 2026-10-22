@@ -168,6 +168,70 @@ pub fn parse_mountinfo(text: &str) -> Vec<MountedDevice> {
     out
 }
 
+/// A network filesystem mounted in this session. `fuse.gvfsd-fuse` marks the GVFS root, whose children are shares.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkMount {
+    pub mount_point: PathBuf,
+    pub fstype: String,
+}
+
+/// Filesystem types shown in the Network group: SMB/CIFS, NFS, sshfs, WebDAV (davfs) and the GVFS FUSE root.
+pub const NETWORK_FSTYPES: [&str; 8] = ["cifs", "smb3", "nfs", "nfs4", "fuse.sshfs", "davfs", "fuse.davfs", "fuse.gvfsd-fuse"];
+pub const GVFS_FSTYPE: &str = "fuse.gvfsd-fuse";
+
+/// Network mounts from `/proc/self/mountinfo` text. Only the fstype selects a line, so pseudo or local mounts never match.
+/// Field layout: id parent maj:min root mount_point opts [optional...] - fstype source superopts.
+pub fn parse_network_mounts(text: &str) -> Vec<NetworkMount> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let Some(sep) = fields.iter().position(|f| *f == "-") else { continue };
+        let (Some(mount), Some(fstype)) = (fields.get(4), fields.get(sep + 1)) else { continue };
+        if !NETWORK_FSTYPES.contains(fstype) {
+            continue;
+        }
+        let mount_point = PathBuf::from(unescape_mount(mount));
+        if seen.insert(mount_point.clone()) {
+            out.push(NetworkMount { mount_point, fstype: (*fstype).to_owned() });
+        }
+    }
+    out
+}
+
+/// The per-user GVFS FUSE root, `/run/user/<uid>/gvfs`. The uid is the owner of this process's `/proc/self`.
+pub fn gvfs_root() -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    let uid = fs::metadata("/proc/self").map(|meta| meta.uid()).unwrap_or(0);
+    PathBuf::from(format!("/run/user/{uid}/gvfs"))
+}
+
+/// Share folders directly under the GVFS root, sorted by name. Each is one network location.
+pub fn gvfs_shares(root: &Path) -> Vec<PathBuf> {
+    let mut shares: Vec<PathBuf> = fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    shares.sort();
+    shares
+}
+
+/// Sidebar label for a GVFS share folder name such as `smb-share:server=nas,share=media` ("media on nas").
+/// Falls back to the raw folder name when the name has no recognised keys.
+pub fn gvfs_label(folder: &str) -> String {
+    let params = folder.split_once(':').map_or("", |(_, rest)| rest);
+    let value = |key: &str| params.split(',').find_map(|pair| pair.strip_prefix(key)?.strip_prefix('=').map(str::to_owned));
+    let label = match (value("share"), value("server").or_else(|| value("host"))) {
+        (Some(share), Some(server)) => format!("{share} on {server}"),
+        (Some(share), None) => share,
+        (None, Some(server)) => server,
+        (None, None) => folder.to_owned(),
+    };
+    sanitize_label(&label)
+}
+
 /// True when sysfs marks the block device, or its parent disk, as removable.
 pub fn is_removable_in(sys_block_root: &Path, block_name: &str) -> bool {
     let flag = |dir: PathBuf| fs::read_to_string(dir.join("removable")).map(|v| v.trim() == "1").unwrap_or(false);
@@ -501,6 +565,41 @@ mod tests {
         assert_eq!(load_bookmarks(&file), items);
         assert!(!dir.join("gtk-3.0/.bookmarks.flamewm-tmp").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn network_filter_keeps_only_network_fstypes_on_sample_lines() {
+        let text = "\
+36 35 0:45 / /mnt/nas rw,relatime shared:12 - cifs //nas/media rw,vers=3.0
+37 35 0:46 / /home/u/share\\040dir rw,relatime shared:13 - nfs4 host:/export rw,vers=4.2
+38 35 0:47 / /home/u/sshfs rw,nosuid - fuse.sshfs user@host:/srv rw,user_id=1000
+39 35 0:48 / /home/u/dav rw,nosuid shared:14 - fuse.davfs https://dav.example/ rw
+40 35 0:49 / /run/user/1000/gvfs rw,nosuid,nodev,relatime shared:15 - fuse.gvfsd-fuse gvfsd-fuse rw,user_id=1000
+41 35 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
+42 35 0:50 / /run/media/u/USB rw shared:16 - vfat /dev/sdb1 rw
+43 35 0:51 / /proc rw - proc proc rw
+44 35 0:45 / /mnt/nas rw shared:12 - cifs //nas/media rw
+garbage line with no separator
+";
+        let mounts = parse_network_mounts(text);
+        let found: Vec<(&str, &str)> = mounts.iter().map(|m| (m.mount_point.to_str().unwrap(), m.fstype.as_str())).collect();
+        assert_eq!(
+            found,
+            vec![
+                ("/mnt/nas", "cifs"),
+                ("/home/u/share dir", "nfs4"),
+                ("/home/u/sshfs", "fuse.sshfs"),
+                ("/home/u/dav", "fuse.davfs"),
+                ("/run/user/1000/gvfs", "fuse.gvfsd-fuse"),
+            ]
+        );
+    }
+
+    #[test]
+    fn gvfs_folder_names_become_share_labels() {
+        assert_eq!(gvfs_label("smb-share:server=nas,share=media"), "media on nas");
+        assert_eq!(gvfs_label("sftp:host=example.com,user=me"), "example.com");
+        assert_eq!(gvfs_label("plain"), "plain");
     }
 
     #[test]

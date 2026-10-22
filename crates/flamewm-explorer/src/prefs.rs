@@ -1,9 +1,20 @@
 //! Explorer preferences kept in `explorer.toml` under the FlameWM config directory.
 use std::{fs, io, path::{Path, PathBuf}};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Column widths in pixels as persisted; the Name column takes the remaining width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Prefs {
     pub show_hidden: bool,
+    pub show_type: bool,
+    pub col_modified: u32,
+    pub col_size: u32,
+    pub col_kind: u32,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self { show_hidden: false, show_type: false, col_modified: 120, col_size: 100, col_kind: 130 }
+    }
 }
 
 /// `FLAMEWM_CONFIG_DIR`, else `$XDG_CONFIG_HOME/flamewm`, else `~/.config/flamewm`.
@@ -23,8 +34,14 @@ pub fn parse(text: &str) -> Prefs {
     let mut prefs = Prefs::default();
     for line in text.lines() {
         if let Some((key, value)) = line.split_once('=') {
-            if key.trim() == "show_hidden" {
-                prefs.show_hidden = value.trim() == "true";
+            let value = value.trim();
+            match key.trim() {
+                "show_hidden" => prefs.show_hidden = value == "true",
+                "show_type" => prefs.show_type = value == "true",
+                "col_modified" => prefs.col_modified = value.parse().unwrap_or(prefs.col_modified),
+                "col_size" => prefs.col_size = value.parse().unwrap_or(prefs.col_size),
+                "col_kind" => prefs.col_kind = value.parse().unwrap_or(prefs.col_kind),
+                _ => {}
             }
         }
     }
@@ -32,7 +49,10 @@ pub fn parse(text: &str) -> Prefs {
 }
 
 pub fn render(prefs: &Prefs) -> String {
-    format!("show_hidden = {}\n", prefs.show_hidden)
+    format!(
+        "show_hidden = {}\nshow_type = {}\ncol_modified = {}\ncol_size = {}\ncol_kind = {}\n",
+        prefs.show_hidden, prefs.show_type, prefs.col_modified, prefs.col_size, prefs.col_kind
+    )
 }
 
 pub fn load(dir: &Path) -> Prefs {
@@ -55,9 +75,10 @@ mod tests {
     fn save_then_load_round_trips_through_temp_dir() {
         let dir = std::env::temp_dir().join(format!("flamewm-explorer-prefs-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         assert_eq!(load(&dir), Prefs::default());
-        save(&dir, &Prefs { show_hidden: true }).unwrap();
-        assert_eq!(load(&dir), Prefs { show_hidden: true });
-        save(&dir, &Prefs { show_hidden: false }).unwrap();
+        let custom = Prefs { show_hidden: true, show_type: true, col_modified: 150, col_size: 90, col_kind: 111 };
+        save(&dir, &custom).unwrap();
+        assert_eq!(load(&dir), custom);
+        save(&dir, &Prefs { show_hidden: false, ..Prefs::default() }).unwrap();
         assert!(!load(&dir).show_hidden);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -66,5 +87,9 @@ mod tests {
     fn malformed_or_unknown_lines_keep_defaults() {
         assert_eq!(parse("show_hidden = yes\nother = true\ngarbage"), Prefs::default());
         assert!(parse("show_hidden=true").show_hidden);
+        // A non-numeric width keeps the default width; the Type column is off unless asked for.
+        let parsed = parse("col_size = wide\nshow_type = true");
+        assert_eq!(parsed.col_size, Prefs::default().col_size);
+        assert!(parsed.show_type);
     }
 }

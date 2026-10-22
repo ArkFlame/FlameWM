@@ -46,12 +46,15 @@ button:active { background:var(--hover); }
 .head { color:var(--text); font-size:12px; }
 .cell-name { flex-grow:1; min-width:0; padding-left:14px; display:flex; flex-direction:row; align-items:center; gap:12px; white-space:nowrap; overflow:hidden; }
 .row-ico { width:18px; height:18px; flex-grow:0; }
+/* Image-file thumbnail, shown in place of the type icon (see thumbs.rs). */
+.row-thumb { width:24px; height:24px; }
 .name-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
 /* Dot-file names: a static dim colour, shown instead of .name-text (see main.rs row projection). */
 .name-dim { color:var(--muted); }
-.cell-mod { width:120px; min-width:120px; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-.cell-size { width:100px; min-width:100px; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-.cell-kind { width:130px; min-width:130px; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+/* Widths come from doc.size in main.rs (columns.rs), so the header and every row share one geometry. */
+.cell-mod { flex-grow:0; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.cell-size { flex-grow:0; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.cell-kind { flex-grow:0; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
 
 /* Status strip: item count, activity message, free space and a usage bar in the accent colour. */
 .status { width:100%; height:31px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 14px; color:var(--text); font-size:12px; }
@@ -63,7 +66,9 @@ button:active { background:var(--hover); }
 .usage-fill { width:0px; height:4px; background:var(--accent); border-radius:2px; }
 
 .context { position:absolute; top:105px; left:330px; width:210px; padding:5px; display:flex; flex-direction:column; background:var(--menu); border:1px solid var(--hover); border-radius:11px; }
-.menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; border-radius:3px; }
+.menu-row { justify-content:flex-start; width:198px; height:31px; padding-left:11px; gap:9px; border-radius:3px; }
+/* Menu icons sit left of the label; the set is drawn in a fixed stroke colour (see icons/). */
+.menu-ico { width:16px; height:16px; flex-grow:0; }
 .menu-row:hover { background:var(--hover); }
 
 .progress-popup { position:absolute; bottom:42px; right:18px; width:290px; height:140px; padding:13px; border:1px solid var(--line); border-radius:9px; background:var(--menu); display:flex; flex-direction:column; gap:11px; }
@@ -81,6 +86,14 @@ button:active { background:var(--hover); }
 .dialog-button:hover { background:var(--hover); }
 
 .selection-rectangle { position:absolute; background:var(--accent-soft); border:1px solid var(--accent); border-radius:3px; }
+
+/* Header dividers: 1px light overlay between cells, with a wider invisible grip centred on each line. */
+.col-sep { position:absolute; top:5px; width:1px; height:19px; background:#ffffff26; }
+.col-grip { position:absolute; top:0px; width:8px; height:29px; }
+/* Minimal scrollbar on the list's right edge: drawn only while entries overflow (see scroll.rs). */
+.scroll-track { position:absolute; width:10px; background:transparent; }
+.scroll-thumb { position:absolute; width:6px; border-radius:3px; background:#ffffff48; }
+.scroll-thumb:hover { background:#ffffff70; }
 
 /* Native modal chooser: no new configuration or external GTK dialog. */
 .openwith-dialog { position:absolute; left:320px; top:108px; width:440px; height:466px; background:var(--menu); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
