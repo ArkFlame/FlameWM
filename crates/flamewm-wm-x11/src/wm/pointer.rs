@@ -533,6 +533,9 @@ impl<'a, C: Connection> Wm<'a, C> {
             .map(|target| target.region);
         match region {
             Some(FrameRegion::Control(control)) => Some(control),
+            // Resize strips report y relative to themselves, so the titlebar-band fallback would
+            // mistake the bottom edge for the titlebar and light a control at the same x.
+            Some(FrameRegion::Resize(_)) => None,
             _ => {
                 let state = self.clients.get(&client_id)?;
                 crate::frame::input::frame_control_fallback(

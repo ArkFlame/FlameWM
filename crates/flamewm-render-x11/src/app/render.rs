@@ -735,37 +735,35 @@ impl X11App {
                 self.clip_stack.pop();
                 unsafe { self.apply_clip_stack() };
             }
-            PaintCommand::ScrollbarTrack { rect, .. } => {
-                let rect = scale_rect(*rect, scale);
-                let pixel = unsafe { self.pixel(Color::rgb(48, 49, 52))? };
-                unsafe { XSetForeground(self.display, self.gc, pixel) };
-                unsafe {
-                    XFillRectangle(
-                        self.display,
-                        self.backbuffer,
-                        self.gc,
-                        rect.x.round() as i32,
-                        rect.y.round() as i32,
-                        rect.width.round().max(1.0) as u32,
-                        rect.height.round().max(1.0) as u32,
-                    )
+            // Overlay scrollbar, same look as the explorer's file-list thumb: no reserved track,
+            // a slim translucent rounded thumb 2px in from the edge, drawn over the entries.
+            PaintCommand::ScrollbarTrack { .. } => {}
+            PaintCommand::ScrollbarThumb { rect, horizontal } => {
+                let mut thumb = *rect;
+                if *horizontal {
+                    thumb.y += thumb.height - 8.0;
+                    thumb.height = 6.0;
+                } else {
+                    thumb.x += thumb.width - 8.0;
+                    thumb.width = 6.0;
+                }
+                let rect = scale_rect(thumb, scale);
+                let radius = 3.0 * scale;
+                let color = Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 0x48,
                 };
-            }
-            PaintCommand::ScrollbarThumb { rect, .. } => {
-                let rect = scale_rect(*rect, scale);
-                let pixel = unsafe { self.pixel(Color::rgb(120, 123, 128))? };
-                unsafe { XSetForeground(self.display, self.gc, pixel) };
-                unsafe {
-                    XFillRectangle(
-                        self.display,
-                        self.backbuffer,
-                        self.gc,
-                        rect.x.round() as i32,
-                        rect.y.round() as i32,
-                        rect.width.round().max(1.0) as u32,
-                        rect.height.round().max(1.0) as u32,
-                    )
-                };
+                if let Some(xrender) = self.xrender.as_mut() {
+                    let (rect, radius) = match visible_under(rect, &self.clip_stack) {
+                        Visible::Hidden => return Ok(()),
+                        Visible::Whole => (rect, radius),
+                        Visible::Part(part) => (part, 0.0),
+                    };
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, color)? };
+                }
             }
             PaintCommand::TextShadow {
                 x,
