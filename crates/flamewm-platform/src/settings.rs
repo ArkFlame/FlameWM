@@ -349,7 +349,7 @@ impl Default for ProductSettings {
             start_button_text: String::new(),
             custom_start_icon: String::new(),
             sticky_notes_enabled: true,
-            organize_downloads: true,
+            organize_downloads: false,
             start_menu_color: "#191b1d".to_owned(),
             start_menu_opacity: 50,
             start_menu_blur_percent: 80,

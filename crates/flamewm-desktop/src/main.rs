@@ -424,7 +424,7 @@ fn main() -> Result<(), String> {
         state_path("flamewm-downloads-organizer.state")?,
     )
     .map_err(|error| format!("init downloads organizer: {error}"))?;
-    downloads.set_enabled(setting_bool(&settings, "organizeDownloads", true));
+    downloads.set_enabled(setting_bool(&settings, "organizeDownloads", false));
     let inotify = inotify::Inotify::init().map_err(|error| format!("init inotify: {error}"))?;
     inotify
         .watches()
@@ -831,7 +831,7 @@ fn main() -> Result<(), String> {
                 let mut state = state_cell.borrow_mut();
                 reactor_watch.set(menus_open(&state.menu_rects));
                 // Live toggle: the setting snapshot is the authority; watch add/remove follows it.
-                let organize_wanted = setting_bool(&state.settings, "organizeDownloads", true);
+                let organize_wanted = setting_bool(&state.settings, "organizeDownloads", false);
                 state.downloads.set_enabled(organize_wanted);
                 state.downloads.tick(std::time::Instant::now());
                 if state.downloads.take_notice()
