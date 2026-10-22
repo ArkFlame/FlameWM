@@ -16,6 +16,7 @@ use crate::settings::{Command, SettingsView};
 use crate::store::{FOLLOW_FLAMEWM, TerminalConfig, ThemeStore};
 use crate::theme;
 use crate::themes::{Palette, Theme};
+use crate::glyphs::Arm;
 use crate::view::{GridOptions, Run, Span, grid_runs, text_run};
 use crate::screen::CursorShape;
 
@@ -29,7 +30,18 @@ pub const MAX_GRID_ROWS: usize = crate::pool::POOL_ROWS - 1;
 pub struct Tab {
     pub id: u64,
     pub session: Session,
+    /// Name set with Rename Tab; wins over the title the shell sets.
+    pub title: Option<String>,
 }
+
+/// Inline tab rename in progress: the tab index and the text typed so far.
+pub struct Rename {
+    pub tab: usize,
+    pub text: String,
+}
+
+/// Right-click menu items, in display order. Indexes are matched in `menu_action`.
+const MENU: [&str; 5] = ["New Tab", "Close Tab", "Rename Tab", "Copy", "Paste"];
 
 #[derive(Debug)]
 pub enum View {
@@ -77,6 +89,9 @@ pub struct App {
     pub packaged_root: PathBuf,
     /// Last projected rows and font, so only changed rows reach the UI.
     pub ui: crate::ui::UiCache,
+    /// Open context menu: window row and column of its top-left cell.
+    pub menu: Option<(usize, usize)>,
+    pub rename: Option<Rename>,
 }
 
 impl App {
@@ -118,6 +133,8 @@ impl App {
             first_launch,
             packaged_root,
             ui: crate::ui::UiCache::default(),
+            menu: None,
+            rename: None,
         };
         app.refresh_metrics();
         app.set_window(window.0, window.1);
@@ -127,9 +144,10 @@ impl App {
 
     /// Recomputes cell metrics from the font size.
     pub fn refresh_metrics(&mut self) {
+        // Whole pixels: the text backend hints advances to integer pixels, so a fractional pitch drifts across a row.
         let size = f32::from(self.config.font_size);
-        self.cell_w = size * CELL_WIDTH_RATIO;
-        self.cell_h = size * CELL_HEIGHT_RATIO;
+        self.cell_w = (size * CELL_WIDTH_RATIO).round();
+        self.cell_h = (size * CELL_HEIGHT_RATIO).round();
     }
 
     pub fn reload_themes(&mut self) {
@@ -174,7 +192,7 @@ impl App {
         self.next_id += 1;
         let wake = self.wake.try_clone().map_err(|error| error.to_string())?;
         let session = Session::start(id, &launch, self.pty_size(), self.config.scrollback, self.events.clone(), wake)?;
-        self.tabs.push(Tab { id, session });
+        self.tabs.push(Tab { id, session, title: None });
         self.active = self.tabs.len() - 1;
         self.view_offset = 0;
         self.selection = None;
@@ -359,6 +377,27 @@ impl App {
         if event.phase != UiKeyPhase::Press {
             return;
         }
+        if self.menu.take().is_some() && event.key.eq_ignore_ascii_case("escape") {
+            return;
+        }
+        if self.rename.is_some() {
+            let text = event.text.as_deref().filter(|t| !t.is_empty() && !t.chars().any(char::is_control));
+            match event.key.to_ascii_lowercase().as_str() {
+                "return" | "enter" | "kp_enter" => self.finish_rename(true),
+                "escape" => self.finish_rename(false),
+                "backspace" => {
+                    if let Some(rename) = self.rename.as_mut() {
+                        rename.text.pop();
+                    }
+                }
+                _ => {
+                    if let (Some(rename), Some(text)) = (self.rename.as_mut(), text) {
+                        rename.text.push_str(text);
+                    }
+                }
+            }
+            return;
+        }
         let mods = Mods::from_names(event.modifiers.iter());
         if let Some(shortcut) = keys::shortcut(&event.key, mods) {
             self.shortcut(shortcut);
@@ -520,7 +559,15 @@ impl App {
         let _ = std::fs::write(&self.config_path, self.config.to_toml());
     }
 
-    /// Tab bar layout: labels, the new-tab and settings buttons, and their hit areas on row 0.
+    /// Title shown for tab `index`: the name set by Rename Tab, else the shell's title, else a default.
+    fn tab_title(&self, index: usize) -> String {
+        let tab = &self.tabs[index];
+        let title = tab.title.clone().or_else(|| tab.session.screen.title.clone()).unwrap_or_else(|| format!("Terminal {}", index + 1));
+        title.chars().take(24).collect()
+    }
+
+    /// Tab bar layout: labels, the new-tab and settings buttons, and their hit areas on row 0. The tab strip shows
+    /// only with more than one tab (or while renaming); the settings button always shows.
     pub fn tab_bar(&self) -> (Vec<Run>, Vec<(usize, usize, Hit)>) {
         let fg = self.palette.foreground;
         let muted = self.palette.ansi[8];
@@ -534,22 +581,26 @@ impl App {
             hits.push((0, label.chars().count(), Hit::Settings));
             return (runs, hits);
         }
-        for (index, tab) in self.tabs.iter().enumerate() {
-            let title = tab.session.screen.title.clone().unwrap_or_else(|| format!("Terminal {}", index + 1));
-            let title: String = title.chars().take(24).collect();
-            let active = index == self.active;
-            let label = format!(" {title} ");
-            let width = label.chars().count() + 2;
-            let bg = if active { accent_bg } else { None };
-            let colour = if active { fg } else { muted };
-            runs.push(text_run(col, &label, colour, bg, active));
-            hits.push((col, col + label.chars().count(), Hit::Tab(index)));
-            runs.push(text_run(col + label.chars().count(), "× ", colour, bg, false));
-            hits.push((col + label.chars().count(), col + width, Hit::Close(index)));
-            col += width;
+        if self.tabs.len() > 1 || self.rename.is_some() {
+            for index in 0..self.tabs.len() {
+                let active = index == self.active;
+                let title = match &self.rename {
+                    Some(rename) if rename.tab == index => format!("{}\u{258f}", rename.text),
+                    _ => self.tab_title(index),
+                };
+                let label = format!(" {title} ");
+                let width = label.chars().count() + 2;
+                let bg = if active { accent_bg } else { None };
+                let colour = if active { fg } else { muted };
+                runs.push(text_run(col, &label, colour, bg, active));
+                hits.push((col, col + label.chars().count(), Hit::Tab(index)));
+                runs.push(text_run(col + label.chars().count(), "× ", colour, bg, false));
+                hits.push((col + label.chars().count(), col + width, Hit::Close(index)));
+                col += width;
+            }
+            runs.push(text_run(col, " + ", fg, None, true));
+            hits.push((col, col + 3, Hit::NewTab));
         }
-        runs.push(text_run(col, " + ", fg, None, true));
-        hits.push((col, col + 3, Hit::NewTab));
         let gear = " ⚙ ";
         let gear_col = self.cols.saturating_sub(gear.chars().count());
         runs.push(text_run(gear_col, gear, fg, None, false));
@@ -574,6 +625,9 @@ impl App {
                     None => vec![Vec::new(); self.grid_rows],
                 };
                 rows.extend(grid);
+                if let Some((row, col)) = self.menu {
+                    self.draw_menu(&mut rows, row, col);
+                }
             }
             View::Settings(settings) => {
                 let palette = settings.preview().cloned().unwrap_or_else(|| self.palette.clone());
@@ -588,6 +642,38 @@ impl App {
         rows
     }
 
+    /// Paints the context menu over window rows starting at `row`, column `col`.
+    fn draw_menu(&self, rows: &mut [Vec<Run>], row: usize, col: usize) {
+        let width = menu_width();
+        for (index, item) in MENU.iter().enumerate() {
+            let Some(line) = rows.get_mut(row + index) else { break };
+            let label = format!(" {item:<w$} ", w = width - 2);
+            let run = text_run(col, &label, self.palette.foreground, Some(self.palette.selection), false);
+            *line = overlay(std::mem::take(line), col, width, run);
+        }
+    }
+
+    fn menu_action(&mut self, index: usize) {
+        match index {
+            0 => {
+                let _ = self.open_tab_here();
+            }
+            1 => self.close_tab(self.active),
+            2 => self.rename = Some(Rename { tab: self.active, text: String::new() }),
+            3 => self.copy_to_clipboard(),
+            _ => self.paste(),
+        }
+    }
+
+    /// Ends an inline rename. A blank name clears the custom title, so the shell's title shows again.
+    fn finish_rename(&mut self, commit: bool) {
+        let Some(rename) = self.rename.take() else { return };
+        if let (true, Some(tab)) = (commit, self.tabs.get_mut(rename.tab)) {
+            let name = rename.text.trim();
+            tab.title = (!name.is_empty()).then(|| name.to_owned());
+        }
+    }
+
     /// Mouse and wheel actions from the `terminal.surface` region.
     pub fn pointer(&mut self, event: &UiActionEvent) {
         if event.action == "scroll" {
@@ -599,6 +685,22 @@ impl App {
         }
         let row = (event.y / self.cell_h).floor().max(0.0) as usize;
         let col = (event.x / self.cell_w).floor().max(0.0) as usize;
+        if let Some((menu_row, menu_col)) = self.menu {
+            if event.phase == UiActionPhase::Press && event.button == 1 {
+                self.menu = None;
+                let inside = (menu_row..menu_row + MENU.len()).contains(&row) && (menu_col..menu_col + menu_width()).contains(&col);
+                if inside {
+                    self.menu_action(row - menu_row);
+                    return;
+                }
+            }
+        }
+        let mouse_captured = !event.shift_down() && self.tabs.get(self.active).is_some_and(|tab| tab.session.screen.mouse != MouseMode::Off);
+        if event.phase == UiActionPhase::Release && event.button == 3 && matches!(self.view, View::Terminal) && (row == 0 || !mouse_captured) {
+            let top = (self.grid_rows + 1).saturating_sub(MENU.len());
+            self.menu = Some((row.min(top), col.min(self.cols.saturating_sub(menu_width()))));
+            return;
+        }
         if row == 0 {
             if event.phase == UiActionPhase::Press && event.button == 1 {
                 let (_, hits) = self.tab_bar();
@@ -759,6 +861,35 @@ fn next_click_count(previous: Option<(Instant, usize, usize, u8)>, now: Instant,
 }
 
 /// Inclusive bounds of the word under `col`: letters, digits and `_`. None for a blank or out-of-range cell.
+fn menu_width() -> usize {
+    MENU.iter().map(|item| item.chars().count()).max().unwrap_or(0) + 2
+}
+
+/// Replaces cells `[col, col + width)` of a row with `menu`, keeping the runs on either side.
+fn overlay(row: Vec<Run>, col: usize, width: usize, menu: Run) -> Vec<Run> {
+    let end = col + width;
+    let (mut out, mut right) = (Vec::new(), Vec::new());
+    for run in row {
+        let run_end = run.col + run.cells;
+        if run.col < col {
+            out.push(clip(&run, 0, col.min(run_end) - run.col));
+        }
+        if run_end > end {
+            right.push(clip(&run, end.max(run.col) - run.col, run.cells));
+        }
+    }
+    out.push(menu);
+    out.extend(right);
+    out
+}
+
+/// The part of `run` between cells `from` and `to` (relative to the run). Text is cut by character, one per cell.
+fn clip(run: &Run, from: usize, to: usize) -> Run {
+    let text = run.text.chars().skip(from).take(to - from).collect();
+    let shape = run.shape.map(|arm| Arm { x0: (arm.x0 - from as f32).max(0.0), x1: (arm.x1 - from as f32).min((to - from) as f32), ..arm });
+    Run { col: run.col + from, cells: to - from, text, shape, ..run.clone() }
+}
+
 fn word_bounds(chars: &[char], col: usize) -> Option<(usize, usize)> {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     if !chars.get(col).copied().is_some_and(is_word) {
@@ -778,6 +909,15 @@ fn word_bounds(chars: &[char], col: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_replaces_cells_and_keeps_the_runs_on_either_side() {
+        let row = vec![text_run(0, "abcdef", 1, None, false)];
+        let menu = text_run(2, "XY", 2, Some(3), false);
+        let out = overlay(row, 2, 2, menu);
+        let texts: Vec<(usize, usize, &str)> = out.iter().map(|run| (run.col, run.cells, run.text.as_str())).collect();
+        assert_eq!(texts, vec![(0, 2, "ab"), (2, 2, "XY"), (4, 2, "ef")]);
+    }
 
     #[test]
     fn repeated_presses_on_one_cell_cycle_single_double_triple() {

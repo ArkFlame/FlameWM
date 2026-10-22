@@ -1,6 +1,7 @@
 //! FlameWM Terminal: PTY, VT parser, cell grid, themes and the retained-UI projection. The binary in `main.rs`
 //! wires these to the FlameWM window loop.
 pub mod app;
+pub mod glyphs;
 pub mod keys;
 pub mod parser;
 pub mod pool;

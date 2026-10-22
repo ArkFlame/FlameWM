@@ -1,10 +1,11 @@
 //! Cell grid and settings text to per-row runs. A run is a span of cells that share colours and flags; the UI draws
 //! each run as one absolutely positioned text node on a fixed cell pitch. Pure functions only, so the same code
 //! is unit tested and drives the screen.
+use crate::glyphs::{Arm, blend, glyph_rects};
 use crate::screen::{Cell, Color, CursorShape, Screen, attr};
 use crate::themes::Palette;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Run {
     /// First cell column of the run.
     pub col: usize,
@@ -15,6 +16,8 @@ pub struct Run {
     /// `None` draws no background, so the window surface shows through.
     pub bg: Option<u32>,
     pub bold: bool,
+    /// Set for a box or block glyph: the run is one rectangle (in `fg`) instead of text. `col` and `cells` place it.
+    pub shape: Option<Arm>,
 }
 
 /// Inclusive selection in absolute line coordinates (scrollback first), normalised so `start <= end`.
@@ -69,8 +72,7 @@ fn resolve(color: Color, palette: &Palette, default: u32) -> u32 {
 
 /// Blends `fg` toward `bg` by half, the SGR "faint" rendering.
 fn dimmed(fg: u32, bg: u32) -> u32 {
-    let mix = |shift: u32| ((fg >> shift) & 0xff) / 2 + ((bg >> shift) & 0xff) / 2;
-    (mix(16) << 16) | (mix(8) << 8) | mix(0)
+    blend(fg, bg, 1, 2)
 }
 
 /// Colours of one cell after SGR inverse, dim, selection and cursor are applied.
@@ -128,19 +130,74 @@ pub fn grid_runs(screen: &Screen, palette: &Palette, options: &GridOptions) -> V
             }
             let bold = cell.attrs & attr::BOLD != 0;
             let bg_drawn = bg_visible(bg, palette);
-            let mergeable = runs.last().is_some_and(|last| last.fg == fg && last.bg == bg_drawn && last.bold == bold && last.col + last.cells == col);
-            if mergeable {
-                let last = runs.last_mut().expect("checked above");
-                last.text.push(ch);
-                last.cells += width;
-            } else {
-                runs.push(Run { col, cells: width, text: ch.to_string(), fg, bg: bg_drawn, bold });
+            match glyph_rects(ch, fg, bg) {
+                Some(rects) => {
+                    if bg_drawn.is_some() {
+                        push_text(&mut runs, Text { col, cells: width, ch: ' ', fg, bg: bg_drawn, bold });
+                    }
+                    if !extend_bands(&mut runs, col, &rects) {
+                        for (arm, colour) in rects {
+                            runs.push(Run { col, cells: width, text: "\u{a0}".into(), fg: colour, bg: Some(colour), bold, shape: Some(arm) });
+                        }
+                    }
+                }
+                None => push_text(&mut runs, Text { col, cells: width, ch, fg, bg: bg_drawn, bold }),
             }
             col += width;
         }
         rows.push(runs);
     }
     rows
+}
+
+/// One text cell as a run, merged into the previous run when colours and weight match.
+struct Text {
+    col: usize,
+    cells: usize,
+    ch: char,
+    fg: u32,
+    bg: Option<u32>,
+    bold: bool,
+}
+
+fn push_text(runs: &mut Vec<Run>, cell: Text) {
+    let mergeable = runs.last().is_some_and(|last| {
+        last.shape.is_none() && last.fg == cell.fg && last.bg == cell.bg && last.bold == cell.bold && last.col + last.cells == cell.col
+    });
+    if mergeable {
+        let last = runs.last_mut().expect("checked above");
+        last.text.push(cell.ch);
+        last.cells += cell.cells;
+    } else {
+        runs.push(Run { col: cell.col, cells: cell.cells, text: cell.ch.to_string(), fg: cell.fg, bg: cell.bg, bold: cell.bold, shape: None });
+    }
+}
+
+/// Grows the trailing band runs to cover one more cell when `rects` are full-width bands of the same colours. Returns
+/// false when they do not line up, so the caller starts new runs.
+fn extend_bands(runs: &mut [Run], col: usize, rects: &[(Arm, u32)]) -> bool {
+    let n = rects.len();
+    if n == 0 || runs.len() < n {
+        return false;
+    }
+    let start = runs.len() - n;
+    let tail = &mut runs[start..];
+    let fits = tail.iter().zip(rects).all(|(run, (arm, colour))| {
+        let full = |a: &Arm, cells: f32| a.x0 == 0.0 && a.x1 == cells;
+        run.shape.is_some_and(|shape| full(&shape, run.cells as f32) && shape.y0 == arm.y0 && shape.y1 == arm.y1)
+            && run.fg == *colour
+            && run.col + run.cells == col
+            && full(arm, 1.0)
+    });
+    if fits {
+        for run in tail {
+            run.cells += 1;
+            if let Some(shape) = run.shape.as_mut() {
+                shape.x1 = run.cells as f32;
+            }
+        }
+    }
+    fits
 }
 
 /// Background colour as drawn: the theme's default background is left undrawn so the window surface (and its
@@ -151,7 +208,7 @@ fn bg_visible(bg: u32, palette: &Palette) -> Option<u32> {
 
 /// Converts plain text into one run per line (settings, tab bar). Wide glyphs are not expected here.
 pub fn text_run(col: usize, text: &str, fg: u32, bg: Option<u32>, bold: bool) -> Run {
-    Run { col, cells: text.chars().count(), text: text.to_owned(), fg, bg, bold }
+    Run { col, cells: text.chars().count(), text: text.to_owned(), fg, bg, bold, shape: None }
 }
 
 #[cfg(test)]
@@ -244,9 +301,9 @@ mod tests {
         for (shape, glyph) in [(CursorShape::Underline, '\u{2581}'), (CursorShape::Bar, '\u{258f}')] {
             let rows = grid_runs(&screen, &p, &GridOptions { view_offset: 0, selection: None, cursor: true, cursor_shape: shape });
             let cursor_run = rows[0].iter().find(|r| r.col == 2).expect("cursor run at column 2");
-            assert_eq!(cursor_run.text, glyph.to_string());
+            assert!(cursor_run.shape.is_some(), "{glyph} is drawn as a rectangle");
             assert_eq!(cursor_run.fg, p.cursor);
-            assert_eq!(cursor_run.bg, None, "non-block cursors keep the cell background");
+            assert_eq!(cursor_run.bg, Some(p.cursor));
             assert_eq!(rows[0][0].text, "ab", "the typed text is untouched");
         }
     }

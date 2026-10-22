@@ -8,7 +8,8 @@ use crate::view::Run;
 
 #[derive(Default)]
 pub struct UiCache {
-    rows: Vec<Vec<Run>>,
+    /// `None` until the row is first written, so the placeholder text of unused nodes is hidden on the first frame.
+    rows: Vec<Option<Vec<Run>>>,
     font: Option<u16>,
     surface: Option<(u32, u8)>,
 }
@@ -32,6 +33,7 @@ fn fit(runs: &[Run], slots: usize) -> Vec<Run> {
         fg: tail[0].fg,
         bg: tail[0].bg,
         bold: tail[0].bold,
+        shape: None,
     });
     out
 }
@@ -58,11 +60,11 @@ impl App {
         let frame = self.frame();
         let (cell_w, cell_h) = (self.cell_w, self.cell_h);
         if self.ui.rows.len() != POOL_ROWS {
-            self.ui.rows = vec![Vec::new(); POOL_ROWS];
+            self.ui.rows = vec![None; POOL_ROWS];
         }
         for row in 0..POOL_ROWS {
             let runs: &[Run] = frame.get(row).map_or(&[], Vec::as_slice);
-            if self.ui.rows[row] == runs {
+            if self.ui.rows[row].as_deref() == Some(runs) {
                 continue;
             }
             let fitted = fit(runs, POOL_RUNS);
@@ -72,8 +74,12 @@ impl App {
                     Some(run) => {
                         // nowrap collapses ASCII spaces, so cells are written as no-break spaces to keep their width.
                         doc.text(&id, run.text.replace(' ', "\u{a0}"))?;
-                        doc.position(&id, run.col as f32 * cell_w, row as f32 * cell_h)?;
-                        doc.size(&id, run.cells as f32 * cell_w, cell_h)?;
+                        let (x, y, w, h) = match run.shape {
+                            Some(arm) => ((run.col as f32 + arm.x0) * cell_w, (row as f32 + arm.y0) * cell_h, (arm.x1 - arm.x0) * cell_w, (arm.y1 - arm.y0) * cell_h),
+                            None => (run.col as f32 * cell_w, row as f32 * cell_h, run.cells as f32 * cell_w, cell_h),
+                        };
+                        doc.position(&id, x, y)?;
+                        doc.size(&id, w, h)?;
                         doc.foreground(&id, rgb(run.fg))?;
                         match run.bg {
                             Some(bg) => doc.background(&id, rgb(bg))?,
@@ -85,7 +91,7 @@ impl App {
                     None => doc.visible(&id, false)?,
                 }
             }
-            self.ui.rows[row] = runs.to_vec();
+            self.ui.rows[row] = Some(runs.to_vec());
         }
         Ok(())
     }
@@ -96,7 +102,7 @@ mod tests {
     use super::*;
 
     fn run(col: usize, text: &str) -> Run {
-        Run { col, cells: text.chars().count(), text: text.into(), fg: 0, bg: None, bold: false }
+        Run { col, cells: text.chars().count(), text: text.into(), fg: 0, bg: None, bold: false, shape: None }
     }
 
     #[test]
