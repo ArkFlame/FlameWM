@@ -165,7 +165,7 @@ enum WorkerResult {
     DefaultSaved(Result<(), String>),
     BatchCompleted {report:BatchReport,action:&'static str,cut_sources:Option<Vec<PathBuf>>},
     Completed(Result<String,String>),
-    /// Unmounted removable filesystems from lsblk.
+    /// Unmounted filesystems from lsblk.
     Devices(Vec<bookmarks::BlockDevice>),
     /// Outcome of a udisks2 mount/unmount/eject, already worded for the status strip.
     DeviceDone(Result<String,String>),
@@ -1231,7 +1231,7 @@ impl ExplorerApp {
     /// Mount, unmount or eject a removable device through udisks2 on a worker thread; the outcome is shown in the status strip.
     fn device_action(&mut self,verb:&'static str,device:String,label:String) {
         self.model.status=format!("{} {label}…",match verb {"mount"=>"Mounting","unmount"=>"Unmounting",_=>"Ejecting"});
-        self.spawn_background(move||WorkerResult::DeviceDone(match bookmarks::udisks_action(verb,&device) {
+        self.spawn_background(move||WorkerResult::DeviceDone(match if verb=="eject" {bookmarks::eject_device(&device)} else {bookmarks::udisks_action(verb,&device)} {
             Ok(_)=>Ok(format!("{} {label}",match verb {"mount"=>"Mounted","unmount"=>"Unmounted",_=>"Ejected"})),
             Err(error)=>Err(format!("{verb} {label} failed: {error}")),
         }));

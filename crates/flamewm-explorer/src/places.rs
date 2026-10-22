@@ -289,15 +289,6 @@ impl Json {
             _ => None,
         }
     }
-    /// lsblk prints flags as booleans in recent releases and as "0"/"1" strings in older ones.
-    fn flag(&self) -> bool {
-        match self {
-            Json::Bool(b) => *b,
-            Json::Num(n) => *n != 0.0,
-            Json::Str(s) => s == "1" || s == "true",
-            _ => false,
-        }
-    }
     fn parse(text: &str) -> Option<Json> {
         let mut parser = JsonParser { bytes: text.as_bytes(), at: 0 };
         let value = parser.value(0)?;
@@ -431,16 +422,13 @@ impl JsonParser<'_> {
 /// Filesystems smaller than this are system partitions, not user media.
 const MIN_DEVICE_BYTES: f64 = (64u64 << 20) as f64;
 
-/// Unmounted removable filesystems from `lsblk -J` output. Partitions of a removable disk are listed one by one;
-/// a removable disk without partitions is listed itself. Mounted, swap, unformatted and invalid nodes are skipped.
+/// Unmounted filesystems from `lsblk -J` output, on internal and removable disks alike. Partitions are listed one
+/// by one; a disk without partitions is listed itself. Mounted, swap, encryption/RAID/LVM members, unformatted,
+/// tiny and invalid nodes are skipped.
 pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
     let Some(root) = Json::parse(text) else { return Vec::new() };
     let mut out = Vec::new();
     for disk in root.get("blockdevices").map_or(&[][..], Json::items) {
-        let removable = disk.get("rm").is_some_and(Json::flag) || disk.get("hotplug").is_some_and(Json::flag);
-        if !removable {
-            continue;
-        }
         let partitions = disk.get("children").map_or(&[][..], Json::items);
         let nodes: Vec<&Json> = if partitions.is_empty() { vec![disk] } else { partitions.iter().collect() };
         out.extend(nodes.into_iter().filter_map(unmounted_filesystem));
@@ -451,7 +439,9 @@ pub fn parse_lsblk(text: &str) -> Vec<BlockDevice> {
 fn unmounted_filesystem(node: &Json) -> Option<BlockDevice> {
     let name = node.get("name")?.text()?;
     let fstype = node.get("fstype").and_then(Json::text).unwrap_or("");
-    if fstype.is_empty() || fstype == "swap" || name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
+    // Encrypted, RAID and LVM members hold no mountable filesystem of their own.
+    let member = matches!(fstype, "swap" | "crypto_LUKS" | "LVM2_member" | "linux_raid_member");
+    if fstype.is_empty() || member || name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
         return None;
     }
     // Dolphin hides tiny system partitions; lsblk -b reports sizes in bytes.
@@ -475,17 +465,16 @@ fn unmounted_filesystem(node: &Json) -> Option<BlockDevice> {
         return None;
     }
     let label = node.get("label").and_then(Json::text).map(sanitize_label).filter(|l| !l.is_empty());
-    // Dolphin-style fallback when the filesystem has no label.
-    Some(BlockDevice { device, label: label.unwrap_or_else(|| format!("Removable Device ({name})")) })
+    Some(BlockDevice { device, label: label.unwrap_or_else(|| format!("Volume ({name})")) })
 }
 
-/// Runs `lsblk` and returns unmounted removable filesystems. A missing or failing lsblk yields no devices.
+/// Runs `lsblk` and returns unmounted filesystems. A missing or failing lsblk yields no devices.
 pub fn unmounted_devices() -> Vec<BlockDevice> {
     // Dev-only hook: a saved `lsblk -J` sample stands in for hardware, so screenshots need no real device.
     if let Some(path) = std::env::var_os("FLAMEWM_EXPLORER_FAKE_DEVICES") {
         return fs::read_to_string(path).map(|text| parse_lsblk(&text)).unwrap_or_default();
     }
-    let Ok(output) = Command::new("lsblk").args(["-J", "-b", "-o", "NAME,RM,HOTPLUG,FSTYPE,MOUNTPOINT,LABEL,SIZE"]).output() else {
+    let Ok(output) = Command::new("lsblk").args(["-J", "-b", "-o", "NAME,FSTYPE,MOUNTPOINT,LABEL,SIZE"]).output() else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -520,6 +509,50 @@ pub fn udisks_action(action: &str, device: &str) -> Result<String, String> {
         let message = String::from_utf8_lossy(&output.stderr);
         Err(sanitize_label(message.trim()).chars().take(300).collect::<String>())
     }
+}
+
+/// Name of the drive holding `block_name`: the parent disk of a partition, or the device itself.
+pub fn drive_in(sys_block_root: &Path, block_name: &str) -> String {
+    let dev = sys_block_root.join(block_name);
+    if !dev.join("partition").exists() {
+        return block_name.to_owned();
+    }
+    fs::canonicalize(&dev)
+        .ok()
+        .and_then(|path| path.parent()?.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| block_name.to_owned())
+}
+
+/// Eject a device: unmount its filesystem, then power off the drive that holds it. `run` performs one udisks action
+/// on a device path. A filesystem that is already unmounted is not an error; a busy one gets a plain message.
+pub fn eject_with(
+    device: &str,
+    drive: &str,
+    mut run: impl FnMut(&str, &str) -> Result<String, String>,
+) -> Result<String, String> {
+    let explain = |error: String| {
+        if error.to_lowercase().contains("busy") {
+            "the device is busy: close files or programs using it, then try again".to_owned()
+        } else {
+            error
+        }
+    };
+    if let Err(error) = run("unmount", device) {
+        if !error.to_lowercase().contains("not mounted") {
+            return Err(explain(error));
+        }
+    }
+    run("eject", drive).map_err(explain)
+}
+
+/// Eject for the real system: resolves the drive through sysfs, then runs udisksctl.
+pub fn eject_device(device: &str) -> Result<String, String> {
+    if !valid_device_path(device) {
+        return Err("Refusing invalid device path".into());
+    }
+    let name = device.trim_start_matches("/dev/");
+    let drive = format!("/dev/{}", drive_in(Path::new("/sys/class/block"), name));
+    eject_with(device, &drive, udisks_action)
 }
 
 #[cfg(test)]
@@ -647,7 +680,7 @@ garbage line with no separator
         let devices = parse_lsblk(json);
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].device, "/dev/sdb1");
-        assert_eq!(devices[0].label, "Removable Device (sdb1)");
+        assert_eq!(devices[0].label, "Volume (sdb1)");
     }
 
     #[test]
@@ -661,10 +694,15 @@ garbage line with no separator
     }
 
     #[test]
-    fn lsblk_json_lists_only_unmounted_removable_filesystems() {
+    fn lsblk_json_lists_unmounted_filesystems_on_internal_and_removable_disks() {
         let sample = r#"{"blockdevices": [
             {"name":"sda","rm":false,"hotplug":false,"fstype":null,"mountpoint":null,"label":null,
-             "children":[{"name":"sda1","rm":false,"hotplug":false,"fstype":"ext4","mountpoint":"/","label":null}]},
+             "children":[
+                {"name":"sda1","rm":false,"hotplug":false,"fstype":"ext4","mountpoint":"/","label":null},
+                {"name":"sda2","fstype":"ntfs","mountpoint":null,"label":"Windows","size":500000000000},
+                {"name":"sda3","fstype":"swap","mountpoint":null,"label":null,"size":8000000000},
+                {"name":"sda4","fstype":"crypto_LUKS","mountpoint":null,"label":null,"size":8000000000},
+                {"name":"sda5","fstype":"ext4","mountpoint":null,"label":"Tiny","size":1000}]},
             {"name":"sdb","rm":true,"hotplug":true,"fstype":null,"mountpoint":null,"label":null,
              "children":[
                 {"name":"sdb1","rm":true,"hotplug":true,"fstype":"vfat","mountpoint":"/run/media/u/Backup","label":"Backup"},
@@ -677,13 +715,64 @@ garbage line with no separator
         assert_eq!(
             parse_lsblk(sample),
             vec![
+                BlockDevice { device: "/dev/sda2".into(), label: "Windows".into() },
                 BlockDevice { device: "/dev/sdb2".into(), label: "Stick é".into() },
-                BlockDevice { device: "/dev/sdc".into(), label: "Removable Device (sdc)".into() },
+                BlockDevice { device: "/dev/sdc".into(), label: "Volume (sdc)".into() },
                 BlockDevice { device: "/dev/sde".into(), label: "Camera".into() },
             ]
         );
         assert!(parse_lsblk("not json").is_empty());
         assert!(parse_lsblk(r#"{"blockdevices": [{"name":"sdf","rm":true,"fstype":"vfat"}"#).is_empty());
+    }
+
+    #[test]
+    fn drive_is_parent_disk_for_partitions_and_self_for_disks() {
+        let root = std::env::temp_dir().join(format!("flamewm-drive-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sda/sda1")).unwrap();
+        fs::write(root.join("sda/sda1/partition"), "1\n").unwrap();
+        std::os::unix::fs::symlink(root.join("sda/sda1"), root.join("sda1")).unwrap();
+        fs::create_dir_all(root.join("sdb")).unwrap();
+        assert_eq!(drive_in(&root, "sda1"), "sda");
+        assert_eq!(drive_in(&root, "sda"), "sda");
+        assert_eq!(drive_in(&root, "sdb"), "sdb");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn eject_unmounts_then_powers_off_the_drive() {
+        let mut calls = Vec::new();
+        let result = eject_with("/dev/sdb1", "/dev/sdb", |action, device| {
+            calls.push(format!("{action} {device}"));
+            Ok(String::new())
+        });
+        assert!(result.is_ok());
+        assert_eq!(calls, ["unmount /dev/sdb1", "eject /dev/sdb"]);
+        assert_eq!(udisks_args("eject", "/dev/sdb").unwrap(), ["power-off", "-b", "/dev/sdb"]);
+    }
+
+    #[test]
+    fn eject_skips_unmount_when_already_unmounted_and_reports_busy_without_power_off() {
+        let mut calls = Vec::new();
+        let ok = eject_with("/dev/sdb1", "/dev/sdb", |action, _| {
+            calls.push(action.to_owned());
+            if action == "unmount" { Err("Error unmounting /dev/sdb1: Not mounted".into()) } else { Ok(String::new()) }
+        });
+        assert!(ok.is_ok());
+        assert_eq!(calls, ["unmount", "eject"]);
+
+        let mut calls = Vec::new();
+        let busy = eject_with("/dev/sdb1", "/dev/sdb", |action, _| {
+            calls.push(action.to_owned());
+            Err("Error unmounting /dev/sdb1: Device or resource busy".into())
+        });
+        assert_eq!(busy.unwrap_err(), "the device is busy: close files or programs using it, then try again");
+        assert_eq!(calls, ["unmount"]);
+    }
+
+    #[test]
+    fn eject_device_refuses_invalid_paths_before_running_anything() {
+        assert_eq!(eject_device("/dev/sdb1; rm -rf ~").unwrap_err(), "Refusing invalid device path");
     }
 
     #[test]
