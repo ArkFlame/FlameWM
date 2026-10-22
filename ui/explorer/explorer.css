@@ -1,4 +1,6 @@
-:root { --accent:#ef4048; --surface:#202326; --card:#272a2e; --line:#363b41; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#9ca3ab; --accent-soft:#ef404830; }
+/* --accent and --accent-soft are compile-time placeholders only (neutral grey, the WM's pre-snapshot value). theme.rs overwrites them
+   from the live FlameWM settings snapshot before the first paint, so no accent literal is painted from this file. */
+:root { --accent:#7f878e; --accent-soft:#7f878e30; --surface:#202326; --card:#272a2e; --line:#363b41; --sidebar:#1b1e20; --text:#f1f2f3; --muted:#9ca3ab; }
 * { box-sizing:border-box; }
 html { width:100%; height:100%; }
 body { width:100%; height:100%; margin:0; color:var(--text); background:var(--surface); display:flex; flex-direction:column; overflow:hidden; font-size:13px; }
@@ -44,6 +46,8 @@ button:active { background:#424950; }
 .cell-name { flex-grow:1; min-width:0; padding-left:14px; display:flex; flex-direction:row; align-items:center; gap:12px; white-space:nowrap; overflow:hidden; }
 .row-ico { width:18px; height:18px; flex-grow:0; }
 .name-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; }
+/* Dot-file names: a static dim colour, shown instead of .name-text (see main.rs row projection). */
+.name-dim { color:#767d84; }
 .cell-mod { width:120px; min-width:120px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 .cell-size { width:100px; min-width:100px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }
 .cell-kind { width:130px; min-width:130px; padding-left:12px; color:#b4bac1; white-space:nowrap; overflow:hidden; }

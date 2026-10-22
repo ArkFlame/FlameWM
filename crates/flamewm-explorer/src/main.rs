@@ -55,14 +55,18 @@ const USAGE_TRACK_WIDTH:f32=114.0;
 const TASKBAR_RESERVE:u32=56;
 /// Top edge of the window when there is room for it.
 const WINDOW_TOP:u32=65;
-/// Window size and top edge: the maximum size, clamped to 90% of the work area (root minus taskbar) so small screens fit.
-/// The window never extends into the taskbar, so the status strip stays visible.
+/// WM frame chrome around the client: a 31px titlebar (flamewm-wm-x11 frame/layout `TITLEBAR_H`) plus a 1px border on each side.
+/// The WM draws it outside the client rect, so the height budget must include it or the bottom of the client (the status strip) lands under the taskbar.
+const FRAME_CHROME_HEIGHT:u32=31+2;
+/// Client size and top edge. The whole framed window (client plus chrome) is clamped to 90% of the work area (root minus taskbar),
+/// so the status strip stays above the taskbar at any screen size.
 fn window_frame(root:(u32,u32))->(u32,u32,i32) {
     let work_w=root.0;
     let work_h=root.1.saturating_sub(TASKBAR_RESERVE);
     let w=WINDOW_WIDTH.min((u64::from(work_w)*9/10) as u32).max(1);
-    let h=WINDOW_HEIGHT.min((u64::from(work_h)*9/10) as u32).max(1);
-    let y=WINDOW_TOP.min(work_h.saturating_sub(h));
+    let frame_h=(WINDOW_HEIGHT+FRAME_CHROME_HEIGHT).min((u64::from(work_h)*9/10) as u32);
+    let h=frame_h.saturating_sub(FRAME_CHROME_HEIGHT).max(1);
+    let y=WINDOW_TOP.min(work_h.saturating_sub(frame_h));
     (w,h,y as i32)
 }
 /// Top of the column header: below the toolbar and, with more than one tab, the tab strip.
@@ -1231,6 +1235,9 @@ impl ExplorerApp {
         doc.position("columns",SIDEBAR_WIDTH,header_top(tab_strip))?;
         doc.size("columns",self.window.0-SIDEBAR_WIDTH,HEADER_HEIGHT)?;
         doc.visible("columns",true)?;
+        // The engine has no flex-shrink, so a tall sidebar would push the status strip out of the window.
+        // The body gets an explicit height: window minus toolbar/tabs, the two 1px hairlines and the status strip.
+        doc.size("body-area",self.window.0,(self.window.1-header_top(tab_strip)-2.0-STATUS_STRIP_HEIGHT).max(0.0))?;
         // Sort direction is a drawn triangle per column; only the active column shows one.
         for (column,key) in [(Column::Name,"name"),(Column::Modified,"mod"),(Column::Size,"size"),(Column::Type,"kind")] {
             let active=self.column_sort.column==column;
@@ -1255,11 +1262,12 @@ impl ExplorerApp {
                 doc.text(&format!("size-{slot}"),entry.size_label())?;
                 doc.text(&format!("modified-{slot}"),entry.modified_label())?;
                 doc.text(&format!("kind-{slot}"),view::kind_name(entry))?;
-                // Dot files are dimmed (text only; the icon raster is shared and stays full strength).
+                // Dot files show the dimmed name twin (`name-dim-*`, CSS colour). Foreground overrides cannot reach a
+                // text child, and the icon raster is shared, so the icon stays full strength.
                 let dim=entry.name.starts_with('.');
-                for id in [format!("name-{slot}"),format!("size-{slot}"),format!("modified-{slot}"),format!("kind-{slot}")] {
-                    if dim {doc.foreground(&id,UiColor{r:0xb4,g:0xba,b:0xc1,a:110})?;} else {doc.foreground_clear(&id)?;}
-                }
+                doc.visible(&format!("name-{slot}"),!dim)?;
+                doc.visible(&format!("name-dim-{slot}"),dim)?;
+                doc.text(&format!("name-dim-{slot}"),entry.name.clone())?;
                 let icon=view::file_icon(entry);
                 for kind in ROW_ICONS {doc.visible(&format!("ico-{slot}-{kind}"),kind==icon)?;}
                 doc.background(&row,if self.drop_folder.as_deref()==Some(entry.path.as_path()) {
@@ -1563,10 +1571,12 @@ mod window_frame_tests {
     fn window_stays_above_taskbar_reserve() {
         for root in [(1350,641),(1600,900),(1920,1080),(800,600)] {
             let (w,h,y)=window_frame(root);
-            assert!(y>=0 && (y as u32)+h<=root.1-TASKBAR_RESERVE, "root {root:?} window {w}x{h} at {y}");
+            // The framed window (client plus WM chrome) must end above the taskbar reserve.
+            assert!(y>=0 && (y as u32)+h+FRAME_CHROME_HEIGHT<=root.1-TASKBAR_RESERVE, "root {root:?} window {w}x{h} at {y}");
             assert!(w<=root.0);
         }
         assert_eq!(window_frame((1920,1080)),(1250,740,65));
+        assert_eq!(window_frame((1350,641)),(1215,493,59));
     }
 }
 #[cfg(test)]

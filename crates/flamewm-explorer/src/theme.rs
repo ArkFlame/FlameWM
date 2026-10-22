@@ -2,13 +2,15 @@
 use flamewm_api::settings::{SettingValue,SettingsSnapshot};
 use flamewm_ui_x11::{UiColor,UiDocumentAccess};
 
+/// FlameWM default accent, the same value as flamewm-settings `DEFAULT_ACCENT`. Used only when no settings snapshot supplies `accent`.
+pub const DEFAULT_ACCENT:u32=0xEF4048;
 const MAX_FONT_SIZE_OFFSET:i32=4;
 const MIN_FONT_SIZE_OFFSET:i32=-2;
 
 #[derive(Clone)]
 pub struct ExplorerTheme {accent:UiColor,surface:UiColor,sidebar:UiColor,card:UiColor,accent_alpha:u8,surface_alpha:u8,font_family:Option<String>,font_size_offset:i32,font_bold:bool}
 impl Default for ExplorerTheme {
-    fn default()->Self {Self {accent:rgb(0xef4048),surface:rgb(0x202326),sidebar:rgb(0x1b1e20),card:rgb(0x232629),accent_alpha:70,surface_alpha:255,font_family:None,font_size_offset:0,font_bold:false}}
+    fn default()->Self {Self {accent:rgb(DEFAULT_ACCENT),surface:rgb(0x202326),sidebar:rgb(0x1b1e20),card:rgb(0x232629),accent_alpha:70,surface_alpha:255,font_family:None,font_size_offset:0,font_bold:false}}
 }
 const fn rgb(value:u32)->UiColor {UiColor{r:(value>>16) as u8,g:(value>>8) as u8,b:value as u8,a:255}}
 fn hex(value:&str)->Option<u32> {
@@ -23,7 +25,7 @@ impl ExplorerTheme {
     pub fn from_snapshot(snapshot:&SettingsSnapshot)->Self {
         let mut theme=Self::default();
         if let Some(SettingValue::Text(name))=snapshot.values.get("accent") {
-            theme.accent=rgb(match name.as_str(){"red"=>0xef4048,"blue"=>0x3daee9,"purple"=>0x9b59b6,"teal"=>0x1abc9c,"green"=>0x27ae60,"amber"=>0xf39c12,_=>hex(name).unwrap_or(0xef4048)});
+            theme.accent=rgb(match name.as_str(){"red"=>DEFAULT_ACCENT,"blue"=>0x3daee9,"purple"=>0x9b59b6,"teal"=>0x1abc9c,"green"=>0x27ae60,"amber"=>0xf39c12,_=>hex(name).unwrap_or(DEFAULT_ACCENT)});
         }
         // accentOpacity tints selection and focus fills; the opaque accent stays for the selected row.
         if let Some(SettingValue::Percent(percent))=snapshot.values.get("accentOpacity") {
@@ -81,6 +83,20 @@ mod tests {
         settings.values.insert("surfaceColor".into(),SettingValue::Text("oops".into()));
         let default=ExplorerTheme::default();let mapped=ExplorerTheme::from_snapshot(&settings);
         assert_eq!(mapped.surface.r,default.surface.r);
+    }
+
+    #[test] fn accent_defaults_to_flamewm_default_and_follows_snapshot() {
+        // No snapshot (or no accent key) keeps FlameWM's real default accent, never a private literal.
+        let defaults=ExplorerTheme::from_snapshot(&SettingsSnapshot::new(1));
+        assert_eq!((defaults.accent.r,defaults.accent.g,defaults.accent.b),(0xEF,0x40,0x48));
+        let mut settings=SettingsSnapshot::new(2);
+        settings.values.insert("accent".into(),SettingValue::Text("#3DAEE9".into()));
+        let live=ExplorerTheme::from_snapshot(&settings);
+        assert_eq!((live.accent.r,live.accent.g,live.accent.b),(0x3D,0xAE,0xE9));
+        assert_eq!(live.selection_fill().a,70);
+        settings.values.insert("accent".into(),SettingValue::Text("nonsense".into()));
+        let bad=ExplorerTheme::from_snapshot(&settings);
+        assert_eq!((bad.accent.r,bad.accent.g,bad.accent.b),(0xEF,0x40,0x48));
     }
 
     #[test] fn surface_opacity_font_and_size_offset_map_from_snapshot() {
