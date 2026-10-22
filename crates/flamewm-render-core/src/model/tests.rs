@@ -85,6 +85,28 @@ mod ui_scale_tests {
     }
 
     #[test]
+    fn runtime_foreground_and_weight_reach_the_text_children_of_the_element() {
+        let mut document = labelled_document();
+        document
+            .set_foreground_color("label", ColorValue::Literal(Color::rgb(255, 0, 0)))
+            .expect("foreground");
+        document.set_font_weight("label", 700).expect("weight");
+        let element = document.node_by_id("label").expect("label");
+        let text = document.document.nodes[element as usize]
+            .first_child
+            .expect("text child");
+        for index in [element, text] {
+            let style = document.runtime_style(index, InteractionState::default());
+            assert_eq!(
+                style.color,
+                ColorValue::Literal(Color::rgb(255, 0, 0)),
+                "node {index} colour"
+            );
+            assert_eq!(style.font_weight, 700, "node {index} weight");
+        }
+    }
+
+    #[test]
     fn runtime_font_size_reaches_the_text_children_of_the_element() {
         let mut document = labelled_document();
         document.set_font_size_px("label", 51.0).expect("font size");

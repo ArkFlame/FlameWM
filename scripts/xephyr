@@ -116,7 +116,7 @@ if [[ "$BUILD" == 1 ]]; then
   # and invalidate only its release cache on a source-content change.
   python3 -I tools/ensure_desktop_conversion_cargo.py --profile release --include-ui
   echo "[1/5] Building FlameWM WM + desktop + shell + settings + Explorer + X11 canary"
-  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-x11-canary
+  cargo build --quiet --release -p flamewm-wm -p flamewm-desktop -p flamewm-shell -p flamewm-settings -p flamewm-explorer -p flamewm-terminal -p flamewm-x11-canary
 elif [[ "$BUILD" != 0 ]]; then
   echo "FLAMEWM_XEPHYR_BUILD must be 0 or 1" >&2; exit 2
 fi
@@ -570,6 +570,15 @@ if [[ -n "$explorer_bin" && -x "$explorer_bin" ]]; then
   printf '[Default Applications]\ninode/directory=flamewm-explorer.desktop\n\n[Added Associations]\ninode/directory=flamewm-explorer.desktop;\n\n[Removed Associations]\ninode/directory=org.kde.dolphin.desktop;\n' >"$XDG_CONFIG_HOME/mimeapps.list"
 else
   echo "[xephyr] flamewm-explorer not found; nested folder opens use the system handler" >&2
+fi
+# The nested Terminal entry makes 'Open Terminal Here' and the start menu find flamewm-terminal.
+terminal_bin="$ROOT/.target/release/flamewm-terminal"
+[[ -x "$terminal_bin" ]] || terminal_bin="$(command -v flamewm-terminal || true)"
+if [[ -n "$terminal_bin" && -x "$terminal_bin" ]]; then
+  sed -e "s|^Exec=flamewm-terminal|Exec=$terminal_bin|" -e "s|^TryExec=flamewm-terminal|TryExec=$terminal_bin|" \
+    "$ROOT/packaging/flamewm-terminal.desktop" >"$XDG_DATA_HOME/applications/flamewm-terminal.desktop"
+else
+  echo "[xephyr] flamewm-terminal not found; nested terminal entry is absent" >&2
 fi
 
 echo "[2/5] Starting Xephyr $nested ($SCREEN)"

@@ -60,13 +60,31 @@ impl Clipboard {
         if paths.is_empty() || !paths.iter().all(|path| path.is_absolute()) {
             return Err("clipboard files must be a non-empty list of absolute paths".into());
         }
-        owner::spawn(self.display.clone(), codec::payloads(paths, op))
+        owner::spawn(self.display.clone(), "CLIPBOARD", codec::payloads(paths, op))
     }
 
     /// Takes CLIPBOARD and serves `text` as UTF8_STRING (and STRING for ASCII text) until another
     /// client replaces it. Returns once the selection is owned.
     pub fn set_text(&self, text: &str) -> Result<(), String> {
-        owner::spawn(self.display.clone(), codec::text_payloads(text))
+        owner::spawn(self.display.clone(), "CLIPBOARD", codec::text_payloads(text))
+    }
+
+    /// Takes PRIMARY (the middle-click selection) and serves `text` like `set_text`.
+    pub fn set_primary_text(&self, text: &str) -> Result<(), String> {
+        owner::spawn(self.display.clone(), "PRIMARY", codec::text_payloads(text))
+    }
+
+    /// Reads text from PRIMARY with the same fallback and timeout as `get_text`.
+    pub fn get_primary_text(&self) -> Result<Option<String>, String> {
+        let deadline = Instant::now() + GET_TIMEOUT;
+        let requester = self.requester.lock().map_err(err)?;
+        let primary = requester.primary;
+        if let Some(bytes) = requester.read_selection(primary, requester.utf8_string, deadline)? {
+            return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+        }
+        Ok(requester
+            .read_selection(primary, requester.string, deadline)?
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
     }
 
     /// Reads text from CLIPBOARD, preferring UTF8_STRING and falling back to STRING. Returns
@@ -120,6 +138,7 @@ struct Requester {
     kde_cut: Atom,
     utf8_string: Atom,
     string: Atom,
+    primary: Atom,
 }
 
 impl Requester {
@@ -136,6 +155,7 @@ impl Requester {
                 codec::KDE_CUT,
                 UTF8_STRING,
                 STRING,
+                "PRIMARY",
             ],
         )?;
         let window = owner::helper_window(&conn, screen)?;
@@ -150,16 +170,27 @@ impl Requester {
             kde_cut: atoms[5],
             utf8_string: atoms[6],
             string: atoms[7],
+            primary: atoms[8],
         })
     }
 
-    /// Requests `target`; `None` when refused, absent, or past `deadline`.
+    /// Requests `target` from CLIPBOARD; `None` when refused, absent, or past `deadline`.
     fn read(&self, target: Atom, deadline: Instant) -> Result<Option<Vec<u8>>, String> {
+        self.read_selection(self.selection, target, deadline)
+    }
+
+    /// Requests `target` from `selection`; `None` when refused, absent, or past `deadline`.
+    fn read_selection(
+        &self,
+        selection: Atom,
+        target: Atom,
+        deadline: Instant,
+    ) -> Result<Option<Vec<u8>>, String> {
         if Instant::now() >= deadline {
             return Ok(None);
         }
         self.conn
-            .convert_selection(self.window, self.selection, target, self.data, CURRENT_TIME)
+            .convert_selection(self.window, selection, target, self.data, CURRENT_TIME)
             .map_err(err)?;
         self.conn.flush().map_err(err)?;
         let notify = next_event(

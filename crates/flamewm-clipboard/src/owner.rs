@@ -19,9 +19,10 @@ use crate::{err, intern};
 const TICK_PROPERTY: &str = "_FLAMEWM_CLIPBOARD_TIME";
 const MAX_CHUNK: usize = 64 * 1024;
 
-/// Starts the owner thread and returns once it owns CLIPBOARD (or failed to).
+/// Starts the owner thread and returns once it owns `selection` (CLIPBOARD or PRIMARY), or failed.
 pub(crate) fn spawn(
     display: Option<String>,
+    selection: &'static str,
     payloads: Vec<(&'static str, Vec<u8>)>,
 ) -> Result<(), String> {
     let (ready_tx, ready_rx) = mpsc::channel();
@@ -29,7 +30,7 @@ pub(crate) fn spawn(
         .name("flamewm-clipboard-owner".into())
         .spawn(move || {
             // Failures after the claim have no caller left, so the thread just ends.
-            if let Err(error) = run(display.as_deref(), payloads, &ready_tx) {
+            if let Err(error) = run(display.as_deref(), selection, payloads, &ready_tx) {
                 let _ = ready_tx.send(Err(error));
             }
         })
@@ -78,11 +79,12 @@ struct Transfer {
 
 fn run(
     display: Option<&str>,
+    selection_name: &'static str,
     payloads: Vec<(&'static str, Vec<u8>)>,
     ready: &mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
     let (conn, screen) = x11rb::connect(display).map_err(err)?;
-    let mut names = vec!["CLIPBOARD", "TARGETS", "TIMESTAMP", "INCR", TICK_PROPERTY];
+    let mut names = vec![selection_name, "TARGETS", "TIMESTAMP", "INCR", TICK_PROPERTY];
     names.extend(payloads.iter().map(|(name, _)| *name));
     let atoms = intern(&conn, &names)?;
     let (selection, tick) = (atoms[0], atoms[4]);

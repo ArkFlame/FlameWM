@@ -3,9 +3,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use flamewm_clipboard::{Clipboard, FileOp};
+
+/// Tests pick the first free display number, so they must not start servers concurrently.
+static SERVER_LOCK: Mutex<()> = Mutex::new(());
 
 /// Kills only the Xvfb process this test started.
 struct TestServer(Child);
@@ -44,6 +48,7 @@ fn start_server() -> Option<(TestServer, String)> {
 
 #[test]
 fn set_files_on_one_instance_is_read_by_another() {
+    let _serial = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some((_server, display)) = start_server() else {
         eprintln!("skipped: Xvfb not available or no free display");
         return;
@@ -77,5 +82,27 @@ fn set_files_on_one_instance_is_read_by_another() {
     assert_eq!(
         reader.get_files().expect("get large"),
         Some((large, FileOp::Cut))
+    );
+}
+
+#[test]
+fn primary_text_is_separate_from_clipboard_text() {
+    let _serial = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_server, display)) = start_server() else {
+        eprintln!("skipped: Xvfb not available or no free display");
+        return;
+    };
+    let owner = Clipboard::connect_display(Some(&display)).expect("owner connects");
+    let reader = Clipboard::connect_display(Some(&display)).expect("reader connects");
+
+    owner.set_text("clip-text").expect("set clipboard");
+    owner.set_primary_text("primary-text").expect("set primary");
+    assert_eq!(
+        reader.get_primary_text().expect("get primary"),
+        Some("primary-text".to_owned())
+    );
+    assert_eq!(
+        reader.get_text().expect("get clipboard"),
+        Some("clip-text".to_owned())
     );
 }

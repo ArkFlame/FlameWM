@@ -2,6 +2,7 @@
 //! reporting and the commands that persist theme and config changes. Rendering lives in `ui` and `view`.
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use std::sync::mpsc::Sender;
 
 use flamewm_api::settings::SettingsSnapshot;
@@ -63,6 +64,8 @@ pub struct App {
     pub view: View,
     pub selection: Option<Span>,
     drag_anchor: Option<(usize, usize)>,
+    /// Last primary press: time, absolute row, column and click count (1 to 3).
+    last_click: Option<(Instant, usize, usize, u8)>,
     pub view_offset: usize,
     /// System CLIPBOARD handle. `None` when no X connection is available; copy and paste then stay in-process.
     pub clipboard: Option<flamewm_clipboard::Clipboard>,
@@ -106,6 +109,7 @@ impl App {
             view: View::Terminal,
             selection: None,
             drag_anchor: None,
+            last_click: None,
             view_offset: 0,
             clipboard: None,
             selection_text: String::new(),
@@ -242,6 +246,42 @@ impl App {
         self.selection_text = out.join("\n");
     }
 
+    /// Makes `span` the selection, copies its text, and publishes it on PRIMARY for middle-click.
+    fn select_span(&mut self, span: Span) {
+        self.selection = Some(span);
+        self.copy_selection();
+        if self.selection_text.is_empty() {
+            return;
+        }
+        if let Some(clipboard) = &self.clipboard
+            && let Err(error) = clipboard.set_primary_text(&self.selection_text)
+        {
+            eprintln!("flamewm-terminal: primary selection: {error}");
+        }
+    }
+
+    /// Counts presses on the same cell within 400 ms: 1, 2 (word), 3 (line), then back to 1.
+    fn register_click(&mut self, abs_row: usize, col: usize) -> u8 {
+        let now = Instant::now();
+        let count = next_click_count(self.last_click, now, abs_row, col);
+        self.last_click = Some((now, abs_row, col, count));
+        count
+    }
+
+    fn select_word(&mut self, abs_row: usize, col: usize) {
+        let Some(tab) = self.tabs.get(self.active) else { return };
+        let Some(line) = tab.session.screen.line_abs(abs_row) else { return };
+        let chars: Vec<char> = line.iter().map(|cell| cell.ch).collect();
+        if let Some((start, end)) = word_bounds(&chars, col) {
+            self.select_span(Span::normalised((abs_row, start), (abs_row, end)));
+        }
+    }
+
+    fn select_line(&mut self, abs_row: usize) {
+        let last = self.cols.saturating_sub(1);
+        self.select_span(Span::normalised((abs_row, 0), (abs_row, last)));
+    }
+
     /// Ctrl+Shift+C: the selection goes to the system CLIPBOARD. Without an X connection it stays in-process.
     pub fn copy_to_clipboard(&mut self) {
         self.copy_selection();
@@ -268,6 +308,23 @@ impl App {
             None => None,
         };
         let text = system.unwrap_or_else(|| self.selection_text.clone());
+        self.send_paste(text);
+    }
+
+    /// Middle-click: the PRIMARY selection, or the in-process selection when PRIMARY yields nothing.
+    fn paste_primary(&mut self) {
+        let system = match &self.clipboard {
+            Some(clipboard) => clipboard.get_primary_text().unwrap_or_else(|error| {
+                eprintln!("flamewm-terminal: primary selection: {error}");
+                None
+            }),
+            None => None,
+        };
+        let text = system.unwrap_or_else(|| self.selection_text.clone());
+        self.send_paste(text);
+    }
+
+    fn send_paste(&mut self, text: String) {
         if text.is_empty() {
             return;
         }
@@ -573,9 +630,15 @@ impl App {
         }
         match event.phase {
             UiActionPhase::Press if event.button == 1 => {
-                self.drag_anchor = Some((abs_row, col));
                 self.selection = None;
+                self.drag_anchor = None;
+                match self.register_click(abs_row, col) {
+                    2 => self.select_word(abs_row, col),
+                    3 => self.select_line(abs_row),
+                    _ => self.drag_anchor = Some((abs_row, col)),
+                }
             }
+            UiActionPhase::Press if event.button == 2 => self.paste_primary(),
             UiActionPhase::Motion | UiActionPhase::Hover if self.drag_anchor.is_some() => {
                 if let Some(anchor) = self.drag_anchor {
                     self.selection = Some(Span::normalised(anchor, (abs_row, col)));
@@ -586,8 +649,7 @@ impl App {
                     if anchor == (abs_row, col) {
                         self.selection = None;
                     } else {
-                        self.selection = Some(Span::normalised(anchor, (abs_row, col)));
-                        self.copy_selection();
+                        self.select_span(Span::normalised(anchor, (abs_row, col)));
                     }
                 }
             }
@@ -682,9 +744,72 @@ fn mouse_report_raw_x10(code: u8, col: usize, row: usize) -> Vec<u8> {
     vec![0x1b, b'[', b'M', code.saturating_add(32), clamp(col), clamp(row)]
 }
 
+/// Click count for a press at (`row`, `col`) at `now`, given the previous press.
+fn next_click_count(previous: Option<(Instant, usize, usize, u8)>, now: Instant, row: usize, col: usize) -> u8 {
+    const MULTI_CLICK: Duration = Duration::from_millis(400);
+    match previous {
+        Some((at, prev_row, prev_col, count))
+            if prev_row == row && prev_col == col && now.duration_since(at) <= MULTI_CLICK =>
+        {
+            count % 3 + 1
+        }
+        _ => 1,
+    }
+}
+
+/// Inclusive bounds of the word under `col`: letters, digits and `_`. None for a blank or out-of-range cell.
+fn word_bounds(chars: &[char], col: usize) -> Option<(usize, usize)> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    if !chars.get(col).copied().is_some_and(is_word) {
+        return None;
+    }
+    let mut start = col;
+    while start > 0 && is_word(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end + 1 < chars.len() && is_word(chars[end + 1]) {
+        end += 1;
+    }
+    Some((start, end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_presses_on_one_cell_cycle_single_double_triple() {
+        let t0 = Instant::now();
+        let first = next_click_count(None, t0, 3, 4);
+        assert_eq!(first, 1);
+        let second = next_click_count(Some((t0, 3, 4, first)), t0 + Duration::from_millis(100), 3, 4);
+        assert_eq!(second, 2);
+        let third = next_click_count(Some((t0, 3, 4, second)), t0 + Duration::from_millis(200), 3, 4);
+        assert_eq!(third, 3);
+        let fourth = next_click_count(Some((t0, 3, 4, third)), t0 + Duration::from_millis(300), 3, 4);
+        assert_eq!(fourth, 1);
+    }
+
+    #[test]
+    fn slow_or_moved_presses_start_over() {
+        let t0 = Instant::now();
+        assert_eq!(next_click_count(Some((t0, 3, 4, 1)), t0 + Duration::from_millis(900), 3, 4), 1);
+        assert_eq!(next_click_count(Some((t0, 3, 4, 1)), t0 + Duration::from_millis(50), 3, 5), 1);
+        assert_eq!(next_click_count(Some((t0, 3, 4, 1)), t0 + Duration::from_millis(50), 2, 4), 1);
+    }
+
+    #[test]
+    fn word_bounds_cover_the_word_under_the_column_only() {
+        let chars: Vec<char> = "ls -la foo_bar.rs".chars().collect();
+        assert_eq!(word_bounds(&chars, 0), Some((0, 1)));
+        assert_eq!(word_bounds(&chars, 4), Some((4, 5)));
+        assert_eq!(word_bounds(&chars, 9), Some((7, 13)));
+        assert_eq!(word_bounds(&chars, 14), None);
+        assert_eq!(word_bounds(&chars, 15), Some((15, 16)));
+        assert_eq!(word_bounds(&chars, 2), None);
+        assert_eq!(word_bounds(&chars, 99), None);
+    }
 
     #[test]
     fn sgr_mouse_press_and_release_are_one_based() {

@@ -340,7 +340,9 @@ impl RuntimeDocument {
     }
 
     pub fn set_foreground_color(&mut self, id: &str, color: ColorValue) -> Result<(), String> {
-        self.override_entry(id)?.color = Some(color);
+        let index = self.require_node(id)?;
+        self.style_overrides.entry(index).or_default().color = Some(color.clone());
+        self.mirror_to_text_children(index, |style| style.color = Some(color.clone()));
         self.touch();
         Ok(())
     }
@@ -367,22 +369,33 @@ impl RuntimeDocument {
         }
         let index = self.require_node(id)?;
         self.style_overrides.entry(index).or_default().font_size = Some(size);
-        // Text children are measured with their own compile-time style, so the element override alone
-        // never reaches the glyphs: mirror it onto the element's direct text children.
+        self.mirror_to_text_children(index, |style| style.font_size = Some(size));
+        Ok(())
+    }
+
+    /// Text children are measured with their own compile-time style, so an element override alone
+    /// never reaches the glyphs: apply the same override to the element's direct text children.
+    fn mirror_to_text_children(
+        &mut self,
+        index: u32,
+        apply: impl Fn(&mut RuntimeStyleOverride),
+    ) {
         let mut child = self.document.nodes[index as usize].first_child;
         while let Some(current) = child {
             let node = &self.document.nodes[current as usize];
             let next = node.next_sibling;
             if node.kind == NodeKind::Text {
-                self.style_overrides.entry(current).or_default().font_size = Some(size);
+                apply(self.style_overrides.entry(current).or_default());
             }
             child = next;
         }
-        Ok(())
     }
 
     pub fn set_font_weight(&mut self, id: &str, weight: u16) -> Result<(), String> {
-        self.override_entry(id)?.font_weight = Some(weight.clamp(100, 900));
+        let weight = Some(weight.clamp(100, 900));
+        let index = self.require_node(id)?;
+        self.style_overrides.entry(index).or_default().font_weight = weight;
+        self.mirror_to_text_children(index, |style| style.font_weight = weight);
         Ok(())
     }
 

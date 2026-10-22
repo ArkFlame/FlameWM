@@ -28,3 +28,10 @@ capability = "j11-g08-prefixed-env"
 reason = "FlameWM Terminal starts the user's login shell, which is defined by the SHELL variable; the guard only admits FLAMEWM_, XDG_ and similar prefixes."
 canonical_target = "crates/flamewm-terminal/src/pty.rs"
 remove_by = "0.2.0"
+
+[[exception]]
+path = "crates/flamewm-remote-fs/src/client.rs"
+capability = "j11-g08-prefixed-env"
+reason = "The remote filesystem client names its per-user fallback runtime directory from USER, the standard login name; the guard only admits FLAMEWM_, XDG_ and similar prefixes."
+canonical_target = "crates/flamewm-remote-fs/src/client.rs"
+remove_by = "0.2.0"
