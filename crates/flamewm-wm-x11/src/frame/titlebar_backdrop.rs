@@ -163,6 +163,11 @@ pub fn set_wallpaper_source(source: WallpaperSource) -> u32 {
         state.natural = None;
         state.cache.clear();
         state.retained = None;
+        // Decode now, not on the first drag press: a full wallpaper decode there cost ~280ms CPU.
+        if let Some(WallpaperSource::Image { path, .. }) = state.source.as_ref() {
+            let file = wallpaper_file(path);
+            state.natural = wallpaper::decode_file(&file).ok().map(|image| (file, image));
+        }
     }
     state.generation
 }
