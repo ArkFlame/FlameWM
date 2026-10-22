@@ -905,6 +905,30 @@ mod tests {
     }
 
     #[test]
+    fn content_hash_sees_every_byte_including_the_word_tail() {
+        // 8-byte words plus a 3-byte remainder: a change in the tail must change the hash.
+        let base: Vec<u8> = (0u8..19).collect();
+        let base_hash = external_content_hash(&base);
+        for index in 0..base.len() {
+            let mut changed = base.clone();
+            changed[index] ^= 0x80;
+            assert_ne!(
+                base_hash,
+                external_content_hash(&changed),
+                "byte {index} edit must change the content hash"
+            );
+        }
+    }
+
+    #[test]
+    fn content_hash_separates_lengths_with_identical_prefix() {
+        let short = vec![7u8; 8];
+        let long = vec![7u8; 16];
+        assert_ne!(external_content_hash(&short), external_content_hash(&long));
+        assert_ne!(external_content_hash(&[]), external_content_hash(&[0]));
+    }
+
+    #[test]
     fn rgba_length_validated_before_touching_display() {
         assert!(expected_rgba_len(2, 2, &vec![0u8; 15]).is_err());
         assert!(expected_rgba_len(2, 2, &vec![0u8; 16]).is_ok());

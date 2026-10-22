@@ -7,6 +7,46 @@ use super::xdnd::SELECTION_NOTIFY;
 use crate::runtime::{RawPress, RawPressWatch};
 use crate::xinput::{GENERIC_EVENT, generic_cookie};
 
+/// Folds a run of queued ConfigureNotify events into the newest one. `next_matching` yields
+/// the next queued event only while it belongs to this window; the first `None` ends the run.
+pub(crate) fn newest_configure<T>(first: T, mut next_matching: impl FnMut() -> Option<T>) -> T {
+    let mut newest = first;
+    while let Some(next) = next_matching() {
+        newest = next;
+    }
+    newest
+}
+
+#[cfg(test)]
+mod configure_coalescing_regressions {
+    use super::newest_configure;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn drag_run_adopts_only_the_newest_size() {
+        let mut queue: VecDeque<(u32, u32)> = VecDeque::from([(501, 400), (502, 400), (560, 430)]);
+        let newest = newest_configure((500, 400), || queue.pop_front());
+        assert_eq!(newest, (560, 430));
+        assert!(queue.is_empty(), "every queued configure is consumed");
+    }
+
+    #[test]
+    fn empty_queue_keeps_the_first_event() {
+        let mut queue: VecDeque<(u32, u32)> = VecDeque::new();
+        assert_eq!(newest_configure((500, 400), || queue.pop_front()), (500, 400));
+    }
+
+    #[test]
+    fn run_stops_at_first_foreign_event_and_leaves_the_rest_queued() {
+        // `None` models a queue head that is not a ConfigureNotify for this window.
+        let mut queue: VecDeque<Option<(u32, u32)>> =
+            VecDeque::from([Some((510, 400)), None, Some((999, 999))]);
+        let newest = newest_configure((500, 400), || queue.pop_front().flatten());
+        assert_eq!(newest, (510, 400));
+        assert_eq!(queue.len(), 1, "events after the foreign one are not consumed");
+    }
+}
+
 fn keyboard_text(symbol: u64) -> Option<String> {
     match symbol {
         XK_BACK_SPACE => Some("\u{8}".to_string()),
@@ -330,27 +370,31 @@ impl X11App {
                     // state (recreate backbuffer, mark Full, shape follows).
                     // No XMoveResizeWindow echo: the native move is owned by
                     // SurfaceController::move_resize only.
-                    let mut configure = unsafe { event.xconfigure };
                     // Coalesce: a drag queues many ConfigureNotify; only the newest size is adopted.
-                    while unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } > 0 {
+                    let window = self.window;
+                    let display = self.display;
+                    let configure = newest_configure(unsafe { event.xconfigure }, || {
+                        if unsafe { XEventsQueued(display, QUEUED_AFTER_READING) } <= 0 {
+                            return None;
+                        }
                         let mut peeked = MaybeUninit::<XEvent>::uninit();
                         // SAFETY: XPeekEvent initializes the supplied XEvent storage.
-                        unsafe { XPeekEvent(self.display, peeked.as_mut_ptr()) };
+                        unsafe { XPeekEvent(display, peeked.as_mut_ptr()) };
                         // SAFETY: XPeekEvent wrote a complete XEvent into the storage.
                         let peeked = unsafe { peeked.assume_init() };
                         // SAFETY: type_ and xany are the common XEvent prefix.
                         if unsafe { peeked.type_ } != CONFIGURE_NOTIFY
                             // SAFETY: xany is valid after checking the common prefix.
-                            || unsafe { peeked.xany.window } != self.window
+                            || unsafe { peeked.xany.window } != window
                         {
-                            break;
+                            return None;
                         }
                         let mut queued = MaybeUninit::<XEvent>::uninit();
                         // SAFETY: XNextEvent removes the exact event XPeekEvent reported.
-                        unsafe { XNextEvent(self.display, queued.as_mut_ptr()) };
+                        unsafe { XNextEvent(display, queued.as_mut_ptr()) };
                         // SAFETY: the removed event was checked as CONFIGURE_NOTIFY above.
-                        configure = unsafe { queued.assume_init().xconfigure };
-                    }
+                        Some(unsafe { queued.assume_init().xconfigure })
+                    });
                     let width = configure.width.max(1) as u32;
                     let height = configure.height.max(1) as u32;
                     if self.window_backdrop.is_some() {
@@ -363,6 +407,11 @@ impl X11App {
                         self.pending_window_resize = Some((width, height));
                         // SAFETY: The display, window, and retained backbuffer belong to this app.
                         unsafe { self.recreate_backbuffer()? };
+                        // Shrink only once the resize has settled (no queued X events).
+                        // SAFETY: display is live; the queue probe does not consume events.
+                        if unsafe { XEventsQueued(self.display, QUEUED_AFTER_READING) } <= 0 {
+                            unsafe { self.shrink_backbuffer_if_settled()? };
+                        }
                         self.mark_full();
                         // SAFETY: window and display are live; mask follows resize.
                         unsafe { self.refresh_shape_mask(document) };
@@ -935,7 +984,39 @@ impl X11App {
         };
     }
 
+    /// Makes the backbuffer hold the current window size. Grow-only pool: a window that
+    /// still fits the existing capacity reuses the pixmap and its XRender picture, so a
+    /// resize step costs no allocation. Shrinking happens only on settle (see below).
     pub(crate) unsafe fn recreate_backbuffer(&mut self) -> Result<(), String> {
+        let root = self.root_extent();
+        let target = super::backbuffer_pool::grown_capacity(
+            self.backbuffer_cap,
+            (self.width, self.height),
+            root,
+        );
+        if target == self.backbuffer_cap {
+            return Ok(());
+        }
+        // SAFETY: forwarded caller contract; the swap owns the display-live handles.
+        unsafe { self.swap_backbuffer(target) }
+    }
+
+    /// Settle-time shrink: releases an oversized backbuffer once the resize has stopped.
+    pub(crate) unsafe fn shrink_backbuffer_if_settled(&mut self) -> Result<(), String> {
+        let root = self.root_extent();
+        match super::backbuffer_pool::settled_capacity(
+            self.backbuffer_cap,
+            (self.width, self.height),
+            root,
+        ) {
+            // SAFETY: forwarded caller contract; the swap owns the display-live handles.
+            Some(target) => unsafe { self.swap_backbuffer(target) },
+            None => Ok(()),
+        }
+    }
+
+    /// Replaces the backbuffer pixmap with one of `capacity` pixels.
+    unsafe fn swap_backbuffer(&mut self, capacity: (u32, u32)) -> Result<(), String> {
         // Resize retarget lifecycle: checked replacement first, retarget
         // Xft/XRender (Pictures freed before Pixmaps on failure paths),
         // then swap + free the stale pixmap through the allocator ledger.
@@ -945,8 +1026,8 @@ impl X11App {
             self.allocator.create_pixmap(
                 self.display,
                 self.window,
-                self.width,
-                self.height,
+                capacity.0,
+                capacity.1,
                 self.depth as u32,
                 root_w,
                 root_h,
@@ -979,6 +1060,7 @@ impl X11App {
         let previous_bytes = self.backbuffer_bytes;
         self.backbuffer = replacement;
         self.backbuffer_bytes = replacement_bytes;
+        self.backbuffer_cap = capacity;
         refresh_backbuffer_gauge(replacement_bytes as u64);
         if let Some(surface) = self.surface.as_mut() {
             surface.pixmap = replacement;

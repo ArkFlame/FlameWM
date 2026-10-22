@@ -35,6 +35,7 @@ use cursor_theme::{SurfaceCursor, share_surface_cursor};
 mod color;
 mod cursor;
 mod xdnd;
+mod backbuffer_pool;
 mod cursor_theme;
 mod events;
 mod geometry;
@@ -147,6 +148,8 @@ pub(crate) struct X11App {
     images: HashMap<ImageCacheKey, CachedImage>,
     pub(crate) allocator: X11ResourceAllocator,
     backbuffer_bytes: usize,
+    /// Pixel capacity of `backbuffer` (>= window size); see `backbuffer_pool`.
+    pub(crate) backbuffer_cap: (u32, u32),
     pub(crate) cursors: HashMap<CursorKind, Cursor>,
     pub(crate) current_cursor: Option<CursorKind>,
     pub(crate) xcursor: Option<Rc<RefCell<SurfaceCursor>>>,
@@ -547,6 +550,7 @@ impl X11App {
             images: HashMap::new(),
             allocator,
             backbuffer_bytes,
+            backbuffer_cap: (config.width.max(1), config.height.max(1)),
             cursors,
             current_cursor: None,
             xcursor: Some(xcursor),

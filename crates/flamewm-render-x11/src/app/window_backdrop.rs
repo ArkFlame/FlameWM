@@ -17,6 +17,25 @@ use crate::xlib_ext::XTranslateCoordinates;
 /// often and a trailing capture lands once the pointer stops (see `arm_backdrop_deadline`).
 pub(crate) const CAPTURE_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Outcome of the capture throttle for one refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureThrottle {
+    /// Capture now.
+    Capture,
+    /// Too soon after the last capture: stay stale and wake at this trailing instant.
+    Defer(Instant),
+}
+
+/// Pure throttle: captures at most once per `interval`; a deferred capture is due exactly
+/// `interval` after the last one.
+#[must_use]
+pub(crate) fn throttle_capture(last: Option<Instant>, now: Instant, interval: Duration) -> CaptureThrottle {
+    match last {
+        Some(last) if now.duration_since(last) < interval => CaptureThrottle::Defer(last + interval),
+        _ => CaptureThrottle::Capture,
+    }
+}
+
 /// Per-window state: the spec, the decoded wallpaper cache, and whether a capture is due.
 #[derive(Debug)]
 pub(crate) struct WindowBackdropState {
@@ -71,9 +90,11 @@ impl X11App {
         let Some(state) = self.window_backdrop.as_mut() else {
             return;
         };
-        if let Some(last) = state.last_capture.filter(|last| now.duration_since(*last) < CAPTURE_INTERVAL) {
+        if let CaptureThrottle::Defer(deadline) =
+            throttle_capture(state.last_capture, now, CAPTURE_INTERVAL)
+        {
             // Throttled: keep the snapshot stale and wake again at the trailing edge.
-            self.backdrop_deadline = Some(last + CAPTURE_INTERVAL);
+            self.backdrop_deadline = Some(deadline);
             return;
         }
         state.stale = false;
@@ -204,5 +225,44 @@ fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage>
         pixels.extend_from_slice(&image.pixels[start..start + row]);
     }
     Some(RgbaImage { width: w, height: h, pixels })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INTERVAL: Duration = Duration::from_millis(250);
+
+    #[test]
+    fn first_capture_is_never_throttled() {
+        assert_eq!(
+            throttle_capture(None, Instant::now(), INTERVAL),
+            CaptureThrottle::Capture
+        );
+    }
+
+    #[test]
+    fn capture_inside_interval_defers_to_trailing_edge() {
+        let last = Instant::now();
+        let now = last + Duration::from_millis(100);
+        assert_eq!(
+            throttle_capture(Some(last), now, INTERVAL),
+            CaptureThrottle::Defer(last + INTERVAL),
+            "trailing deadline is last capture + interval, not now + interval"
+        );
+    }
+
+    #[test]
+    fn capture_at_or_after_interval_is_allowed() {
+        let last = Instant::now();
+        assert_eq!(
+            throttle_capture(Some(last), last + INTERVAL, INTERVAL),
+            CaptureThrottle::Capture
+        );
+        assert_eq!(
+            throttle_capture(Some(last), last + INTERVAL * 3, INTERVAL),
+            CaptureThrottle::Capture
+        );
+    }
 }
 
