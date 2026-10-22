@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_short, c_uchar, c_ulong, c_ushort};
+use std::os::raw::{c_char, c_int, c_short, c_uchar, c_ulong, c_ushort, c_void};
 use std::path::Path;
 use std::ptr;
 
@@ -12,7 +12,7 @@ use flamewm_render_core::Color;
 use crate::ffi::dynamic_library::DynamicLibrary;
 use crate::xlib::{
     Colormap, Display, Drawable, Visual, XCreateGC, XCreatePixmap, XDestroyImage, XFillRectangle,
-    XFreeGC, XFreePixmap, XGetImage, XImageHead, XRootWindow, XSetForeground, ZPIXMAP,
+    XFreeGC, XFreePixmap, XGetImage, XImageHead, XRectangle, XRootWindow, XSetForeground, ZPIXMAP,
 };
 
 #[repr(C)]
@@ -82,6 +82,10 @@ type XftDrawCreateFn =
 type XftDrawDestroyFn = unsafe extern "C" fn(*mut XftDraw);
 type XftDrawCreateAlphaFn = unsafe extern "C" fn(*mut Display, Drawable, c_int) -> *mut XftDraw;
 type XftDrawChangeFn = unsafe extern "C" fn(*mut XftDraw, Drawable);
+/// `XftDrawSetClip(draw, region)`; a null region removes the clip.
+type XftDrawSetClipFn = unsafe extern "C" fn(*mut XftDraw, *const c_void);
+type XftDrawSetClipRectanglesFn =
+    unsafe extern "C" fn(*mut XftDraw, c_int, c_int, *const XRectangle, c_int) -> c_int;
 type XftDrawStringUtf8Fn = unsafe extern "C" fn(
     *mut XftDraw,
     *const XftColor,
@@ -115,6 +119,8 @@ struct XftApi {
     draw_create_alpha: Option<XftDrawCreateAlphaFn>,
     draw_change: XftDrawChangeFn,
     draw_string_utf8: XftDrawStringUtf8Fn,
+    draw_set_clip: Option<XftDrawSetClipFn>,
+    draw_set_clip_rectangles: Option<XftDrawSetClipRectanglesFn>,
     text_extents_utf8: Option<XftTextExtentsUtf8Fn>,
     font_open_name: XftFontOpenNameFn,
     font_close: XftFontCloseFn,
@@ -170,6 +176,10 @@ impl XftBackend {
             draw_create_alpha: unsafe { xft_library.symbol(b"XftDrawCreateAlpha\0").ok() },
             draw_change: unsafe { xft_library.symbol(b"XftDrawChange\0") }?,
             draw_string_utf8: unsafe { xft_library.symbol(b"XftDrawStringUtf8\0") }?,
+            draw_set_clip: unsafe { xft_library.symbol(b"XftDrawSetClip\0").ok() },
+            draw_set_clip_rectangles: unsafe {
+                xft_library.symbol(b"XftDrawSetClipRectangles\0").ok()
+            },
             text_extents_utf8: unsafe { xft_library.symbol(b"XftTextExtentsUtf8\0").ok() },
             font_open_name: unsafe { xft_library.symbol(b"XftFontOpenName\0") }?,
             font_close: unsafe { xft_library.symbol(b"XftFontClose\0") }?,
@@ -237,6 +247,35 @@ impl XftBackend {
         // SAFETY: `self.draw` is a live XftDraw and caller guarantees `drawable`
         // is valid for `display` per this method's contract.
         unsafe { (self.api.draw_change)(self.draw, drawable) };
+    }
+
+    /// Restricts later glyph draws to `clip` (device pixels, `x y w h`); `None` removes the
+    /// restriction. Xft keeps its own draw clip, so the GC clip stack does not reach text.
+    /// # Safety
+    /// `self.draw` must be a live XftDraw on this backend's display.
+    pub unsafe fn set_clip(&mut self, clip: Option<(i32, i32, u32, u32)>) {
+        match clip {
+            Some((x, y, width, height)) => {
+                let Some(set_rects) = self.api.draw_set_clip_rectangles else {
+                    return;
+                };
+                let rect = XRectangle {
+                    x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                    y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                    width: width.min(u16::MAX as u32) as u16,
+                    height: height.min(u16::MAX as u32) as u16,
+                };
+                // SAFETY: `self.draw` is live per the contract; `rect` outlives the call.
+                unsafe { set_rects(self.draw, 0, 0, &rect, 1) };
+            }
+            None => {
+                let Some(set_clip) = self.api.draw_set_clip else {
+                    return;
+                };
+                // SAFETY: `self.draw` is live per the contract; a null region removes the clip.
+                unsafe { set_clip(self.draw, ptr::null()) };
+            }
+        }
     }
 
     pub unsafe fn set_preferred_family(&mut self, family: &str) {

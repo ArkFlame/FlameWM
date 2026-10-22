@@ -32,6 +32,7 @@ use crate::surface_controller::{RawPressSelection, xi_raw_press_opcode};
 use cursor::cursor_shape;
 use cursor_theme::{SurfaceCursor, share_surface_cursor};
 
+mod clip;
 mod color;
 mod cursor;
 mod xdnd;
@@ -231,6 +232,9 @@ impl X11App {
         y: i32,
         initially_visible: bool,
     ) -> Result<Self, String> {
+        // Every app display gets the non-fatal protocol handler: a BadWindow from a reply to a
+        // vanished peer (XDND source) must not exit the process. Idempotent per process.
+        install_x_protocol_error_handler();
         let screen = unsafe { XDefaultScreen(display) };
         let root = unsafe { XRootWindow(display, screen) };
         let width = config.width.max(1);

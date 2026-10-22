@@ -252,6 +252,11 @@ thread_local! {
         std::cell::RefCell::default();
 }
 
+/// Blur runs on a snapshot shrunk by this factor once the radius is large: the blur cost falls with
+/// the pixel count, and the soft result is upscaled bilinearly. Below twice the factor the blur is
+/// already cheap, so it stays at full resolution.
+const BLUR_DOWNSCALE: u32 = 4;
+
 /// Opaque ARGB32 words (0xFFRRGGBB) for a straight RGBA8 snapshot, blurred per
 /// [`blur_radius_px`]. Takes ownership so the blur runs in place without a copy.
 /// Blur failure keeps the unblurred pixels.
@@ -264,23 +269,94 @@ pub fn blurred_argb_words(
     blur_percent: u8,
 ) -> Vec<u32> {
     let radius = blur_radius_px(opacity_percent, blur_percent);
+    if radius >= 2.0 * BLUR_DOWNSCALE as f32 {
+        let (mut small, small_w, small_h) = box_downscale(&rgba, width, height, BLUR_DOWNSCALE);
+        blur_in_place_slice(&mut small, small_w, small_h, radius / BLUR_DOWNSCALE as f32);
+        return bilinear_argb_words(&small, small_w, small_h, width, height);
+    }
     if radius > 0.0 {
-        let blurred = BLUR_SCRATCH.with(|scratch| {
-            flamewm_image_core::blur::gaussian_blur_rgba_with(
-                &mut scratch.borrow_mut(),
-                &mut rgba,
-                width,
-                height,
-                radius,
-            )
-        });
-        if let Err(error) = blurred {
-            eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
-        }
+        blur_in_place_slice(&mut rgba, width, height, radius);
     }
     rgba.chunks_exact(4)
         .map(|p| 0xff00_0000 | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
         .collect()
+}
+
+/// Gaussian blur through the shared scratch buffers. A failure keeps the input pixels.
+fn blur_in_place_slice(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
+    let blurred = BLUR_SCRATCH.with(|scratch| {
+        flamewm_image_core::blur::gaussian_blur_rgba_with(
+            &mut scratch.borrow_mut(),
+            pixels,
+            width,
+            height,
+            radius,
+        )
+    });
+    if let Err(error) = blurred {
+        eprintln!("flamewm-render-x11: backdrop blur skipped: {error:?}");
+    }
+}
+
+/// Averages `factor` by `factor` blocks (edge blocks average what is inside the image).
+fn box_downscale(rgba: &[u8], width: u32, height: u32, factor: u32) -> (Vec<u8>, u32, u32) {
+    let (small_w, small_h) = (width.div_ceil(factor), height.div_ceil(factor));
+    let mut out = vec![0u8; (small_w * small_h * 4) as usize];
+    for sy in 0..small_h {
+        for sx in 0..small_w {
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            for y in sy * factor..((sy + 1) * factor).min(height) {
+                for x in sx * factor..((sx + 1) * factor).min(width) {
+                    let i = ((y * width + x) * 4) as usize;
+                    for (channel, total) in sum.iter_mut().enumerate() {
+                        *total += u32::from(rgba[i + channel]);
+                    }
+                    count += 1;
+                }
+            }
+            let o = ((sy * small_w + sx) * 4) as usize;
+            for (channel, total) in sum.iter().enumerate() {
+                out[o + channel] = (total / count) as u8;
+            }
+        }
+    }
+    (out, small_w, small_h)
+}
+
+/// Bilinear upscale of a small RGBA image to opaque ARGB32 words for a `width` x `height` target.
+/// Weights are 8-bit fixed point and the taps are computed once per column and per row.
+fn bilinear_argb_words(small: &[u8], small_w: u32, small_h: u32, width: u32, height: u32) -> Vec<u32> {
+    // (lower index, upper index, weight of the upper tap out of 256) for each output coordinate.
+    let taps = |len: u32, out: u32| -> Vec<(usize, usize, u32)> {
+        let scale = len as f32 / out as f32;
+        (0..out)
+            .map(|i| {
+                let f = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (len - 1) as f32);
+                let lo = f.floor();
+                let hi = (lo as u32 + 1).min(len - 1);
+                (lo as usize, hi as usize, ((f - lo) * 256.0).round() as u32)
+            })
+            .collect()
+    };
+    let (cols, rows) = (taps(small_w, width), taps(small_h, height));
+    let stride = small_w as usize * 4;
+    let mut words = Vec::with_capacity((width * height) as usize);
+    for &(r0, r1, wy) in &rows {
+        let (top_row, bottom_row) = (&small[r0 * stride..], &small[r1 * stride..]);
+        for &(c0, c1, wx) in &cols {
+            let (a, b) = (c0 * 4, c1 * 4);
+            let mut word = 0xff00_0000u32;
+            for channel in 0..3usize {
+                let top = u32::from(top_row[a + channel]) * (256 - wx) + u32::from(top_row[b + channel]) * wx;
+                let bottom = u32::from(bottom_row[a + channel]) * (256 - wx) + u32::from(bottom_row[b + channel]) * wx;
+                let value = (top * (256 - wy) + bottom * wy + (1 << 15)) >> 16;
+                word |= value << (16 - 8 * channel);
+            }
+            words.push(word);
+        }
+    }
+    words
 }
 
 /// Window-level pseudo-transparency for a Normal window (for example the explorer): the
@@ -381,6 +457,48 @@ mod tests {
     }
 
     #[test]
+    fn downscaled_blur_keeps_output_size_and_softens_an_edge() {
+        // 66 is not a multiple of the downscale factor, so the last blocks are partial.
+        let (width, height) = (66u32, 3u32);
+        let rgba: Vec<u8> = (0..width * height)
+            .flat_map(|i| {
+                let v = if i % width < 33 { 0u8 } else { 255 };
+                [v, v, v, 0xff]
+            })
+            .collect();
+        let words = blurred_argb_words(width, height, rgba, 40, 100);
+        assert_eq!(words.len(), (width * height) as usize);
+        let channel = |x: usize| (words[x] & 0xff) as u8;
+        assert!(channel(0) < channel(16) && channel(16) < channel(33), "dark side ramps up");
+        assert!(channel(33) < channel(50) && channel(50) < channel(65), "light side ramps up");
+        assert!((64..192).contains(&channel(33)), "edge is soft: {}", channel(33));
+    }
+
+    #[test]
+    fn downscaled_blur_tracks_full_resolution_blur() {
+        let (width, height) = (96u32, 64u32);
+        let rgba: Vec<u8> = (0..width * height)
+            .flat_map(|i| {
+                let (x, y) = (i % width, i / width);
+                [(x * 255 / width) as u8, (y * 255 / height) as u8, 96, 0xff]
+            })
+            .collect();
+        let mut full = rgba.clone();
+        flamewm_image_core::blur::gaussian_blur_rgba(&mut full, width, height, 24.0).unwrap();
+        let fast = blurred_argb_words(width, height, rgba, 40, 100);
+        let total: u32 = full
+            .chunks_exact(4)
+            .zip(&fast)
+            .map(|(p, w)| {
+                let got = [(w >> 16) & 0xff, (w >> 8) & 0xff, w & 0xff];
+                (0..3).map(|c| (i32::from(p[c]) - got[c] as i32).unsigned_abs()).sum::<u32>()
+            })
+            .sum();
+        let mean = total as f32 / (width * height * 3) as f32;
+        assert!(mean < 3.0, "mean channel error {mean}");
+    }
+
+    #[test]
     fn in_place_blur_matches_copying_reference_on_random_pixels() {
         // Reference: the pre-move path (copy, blur the copy, then convert).
         fn reference(width: u32, height: u32, rgba: &[u8], radius: f32) -> Vec<u32> {
@@ -404,7 +522,8 @@ mod tests {
         for &(width, height) in &[(1u32, 1u32), (7, 5), (31, 17)] {
             let len = (width * height * 4) as usize;
             let rgba: Vec<u8> = (0..len).map(|_| next()).collect();
-            for &(opacity, blur) in &[(100u8, 80u8), (80, 0), (40, 100), (60, 33)] {
+            // Radii below twice BLUR_DOWNSCALE keep the full-resolution path this reference models.
+            for &(opacity, blur) in &[(100u8, 80u8), (80, 0), (95, 25), (60, 33)] {
                 let radius = blur_radius_px(opacity, blur);
                 let expected = reference(width, height, &rgba, radius);
                 let actual = blurred_argb_words(width, height, rgba.clone(), opacity, blur);

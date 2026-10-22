@@ -33,9 +33,13 @@ pub(crate) struct XRectangle {
     pub height: u16,
 }
 
+type ShapeGetRectanglesFn =
+    unsafe extern "C" fn(*mut Display, c_ulong, c_int, *mut c_int, *mut c_int) -> *mut XRectangle;
+
 pub(crate) struct XShapeBridge {
     display: *mut Display,
     shape_rectangles: ShapeRectanglesFn,
+    shape_get_rectangles: ShapeGetRectanglesFn,
     _library: Option<DynamicLibrary>,
 }
 
@@ -47,11 +51,49 @@ impl XShapeBridge {
         let library = DynamicLibrary::open(&["libXext.so.6", "libXext.so"])?;
         let shape_rectangles =
             unsafe { library.symbol::<ShapeRectanglesFn>(b"XShapeCombineRectangles\0") }?;
+        let shape_get_rectangles =
+            unsafe { library.symbol::<ShapeGetRectanglesFn>(b"XShapeGetRectangles\0") }?;
         Ok(Self {
             display,
             shape_rectangles,
+            shape_get_rectangles,
             _library: Some(library),
         })
+    }
+
+    /// Current bounding rectangles of `window` (one full-size rectangle when it was never shaped).
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a live X window on this bridge's display.
+    pub(crate) unsafe fn bounding_rects(&self, window: Window) -> Vec<XRectangle> {
+        let (mut count, mut ordering) = (0 as c_int, 0 as c_int);
+        // SAFETY: display is live per `new`; the returned array is freed with XFree below.
+        let rects = unsafe {
+            (self.shape_get_rectangles)(
+                self.display,
+                window,
+                SHAPE_BOUNDING,
+                &mut count,
+                &mut ordering,
+            )
+        };
+        if rects.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: XShapeGetRectangles returned `count` valid rectangles at `rects`.
+        let copy = unsafe { std::slice::from_raw_parts(rects, count.max(0) as usize) }.to_vec();
+        unsafe { crate::xlib::XFree(rects.cast()) };
+        copy
+    }
+
+    /// Replaces the bounding shape of `window`. An empty list hides the window.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a live X window on this bridge's display.
+    pub(crate) unsafe fn set_bounding_rects(&self, window: Window, rects: &[XRectangle]) {
+        unsafe { self.set_rects(window, SHAPE_BOUNDING, rects) };
     }
 
     /// Transfer libXext's handle to the display lifetime owner. Shape has no

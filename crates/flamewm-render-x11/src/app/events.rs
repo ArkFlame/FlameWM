@@ -506,11 +506,12 @@ impl X11App {
             // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
             match unsafe { event.type_ } {
                 EXPOSE => {
-                    // Expose is present-only: re-blit the retained scene,
-                    // never recompute layout/paint. Coalesce counts.
+                    // Expose repaints in full: a retained scene can predate a size or
+                    // document change (a shrink), so the last Expose of a run relayouts
+                    // and repaints. Coalesce counts.
                     if unsafe { event.xexpose.count } == 0 {
                         // SAFETY: The caller owns a live X11 display and app resources.
-                        unsafe { self.present_retained(document)? };
+                        unsafe { self.repaint_full(document)? };
                     }
                 }
                 MAP_NOTIFY => {
@@ -1040,6 +1041,11 @@ impl X11App {
                     text: None,
                 };
                 on_action(&resize, document)?;
+                // The resize hand-off relayouts the document after the paint above. Repaint
+                // now, so a shrink shows the new layout (status strip) without waiting for
+                // the next event.
+                // SAFETY: the display and retained scene belong to this app's event loop.
+                unsafe { self.repaint_full(document)? };
             }
             if self.single_event {
                 return Ok(());

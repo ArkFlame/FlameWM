@@ -1,3 +1,4 @@
+use super::clip::{Visible, visible_under};
 use super::primitives::{scale_rect, snap_device_rect};
 use super::*;
 use crate::external_drawable::match_argb32_visual;
@@ -208,6 +209,7 @@ impl X11App {
             );
             self.layout = Some(layout);
             if let Some(layout) = self.layout.as_mut() {
+                super::scroll::fit_scroll_extents(layout, document, self.interaction);
                 super::scroll::translate_scrolled_content(layout, document, self.interaction);
             }
             self.cached_viewport = viewport;
@@ -285,17 +287,12 @@ impl X11App {
         Ok(())
     }
 
-    pub(crate) unsafe fn present_retained(
-        &mut self,
-        document: &RuntimeDocument,
-    ) -> Result<(), String> {
-        let _guard = flamewm_profiler::start("render.present");
-        if self.layout.is_some() {
-            unsafe { self.present_scene()? };
-            unsafe { XFlush(self.display) };
-            return Ok(());
-        }
-        unsafe { self.redraw(document) }
+    /// Full relayout and repaint for a window size change or Expose. A retained scene can
+    /// predate the new size or the document state the resize hand-off just applied.
+    pub(crate) unsafe fn repaint_full(&mut self, document: &mut RuntimeDocument) -> Result<(), String> {
+        self.mark_full();
+        unsafe { self.redraw_if_dirty(document)? };
+        Ok(())
     }
 
     /// Mark damage without painting: merged (max coverage) latch consumed
@@ -563,7 +560,15 @@ impl X11App {
                 let radius = *radius * scale;
                 // Canonical scene target: XRender handles all alpha; the GC
                 // path only runs in explicit OpaqueFallback (flattened pixel).
+                // XRender ignores the GC clip stack: cut the fill to it. A cut fill keeps
+                // straight edges (its corner radius is dropped at the clip edge).
+                let visible = visible_under(rect, &self.clip_stack);
                 if let Some(xrender) = self.xrender.as_mut() {
+                    let (rect, radius) = match visible {
+                        Visible::Hidden => return Ok(()),
+                        Visible::Whole => (rect, radius),
+                        Visible::Part(part) => (part, 0.0),
+                    };
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
                     unsafe { crate::xrender_aa::fill_rounded_rect(xrender, rect, radius, *color)? };
                     return Ok(());
@@ -591,13 +596,34 @@ impl X11App {
                 let rect = scale_rect(*rect, scale);
                 let width = *width * scale;
                 let radius = *radius * scale;
+                // XRender ignores the GC clip stack: a border cut by a clip is drawn as its
+                // four edge bands, each cut to the clip (corner radius dropped).
+                let visible = visible_under(rect, &self.clip_stack);
                 if let Some(xrender) = self.xrender.as_mut() {
-                    // SAFETY: same initialized backbuffer/display contract as `paint`.
-                    unsafe {
-                        crate::xrender_aa::stroke_rounded_rect(
-                            xrender, rect, radius, width, *color,
-                        )?
-                    };
+                    match visible {
+                        Visible::Hidden => {}
+                        Visible::Whole => {
+                            // SAFETY: same initialized backbuffer/display contract as `paint`.
+                            unsafe {
+                                crate::xrender_aa::stroke_rounded_rect(
+                                    xrender, rect, radius, width, *color,
+                                )?
+                            };
+                        }
+                        Visible::Part(_) => {
+                            for band in super::clip::border_bands(rect, width) {
+                                let cut = match visible_under(band, &self.clip_stack) {
+                                    Visible::Hidden => continue,
+                                    Visible::Whole => band,
+                                    Visible::Part(part) => part,
+                                };
+                                // SAFETY: same initialized backbuffer/display contract as `paint`.
+                                unsafe {
+                                    crate::xrender_aa::fill_rounded_rect(xrender, cut, 0.0, *color)?
+                                };
+                            }
+                        }
+                    }
                     return Ok(());
                 }
                 if self.alpha_mode != SurfaceAlphaMode::OpaqueFallback && color.a < 255 {
@@ -654,9 +680,22 @@ impl X11App {
                 };
                 // Canonical scene target: XRender/Xft paint onto the scene
                 // backbuffer; composited path uses PictOpOver with true alpha.
+                // XRender ignores the GC clip stack. A blit cannot be cropped (no source
+                // offset in the XRender backend), so an image cut by a clip is skipped.
+                let visible = visible_under(
+                    Rect {
+                        x: dx as f32,
+                        y: dy as f32,
+                        width: width as f32,
+                        height: height as f32,
+                    },
+                    &self.clip_stack,
+                );
                 if let Some(xrender) = self.xrender.as_mut() {
-                    // SAFETY: same initialized backbuffer/display contract as `paint`.
-                    unsafe { xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)? };
+                    if visible == Visible::Whole {
+                        // SAFETY: same initialized backbuffer/display contract as `paint`.
+                        unsafe { xrender.blit_argb32_over(cached.pixmap, dx, dy, width, height)? };
+                    }
                     return Ok(());
                 }
                 if cached.mask != 0 {
@@ -776,11 +815,28 @@ impl X11App {
                 let x = *x * scale;
                 let y = *y * scale;
                 let size = *size * scale;
+                // Xft keeps its own draw clip, so the GC clip stack never reaches glyphs.
+                // Cut to the stack bounds; a stack with no common area draws nothing.
+                let text_clip = match super::clip::stack_bounds(&self.clip_stack) {
+                    _ if self.clip_stack.is_empty() => None,
+                    None => return Ok(()),
+                    Some(b) => Some((
+                        b.x.round() as i32,
+                        b.y.round() as i32,
+                        b.width.round().max(0.0) as u32,
+                        b.height.round().max(0.0) as u32,
+                    )),
+                };
                 if let Some(xft) = self.xft.as_mut() {
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
                     unsafe { xft.set_preferred_family(document.ui_font_family()) };
                     // SAFETY: same initialized backbuffer/display contract as `paint`.
-                    unsafe { xft.draw_text(x, y, *color, size, *weight, text)? };
+                    unsafe { xft.set_clip(text_clip) };
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    let drawn = unsafe { xft.draw_text(x, y, *color, size, *weight, text) };
+                    // SAFETY: same initialized backbuffer/display contract as `paint`.
+                    unsafe { xft.set_clip(None) };
+                    drawn?;
                 } else {
                     // SAFETY: the app's display and colormap are initialized for this draw.
                     let pixel = unsafe { self.pixel(*color)? };

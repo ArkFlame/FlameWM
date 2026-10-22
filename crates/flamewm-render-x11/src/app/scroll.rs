@@ -18,10 +18,56 @@ pub(crate) fn is_scroll_container(
     )
 }
 
+/// Any element whose overflow clips its descendants to its box (`hidden`, `auto`, `scroll`).
+/// Only `auto|scroll` also translate content by a scroll offset.
+pub(crate) fn clips_descendants(
+    document: &RuntimeDocument,
+    index: u32,
+    interaction: Interaction,
+) -> bool {
+    let style = document.runtime_style(index, interaction);
+    [style.overflow_x, style.overflow_y]
+        .iter()
+        .any(|mode| matches!(mode, Overflow::Hidden | Overflow::Auto | Overflow::Scroll))
+}
+
 fn children(document: &RuntimeDocument, index: u32) -> impl Iterator<Item = u32> + '_ {
     std::iter::successors(document.document.nodes[index as usize].first_child, |&c| {
         document.document.nodes[c as usize].next_sibling
     })
+}
+
+/// Sets each `overflow-y: auto|scroll` container's content height from its laid-out
+/// descendants (bottom edge plus bottom padding). The engine's intrinsic measure returns an
+/// explicit `height` unchanged, so a scroller whose size the app sets reports no overflow and
+/// gets no track or thumb. Call on a fresh layout, before `translate_scrolled_content`.
+pub(crate) fn fit_scroll_extents(
+    layout: &mut LayoutResult,
+    document: &RuntimeDocument,
+    interaction: Interaction,
+) {
+    for index in 0..document.document.nodes.len() as u32 {
+        let style = document.runtime_style(index, interaction);
+        if !matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll) {
+            continue;
+        }
+        let viewport = layout.boxes[index as usize].rect;
+        let mut bottom = viewport.y + viewport.height;
+        let mut pending: Vec<u32> = children(document, index).collect();
+        while let Some(child) = pending.pop() {
+            let rect = layout.boxes[child as usize].rect;
+            if rect.width > 0.0 && rect.height > 0.0 {
+                bottom = bottom.max(rect.y + rect.height);
+            }
+            pending.extend(children(document, child));
+        }
+        let fitted = bottom - viewport.y + style.padding.bottom;
+        let mut content = layout.contents[index as usize];
+        content.x = viewport.x;
+        content.y = viewport.y;
+        content.height = content.height.max(fitted).max(viewport.height);
+        layout.contents[index as usize] = content;
+    }
 }
 
 /// Shifts every descendant of a scroll container by the clamped offset.
@@ -72,7 +118,7 @@ pub(crate) fn build_scrolled_paint(
     let mut any_clip = false;
     while let Some(index) = stack.pop() {
         let mut inherited = chain[index as usize].clone();
-        if is_scroll_container(document, index, interaction) {
+        if clips_descendants(document, index, interaction) {
             inherited.push(layout.boxes[index as usize].rect);
             any_clip = true;
         }
@@ -114,9 +160,16 @@ mod tests {
     /// single child is taller than the viewport; the layout engine measures
     /// scroll extent from auto-height content, as the settings page does.
     fn fixture() -> RuntimeDocument {
+        fixture_with_height(None)
+    }
+
+    fn fixture_with_height(height: Option<f32>) -> RuntimeDocument {
         let mut scroller = Style::default();
         scroller.width = Length::Px(300.0);
         scroller.overflow_y = Overflow::Auto;
+        if let Some(h) = height {
+            scroller.height = Length::Px(h);
+        }
         let mut tall = Style::default();
         tall.width = Length::Px(180.0);
         tall.height = Length::Px(500.0);
@@ -169,6 +222,23 @@ mod tests {
             .expect("tall child painted at shifted position");
         assert!(push < fill);
         assert!(matches!(commands.last(), Some(PaintCommand::PopClip)));
+    }
+
+    #[test]
+    fn explicit_height_scroller_gets_extent_from_taller_child() {
+        let mut doc = fixture_with_height(Some(100.0));
+        let it = Interaction::default();
+        let mut layout = LayoutEngine::compute(&doc, 300.0, 100.0, it);
+        assert_eq!(
+            layout.metrics_for(0, Default::default()).max_y,
+            0.0,
+            "engine reports no overflow for an explicit height"
+        );
+        fit_scroll_extents(&mut layout, &doc, it);
+        let max_y = layout.metrics_for(0, Default::default()).max_y;
+        assert_eq!(max_y, 400.0);
+        doc.apply_scroll_delta(0, ScrollDelta { dx: 0.0, dy: 1000.0 }, (0.0, max_y));
+        assert_eq!(doc.scroll_offset(0).offset_y, 400.0);
     }
 
     #[test]
