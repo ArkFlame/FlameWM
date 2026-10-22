@@ -12,6 +12,7 @@ use std::time::SystemTime;
 pub mod archive;
 pub mod clipboard;
 pub mod columns;
+pub mod ops;
 pub mod places;
 pub mod prefs;
 pub mod properties;

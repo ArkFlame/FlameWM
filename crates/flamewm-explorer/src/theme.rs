@@ -16,6 +16,8 @@ const DEFAULT_SURFACE_OPACITY:u8=50;
 const DEFAULT_BLUR_PERCENT:u8=80;
 /// Light wash over the surface for rows, headers, fields and cards (10%).
 const WASH_ALPHA:u8=26;
+/// Accent opacity for selection and highlight fills (50%).
+const SELECTION_ALPHA:u8=0x80;
 /// Stronger wash for hover and pressed states (25%).
 const HOVER_ALPHA:u8=64;
 /// Menus and dialogs read as the surface, a little more opaque than the root for legibility.
@@ -26,7 +28,7 @@ const MAX_FONT_SIZE_OFFSET:i32=4;
 const MIN_FONT_SIZE_OFFSET:i32=-2;
 
 #[derive(Clone)]
-pub struct ExplorerTheme {accent:UiColor,surface:UiColor,surface_alpha:u8,accent_alpha:u8,font_family:Option<String>,font_size_offset:i32,font_bold:bool}
+pub struct ExplorerTheme {accent:UiColor,surface:UiColor,surface_alpha:u8,font_family:Option<String>,font_size_offset:i32,font_bold:bool}
 impl Default for ExplorerTheme {
     fn default()->Self {Self::from_snapshot(&SettingsSnapshot::new(0))}
 }
@@ -68,13 +70,9 @@ fn hex(value:&str)->Option<u32> {
 }
 impl ExplorerTheme {
     pub fn from_snapshot(snapshot:&SettingsSnapshot)->Self {
-        let mut theme=Self {accent:rgb(DEFAULT_ACCENT),surface:rgb(0),surface_alpha:0,accent_alpha:70,font_family:None,font_size_offset:0,font_bold:false};
+        let mut theme=Self {accent:rgb(DEFAULT_ACCENT),surface:rgb(0),surface_alpha:0,font_family:None,font_size_offset:0,font_bold:false};
         if let Some(SettingValue::Text(name))=snapshot.values.get("accent") {
             theme.accent=rgb(match name.as_str(){"red"=>DEFAULT_ACCENT,"blue"=>0x3daee9,"purple"=>0x9b59b6,"teal"=>0x1abc9c,"green"=>0x27ae60,"amber"=>0xf39c12,_=>hex(name).unwrap_or(DEFAULT_ACCENT)});
-        }
-        // accentOpacity tints selection and focus fills; the opaque accent stays for the selected row.
-        if let Some(SettingValue::Percent(percent))=snapshot.values.get("accentOpacity") {
-            theme.accent_alpha=((u16::from((*percent).min(100))*255)/100) as u8;
         }
         if let Some(SettingValue::Text(name))=snapshot.values.get("fontFamily") {
             let name=name.trim();
@@ -109,10 +107,11 @@ impl ExplorerTheme {
         let mix=|c:u8|->u8 {((u16::from(c)*(255-u16::from(MUTED_ALPHA))+255*u16::from(MUTED_ALPHA))/255) as u8};
         UiColor{r:mix(self.surface.r),g:mix(self.surface.g),b:mix(self.surface.b),a:255}
     }
-    pub fn selection_fill(&self)->UiColor {UiColor{a:self.accent_alpha,..self.accent}}
+    /// Selection and highlight fills use the accent at 50% opacity, blended over the surface.
+    pub fn selection_fill(&self)->UiColor {UiColor{a:SELECTION_ALPHA,..self.accent}}
     pub fn selected(&self)->UiColor {
-        // Accent blended over the surface colour, opaque: the selected row stays readable at any opacity.
-        let blend=|a:u8,b:u8|->u8 {((u16::from(a)*40+u16::from(b)*60)/100) as u8};
+        // Accent at 50% over the surface, opaque: the selected row stays readable at any opacity.
+        let blend=|a:u8,b:u8|->u8 {((u16::from(a)*u16::from(SELECTION_ALPHA)+u16::from(b)*(255-u16::from(SELECTION_ALPHA)))/255) as u8};
         UiColor{r:blend(self.accent.r,self.surface.r),g:blend(self.accent.g,self.surface.g),b:blend(self.accent.b,self.surface.b),a:255}
     }
     pub fn project(&self,doc:&mut impl UiDocumentAccess)->Result<(),String>{
@@ -150,7 +149,10 @@ mod tests {
         settings.values.insert("accent".into(),SettingValue::Text("#3DAEE9".into()));
         let live=ExplorerTheme::from_snapshot(&settings);
         assert_eq!((live.accent.r,live.accent.g,live.accent.b),(0x3D,0xAE,0xE9));
-        assert_eq!(live.selection_fill().a,70);
+        // Selection fills are the accent at 50% (0x80), regardless of the accentOpacity setting.
+        assert_eq!(live.selection_fill().a,0x80);
+        assert_eq!(live.selection_fill().r,0x3D);
+        assert_eq!(live.selected().a,255);
         settings.values.insert("accent".into(),SettingValue::Text("nonsense".into()));
         let bad=ExplorerTheme::from_snapshot(&settings);
         assert_eq!((bad.accent.r,bad.accent.g,bad.accent.b),(0xEF,0x40,0x48));

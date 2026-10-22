@@ -280,6 +280,24 @@ pub fn launch(entry: &DesktopEntry, path: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Opens a file with its XDG default application (mimeapps.list via `xdg-mime`). Returns `Ok(false)` when
+/// no default is configured or its desktop entry is missing, so the caller asks the user instead.
+/// Never falls back to a browser.
+pub fn open_with_default(path: &Path) -> Result<bool, String> {
+    use std::ffi::OsStr;
+    let mime = xdg_query(&[OsStr::new("query"), OsStr::new("filetype"), path.as_os_str()])?;
+    if mime.is_empty() { return Ok(false); }
+    let default = xdg_query(&[OsStr::new("query"), OsStr::new("default"), OsStr::new(&mime)]).unwrap_or_default();
+    if default.is_empty() { return Ok(false); }
+    let catalog = ApplicationCatalog::discover_file_handlers()
+        .map_err(|error| format!("Application catalog unavailable: {error}"))?;
+    let Some(entry) = catalog.entries().iter().find(|entry| entry.id().as_str() == default) else {
+        return Ok(false);
+    };
+    launch(entry, path)?;
+    Ok(true)
+}
+
 pub fn set_default(mime: &str, desktop_id: &str) -> Result<(), String> {
     use std::ffi::OsStr;
     if mime.is_empty() || !desktop_id.ends_with(".desktop") {

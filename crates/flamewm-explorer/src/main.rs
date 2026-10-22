@@ -2,6 +2,7 @@
 mod theme;
 mod mime;
 use mime::{OpenWithChooser, CHOICE_ROWS};
+use flamewm_explorer::ops::{self,Verdict};
 use std::cell::RefCell;
 use std::fs;
 use std::io::{Read,Write};
@@ -311,6 +312,7 @@ fn worker(rx:Receiver<WorkerJob>, result:Sender<WorkerResult>, mut wake:UnixStre
 /// Work that waits for a dialog answer before it touches files.
 enum Pending {
     Delete(Vec<PathBuf>),
+    Trash(Vec<PathBuf>),
     EmptyTrash(PathBuf),
     Transfer {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict},
 }
@@ -318,7 +320,7 @@ enum Pending {
 enum Dialog {
     Properties {props:properties::Properties, size:Option<u64>, cancel:Arc<AtomicBool>},
     Conflicts {sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,count:usize},
-    Confirm {text:String, pending:Pending},
+    Confirm {title:String, lines:Vec<String>, pending:Pending},
 }
 #[derive(Clone,Copy)]
 enum EditMode { Path, Search, Rename, PlaceName, Mode }
@@ -554,6 +556,13 @@ impl ExplorerApp {
         }
     }
     fn navigate(&mut self,path:PathBuf) {
+        // Opening Trash creates the XDG layout (files/ and info/) when it is missing; it never errors on a fresh home.
+        if path==self.trash_base.join("files") {
+            if let Err(e)=fs::create_dir_all(&path).and_then(|()|fs::create_dir_all(self.trash_base.join("info"))) {
+                self.model.status=format!("Cannot create Trash: {e}");
+                return;
+            }
+        }
         if path.is_dir() {self.clear_search();self.model.tab_mut().visit(path);self.scan();} else {self.model.status="Directory does not exist".into();}
         self.context=None;
     }
@@ -640,7 +649,12 @@ impl ExplorerApp {
                 Err(e)=>{self.model.status=format!("Ark failed: {e}");return;},
             }
         }
-        if let Err(e)=Command::new("xdg-open").arg(path).spawn() {self.model.status=format!("Open failed: {e}");}
+        // The XDG default application opens the file; with none configured, the user chooses (no browser fallback).
+        match mime::open_with_default(path) {
+            Ok(true)=>{},
+            Ok(false)=>self.request_open_with(path.to_path_buf()),
+            Err(e)=>self.model.status=format!("Open failed: {e}"),
+        }
     }
     fn start_transfer(&mut self,sources:Vec<PathBuf>,move_it:bool) {
         let directory=self.model.tab().path().to_path_buf();
@@ -649,9 +663,22 @@ impl ExplorerApp {
     fn start_transfer_to(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool) {
         if self.busy {self.model.status="File operation already in progress".into();return;}
         if sources.is_empty() {self.model.status="Select files first".into();return;}
+        let writable=fs::metadata(&directory).is_ok_and(|m|m.is_dir() && !m.permissions().readonly());
+        let kind=if move_it {ops::Kind::Move} else {ops::Kind::Copy};
+        // Redundant transfers (move into its own folder, missing sources) are dropped without a popup.
+        let sources=match ops::validate(kind,&source_facts(&sources),Some(&directory),writable) {
+            Verdict::Run(sources)=>sources,
+            Verdict::NoOp=>return,
+            Verdict::Refuse(message)=>{self.model.status=message.into();return;},
+        };
         // Existing names need one answer for the whole batch; the default keeps both.
         let count=sources.iter().filter(|s|s.file_name().is_some_and(|n|fs::symlink_metadata(directory.join(n)).is_ok())).count();
         if count>0 {self.dialog=Some(Dialog::Conflicts{sources,directory,move_it,count});return;}
+        if move_it {
+            let title=if sources.len()==1 {"Move file?"} else {"Move items?"};
+            self.confirm_items(title,&sources,&directory,Pending::Transfer{sources:sources.clone(),directory:directory.clone(),move_it,conflict:Conflict::KeepBoth});
+            return;
+        }
         self.send_transfer(sources,directory,move_it,Conflict::KeepBoth);
     }
     fn send_transfer(&mut self,sources:Vec<PathBuf>,directory:PathBuf,move_it:bool,conflict:Conflict) {
@@ -811,12 +838,7 @@ impl ExplorerApp {
                 }else{self.model.status="File worker unavailable".into();}
             },
             "rename"=>if let Some(path)=selected {self.edit=Some(EditMode::Rename);self.buffer=path.file_name().unwrap_or_default().to_string_lossy().into_owned();},
-            "trash"=>if !paths.is_empty() {
-                let len=paths.len();
-                if self.tx.send(WorkerJob::Trash{paths}).is_ok() {
-                    self.busy=true;self.model.status=format!("Moving {len} item(s) to Trash…");
-                } else {self.model.status="Trash worker unavailable".into();}
-            },
+            "trash"=>self.request_trash(paths),
             "terminal"=>self.spawn_terminal(),
             "compress"=>self.compress_selected(),
             "extract"=>if let Some(path)=selected.as_deref() {
@@ -833,7 +855,8 @@ impl ExplorerApp {
                 }
             },
             "emptytrash"=>self.dialog=Some(Dialog::Confirm{
-                text:"Permanently empty the Trash? This cannot be undone.".into(),
+                title:"Empty Trash?".into(),
+                lines:vec!["Permanently empty the Trash? This cannot be undone.".into()],
                 pending:Pending::EmptyTrash(self.trash_base.clone()),
             }),
             "placerename"=>if let Some(place)=self.context_place.and_then(|i|self.places.get(i)) {
@@ -918,12 +941,29 @@ impl ExplorerApp {
     }
     fn confirm_delete(&mut self) {
         let paths=self.selected_files();
-        if paths.is_empty() {return;}
         self.context=None;
-        self.dialog=Some(Dialog::Confirm{
-            text:format!("Permanently delete {} item(s)? This cannot be undone.",paths.len()),
-            pending:Pending::Delete(paths),
-        });
+        match ops::validate(ops::Kind::Delete,&source_facts(&paths),None,true) {
+            Verdict::Run(paths)=>{let location=parent_dir(&paths);self.confirm_items("Delete permanently?",&paths,&location,Pending::Delete(paths.clone()));},
+            Verdict::NoOp=>{},
+            Verdict::Refuse(message)=>self.model.status=message.into(),
+        }
+    }
+    fn request_trash(&mut self,paths:Vec<PathBuf>) {
+        self.context=None;
+        match ops::validate(ops::Kind::Trash,&source_facts(&paths),None,true) {
+            Verdict::Run(paths)=>{let location=parent_dir(&paths);self.confirm_items("Move to trash?",&paths,&location,Pending::Trash(paths.clone()));},
+            Verdict::NoOp=>{},
+            Verdict::Refuse(message)=>self.model.status=message.into(),
+        }
+    }
+    /// The one reusable confirmation: title, item name (or "N items"), and the location shortened to `~`.
+    fn confirm_items(&mut self,title:&str,paths:&[PathBuf],location:&Path,pending:Pending) {
+        let name=match paths {
+            [only]=>only.file_name().unwrap_or(only.as_os_str()).to_string_lossy().into_owned(),
+            many=>format!("{} items",many.len()),
+        };
+        let lines=vec![name,ops::display_location(location,&home_dir())];
+        self.dialog=Some(Dialog::Confirm{title:title.into(),lines,pending});
     }
     /// Button slots: primary, secondary, tertiary, cancel. Each dialog kind decides what they mean.
     fn dialog_action(&mut self,slot:&str) {
@@ -942,7 +982,8 @@ impl ExplorerApp {
             (Dialog::Conflicts{sources,directory,move_it,..},"secondary")=>self.send_transfer(sources,directory,move_it,Conflict::KeepBoth),
             (Dialog::Conflicts{sources,directory,move_it,count},"tertiary")=>{
                 self.dialog=Some(Dialog::Confirm{
-                    text:format!("Replace {count} existing item(s)? Replaced items are not recoverable."),
+                    title:"Replace existing items?".into(),
+                    lines:vec![format!("Replace {count} existing item(s)? Replaced items are not recoverable.")],
                     pending:Pending::Transfer{sources,directory,move_it,conflict:Conflict::Replace},
                 });
             },
@@ -953,6 +994,11 @@ impl ExplorerApp {
         match pending {
             Pending::Delete(paths)=>{
                 if self.tx.send(WorkerJob::Delete{paths}).is_ok() {self.busy=true;self.model.status="Deleting…".into();}
+            },
+            Pending::Trash(paths)=>{
+                let len=paths.len();
+                if self.tx.send(WorkerJob::Trash{paths}).is_ok() {self.busy=true;self.model.status=format!("Moving {len} item(s) to Trash…");}
+                else {self.model.status="Trash worker unavailable".into();}
             },
             Pending::EmptyTrash(base)=>{
                 if self.tx.send(WorkerJob::EmptyTrash{base}).is_ok() {self.busy=true;self.model.status="Emptying Trash…".into();}
@@ -1720,7 +1766,7 @@ impl ExplorerApp {
                 ],
                 [Some("Skip"),Some("Keep Both"),Some("Replace…"),Some("Cancel")],
             ),
-            Dialog::Confirm{text,..}=>("Confirm".into(),vec![text.clone()],[Some("Confirm"),None,None,Some("Cancel")]),
+            Dialog::Confirm{title,lines,..}=>(title.clone(),lines.clone(),[Some("OK"),None,None,Some("Cancel")]),
         };
         doc.text("dialog-title",title)?;
         for (i,line) in (0..4).zip(lines.into_iter().chain(std::iter::repeat(String::new()))) {
@@ -1970,4 +2016,16 @@ mod window_frame_tests {
         assert_eq!(window_frame((1920,1080)),(1250,740,65));
         assert_eq!(window_frame((1350,641)),(1215,493,59));
     }
+}
+
+/// Filesystem facts for the guard; a source that cannot be stat'ed is reported missing.
+fn source_facts(paths:&[PathBuf])->Vec<ops::Source> {
+    paths.iter().map(|path|{
+        let meta=fs::symlink_metadata(path).ok();
+        ops::Source{path:path.clone(),exists:meta.is_some(),is_dir:meta.as_ref().is_some_and(|m|m.is_dir())}
+    }).collect()
+}
+/// Parent directory of the first path, used as the location line of a confirmation.
+fn parent_dir(paths:&[PathBuf])->PathBuf {
+    paths.first().and_then(|p|p.parent()).unwrap_or(Path::new("/")).to_path_buf()
 }

@@ -190,6 +190,38 @@ mod tests {
     }
 
     #[test]
+    fn move_to_trash_then_restore_round_trips_through_xdg_layout() {
+        let root = std::env::temp_dir().join(format!("flamewm-trash-roundtrip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let data = root.join("data");
+        fs::create_dir_all(home.join("Docs")).unwrap();
+        let file = home.join("Docs/report.txt");
+        fs::write(&file, b"keep me").unwrap();
+        let uid = fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| flamewm_desktop_core::trash::current_uid_from_proc(&s))
+            .expect("uid");
+
+        let item = flamewm_desktop_core::trash::Trash::move_to_trash(&file, &home, &data, uid).unwrap();
+        assert!(!file.exists(), "source must leave its folder");
+        assert!(item.stored.starts_with(data.join("Trash/files")));
+        assert!(item.info.starts_with(data.join("Trash/info")));
+
+        let base = data.join("Trash");
+        let entries = list(&base).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].original, file);
+        assert_eq!(fs::read(&entries[0].stored).unwrap(), b"keep me");
+
+        let restored = restore(&entries[0]).unwrap();
+        assert_eq!(restored, file);
+        assert_eq!(fs::read(&file).unwrap(), b"keep me");
+        assert!(list(&base).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn relative_original_is_refused() {
         let entry = TrashEntry {
             stored: PathBuf::from("/nonexistent/files/a"),
