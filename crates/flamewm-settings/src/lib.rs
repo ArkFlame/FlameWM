@@ -55,6 +55,7 @@ const ACCENT_NODE_IDS: &[&str] = &[
     "downloads-organize-on",
     "focus-mouse-on",
     "snap-preview-on",
+    "show-content-on",
     "taskbar-seconds-on",
     "taskbar-date-on",
     "taskbar-weather-on",
@@ -1951,6 +1952,11 @@ impl<T: ControlTransport> SettingsApplication<T> {
             ),
             ("taskbarShowDate", "taskbar-date-on", "taskbar-date-off"),
             ("snapPreviewEnabled", "snap-preview-on", "snap-preview-off"),
+            (
+                "showContentWhileDragging",
+                "show-content-on",
+                "show-content-off",
+            ),
             ("focusFollowsMouse", "focus-mouse-on", "focus-mouse-off"),
         ] {
             let enabled = self.setting_value(key).and_then(|value| match value {
@@ -3202,7 +3208,8 @@ fn integer_choice_action(
 }
 
 /// Keys that `settings.toggle.<key>` may flip, in no particular order.
-const TOGGLE_KEYS: [&str; 27] = [
+const TOGGLE_KEYS: [&str; 28] = [
+    "showContentWhileDragging",
     "stickyNotesEnabled",
     "organizeDownloads",
     "fontBold",

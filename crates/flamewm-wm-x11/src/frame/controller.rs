@@ -49,6 +49,8 @@ pub enum FrameEffect {
     ApplyShape,
     NotifyClientRoot { x: i32, y: i32, w: u32, h: u32 },
     SnapPreview { target: Option<SnapTarget> },
+    /// XP-style move/resize outline while `contents_while_dragging` is off. `None` hides it.
+    DragOutline { rect: Option<RootRect> },
     Noop,
 }
 
@@ -69,6 +71,8 @@ pub struct ControllerState {
     /// Last title click (release without drag activation); a second one
     /// inside the double-click window toggles maximize.
     pub last_title_click: Option<TitleClick>,
+    /// `false`: motion only moves an outline; the real frame/client change on release.
+    pub contents_while_dragging: bool,
 }
 
 /// Non-drag title release awaiting a possible second click.
@@ -104,7 +108,14 @@ impl ControllerState {
             hints,
             extents,
             last_title_click: None,
+            contents_while_dragging: true,
         }
+    }
+
+    #[must_use]
+    pub fn with_contents_while_dragging(mut self, enabled: bool) -> Self {
+        self.contents_while_dragging = enabled;
+        self
     }
 
     #[must_use]
@@ -245,6 +256,15 @@ fn release_effects(mut effects: Vec<FrameEffect>) -> Vec<FrameEffect> {
     effects
 }
 
+/// Release tail with the XP outline hidden first when it was shown during the drag.
+fn release_tail(contents_while_dragging: bool, effects: Vec<FrameEffect>) -> Vec<FrameEffect> {
+    let mut tail = release_effects(effects);
+    if !contents_while_dragging {
+        tail.insert(0, FrameEffect::DragOutline { rect: None });
+    }
+    tail
+}
+
 fn snap_rect(work_area: RootRect, target: SnapTarget) -> RootRect {
     let (x, y, w, h) = (work_area.x, work_area.y, work_area.w, work_area.h);
     let hw = (w / 2).max(1);
@@ -300,6 +320,8 @@ fn move_step(
     if first_activation && !move_reached_activation(session.start_pointer, pointer) {
         return (state, vec![FrameEffect::Noop]);
     }
+    let preview = !state.contents_while_dragging && !final_commit;
+    let start_mode = session.start_placement.mode;
 
     let delta = move_delta(session.start_pointer, pointer);
     let req = request(
@@ -318,6 +340,9 @@ fn move_step(
         state.placement.resume = None;
         state.placement.current = plan.frame;
         state.placement.floating_restore = plan.frame;
+        if preview {
+            return (state, vec![FrameEffect::DragOutline { rect: Some(plan.frame) }]);
+        }
         let effects = full_configure(plan.frame, state.extents);
         return (state, effects);
     }
@@ -330,8 +355,16 @@ fn move_step(
     if state.placement.mode == PlacementMode::Floating {
         state.placement.floating_restore = plan.frame;
     }
+    if preview {
+        return (state, vec![FrameEffect::DragOutline { rect: Some(plan.frame) }]);
+    }
+    if final_commit && !state.contents_while_dragging && start_mode != PlacementMode::Floating {
+        // Preview left a snapped/maximized window untouched; apply its real size now.
+        let effects = full_configure(plan.frame, state.extents);
+        return (state, effects);
+    }
     let mut effects = move_effects(plan.frame, state.extents);
-    if moved {
+    if moved || (final_commit && !state.contents_while_dragging) {
         // Titlebar pixels are frame-relative; repaint after the frame moves.
         effects.push(FrameEffect::PaintChrome);
     }
@@ -371,6 +404,9 @@ fn resize_step(
     state.placement.current = plan.frame;
     if state.placement.mode == PlacementMode::Floating {
         state.placement.floating_restore = plan.frame;
+    }
+    if !state.contents_while_dragging && !final_effects {
+        return (state, vec![FrameEffect::DragOutline { rect: Some(plan.frame) }]);
     }
     let effects = if final_effects {
         full_configure(plan.frame, state.extents)
@@ -502,16 +538,18 @@ pub fn reduce_owned(
                 if !m.anchor.is_activated() && !move_reached_activation(m.start_pointer, pointer) {
                     return title_click_release(state, pointer, time_ms);
                 }
+                let contents = state.contents_while_dragging;
                 let (mut next, effects) = move_step(state, m, pointer, true);
                 next.session = InteractionSession::Idle;
                 next.last_title_click = None;
                 // Move is position-only: no layout/paint/shape, just MoveFrameRoot + notify.
-                (next, release_effects(effects))
+                (next, release_tail(contents, effects))
             }
             InteractionSession::Resize(r) => {
+                let contents = state.contents_while_dragging;
                 let (mut next, effects) = resize_step(state, r, pointer, true);
                 next.session = InteractionSession::Idle;
-                (next, release_effects(effects))
+                (next, release_tail(contents, effects))
             }
             InteractionSession::ControlPress(c) => {
                 state.session = InteractionSession::Idle;
@@ -612,14 +650,16 @@ pub fn reduce_owned(
             if state.session.is_idle() {
                 (state, vec![FrameEffect::Noop])
             } else {
+                let contents = state.contents_while_dragging;
                 state.session.cancel();
-                (
-                    state,
-                    vec![
-                        FrameEffect::Ungrab,
-                        FrameEffect::SnapPreview { target: None },
-                    ],
-                )
+                let mut effects = vec![
+                    FrameEffect::Ungrab,
+                    FrameEffect::SnapPreview { target: None },
+                ];
+                if !contents {
+                    effects.insert(0, FrameEffect::DragOutline { rect: None });
+                }
+                (state, effects)
             }
         }
     }
@@ -857,6 +897,86 @@ mod tests {
         assert!(e3.contains(&FrameEffect::Ungrab));
         assert!(e3.contains(&FrameEffect::ApplyShape));
         assert_eq!(s3.placement.current, RootRect::new(100, 100, 450, 360));
+    }
+
+    fn outline_state() -> ControllerState {
+        floating_state().with_contents_while_dragging(false)
+    }
+
+    #[test]
+    fn outline_move_motion_never_touches_real_frame_or_client() {
+        let (s1, _) = reduce(&outline_state(), press(1, 150, 120));
+        let (s2, e2) = reduce(&s1, motion(200, 170));
+        assert_eq!(
+            e2,
+            vec![FrameEffect::DragOutline {
+                rect: Some(RootRect::new(150, 150, 400, 300)),
+            }]
+        );
+        assert_eq!(s2.placement.current, RootRect::new(150, 150, 400, 300));
+    }
+
+    #[test]
+    fn outline_resize_motion_shows_outline_without_configure() {
+        let (s1, _) = reduce(&outline_state(), press(2, 500, 400));
+        let (_, e2) = reduce(&s1, motion(550, 460));
+        assert_eq!(
+            e2,
+            vec![FrameEffect::DragOutline {
+                rect: Some(RootRect::new(100, 100, 450, 360)),
+            }]
+        );
+        assert!(!e2.iter().any(|e| matches!(
+            e,
+            FrameEffect::ConfigureFrameRoot { .. }
+                | FrameEffect::MoveFrameRoot { .. }
+                | FrameEffect::ConfigureClientLocal { .. }
+                | FrameEffect::NotifyClientRoot { .. }
+        )));
+    }
+
+    #[test]
+    fn outline_move_release_hides_outline_then_applies_final_position() {
+        let (s1, _) = reduce(&outline_state(), press(1, 150, 120));
+        let (s2, _) = reduce(&s1, motion(200, 170));
+        let (s3, e3) = reduce(&s2, release(200, 170));
+        assert!(s3.session.is_idle());
+        assert_eq!(e3.first(), Some(&FrameEffect::DragOutline { rect: None }));
+        assert!(has_move_frame(&e3, 150, 150));
+        assert_eq!(e3.last(), Some(&FrameEffect::Ungrab));
+    }
+
+    #[test]
+    fn outline_resize_release_applies_full_configure_and_hides_outline() {
+        let (s1, _) = reduce(&outline_state(), press(2, 500, 400));
+        let (s2, _) = reduce(&s1, motion(550, 460));
+        let (_, e3) = reduce(&s2, release(550, 460));
+        assert_eq!(e3.first(), Some(&FrameEffect::DragOutline { rect: None }));
+        assert!(e3.contains(&FrameEffect::ConfigureFrameRoot {
+            x: 100,
+            y: 100,
+            w: 450,
+            h: 360,
+        }));
+        assert!(e3.contains(&FrameEffect::ApplyShape));
+        assert_eq!(e3.last(), Some(&FrameEffect::Ungrab));
+    }
+
+    #[test]
+    fn outline_cancel_hides_outline() {
+        let (s1, _) = reduce(&outline_state(), press(1, 150, 120));
+        let (s2, _) = reduce(&s1, motion(200, 170));
+        let (_, e3) = reduce(&s2, FrameEvent::Cancel);
+        assert!(e3.contains(&FrameEffect::DragOutline { rect: None }));
+    }
+
+    #[test]
+    fn live_contents_mode_emits_no_outline() {
+        let (s1, _) = reduce(&floating_state(), press(1, 150, 120));
+        let (_, e2) = reduce(&s1, motion(200, 170));
+        assert!(!e2.iter().any(|e| matches!(e, FrameEffect::DragOutline { .. })));
+        let (_, e3) = reduce(&s1, release(200, 170));
+        assert!(!e3.iter().any(|e| matches!(e, FrameEffect::DragOutline { .. })));
     }
 
     #[test]

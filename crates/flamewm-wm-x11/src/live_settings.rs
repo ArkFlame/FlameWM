@@ -9,11 +9,15 @@ use flamewm_platform::chrome::parse_hex_rgb;
 
 const DEFAULT_SNAP_PREVIEW_ENABLED: bool = true;
 const DEFAULT_FOCUS_FOLLOWS_MOUSE: bool = false;
+/// XP style: moves and resizes show an outline and apply the real geometry on release.
+const DEFAULT_SHOW_CONTENT_WHILE_DRAGGING: bool = false;
 /// Neutral grey until a settings snapshot supplies `accent`.
 const DEFAULT_ACCENT_RGB: (u8, u8, u8) = (0x7f, 0x87, 0x8e);
 
 static SNAP_PREVIEW_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SNAP_PREVIEW_ENABLED);
 static FOCUS_FOLLOWS_MOUSE: AtomicBool = AtomicBool::new(DEFAULT_FOCUS_FOLLOWS_MOUSE);
+static SHOW_CONTENT_WHILE_DRAGGING: AtomicBool =
+    AtomicBool::new(DEFAULT_SHOW_CONTENT_WHILE_DRAGGING);
 /// Live `accent` packed as `0x00RRGGBB`.
 static ACCENT_RGB: AtomicU32 = AtomicU32::new(pack_rgb(DEFAULT_ACCENT_RGB));
 
@@ -36,6 +40,15 @@ fn window_behaviour_from_snapshot(snapshot: &SettingsSnapshot) -> (bool, bool) {
     )
 }
 
+/// Pure mapping from a settings snapshot to `showContentWhileDragging`.
+fn show_content_from_snapshot(snapshot: &SettingsSnapshot) -> bool {
+    boolean_setting(
+        snapshot,
+        "showContentWhileDragging",
+        DEFAULT_SHOW_CONTENT_WHILE_DRAGGING,
+    )
+}
+
 /// Pure mapping from a settings snapshot to the `accent` colour. Accepts `#RRGGBB` and bare
 /// `RRGGBB`, the same forms the shell accepts; invalid or missing values keep the neutral default.
 fn accent_from_snapshot(snapshot: &SettingsSnapshot) -> (u8, u8, u8) {
@@ -53,6 +66,7 @@ pub(crate) fn sync(snapshot: &SettingsSnapshot) {
     let (snap_preview, focus_follows_mouse) = window_behaviour_from_snapshot(snapshot);
     SNAP_PREVIEW_ENABLED.store(snap_preview, Ordering::Relaxed);
     FOCUS_FOLLOWS_MOUSE.store(focus_follows_mouse, Ordering::Relaxed);
+    SHOW_CONTENT_WHILE_DRAGGING.store(show_content_from_snapshot(snapshot), Ordering::Relaxed);
     ACCENT_RGB.store(pack_rgb(accent_from_snapshot(snapshot)), Ordering::Relaxed);
 }
 
@@ -68,6 +82,32 @@ pub(crate) fn snap_preview_enabled() -> bool {
 
 pub(crate) fn focus_follows_mouse() -> bool {
     FOCUS_FOLLOWS_MOUSE.load(Ordering::Relaxed)
+}
+
+/// `false` (default) draws an outline during interactive move/resize.
+pub(crate) fn show_content_while_dragging() -> bool {
+    SHOW_CONTENT_WHILE_DRAGGING.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod show_content_tests {
+    use super::*;
+
+    #[test]
+    fn show_content_defaults_off_and_maps_booleans() {
+        assert!(!show_content_from_snapshot(&SettingsSnapshot::new(1)));
+        let mut snapshot = SettingsSnapshot::new(1);
+        snapshot.values.insert(
+            "showContentWhileDragging".into(),
+            SettingValue::Boolean(true),
+        );
+        assert!(show_content_from_snapshot(&snapshot));
+        snapshot.values.insert(
+            "showContentWhileDragging".into(),
+            SettingValue::Text("yes".into()),
+        );
+        assert!(!show_content_from_snapshot(&snapshot));
+    }
 }
 
 #[cfg(test)]

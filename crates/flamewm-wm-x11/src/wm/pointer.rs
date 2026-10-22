@@ -378,8 +378,11 @@ impl<'a, C: Connection> Wm<'a, C> {
                     .get(&client_id)
                     .is_some_and(|state| state.placement.mode == PlacementMode::Floating);
             if preview_allowed {
+                // XP outline mode owns the drag feedback: a snap-zone update would hide it.
                 if let Some((target, work)) = motion_snap {
-                    self.update_snap_preview(target, work, client_id);
+                    if crate::live_settings::show_content_while_dragging() {
+                        self.update_snap_preview(target, work, client_id);
+                    }
                 }
             } else if move_active {
                 self.snap_preview.hide();

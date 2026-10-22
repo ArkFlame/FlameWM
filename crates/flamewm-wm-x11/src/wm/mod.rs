@@ -2176,7 +2176,8 @@ impl<'a, C: Connection> Wm<'a, C> {
                 session,
                 region_map,
             )
-            .with_outputs(outputs),
+            .with_outputs(outputs)
+            .with_contents_while_dragging(crate::live_settings::show_content_while_dragging()),
         );
         if let Some(controller) = controller.as_mut() {
             controller.last_title_click = last_title_click;

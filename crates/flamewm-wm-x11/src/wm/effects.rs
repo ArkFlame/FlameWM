@@ -152,6 +152,15 @@ impl<'a, C: Connection> Wm<'a, C> {
                             self.snap_preview.hide();
                         }
                     }
+                    FrameEffect::DragOutline { rect } => match rect {
+                        Some(frame) => self.snap_preview.show_outline(flamewm_api::Rect {
+                            x: frame.x,
+                            y: frame.y,
+                            width: frame.w,
+                            height: frame.h,
+                        }),
+                        None => self.snap_preview.hide(),
+                    },
                     FrameEffect::Noop => {}
                 }
             }

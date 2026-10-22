@@ -118,6 +118,27 @@ impl SnapPreviewSurface {
             self.candidate = Some(candidate);
             self.geometry = Some(geometry);
         }
+        self.present(geometry, width, height);
+    }
+
+    /// XP-style move/resize outline at `geometry`. Reuses the same border-only surface as the
+    /// snap preview; while already visible only the position and size are updated.
+    pub fn show_outline(&mut self, geometry: Rect) {
+        if self.visible && self.candidate.is_none() && self.geometry == Some(geometry) {
+            return;
+        }
+        let Some((width, height)) = checked_size(geometry.width).zip(checked_size(geometry.height))
+        else {
+            self.hide();
+            return;
+        };
+        self.candidate = None;
+        self.geometry = Some(geometry);
+        self.present(geometry, width, height);
+    }
+
+    /// Move/size the overlay and make it visible. Shared by snap and outline paths.
+    fn present(&mut self, geometry: Rect, width: u32, height: u32) {
         if !self.ensure_surface() {
             self.visible = false;
             return;
@@ -134,6 +155,12 @@ impl SnapPreviewSurface {
                 .is_err()
         {
             self.hide();
+            return;
+        }
+        if self.visible {
+            if runtime.redraw(surface).is_err() {
+                self.hide();
+            }
             return;
         }
 
