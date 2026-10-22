@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::os::raw::{c_char, c_int, c_uint, c_ulong};
 
 use super::input::apply_wheel_scroll;
 use super::*;
@@ -15,6 +16,111 @@ pub(crate) fn newest_configure<T>(first: T, mut next_matching: impl FnMut() -> O
         newest = next;
     }
     newest
+}
+
+#[cfg(test)]
+mod key_text_regressions {
+    use super::*;
+
+    fn payload(state: u32, symbol: u64) -> String {
+        let mut out = String::new();
+        typed_key_payload(state, symbol, &mut out);
+        out
+    }
+
+    #[test]
+    fn altgr_inserts_text_while_plain_alt_and_chords_do_not() {
+        assert!(inserts_text(0));
+        assert!(inserts_text(SHIFT_MASK));
+        assert!(inserts_text(LOCK_MASK));
+        assert!(inserts_text(MOD5_MASK));
+        assert!(inserts_text(MOD5_MASK | MOD1_MASK));
+        assert!(!inserts_text(MOD1_MASK));
+        assert!(!inserts_text(CONTROL_MASK));
+        assert!(!inserts_text(CONTROL_MASK | MOD5_MASK));
+        assert!(!inserts_text(MOD4_MASK));
+    }
+
+    #[test]
+    fn ctrl_a_is_key_a_with_ctrl_and_no_text() {
+        assert_eq!(payload(CONTROL_MASK, 'a' as u64), "Ctrl\u{1f}a\u{1f}");
+        assert_eq!(payload(CONTROL_MASK | SHIFT_MASK, 'A' as u64), "Ctrl+Shift\u{1f}A\u{1f}");
+    }
+
+    #[test]
+    fn plain_and_altgr_keys_carry_their_text() {
+        assert_eq!(payload(0, 'q' as u64), "\u{1f}q\u{1f}q");
+        assert_eq!(payload(MOD5_MASK, '@' as u64), "\u{1f}@\u{1f}@");
+        assert_eq!(payload(MOD1_MASK, 'q' as u64), "Alt\u{1f}q\u{1f}");
+    }
+}
+
+/// Runtime proof against a private X display (never the host display). Run with
+/// `FLAMEWM_KEY_TEST_DISPLAY=:200 cargo test -p flamewm-render-x11 xkb_lookup -- --ignored`.
+/// Uses the server's keymap as-is: Shift+2 is `@` on the default us layout.
+#[cfg(test)]
+mod xkb_lookup_runtime {
+    use super::*;
+    use crate::xlib::{
+        XCloseDisplay, XKeysymToKeycode, XMappingEvent, XOpenDisplay, XRefreshKeyboardMapping,
+    };
+    use std::ffi::CString;
+
+    #[test]
+    #[ignore = "needs FLAMEWM_KEY_TEST_DISPLAY set to a private display"]
+    fn xkb_lookup_resolves_levels_across_repeated_mapping_refreshes() {
+        let name = std::env::var("FLAMEWM_KEY_TEST_DISPLAY")
+            .expect("set FLAMEWM_KEY_TEST_DISPLAY to a private display");
+        let name = CString::new(name).unwrap();
+        // SAFETY: the display name is a valid C string; the display is closed below.
+        let display = unsafe { XOpenDisplay(name.as_ptr()) };
+        assert!(!display.is_null(), "XOpenDisplay failed");
+        let keycode_of = |keysym: c_ulong| {
+            // SAFETY: display is live.
+            let code = unsafe { XKeysymToKeycode(display, keysym) };
+            code as c_uint
+        };
+        let (q, two) = (keycode_of('q' as c_ulong), keycode_of('2' as c_ulong));
+        assert!(q != 0 && two != 0);
+        let event = |keycode: c_uint, state: u32| {
+            // SAFETY: an all-zero XKeyEvent is a valid value; the fields used are set below.
+            let mut key: XKeyEvent = unsafe { std::mem::zeroed() };
+            key.type_ = KEY_PRESS;
+            key.display = display;
+            key.keycode = keycode;
+            key.state = state;
+            key
+        };
+        // FLAMEWM_KEY_TEST_ALTGR=1: the caller patched keycode of Q to `q Q at AT` (de AltGr+Q).
+        let altgr_q = std::env::var("FLAMEWM_KEY_TEST_ALTGR").is_ok();
+        for round in 0..2000 {
+            if round % 100 == 0 {
+                // SAFETY: display is live; this mirrors a MappingKeyboard notify.
+                let mut mapping: XMappingEvent = unsafe { std::mem::zeroed() };
+                mapping.request = 1;
+                mapping.display = display;
+                unsafe { XRefreshKeyboardMapping(&mut mapping) };
+            }
+            let (plain, typed) = unsafe { key_symbols(&event(q, 0)) };
+            assert_eq!((plain, typed), ('q' as u64, 'q' as u64), "round {round}");
+            let (_, shifted) = unsafe { key_symbols(&event(two, SHIFT_MASK)) };
+            assert_eq!(shifted, '@' as u64, "Shift+2 must decode to @ (round {round})");
+            assert!(inserts_text(SHIFT_MASK));
+            if altgr_q {
+                let (_, altgr) = unsafe { key_symbols(&event(q, MOD5_MASK)) };
+                assert_eq!(altgr, '@' as u64, "AltGr+Q must decode to @ (round {round})");
+                assert!(inserts_text(MOD5_MASK));
+            }
+            let (ctrl_plain, _) = unsafe { key_symbols(&event(q, CONTROL_MASK)) };
+            assert_eq!(ctrl_plain, 'q' as u64, "Ctrl+Q keeps key name q");
+            assert!(!inserts_text(CONTROL_MASK));
+            let (_, alt_shifted) = unsafe { key_symbols(&event(two, MOD1_MASK | SHIFT_MASK)) };
+            assert_eq!(alt_shifted, '@' as u64);
+            assert!(!inserts_text(MOD1_MASK | SHIFT_MASK), "Alt chords insert no text");
+        }
+        // SAFETY: display came from XOpenDisplay and is closed exactly once.
+        unsafe { XCloseDisplay(display) };
+    }
 }
 
 #[cfg(test)]
@@ -245,11 +351,58 @@ fn range_drag_text(track_x: f32, track_w: f32, min: f32, max: f32, x: f32) -> St
     slider_value_from_pointer(track, min, max, 0.0, x).to_string()
 }
 
-/// Keysyms at shift level 0 and at the level the event's Shift state selects.
-unsafe fn key_symbols(key: &mut XKeyEvent) -> (u64, u64) {
-    let shift = if key.state & SHIFT_MASK != 0 { 1 } else { 0 };
+/// Keysyms `(unshifted, typed)` resolved through the server keymap. Both honor the
+/// keyboard group, Level3 (Mod5/AltGr) and CapsLock, so layouts such as `de` or `es`
+/// decode `AltGr+Q` as `@`. `unshifted` drives shortcut matching; `typed` names the key.
+unsafe fn key_symbols(key: &XKeyEvent) -> (u64, u64) {
+    let unshifted = key.state & !(SHIFT_MASK | LOCK_MASK);
     // SAFETY: key is an initialized XKeyEvent copied from a key XEvent.
-    unsafe { (XLookupKeysym(key, 0), XLookupKeysym(key, shift)) }
+    unsafe { (lookup_keysym(key, unshifted), lookup_keysym(key, key.state)) }
+}
+
+/// Keysym for `key` under `state`. XLookupString ignores Ctrl/Alt/Super for level selection.
+unsafe fn lookup_keysym(key: &XKeyEvent, state: c_uint) -> u64 {
+    let mut event = *key;
+    event.state = state;
+    let mut keysym: c_ulong = 0;
+    let mut buffer = [0 as c_char; 8];
+    // SAFETY: event is a private copy; buffer and keysym outlive the call; no compose status.
+    unsafe {
+        XLookupString(
+            &mut event,
+            buffer.as_mut_ptr(),
+            buffer.len() as c_int,
+            &mut keysym,
+            std::ptr::null_mut(),
+        )
+    };
+    keysym as u64
+}
+
+/// Whether a key with `state` inserts text. Ctrl and Super are always shortcuts. Alt is a
+/// shortcut unless Level3 (AltGr) is held, because AltGr is how layouts type characters
+/// such as `@`. Shift and CapsLock are part of the keysym already.
+fn inserts_text(state: u32) -> bool {
+    state & (CONTROL_MASK | MOD4_MASK) == 0
+        && (state & MOD1_MASK == 0 || state & MOD5_MASK != 0)
+}
+
+/// Typed-key payload `modifiers US key US text`, e.g. `Ctrl\x1fa\x1f` for Ctrl+A (no text).
+/// Text is present only when `inserts_text` allows it; the key name is always set.
+fn typed_key_payload(state: u32, symbol: u64, payload: &mut String) {
+    payload.clear();
+    for (index, modifier) in normalized_modifiers(state).iter().enumerate() {
+        if index > 0 {
+            payload.push('+');
+        }
+        payload.push_str(modifier);
+    }
+    payload.push(KEY_PAYLOAD_SEPARATOR);
+    payload.push_str(&canonical_key_name(symbol));
+    payload.push(KEY_PAYLOAD_SEPARATOR);
+    if let Some(key) = inserts_text(state).then(|| printable_key_char(symbol)).flatten() {
+        payload.push(key);
+    }
 }
 
 fn emit_typed_key<F>(
@@ -263,25 +416,8 @@ fn emit_typed_key<F>(
 where
     F: FnMut(&ActionEvent, &mut RuntimeDocument) -> Result<(), String>,
 {
-    let modifiers = normalized_modifiers(key.state);
-    let key_name = canonical_key_name(symbol);
-    let printable = (!modifiers.iter().any(|modifier| *modifier != "Shift"))
-        .then(|| printable_key_char(symbol))
-        .flatten();
     let mut payload = std::mem::take(&mut buffers.payload);
-    payload.clear();
-    for (index, modifier) in modifiers.iter().enumerate() {
-        if index > 0 {
-            payload.push('+');
-        }
-        payload.push_str(modifier);
-    }
-    payload.push(KEY_PAYLOAD_SEPARATOR);
-    payload.push_str(&key_name);
-    payload.push(KEY_PAYLOAD_SEPARATOR);
-    if let Some(key) = printable {
-        payload.push(key);
-    }
+    typed_key_payload(key.state, symbol, &mut payload);
     let mut event = action_event(
         document.ui_scale(),
         phase,
@@ -338,6 +474,23 @@ impl X11App {
                 {
                     // SAFETY: the event is a GenericEvent of the selected XI extension.
                     unsafe { self.record_raw_press(&event, document.ui_scale()) };
+                }
+                if self.single_event {
+                    return Ok(());
+                }
+                continue;
+            }
+            // SAFETY: type_ is the common discriminator at the start of every XEvent variant.
+            if unsafe { event.type_ } == MAPPING_NOTIFY {
+                // Keymap changed (layout switch, setxkbmap, xmodmap). Refresh Xlib's cache so
+                // later KeyPress decoding uses the new keysyms. Mapping events carry no window,
+                // so they are handled before the window filter, which would put them back forever
+                // in single-event mode.
+                // SAFETY: the discriminator selects XMappingEvent; the copy is a valid event.
+                let mut mapping = unsafe { event.xmapping };
+                if mapping.request != MAPPING_POINTER {
+                    // SAFETY: the display and event are live; Xlib only updates its keymap cache.
+                    unsafe { XRefreshKeyboardMapping(&mut mapping) };
                 }
                 if self.single_event {
                     return Ok(());
@@ -537,9 +690,9 @@ impl X11App {
                 }
                 KEY_PRESS => {
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
-                    let mut key = unsafe { event.xkey };
+                    let key = unsafe { event.xkey };
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
-                    let (symbol, typed_symbol) = unsafe { key_symbols(&mut key) };
+                    let (symbol, typed_symbol) = unsafe { key_symbols(&key) };
                     emit_typed_key(
                         &key,
                         typed_symbol,
@@ -592,7 +745,7 @@ impl X11App {
                         );
                         fire_static(on_action, document, &mut buffers, action, &mut event)?;
                         self.mark_full();
-                    } else if !ctrl && !alt && !super_key {
+                    } else if inserts_text(key.state) {
                         if let Some(text) = keyboard_text(typed_symbol) {
                             let mut event = action_event(
                                 document.ui_scale(),
@@ -617,9 +770,9 @@ impl X11App {
                 }
                 KEY_RELEASE => {
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
-                    let mut key = unsafe { event.xkey };
+                    let key = unsafe { event.xkey };
                     // SAFETY: The discriminator identifies XKeyEvent in this match arm.
-                    let (symbol, typed_symbol) = unsafe { key_symbols(&mut key) };
+                    let (symbol, typed_symbol) = unsafe { key_symbols(&key) };
                     emit_typed_key(
                         &key,
                         typed_symbol,

@@ -398,6 +398,30 @@ where
 #[cfg(test)]
 mod tests {
     #[test]
+    fn ctrl_a_arrives_as_key_a_with_ctrl_and_no_text() {
+        let typed = flamewm_render_core::ActionEvent {
+            action: super::TYPED_KEY_ACTION.into(),
+            phase: flamewm_render_core::ActionPhase::Press,
+            button: 0,
+            modifiers: 0,
+            x: 0.0,
+            y: 0.0,
+            inside: true,
+            time_ms: 0,
+            text: Some("Ctrl\u{1f}a\u{1f}".into()),
+        };
+        assert_eq!(
+            super::controller_event(&typed),
+            super::UiControllerEvent::Key(super::UiKeyEvent {
+                phase: super::UiKeyPhase::Press,
+                modifiers: vec!["Ctrl".into()],
+                key: "a".into(),
+                text: None,
+            })
+        );
+    }
+
+    #[test]
     fn settled_window_size_maps_to_resized_event_not_action() {
         let resize = flamewm_render_core::ActionEvent {
             action: flamewm_render_x11::WINDOW_RESIZE_ACTION.into(),

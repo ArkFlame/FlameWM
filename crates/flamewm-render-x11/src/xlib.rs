@@ -179,6 +179,19 @@ pub struct XMotionEvent {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct XMappingEvent {
+    pub type_: c_int,
+    pub serial: c_ulong,
+    pub send_event: Bool,
+    pub display: *mut Display,
+    pub window: Window,
+    pub request: c_int,
+    pub first_keycode: c_int,
+    pub count: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct XKeyEvent {
     pub type_: c_int,
     pub serial: c_ulong,
@@ -270,6 +283,7 @@ pub union XEvent {
     pub xbutton: XButtonEvent,
     pub xclient: XClientMessageEvent,
     pub xmap: XMapEvent,
+    pub xmapping: XMappingEvent,
     pub pad: [c_long; 24],
 }
 
@@ -371,6 +385,8 @@ pub const MOTION_NOTIFY: c_int = 6;
 pub const LEAVE_NOTIFY: c_int = 8;
 pub const EXPOSE: c_int = 12;
 pub const MAP_NOTIFY: c_int = 19;
+pub const MAPPING_NOTIFY: c_int = 34;
+pub const MAPPING_POINTER: c_int = 2;
 pub const CONFIGURE_NOTIFY: c_int = 22;
 pub const CLIENT_MESSAGE: c_int = 33;
 
@@ -388,9 +404,12 @@ pub const GRAB_MODE_ASYNC: c_int = 1;
 pub const CURRENT_TIME: Time = 0;
 
 pub const SHIFT_MASK: c_uint = 1 << 0;
+pub const LOCK_MASK: c_uint = 1 << 1;
 pub const CONTROL_MASK: c_uint = 1 << 2;
 pub const MOD1_MASK: c_uint = 1 << 3;
 pub const MOD4_MASK: c_uint = 1 << 6;
+/// Level3 (AltGr / ISO_Level3_Shift) modifier in the default xkb keymap.
+pub const MOD5_MASK: c_uint = 1 << 7;
 
 pub const XK_BACK_SPACE: c_ulong = 0xff08;
 pub const XK_DELETE: c_ulong = 0xffff;
@@ -646,6 +665,15 @@ unsafe extern "C" {
         screen_in_out: *mut XColor,
     ) -> Status;
     pub fn XLookupKeysym(key_event: *mut XKeyEvent, index: c_int) -> c_ulong;
+    pub fn XLookupString(
+        key_event: *mut XKeyEvent,
+        buffer_return: *mut c_char,
+        bytes_buffer: c_int,
+        keysym_return: *mut c_ulong,
+        status_in_out: *mut c_void,
+    ) -> c_int;
+    pub fn XRefreshKeyboardMapping(event_map: *mut XMappingEvent) -> c_int;
+    pub fn XKeysymToKeycode(display: *mut Display, keysym: c_ulong) -> u8;
     pub fn XNextEvent(display: *mut Display, event_return: *mut XEvent) -> c_int;
     pub fn XConnectionNumber(display: *mut Display) -> c_int;
     pub fn XPutBackEvent(display: *mut Display, event: *mut XEvent) -> c_int;
