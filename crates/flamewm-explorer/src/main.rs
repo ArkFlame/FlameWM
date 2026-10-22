@@ -885,7 +885,8 @@ impl ExplorerApp {
     fn compress_selected(&mut self) {
         let paths=self.selected_files();
         if paths.is_empty() {return;}
-        match Command::new("ark").arg("--add").args(&paths).spawn() {
+        // Ark requires either a filename or --autofilename; without it the dialog only shows an error.
+        match Command::new("ark").args(["--add","--autofilename","zip"]).args(&paths).spawn() {
             Ok(_)=>self.model.status="Opened Ark compression dialog".into(),
             Err(e)=>self.model.status=format!("Ark unavailable: {e}"),
         }
