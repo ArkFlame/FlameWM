@@ -21,3 +21,10 @@ capability = "x11rb-symbol"
 reason = "Explicit native EWMH readiness validation is needed before dependent session processes start."
 canonical_target = "crates/flamewm-wm-x11"
 remove_by = "0.0.10"
+
+[[exception]]
+path = "crates/flamewm-terminal/src/pty.rs"
+capability = "j11-g08-prefixed-env"
+reason = "FlameWM Terminal starts the user's login shell, which is defined by the SHELL variable; the guard only admits FLAMEWM_, XDG_ and similar prefixes."
+canonical_target = "crates/flamewm-terminal/src/pty.rs"
+remove_by = "0.2.0"

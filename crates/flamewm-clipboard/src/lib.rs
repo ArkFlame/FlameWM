@@ -24,6 +24,8 @@ use x11rb::{CURRENT_TIME, NONE};
 /// Upper bound for one `get_files` call, across all targets and INCR chunks.
 const GET_TIMEOUT: Duration = Duration::from_millis(500);
 const DATA_PROPERTY: &str = "FLAMEWM_CLIPBOARD_DATA";
+const UTF8_STRING: &str = "UTF8_STRING";
+const STRING: &str = "STRING";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileOp {
@@ -59,6 +61,25 @@ impl Clipboard {
             return Err("clipboard files must be a non-empty list of absolute paths".into());
         }
         owner::spawn(self.display.clone(), codec::payloads(paths, op))
+    }
+
+    /// Takes CLIPBOARD and serves `text` as UTF8_STRING (and STRING for ASCII text) until another
+    /// client replaces it. Returns once the selection is owned.
+    pub fn set_text(&self, text: &str) -> Result<(), String> {
+        owner::spawn(self.display.clone(), codec::text_payloads(text))
+    }
+
+    /// Reads text from CLIPBOARD, preferring UTF8_STRING and falling back to STRING. Returns
+    /// `Ok(None)` when the clipboard holds no text or the owner does not answer within 500 ms.
+    pub fn get_text(&self) -> Result<Option<String>, String> {
+        let deadline = Instant::now() + GET_TIMEOUT;
+        let requester = self.requester.lock().map_err(err)?;
+        if let Some(bytes) = requester.read(requester.utf8_string, deadline)? {
+            return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
+        }
+        Ok(requester
+            .read(requester.string, deadline)?
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
     }
 
     /// Reads the file list on CLIPBOARD. Returns `Ok(None)` when the clipboard holds no
@@ -97,6 +118,8 @@ struct Requester {
     uri_list: Atom,
     gnome: Atom,
     kde_cut: Atom,
+    utf8_string: Atom,
+    string: Atom,
 }
 
 impl Requester {
@@ -111,6 +134,8 @@ impl Requester {
                 codec::URI_LIST,
                 codec::GNOME_FILES,
                 codec::KDE_CUT,
+                UTF8_STRING,
+                STRING,
             ],
         )?;
         let window = owner::helper_window(&conn, screen)?;
@@ -123,6 +148,8 @@ impl Requester {
             uri_list: atoms[3],
             gnome: atoms[4],
             kde_cut: atoms[5],
+            utf8_string: atoms[6],
+            string: atoms[7],
         })
     }
 

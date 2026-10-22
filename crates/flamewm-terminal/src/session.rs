@@ -35,9 +35,10 @@ impl Session {
     ) -> Result<Self, String> {
         let mut pty = PtyProcess::spawn(launch, size).map_err(|error| format!("start {}: {error}", launch.program))?;
         let reader = pty.take_reader().ok_or("pty reader missing")?;
+        let notice_wake = wake.try_clone().map_err(|error| error.to_string())?;
         std::thread::Builder::new()
             .name(format!("flamewm-terminal-read-{id}"))
-            .spawn(move || read_loop(id, reader, events, wake))
+            .spawn(move || read_loop(id, reader, events, wake, notice_wake))
             .map_err(|error| error.to_string())?;
         Ok(Self { id, pty, parser: Parser::new(), screen: Screen::new(size.cols as usize, size.rows as usize, scrollback) })
     }
@@ -72,15 +73,27 @@ impl Session {
     }
 }
 
-fn read_loop(id: u64, mut reader: File, events: Sender<SessionEvent>, mut wake: UnixStream) {
+/// Reports `Exited` when the reader thread ends for any reason, including a panic (Drop runs while unwinding),
+/// so a dead PTY can never leave its tab open with nothing feeding it.
+struct ExitNotice {
+    id: u64,
+    events: Sender<SessionEvent>,
+    wake: UnixStream,
+}
+
+impl Drop for ExitNotice {
+    fn drop(&mut self) {
+        let _ = self.events.send(SessionEvent::Exited { id: self.id });
+        let _ = self.wake.write_all(&[1]);
+    }
+}
+
+fn read_loop(id: u64, mut reader: File, events: Sender<SessionEvent>, mut wake: UnixStream, notice_wake: UnixStream) {
+    let _notice = ExitNotice { id, events: events.clone(), wake: notice_wake };
     let mut buffer = vec![0_u8; 16 * 1024];
     loop {
         match reader.read(&mut buffer) {
-            Ok(0) | Err(_) => {
-                let _ = events.send(SessionEvent::Exited { id });
-                let _ = wake.write_all(&[1]);
-                return;
-            }
+            Ok(0) => return,
             Ok(count) => {
                 if events.send(SessionEvent::Output { id, bytes: buffer[..count].to_vec() }).is_err() {
                     return;
@@ -89,6 +102,9 @@ fn read_loop(id: u64, mut reader: File, events: Sender<SessionEvent>, mut wake: 
                     return;
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            // EIO is how Linux ends a PTY once the child's session is gone; any other error also ends the tab.
+            Err(_) => return,
         }
     }
 }

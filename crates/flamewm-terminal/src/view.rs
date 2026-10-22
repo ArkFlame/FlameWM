@@ -1,7 +1,7 @@
 //! Cell grid and settings text to per-row runs. A run is a span of cells that share colours and flags; the UI draws
 //! each run as one absolutely positioned text node on a fixed cell pitch. Pure functions only, so the same code
 //! is unit tested and drives the screen.
-use crate::screen::{Cell, Color, Screen, attr};
+use crate::screen::{Cell, Color, CursorShape, Screen, attr};
 use crate::themes::Palette;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,8 +38,10 @@ pub struct GridOptions {
     /// Lines scrolled back from the live bottom; 0 shows the live grid.
     pub view_offset: usize,
     pub selection: Option<Span>,
-    /// Draw the cursor (block style, inverted) when the terminal has focus and the child has not hidden it.
+    /// Draw the cursor when the terminal has focus and the child has not hidden it.
     pub cursor: bool,
+    /// Block inverts the cell; underline and bar draw a thin glyph in the cursor colour instead.
+    pub cursor_shape: CursorShape,
 }
 
 /// xterm 256-colour palette index to RGB (16 ANSI from the theme, then the 6x6x6 cube and the greyscale ramp).
@@ -117,16 +119,22 @@ pub fn grid_runs(screen: &Screen, palette: &Palette, options: &GridOptions) -> V
             let width = if cell.attrs & attr::WIDE != 0 { 2 } else { 1 };
             let selected = options.selection.is_some_and(|span| span.contains(index, col));
             let cursor = show_cursor && row == cursor_row && col == cursor_col;
-            let (fg, bg) = cell_colours(cell, palette, selected, cursor);
+            let block = options.cursor_shape == CursorShape::Block;
+            let (mut fg, bg) = cell_colours(cell, palette, selected, cursor && block);
+            let mut ch = cell.ch;
+            if cursor && !block {
+                fg = palette.cursor;
+                ch = if options.cursor_shape == CursorShape::Underline { '\u{2581}' } else { '\u{258f}' };
+            }
             let bold = cell.attrs & attr::BOLD != 0;
             let bg_drawn = bg_visible(bg, palette);
             let mergeable = runs.last().is_some_and(|last| last.fg == fg && last.bg == bg_drawn && last.bold == bold && last.col + last.cells == col);
             if mergeable {
                 let last = runs.last_mut().expect("checked above");
-                last.text.push(cell.ch);
+                last.text.push(ch);
                 last.cells += width;
             } else {
-                runs.push(Run { col, cells: width, text: cell.ch.to_string(), fg, bg: bg_drawn, bold });
+                runs.push(Run { col, cells: width, text: ch.to_string(), fg, bg: bg_drawn, bold });
             }
             col += width;
         }
@@ -161,7 +169,7 @@ mod tests {
     }
 
     fn opts(cursor: bool) -> GridOptions {
-        GridOptions { view_offset: 0, selection: None, cursor }
+        GridOptions { view_offset: 0, selection: None, cursor, cursor_shape: CursorShape::Block }
     }
 
     #[test]
@@ -208,7 +216,7 @@ mod tests {
         let mut screen = Screen::new(3, 2, 10);
         feed(&mut screen, b"aaa\r\nbbb\r\nccc");
         let span = Span::normalised((1, 0), (1, 1));
-        let view = grid_runs(&screen, &p, &GridOptions { view_offset: 1, selection: Some(span), cursor: true });
+        let view = grid_runs(&screen, &p, &GridOptions { view_offset: 1, selection: Some(span), cursor: true, cursor_shape: CursorShape::Block });
         assert_eq!(view[0][0].text, "aaa");
         assert_eq!(view[1][0].text, "bb");
         assert_eq!(view[1][0].bg, Some(p.selection));
@@ -226,6 +234,21 @@ mod tests {
         let rows = grid_runs(&screen, &p, &opts(false));
         assert_eq!(rows[0][0].text, "界x ", "blank tail merges with the default-styled x");
         assert_eq!(rows[0][0].cells, 4, "wide glyph takes two cells, spacer skipped");
+    }
+
+    #[test]
+    fn underline_and_bar_cursors_draw_a_glyph_in_the_cursor_colour() {
+        let p = palette();
+        let mut screen = Screen::new(4, 1, 0);
+        feed(&mut screen, b"ab");
+        for (shape, glyph) in [(CursorShape::Underline, '\u{2581}'), (CursorShape::Bar, '\u{258f}')] {
+            let rows = grid_runs(&screen, &p, &GridOptions { view_offset: 0, selection: None, cursor: true, cursor_shape: shape });
+            let cursor_run = rows[0].iter().find(|r| r.col == 2).expect("cursor run at column 2");
+            assert_eq!(cursor_run.text, glyph.to_string());
+            assert_eq!(cursor_run.fg, p.cursor);
+            assert_eq!(cursor_run.bg, None, "non-block cursors keep the cell background");
+            assert_eq!(rows[0][0].text, "ab", "the typed text is untouched");
+        }
     }
 
     #[test]

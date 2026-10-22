@@ -147,6 +147,17 @@ pub fn payloads(paths: &[PathBuf], op: FileOp) -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
+/// Text targets: UTF8_STRING always, STRING only for ASCII text (its Latin-1 meaning would
+/// corrupt UTF-8 bytes).
+pub fn text_payloads(text: &str) -> Vec<(&'static str, Vec<u8>)> {
+    let bytes = text.as_bytes().to_vec();
+    let mut out = vec![("UTF8_STRING", bytes.clone())];
+    if text.is_ascii() {
+        out.push(("STRING", bytes));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +280,23 @@ mod tests {
             .map(|(name, _)| name)
             .collect();
         assert_eq!(names, [URI_LIST, GNOME_FILES, KDE_CUT, TEXT_PLAIN]);
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+
+    #[test]
+    fn ascii_text_offers_both_string_targets() {
+        let targets: Vec<&str> = text_payloads("hi").iter().map(|(name, _)| *name).collect();
+        assert_eq!(targets, ["UTF8_STRING", "STRING"]);
+    }
+
+    #[test]
+    fn non_ascii_text_offers_only_utf8_with_exact_bytes() {
+        let payloads = text_payloads("é界");
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0], ("UTF8_STRING", "é界".as_bytes().to_vec()));
     }
 }

@@ -16,6 +16,7 @@ use crate::store::{FOLLOW_FLAMEWM, TerminalConfig, ThemeStore};
 use crate::theme;
 use crate::themes::{Palette, Theme};
 use crate::view::{GridOptions, Run, Span, grid_runs, text_run};
+use crate::screen::CursorShape;
 
 /// Cell pitch as a fraction of the font size for the bundled monospace face (advance and line height).
 const CELL_WIDTH_RATIO: f32 = 0.6;
@@ -63,8 +64,10 @@ pub struct App {
     pub selection: Option<Span>,
     drag_anchor: Option<(usize, usize)>,
     pub view_offset: usize,
-    /// Text copied from the terminal. Clipboard text is not yet exposed by flamewm-clipboard, so this stays in-process.
-    pub clipboard: String,
+    /// System CLIPBOARD handle. `None` when no X connection is available; copy and paste then stay in-process.
+    pub clipboard: Option<flamewm_clipboard::Clipboard>,
+    /// Text of the last mouse selection. Mouse selection never writes the system clipboard; Ctrl+Shift+C does.
+    pub selection_text: String,
     pub events: Sender<SessionEvent>,
     pub wake: UnixStream,
     pub first_launch: Option<Launch>,
@@ -104,7 +107,8 @@ impl App {
             selection: None,
             drag_anchor: None,
             view_offset: 0,
-            clipboard: String::new(),
+            clipboard: None,
+            selection_text: String::new(),
             events,
             wake,
             first_launch,
@@ -235,11 +239,36 @@ impl App {
             }
             out.push(text.trim_end().to_owned());
         }
-        self.clipboard = out.join("\n");
+        self.selection_text = out.join("\n");
     }
 
+    /// Ctrl+Shift+C: the selection goes to the system CLIPBOARD. Without an X connection it stays in-process.
+    pub fn copy_to_clipboard(&mut self) {
+        self.copy_selection();
+        if self.selection_text.is_empty() {
+            return;
+        }
+        if let Some(clipboard) = &self.clipboard
+            && let Err(error) = clipboard.set_text(&self.selection_text)
+        {
+            eprintln!("flamewm-terminal: clipboard: {error}");
+        }
+    }
+
+    /// Ctrl+Shift+V: the system CLIPBOARD text, or the in-process selection when the system read yields nothing.
     pub fn paste(&mut self) {
-        if self.clipboard.is_empty() {
+        let system = match &self.clipboard {
+            Some(clipboard) => match clipboard.get_text() {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("flamewm-terminal: clipboard: {error}");
+                    None
+                }
+            },
+            None => None,
+        };
+        let text = system.unwrap_or_else(|| self.selection_text.clone());
+        if text.is_empty() {
             return;
         }
         let bracketed = self.tabs.get(self.active).is_some_and(|tab| tab.session.screen.bracketed_paste);
@@ -247,12 +276,21 @@ impl App {
         if bracketed {
             bytes.extend_from_slice(b"\x1b[200~");
         }
-        bytes.extend_from_slice(self.clipboard.replace('\n', "\r").as_bytes());
+        bytes.extend_from_slice(text.replace('\n', "\r").as_bytes());
         if bracketed {
             bytes.extend_from_slice(b"\x1b[201~");
         }
         self.view_offset = 0;
         self.send_to_active(bytes);
+    }
+
+    /// Cursor drawn for the terminal, from the `cursor_style` setting (programs cannot change it).
+    pub fn cursor_shape(&self) -> CursorShape {
+        match self.config.cursor_style.as_str() {
+            "underline" => CursorShape::Underline,
+            "bar" => CursorShape::Bar,
+            _ => CursorShape::Block,
+        }
     }
 
     fn app_cursor(&self) -> bool {
@@ -283,7 +321,7 @@ impl App {
 
     fn shortcut(&mut self, shortcut: Shortcut) {
         match shortcut {
-            Shortcut::Copy => self.copy_selection(),
+            Shortcut::Copy => self.copy_to_clipboard(),
             Shortcut::Paste => self.paste(),
             Shortcut::NewTab => {
                 let _ = self.open_tab_here();
@@ -474,7 +512,7 @@ impl App {
                     Some(tab) => grid_runs(
                         &tab.session.screen,
                         palette,
-                        &GridOptions { view_offset: self.view_offset, selection, cursor: true },
+                        &GridOptions { view_offset: self.view_offset, selection, cursor: true, cursor_shape: self.cursor_shape() },
                     ),
                     None => vec![Vec::new(); self.grid_rows],
                 };
