@@ -59,13 +59,14 @@ pub fn opacity_options() -> Vec<u8> {
 
 /// Monospace font families from fontconfig. The generic `monospace` alias always comes first.
 pub fn mono_fonts() -> Vec<String> {
-    let mut fonts = vec![DEFAULT_FONT_FAMILY.to_owned()];
-    if let Ok(output) = std::process::Command::new("fc-list").args([":spacing=mono", "family"]).output() {
-        fonts.extend(String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| line.split(',').next()).map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned));
-    }
-    fonts.sort();
-    fonts.dedup();
-    fonts
+    let mut families: Vec<String> = match std::process::Command::new("fc-list").args([":spacing=mono", "family"]).output() {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| line.split(',').next()).map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect(),
+        Err(_) => Vec::new(),
+    };
+    families.sort();
+    families.dedup();
+    families.insert(0, DEFAULT_FONT_FAMILY.to_owned());
+    families
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

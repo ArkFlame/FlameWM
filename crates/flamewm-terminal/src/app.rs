@@ -45,11 +45,11 @@ pub struct Rename {
 
 /// Startup banner: FlameWM art, then the `/theme` hint. Drawn above the shell until its output scrolls.
 const BANNER: [&str; 7] = [
-    r" _____ _                 __        ____  __ ",
-    r"|  ___| | __ _ _ __ ___  \ \      / /  \/  |",
-    r"| |_  | |/ _` | '_ ` _ \  \ \ /\ / /| |\/| |",
-    r"|  _| | | (_| | | | | | |  \ V  V / | |  | |",
-    r"|_|   |_|\__,_|_| |_| |_|   \_/\_/  |_|  |_|",
+    r"     _____   _         _       __  __   _____  __        __  __  __ ",
+    r"   |  ___| | |       / \     |  \/  | | ____| \ \      / / |  \/  | ",
+    r"  | |_    | |      / _ \    | |\/| | |  _|    \ \ /\ / /  | |\/| |  ",
+    r" |  _|   | |___  / ___ \   | |  | | | |___    \ V  V /   | |  | |   ",
+    r"|_|     |_____| /_/   \_\ |_|  |_| |_____|    \_/\_/    |_|  |_|    ",
     "",
     "/theme - Change the Terminal theme.",
 ];
@@ -1076,6 +1076,19 @@ fn word_bounds(chars: &[char], col: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn banner_art_spells_flamewm_with_every_glyph() {
+        let art = &BANNER[..BANNER_ART_ROWS];
+        let width = art[0].chars().count();
+        assert!(art.iter().all(|row| row.chars().count() == width), "art rows must share one width");
+        // Seven letters, six distinct glyphs; the E glyph's middle row is the one that is easiest to lose.
+        assert!(art[1].contains("| ____|"), "the E glyph is missing from the banner");
+        // Slanted: each row down starts one column further left than the row above.
+        let indent = |row: &str| row.chars().take_while(|c| *c == ' ').count();
+        assert!(art.windows(2).all(|pair| indent(pair[0]) > indent(pair[1])), "the art must lean right");
+        assert_eq!(art.iter().filter(|row| row.contains('_')).count(), BANNER_ART_ROWS, "every art row carries glyph strokes");
+    }
 
     #[test]
     fn overlay_replaces_cells_and_keeps_the_runs_on_either_side() {

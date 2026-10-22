@@ -44,7 +44,12 @@ impl App {
         let surface = (self.palette.background, self.surface_alpha);
         if self.ui.surface != Some(surface) {
             let color = UiColor { a: self.surface_alpha, ..rgb(self.palette.background) };
-            doc.background("screen", color)?;
+            // The window's root node carries the surface fill (the explorer does the same with its root). The grid
+            // node is transparent, so the translucent fill shows through it.
+            doc.background("terminal", color)?;
+            // Translucent surfaces blur what is behind them, the same node backdrop FlameWM uses for translucent menus.
+            let blur = (self.surface_alpha < 255).then_some(crate::theme::DEFAULT_BLUR_PERCENT);
+            doc.node_backdrop("terminal", blur)?;
             self.ui.surface = Some(surface);
         }
         let font = (self.config.font_size, self.config.font_family.clone());

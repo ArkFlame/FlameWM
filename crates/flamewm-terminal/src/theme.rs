@@ -13,7 +13,7 @@ use crate::themes::{Palette, Theme, builtin_themes};
 /// FlameWM default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
 pub const DEFAULT_ACCENT: u32 = 0xEF4048;
 /// Shared default for the surface blur (shell/desktop `surfaceBlurPercent`).
-const DEFAULT_BLUR_PERCENT: u8 = 80;
+pub const DEFAULT_BLUR_PERCENT: u8 = 80;
 
 fn text_setting<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str> {
     match snapshot.values.get(key) {
