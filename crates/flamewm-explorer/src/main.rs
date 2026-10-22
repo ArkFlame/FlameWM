@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self,Receiver,Sender};
 use std::time::{Duration,Instant};
 
-use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,SortBy,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
+use flamewm_explorer::{AddressTarget,BatchReport,Entry,Explorer,Place,PlaceGroup,SidebarRow,SortBy,sidebar_rows,ROW_SLOTS,add_bookmark,display_location,home_dir,is_archive,list_directory,parse_address,places};
 use flamewm_explorer::view::{self,Column,ColumnSort,ViewMode};
 use flamewm_explorer::{archive,properties,refresh::DirWatch,search::SearchWorker,trash,places as bookmarks};
 use std::sync::atomic::{AtomicBool,Ordering};
@@ -29,8 +29,8 @@ use flamewm_ui_x11::{UiActionEvent,UiActionPhase,UiColor,UiControllerEvent,UiDoc
 
 const UI: &[u8]=include_bytes!(concat!(env!("OUT_DIR"),"/flamewm-explorer.rwr"));
 const MENU_ITEMS: [&str;22]=["open","openwith","cut","copy","paste","rename","duplicate","newfolder","bookmark","trash","properties","terminal","compress","extract","newtab","opencontaining","restore","emptytrash","placerename","placeremove","unmount","eject"];
-/// Home, six user folders and System come before user bookmarks in `places()`.
-const BUILTIN_PLACES:usize=8;
+/// Sidebar rows (group headings plus places) that the template provides; extra rows are not drawn.
+const SIDEBAR_SLOTS:usize=32;
 // Canonical geometry: paint (project) and hit-testing (cell_rect, folder_at, select bands) all derive from these.
 const TOOLBAR_HEIGHT:f32=45.0;
 const TABBAR_HEIGHT:f32=36.0;
@@ -297,7 +297,7 @@ impl ExplorerApp {
     fn reload_places(&mut self) {
         let home=home_dir();
         let mut list=places(&home);
-        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false};
+        let trash=Place{name:"Trash".into(),path:self.trash_base.join("files"),removable:false,group:PlaceGroup::Devices};
         let at=list.iter().position(|p|p.removable).unwrap_or(list.len());
         list.insert(at,trash);
         self.places=list;
@@ -595,7 +595,7 @@ impl ExplorerApp {
                 self.spawn_ark(&["--batch","--dialog"],path);
             },
             "newtab"=>if self.model.tabs.len()<5 {self.model.new_tab();self.scan();},
-            "bookmark"=>{let path=self.model.tab().path().to_path_buf();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.places=places(&home_dir());self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
+            "bookmark"=>{let path=self.model.tab().path().to_path_buf();match add_bookmark(&path,&home_dir()) {Ok(())=>{self.reload_places();self.model.status="Added to Places".into();},Err(e)=>self.model.status=format!("Bookmark failed: {e}")}},
             "properties"=>if let Some(path)=selected {self.open_properties(path)},
             "opencontaining"=>if let Some(path)=selected {self.open_containing(path)},
             "restore"=>if let Some(path)=selected {
@@ -621,7 +621,7 @@ impl ExplorerApp {
         self.context_place.and_then(|i|self.places.get(i)).map(|p|p.path.clone())
     }
     fn is_bookmark(&self,index:usize)->bool {
-        self.places.get(index).is_some_and(|p|!p.removable && index>=BUILTIN_PLACES && p.path!=self.trash_base.join("files"))
+        self.places.get(index).is_some_and(|p|p.group==PlaceGroup::Pinned && !p.removable && p.path!=self.trash_base.join("files"))
     }
     /// Edits the GTK bookmarks file atomically; the sidebar is rebuilt from the saved file.
     fn mutate_bookmark(&mut self,path:&Path,edit:impl FnOnce(&mut Vec<bookmarks::Bookmark>,usize)->bool) {
@@ -847,13 +847,16 @@ impl ExplorerApp {
             }
             return;
         }
-        if let Some(slot)=action.strip_prefix("explorer.place.").and_then(|v|v.parse::<usize>().ok()) {
-            if e.button==3 {
-                // Right-click on a sidebar item opens the place menu instead of navigating.
-                self.context_on_entry=false;
-                self.context_place=Some(slot);
-                self.context=Some((e.x,e.y));
-            } else if let Some(place)=self.places.get(slot) {self.navigate(place.path.clone());}
+        if let Some(row)=action.strip_prefix("explorer.place.").and_then(|v|v.parse::<usize>().ok()) {
+            // `row` is a sidebar slot; headings have no place and ignore clicks.
+            if let Some(SidebarRow::Place(index))=sidebar_rows(&self.places).get(row).copied() {
+                if e.button==3 {
+                    // Right-click on a sidebar item opens the place menu instead of navigating.
+                    self.context_on_entry=false;
+                    self.context_place=Some(index);
+                    self.context=Some((e.x,e.y));
+                } else if let Some(place)=self.places.get(index) {self.navigate(place.path.clone());}
+            }
             return;
         }
         if let Some(slot)=action.strip_prefix("explorer.tab.").and_then(|v|v.parse::<usize>().ok()) {
@@ -864,7 +867,7 @@ impl ExplorerApp {
             "explorer.back"=>{if self.model.tab_mut().back(){self.scan();}},
             "explorer.forward"=>{if self.model.tab_mut().forward(){self.scan();}},
             "explorer.up"=>{if self.model.tab_mut().up(){self.scan();}},
-            "explorer.reload"=>{self.places=places(&home_dir());self.scan();},
+            "explorer.reload"=>{self.reload_places();self.scan();},
             "explorer.search"=>{self.edit=Some(EditMode::Search);self.buffer=self.model.tab().search.clone();},
             "explorer.address"=>{self.edit=Some(EditMode::Path);self.buffer=self.model.tab().path().to_string_lossy().into_owned();},
             "explorer.tab.new"=>{if self.model.tabs.len()<5 {self.model.new_tab();self.scan();}},
@@ -874,6 +877,7 @@ impl ExplorerApp {
             "explorer.sort.name"=>self.sort_by(Column::Name),
             "explorer.sort.size"=>self.sort_by(Column::Size),
             "explorer.sort.modified"=>self.sort_by(Column::Modified),
+            "explorer.sort.kind"=>self.sort_by(Column::Type),
             "explorer.menu"=>{self.context_on_entry=false;self.context=Some((725.0,53.0));},
             "explorer.cancel"=>if self.busy {self.cancel.cancel();self.model.status="Cancelling…".into();},
             _=>{}
@@ -1100,12 +1104,27 @@ impl ExplorerApp {
                 doc.background(&format!("tab-{i}"),if i==self.model.active{self.theme.selected()}else{self.theme.card()})?;
             }
         }
-        for i in 0..15 {
-            if let Some(place)=self.places.get(i) {
-                doc.visible(&format!("place-{i}"),true)?;
-                doc.text(&format!("place-label-{i}"),place.name.clone())?;
-                doc.background(&format!("place-{i}"),if place.path==tab.path(){self.theme.selected()}else{self.theme.sidebar()})?;
-            } else {doc.visible(&format!("place-{i}"),false)?;}
+        let rows=sidebar_rows(&self.places);
+        for slot in 0..SIDEBAR_SLOTS {
+            // Each slot shows either a group heading or a place button; the other element stays hidden.
+            match rows.get(slot) {
+                Some(SidebarRow::Heading(title)) => {
+                    doc.visible(&format!("sb-head-{slot}"),true)?;
+                    doc.text(&format!("sb-head-label-{slot}"),(*title).to_owned())?;
+                    doc.visible(&format!("place-{slot}"),false)?;
+                }
+                Some(SidebarRow::Place(index)) => {
+                    let place=&self.places[*index];
+                    doc.visible(&format!("sb-head-{slot}"),false)?;
+                    doc.visible(&format!("place-{slot}"),true)?;
+                    doc.text(&format!("place-label-{slot}"),place.name.clone())?;
+                    doc.background(&format!("place-{slot}"),if place.path==tab.path(){self.theme.selected()}else{self.theme.sidebar()})?;
+                }
+                None => {
+                    doc.visible(&format!("sb-head-{slot}"),false)?;
+                    doc.visible(&format!("place-{slot}"),false)?;
+                }
+            }
         }
         let entries=self.visible_entries();
         // Only Details shows the metadata columns; Icons shows names alone.
@@ -1120,7 +1139,7 @@ impl ExplorerApp {
         doc.text("col-name",arrow(Column::Name,"Name"))?;
         doc.text("col-mod",arrow(Column::Modified,"Date modified"))?;
         doc.text("col-size",arrow(Column::Size,"Size"))?;
-        doc.text("col-kind","Kind".to_owned())?;
+        doc.text("col-kind",arrow(Column::Type,"Kind"))?;
         for slot in 0..ROW_SLOTS {
             let row=format!("row-{slot}");
             if let Some(entry)=entries.get(slot) {

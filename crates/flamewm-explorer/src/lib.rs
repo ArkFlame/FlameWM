@@ -246,8 +246,34 @@ impl Explorer {
         true
     }
 }
+/// Sidebar section a place belongs to. Sections render in declaration order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlaceGroup { Favorites, Devices, Pinned }
+
+impl PlaceGroup {
+    pub fn heading(self) -> &'static str {
+        match self { Self::Favorites => "Favorites", Self::Devices => "Devices", Self::Pinned => "Pinned Folders" }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Place { pub name:String, pub path:PathBuf, pub removable:bool }
+pub struct Place { pub name:String, pub path:PathBuf, pub removable:bool, pub group:PlaceGroup }
+
+/// One sidebar row: a group heading, or an index into the places list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidebarRow { Heading(&'static str), Place(usize) }
+
+/// Groups places into sidebar rows. A heading is emitted only for a non-empty group.
+pub fn sidebar_rows(places:&[Place]) -> Vec<SidebarRow> {
+    let mut rows=Vec::with_capacity(places.len()+3);
+    for group in [PlaceGroup::Favorites,PlaceGroup::Devices,PlaceGroup::Pinned] {
+        let members:Vec<usize>=places.iter().enumerate().filter(|(_,p)|p.group==group).map(|(i,_)|i).collect();
+        if members.is_empty() {continue;}
+        rows.push(SidebarRow::Heading(group.heading()));
+        rows.extend(members.into_iter().map(SidebarRow::Place));
+    }
+    rows
+}
 pub fn home_dir() -> PathBuf {std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_dir()).unwrap_or_else(||PathBuf::from("/"))}
 pub fn user_dir(name:&str, fallback:&str, home:&Path) -> PathBuf {
     let base=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".config"));
@@ -289,18 +315,18 @@ fn unescape_uri(raw:&str)->Option<PathBuf>{
     String::from_utf8(result).ok().map(PathBuf::from)
 }
 pub fn places(home:&Path) -> Vec<Place> {
-    let mut places=vec![Place{name:"Home".into(),path:home.to_path_buf(),removable:false}];
+    let mut places=vec![Place{name:"Home".into(),path:home.to_path_buf(),removable:false,group:PlaceGroup::Favorites}];
     for (id,name,dir) in [("DESKTOP","Desktop","Desktop"),("DOCUMENTS","Documents","Documents"),("DOWNLOAD","Downloads","Downloads"),("MUSIC","Music","Music"),("PICTURES","Pictures","Pictures"),("VIDEOS","Videos","Videos")] {
-        let path=user_dir(id,dir,home); places.push(Place{name:name.into(),path,removable:false});
+        let path=user_dir(id,dir,home); places.push(Place{name:name.into(),path,removable:false,group:PlaceGroup::Favorites});
     }
-    places.push(Place{name:"System".into(),path:PathBuf::from("/"),removable:false});
+    places.push(Place{name:"System".into(),path:PathBuf::from("/"),removable:false,group:PlaceGroup::Devices});
     let base=std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".config"));
     if let Ok(source)=fs::read_to_string(base.join("gtk-3.0/bookmarks")) {
         for line in source.lines().take(128) {
             let mut words=line.splitn(2,' ');
             if let Some(path)=words.next().and_then(unescape_uri).filter(|p|p.is_dir()) {
                 let name=words.next().map(str::to_owned).unwrap_or_else(||path.file_name().unwrap_or_default().to_string_lossy().into_owned());
-                places.push(Place{name,path,removable:false});
+                places.push(Place{name,path,removable:false,group:PlaceGroup::Pinned});
             }
         }
     }
@@ -308,7 +334,7 @@ pub fn places(home:&Path) -> Vec<Place> {
         for device in places::parse_mountinfo(&contents) {
             if device.mount_point.is_dir() {
                 let name=places::sanitize_label(&device.mount_point.file_name().unwrap_or_default().to_string_lossy());
-                places.push(Place{name,path:device.mount_point,removable:true});
+                places.push(Place{name,path:device.mount_point,removable:true,group:PlaceGroup::Devices});
             }
         }
     }
@@ -624,5 +650,31 @@ mod tests {
         assert!(copy_entry(&base.join("a/item"),&base.join("copy"),&mut |_|{}).is_err());
         assert_eq!(fs::read(base.join("copy")).unwrap(),b"content");
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn sidebar_rows_group_places_and_hide_empty_headings() {
+        let place = |name: &str, group: PlaceGroup| Place { name: name.into(), path: PathBuf::from("/x"), removable: false, group };
+        let places = vec![
+            place("Home", PlaceGroup::Favorites),
+            place("Docs", PlaceGroup::Favorites),
+            place("System", PlaceGroup::Devices),
+            place("Work", PlaceGroup::Pinned),
+        ];
+        assert_eq!(
+            sidebar_rows(&places),
+            vec![
+                SidebarRow::Heading("Favorites"),
+                SidebarRow::Place(0),
+                SidebarRow::Place(1),
+                SidebarRow::Heading("Devices"),
+                SidebarRow::Place(2),
+                SidebarRow::Heading("Pinned Folders"),
+                SidebarRow::Place(3),
+            ]
+        );
+        let without_pins: Vec<Place> = places.iter().filter(|p| p.group != PlaceGroup::Pinned).cloned().collect();
+        assert!(!sidebar_rows(&without_pins).contains(&SidebarRow::Heading("Pinned Folders")));
+        assert!(sidebar_rows(&[]).is_empty());
     }
 }
