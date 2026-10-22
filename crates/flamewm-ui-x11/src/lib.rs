@@ -18,7 +18,8 @@ pub use event_source::{
 };
 pub use flamewm_render_x11::{
     DockEdge, GeometryTrace, RawPress, RawPressWatch, WindowGeometry, WindowGeometrySlot,
-    X11WindowIdentity, apply_cursor_shadow, apply_cursor_theme,
+    X11WindowIdentity, apply_cursor_shadow, apply_cursor_theme, safe_file_name, valid_bus_name,
+    valid_object_path,
 };
 pub use input::{
     SurfaceEvent, UiInputEvent, WHEEL_SCROLL_STEP, pointer_button_from_raw,
@@ -102,9 +103,19 @@ pub enum UiDragEvent {
     Drop {
         x: f32,
         y: f32,
+        /// Local paths for `DropPayload::Uris`; empty for the other payloads.
         paths: Vec<PathBuf>,
         action: UiDragAction,
+        payload: DropPayload,
     },
+}
+
+/// What a drop carries. `Uris` data is in `Drop::paths`. The Ark payload asks the owner to
+/// extract the source's selection into the window's current folder over DBus.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DropPayload {
+    Uris,
+    ArkExtract { service: String, path: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,7 +152,25 @@ fn drag_event(event: &flamewm_render_core::ActionEvent) -> Option<UiDragEvent> {
                 event.text.as_deref().unwrap_or("").as_bytes(),
             ),
             action: UiDragAction::Copy,
+            payload: DropPayload::Uris,
         },
+        flamewm_render_x11::FILE_DRAG_EXTRACT_ACTION => {
+            let (service, path) = event
+                .text
+                .as_deref()
+                .and_then(|text| text.split_once('\u{1f}'))
+                .unwrap_or_default();
+            UiDragEvent::Drop {
+                x,
+                y,
+                paths: Vec::new(),
+                action: UiDragAction::Copy,
+                payload: DropPayload::ArkExtract {
+                    service: service.to_string(),
+                    path: path.to_string(),
+                },
+            }
+        }
         _ => return None,
     })
 }

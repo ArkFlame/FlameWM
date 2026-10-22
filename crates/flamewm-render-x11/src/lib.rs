@@ -39,7 +39,7 @@ mod surface_controller;
 
 use app::X11App;
 pub use config::*;
-pub use xdnd::{encode_uri_list, parse_uri_list};
+pub use xdnd::{encode_uri_list, parse_uri_list, safe_file_name, valid_bus_name, valid_object_path};
 pub use external_decoration::{
     ExternalDecorationRenderer, apply_cursor_shadow, apply_cursor_theme,
 };

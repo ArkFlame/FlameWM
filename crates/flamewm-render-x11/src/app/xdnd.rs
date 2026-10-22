@@ -15,10 +15,10 @@ use flamewm_render_core::{ActionEvent, ActionPhase, RuntimeDocument};
 
 use super::*;
 use crate::config::{
-    FILE_DRAG_DROP_ACTION, FILE_DRAG_ENTER_ACTION, FILE_DRAG_LEAVE_ACTION, FILE_DRAG_OVER_ACTION,
-    FileDragSlot,
+    FILE_DRAG_DROP_ACTION, FILE_DRAG_ENTER_ACTION, FILE_DRAG_EXTRACT_ACTION, FILE_DRAG_LEAVE_ACTION,
+    FILE_DRAG_OVER_ACTION, FileDragSlot,
 };
-use crate::xdnd::{self as protocol, DropEvent, DropTarget, Reply};
+use crate::xdnd::{self as protocol, DropEvent, DropTarget, FormatAtoms, Reply};
 use crate::xlib_ext::{XConvertSelection, XGetSelectionOwner, XGetWindowProperty, XSendEvent, XSetSelectionOwner, XTranslateCoordinates};
 
 const SELECTION_CLEAR: c_int = 29;
@@ -47,6 +47,8 @@ pub(crate) struct XdndAtoms {
     type_list: Atom,
     uri_list: Atom,
     text_plain: Atom,
+    ark_service: Atom,
+    ark_path: Atom,
     targets: Atom,
     data: Atom,
 }
@@ -67,6 +69,8 @@ impl XdndAtoms {
             type_list: get("XdndTypeList"),
             uri_list: get(protocol::URI_LIST),
             text_plain: get(protocol::TEXT_PLAIN),
+            ark_service: get(protocol::ARK_SERVICE_TYPE),
+            ark_path: get(protocol::ARK_PATH_TYPE),
             targets: get("TARGETS"),
             data: get(DATA_PROPERTY),
         }
@@ -286,6 +290,12 @@ fn drag_action_event(event: DropEvent) -> ActionEvent {
         DropEvent::Enter { x, y } => (FILE_DRAG_ENTER_ACTION, x, y, None),
         DropEvent::Over { x, y } => (FILE_DRAG_OVER_ACTION, x, y, None),
         DropEvent::Leave => (FILE_DRAG_LEAVE_ACTION, 0, 0, None),
+        DropEvent::Extract { x, y, service, path } => (
+            FILE_DRAG_EXTRACT_ACTION,
+            x,
+            y,
+            Some(format!("{service}\u{1f}{path}")),
+        ),
         DropEvent::Drop { x, y, paths } => (
             FILE_DRAG_DROP_ACTION,
             x,
@@ -369,13 +379,15 @@ impl X11App {
             } else {
                 enter.types.clone()
             };
-            let format = protocol::choose_format(
-                &offered,
-                atoms.uri_list as u64,
-                atoms.text_plain as u64,
-            );
+            let formats = FormatAtoms {
+                uri_list: atoms.uri_list as u64,
+                ark_service: atoms.ark_service as u64,
+                ark_path: atoms.ark_path as u64,
+                text_plain: atoms.text_plain as u64,
+            };
+            let offer = protocol::choose_offer(&offered, &formats);
             if let Some(state) = self.xdnd.as_mut() {
-                state.target.enter(&enter, format);
+                state.target.enter_offer(&enter, offer);
             }
             Ok(true)
         } else if kind == atoms.position {
@@ -436,16 +448,16 @@ impl X11App {
             return Ok(false);
         }
         // SAFETY: the window is this app's; the property is consumed (deleted) once read.
-        let paths = if note.property == 0 {
+        let bytes = if note.property == 0 {
             None
         } else {
             unsafe { read_property(self.display, self.window, atoms.data, true) }
-                .map(|(_, _, bytes)| protocol::parse_uri_list(&bytes))
+                .map(|(_, _, bytes)| bytes)
         };
         let Some(state) = self.xdnd.as_mut() else {
             return Ok(false);
         };
-        let (events, replies) = state.target.selection(paths);
+        let (events, replies) = state.target.selection_bytes(bytes);
         // SAFETY: replies reference this window's live display.
         unsafe { self.send_replies(&replies, atoms) };
         emit_drag_events(events, document, on_action)?;

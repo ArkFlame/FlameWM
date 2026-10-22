@@ -26,6 +26,8 @@ pub const FILE_DRAG_ENTER_ACTION: &str = "__flamewm.window.drag.enter";
 pub const FILE_DRAG_OVER_ACTION: &str = "__flamewm.window.drag.over";
 pub const FILE_DRAG_LEAVE_ACTION: &str = "__flamewm.window.drag.leave";
 pub const FILE_DRAG_DROP_ACTION: &str = "__flamewm.window.drag.drop";
+/// Ark drag-out drop; `text` is `service` + U+001F + `object path`.
+pub const FILE_DRAG_EXTRACT_ACTION: &str = "__flamewm.window.drag.extract";
 
 /// Outgoing file-drag request: written by the UI, taken by the X11 event loop after the event
 /// that requested it. `Some(paths)` starts a modal XDND drag with absolute `paths`.
