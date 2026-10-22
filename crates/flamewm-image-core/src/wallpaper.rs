@@ -176,6 +176,55 @@ enum Layer {
     Tiled,
 }
 
+/// Root-space region of the wallpaper laid out the way the desktop draws it: each output in
+/// `outputs` (root coordinates `x, y, w, h`) gets its own copy fitted to its own size. An empty
+/// `outputs` is one wallpaper over the whole root. Root pixels no output covers are [`BACKGROUND`].
+/// `None` for an empty `rect` or a refused composition.
+#[must_use]
+pub fn compose_outputs_region(
+    natural: &RgbaImage,
+    root: (u32, u32),
+    outputs: &[(i32, i32, u32, u32)],
+    fit: WallpaperFit,
+    rect: (i32, i32, u32, u32),
+) -> Option<RgbaImage> {
+    if outputs.is_empty() {
+        return compose_region(natural, root.0, root.1, fit, rect);
+    }
+    let (rx, ry, rw, rh) = rect;
+    if rw == 0 || rh == 0 {
+        return None;
+    }
+    let mut pixels: Vec<u8> = BACKGROUND
+        .iter()
+        .copied()
+        .cycle()
+        .take(rw as usize * rh as usize * 4)
+        .collect();
+    for &(ox, oy, ow, oh) in outputs {
+        let x0 = rx.max(ox);
+        let y0 = ry.max(oy);
+        let x1 = (i64::from(rx) + i64::from(rw)).min(i64::from(ox) + i64::from(ow)) as i32;
+        let y1 = (i64::from(ry) + i64::from(rh)).min(i64::from(oy) + i64::from(oh)) as i32;
+        if x0 >= x1 || y0 >= y1 {
+            continue;
+        }
+        let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
+        let piece = compose_region(natural, ow, oh, fit, (x0 - ox, y0 - oy, w, h))?;
+        for row in 0..h as usize {
+            let dst = ((y0 - ry) as usize + row) * rw as usize + (x0 - rx) as usize;
+            let src = row * w as usize * 4;
+            pixels[dst * 4..(dst + w as usize) * 4]
+                .copy_from_slice(&piece.pixels[src..src + w as usize * 4]);
+        }
+    }
+    Some(RgbaImage {
+        width: rw,
+        height: rh,
+        pixels,
+    })
+}
+
 fn layer(natural: &RgbaImage, width: u32, height: u32, fit: WallpaperFit) -> Option<Layer> {
     let (tw, th) = (u64::from(width), u64::from(height));
     let (nw, nh) = (u64::from(natural.width), u64::from(natural.height));
@@ -551,5 +600,78 @@ mod region_tests {
                 println!("{label} {fit:?} compose {ours:.1} ms baseline {baseline:.1} ms");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod output_layout_tests {
+    use super::*;
+
+    fn gradient(width: u32, height: u32) -> RgbaImage {
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(&[(x * 37) as u8, (y * 91) as u8, 200, 255]);
+            }
+        }
+        RgbaImage { width, height, pixels }
+    }
+
+    fn at(image: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
+        let i = (y * image.width + x) as usize * 4;
+        [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2], image.pixels[i + 3]]
+    }
+
+    #[test]
+    fn each_output_gets_its_own_fit_at_its_own_offset() {
+        let natural = gradient(64, 32);
+        let fit = parse("fill");
+        // Two outputs of different sizes side by side: 8x4 at 0,0 and 6x5 at 8,0.
+        let outputs = [(0, 0, 8u32, 4u32), (8, 0, 6, 5)];
+        let root = compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 14, 5))
+            .expect("two outputs compose");
+        let left = compose(&natural, 8, 4, fit).expect("left copy");
+        let right = compose(&natural, 6, 5, fit).expect("right copy");
+        for y in 0..4 {
+            for x in 0..8 {
+                assert_eq!(at(&root, x, y), at(&left, x, y), "left ({x},{y})");
+            }
+        }
+        for y in 0..5 {
+            for x in 0..6 {
+                assert_eq!(at(&root, 8 + x, y), at(&right, x, y), "right ({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn region_crossing_the_seam_matches_the_per_output_copies() {
+        let natural = gradient(64, 32);
+        let fit = parse("fill");
+        let outputs = [(0, 0, 8u32, 4u32), (8, 0, 6, 5)];
+        let whole = compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 14, 5))
+            .expect("whole");
+        let crop = compose_outputs_region(&natural, (14, 5), &outputs, fit, (5, 1, 6, 3))
+            .expect("seam crop");
+        for y in 0..3 {
+            for x in 0..6 {
+                assert_eq!(at(&crop, x, y), at(&whole, 5 + x, 1 + y), "({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn root_pixels_no_output_covers_are_black_and_empty_layout_is_one_root() {
+        let natural = gradient(64, 32);
+        let fit = parse("fill");
+        let outputs = [(0, 0, 8u32, 4u32)];
+        let partial = compose_outputs_region(&natural, (8, 6), &outputs, fit, (0, 0, 8, 6))
+            .expect("partial");
+        assert_eq!(at(&partial, 3, 5), BACKGROUND, "row below the output");
+        let single = compose_outputs_region(&natural, (14, 5), &[], fit, (0, 0, 14, 5))
+            .expect("one root");
+        let direct = compose(&natural, 14, 5, fit).expect("direct");
+        assert_eq!(single.pixels, direct.pixels);
+        assert!(compose_outputs_region(&natural, (14, 5), &outputs, fit, (0, 0, 0, 3)).is_none());
     }
 }
