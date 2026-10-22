@@ -203,6 +203,16 @@ mod tests {
     }
 
     #[test]
+    fn alt_chars_send_escape_prefixed_meta_bytes() {
+        assert_eq!(encode(&key("b", &["alt"], Some("b")), false), Some(b"\x1bb".to_vec()));
+        assert_eq!(encode(&key("f", &["alt"], Some("f")), false), Some(b"\x1bf".to_vec()));
+        assert_eq!(encode(&key("period", &["alt"], Some(".")), false), Some(b"\x1b.".to_vec()));
+        assert_eq!(encode(&key("b", &["alt", "shift"], Some("B")), false), Some(b"\x1bB".to_vec()));
+        assert_eq!(encode(&key("backspace", &["alt"], None), false), Some(b"\x1b\x7f".to_vec()));
+        assert_eq!(encode(&key("left", &["alt"], None), false), Some(b"\x1b[1;3D".to_vec()));
+    }
+
+    #[test]
     fn ctrl_letters_become_c0_codes() {
         assert_eq!(encode(&key("c", &["ctrl"], None), false), Some(vec![0x03]));
         assert_eq!(encode(&key("d", &["ctrl"], None), false), Some(vec![0x04]));

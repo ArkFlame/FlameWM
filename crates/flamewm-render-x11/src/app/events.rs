@@ -29,13 +29,14 @@ mod key_text_regressions {
     }
 
     #[test]
-    fn altgr_inserts_text_while_plain_alt_and_chords_do_not() {
+    fn plain_altgr_and_alt_keys_carry_text_while_ctrl_and_super_do_not() {
         assert!(inserts_text(0));
         assert!(inserts_text(SHIFT_MASK));
         assert!(inserts_text(LOCK_MASK));
         assert!(inserts_text(MOD5_MASK));
         assert!(inserts_text(MOD5_MASK | MOD1_MASK));
-        assert!(!inserts_text(MOD1_MASK));
+        assert!(inserts_text(MOD1_MASK));
+        assert!(inserts_text(MOD1_MASK | SHIFT_MASK));
         assert!(!inserts_text(CONTROL_MASK));
         assert!(!inserts_text(CONTROL_MASK | MOD5_MASK));
         assert!(!inserts_text(MOD4_MASK));
@@ -51,7 +52,9 @@ mod key_text_regressions {
     fn plain_and_altgr_keys_carry_their_text() {
         assert_eq!(payload(0, 'q' as u64), "\u{1f}q\u{1f}q");
         assert_eq!(payload(MOD5_MASK, '@' as u64), "\u{1f}@\u{1f}@");
-        assert_eq!(payload(MOD1_MASK, 'q' as u64), "Alt\u{1f}q\u{1f}");
+        assert_eq!(payload(MOD1_MASK, 'q' as u64), "Alt\u{1f}q\u{1f}q");
+        assert_eq!(payload(MOD1_MASK, '.' as u64), "Alt\u{1f}.\u{1f}.");
+        assert_eq!(payload(MOD1_MASK, XK_BACK_SPACE), "Alt\u{1f}BackSpace\u{1f}");
     }
 }
 
@@ -116,7 +119,7 @@ mod xkb_lookup_runtime {
             assert!(!inserts_text(CONTROL_MASK));
             let (_, alt_shifted) = unsafe { key_symbols(&event(two, MOD1_MASK | SHIFT_MASK)) };
             assert_eq!(alt_shifted, '@' as u64);
-            assert!(!inserts_text(MOD1_MASK | SHIFT_MASK), "Alt chords insert no text");
+            assert!(inserts_text(MOD1_MASK | SHIFT_MASK), "Alt+Shift+2 carries @");
         }
         // SAFETY: display came from XOpenDisplay and is closed exactly once.
         unsafe { XCloseDisplay(display) };
@@ -379,12 +382,12 @@ unsafe fn lookup_keysym(key: &XKeyEvent, state: c_uint) -> u64 {
     keysym as u64
 }
 
-/// Whether a key with `state` inserts text. Ctrl and Super are always shortcuts. Alt is a
-/// shortcut unless Level3 (AltGr) is held, because AltGr is how layouts type characters
-/// such as `@`. Shift and CapsLock are part of the keysym already.
+/// Whether a key with `state` carries its printable character. Ctrl and Super are always
+/// shortcuts. Alt carries the character too: terminals send it as `ESC` + char (Meta), and
+/// the start menu types it. Bound shortcuts still win because they are matched before text.
+/// Shift and CapsLock are part of the keysym already.
 fn inserts_text(state: u32) -> bool {
     state & (CONTROL_MASK | MOD4_MASK) == 0
-        && (state & MOD1_MASK == 0 || state & MOD5_MASK != 0)
 }
 
 /// Typed-key payload `modifiers US key US text`, e.g. `Ctrl\x1fa\x1f` for Ctrl+A (no text).
