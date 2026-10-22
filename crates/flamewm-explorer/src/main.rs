@@ -345,7 +345,9 @@ struct ExplorerApp {
     context:Option<(f32,f32)>, edit:Option<EditMode>, buffer:String, theme:ExplorerTheme, window:(f32,f32),
     last_click:Option<(PathBuf,Instant)>, progress:Option<u64>,
     context_on_entry:bool, rubber:Option<((f32,f32),(f32,f32))>, activity:Option<String>, busy:bool,
-    row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>, cancel:CancellationToken,
+    row_drag:Option<RowDrag>, drop_folder:Option<PathBuf>, file_drag_out:Option<Vec<PathBuf>>,
+    /// Ark drag-out extractions in flight; polled from the event loop.
+    ark_extracts: Vec<std::sync::mpsc::Receiver<Result<flamewm_explorer::dndext::ExtractReport, flamewm_explorer::dndext::ExtractError>>>, cancel:CancellationToken,
     menu_overflow:bool, glide:RowGlide, scroll_origin:usize, scroll_ticking:bool,
     /// The window origin or its end-of-glide position changed since the last full projection.
     list_dirty:bool,
@@ -376,7 +378,8 @@ impl ExplorerApp {
     fn new(initial:PathBuf,tx:Sender<WorkerJob>,scan_tx:Sender<WorkerJob>,chooser_tx:Sender<ChooserJob>) -> Self {
         let home=home_dir();
         let trash_base=std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(||home.join(".local/share")).join("Trash");
-        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
+        let mut app=Self {model:Explorer::new(initial),tx,scan_tx,chooser_tx,chooser:None,thumbs:RefCell::new(Thumbnails::default()),thumb_tx:None,thumb_bound:RefCell::new([None;ROW_SLOTS]),chooser_loading:false,chooser_request:0,places:Vec::new(),context:None,edit:None,buffer:String::new(),theme:ExplorerTheme::default(),window:(WINDOW_WIDTH as f32,WINDOW_HEIGHT as f32),last_click:None,progress:None,context_on_entry:false,rubber:None,activity:None,busy:false,row_drag:None,drop_folder:None,file_drag_out:None,
+            ark_extracts:Vec::new(),cancel:CancellationToken::new(),menu_overflow:false,glide:RowGlide::default(),scroll_origin:0,scroll_ticking:false,list_dirty:false,resize_gate:ResizeGate::default(),resize_flush_scheduled:false,widths:Widths::default(),show_type:false,col_drag:None,scroll_drag:None,column_sort:ColumnSort::default(),typed:String::new(),typed_at:None,
             dialog:None,ark:archive::find_ark().is_some(),search:None,search_id:0,search_text:String::new(),search_rows:None,watch:None,watched:None,context_place:None,progress_total:0,trash_base,unmounted:Vec::new(),events:None,system_spent:None,remote:RemoteFs::new(RemoteConfig::default()),remote_cancel:None,remote_recent:prefs::load_recent(&prefs::config_dir())};
         app.reload_places();
         app
@@ -661,6 +664,15 @@ impl ExplorerApp {
         if self.model.tab().selected_paths.contains(source) {self.selected_files()} else {vec![source.to_path_buf()]}
     }
     /// Files dropped from another application copy into the current folder. XDND only offers copy here.
+    fn ark_drop(&mut self,service:String,path:String) {
+        if remote::is_remote(self.model.tab().path()) {
+            self.model.status="Drops into remote folders are not available yet".into();
+            return;
+        }
+        let destination=self.model.tab().path().to_path_buf();
+        self.ark_extracts.push(flamewm_explorer::dndext::spawn_ark_extract(service,path,destination));
+        self.model.status="Extracting from Ark…".into();
+    }
     fn external_drop(&mut self,paths:Vec<PathBuf>) {
         if remote::is_remote(self.model.tab().path()) {
             self.model.status="Drops into remote folders are not available yet".into();
@@ -2072,6 +2084,7 @@ fn run()->Result<(),String>{
                     // Held sizes are projected by the trailing ResizeFlush wake, not on every event.
                     if !app.resize(*width,*height) {return Ok(());}
                 },
+                UiControllerEvent::Drag(UiDragEvent::Drop{payload:flamewm_ui_x11::DropPayload::ArkExtract{service,path},..})=>app.ark_drop(service.clone(),path.clone()),
                 UiControllerEvent::Drag(UiDragEvent::Drop{paths,..})=>app.external_drop(paths.clone()),
                 // Enter/over/leave do not change the list layout.
                 _=>{},
@@ -2090,6 +2103,14 @@ fn run()->Result<(),String>{
             // closure owns changed: a worker message, a settings snapshot, the list origin, or a running glide.
             let mut changed=snapshot_changed;
             while let Ok(message)=results.try_recv(){app.wake(message);changed=true;}
+            for rx in std::mem::take(&mut app.ark_extracts) {
+                match rx.try_recv() {
+                    Ok(Ok(report)) => { app.model.status=format!("Extracted {} item(s) from Ark",report.created.len()); app.scan(); }
+                    Ok(Err(error)) => { app.model.status=format!("Ark extraction failed: {error:?}"); }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => app.ark_extracts.push(rx),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => { app.model.status="Ark extraction ended unexpectedly".into(); }
+                }
+            }
             app.sync_scroll();
             changed|=std::mem::take(&mut app.list_dirty);
             if changed {return app.project(document);}
