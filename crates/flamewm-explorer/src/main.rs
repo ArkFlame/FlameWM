@@ -1665,11 +1665,11 @@ impl ExplorerApp {
                 "right"=>{let to=self.field.caret+1;self.field.move_caret(to);},
                 "keysym(0xff50)"=>self.field.move_caret(0),
                 "keysym(0xff57)"=>self.field.move_caret(usize::MAX),
-                _=>if let Some(text)=&key.text {if !ctrl && !alt && !text.chars().any(char::is_control) {self.field.insert(text);}},
+                _=>if let Some(text)=&key.text {if !ctrl && !text.chars().any(char::is_control) {self.field.insert(text);}},
             }
             return;
         }
-        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && !alt && t.chars().count()==1 && !t.chars().any(char::is_control)) {
+        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && t.chars().count()==1 && !t.chars().any(char::is_control)) {
             self.typeahead(text);
             return;
         }
@@ -1872,6 +1872,9 @@ impl ExplorerApp {
         let address=match self.edit {Some(EditMode::Path)=>self.field.display(),Some(EditMode::Mode)=>format!("Permissions: {}|",self.field.text),_=>display_location(tab.path(),&home_dir())};
         doc.text("address-text",address)?;
         doc.background("address-text",if matches!(self.edit,Some(EditMode::Path)) && self.field.has_selection() {self.theme.selection_fill()} else {self.theme.clear()})?;
+        // Toolbar fields have fixed widths (the layout engine cannot shrink them): drop the path bar first, then search, so they never overlap.
+        doc.visible("address",self.window.0>=480.0)?;
+        doc.visible("search-toggle",self.window.0>=400.0)?;
         // The field shows only the query: a plain placeholder when empty, and the clear button while a search is active.
         let search=match self.edit {
             Some(EditMode::Search)=>self.field.display(),
@@ -2174,6 +2177,10 @@ impl ExplorerApp {
         };
         doc.visible("dialog",true)?;
         doc.background("dialog",self.theme.menu())?;
+        // Keep the modal inside small windows: its CSS width (460px) and fixed top are clamped to the window.
+        let dialog_w=460f32.min(self.window.0-16.0).max(1.0);
+        doc.size("dialog",dialog_w,200.0)?;
+        doc.position("dialog",((self.window.0-dialog_w)/2.0).max(0.0),150f32.min((self.window.1-200.0).max(8.0)))?;
         let (title,lines,buttons):(String,Vec<String>,[Option<&str>;4])=match dialog {
             Dialog::Properties{props,size,..}=>(
                 props.path.file_name().unwrap_or(props.path.as_os_str()).to_string_lossy().into_owned(),
@@ -2239,6 +2246,13 @@ impl ExplorerApp {
         let showing=self.chooser_loading || self.chooser.is_some();
         doc.visible("openwith-dialog",showing)?;
         if !showing{return Ok(());}
+        // Clamp the chooser (440x466 in CSS) to the window so its action row stays reachable at 520x420 and 320x240.
+        let chooser_w=440f32.min(self.window.0-16.0).max(1.0);
+        let chooser_h=466f32.min(self.window.1-16.0).max(1.0);
+        doc.size("openwith-dialog",chooser_w,chooser_h)?;
+        // The app list takes what the fixed header (77), pages (35) and actions (85) leave, so the action row stays inside the window.
+        doc.size("openwith-apps",chooser_w-2.0,(chooser_h-2.0-77.0-35.0-85.0).max(0.0))?;
+        doc.position("openwith-dialog",((self.window.0-chooser_w)/2.0).max(0.0),((self.window.1-chooser_h)/2.0).max(0.0))?;
         doc.background("openwith-dialog",self.theme.menu())?;
         doc.background("openwith-toolbar",self.theme.card())?;
         if let Some(chooser)=self.chooser.as_ref() {

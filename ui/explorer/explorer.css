@@ -16,8 +16,9 @@ button:active { background:var(--hover); }
 .tool-sep { width:1px; height:20px; flex-grow:0; background:var(--line); margin:0 4px; }
 .field { height:30px; padding:0 9px; gap:8px; border-radius:6px; background:var(--card); border:1px solid var(--line); justify-content:flex-start; display:flex; flex-direction:row; align-items:center; overflow:hidden; }
 .field:hover { border-color:var(--accent); background:var(--hover); }
-.address { flex-grow:1; width:0; min-width:120px; }
-.search { width:230px; flex-grow:0; color:var(--muted); }
+.address { flex-grow:1; width:0; min-width:0px; }
+/* The layout engine has no flex-shrink, so the toolbar fields have fixed widths; main.rs hides them when the window is too narrow. */
+.search { width:150px; min-width:0px; flex-grow:0; color:var(--muted); }
 .search-clear { width:22px; height:22px; flex-grow:0; border-radius:11px; color:var(--text); font-size:15px; }
 .field-ico { width:16px; height:16px; flex-grow:0; }
 .field-text { flex-grow:1; min-width:0; white-space:nowrap; overflow:hidden; font-size:13px; }
@@ -101,7 +102,7 @@ button:active { background:var(--hover); }
 .openwith-header { height:77px; padding:14px 16px; display:flex; flex-direction:column; gap:5px; }
 .openwith-title { font-size:16px; color:var(--text); }
 .openwith-hint { font-size:11px; color:var(--muted); }
-.openwith-apps { height:252px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; }
+.openwith-apps { height:252px; padding:8px 12px; display:flex; flex-direction:column; gap:2px; overflow:hidden; }
 .openwith-choice { justify-content:flex-start; width:100%; height:37px; padding-left:12px; gap:10px; display:flex; align-items:center; white-space:nowrap; overflow:hidden; border-radius:5px; }
 .openwith-icon { width:20px; height:20px; flex-grow:0; }
 .openwith-label { min-width:0; overflow:hidden; }
