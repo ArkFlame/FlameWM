@@ -193,7 +193,7 @@ pub(crate) struct X11App {
     pub(crate) window_backdrop: Option<window_backdrop::WindowBackdropState>,
     /// Latest client size from ConfigureNotify, reported once the X queue drains.
     pub(crate) pending_window_resize: Option<(u32, u32)>,
-    /// Trailing wake for a throttled window snapshot capture (`window_backdrop`).
+    /// Trailing wake ending the quiet period of a frozen window snapshot (`window_backdrop`).
     pub(crate) backdrop_deadline: Option<std::time::Instant>,
     pub(crate) node_backdrops: surface_backdrop::NodeBackdropCache,
     pub(crate) pointer_button: Option<u32>,

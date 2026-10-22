@@ -917,7 +917,7 @@ impl X11App {
             // single_event returns. Avoid blocking on the fd reactor in that case.
             let mut timeout = (unsafe { XEventsQueued(self.display, 0) } > 0)
                 .then_some(std::time::Duration::ZERO);
-            // A throttled window snapshot wakes at its trailing edge, even when nothing else arrives.
+            // A frozen window snapshot wakes at the end of its quiet period, even when nothing else arrives.
             if let Some(deadline) = self.backdrop_deadline {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 timeout = Some(timeout.map_or(remaining, |t| t.min(remaining)));
@@ -926,8 +926,8 @@ impl X11App {
                 .dispatch(timeout)
                 .map_err(|error| error.to_string())?;
             if self.backdrop_deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                // Quiet period over: the stale snapshot is recaptured by the paint below.
                 self.backdrop_deadline = None;
-                self.mark_window_backdrop_stale();
                 self.mark_full();
             }
             on_reactor(document)?;

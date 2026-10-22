@@ -13,27 +13,16 @@ use crate::backdrop::{WindowBackdrop, blurred_argb_words, recapture_due, wallpap
 use crate::xlib::*;
 use crate::xlib_ext::XTranslateCoordinates;
 
-/// Smallest interval between two window snapshot captures. A drag re-captures at most this
-/// often and a trailing capture lands once the pointer stops (see `arm_backdrop_deadline`).
-pub(crate) const CAPTURE_INTERVAL: Duration = Duration::from_millis(250);
+/// Quiet period after the last move or resize before the window snapshot is recaptured. Each
+/// configure slides the deadline, so a drag keeps the snapshot frozen and pays one capture when
+/// it stops (the trailing edge), instead of one capture per interval while it moves.
+pub(crate) const CAPTURE_QUIET: Duration = Duration::from_millis(250);
 
-/// Outcome of the capture throttle for one refresh.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CaptureThrottle {
-    /// Capture now.
-    Capture,
-    /// Too soon after the last capture: stay stale and wake at this trailing instant.
-    Defer(Instant),
-}
-
-/// Pure throttle: captures at most once per `interval`; a deferred capture is due exactly
-/// `interval` after the last one.
+/// Whether a stale snapshot keeps its frozen pixels for now: one exists and the quiet period
+/// after the last move is still pending. The first capture is never held back.
 #[must_use]
-pub(crate) fn throttle_capture(last: Option<Instant>, now: Instant, interval: Duration) -> CaptureThrottle {
-    match last {
-        Some(last) if now.duration_since(last) < interval => CaptureThrottle::Defer(last + interval),
-        _ => CaptureThrottle::Capture,
-    }
+pub(crate) fn holds_frozen_snapshot(has_snapshot: bool, quiet_pending: bool) -> bool {
+    has_snapshot && quiet_pending
 }
 
 /// Per-window state: the spec, the decoded wallpaper cache, and whether a capture is due.
@@ -44,7 +33,6 @@ pub(crate) struct WindowBackdropState {
     /// Wallpaper composed over the whole root for (root w, root h, fit); a capture crops it.
     canvas: Option<(u32, u32, String, RgbaImage)>,
     pub(crate) stale: bool,
-    last_capture: Option<Instant>,
 }
 
 impl WindowBackdropState {
@@ -54,16 +42,17 @@ impl WindowBackdropState {
             natural: None,
             canvas: None,
             stale: true,
-            last_capture: None,
         }
     }
 }
 
 impl X11App {
-    /// Marks the snapshot out of date after the window moved or resized.
+    /// Marks the snapshot out of date after the window moved or resized and restarts the quiet
+    /// period; the snapshot stays frozen until it passes.
     pub(crate) fn mark_window_backdrop_stale(&mut self) {
         if let Some(state) = self.window_backdrop.as_mut() {
             state.stale = true;
+            self.backdrop_deadline = Some(Instant::now() + CAPTURE_QUIET);
         }
     }
 
@@ -86,19 +75,14 @@ impl X11App {
         if !recapture_due(snapshot_size, (self.width, self.height), queued) {
             return;
         }
-        let now = Instant::now();
+        // Still moving: keep the frozen snapshot; the deadline wake recaptures once it settles.
+        if holds_frozen_snapshot(snapshot_size.is_some(), self.backdrop_deadline.is_some()) {
+            return;
+        }
         let Some(state) = self.window_backdrop.as_mut() else {
             return;
         };
-        if let CaptureThrottle::Defer(deadline) =
-            throttle_capture(state.last_capture, now, CAPTURE_INTERVAL)
-        {
-            // Throttled: keep the snapshot stale and wake again at the trailing edge.
-            self.backdrop_deadline = Some(deadline);
-            return;
-        }
         state.stale = false;
-        state.last_capture = Some(now);
         self.backdrop_deadline = None;
         if let Err(error) = unsafe { self.capture_window_backdrop() } {
             eprintln!("FLAMEWM_WINDOW_BACKDROP degraded reason={error}");
@@ -231,38 +215,17 @@ fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage>
 mod tests {
     use super::*;
 
-    const INTERVAL: Duration = Duration::from_millis(250);
-
     #[test]
-    fn first_capture_is_never_throttled() {
-        assert_eq!(
-            throttle_capture(None, Instant::now(), INTERVAL),
-            CaptureThrottle::Capture
-        );
+    fn first_capture_is_never_held_back() {
+        // No snapshot yet: capture immediately even while a quiet period is pending.
+        assert!(!holds_frozen_snapshot(false, true));
+        assert!(!holds_frozen_snapshot(false, false));
     }
 
     #[test]
-    fn capture_inside_interval_defers_to_trailing_edge() {
-        let last = Instant::now();
-        let now = last + Duration::from_millis(100);
-        assert_eq!(
-            throttle_capture(Some(last), now, INTERVAL),
-            CaptureThrottle::Defer(last + INTERVAL),
-            "trailing deadline is last capture + interval, not now + interval"
-        );
-    }
-
-    #[test]
-    fn capture_at_or_after_interval_is_allowed() {
-        let last = Instant::now();
-        assert_eq!(
-            throttle_capture(Some(last), last + INTERVAL, INTERVAL),
-            CaptureThrottle::Capture
-        );
-        assert_eq!(
-            throttle_capture(Some(last), last + INTERVAL * 3, INTERVAL),
-            CaptureThrottle::Capture
-        );
+    fn snapshot_stays_frozen_only_while_quiet_period_runs() {
+        assert!(holds_frozen_snapshot(true, true), "moving: keep the frozen snapshot");
+        assert!(!holds_frozen_snapshot(true, false), "settled: recapture once");
     }
 }
 
