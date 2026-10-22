@@ -96,7 +96,7 @@ fn run() -> Result<(), String> {
     app.clipboard = flamewm_clipboard::Clipboard::connect().ok();
     let launch = options.command.unwrap_or_else(|| Launch::shell(cwd));
     app.open_tab(launch)?;
-    let backdrop = snapshot.as_ref().and_then(|s| theme::window_backdrop(s, &packaged_root()));
+    let backdrop = snapshot.as_ref().and_then(|s| theme::window_backdrop(s, &packaged_root(), app.config.background_opacity));
     let mut doc = decode_document(UI)?;
     if let Some(spec) = backdrop {
         doc = doc.with_window_backdrop(spec);

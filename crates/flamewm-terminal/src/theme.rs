@@ -1,6 +1,6 @@
 //! Maps the active terminal theme onto FlameWM's live settings snapshot. In `follow-flamewm` mode the background is the
-//! FlameWM surface colour and the cursor and selection use the accent. Every theme gets the FlameWM opacity and
-//! wallpaper backdrop, so translucency follows `surfaceOpacity`.
+//! FlameWM surface colour and the cursor and selection use the accent. Translucency comes from the terminal's own
+//! `background_opacity` setting, with FlameWM's wallpaper and surface blur.
 use std::path::Path;
 
 use flamewm_api::settings::{SettingValue, SettingsSnapshot};
@@ -12,8 +12,7 @@ use crate::themes::{Palette, Theme, builtin_themes};
 
 /// FlameWM default accent, the same value as flamewm-settings `DEFAULT_ACCENT`.
 pub const DEFAULT_ACCENT: u32 = 0xEF4048;
-/// Shared defaults (flamewm-ui-core `DEFAULT_SURFACE_OPACITY`, shell/desktop `surfaceBlurPercent`).
-const DEFAULT_SURFACE_OPACITY: u8 = 50;
+/// Shared default for the surface blur (shell/desktop `surfaceBlurPercent`).
 const DEFAULT_BLUR_PERCENT: u8 = 80;
 
 fn text_setting<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str> {
@@ -23,17 +22,9 @@ fn text_setting<'a>(snapshot: &'a SettingsSnapshot, key: &str) -> Option<&'a str
     }
 }
 
-/// Surface opacity percent from `surfaceOpacity` (shared default 50).
-pub fn opacity_percent(snapshot: Option<&SettingsSnapshot>) -> u8 {
-    match snapshot.and_then(|s| s.values.get("surfaceOpacity")) {
-        Some(SettingValue::Percent(percent)) => (*percent).min(100),
-        _ => DEFAULT_SURFACE_OPACITY,
-    }
-}
-
-/// Alpha for the default background: the opacity percent scaled to 0..=255.
-pub fn surface_alpha(snapshot: Option<&SettingsSnapshot>) -> u8 {
-    ((u16::from(opacity_percent(snapshot)) * 255) / 100) as u8
+/// Alpha for the background: the opacity percent scaled to 0..=255.
+pub fn surface_alpha(opacity_percent: u8) -> u8 {
+    ((u16::from(opacity_percent.min(100)) * 255) / 100) as u8
 }
 
 fn accent(snapshot: &SettingsSnapshot) -> u32 {
@@ -79,9 +70,8 @@ pub fn resolve_palette(active: &str, themes: &[Theme], snapshot: Option<&Setting
         .unwrap_or_else(|| builtin_themes()[0].palette.clone())
 }
 
-/// Backdrop for the window: shared wallpaper settings with the surface opacity and blur. `None` at 100% opacity.
-pub fn window_backdrop(snapshot: &SettingsSnapshot, packaged_root: &Path) -> Option<WindowBackdrop> {
-    let opacity = opacity_percent(Some(snapshot));
+/// Backdrop for the window: shared wallpaper settings with the terminal opacity and blur. `None` at 100% opacity.
+pub fn window_backdrop(snapshot: &SettingsSnapshot, packaged_root: &Path, opacity: u8) -> Option<WindowBackdrop> {
     if opacity >= 100 {
         return None;
     }
@@ -94,7 +84,7 @@ pub fn window_backdrop(snapshot: &SettingsSnapshot, packaged_root: &Path) -> Opt
         wallpaper: text_setting(snapshot, "wallpaper").unwrap_or("").to_owned(),
         fit: if fit.is_empty() { "fill".to_owned() } else { fit },
         packaged_root: packaged_root.to_path_buf(),
-        opacity_percent: opacity,
+        opacity_percent: opacity.min(100),
         blur_percent: blur,
     })
 }
@@ -104,13 +94,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opacity_defaults_to_fifty_percent_alpha() {
-        assert_eq!(opacity_percent(None), 50);
-        assert_eq!(surface_alpha(None), 127);
-        let mut snapshot = SettingsSnapshot::new(1);
-        snapshot.values.insert("surfaceOpacity".into(), SettingValue::Percent(100));
-        assert_eq!(surface_alpha(Some(&snapshot)), 255);
-        assert!(window_backdrop(&snapshot, Path::new("/x")).is_none(), "opaque surfaces install no backdrop");
+    fn opacity_percent_scales_to_alpha() {
+        assert_eq!(surface_alpha(100), 255);
+        assert_eq!(surface_alpha(80), 204);
+        let snapshot = SettingsSnapshot::new(1);
+        assert!(window_backdrop(&snapshot, Path::new("/x"), 100).is_none(), "opaque surfaces install no backdrop");
+        assert_eq!(window_backdrop(&snapshot, Path::new("/x"), 80).map(|spec| spec.opacity_percent), Some(80));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::view::Run;
 pub struct UiCache {
     /// `None` until the row is first written, so the placeholder text of unused nodes is hidden on the first frame.
     rows: Vec<Option<Vec<Run>>>,
-    font: Option<u16>,
+    font: Option<(u16, String)>,
     surface: Option<(u32, u8)>,
 }
 
@@ -47,14 +47,15 @@ impl App {
             doc.background("screen", color)?;
             self.ui.surface = Some(surface);
         }
-        if self.ui.font != Some(self.config.font_size) {
-            doc.font_family("monospace".to_owned())?;
+        let font = (self.config.font_size, self.config.font_family.clone());
+        if self.ui.font.as_ref() != Some(&font) {
+            doc.font_family(font.1.clone())?;
             for row in 0..POOL_ROWS {
                 for slot in 0..POOL_RUNS {
                     doc.font_size(&run_id(row, slot), f32::from(self.config.font_size))?;
                 }
             }
-            self.ui.font = Some(self.config.font_size);
+            self.ui.font = Some(font);
             self.ui.rows.clear();
         }
         let frame = self.frame();

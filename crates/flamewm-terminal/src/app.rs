@@ -12,7 +12,7 @@ use crate::keys::{self, Mods, Shortcut};
 use crate::pty::{Launch, PtySize};
 use crate::screen::MouseMode;
 use crate::session::{Session, SessionEvent};
-use crate::settings::{Command, SettingsView};
+use crate::settings::{self, Command, SettingsView};
 use crate::store::{FOLLOW_FLAMEWM, TerminalConfig, ThemeStore};
 use crate::theme;
 use crate::themes::{Palette, Theme};
@@ -39,6 +39,18 @@ pub struct Rename {
     pub tab: usize,
     pub text: String,
 }
+
+/// Startup banner: FlameWM art, then the `/theme` hint. Drawn above the shell until its output scrolls.
+const BANNER: [&str; 7] = [
+    r" _____ _                 __        ____  __ ",
+    r"|  ___| | __ _ _ __ ___  \ \      / /  \/  |",
+    r"| |_  | |/ _` | '_ ` _ \  \ \ /\ / /| |\/| |",
+    r"|  _| | | (_| | | | | | |  \ V  V / | |  | |",
+    r"|_|   |_|\__,_|_| |_| |_|   \_/\_/  |_|  |_|",
+    "",
+    "/theme - Change the Terminal theme.",
+];
+const BANNER_ART_ROWS: usize = 5;
 
 /// Right-click menu items, in display order. Indexes are matched in `menu_action`.
 const MENU: [&str; 5] = ["New Tab", "Close Tab", "Rename Tab", "Copy", "Paste"];
@@ -92,6 +104,12 @@ pub struct App {
     /// Open context menu: window row and column of its top-left cell.
     pub menu: Option<(usize, usize)>,
     pub rename: Option<Rename>,
+    /// Startup banner shown above the first tab until its output scrolls.
+    banner: bool,
+    /// Text typed on the shell line, from the keys sent to the PTY. Enter on `/theme` opens the theme menu instead.
+    input_line: String,
+    /// Window size in logical px, as last reported by the window. Grid and PTY size follow it.
+    window: (u32, u32),
 }
 
 impl App {
@@ -135,6 +153,9 @@ impl App {
             ui: crate::ui::UiCache::default(),
             menu: None,
             rename: None,
+            banner: false,
+            input_line: String::new(),
+            window,
         };
         app.refresh_metrics();
         app.set_window(window.0, window.1);
@@ -153,7 +174,7 @@ impl App {
     pub fn reload_themes(&mut self) {
         self.themes = self.store.all_themes();
         self.palette = theme::resolve_palette(&self.config.theme, &self.themes, self.snapshot.as_ref());
-        self.surface_alpha = theme::surface_alpha(self.snapshot.as_ref());
+        self.surface_alpha = theme::surface_alpha(self.config.background_opacity);
     }
 
     /// Grid size for a window in logical px. Row 0 is the tab bar.
@@ -164,6 +185,7 @@ impl App {
     }
 
     pub fn set_window(&mut self, width: u32, height: u32) {
+        self.window = (width, height);
         let (cols, rows) = self.grid_for(width, height);
         if cols == self.cols && rows == self.grid_rows && !self.tabs.is_empty() {
             return;
@@ -192,6 +214,8 @@ impl App {
         self.next_id += 1;
         let wake = self.wake.try_clone().map_err(|error| error.to_string())?;
         let session = Session::start(id, &launch, self.pty_size(), self.config.scrollback, self.events.clone(), wake)?;
+        // The banner belongs to the first tab only.
+        self.banner = self.tabs.is_empty();
         self.tabs.push(Tab { id, session, title: None });
         self.active = self.tabs.len() - 1;
         self.view_offset = 0;
@@ -224,6 +248,7 @@ impl App {
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.session.feed(&bytes);
                 }
+                self.update_banner();
             }
             SessionEvent::Exited { id } => {
                 if let Some(index) = self.tabs.iter().position(|tab| tab.id == id) {
@@ -411,8 +436,50 @@ impl App {
         if let Some(bytes) = keys::encode(event, self.app_cursor()) {
             self.view_offset = 0;
             self.selection = None;
+            if self.theme_command_submitted(event) {
+                // Ctrl+U clears the typed `/theme` from the shell line, so the shell never runs it.
+                self.send_to_active(vec![0x15]);
+                self.open_settings();
+                return;
+            }
+            self.track_input_line(event);
             self.send_to_active(bytes);
         }
+    }
+
+    /// Enter on a typed `/theme` line, outside full-screen programs.
+    fn theme_command_submitted(&self, event: &UiKeyEvent) -> bool {
+        let enter = matches!(event.key.to_ascii_lowercase().as_str(), "return" | "enter" | "kp_enter");
+        enter && self.input_line == "/theme" && self.tabs.get(self.active).is_some_and(|tab| !tab.session.screen.alt_active())
+    }
+
+    /// Follows the text sent to the shell. Editing keys the line cannot follow (arrows, Tab, Ctrl) clear it.
+    fn track_input_line(&mut self, event: &UiKeyEvent) {
+        let mods = Mods::from_names(event.modifiers.iter());
+        match event.key.to_ascii_lowercase().as_str() {
+            "backspace" => {
+                self.input_line.pop();
+            }
+            "return" | "enter" | "kp_enter" | "escape" => self.input_line.clear(),
+            _ => match event.text.as_deref() {
+                Some(text) if !mods.ctrl && !mods.alt && !text.chars().any(char::is_control) => self.input_line.push_str(text),
+                _ => self.input_line.clear(),
+            },
+        }
+    }
+
+    /// The banner goes once the shell output scrolls or reaches the rows the banner covers.
+    fn update_banner(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else { return };
+        let (cursor_row, _) = tab.session.screen.cursor();
+        if tab.session.screen.scrollback_len() > 0 || cursor_row + BANNER.len() >= self.grid_rows {
+            self.banner = false;
+        }
+    }
+
+    /// Banner rows above the grid. Zero when the banner is gone or the window is too short to show it.
+    fn banner_rows(&self) -> usize {
+        if self.banner && self.grid_rows >= 2 * BANNER.len() { BANNER.len() } else { 0 }
     }
 
     fn shortcut(&mut self, shortcut: Shortcut) {
@@ -437,27 +504,59 @@ impl App {
                 }
             }
             Shortcut::Settings => self.toggle_settings(),
-            Shortcut::FontLarger => self.settings_command(Command::FontSize(1)),
-            Shortcut::FontSmaller => self.settings_command(Command::FontSize(-1)),
+            Shortcut::FontLarger => self.change_font_size(1),
+            Shortcut::FontSmaller => self.change_font_size(-1),
         }
     }
 
     pub fn toggle_settings(&mut self) {
-        self.view = match self.view {
-            View::Terminal => {
-                let mut settings = SettingsView::new();
-                settings.focus(&self.themes, &self.config.theme);
-                View::Settings(settings)
-            }
-            View::Settings(_) => View::Terminal,
-        };
+        if matches!(self.view, View::Settings(_)) {
+            self.close_settings();
+        } else {
+            self.open_settings();
+        }
+    }
+
+    fn open_settings(&mut self) {
+        self.view = View::Settings(SettingsView::open(&self.themes, &self.config, settings::mono_fonts()));
+    }
+
+    /// Leaves settings. Unsaved previews are dropped: the saved configuration is reloaded from disk.
+    fn close_settings(&mut self) {
+        self.config = std::fs::read_to_string(&self.config_path).ok().and_then(|text| TerminalConfig::from_toml(&text).ok()).unwrap_or_default();
+        self.refresh_metrics();
+        let (width, height) = self.window;
+        self.set_window(width, height);
+        self.reload_themes();
+        self.view = View::Terminal;
+    }
+
+    /// Font size up or down, applied now. Grid and PTY size follow the window, which keeps its pixel size.
+    fn change_font_size(&mut self, delta: i32) {
+        let size = (i32::from(self.config.font_size) + delta).clamp(6, 40) as u16;
+        if size != self.config.font_size {
+            self.config.font_size = size;
+            self.refresh_metrics();
+            let (width, height) = self.window;
+            self.set_window(width, height);
+        }
     }
 
     /// Applies one settings command: config and theme writes persist to disk.
     pub fn settings_command(&mut self, command: Command) {
         match command {
             Command::None => {}
-            Command::Close => self.view = View::Terminal,
+            Command::Close => self.close_settings(),
+            Command::PreviewTheme(name) => self.palette = theme::resolve_palette(&name, &self.themes, self.snapshot.as_ref()),
+            Command::Font(family) => self.config.font_family = family,
+            Command::Opacity(percent) => {
+                self.config.background_opacity = percent;
+                self.surface_alpha = theme::surface_alpha(percent);
+            }
+            Command::Persist => {
+                self.persist_config();
+                self.settings_message("saved".into());
+            }
             Command::Apply(name) => {
                 self.config.theme = name;
                 self.persist_config();
@@ -517,16 +616,7 @@ impl App {
                 }
                 self.reload_themes();
             }
-            Command::FontSize(delta) => {
-                let size = (i32::from(self.config.font_size) + delta).clamp(6, 40) as u16;
-                if size != self.config.font_size {
-                    self.config.font_size = size;
-                    self.persist_config();
-                    self.refresh_metrics();
-                    let (width, height) = self.window_px();
-                    self.set_window(width, height);
-                }
-            }
+            Command::FontSize(delta) => self.change_font_size(delta),
             Command::CycleCursor => {
                 self.config.cursor_style = match self.config.cursor_style.as_str() {
                     "block" => "underline".into(),
@@ -544,14 +634,6 @@ impl App {
         }
     }
 
-    /// Window size in logical px, reconstructed from the grid (used after font changes).
-    fn window_px(&self) -> (u32, u32) {
-        (
-            (self.cols as f32 * self.cell_w).ceil() as u32,
-            ((self.grid_rows + 1) as f32 * self.cell_h).ceil() as u32,
-        )
-    }
-
     pub fn persist_config(&self) {
         if let Some(parent) = self.config_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -566,8 +648,8 @@ impl App {
         title.chars().take(24).collect()
     }
 
-    /// Tab bar layout: labels, the new-tab and settings buttons, and their hit areas on row 0. The tab strip shows
-    /// only with more than one tab (or while renaming); the settings button always shows.
+    /// Tab bar layout: labels, the new-tab button and their hit areas on row 0. The tab strip shows only with more
+    /// than one tab (or while renaming). Settings opens with Ctrl+, or by typing `/theme`.
     pub fn tab_bar(&self) -> (Vec<Run>, Vec<(usize, usize, Hit)>) {
         let fg = self.palette.foreground;
         let muted = self.palette.ansi[8];
@@ -601,10 +683,6 @@ impl App {
             runs.push(text_run(col, " + ", fg, None, true));
             hits.push((col, col + 3, Hit::NewTab));
         }
-        let gear = " ⚙ ";
-        let gear_col = self.cols.saturating_sub(gear.chars().count());
-        runs.push(text_run(gear_col, gear, fg, None, false));
-        hits.push((gear_col, self.cols, Hit::Settings));
         (runs, hits)
     }
 
@@ -616,7 +694,7 @@ impl App {
             View::Terminal => {
                 let palette = &self.palette;
                 let selection = self.selection;
-                let grid = match self.tabs.get(self.active) {
+                let mut grid = match self.tabs.get(self.active) {
                     Some(tab) => grid_runs(
                         &tab.session.screen,
                         palette,
@@ -624,6 +702,10 @@ impl App {
                     ),
                     None => vec![Vec::new(); self.grid_rows],
                 };
+                // The banner takes the top rows of the grid; the grid's bottom rows give way to it.
+                let banner = self.banner_rows();
+                grid.truncate(self.grid_rows - banner);
+                rows.extend(self.banner_lines_for(banner));
                 rows.extend(grid);
                 if let Some((row, col)) = self.menu {
                     self.draw_menu(&mut rows, row, col);
@@ -631,15 +713,24 @@ impl App {
             }
             View::Settings(settings) => {
                 let palette = settings.preview().cloned().unwrap_or_else(|| self.palette.clone());
-                let config_line = format!(
-                    "Theme {}   font {}   scrollback {}   cursor {}",
-                    self.config.theme, self.config.font_size, self.config.scrollback, self.config.cursor_style
-                );
-                let body = settings.render(self.cols, self.grid_rows, &self.themes, &self.config.theme, &palette, &config_line);
+                let body = settings.render(self.cols, self.grid_rows, &self.themes, &palette, &self.config);
                 rows.extend(body);
             }
         }
         rows
+    }
+
+    /// Banner rows, or nothing when the banner is off.
+    fn banner_lines_for(&self, rows: usize) -> Vec<Vec<Run>> {
+        BANNER[..rows]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let art = index < BANNER_ART_ROWS;
+                let colour = if art { self.palette.cursor } else { self.palette.foreground };
+                vec![text_run(0, &text.chars().take(self.cols).collect::<String>(), colour, None, art)]
+            })
+            .collect()
     }
 
     /// Paints the context menu over window rows starting at `row`, column `col`.
@@ -685,6 +776,11 @@ impl App {
         }
         let row = (event.y / self.cell_h).floor().max(0.0) as usize;
         let col = (event.x / self.cell_w).floor().max(0.0) as usize;
+        if let (View::Settings(settings), UiActionPhase::Hover | UiActionPhase::Motion) = (&mut self.view, event.phase) {
+            let command = settings.hover_theme(row.saturating_sub(1), self.grid_rows, &self.themes);
+            self.settings_command(command);
+            return;
+        }
         if let Some((menu_row, menu_col)) = self.menu {
             if event.phase == UiActionPhase::Press && event.button == 1 {
                 self.menu = None;
@@ -713,7 +809,7 @@ impl App {
         if !matches!(self.view, View::Terminal) {
             return;
         }
-        let grid_row = row - 1;
+        let Some(grid_row) = (row - 1).checked_sub(self.banner_rows()) else { return };
         if grid_row >= self.grid_rows || col >= self.cols {
             return;
         }
@@ -800,7 +896,7 @@ impl App {
             Hit::NewTab => {
                 let _ = self.open_tab_here();
             }
-            Hit::Settings => self.toggle_settings(),
+            Hit::Settings => self.close_settings(),
         }
     }
 

@@ -112,13 +112,27 @@ pub struct TerminalConfig {
     pub scrollback: usize,
     /// `block`, `underline` or `bar`.
     pub cursor_style: String,
+    /// Monospace font family name from `fc-list :spacing=mono`.
+    pub font_family: String,
+    /// Background opacity in percent (100 = opaque), in steps of 5.
+    pub background_opacity: u8,
 }
+
+pub const DEFAULT_FONT_FAMILY: &str = "monospace";
+pub const DEFAULT_BACKGROUND_OPACITY: u8 = 80;
 
 pub const FOLLOW_FLAMEWM: &str = "follow-flamewm";
 
 impl Default for TerminalConfig {
     fn default() -> Self {
-        Self { theme: FOLLOW_FLAMEWM.into(), font_size: 13, scrollback: 10_000, cursor_style: "block".into() }
+        Self {
+            theme: FOLLOW_FLAMEWM.into(),
+            font_size: 13,
+            scrollback: 10_000,
+            cursor_style: "block".into(),
+            font_family: DEFAULT_FONT_FAMILY.into(),
+            background_opacity: DEFAULT_BACKGROUND_OPACITY,
+        }
     }
 }
 
@@ -131,6 +145,8 @@ impl TerminalConfig {
                 ("font_size", Value::Int(size)) => config.font_size = size.clamp(6, 40) as u16,
                 ("scrollback", Value::Int(lines)) => config.scrollback = lines.clamp(0, 1_000_000) as usize,
                 ("cursor_style", Value::Text(style)) if matches!(style.as_str(), "block" | "underline" | "bar") => config.cursor_style = style,
+                ("font_family", Value::Text(family)) if !family.trim().is_empty() => config.font_family = family,
+                ("background_opacity", Value::Int(percent)) => config.background_opacity = (percent.clamp(5, 100) / 5 * 5) as u8,
                 _ => {}
             }
         }
@@ -143,6 +159,8 @@ impl TerminalConfig {
             Entry { section: String::new(), key: "font_size".into(), value: Value::Int(i64::from(self.font_size)) },
             Entry { section: String::new(), key: "scrollback".into(), value: Value::Int(self.scrollback as i64) },
             Entry { section: String::new(), key: "cursor_style".into(), value: Value::Text(self.cursor_style.clone()) },
+            Entry { section: String::new(), key: "font_family".into(), value: Value::Text(self.font_family.clone()) },
+            Entry { section: String::new(), key: "background_opacity".into(), value: Value::Int(i64::from(self.background_opacity)) },
         ])
     }
 }
