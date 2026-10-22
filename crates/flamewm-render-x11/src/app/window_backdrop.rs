@@ -4,9 +4,17 @@
 //! lives in its own slot so the popup mask (which keys off `surface_backdrop`) keeps its shape.
 //! Paint falls back to this slot only when no popup backdrop is installed.
 //!
-//! The root content under the window (other windows, desktop icons, wallpaper) is read back
-//! with the window hidden and cached as one root-sized image. Moves and resizes then crop the
-//! cache at the new position at once; the readback itself runs only after the window settles.
+//! The root content under the window (other windows, desktop icons, wallpaper) is cached as one
+//! root-sized image. The first read hides the window once (no cache yet, so nothing to keep).
+//! Later reads never hide it: the root is read as shown and the window's own frame rectangle is
+//! restored from the cache, so no frame is ever drawn without the window. Moves and resizes crop
+//! the cache at the new position at once; a read runs only after the window settles and at least
+//! `CAPTURE_QUIET` after the previous read.
+//!
+//! Limit: a root read only sees what is outside the window's frame rectangle. Changes under the
+//! window are picked up on the next read after the window has moved away from them. Other windows
+//! changing while the window is still are not noticed until the next settle; no root event
+//! subscription is added here (event sources are owned by `flamewm-reactor`).
 
 use std::time::{Duration, Instant};
 
@@ -15,10 +23,11 @@ use flamewm_image_core::RgbaImage;
 use super::X11App;
 use crate::backdrop::{WindowBackdrop, blurred_argb_words, recapture_due, wallpaper_file};
 use crate::xlib::*;
-use crate::xlib_ext::{XQueryTree, XTranslateCoordinates};
+use crate::xlib_ext::{XGetGeometry, XQueryTree, XTranslateCoordinates};
 
 /// Quiet period after the last move or resize before the root under the window is read again.
-/// Each configure slides the deadline, so a drag reads the root once when it stops.
+/// Each configure slides the deadline, so a drag reads the root once when it stops. It is also
+/// the minimum spacing between two root reads.
 pub(crate) const CAPTURE_QUIET: Duration = Duration::from_millis(250);
 
 /// Whether the root cache must be read again: none cached yet or it no longer matches the root
@@ -26,6 +35,39 @@ pub(crate) const CAPTURE_QUIET: Duration = Duration::from_millis(250);
 #[must_use]
 pub(crate) fn desktop_readback_due(cached: bool, settled: bool, stale: bool) -> bool {
     !cached || (settled && stale)
+}
+
+/// Whether enough time has passed since the last root read for another one. `None` means no
+/// read has happened yet.
+#[must_use]
+pub(crate) fn readback_spaced(since_last: Option<Duration>) -> bool {
+    since_last.map_or(true, |elapsed| elapsed >= CAPTURE_QUIET)
+}
+
+/// Overwrites the pixels of `rect` (root coordinates, clipped to the image) in `fresh` with the
+/// same pixels of `previous`. Images of different sizes are left untouched.
+pub(crate) fn keep_rect_from(
+    fresh: &mut RgbaImage,
+    previous: &RgbaImage,
+    rect: (i32, i32, u32, u32),
+) {
+    if fresh.width != previous.width || fresh.height != previous.height {
+        return;
+    }
+    let (x, y, w, h) = rect;
+    let x0 = i64::from(x).clamp(0, i64::from(fresh.width)) as usize;
+    let y0 = i64::from(y).clamp(0, i64::from(fresh.height)) as usize;
+    let x1 = (i64::from(x) + i64::from(w)).clamp(0, i64::from(fresh.width)) as usize;
+    let y1 = (i64::from(y) + i64::from(h)).clamp(0, i64::from(fresh.height)) as usize;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let stride = fresh.width as usize * 4;
+    for row in y0..y1 {
+        let start = row * stride + x0 * 4;
+        let end = row * stride + x1 * 4;
+        fresh.pixels[start..end].copy_from_slice(&previous.pixels[start..end]);
+    }
 }
 
 /// Per-window state: the spec, the decoded wallpaper cache, and whether a capture is due.
@@ -40,6 +82,8 @@ pub(crate) struct WindowBackdropState {
     desktop: Option<RgbaImage>,
     /// The root changed since `desktop` was read (a move or resize happened).
     pub(crate) desktop_stale: bool,
+    /// When the root was last read (either variant); spaces reads by `CAPTURE_QUIET`.
+    pub(crate) last_readback: Option<Instant>,
     pub(crate) stale: bool,
     /// Last blurred snapshot and the root origin it was captured at. A resized window mirror-extends
     /// it into the grown area until the settled capture replaces it.
@@ -81,6 +125,7 @@ impl WindowBackdropState {
             canvas: None,
             desktop: None,
             desktop_stale: true,
+            last_readback: None,
             stale: true,
             captured: None,
             mirror: None,
@@ -115,11 +160,16 @@ impl X11App {
             .desktop
             .as_ref()
             .is_some_and(|desktop| (desktop.width, desktop.height) == root);
-        let readback = desktop_readback_due(
+        let mut readback = desktop_readback_due(
             cached,
             self.backdrop_deadline.is_none(),
             state.desktop_stale,
         );
+        if readback && cached && !readback_spaced(state.last_readback.map(|at| at.elapsed())) {
+            // Too soon after the last read: keep the cached root and wake when the spacing ends.
+            readback = false;
+            self.backdrop_deadline = state.last_readback.map(|at| at + CAPTURE_QUIET);
+        }
         if !state.stale && !readback {
             return;
         }
@@ -171,12 +221,24 @@ impl X11App {
         let anchor = crate::backdrop::root_anchor_rect(rect, (root_w, root_h));
         if readback {
             // A failed readback leaves no cache: this capture falls back to the wallpaper and the
-            // next refresh retries.
+            // next refresh retries. With a cached root of the same size the window is not hidden.
             let _readback_span = flamewm_profiler::start("render.backdrop.readback");
-            let desktop = unsafe { self.read_root_behind_window((root_w, root_h)) }.ok();
+            let previous = self
+                .window_backdrop
+                .as_ref()
+                .and_then(|state| state.desktop.as_ref())
+                .filter(|desktop| (desktop.width, desktop.height) == (root_w, root_h));
+            let desktop = match previous {
+                Some(previous) => unsafe {
+                    self.read_root_outside_window((root_w, root_h), previous)
+                },
+                None => unsafe { self.read_root_behind_window((root_w, root_h)) },
+            }
+            .ok();
             if let Some(state) = self.window_backdrop.as_mut() {
                 state.desktop = desktop;
                 state.desktop_stale = false;
+                state.last_readback = Some(Instant::now());
             }
         }
         let state = self
@@ -184,8 +246,9 @@ impl X11App {
             .as_mut()
             .ok_or("window backdrop: no spec")?;
         let snapshot = match state.desktop.as_ref() {
-            Some(desktop) => crop_rgba(desktop, anchor)
-                .ok_or("window backdrop: root region unavailable")?,
+            Some(desktop) => {
+                crop_rgba(desktop, anchor).ok_or("window backdrop: root region unavailable")?
+            }
             None => wallpaper_region(state, (root_w, root_h), anchor)?,
         };
         let shift = (
@@ -232,10 +295,76 @@ impl X11App {
         Ok(())
     }
 
+    /// Root pixels read while the window and its frame stay on screen, with the window's frame
+    /// rectangle restored from `previous` (the last root read). Nothing is hidden, so nothing
+    /// flashes. The frame rectangle is the only part that can be stale: whatever lies under the
+    /// window is kept as last read until the window moves away from it.
+    unsafe fn read_root_outside_window(
+        &self,
+        root: (u32, u32),
+        previous: &RgbaImage,
+    ) -> Result<RgbaImage, String> {
+        let root_window = unsafe { XRootWindow(self.display, self.screen) };
+        let chain = unsafe { self.window_and_ancestors(root_window) };
+        let frame = *chain.last().ok_or("window backdrop: no window chain")?;
+        let frame_rect = unsafe { self.frame_rect_in_root(frame) }
+            .ok_or("window backdrop: frame geometry unavailable")?;
+        let capture = crate::backdrop::capture_drawable_rect(
+            self.display,
+            root_window as u64,
+            (0, 0, root.0, root.1),
+        )?;
+        let mut fresh = RgbaImage {
+            width: capture.width,
+            height: capture.height,
+            pixels: capture.pixels,
+        };
+        keep_rect_from(&mut fresh, previous, frame_rect);
+        Ok(fresh)
+    }
+
+    /// The frame's rectangle in root coordinates, border included.
+    unsafe fn frame_rect_in_root(&self, frame: Window) -> Option<(i32, i32, u32, u32)> {
+        let (mut geometry_root, mut x, mut y) = (0, 0, 0);
+        let (mut width, mut height, mut border, mut depth) = (0u32, 0u32, 0u32, 0u32);
+        let ok = unsafe {
+            XGetGeometry(
+                self.display,
+                frame,
+                &mut geometry_root,
+                &mut x,
+                &mut y,
+                &mut width,
+                &mut height,
+                &mut border,
+                &mut depth,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let (mut rx, mut ry, mut child) = (0, 0, 0);
+        unsafe {
+            XTranslateCoordinates(
+                self.display,
+                frame,
+                XRootWindow(self.display, self.screen),
+                0,
+                0,
+                &mut rx,
+                &mut ry,
+                &mut child,
+            )
+        };
+        let b = border as i32;
+        Some((rx - b, ry - b, width + 2 * border, height + 2 * border))
+    }
+
     /// Root pixels with this window hidden, so the readback holds what lies behind it (other
-    /// windows, desktop icons, wallpaper). The bounding shape is emptied and then restored, which
+    /// windows, desktop icons, wallpaper). Used only for the first read, when no cache exists to
+    /// keep the window's rectangle from. The bounding shape is emptied and then restored, which
     /// sends the WM no UnmapNotify. Without a shape bridge the window could not be hidden.
-    unsafe fn read_root_behind_window(&mut self, root: (u32, u32)) -> Result<RgbaImage, String> {
+    unsafe fn read_root_behind_window(&self, root: (u32, u32)) -> Result<RgbaImage, String> {
         let bridge = self
             .xshape
             .as_ref()
@@ -277,9 +406,17 @@ impl X11App {
         let mut chain = vec![self.window];
         let mut current = self.window;
         loop {
-            let (mut queried_root, mut parent, mut children, mut count) = (0, 0, std::ptr::null_mut(), 0);
+            let (mut queried_root, mut parent, mut children, mut count) =
+                (0, 0, std::ptr::null_mut(), 0);
             unsafe {
-                XQueryTree(self.display, current, &mut queried_root, &mut parent, &mut children, &mut count)
+                XQueryTree(
+                    self.display,
+                    current,
+                    &mut queried_root,
+                    &mut parent,
+                    &mut children,
+                    &mut count,
+                )
             };
             if !children.is_null() {
                 unsafe { XFree(children.cast()) };
@@ -361,7 +498,8 @@ fn wallpaper_region(
         state.canvas = Some((root.0, root.1, state.spec.fit.clone(), full));
     }
     let canvas = &state.canvas.as_ref().expect("canvas built above").3;
-    crop_rgba(canvas, rect).ok_or_else(|| "window backdrop: wallpaper region unavailable".to_string())
+    crop_rgba(canvas, rect)
+        .ok_or_else(|| "window backdrop: wallpaper region unavailable".to_string())
 }
 
 /// Crop `rect` out of a root-sized RGBA image; `None` when the rect leaves the image.
@@ -378,7 +516,11 @@ fn crop_rgba(image: &RgbaImage, rect: (i32, i32, u32, u32)) -> Option<RgbaImage>
         let start = line * stride + x as usize * 4;
         pixels.extend_from_slice(&image.pixels[start..start + row]);
     }
-    Some(RgbaImage { width: w, height: h, pixels })
+    Some(RgbaImage {
+        width: w,
+        height: h,
+        pixels,
+    })
 }
 
 #[cfg(test)]
@@ -387,10 +529,86 @@ mod tests {
 
     #[test]
     fn root_is_read_first_then_only_after_the_window_settles() {
-        assert!(desktop_readback_due(false, false, false), "no cache yet: read even while moving");
-        assert!(!desktop_readback_due(true, false, true), "moving: crop the cached root");
-        assert!(!desktop_readback_due(true, true, false), "settled, nothing moved: keep cache");
-        assert!(desktop_readback_due(true, true, true), "settled after a move: read once");
+        assert!(
+            desktop_readback_due(false, false, false),
+            "no cache yet: read even while moving"
+        );
+        assert!(
+            !desktop_readback_due(true, false, true),
+            "moving: crop the cached root"
+        );
+        assert!(
+            !desktop_readback_due(true, true, false),
+            "settled, nothing moved: keep cache"
+        );
+        assert!(
+            desktop_readback_due(true, true, true),
+            "settled after a move: read once"
+        );
+    }
+
+    #[test]
+    fn root_reads_are_spaced_by_the_quiet_period() {
+        assert!(readback_spaced(None), "no read yet: always allowed");
+        assert!(
+            !readback_spaced(Some(Duration::from_millis(100))),
+            "too soon: keep cache"
+        );
+        assert!(!readback_spaced(Some(Duration::from_millis(249))));
+        assert!(
+            readback_spaced(Some(CAPTURE_QUIET)),
+            "exactly one period later: read"
+        );
+    }
+
+    fn solid(width: u32, height: u32, value: u8) -> RgbaImage {
+        RgbaImage {
+            width,
+            height,
+            pixels: vec![value; width as usize * height as usize * 4],
+        }
+    }
+
+    #[test]
+    fn frame_rect_is_restored_from_the_previous_root_read() {
+        let previous = solid(4, 3, 7);
+        let mut fresh = solid(4, 3, 200);
+        // Frame rect covers x 1..3, y 1..3 (2x2 pixels); everything else keeps the fresh read.
+        keep_rect_from(&mut fresh, &previous, (1, 1, 2, 2));
+        for y in 0..3usize {
+            for x in 0..4usize {
+                let inside = (1..3).contains(&x) && (1..3).contains(&y);
+                let expected = if inside { 7 } else { 200 };
+                assert_eq!(fresh.pixels[(y * 4 + x) * 4], expected, "pixel ({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn frame_rect_outside_the_root_is_clipped_and_mismatched_sizes_are_ignored() {
+        let previous = solid(4, 3, 7);
+        let mut fresh = solid(4, 3, 200);
+        keep_rect_from(&mut fresh, &previous, (-2, -2, 3, 10));
+        assert_eq!(
+            fresh.pixels[0], 7,
+            "clipped top-left pixel comes from the cache"
+        );
+        assert_eq!(
+            fresh.pixels[(4 + 2) * 4],
+            200,
+            "column past the rect keeps the fresh read"
+        );
+        let mut other = solid(5, 3, 200);
+        keep_rect_from(&mut other, &previous, (0, 0, 4, 3));
+        assert_eq!(
+            other.pixels[0], 200,
+            "size mismatch leaves the read untouched"
+        );
+        let mut off = solid(4, 3, 200);
+        keep_rect_from(&mut off, &previous, (9, 9, 2, 2));
+        assert_eq!(
+            off.pixels[0], 200,
+            "rect fully off the root changes nothing"
+        );
     }
 }
-
