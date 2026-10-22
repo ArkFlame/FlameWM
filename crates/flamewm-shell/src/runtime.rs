@@ -964,6 +964,7 @@ impl PanelPlacementContext {
         let start_layout = start_surface_layout(
             panel.output.clone(),
             output.geometry,
+            panel.geometry,
             panel.edge,
             ShellMetrics::default(),
         );

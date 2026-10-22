@@ -584,6 +584,12 @@ impl WarpOverlay {
         unsafe { XRaiseWindow(self.display, self.window) };
     }
 
+    /// Like [`Self::raise`], then re-raises the shell's taskbars above it so the bar covers
+    /// the flight too.
+    pub fn raise_above_taskbars(&self, taskbars: &[Window]) {
+        crate::surface_controller::raise_above_taskbars(self.display, self.window, taskbars);
+    }
+
     pub fn paint(&mut self, progress: f64) -> Result<(), String> {
         // Map before the first draw: without backing store, pixels drawn into an unmapped window
         // are discarded, and a picture created before mapping does not clip to the visible window.

@@ -1030,11 +1030,37 @@ mod tests {
         let layout = start_surface_layout(
             OutputId::new("eDP-1"),
             Rect::new(0, 0, 1920, 1080),
+            Rect::new(0, 1036, 1920, 44),
             flamewm_api::PanelEdge::Bottom,
             ShellMetrics::default(),
         );
         assert_eq!(layout.anchor, Rect::new(0, 1036, 43, 44));
         assert!(layout.popover.bottom() <= layout.anchor.y);
+    }
+
+    #[test]
+    fn start_popover_clamps_to_its_own_output_above_its_taskbar() {
+        let metrics = ShellMetrics::default();
+        // Second output: taller and offset; its floating taskbar sits 16px above its bottom edge.
+        let second = start_surface_layout(
+            OutputId::new("DP-2"),
+            Rect::new(1920, 0, 2560, 1440),
+            Rect::new(1920, 1380, 2560, 44),
+            flamewm_api::PanelEdge::Bottom,
+            metrics,
+        );
+        assert_eq!(second.anchor, Rect::new(1920, 1380, 43, 44));
+        assert!(second.popover.bottom() <= 1380);
+        assert!(second.popover.x >= 1920 && second.popover.right() <= 4480);
+        // First output with a bottom bar: popover stays above that output's bar, not the other.
+        let first = start_surface_layout(
+            OutputId::new("eDP-1"),
+            Rect::new(0, 0, 1920, 1080),
+            Rect::new(0, 1036, 1920, 44),
+            flamewm_api::PanelEdge::Bottom,
+            metrics,
+        );
+        assert!(first.popover.bottom() <= 1036);
     }
 
     #[test]

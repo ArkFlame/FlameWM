@@ -1,3 +1,4 @@
+use flamewm_api::display::OutputSnapshot;
 use flamewm_api::panels::PanelSnapshot;
 use flamewm_shell_core::{start_surface_layout, StartSurfaceLayout};
 use flamewm_ui_core::style::ShellMetrics;
@@ -8,12 +9,26 @@ pub struct PanelView {
     pub start: StartSurfaceLayout,
 }
 
-pub fn views(snapshot: &[PanelSnapshot], metrics: ShellMetrics) -> Vec<PanelView> {
+/// One view per panel whose output is present in `outputs` (the work area needs the output rect).
+pub fn views(
+    snapshot: &[PanelSnapshot],
+    outputs: &[OutputSnapshot],
+    metrics: ShellMetrics,
+) -> Vec<PanelView> {
     snapshot
         .iter()
-        .map(|panel| PanelView {
-            start: start_surface_layout(panel.output.clone(), panel.geometry, panel.edge, metrics),
-            snapshot: panel.clone(),
+        .filter_map(|panel| {
+            let output = outputs.iter().find(|output| output.id == panel.output)?;
+            Some(PanelView {
+                start: start_surface_layout(
+                    panel.output.clone(),
+                    output.geometry,
+                    panel.geometry,
+                    panel.edge,
+                    metrics,
+                ),
+                snapshot: panel.clone(),
+            })
         })
         .collect()
 }

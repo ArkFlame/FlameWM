@@ -271,7 +271,8 @@ impl SurfaceController {
             self.slides.cancel(key);
             return Ok(false);
         }
-        overlay.raise();
+        let taskbars = self.taskbar_windows();
+        overlay.raise_above_taskbars(&taskbars);
         self.instance_mut(id)?.overlay = Some((config.transition, overlay));
         Ok(true)
     }
@@ -356,7 +357,8 @@ impl SurfaceController {
             self.slides.cancel(key);
             return Ok(false);
         }
-        overlay.raise();
+        let taskbars = self.taskbar_windows();
+        overlay.raise_above_taskbars(&taskbars);
         let instance = self.instance_mut(id)?;
         instance.overlay = Some((config.transition, overlay));
         // SAFETY: the window is this controller's live child of the root.

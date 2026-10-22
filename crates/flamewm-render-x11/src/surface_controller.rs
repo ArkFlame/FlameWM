@@ -83,7 +83,11 @@ pub fn debug_enabled() -> bool {
 
 /// Raises `window` (a flyout or any shell surface) and then every taskbar window above it, so
 /// the taskbar covers whatever part of a flyout overlaps it. Returns the raise's X status.
-fn raise_above_taskbars(display: *mut Display, window: Window, taskbars: &[Window]) -> std::os::raw::c_int {
+pub(crate) fn raise_above_taskbars(
+    display: *mut Display,
+    window: Window,
+    taskbars: &[Window],
+) -> std::os::raw::c_int {
     // SAFETY: display and every window id are live surfaces owned by the caller's controller.
     unsafe {
         let status = XRaiseWindow(display, window);

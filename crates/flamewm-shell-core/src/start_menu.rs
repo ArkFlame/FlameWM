@@ -3,6 +3,8 @@ use flamewm_api::{OutputId, PanelEdge, Rect};
 use flamewm_ui_core::style::ShellMetrics;
 use flamewm_ui_core::{PopoverDirection, anchor_popover};
 
+use crate::popup::work_area_for_panel;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartCategory {
     All,
@@ -318,9 +320,12 @@ pub struct StartSurfaceLayout {
 }
 
 #[must_use]
+/// Start button anchor on the live taskbar `panel_rect`; the popover is clamped to the output's
+/// work area above/beside that taskbar, so it never extends under the bar.
 pub fn start_surface_layout(
     output: OutputId,
     output_rect: Rect,
+    panel_rect: Rect,
     edge: PanelEdge,
     metrics: ShellMetrics,
 ) -> StartSurfaceLayout {
@@ -336,22 +341,17 @@ pub fn start_surface_layout(
         )
     };
     let anchor = match edge {
-        PanelEdge::Bottom => Rect::new(
-            output_rect.x,
-            output_rect.bottom() - button_h,
-            button_w,
-            button_h,
-        ),
-        PanelEdge::Top | PanelEdge::Left => {
-            Rect::new(output_rect.x, output_rect.y, button_w, button_h)
-        }
         PanelEdge::Right => Rect::new(
-            output_rect.right() - button_w,
-            output_rect.y,
+            panel_rect.right() - button_w,
+            panel_rect.y,
             button_w,
             button_h,
         ),
+        PanelEdge::Bottom | PanelEdge::Top | PanelEdge::Left => {
+            Rect::new(panel_rect.x, panel_rect.y, button_w, button_h)
+        }
     };
+    let work_area = work_area_for_panel(output_rect, panel_rect, edge);
     let direction = match edge {
         PanelEdge::Bottom => PopoverDirection::Above,
         PanelEdge::Top => PopoverDirection::Below,
@@ -360,7 +360,7 @@ pub fn start_surface_layout(
     };
     let popover = anchor_popover(
         output,
-        output_rect,
+        work_area,
         anchor,
         (
             i32::from(metrics.start_menu_width),
