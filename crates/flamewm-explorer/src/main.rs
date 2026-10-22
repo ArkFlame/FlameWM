@@ -1687,7 +1687,7 @@ impl ExplorerApp {
             }
             return;
         }
-        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && t.chars().count()==1 && !t.chars().any(char::is_control)) {
+        if let Some(text)=key.text.as_deref().filter(|t|!ctrl && !alt && t.chars().count()==1 && !t.chars().any(char::is_control)) {
             self.typeahead(text);
             return;
         }
