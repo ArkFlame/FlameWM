@@ -33,6 +33,18 @@ pub(crate) struct WindowBackdropState {
     /// Wallpaper composed over the whole root for (root w, root h, fit); a capture crops it.
     canvas: Option<(u32, u32, String, RgbaImage)>,
     pub(crate) stale: bool,
+    /// Last blurred snapshot and the root origin it was captured at. A resized window mirror-extends
+    /// it into the grown area until the settled capture replaces it.
+    pub(crate) captured: Option<CapturedSnapshot>,
+}
+
+/// Blurred ARGB snapshot as uploaded, with the root position of its top-left pixel.
+#[derive(Debug)]
+pub(crate) struct CapturedSnapshot {
+    pub(crate) words: Vec<u32>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) root: (i32, i32),
 }
 
 impl WindowBackdropState {
@@ -42,6 +54,7 @@ impl WindowBackdropState {
             natural: None,
             canvas: None,
             stale: true,
+            captured: None,
         }
     }
 }
@@ -169,6 +182,14 @@ impl X11App {
         drop(blur_span);
         if words.len() != width as usize * height as usize {
             return Err("window backdrop: snapshot size mismatch".to_string());
+        }
+        if let Some(state) = self.window_backdrop.as_mut() {
+            state.captured = Some(CapturedSnapshot {
+                words: words.clone(),
+                width,
+                height,
+                root: (rx, ry),
+            });
         }
         let upload_span = flamewm_profiler::start("render.backdrop.upload");
         let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };

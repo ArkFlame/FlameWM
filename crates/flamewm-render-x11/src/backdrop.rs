@@ -568,6 +568,92 @@ pub fn edge_extend_rgba(
     out
 }
 
+/// Source index for destination index `i` when a `n`-long source sits at `origin` in the
+/// destination. Positions outside the source reflect back across the nearest edge (period `2n`),
+/// so a grown strip continues the existing content with no seam and no black.
+#[must_use]
+pub fn mirror_index(i: i64, origin: i64, n: i64) -> usize {
+    if n <= 1 {
+        return 0;
+    }
+    let u = (i - origin).rem_euclid(2 * n);
+    let idx = if u < n { u } else { 2 * n - 1 - u };
+    idx as usize
+}
+
+/// Mirror-extends a `src_w`x`src_h` ARGB snapshot over a `dst_w`x`dst_h` canvas. The snapshot's
+/// top-left lands at `origin`; every other pixel is the reflected snapshot, so growing the window
+/// right/bottom (origin 0) or left/top (origin = the snapshot's offset) keeps the join seamless.
+#[must_use]
+pub fn mirror_extend_argb(
+    src: &[u32],
+    src_w: u32,
+    src_h: u32,
+    dst: (u32, u32),
+    origin: (i64, i64),
+) -> Vec<u32> {
+    let (sw, sh) = (i64::from(src_w), i64::from(src_h));
+    let mut out = vec![0u32; dst.0 as usize * dst.1 as usize];
+    if sw == 0 || sh == 0 || src.len() < (sw * sh) as usize {
+        return out;
+    }
+    for (j, row) in out.chunks_exact_mut(dst.0 as usize).enumerate() {
+        let sy = mirror_index(j as i64, origin.1, sh);
+        let src_row = &src[sy * sw as usize..(sy + 1) * sw as usize];
+        for (i, px) in row.iter_mut().enumerate() {
+            *px = src_row[mirror_index(i as i64, origin.0, sw)];
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod mirror_extend_tests {
+    use super::*;
+
+    /// 3x2 source: row 0 = 1,2,3 ; row 1 = 4,5,6.
+    const SRC: [u32; 6] = [1, 2, 3, 4, 5, 6];
+
+    #[test]
+    fn grow_right_mirrors_the_right_edge_outward() {
+        // 3x2 -> 5x2, origin 0: column 3 reflects column 2, column 4 reflects column 1.
+        let out = mirror_extend_argb(&SRC, 3, 2, (5, 2), (0, 0));
+        assert_eq!(out, vec![1, 2, 3, 3, 2, 4, 5, 6, 6, 5]);
+    }
+
+    #[test]
+    fn grow_bottom_mirrors_the_bottom_edge_outward() {
+        // 3x2 -> 3x4: row 2 repeats row 1, row 3 reflects row 0.
+        let out = mirror_extend_argb(&SRC, 3, 2, (3, 4), (0, 0));
+        assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 4, 5, 6, 1, 2, 3]);
+    }
+
+    #[test]
+    fn grow_left_places_source_at_offset_and_mirrors_leading_edge() {
+        // Window grew 2px to the left: the old content starts at x=2 of a 5-wide canvas.
+        let out = mirror_extend_argb(&SRC, 3, 2, (5, 2), (2, 0));
+        assert_eq!(out, vec![2, 1, 1, 2, 3, 5, 4, 4, 5, 6]);
+    }
+
+    #[test]
+    fn source_inside_destination_is_copied_unchanged() {
+        let out = mirror_extend_argb(&SRC, 3, 2, (3, 2), (0, 0));
+        assert_eq!(out, SRC.to_vec());
+    }
+
+    #[test]
+    fn no_destination_pixel_is_left_zero_when_source_is_present() {
+        let out = mirror_extend_argb(&SRC, 3, 2, (9, 7), (1, 3));
+        assert!(out.iter().all(|px| *px != 0));
+    }
+
+    #[test]
+    fn short_or_empty_source_yields_zeroed_canvas_without_panic() {
+        assert_eq!(mirror_extend_argb(&[1, 2], 3, 2, (2, 2), (0, 0)), vec![0; 4]);
+        assert_eq!(mirror_extend_argb(&[], 0, 0, (2, 2), (0, 0)), vec![0; 4]);
+    }
+}
+
 #[cfg(test)]
 mod edge_extend_tests {
     use super::*;

@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::xlib::*;
+use crate::xlib_ext::XTranslateCoordinates;
 
 use super::X11App;
 
@@ -95,6 +96,46 @@ impl X11App {
         }
     }
 
+    /// Resized window: fills the whole scene from the last captured snapshot, mirror-extended
+    /// from where it sits in root coordinates, so the grown strip continues the existing content
+    /// instead of showing the cleared (black) scene.
+    ///
+    /// # Safety
+    ///
+    /// Must run on the app's display thread.
+    unsafe fn paint_mirrored_window_backdrop(&mut self) -> Result<(), String> {
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+        let (mut rx, mut ry, mut child) = (0, 0, 0);
+        unsafe {
+            XTranslateCoordinates(self.display, self.window, root, 0, 0, &mut rx, &mut ry, &mut child)
+        };
+        let (width, height) = (self.width, self.height);
+        let words = {
+            let Some(captured) = self.window_backdrop.as_ref().and_then(|s| s.captured.as_ref())
+            else {
+                return Ok(());
+            };
+            let origin = (
+                i64::from(captured.root.0) - i64::from(rx),
+                i64::from(captured.root.1) - i64::from(ry),
+            );
+            crate::backdrop::mirror_extend_argb(
+                &captured.words,
+                captured.width,
+                captured.height,
+                (width, height),
+                origin,
+            )
+        };
+        let pixmap = unsafe { self.upload_argb_pixmap(&words, width, height)? };
+        let result = match self.xrender.as_mut() {
+            Some(xrender) => unsafe { xrender.blit_argb32_over(pixmap, 0, 0, width, height) },
+            None => Ok(()),
+        };
+        unsafe { XFreePixmap(self.display, pixmap) };
+        result
+    }
+
     /// Lays the retained backdrop over the freshly cleared scene (opaque OVER copy), so the
     /// translucent fills painted afterwards blend over the snapshot. No-op without backdrop
     /// or when the scene size no longer matches the snapshot.
@@ -117,14 +158,10 @@ impl X11App {
             // A resized window keeps the last snapshot where it still covers the scene (until the
             // settled capture lands), so the translucent fill never shows raw transparent pixels.
             let is_window = self.surface_backdrop.is_none();
-            if !is_window {
-                return Ok(());
+            if is_window {
+                return unsafe { self.paint_mirrored_window_backdrop() };
             }
-            let (w, h) = (backdrop.width.min(self.width), backdrop.height.min(self.height));
-            let Some(xrender) = self.xrender.as_mut() else {
-                return Ok(());
-            };
-            return unsafe { xrender.blit_argb32_over(backdrop.pixmap, 0, 0, w, h) };
+            return Ok(());
         }
         let Some(xrender) = self.xrender.as_mut() else {
             trace_paint(|| "no-xrender".to_string());
