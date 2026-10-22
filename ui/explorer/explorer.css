@@ -52,9 +52,9 @@ button:active { background:var(--hover); }
 /* Dot-file names: a static dim colour, shown instead of .name-text (see main.rs row projection). */
 .name-dim { color:var(--muted); }
 /* Widths come from doc.size in main.rs (columns.rs), so the header and every row share one geometry. */
-.cell-mod { flex-grow:0; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-.cell-size { flex-grow:0; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-.cell-kind { flex-grow:0; padding-left:12px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.cell-mod { flex-grow:0; padding-left:12px; color:var(--muted); display:flex; flex-direction:row; align-items:center; white-space:nowrap; overflow:hidden; }
+.cell-size { flex-grow:0; padding-left:12px; color:var(--muted); display:flex; flex-direction:row; align-items:center; white-space:nowrap; overflow:hidden; }
+.cell-kind { flex-grow:0; padding-left:12px; color:var(--muted); display:flex; flex-direction:row; align-items:center; white-space:nowrap; overflow:hidden; }
 
 /* Status strip: item count, activity message, free space and a usage bar in the accent colour. */
 .status { width:100%; height:31px; flex-grow:0; display:flex; flex-direction:row; align-items:center; gap:12px; padding:0 14px; color:var(--text); font-size:12px; }
