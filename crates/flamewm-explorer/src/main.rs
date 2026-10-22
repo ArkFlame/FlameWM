@@ -159,6 +159,8 @@ enum WorkerResult {
     DeviceDone(Result<String,String>),
     /// Paste decision from the system clipboard read; `None` means nothing to paste.
     PasteResolved(Option<(Vec<PathBuf>,bool)>),
+    /// Default-app lookup for a double-clicked file; `Ok(false)` means no default, so the chooser opens.
+    OpenResolved{path:PathBuf,result:Result<bool,String>},
     /// Decoded 24px row thumbnail (`None` when the image could not be thumbnailed).
     Thumbnail{key:ThumbKey,pixels:Option<Vec<u8>>},
     /// Trailing-edge timer for held resize sizes.
@@ -650,11 +652,21 @@ impl ExplorerApp {
             }
         }
         // The XDG default application opens the file; with none configured, the user chooses (no browser fallback).
-        match mime::open_with_default(path) {
-            Ok(true)=>{},
-            Ok(false)=>self.request_open_with(path.to_path_buf()),
-            Err(e)=>self.model.status=format!("Open failed: {e}"),
-        }
+        // xdg-mime and the catalog run on a worker; the result returns through the event loop.
+        let path=path.to_path_buf();
+        let Some((tx,mut wake))=self.events.as_ref().and_then(|(tx,wake)|Some((tx.clone(),wake.try_clone().ok()?))) else {
+            match mime::open_with_default(&path) {
+                Ok(true)=>{},
+                Ok(false)=>self.request_open_with(path),
+                Err(e)=>self.model.status=format!("Open failed: {e}"),
+            }
+            return;
+        };
+        self.model.status="Opening…".into();
+        std::thread::spawn(move||{
+            let result=mime::open_with_default(&path);
+            if tx.send(WorkerResult::OpenResolved{path,result}).is_ok() {let _=wake.write_all(&[1]);}
+        });
     }
     fn start_transfer(&mut self,sources:Vec<PathBuf>,move_it:bool) {
         let directory=self.model.tab().path().to_path_buf();
@@ -1448,6 +1460,11 @@ impl ExplorerApp {
                 }
             }
             WorkerResult::PasteResolved(resolved)=>self.apply_paste(resolved),
+            WorkerResult::OpenResolved{path,result}=>match result {
+                Ok(true)=>{},
+                Ok(false)=>self.request_open_with(path),
+                Err(e)=>self.model.status=format!("Open failed: {e}"),
+            },
             WorkerResult::Completed(result)=>{
                 self.busy=false;
                 let good=result.is_ok();
