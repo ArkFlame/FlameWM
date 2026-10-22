@@ -542,7 +542,7 @@ nested_env(){
 }
 
 echo "[2/5] Starting Xephyr $nested ($SCREEN)"
-Xephyr "$nested" -screen "$SCREEN" -dpi 96 -ac -br -noreset -nolisten tcp -extension GLX >"$xephyr_log" 2>&1 &
+Xephyr "$nested" -screen "$SCREEN" -dpi 96 -ac -br -noreset -nolisten tcp -extension GLX -dumb -sw-cursor >"$xephyr_log" 2>&1 &
 xephyr_pid=$!
 for _ in $(seq 1 100); do
   kill -0 "$xephyr_pid" 2>/dev/null || fail "Xephyr exited during startup"
